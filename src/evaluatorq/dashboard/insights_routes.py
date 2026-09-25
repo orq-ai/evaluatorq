@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
+from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
@@ -13,7 +14,7 @@ from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.insights_views import TABS, full_page, landing, running_page, tab_content, unreadable_page
 from evaluatorq.insights.models import InsightsRun
-from evaluatorq.insights.store import get_insights_runs_dir, list_runs
+from evaluatorq.insights.store import get_insights_runs_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -22,13 +23,26 @@ if TYPE_CHECKING:
 def _entries(directory: Path) -> tuple[list[tuple[str, str, str]], dict[str, tuple[Path, InsightsRun | str]]]:
     entries: list[tuple[str, str, str]] = []
     loaded: dict[str, tuple[Path, InsightsRun | str]] = {}
-    for path, raw in list_runs(directory):
+    try:
+        paths = list(directory.glob('insights_*.json'))
+    except OSError as exc:
+        logger.warning('Could not list Insights run files in {}: {}', directory, exc)
+        paths = []
+
+    def mtime(path: Path) -> int:
         try:
-            run: InsightsRun | str = (
-                library.load_model_cached(path, InsightsRun.model_validate) if isinstance(raw, InsightsRun) else raw
-            )
+            return path.stat().st_mtime_ns
+        except OSError as exc:
+            logger.warning('Could not stat Insights run file {}: {}', path, exc)
+            return 0
+
+    paths.sort(key=mtime, reverse=True)
+    for path in paths:
+        try:
+            run: InsightsRun | str = library.load_model_cached(path, InsightsRun.model_validate)
         except (OSError, ValueError, TypeError) as exc:
             run = f'{type(exc).__name__}: {exc}'
+            logger.warning('Unreadable Insights run {}: {}', path, run)
         if isinstance(run, InsightsRun):
             key = run.run_id
             entries.append((key, run.run_name, run.status))
@@ -107,7 +121,10 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             for key in ('dimension', 'cluster', 'label', 'value')
             if req.query_params.get(key)
         }
-        return _html(tab_content(resolved[1], tab, query=query))
+        if req.headers.get('HX-Request', '').casefold() == 'true':
+            return _html(tab_content(resolved[1], tab, query=query))
+        entries, _ = _entries(directory)
+        return _html(full_page(resolved[1], entries, active_tab=tab, query=query))
 
     @app.get('/insights/{run_id}/cluster/{cluster_id}')
     def insights_cluster(run_id: str, cluster_id: str) -> Response:

@@ -2819,6 +2819,10 @@ _INSIGHTS_CSS = """
 .insights-table th { padding:9px 10px; background:var(--surface-sunken); color:var(--text-muted); text-align:left; text-transform:uppercase; font-size:10px; letter-spacing:.04em; }
 .insights-table td { padding:9px 10px; border-top:1px solid var(--border-subtle); color:var(--text-body); white-space:nowrap; }
 .insights-table .id { font-family:var(--font-mono); font-size:11px; }
+.insights-filter-bar { display:flex; flex-wrap:wrap; align-items:center; gap:7px; margin:0 0 12px; }
+.insights-filter-chip { display:inline-flex; align-items:center; gap:8px; padding:4px 8px; border:1px solid var(--border-default); border-radius:999px; background:var(--surface-card); color:var(--text-body); font-size:11.5px; text-decoration:none; }
+.insights-filter-chip span { color:var(--text-muted); font-size:14px; }
+.insights-clear-filters { color:var(--teal-600); font-size:11.5px; text-decoration:none; }
 .insights-empty,.insights-empty-state { color:var(--text-muted); font-size:12.5px; }
 .insights-empty-state { padding:28px; border:1px dashed var(--border-default); border-radius:10px; background:var(--surface-card); }
 .insights-empty-state h2,.insights-empty-state h3 { margin:0 0 8px; color:var(--text-strong); }

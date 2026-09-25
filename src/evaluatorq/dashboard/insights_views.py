@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.shell import page
@@ -50,20 +50,28 @@ def _chip(label: str, value: object) -> str:
 
 def header(run: InsightsRun) -> str:
     population = run.population
-    request = population.get('request')
-    request = request if isinstance(request, dict) else {}
     query = population.get('query')
-    facets = request.get('facets', {}) if isinstance(request.get('facets', {}), dict) else {}
+    facets = population.get('facets', {})
+    facets = facets if isinstance(facets, dict) else {}
+    numeric = population.get('numeric', {})
+    numeric = numeric if isinstance(numeric, dict) else {}
     chips = [_chip('query', query)]
     for name, values in facets.items():
         if isinstance(values, (list, tuple, set, frozenset)):
             chips.extend(_chip(name, value) for value in values)
         elif values:
             chips.append(_chip(name, values))
-    chips.extend((
-        _chip('window', request.get('window_days') or request.get('window')),
-        _chip('limit', request.get('limit')),
-    ))
+    numeric_labels = {
+        'tokens_min': 'tokens ≥',
+        'tokens_max': 'tokens ≤',
+        'duration_ms_min': 'duration ms ≥',
+        'duration_ms_max': 'duration ms ≤',
+    }
+    for name, value in numeric.items():
+        label = numeric_labels.get(name, name.replace('_', ' '))
+        chips.append(_chip(label, value))
+    chips.extend((_chip('start', population.get('start')), _chip('end', population.get('end'))))
+    chips.append(_chip('limit', population.get('limit')))
     label_chips = [_chip('label', label.name) for label in run.config.labels]
     models = f'{run.config.summary_model} · {run.config.classifier_model} · {run.config.embedding_model}'
     finder = ''
@@ -230,7 +238,7 @@ def labels(run: InsightsRun) -> str:
         rows = []
         for value, count in result.counts.items():
             pct = round(count / total * 100)
-            href = f'/insights/{quote(run.run_id, safe="")}/traces?label={quote(name)}&value={quote(value)}'
+            href = f'/insights/{quote(run.run_id, safe="")}/tab/traces?label={quote(name)}&value={quote(value)}'
             rows.append(
                 f'<a class="insights-label-row" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true"><span>{esc(value)}</span><b>{pct}%</b>{_bar(count, total)}</a>'
             )
@@ -281,6 +289,51 @@ def traces(
     label: str | None = None,
     value: str | None = None,
 ) -> str:
+    active_filters: list[tuple[str, str]] = []
+    if dimension and cluster:
+        selected = (
+            next(
+                (item for item in run.dimensions.get(dimension, ()).clusters if item.id == cluster),
+                None,
+            )
+            if dimension in run.dimensions
+            else None
+        )
+        label_text = selected.name if selected is not None else cluster
+        active_filters.append((f'{dimension} = {label_text}', 'cluster'))
+    if label is not None:
+        active_filters.append((f'{label} = {value}' if value is not None else label, 'label'))
+    chips = []
+    for text, field in active_filters:
+        remaining = {
+            'dimension': dimension,
+            'cluster': cluster,
+            'label': label,
+            'value': value,
+        }
+        if field == 'cluster':
+            remaining.pop('dimension', None)
+            remaining.pop('cluster', None)
+        else:
+            remaining.pop('label', None)
+            remaining.pop('value', None)
+        remaining = {key: item for key, item in remaining.items() if item is not None}
+        href = f'/insights/{quote(run.run_id, safe="")}/tab/traces'
+        if remaining:
+            href += '?' + urlencode(remaining)
+        chips.append(
+            f'<a class="insights-filter-chip" href="{esc(href)}" hx-get="{esc(href)}" '
+            f'hx-target="#insights-content" hx-push-url="true">{esc(text)} <span aria-label="Clear filter">&#215;</span></a>'
+        )
+    if active_filters:
+        clear_href = f'/insights/{quote(run.run_id, safe="")}/tab/traces'
+        active_filter_bar = (
+            f'<div class="insights-filter-bar"><span class="insights-group-label">Filters</span>{"".join(chips)}'
+            f'<a class="insights-clear-filters" href="{esc(clear_href)}" hx-get="{esc(clear_href)}" '
+            'hx-target="#insights-content" hx-push-url="true">Clear filters</a></div>'
+        )
+    else:
+        active_filter_bar = ''
     filtered = list(run.traces)
     if dimension and cluster:
         filtered = [
@@ -296,10 +349,16 @@ def traces(
             if (answer := trace.labels.get(label)) is not None and (value is None or str(answer.value) == value)
         ]
     if not filtered:
-        return '<section class="insights-empty-state"><h3>No traces match these filters</h3><p>Clear a filter or choose a different cluster or label value.</p></section>'
+        return (
+            f'{active_filter_bar}<section class="insights-empty-state"><h3>No traces match these filters</h3>'
+            '<p>Clear a filter or choose a different cluster or label value.</p></section>'
+        )
     headings = ['Trace', 'Time', *run.config.dimensions, *run.labels, 'Orq']
     head = ''.join(f'<th>{esc(item)}</th>' for item in headings)
-    return f'<div class="insights-table-wrap"><table class="insights-table"><thead><tr>{head}</tr></thead><tbody>{"".join(_trace_row(run, trace) for trace in filtered)}</tbody></table></div>'
+    return (
+        f'{active_filter_bar}<div class="insights-table-wrap"><table class="insights-table"><thead><tr>{head}</tr></thead>'
+        f'<tbody>{"".join(_trace_row(run, trace) for trace in filtered)}</tbody></table></div>'
+    )
 
 
 def tab_content(run: InsightsRun, tab: str, *, query: dict[str, str] | None = None) -> str:
