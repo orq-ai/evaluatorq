@@ -140,7 +140,7 @@ def test_error_run_shows_failure_stage_and_failed_trace_note(tmp_path, minimal_r
     assert 'Run failed; results may be partial.' in response.text
     assert 'dimension:failure' in response.text
     assert 'embedding service unavailable' in response.text
-    assert '1 traces could not be fully classified or summarized.' in response.text
+    assert '1 traces had a label, summary, match, or dimension error.' in response.text
 
 
 def test_cluster_panel_has_description_and_example_trace_link(tmp_path, minimal_run, monkeypatch):
@@ -279,3 +279,16 @@ def test_run_rail_keeps_newest_first_order(tmp_path, minimal_run, monkeypatch):
 
     assert response.status_code == 200
     assert response.text.index('newer run') < response.text.index('minimal run')
+
+
+def test_completed_run_shows_escaped_run_warnings(tmp_path, minimal_run, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    warning = 'Small sentiment group: <script>alert(1)</script>'
+    _write_run(tmp_path, minimal_run.model_copy(update={'warnings': [warning]}))
+
+    response = TestClient(build_app()).get('/insights/run-1')
+
+    assert response.status_code == 200
+    assert 'Run warnings' in response.text
+    assert 'Small sentiment group: &lt;script&gt;alert(1)&lt;/script&gt;' in response.text
+    assert warning not in response.text
