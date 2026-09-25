@@ -2176,8 +2176,8 @@ async def _resolve_or_generate_datapoints(
                 'orq.simulation.scenario_count': len(scenarios),
             },
         ) as gen_span:
-            # Keep pending tasks proportional to the request ceiling. An explicit
-            # A top-level -1 leaves both request and task concurrency unbounded.
+            # Keep pending tasks proportional to the request ceiling. A top-level
+            # -1 leaves both request and task concurrency unbounded.
             limit = active_llm_parallelism()
             batch_size = len(pairs) if limit is None else limit * 2
             generated: list[SimulationDatapoint] = []
