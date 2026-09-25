@@ -88,7 +88,7 @@ class DockerOptions(BaseModel):
     def workdir_must_be_absolute(cls, value: str) -> str:
         if not value.startswith('/'):
             raise ValueError(f'workdir must be an absolute container path, got {value!r}')
-        normalized = posixpath.normpath(value)
+        normalized = posixpath.normpath('/' + value.lstrip('/'))
         managed_mounts = ('/evq-lease', '/evq-home')
         if any(
             normalized == mount or normalized.startswith(f'{mount}/') or mount.startswith(f'{normalized.rstrip("/")}/')

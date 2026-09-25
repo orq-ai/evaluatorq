@@ -38,7 +38,17 @@ def test_default_image_tag_is_docker_safe() -> None:
 def test_options_frozen_and_workdir_absolute() -> None:
     with pytest.raises(pydantic.ValidationError):
         DockerOptions(workdir='app')
-    for workdir in ('/evq-lease', '/evq-lease/child', '/evq-home', '/evq-home/child', '/evq-home/../evq-home'):
+    for workdir in (
+        '/evq-lease',
+        '/evq-lease/child',
+        '//evq-lease',
+        '//evq-lease/child',
+        '/evq-home',
+        '/evq-home/child',
+        '//evq-home',
+        '//evq-home/child',
+        '/evq-home/../evq-home',
+    ):
         with pytest.raises(pydantic.ValidationError, match='overlaps evaluatorq-managed'):
             DockerOptions(workdir=workdir)
     with pytest.raises(pydantic.ValidationError, match='overlaps evaluatorq-managed'):
