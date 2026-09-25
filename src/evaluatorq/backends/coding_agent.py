@@ -775,7 +775,7 @@ class CodingAgentTarget(AgentTarget):
             if inspected.returncode != 0:
                 build_dir = Path(__file__).parent / 'docker'
                 detail = inspected.stderr[-STDERR_EXCERPT_CHARS:].strip()
-                if 'no such image' in detail.lower() or 'no such object' in detail.lower():
+                if any(phrase in detail.lower() for phrase in ('no such image', 'no such object', 'image not known')):
                     raise CodingAgentUnavailableError(
                         'cli.image_missing',
                         f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '

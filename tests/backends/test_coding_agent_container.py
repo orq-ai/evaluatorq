@@ -89,10 +89,11 @@ async def test_turn_runs_in_one_container_and_close_removes_it(docker, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_image_missing(docker, monkeypatch) -> None:
+@pytest.mark.parametrize('error', ['Error: No such image: img:1', 'Error: inspecting object: img:1: image not known'])
+async def test_image_missing(docker, monkeypatch, error: str) -> None:
     binary, _, _ = docker
     monkeypatch.setenv('FAKE_IMAGE_EXIT', '1')
-    monkeypatch.setenv('FAKE_IMAGE_ERROR', 'Error: No such image: img:1')
+    monkeypatch.setenv('FAKE_IMAGE_ERROR', error)
     with pytest.raises(CodingAgentUnavailableError) as info:
         await _target(binary).respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.image_missing'
