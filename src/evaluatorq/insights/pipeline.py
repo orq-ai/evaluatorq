@@ -372,7 +372,7 @@ async def insights(  # noqa: C901
     resolved_orq = orq_client
     cache_store = InsightsCache(enabled=cache)
     try:
-        resolved_client = resolve_llm_client(llm_client)
+        resolved_client = resolve_llm_client(llm_client, max_retries=0)
         resolved_llm = resolved_client.client
         llm_owned = resolved_client.owned
         if resolved_orq is None:
