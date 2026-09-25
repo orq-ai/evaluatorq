@@ -13,8 +13,9 @@ from types import SimpleNamespace
 from starlette.testclient import TestClient
 
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
-from evaluatorq.dashboard import finder_views, insights_views
+from evaluatorq.dashboard import insights_views
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.trace_finder import views as finder_views
 from evaluatorq.insights.models import (
     Cluster,
     ClusterAssignment,
