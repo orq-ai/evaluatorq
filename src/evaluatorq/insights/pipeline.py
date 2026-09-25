@@ -462,50 +462,54 @@ async def insights(  # noqa: C901
                 logger.warning('Insights label stage failed: {}', label_error)
             _stage_end(writer, 'label', label_error)
 
-            _stage(writer, 'summary')
-            summaries = await summarize_traces(
-                [outcome.trace for outcome in outcomes if outcome.trace.trace_id in retained_trace_ids],
-                client=resolved_llm,
-                model=summary_model,
-                cache=cache_store,
-                parallelism=parallelism,
-            )
-            for trace_id, summary in summaries.items():
-                item = original_by_id[trace_id]
-                if isinstance(summary, str):
-                    item.errors['summary'] = summary
-                else:
-                    item.summary = summary
-            _stage_end(writer, 'summary')
+            if run.traces:
+                _stage(writer, 'summary')
+                summaries = await summarize_traces(
+                    [outcome.trace for outcome in outcomes if outcome.trace.trace_id in retained_trace_ids],
+                    client=resolved_llm,
+                    model=summary_model,
+                    cache=cache_store,
+                    parallelism=parallelism,
+                )
+                for trace_id, summary in summaries.items():
+                    item = original_by_id[trace_id]
+                    if isinstance(summary, str):
+                        item.errors['summary'] = summary
+                    else:
+                        item.summary = summary
+                _stage_end(writer, 'summary')
 
-            for dimension in dimensions:
-                stage_name = f'dimension:{dimension}'
-                _stage(writer, stage_name)
-                try:
-                    result = await _build_dimension(
-                        dimension,
-                        run.traces,
-                        client=resolved_llm,
-                        cache=cache_store,
-                        embedding_model=embedding_model,
-                        summary_model=summary_model,
-                        max_clusters=max_clusters,
-                        max_subclusters=max_subclusters,
-                        outlier_zscore=outlier_zscore,
-                        parallelism=parallelism,
-                        classifier_model=classifier_model,
-                    )
-                    run.dimensions[dimension] = result
-                    for warning in result.warnings:
-                        run.warnings.append(warning)
-                    _stage_end(writer, stage_name)
-                except Exception as exc:  # noqa: BLE001 - a dimension failure must preserve other dimensions
-                    message = str(exc)
-                    run.status = 'error'
-                    run.stage_failures.append(StageFailure(stage=stage_name, message=message, dimension=dimension))
-                    logger.warning('Insights {} stage failed: {}', dimension, message)
-                    _stage_end(writer, stage_name, message)
+                for dimension in dimensions:
+                    stage_name = f'dimension:{dimension}'
+                    _stage(writer, stage_name)
+                    try:
+                        result = await _build_dimension(
+                            dimension,
+                            run.traces,
+                            client=resolved_llm,
+                            cache=cache_store,
+                            embedding_model=embedding_model,
+                            summary_model=summary_model,
+                            max_clusters=max_clusters,
+                            max_subclusters=max_subclusters,
+                            outlier_zscore=outlier_zscore,
+                            parallelism=parallelism,
+                            classifier_model=classifier_model,
+                        )
+                        run.dimensions[dimension] = result
+                        for warning in result.warnings:
+                            run.warnings.append(warning)
+                        _stage_end(writer, stage_name)
+                    except Exception as exc:  # noqa: BLE001 - a dimension failure must preserve other dimensions
+                        message = str(exc)
+                        run.status = 'error'
+                        run.stage_failures.append(StageFailure(stage=stage_name, message=message, dimension=dimension))
+                        logger.warning('Insights {} stage failed: {}', dimension, message)
+                        _stage_end(writer, stage_name, message)
 
+            else:
+                run.warnings.append('population is empty')
+                logger.warning('Insights population is empty after match filtering')
         run.labels = _label_results(run.traces, specs)
         run.counts = {
             'n_traces': len(run.traces),
