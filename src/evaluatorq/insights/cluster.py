@@ -11,6 +11,7 @@ no LLM or network calls, so there is no retry layer here.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from operator import itemgetter
 
 import numpy as np
 from loguru import logger
@@ -38,6 +39,24 @@ def centroids(vectors: np.ndarray, labels: np.ndarray) -> dict[int, np.ndarray]:
         if lbl == -1:
             continue
         result[int(lbl)] = vectors[labels == lbl].mean(axis=0)
+    return result
+
+
+def nearest_neighbours(cents: dict[int, np.ndarray], k: int = 3) -> dict[int, list[int]]:
+    """For each cluster id, its up to `k` nearest other cluster ids by centroid cosine similarity.
+
+    Most similar first. Used by `describe.py` (contrastive examples) and `merge.py`
+    (candidate pairs) so both stages agree on which clusters are "nearby".
+    """
+    ids = sorted(cents)
+    result: dict[int, list[int]] = {}
+    for cid in ids:
+        similarities = sorted(
+            ((other, _cosine_sim(cents[cid], cents[other])) for other in ids if other != cid),
+            key=itemgetter(1),
+            reverse=True,
+        )
+        result[cid] = [other for other, _ in similarities[:k]]
     return result
 
 
