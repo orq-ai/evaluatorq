@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 
 import pytest
@@ -45,4 +46,14 @@ def test_dimension_fields_cover_every_dimension_name() -> None:
 
 
 def test_importing_insights_does_not_import_numpy() -> None:
-    assert 'numpy' not in sys.modules
+    # Runs in a fresh subprocess: other test modules in this same session legitimately
+    # import numpy (e.g. to build synthetic clustering fixtures), which would otherwise
+    # poison sys.modules and make this assertion depend on collection order rather than
+    # on `evaluatorq.insights` actually deferring the import.
+    result = subprocess.run(
+        [sys.executable, '-c', "import evaluatorq.insights, sys; assert 'numpy' not in sys.modules"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
