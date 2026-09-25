@@ -348,7 +348,10 @@ async def test_failed_restart_removal_does_not_renew_old_container_lease(docker,
     c.heartbeat_once(123)
     assert old_beat.read_text() == old_value
     assert new_live.beat.read_text() == '123'
-    assert len(calls('run')) == 2
+    runs = calls('run')
+    assert len(runs) == 2
+    assert f'-v {old_beat.parent}:/evq-lease:ro' in runs[0]
+    assert f'-v {new_live.beat.parent}:/evq-lease:ro' in runs[1]
     await target.close()
 
 

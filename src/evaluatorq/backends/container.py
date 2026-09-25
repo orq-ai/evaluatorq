@@ -1,7 +1,4 @@
-"""Container plumbing for ``CodingAgentTarget``: options and pure Docker argv helpers.
-
-Nothing here knows about agents or turns. ``coding_agent.py`` builds on these pieces.
-"""
+"""Container options, Docker argv, lease heartbeats, and cleanup for coding agent targets."""
 
 from __future__ import annotations
 
@@ -121,12 +118,8 @@ def watchdog_script(check_s: int = LEASE_CHECK_S) -> str:
     )
 
 
-def build_run_argv(
-    opts: DockerOptions, *, name: str, root: Path, uid: int, gid: int, lease_dir: Path | None = None
-) -> list[str]:
+def build_run_argv(opts: DockerOptions, *, name: str, root: Path, lease_dir: Path, uid: int, gid: int) -> list[str]:
     """Build a container command, mounting its private lease beside shared workdir state."""
-    if lease_dir is None:
-        lease_dir = root / 'lease'
     argv = [
         *opts.cli(), 'run', '-d', '--rm', '--init', '--entrypoint', 'sh',
         '--name', name,

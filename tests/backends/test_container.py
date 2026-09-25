@@ -73,7 +73,8 @@ def test_podman_context_is_rejected() -> None:
 
 def test_run_argv(tmp_path: Path) -> None:
     opts = DockerOptions(image='img:1', context='orbstack', workdir='/app', run_args=('--memory', '4g'))
-    argv = build_run_argv(opts, name='evq-claude-abcd1234', root=tmp_path, uid=501, gid=20)
+    lease_dir = tmp_path / 'lease' / 'evq-claude-abcd1234'
+    argv = build_run_argv(opts, name='evq-claude-abcd1234', root=tmp_path, lease_dir=lease_dir, uid=501, gid=20)
     assert argv[:4] == ['docker', '--context', 'orbstack', 'run']
     expected_parts = (
         ['-d', '--rm', '--init', '--entrypoint', 'sh'],
@@ -82,7 +83,7 @@ def test_run_argv(tmp_path: Path) -> None:
         ['--user', '501:20'],
         ['-e', 'HOME=/evq-home'],
         ['-v', f'{tmp_path / "home"}:/evq-home'],
-        ['-v', f'{tmp_path / "lease"}:/evq-lease:ro'],
+        ['-v', f'{lease_dir}:/evq-lease:ro'],
         ['-v', f'{tmp_path / "work"}:/app', '-w', '/app'],
         ['--security-opt', 'no-new-privileges'],
         ['--memory', '4g', 'img:1', '-c'],
@@ -93,7 +94,14 @@ def test_run_argv(tmp_path: Path) -> None:
 
 
 def test_privilege_escalation_opt_in(tmp_path: Path) -> None:
-    argv = build_run_argv(DockerOptions(allow_privilege_escalation=True), name='n', root=tmp_path, uid=1, gid=1)
+    argv = build_run_argv(
+        DockerOptions(allow_privilege_escalation=True),
+        name='n',
+        root=tmp_path,
+        lease_dir=tmp_path / 'lease' / 'n',
+        uid=1,
+        gid=1,
+    )
     assert 'no-new-privileges' not in argv
 
 
