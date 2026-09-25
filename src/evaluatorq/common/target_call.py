@@ -208,11 +208,17 @@ async def call_target_with_retry(
     caller-supplied span (0-based index). ``on_attempt_response`` receives the
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. Returns a uniform
-    `TargetCallResult`.
+    `TargetCallResult`. A target with ``manages_own_timeout`` set gets no per-call
+    timeout here; it bounds itself.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
+    manages_own_timeout = getattr(target, 'manages_own_timeout', False) is True
     own_timeout_ms = getattr(target, 'timeout_ms', None)
-    if isinstance(own_timeout_ms, (int, float)) and own_timeout_ms >= target_agent_timeout_ms:
+    if (
+        not manages_own_timeout
+        and isinstance(own_timeout_ms, (int, float))
+        and own_timeout_ms >= target_agent_timeout_ms
+    ):
         logger.warning(
             f'{type(target).__name__}.timeout_ms ({own_timeout_ms:.0f} ms) is not below '
             f'target_agent_timeout_ms ({target_agent_timeout_ms:.0f} ms); the retry helper will time out first '
@@ -228,7 +234,8 @@ async def call_target_with_retry(
         ctx = on_attempt(attempt) if on_attempt is not None else nullcontext()
         try:
             async with ctx as attempt_context:
-                raw = await asyncio.wait_for(target.respond(messages), timeout=timeout_s)
+                call = target.respond(messages)
+                raw = await (call if manages_own_timeout else asyncio.wait_for(call, timeout=timeout_s))
                 resp = _coerce_to_agent_response(raw)
                 if on_attempt_response is not None:
                     on_attempt_response(attempt_context, resp)

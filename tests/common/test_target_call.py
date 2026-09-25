@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from evaluatorq.common.target_call import (
     call_target_with_retry,
@@ -12,7 +13,7 @@ from evaluatorq.common.target_call import (
     default_map_error,
     extract_status_code,
 )
-from evaluatorq.contracts import AgentResponse, AgentResponseError, Message
+from evaluatorq.contracts import AgentResponse, AgentResponseError, Message, TextOutputItem
 
 class _Target:
     """Minimal AgentTarget double: respond() returns queued items or raises them."""
@@ -327,3 +328,72 @@ async def test_implicitly_chained_client_error_is_not_retried():
     assert r.succeeded is False
     assert r.attempts == 1
     assert t.calls == 1
+
+
+class _Slow:
+    manages_own_timeout = True
+    timeout_ms = 10_000
+
+    def __init__(self, sleep_s: float, fail_first: int = 0) -> None:
+        self.sleep_s, self.fail_first, self.calls = sleep_s, fail_first, 0
+
+    async def respond(self, messages: list[Message]) -> AgentResponse:
+        self.calls += 1
+        await asyncio.sleep(self.sleep_s)
+        if self.calls <= self.fail_first:
+            raise RuntimeError('flaky')
+        return AgentResponse(output=[TextOutputItem(text='ok', annotations=[])])
+
+
+def _capture() -> tuple[list[str], int]:
+    seen: list[str] = []
+    return seen, logger.add(lambda m: seen.append(str(m)), level='WARNING')
+
+
+@pytest.mark.asyncio
+async def test_self_timed_target_outlives_runner_limit_without_warning() -> None:
+    seen, sink = _capture()
+    try:
+        result = await call_target_with_retry(
+            _Slow(0.3), [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=0
+        )
+    finally:
+        logger.remove(sink)
+    assert result.error is None
+    assert not any('is not below' in s for s in seen)
+
+
+@pytest.mark.asyncio
+async def test_self_timed_target_still_retried() -> None:
+    target = _Slow(0.0, fail_first=1)
+    result = await call_target_with_retry(
+        target, [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=1
+    )
+    assert result.error is None and target.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_self_timed_target_cancellation_propagates() -> None:
+    task = asyncio.create_task(
+        call_target_with_retry(_Slow(5), [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=0)
+    )
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
+async def test_plain_target_keeps_runner_limit_and_warning() -> None:
+    class Plain(_Slow):
+        manages_own_timeout = False
+
+    seen, sink = _capture()
+    try:
+        result = await call_target_with_retry(
+            Plain(0.3), [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=0
+        )
+    finally:
+        logger.remove(sink)
+    assert result.error is not None and result.error.code == 'target.timeout'
+    assert any('is not below' in s for s in seen)
