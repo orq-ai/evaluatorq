@@ -43,6 +43,8 @@ Click a dot or a table row to open its drawer. A loading badge appears while the
 
 When a run completes, choose **Download JSON** to export the query, compiled task, filters, selected trace metadata including each trace's agent and tool names, verdicts, and errors. The export does not include source messages or the classifier projection.
 
+Use the **Analyze matches** section after a completed run to download its export and see the Python and CLI commands for analyzing only the matched traces. The [Trace Insights guide](insights.md) explains the population, labels, discovered clusters, and saved-run review workflow.
+
 The common failure mode is stopping in **Review first**: the plan is visible, but no trace is judged until you press **Start classification**. If no traces match the compiled filters, the run ends with an explicit error instead of pretending that zero judgments are a successful result. Without `ORQ_API_KEY`, the page stays available but shows that trace finding is unavailable.
 
 ## Facets and numeric ranges
