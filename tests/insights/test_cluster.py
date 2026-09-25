@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from evaluatorq.insights.cluster import ClusterTree, cluster_two_level, nearest_neighbours
 
 
-def _blobs(n_blobs: int, n_per_blob: int, dim: int = 32, spread: float = 0.3, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+def _blobs(n_blobs: int, n_per_blob: int, dim: int = 32, spread: float = 0.3, seed: int = 0) -> tuple[NDArray[Any], NDArray[Any]]:
     """`n_blobs` well-separated gaussian blobs in `dim`-d space, plus their true labels."""
     rng = np.random.default_rng(seed)
     centers = rng.normal(scale=8.0, size=(n_blobs, dim))
@@ -47,7 +50,7 @@ def test_max_subclusters_caps_group_size():
     assert all(count <= 2 for count in counts.values())
 
 
-def _blobs_with_within_cluster_outlier(n_blobs: int = 3, n_per_blob: int = 20, seed: int = 0) -> np.ndarray:
+def _blobs_with_within_cluster_outlier(n_blobs: int = 3, n_per_blob: int = 20, seed: int = 0) -> NDArray[Any]:
     """Blobs where point 0 is pushed far from its own blob's centroid, but not far enough
     to form its own base cluster — a within-cluster distance outlier, not a structural one."""
     vectors, _ = _blobs(n_blobs=n_blobs, n_per_blob=n_per_blob, seed=seed)

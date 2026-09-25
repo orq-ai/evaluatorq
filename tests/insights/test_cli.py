@@ -29,7 +29,7 @@ def _app() -> typer.Typer:
 
 
 def test_help_lists_population_and_clustering_options() -> None:
-    result = CliRunner().invoke(_app(), ['insights', '--help'])
+    result = CliRunner().invoke(_app(), ['insights', '--help'], env={'COLUMNS': '120'})
 
     assert result.exit_code == 0, result.output
     for option in ('--query', '--label', '--dimension', '--from-finder', '--max-clusters'):

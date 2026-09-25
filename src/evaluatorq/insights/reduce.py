@@ -7,15 +7,15 @@ behind the `insights` extra.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
 if TYPE_CHECKING:
-    import numpy as np
+    from numpy.typing import NDArray
 
 
-def reduce_3d(vectors: np.ndarray, *, random_state: int = 42) -> np.ndarray | None:
+def reduce_3d(vectors: NDArray[Any], *, random_state: int = 42) -> NDArray[Any] | None:
     """Reduce `vectors` to 3D coordinates via UMAP (cosine metric).
 
     Returns `None` with a `logger.warning` when there are fewer than 5 points — too few
@@ -34,4 +34,4 @@ def reduce_3d(vectors: np.ndarray, *, random_state: int = 42) -> np.ndarray | No
         metric='cosine',
         random_state=random_state,
     )
-    return cast('np.ndarray', reducer.fit_transform(vectors))
+    return cast('NDArray[Any]', reducer.fit_transform(vectors))
