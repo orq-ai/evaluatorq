@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
 
@@ -31,3 +33,28 @@ def test_corrupt_file_degrades_to_miss(tmp_path, caplog):
     p = tmp_path / 'c.sqlite'
     p.write_bytes(b'not sqlite')
     assert InsightsCache(p).get_vectors('e', ['a']) == {}
+
+
+def test_unwritable_cache_directory_disables_cache(tmp_path, monkeypatch):
+    def fail_mkdir(*args, **kwargs):
+        raise PermissionError('read only')
+
+    monkeypatch.setattr('pathlib.Path.mkdir', fail_mkdir)
+    cache = InsightsCache(tmp_path / 'cache.sqlite')
+
+    assert cache.get_vectors('e', ['a']) == {}
+    cache.put_vectors('e', {'a': [1.0]})
+
+
+def test_corrupt_vector_row_is_miss_but_valid_rows_survive(tmp_path):
+    path = tmp_path / 'cache.sqlite'
+    cache = InsightsCache(path)
+    cache.put_vectors('e', {'good': [0.5, 1.0]})
+    with sqlite3.connect(path) as conn:
+        conn.execute('INSERT INTO vectors (model, text_hash, vector) VALUES (?, ?, ?)', ('e', 'bad-hash', b'bad'))
+    from evaluatorq.insights.cache import _text_hash
+
+    with sqlite3.connect(path) as conn:
+        conn.execute('UPDATE vectors SET text_hash = ? WHERE text_hash = ?', (_text_hash('bad'), 'bad-hash'))
+
+    assert cache.get_vectors('e', ['good', 'bad']) == {'good': [0.5, 1.0]}

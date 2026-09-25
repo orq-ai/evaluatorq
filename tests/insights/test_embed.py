@@ -40,24 +40,30 @@ def _vector_for(text: str) -> list[float]:
 
 
 class _FakeEmbeddingsResource:
-    def __init__(self, *, fail_batches: set[int] | None = None) -> None:
+    def __init__(self, *, fail_batches: set[int] | None = None, wrong_count_batches: set[int] | None = None) -> None:
         self.calls: list[list[str]] = []
         self._fail_batches = fail_batches or set()
+        self._wrong_count_batches = wrong_count_batches or set()
 
     async def create(self, *, model: str, input: list[str]) -> _Response:  # noqa: A002
         self.calls.append(list(input))
         if len(self.calls) - 1 in self._fail_batches:
             raise RuntimeError('embedding API down')
-        return _Response([_Embedding(_vector_for(text)) for text in input])
+        data = [_Embedding(_vector_for(text)) for text in input]
+        if len(self.calls) - 1 in self._wrong_count_batches:
+            data = data[:-1]
+        return _Response(data)
 
 
 class _FakeClient:
-    def __init__(self, *, fail_batches: set[int] | None = None) -> None:
-        self.embeddings = _FakeEmbeddingsResource(fail_batches=fail_batches)
+    def __init__(
+        self, *, fail_batches: set[int] | None = None, wrong_count_batches: set[int] | None = None
+    ) -> None:
+        self.embeddings = _FakeEmbeddingsResource(fail_batches=fail_batches, wrong_count_batches=wrong_count_batches)
 
 
-def fake_client(*, fail_batches: set[int] | None = None) -> Any:
-    return _FakeClient(fail_batches=fail_batches)
+def fake_client(*, fail_batches: set[int] | None = None, wrong_count_batches: set[int] | None = None) -> Any:
+    return _FakeClient(fail_batches=fail_batches, wrong_count_batches=wrong_count_batches)
 
 
 @pytest.mark.asyncio
@@ -94,6 +100,14 @@ async def test_embed_texts_failure_raises_embedding_error(cache: InsightsCache) 
     client = fake_client(fail_batches={0})
 
     with pytest.raises(EmbeddingError):
+        await embed_texts(['a', 'b'], client=client, model=MODEL, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_malformed_embedding_response_raises_embedding_error(cache: InsightsCache) -> None:
+    client = fake_client(wrong_count_batches={0})
+
+    with pytest.raises(EmbeddingError, match='embedding batch failed'):
         await embed_texts(['a', 'b'], client=client, model=MODEL, cache=cache)
 
 

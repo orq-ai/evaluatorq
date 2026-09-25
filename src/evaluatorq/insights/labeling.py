@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -246,6 +246,8 @@ async def label_traces(
     fail a run" house rule.
     """
     resolved_cfg = cfg if cfg is not None else _default_cfg(model)
+    if parallelism <= 0:
+        raise ValueError('parallelism must be greater than zero')
     semaphore = asyncio.Semaphore(parallelism)
     total = len(traces)
     completed = 0
@@ -253,21 +255,46 @@ async def label_traces(
 
     async def run_one(trace: TraceRecord) -> LabelOutcome:
         nonlocal completed
-        outcome = await _label_one(
-            trace,
-            labels=labels,
-            compiled=compiled,
-            client=client,
-            model=model,
-            cfg=resolved_cfg,
-            semaphore=semaphore,
-        )
-        if on_progress is not None:
-            async with completed_lock:
-                completed += 1
-                current = completed
-            on_progress(current, total)
+        try:
+            outcome = await _label_one(
+                trace,
+                labels=labels,
+                compiled=compiled,
+                client=client,
+                model=model,
+                cfg=resolved_cfg,
+                semaphore=semaphore,
+            )
+        except Exception as exc:  # noqa: BLE001 - an unexpected trace shape must not fail the whole pass
+            message = str(exc) or type(exc).__name__
+            logger.warning('Insights label processing failed for trace {}: {}', trace.trace_id, message)
+            failed = LabelAnswer(value=None, confidence=None, probabilities=None, error=message)
+            outcome = LabelOutcome(
+                trace=trace,
+                answers={label.name: failed for label in labels},
+                matched=None,
+                error=message,
+            )
+        finally:
+            if on_progress is not None:
+                async with completed_lock:
+                    completed += 1
+                    current = completed
+                try:
+                    on_progress(current, total)
+                except Exception as exc:  # noqa: BLE001 - progress reporting must not abort result collection
+                    logger.warning('Insights label progress callback failed: {}', exc)
         return outcome
 
-    tasks: list[Any] = [asyncio.ensure_future(run_one(trace)) for trace in traces]
-    return await asyncio.gather(*tasks)
+    results: list[LabelOutcome | None] = [None] * total
+    next_index = 0
+
+    async def worker() -> None:
+        nonlocal next_index
+        while next_index < total:
+            index = next_index
+            next_index += 1
+            results[index] = await run_one(traces[index])
+
+    await asyncio.gather(*(worker() for _ in range(min(parallelism, total))))
+    return [outcome for outcome in results if outcome is not None]

@@ -76,13 +76,16 @@ class InsightsCache:
             return
 
         resolved = path if path is not None else DEFAULT_CACHE_PATH
+        conn: sqlite3.Connection | None = None
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(resolved, check_same_thread=False)
             conn.executescript(_SCHEMA)
             self._conn = conn
-        except sqlite3.Error as exc:
+        except (OSError, sqlite3.Error) as exc:
             logger.warning(f'InsightsCache: failed to open/migrate {resolved}: {exc}; caching disabled for this run')
+            if conn is not None:
+                conn.close()
             self._conn = None
 
     def get_summary(self, trace_id: str, span_id: str, model: str, prompt_hash_value: str) -> TraceSummary | None:
@@ -145,7 +148,12 @@ class InsightsCache:
             text = hash_to_text.get(text_hash)
             if text is None:
                 continue
-            result[text] = _unpack_vector(blob)
+            try:
+                result[text] = _unpack_vector(blob)
+            except (TypeError, ValueError, OverflowError) as exc:
+                logger.warning(
+                    f'InsightsCache.get_vectors: corrupt cached vector for {text_hash}: {exc}; treating as a miss'
+                )
         return result
 
     def put_vectors(self, model: str, vectors: dict[str, list[float]]) -> None:

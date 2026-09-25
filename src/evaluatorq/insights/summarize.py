@@ -148,10 +148,22 @@ async def summarize_traces(
     than raised — per-trace failures never fail the run (the caller records it
     on `TraceInsight.errors['summary']`).
     """
+    if parallelism <= 0:
+        raise ValueError('parallelism must be greater than zero')
     semaphore = asyncio.Semaphore(parallelism)
-    tasks = [
-        asyncio.ensure_future(_summarize_one(trace, client=client, model=model, cache=cache, semaphore=semaphore))
-        for trace in traces
-    ]
-    results = await asyncio.gather(*tasks)
-    return dict(results)
+    results: dict[str, TraceSummary | str] = {}
+    next_index = 0
+
+    async def worker() -> None:
+        nonlocal next_index
+        while next_index < len(traces):
+            index = next_index
+            next_index += 1
+            trace = traces[index]
+            trace_id, summary = await _summarize_one(
+                trace, client=client, model=model, cache=cache, semaphore=semaphore
+            )
+            results[trace_id] = summary
+
+    await asyncio.gather(*(worker() for _ in range(min(parallelism, len(traces)))))
+    return results
