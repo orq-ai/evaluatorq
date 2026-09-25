@@ -10,8 +10,8 @@ import pytest
 from loguru import logger
 
 from evaluatorq.backends import DockerOptions
-from evaluatorq.backends import container as c
 from evaluatorq.backends import coding_agent as coding_agent_module
+from evaluatorq.backends import container as c
 from evaluatorq.backends.coding_agent import CodingAgentTarget, CodingAgentUnavailableError
 from evaluatorq.contracts import Message
 
@@ -21,7 +21,8 @@ FAKE = r"""#!/bin/sh
 printf 'ARGV %s\n' "$*" >> "$FAKE_LOG"
 [ "$1" = "--context" ] && shift 2
 case "$1" in
-  image) exit ${FAKE_IMAGE_EXIT:-0};;
+  image) [ -n "$FAKE_IMAGE_ERROR" ] && echo "$FAKE_IMAGE_ERROR" >&2
+         exit ${FAKE_IMAGE_EXIT:-0};;
   ps) exit 0;;
   run) [ -n "$FAKE_RUN_SLEEP" ] && sleep "$FAKE_RUN_SLEEP"
        [ -n "$FAKE_RUN_EXIT" ] && { echo "daemon down" >&2; exit $FAKE_RUN_EXIT; }; echo CREATED >> "$FAKE_LOG"; echo cid; exit 0;;
@@ -91,10 +92,23 @@ async def test_turn_runs_in_one_container_and_close_removes_it(docker, monkeypat
 async def test_image_missing(docker, monkeypatch) -> None:
     binary, _, _ = docker
     monkeypatch.setenv('FAKE_IMAGE_EXIT', '1')
+    monkeypatch.setenv('FAKE_IMAGE_ERROR', 'Error: No such image: img:1')
     with pytest.raises(CodingAgentUnavailableError) as info:
         await _target(binary).respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.image_missing'
     assert 'eq coding-agent build-image' in info.value.message and 'docker build' in info.value.message
+
+
+@pytest.mark.asyncio
+async def test_image_inspect_docker_context_failure(docker, monkeypatch) -> None:
+    binary, _, _ = docker
+    monkeypatch.setenv('FAKE_IMAGE_EXIT', '1')
+    monkeypatch.setenv('FAKE_IMAGE_ERROR', 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock')
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        await _target(binary).respond([Message(role='user', content='x')])
+    assert info.value.code == 'cli.container_start'
+    assert 'image inspect failed' in info.value.message
+    assert 'Cannot connect to the Docker daemon' in info.value.message
 
 
 @pytest.mark.asyncio

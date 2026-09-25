@@ -756,10 +756,16 @@ class CodingAgentTarget(AgentTarget):
             inspected = await self._docker([*opts.cli(), 'image', 'inspect', opts.image])
             if inspected.returncode != 0:
                 build_dir = Path(__file__).parent / 'docker'
+                detail = inspected.stderr[-STDERR_EXCERPT_CHARS:].strip()
+                if 'no such image' in detail.lower() or 'no such object' in detail.lower():
+                    raise CodingAgentUnavailableError(
+                        'cli.image_missing',
+                        f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '
+                        f'or `{opts.binary} build -t {opts.image} {build_dir}`',
+                    )
                 raise CodingAgentUnavailableError(
-                    'cli.image_missing',
-                    f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '
-                    f'or `{opts.binary} build -t {opts.image} {build_dir}`',
+                    'cli.container_start',
+                    f'{opts.binary} image inspect failed: {detail or "Docker returned no error details"}',
                 )
             self._image_checked = True
             await asyncio.to_thread(sweep_orphans, opts.binary, opts.context)
