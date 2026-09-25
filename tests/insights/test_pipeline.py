@@ -403,14 +403,16 @@ async def test_three_signal_traces_skip_dimension(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_small_sentiment_groups_log_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_small_sentiment_groups_cluster_and_warn_when_umap_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     from io import StringIO
 
     from loguru import logger
     from openai import AsyncOpenAI
 
     from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
     from evaluatorq.insights.models import LabelAnswer, TraceInsight
+    from evaluatorq.insights import reduce
 
     traces = [
         TraceInsight(
@@ -418,7 +420,8 @@ async def test_small_sentiment_groups_log_warning(monkeypatch: pytest.MonkeyPatc
             summary=_summary(),
             labels={
                 'sentiment': LabelAnswer(
-                    value='positive' if i < 3 else 'negative', confidence=1.0, probabilities=None, error=None,
+                    value='positive' if i < 3 else 'neutral' if i < 5 else 'negative',
+                    confidence=1.0, probabilities=None, error=None,
                 )
             },
         )
@@ -427,10 +430,22 @@ async def test_small_sentiment_groups_log_warning(monkeypatch: pytest.MonkeyPatc
     messages = StringIO()
     sink_id = logger.add(messages, level='WARNING')
 
-    async def embeddings(*args, **kwargs):
-        pytest.fail('three-member sentiment groups should be skipped before embedding')
+    async def embeddings(texts, **kwargs):
+        return {text: [1.0, 0.0] for text in set(texts)}
+
+    async def descriptions(members, **kwargs):
+        return {cluster_id: ClusterName(name=f'group {cluster_id}', description='group details') for cluster_id in members}
+
+    async def top_descriptions(children, **kwargs):
+        return {top_id: ClusterName(name=f'top {top_id}', description='top details') for top_id in children}
+
+    def no_umap(*args, **kwargs):
+        return None
 
     monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', top_descriptions)
+    monkeypatch.setattr(reduce, 'reduce_3d', no_umap)
     cache = InsightsCache(enabled=False)
     try:
         result = await pipeline._build_dimension(
@@ -441,5 +456,15 @@ async def test_small_sentiment_groups_log_warning(monkeypatch: pytest.MonkeyPatc
     finally:
         cache.close()
         logger.remove(sink_id)
-    assert len(result.warnings) == 2
-    assert 'skipped' in messages.getvalue()
+
+    base_clusters = [cluster for cluster in result.clusters if cluster.level == 'base']
+    top_clusters = [cluster for cluster in result.clusters if cluster.level == 'top']
+    assert {cluster.group: cluster.size for cluster in base_clusters} == {'positive': 3, 'neutral': 2}
+    assert {cluster.group: cluster.size for cluster in top_clusters} == {'positive': 3, 'neutral': 2}
+    assert all(trace.assignments['sentiment'].base != 'unclassified' for trace in traces[:5])
+    assert traces[5].assignments['sentiment'].base == 'unclassified'
+    assert 'dimension:sentiment' in traces[5].errors
+    assert result.n_failed == 1
+    assert sum('UMAP skipped' in warning for warning in result.warnings) == 2
+    assert 'UMAP skipped' in messages.getvalue()
+    assert 'marked unclassified' in messages.getvalue()

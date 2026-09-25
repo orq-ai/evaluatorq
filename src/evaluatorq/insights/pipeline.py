@@ -169,10 +169,13 @@ async def _build_dimension(  # noqa: C901
     next_base = next_top = 0
     vector_map: dict[str, list[float]] = {}
     for group, indices in group_indices.items():
-        if len(indices) < 5:
-            warning = f'dimension {dimension} group {group!r} skipped: only {len(indices)} signal traces'
+        if len(indices) == 1:
+            warning = f'dimension {dimension} group {group!r} has one signal trace; marked unclassified'
             result.warnings.append(warning)
             logger.warning(warning)
+            trace = usable[indices[0]][0]
+            trace.assignments[dimension] = ClusterAssignment(top='unclassified', base='unclassified')
+            trace.errors[f'dimension:{dimension}'] = warning
             continue
         texts = [usable[i][1] for i in indices]
         embedded = await embed_texts(texts, client=client, model=embedding_model, cache=cache)
@@ -305,6 +308,11 @@ async def _build_dimension(  # noqa: C901
             for i, coord in enumerate(coords):
                 trace = usable[indices[i]][0]
                 trace.coords[dimension] = (float(coord[0]), float(coord[1]), float(coord[2]))
+        else:
+            warning = f'dimension {dimension} group {group!r}: UMAP skipped for {len(indices)} traces (need at least 5)'
+            result.warnings.append(warning)
+            logger.warning(warning)
+    result.n_failed = sum(bool(trace.errors) for trace in traces)
     return result
 
 

@@ -107,8 +107,11 @@ def failures(run: InsightsRun) -> str:
     n_failed = run.counts.get('n_failed_traces', 0)
     if n_failed:
         banners.append(
-            f'<p class="insights-warning">{n_failed} traces could not be fully classified or summarized.</p>'
+            f'<p class="insights-warning">{n_failed} traces had a label, summary, match, or dimension error.</p>'
         )
+    if run.warnings:
+        items = ''.join(f'<li>{esc(warning)}</li>' for warning in run.warnings)
+        banners.append(f'<section class="insights-warning" role="status"><b>Run warnings</b><ul>{items}</ul></section>')
     return ''.join(banners)
 
 
