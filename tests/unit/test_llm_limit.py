@@ -241,3 +241,34 @@ async def test_each_run_gets_its_own_semaphore() -> None:
 
     await asyncio.gather(run(first, 2), run(second, 5))
     assert (first.peak, second.peak) == (2, 5)
+
+
+def test_every_provider_call_in_llm_call_goes_through_bounded_call() -> None:
+    """Only `test_execute_chat_completion_takes_a_slot` runs an executor end to end.
+
+    This covers the rest: a `client.*(...)` call in `llm_call.py` that is not the
+    direct argument of `_bounded_call` skips the slot, and the ceiling stops holding
+    for every judge, generator and trace step behind that executor.
+    """
+    import ast
+    import inspect
+
+    from evaluatorq.common import llm_call
+
+    tree = ast.parse(inspect.getsource(llm_call))
+    wrapped: set[int] = set()
+    provider_calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == '_bounded_call':
+            wrapped.update(id(arg) for arg in node.args)
+        root = node.func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(node.func, ast.Attribute) and isinstance(root, ast.Name) and root.id == 'client':
+            provider_calls.append(node)
+
+    assert provider_calls, 'found no client calls; the scan no longer matches llm_call.py'
+    unbounded = [f'line {call.lineno}' for call in provider_calls if id(call) not in wrapped]
+    assert not unbounded, f'provider calls outside _bounded_call (no LLM slot): {unbounded}'

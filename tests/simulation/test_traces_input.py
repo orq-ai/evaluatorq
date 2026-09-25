@@ -760,44 +760,57 @@ async def test_summarize_conversations_is_concurrent(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
-async def test_summarize_fan_out_is_bounded_by_the_run_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The run-scoped ceiling actually caps the summarize fan-out.
+async def test_summarize_fan_out_is_bounded_by_the_run_ceiling() -> None:
+    """The run-scoped ceiling caps the real summarize -> generate_structured -> executor path.
 
-    The per-call-site semaphore is gone; ``llm_concurrency_limit`` is the only
-    thing left holding the line. The fake takes an ``llm_slot()`` the way the real
-    executor does, so with ``llm_concurrency_limit(2)`` active the observed peak
-    concurrency must be <= 2. Without the ceiling entered (or if a call skipped the
-    slot) the twelve calls would overlap and peak well above 2, failing this test.
+    The fake sits at the provider client, so the slot is taken by the production
+    executor. If any layer between summarize and the client stopped taking a slot,
+    the twelve calls would overlap past the limit and this test would fail.
     """
     import asyncio
 
-    from evaluatorq.common.llm_limit import llm_concurrency_limit, llm_slot
+    from openai.types.chat.parsed_chat_completion import (
+        ParsedChatCompletion,
+        ParsedChatCompletionMessage,
+        ParsedChoice,
+    )
+
+    from evaluatorq.common.llm_limit import llm_concurrency_limit
     from evaluatorq.simulation import traces as traces_mod
 
     limit = 2
     state = {"active": 0, "peak": 0}
 
-    async def tracked_generate_structured(*args: Any, **kwargs: Any) -> StructuredResult[Any]:
-        # Hold a slot around the "request", exactly where the real executor holds
-        # one, so the ceiling gates this fan-out.
-        async with llm_slot():
-            state["active"] += 1
-            state["peak"] = max(state["peak"], state["active"])
-            # Yield repeatedly: an unbounded fan-out would all be in-flight here.
-            for _ in range(4):
-                await asyncio.sleep(0)
-            state["active"] -= 1
-            return StructuredResult(traces_mod._ConversationSummary(summary="summary"), "")
+    async def parse(**_kwargs: Any) -> ParsedChatCompletion[Any]:
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        for _ in range(4):
+            await asyncio.sleep(0)
+        state["active"] -= 1
+        summary = traces_mod._ConversationSummary(summary="summary")
+        return ParsedChatCompletion[Any](
+            id="cmpl",
+            created=0,
+            model="fake",
+            object="chat.completion",
+            choices=[
+                ParsedChoice[Any](
+                    index=0,
+                    finish_reason="stop",
+                    message=ParsedChatCompletionMessage[Any](role="assistant", content=None, parsed=summary),
+                )
+            ],
+        )
 
-    monkeypatch.setattr(traces_mod, "generate_structured", tracked_generate_structured)
+    client = MagicMock()
+    client.chat.completions.parse = parse
 
     conversations = [_make_conversation(f"t{i}") for i in range(12)]
     async with llm_concurrency_limit(limit):
-        summaries = await summarize_conversations(conversations, client=MagicMock())
+        summaries = await summarize_conversations(conversations, client=client)
 
     assert len(summaries) == 12
-    assert state["peak"] > 1  # still actually concurrent
-    assert state["peak"] <= limit  # and bounded by the ceiling
+    assert state["peak"] == limit  # concurrent, and held at the ceiling
 
 
 @pytest.mark.asyncio
