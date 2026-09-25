@@ -1708,6 +1708,7 @@ class ManifestSurface(StrEnum):
 
     SIM = 'sim'
     REDTEAM = 'redteam'
+    INSIGHTS = 'insights'
 
 
 class ManifestStatus(StrEnum):
