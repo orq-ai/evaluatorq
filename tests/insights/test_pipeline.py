@@ -30,7 +30,11 @@ def _trace(i: int) -> TraceRecord:
 
 
 def _patch_clients(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pipeline, 'resolve_llm_client', lambda client: SimpleNamespace(client=object(), owned=False))
+    def resolve_client(client: object, *, max_retries: int) -> SimpleNamespace:
+        assert max_retries == 0
+        return SimpleNamespace(client=object(), owned=False)
+
+    monkeypatch.setattr(pipeline, 'resolve_llm_client', resolve_client)
     monkeypatch.setattr(pipeline, 'resolve_orq_client', lambda: object())
 
     async def close(_client):
