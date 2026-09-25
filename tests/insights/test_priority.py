@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from evaluatorq.insights.models import Cluster, DimensionResult, LabelAnswer, TraceInsight
-from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, MADE_ERRORS, score_to_unit
+from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, MADE_ERRORS
 from evaluatorq.insights.priority import priority_points
 
 
@@ -57,10 +59,12 @@ def _dimension(clusters: list[Cluster]) -> DimensionResult:
 
 
 def test_happy_path_computes_volume_satisfaction_and_error_share() -> None:
+    # `satisfaction` values are already the [0, 1]-normalized `LabelAnswer.value`
+    # `labeling._map_answer` produces for a `score` label (value = score / top).
     traces = [
-        _trace('t1', satisfaction=4.0, made_errors=True),
+        _trace('t1', satisfaction=1.0, made_errors=True),
         _trace('t2', satisfaction=0.0, made_errors=False),
-        _trace('t3', satisfaction=2.0, made_errors=False),
+        _trace('t3', satisfaction=0.5, made_errors=False),
     ]
     cluster = _base_cluster('base-1', ['t1', 't2', 't3'])
     dimension = _dimension([cluster])
@@ -73,11 +77,20 @@ def test_happy_path_computes_volume_satisfaction_and_error_share() -> None:
     point = points[0]
     assert point.cluster_id == 'base-1'
     assert point.volume == 3
-    expected_mean = sum(
-        score_to_unit(CUSTOMER_SATISFACTION, v) for v in (4.0, 0.0, 2.0)
-    ) / 3
-    assert point.mean_satisfaction == expected_mean
+    assert point.mean_satisfaction == (1.0 + 0.0 + 0.5) / 3
     assert point.error_share == 1 / 3
+
+
+def test_top_level_satisfaction_answer_yields_one_in_the_matrix() -> None:
+    """Pins the fix: `answer.value` is used directly, not re-normalized through `score_to_unit`."""
+    traces = [_trace('t1', satisfaction=1.0, made_errors=False)]
+    cluster = _base_cluster('base-1', ['t1'])
+    dimension = _dimension([cluster])
+
+    points, _reason = priority_points(traces, dimension, satisfaction_spec=CUSTOMER_SATISFACTION)
+
+    assert points is not None
+    assert points[0].mean_satisfaction == 1.0
 
 
 def test_missing_satisfaction_label_returns_none_with_reason() -> None:
@@ -97,7 +110,7 @@ def test_missing_satisfaction_label_returns_none_with_reason() -> None:
 
 def test_failed_satisfaction_answers_excluded_from_mean() -> None:
     traces = [
-        _trace('t1', satisfaction=4.0, made_errors=False),
+        _trace('t1', satisfaction=1.0, made_errors=False),
         _trace('t2', satisfaction_error='classify timed out', made_errors=False),
         _trace('t3', satisfaction=None, made_errors=False),
     ]
@@ -112,7 +125,7 @@ def test_failed_satisfaction_answers_excluded_from_mean() -> None:
     point = points[0]
     # volume still counts every member; only t1 contributed a valid satisfaction answer.
     assert point.volume == 3
-    assert point.mean_satisfaction == score_to_unit(CUSTOMER_SATISFACTION, 4.0)
+    assert point.mean_satisfaction == 1.0
 
 
 def test_no_cluster_has_satisfaction_answer_returns_none() -> None:
@@ -132,8 +145,8 @@ def test_no_cluster_has_satisfaction_answer_returns_none() -> None:
 
 def test_errors_label_absent_defaults_error_share_to_zero_with_reason() -> None:
     traces = [
-        _trace('t1', satisfaction=4.0, include_made_errors=False),
-        _trace('t2', satisfaction=2.0, include_made_errors=False),
+        _trace('t1', satisfaction=1.0, include_made_errors=False),
+        _trace('t2', satisfaction=0.5, include_made_errors=False),
     ]
     cluster = _base_cluster('base-1', ['t1', 't2'])
     dimension = _dimension([cluster])
@@ -146,8 +159,30 @@ def test_errors_label_absent_defaults_error_share_to_zero_with_reason() -> None:
     assert 'made_errors' in reason
 
 
+def test_errors_label_requested_but_cluster_all_failed_is_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    """`made_errors` was requested for the run, but every answer in base-2 failed: skip that cluster, not a 0.0 guess."""
+    traces = [
+        _trace('t1', satisfaction=1.0, made_errors=False),
+        _trace('t2', satisfaction=0.5, made_errors_error='classify timed out'),
+        _trace('t3', satisfaction=0.5, made_errors_error='classify timed out'),
+    ]
+    cluster_ok = _base_cluster('base-1', ['t1'])
+    cluster_all_failed = _base_cluster('base-2', ['t2', 't3'])
+    dimension = _dimension([cluster_ok, cluster_all_failed])
+
+    with caplog.at_level('WARNING'):
+        points, reason = priority_points(traces, dimension, satisfaction_spec=CUSTOMER_SATISFACTION)
+
+    assert points is not None
+    assert [p.cluster_id for p in points] == ['base-1']
+    # error_share was requested for the run, so no whole-run degradation note is expected.
+    assert reason is None
+    assert 'base-2' in caplog.text
+    assert 'made_errors' in caplog.text
+
+
 def test_only_base_clusters_are_scored() -> None:
-    traces = [_trace('t1', satisfaction=4.0, made_errors=False)]
+    traces = [_trace('t1', satisfaction=1.0, made_errors=False)]
     top = Cluster(
         id='top-1',
         parent_id=None,
@@ -170,8 +205,8 @@ def test_only_base_clusters_are_scored() -> None:
 def test_made_errors_value_is_true_not_truthy() -> None:
     """A `noul` label's `value` is already the thresholded bool; a non-True value never counts as an error."""
     traces = [
-        _trace('t1', satisfaction=4.0, made_errors=False),
-        _trace('t2', satisfaction=4.0, made_errors=True),
+        _trace('t1', satisfaction=1.0, made_errors=False),
+        _trace('t2', satisfaction=1.0, made_errors=True),
     ]
     cluster = _base_cluster('base-1', ['t1', 't2'])
     dimension = _dimension([cluster])

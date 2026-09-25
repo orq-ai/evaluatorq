@@ -33,11 +33,6 @@ def test_label_name_rejects_reserved_match_key() -> None:
         LabelSpec(name='__match__', kind='noul', instructions='x')
 
 
-def test_score_to_unit_maps_levels() -> None:
-    assert presets.score_to_unit(presets.CUSTOMER_SATISFACTION, 0.0) == 0.0
-    assert presets.score_to_unit(presets.CUSTOMER_SATISFACTION, 4.0) == 1.0
-
-
 def test_dimension_fields_cover_every_dimension_name() -> None:
     from evaluatorq.insights.models import DimensionName
     from typing import get_args
