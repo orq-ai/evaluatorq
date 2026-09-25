@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
+from evaluatorq.backends.container import RESERVED_ENV, DockerOptions, isolation_breaking_flags
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
@@ -122,6 +123,9 @@ class AgentSpec(BaseModel):
     system_prompt_flag: str | None
     skills_dir: str
     tools: tuple[str, ...]
+    container_permission: str | None
+    container_extra_args: tuple[str, ...]
+    provider_env: tuple[str, ...]
     # Empty means the binary reads stdin whenever no positional prompt is given.
     stdin_marker: tuple[str, ...] = ()
 
@@ -135,6 +139,9 @@ AGENTS: types.MappingProxyType[str, AgentSpec] = types.MappingProxyType({
         system_prompt_flag='--append-system-prompt',
         skills_dir='.claude/skills',
         tools=('Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch'),
+        container_permission='bypassPermissions',
+        container_extra_args=(),
+        provider_env=('ANTHROPIC_API_KEY',),
     ),
     'codex': AgentSpec(
         binary='codex',
@@ -144,6 +151,10 @@ AGENTS: types.MappingProxyType[str, AgentSpec] = types.MappingProxyType({
         system_prompt_flag=None,
         skills_dir='.agents/skills',
         tools=('shell', 'apply_patch'),
+        # Codex's own sandbox often cannot start inside a container; the container is the sandbox.
+        container_permission='danger-full-access',
+        container_extra_args=(),
+        provider_env=('OPENAI_API_KEY',),
         stdin_marker=('-',),
     ),
     'opencode': AgentSpec(
@@ -154,6 +165,9 @@ AGENTS: types.MappingProxyType[str, AgentSpec] = types.MappingProxyType({
         system_prompt_flag=None,
         skills_dir='.agents/skills',
         tools=('bash', 'read', 'edit', 'write', 'glob', 'grep'),
+        container_permission=None,
+        container_extra_args=('--auto',),
+        provider_env=('ANTHROPIC_API_KEY', 'OPENAI_API_KEY'),
     ),
 })
 if set(AGENTS) != set(get_args(AgentName)):
@@ -570,6 +584,7 @@ class CodingAgentTarget(AgentTarget):
         timeout_ms: int = DEFAULT_CODING_AGENT_TIMEOUT_MS,
         max_turn_ms: int = DEFAULT_CODING_AGENT_MAX_TURN_MS,
         env: dict[str, str] | None = None,
+        container: DockerOptions | None = None,
     ) -> None:
         super().__init__()
         if agent not in AGENTS:
@@ -579,6 +594,22 @@ class CodingAgentTarget(AgentTarget):
         if timeout_ms <= 0 or max_turn_ms <= 0:
             raise ValueError('timeout_ms and max_turn_ms must be positive')
         self._spec = AGENTS[agent]
+        self._container = container
+        if container is not None:
+            if permission_mode is None:
+                permission_mode = self._spec.container_permission
+            extra_args = [
+                *(extra_args or []),
+                *(a for a in self._spec.container_extra_args if a not in (extra_args or [])),
+            ]
+            for flag in isolation_breaking_flags(container.run_args):
+                logger.warning(f'CodingAgentTarget({agent}): run_args {flag!r} undoes the container isolation')
+            dropped = [key for key in RESERVED_ENV if key in (env or {})]
+            if dropped:
+                logger.warning(
+                    f'CodingAgentTarget({agent}): env {", ".join(dropped)} not forwarded into the container; '
+                    'it applies to the docker client only'
+                )
         if permission_mode is not None and self._spec.permission_flag is None:
             raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
         if orq is not None and launcher == 'direct':
@@ -601,6 +632,7 @@ class CodingAgentTarget(AgentTarget):
             'timeout_ms': timeout_ms,
             'max_turn_ms': max_turn_ms,
             'env': dict(env) if env else None,
+            'container': container,
         }
         self._agent: AgentName = agent
         self._launcher: Launcher = launcher
