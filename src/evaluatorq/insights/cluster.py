@@ -12,10 +12,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from operator import itemgetter
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 from loguru import logger
 from scipy.cluster.hierarchy import fcluster, linkage
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 
 @dataclass
@@ -26,15 +30,15 @@ class ClusterTree:
     `top_of_base` maps every non-noise base cluster id to its top cluster id.
     """
 
-    base_labels: np.ndarray
+    base_labels: NDArray[Any]
     top_of_base: dict[int, int] = field(default_factory=dict)
     n_base: int = 0
     n_top: int = 0
 
 
-def centroids(vectors: np.ndarray, labels: np.ndarray) -> dict[int, np.ndarray]:
+def centroids(vectors: NDArray[Any], labels: NDArray[Any]) -> dict[int, NDArray[Any]]:
     """Mean vector per non-noise label. `labels` must align 1:1 with `vectors` rows."""
-    result: dict[int, np.ndarray] = {}
+    result: dict[int, NDArray[Any]] = {}
     for lbl in np.unique(labels):
         if lbl == -1:
             continue
@@ -42,7 +46,7 @@ def centroids(vectors: np.ndarray, labels: np.ndarray) -> dict[int, np.ndarray]:
     return result
 
 
-def nearest_neighbours(cents: dict[int, np.ndarray], k: int = 3) -> dict[int, list[int]]:
+def nearest_neighbours(cents: dict[int, NDArray[Any]], k: int = 3) -> dict[int, list[int]]:
     """For each cluster id, its up to `k` nearest other cluster ids by centroid cosine similarity.
 
     Most similar first. Used by `describe.py` (contrastive examples) and `merge.py`
@@ -60,7 +64,7 @@ def nearest_neighbours(cents: dict[int, np.ndarray], k: int = 3) -> dict[int, li
     return result
 
 
-def gap_optimal_k(z: np.ndarray, n: int, *, k_min: int = 2, k_max: int) -> int:
+def gap_optimal_k(z: NDArray[Any], n: int, *, k_min: int = 2, k_max: int) -> int:
     """Port of `_gap_optimal_k`: the k whose merge-distance gap to the next merge is largest.
 
     `z` is a scipy linkage matrix over `n` observations. Falls back to `k_min` when there
@@ -84,14 +88,14 @@ def gap_optimal_k(z: np.ndarray, n: int, *, k_min: int = 2, k_max: int) -> int:
     return best_k
 
 
-def _cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
+def _cosine_sim(a: NDArray[Any], b: NDArray[Any]) -> float:
     denom = float(np.linalg.norm(a) * np.linalg.norm(b))
     if denom == 0.0:
         return 0.0
     return float(np.dot(a, b) / denom)
 
 
-def _flag_outliers(vectors: np.ndarray, base_labels: np.ndarray, *, zscore: float) -> np.ndarray:
+def _flag_outliers(vectors: NDArray[Any], base_labels: NDArray[Any], *, zscore: float) -> NDArray[Any]:
     """Port of `cluster_runner.py`'s z-score outlier step, applied to base clusters only.
 
     Per base cluster with >= 3 members, a point whose distance to the (unit) centroid
@@ -120,7 +124,7 @@ def _flag_outliers(vectors: np.ndarray, base_labels: np.ndarray, *, zscore: floa
     return labels
 
 
-def _relabel_contiguous(labels: np.ndarray) -> np.ndarray:
+def _relabel_contiguous(labels: NDArray[Any]) -> NDArray[Any]:
     """Remap non-noise labels to a contiguous `0..k-1` range, preserving `-1`."""
     unique = sorted(int(v) for v in np.unique(labels) if v != -1)
     remap = {old: new for new, old in enumerate(unique)}
@@ -131,8 +135,8 @@ def _relabel_contiguous(labels: np.ndarray) -> np.ndarray:
 
 
 def _merge_base_into_nearest_sibling(
-    base_labels: np.ndarray,
-    vectors: np.ndarray,
+    base_labels: NDArray[Any],
+    vectors: NDArray[Any],
     top_labels: dict[int, int],
     group_top: int,
     max_subclusters: int,
@@ -157,7 +161,7 @@ def _merge_base_into_nearest_sibling(
 
 
 def cluster_two_level(
-    vectors: np.ndarray,
+    vectors: NDArray[Any],
     *,
     max_clusters: int = 15,
     max_subclusters: int = 15,
