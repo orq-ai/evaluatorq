@@ -74,6 +74,13 @@ class DockerOptions(BaseModel):
     pass_env: tuple[str, ...] | None = None
     allow_privilege_escalation: bool = False
 
+    @field_validator('name_prefix')
+    @classmethod
+    def name_prefix_must_be_safe_component(cls, value: str) -> str:
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]*', value):
+            raise ValueError('name_prefix must be a Docker-safe single path component')
+        return value
+
     @model_validator(mode='after')
     def podman_does_not_accept_docker_context(self) -> DockerOptions:
         if self.binary == 'podman' and self.context is not None:

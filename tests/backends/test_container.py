@@ -60,6 +60,12 @@ def test_options_frozen_and_workdir_absolute() -> None:
         opts.image = 'x'  # pyright: ignore[reportAttributeAccessIssue]
 
 
+@pytest.mark.parametrize('name_prefix', ['', '.', '..', '../evq-leak', '../../evq-leak', 'a/b', 'a\\b', '-task', '_task'])
+def test_name_prefix_must_be_safe_component(name_prefix: str) -> None:
+    with pytest.raises(pydantic.ValidationError, match='Docker-safe single path component'):
+        DockerOptions(name_prefix=name_prefix)
+
+
 def test_podman_context_is_rejected() -> None:
     with pytest.raises(pydantic.ValidationError, match='CONTAINER_CONNECTION'):
         DockerOptions(binary='podman', context='remote')
