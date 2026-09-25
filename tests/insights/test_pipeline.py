@@ -282,6 +282,39 @@ async def test_partial_label_answer_failures_do_not_fail_label_stage(
     assert run.labels['second'].counts == {'valid': len(traces)}
 
 
+
+@pytest.mark.asyncio
+async def test_all_false_query_matches_finish_as_empty_without_summary_or_dimensions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(3)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces, compiled=object()))
+
+    async def label(*args, **kwargs):
+        return [SimpleNamespace(trace=trace, answers={}, matched=False, error=None) for trace in traces]
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail('empty matched population must bypass summaries and dimensions')
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', forbidden)
+    monkeypatch.setattr(pipeline, '_build_dimension', forbidden)
+    run = await pipeline.insights(_population(), dimensions=('intent',), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    assert run.traces == []
+    assert run.warnings.count('population is empty') == 1
+    assert run.counts['n_traces'] == 0
+    assert run.population['n_matched'] == 0
+    assert run.population['n_failed_match'] == 0
+    assert run.dimensions == {}
+    assert list(tmp_path.glob('insights_*.json'))
+    from evaluatorq.common.run_manifest import list_manifests
+
+    assert list_manifests(tmp_path)[0].status.value == 'completed'
+
+
 def _population():
     from evaluatorq.insights.models import InsightsPopulation
 
