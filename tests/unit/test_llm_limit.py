@@ -211,6 +211,37 @@ async def test_none_leaves_an_enclosing_limit_alone() -> None:
     assert peak.peak == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('outer', 'inner', 'expected'),
+    [
+        (2, 5, 2),
+        (5, 2, 2),
+        (2, UNBOUNDED, 2),
+        (UNBOUNDED, 3, 3),
+    ],
+)
+async def test_nested_limits_honor_every_finite_budget(outer: int, inner: int, expected: int) -> None:
+    peak = _Peak()
+    async with llm_concurrency_limit(outer):
+        async with llm_concurrency_limit(inner):
+            await asyncio.gather(*(peak.call() for _ in range(12)))
+    assert peak.peak == expected
+
+
+@pytest.mark.asyncio
+async def test_nested_groups_share_the_outer_budget() -> None:
+    peak = _Peak()
+
+    async def group(inner: int) -> None:
+        async with llm_concurrency_limit(inner):
+            await asyncio.gather(*(peak.call() for _ in range(8)))
+
+    async with llm_concurrency_limit(2):
+        await asyncio.gather(group(5), group(UNBOUNDED))
+    assert peak.peak == 2
+
+
 @pytest.mark.parametrize(
     ('module', 'func'),
     [

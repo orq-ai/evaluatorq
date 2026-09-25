@@ -28,7 +28,7 @@ async def evaluatorq(
 | `jobs` | `list[Job]` \| `None` | required when `inference=True` | Jobs to run on each data point; omitted and ignored when `inference=False` |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `datapoint_parallelism` | `int` (≥1) | `10` | Number of concurrent datapoints. The former name `parallelism` still works, deprecated |
-| `llm_parallelism` | `int` (≥1, or `-1`) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. `None` applies the default of 10; `-1` disables the ceiling |
+| `llm_parallelism` | `int` (≥1, or `-1`) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. `None` keeps an enclosing limit or applies the default of 10; `-1` adds no cap and disables the default only at the top level |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
@@ -313,7 +313,7 @@ Against a provider concurrency limit, size the request ceiling instead:
 await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=20)
 ```
 
-Unset, the ceiling is 10 concurrent requests, and that default also covers calls made outside `evaluatorq()`, such as a standalone `run_pairwise()`. Pass `-1` to disable the ceiling. To bound code that is not an entry point, wrap it in `async with evaluatorq.llm_concurrency_limit(n):`.
+Unset, the ceiling is 10 concurrent requests, and that default also covers calls made outside `evaluatorq()`, such as a standalone `run_pairwise()`. Pass `-1` at the top level to disable the default ceiling. To bound code that is not an entry point, wrap it in `async with evaluatorq.llm_concurrency_limit(n):`. Nested limits stack: a block set to 5 inside a run set to 10 has a ceiling of 5, while a block set to 20 or `-1` inside that run remains under the run's ceiling of 10.
 
 This counts requests, not tasks, so it holds however the fan-out nests. It is a concurrency bound rather than a rate limit — ten slots against 10s calls is about 60 requests/minute, but the same ten slots become 300/minute if the provider speeds up to 2s.
 

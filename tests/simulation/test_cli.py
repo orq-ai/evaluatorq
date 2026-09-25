@@ -1877,7 +1877,8 @@ def test_from_traces_runs_every_llm_step_under_the_ceiling(
     seen: dict[str, int] = {}
 
     def record(step: str) -> None:
-        seen[step] = (llm_limit._llm_budget.get() or llm_limit._DEFAULT_BUDGET)._limit
+        budgets = llm_limit._llm_budgets.get()
+        seen[step] = budgets[-1]._limit if budgets else llm_limit.DEFAULT_LLM_PARALLELISM
 
     async def fake_fetch(**kwargs: Any) -> list[Any]:
         return [object()]
