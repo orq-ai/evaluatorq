@@ -65,7 +65,7 @@
             <a id="nextFileLink" class="nav" href="z_92b8f29529224fcd_evaluators_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-09-25 14:19 +0000
+            created at 2026-09-25 15:53 +0000
         </p>
         <aside class="hidden">
             <button type="button" class="button_next_chunk" data-shortcut="j"></button>
@@ -876,7 +876,7 @@
     <p class="pln"><span class="n"><a id="t794" href="#t794">794</a></span><span class="t"><span class="str">        parallelism: Deprecated alias for ``datapoint_parallelism``.</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t795" href="#t795">795</a></span><span class="t"><span class="str">        llm_parallelism: Ceiling on in-flight LLM requests for the whole run,</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t796" href="#t796">796</a></span><span class="t"><span class="str">              counted per request rather than per task, so it holds however the</span>&nbsp;</span><span class="r"></span></p>
-    <p class="pln"><span class="n"><a id="t797" href="#t797">797</a></span><span class="t"><span class="str">              datapoint/job/evaluator/jury fan-out nests. Unbounded by default. This</span>&nbsp;</span><span class="r"></span></p>
+    <p class="pln"><span class="n"><a id="t797" href="#t797">797</a></span><span class="t"><span class="str">              datapoint/job/evaluator/jury fan-out nests. Defaults to 10; -1 disables it. This</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t798" href="#t798">798</a></span><span class="t"><span class="str">              is the knob to set against a provider concurrency limit; ``datapoint_parallelism``</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t799" href="#t799">799</a></span><span class="t"><span class="str">              bounds tasks, and one task can issue many requests. Only requests routed</span>&nbsp;</span><span class="r"></span></p>
     <p class="pln"><span class="n"><a id="t800" href="#t800">800</a></span><span class="t"><span class="str">              through evaluatorq are counted &#8212; wrap a job&#x27;s own provider calls in</span>&nbsp;</span><span class="r"></span></p>
@@ -1041,7 +1041,7 @@
             <a class="nav" href="z_92b8f29529224fcd_evaluators_py.html">&#xbb; next</a>
             &nbsp; &nbsp; &nbsp;
             <a class="nav" href="https://coverage.readthedocs.io/en/7.16.1">coverage.py v7.16.1</a>,
-            created at 2026-09-25 14:19 +0000
+            created at 2026-09-25 15:53 +0000
         </p>
     </div>
 </footer>
