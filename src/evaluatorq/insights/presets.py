@@ -141,14 +141,3 @@ DIMENSION_FIELDS: MappingProxyType[DimensionName, str] = MappingProxyType({
 _missing_fields = set(get_args(DimensionName)) - set(DIMENSION_FIELDS)
 if _missing_fields:
     raise RuntimeError(f'DIMENSION_FIELDS is missing a source field for: {sorted(_missing_fields)}.')
-
-
-def score_to_unit(label: LabelSpec, value: float) -> float:
-    """Map a `score` label's probability-weighted level mean onto 0-1 (level 0 -> 0.0, last level -> 1.0)."""
-    if label.kind != 'score' or not isinstance(label.criteria, list):
-        raise ValueError(f"score_to_unit needs a 'score' label with a level list, got kind={label.kind!r}")
-    n_levels = len(label.criteria)
-    if n_levels <= 1:
-        return 0.0
-    unit = value / (n_levels - 1)
-    return min(1.0, max(0.0, unit))

@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from evaluatorq.insights.models import PriorityPoint
-from evaluatorq.insights.presets import score_to_unit
 
 if TYPE_CHECKING:
     from evaluatorq.insights.models import DimensionResult, LabelSpec, TraceInsight
@@ -33,21 +32,27 @@ def priority_points(
     """Compute one `PriorityPoint` per base cluster in `dimension`.
 
     volume = the cluster's member count. mean_satisfaction = the mean of
-    `score_to_unit(satisfaction_spec, value)` over members whose
-    `satisfaction_label` answer succeeded (`error is None` and `value is not
-    None`); members with a failed or missing answer are excluded from the
-    mean, never counted as 0. error_share = the share of members with a
-    non-failed `errors_label` answer whose `value is True` (already the
-    threshold-derived boolean — never re-derive it from `probabilities`);
-    when every member's `errors_label` answer is missing or failed for a
-    cluster, `error_share` defaults to 0.0.
+    `answer.value` over members whose `satisfaction_label` answer succeeded
+    (`error is None` and `value is not None`); `labeling._map_answer` already
+    normalizes a `score`-kind answer to `[0, 1]` (`value = score / top`), so
+    this reads it directly rather than re-normalizing it a second time.
+    `satisfaction_spec` is accepted for interface stability (the caller
+    already has it at hand) but is not otherwise read here. Members with a
+    failed or missing answer are excluded from the mean, never counted as 0.
+    error_share = the share of members with a non-failed `errors_label`
+    answer whose `value is True` (already the threshold-derived boolean —
+    never re-derive it from `probabilities`).
 
     Returns `(None, reason)` when `satisfaction_label` was never requested
     for this run (no trace carries that key in `labels`) or when every base
-    cluster ends up with zero valid `satisfaction_label` answers. Otherwise
-    returns `(points, reason)` where `reason` is `None` unless `errors_label`
-    was never requested for this run, in which case it names the 0.0
-    error-share default applied to every point.
+    cluster ends up with zero valid `satisfaction_label` answers. A base
+    cluster with zero valid `satisfaction_label` answers is skipped (logged),
+    and likewise a base cluster is skipped when `errors_label` was requested
+    for the run but every member's answer failed or is missing for that one
+    cluster — neither ever falls back to a guessed value. Only when
+    `errors_label` was never requested for the *whole run* does every
+    produced point's `error_share` default to `0.0`, and that default is
+    always named in the returned `reason`.
     """
     satisfaction_requested = any(satisfaction_label in trace.labels for trace in run_traces)
     if not satisfaction_requested:
@@ -77,7 +82,7 @@ def priority_points(
             answer = member.labels.get(satisfaction_label)
             if answer is None or answer.error is not None or answer.value is None:
                 continue
-            satisfaction_values.append(score_to_unit(satisfaction_spec, float(answer.value)))  # pyright: ignore[reportArgumentType]
+            satisfaction_values.append(float(answer.value))  # pyright: ignore[reportArgumentType]
 
         if not satisfaction_values:
             logger.warning(
@@ -97,7 +102,19 @@ def priority_points(
             error_denominator += 1
             if answer.value is True:
                 error_numerator += 1
-        error_share = (error_numerator / error_denominator) if error_denominator else 0.0
+
+        if error_denominator == 0:
+            if errors_requested:
+                logger.warning(
+                    'Insights priority matrix: cluster {!r} in dimension {!r} has no valid {!r} answer and was skipped',
+                    cluster.id,
+                    dimension.name,
+                    errors_label,
+                )
+                continue
+            error_share = 0.0
+        else:
+            error_share = error_numerator / error_denominator
 
         points.append(
             PriorityPoint(

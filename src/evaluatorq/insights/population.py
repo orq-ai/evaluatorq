@@ -2,11 +2,12 @@
 
 Three mutually exclusive paths, matching `InsightsPopulation`'s own fields:
 
-- **Query path** (`pop.query` set): compile the semantic query with `compile_query`,
-  select generated facet/numeric filters with `select_filters_with_response`, merge
-  them under the caller's explicit facets/numeric (explicit wins — mirrors
-  `trace_finder/run_store.py`'s `_merge_facets`/`_merge_numeric`, which are private
-  to that module and not reused directly), then load with `OrqTraceSource`.
+- **Query path** (`pop.query` set): compile the semantic query with `compile_query`
+  and select generated facet/numeric filters with `select_filters_with_response`
+  concurrently (mirrors `trace_finder/run_store.py`'s `_plan`), merge them under the
+  caller's explicit facets/numeric (explicit wins — reuses `run_store._merge_facets`/
+  `_merge_numeric` directly; they're module-private but not duplicated here), then
+  load with `OrqTraceSource`.
 - **Finder export path** (`pop.finder_export` set): read a `RunExport` JSON, reload
   its window and filters through `OrqTraceSource`, and keep only the traces whose
   ids are in `matched_trace_ids`. No compile, no match question — the export already
@@ -28,6 +29,7 @@ into a `StageFailure` for the `'population'` stage.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
@@ -38,8 +40,9 @@ from evaluatorq.trace_finder.compiler import compile_query
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.filter_selector import select_filters_with_response
-from evaluatorq.trace_finder.models import FACET_NAMES, FacetSelection, NumericFilters
+from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.orq_source import OrqTraceSource
+from evaluatorq.trace_finder.run_store import _merge_facets, _merge_numeric  # reportPrivateUsage is off; see docstring
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -69,22 +72,6 @@ def _window(pop: InsightsPopulation) -> tuple[datetime, datetime]:
     end = pop.end or datetime.now(timezone.utc)
     start = pop.start or end - timedelta(days=pop.window_days)
     return start, end
-
-
-def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
-    """Merge facets with caller-supplied non-empty values taking precedence (mirrors `run_store._merge_facets`)."""
-    return FacetSelection(
-        project_id=caller.project_id,
-        **{name: getattr(caller, name) or getattr(generated, name) for name in FACET_NAMES},
-    )
-
-
-def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
-    """Merge numeric bounds with each caller-supplied bound taking precedence (mirrors `run_store._merge_numeric`)."""
-    return NumericFilters(**{
-        name: getattr(caller, name) if getattr(caller, name) is not None else getattr(generated, name)
-        for name in NumericFilters.model_fields
-    })
 
 
 def _facets_from_export(filters: ExportFilters) -> FacetSelection:
@@ -147,14 +134,27 @@ async def _resolve_from_query(
     assert pop.query is not None  # noqa: S101 - guarded by the caller's dispatch before this is reached
     start, end = _window(pop)
 
+    # Run the compile and the filter selection concurrently, mirroring
+    # `trace_finder/run_store.py`'s `_plan`. Only the compile task can raise
+    # (`_select_generated_filters` already catches its own failures and
+    # degrades instead); either way, clean up the other task before returning.
+    compile_task = asyncio.create_task(compile_query(client, compiler_model, pop.query))
+    filters_task = asyncio.create_task(
+        _select_generated_filters(
+            pop.query, orq=orq, client=client, classifier_model=classifier_model, start=start, end=end
+        )
+    )
+    tasks = (compile_task, filters_task)
     try:
-        plan = await compile_query(client, compiler_model, pop.query)
+        plan, (generated_facets, filter_error) = await asyncio.gather(*tasks)
     except Exception as error:
         raise PopulationError(f'compiling the population query failed: {error}') from error
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    generated_facets, filter_error = await _select_generated_filters(
-        pop.query, orq=orq, client=client, classifier_model=classifier_model, start=start, end=end
-    )
     merged_facets = _merge_facets(pop.facets, generated_facets)
     merged_numeric = _merge_numeric(pop.numeric, plan.numeric)
 
