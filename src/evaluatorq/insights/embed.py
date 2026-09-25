@@ -1,10 +1,8 @@
 """Embedding pass: batched text embeddings through the orq router, with a vector cache.
 
-One retry layer: `with_retry` wraps each batch's `client.embeddings.create` call.
-The caller resolves `client` with `max_retries=0` (via `common.llm_client.
-resolve_llm_client`) so the SDK's own retry budget is disarmed before it reaches
-here — `with_retry` is the only layer, per the "one retry layer per call path"
-house rule.
+One retry layer: `with_retry` wraps each batch's `client.embeddings.create` call,
+and `embed_texts` disarms the SDK's own budget with `without_client_retries` so
+the two never multiply.
 
 Unlike a per-trace summary or label, a whole embedding batch failing after
 retries is not a per-trace failure: it takes an entire dimension's clustering
@@ -19,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.common.retry import with_retry
+from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.tracing import record_token_usage, with_llm_span
 
 if TYPE_CHECKING:
@@ -71,6 +69,7 @@ async def embed_texts(
     unique_texts = list(dict.fromkeys(texts))
     if not unique_texts:
         return {}
+    client = without_client_retries(client)
 
     vectors: dict[str, list[float]] = dict(cache.get_vectors(model, unique_texts))
     missing = [text for text in unique_texts if text not in vectors]
