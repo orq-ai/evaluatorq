@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from evaluatorq.insights.cluster import ClusterTree, cluster_two_level
+from evaluatorq.insights.cluster import ClusterTree, cluster_two_level, nearest_neighbours
 
 
 def _blobs(n_blobs: int, n_per_blob: int, dim: int = 32, spread: float = 0.3, seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
@@ -105,3 +105,33 @@ def test_top_of_base_keys_match_present_base_ids(n_blobs, n_per_blob):
 
     present_base_ids = {b for b in tree.base_labels.tolist() if b != -1}
     assert present_base_ids == set(tree.top_of_base.keys())
+
+
+def test_nearest_neighbours_returns_k_closest_by_cosine_similarity():
+    # 0 and 1 point the same direction (closest to each other); 2 is orthogonal to both.
+    cents = {
+        0: np.array([1.0, 0.0]),
+        1: np.array([0.9, 0.1]),
+        2: np.array([0.0, 1.0]),
+    }
+    result = nearest_neighbours(cents, k=1)
+
+    assert result[0] == [1]
+    assert result[1] == [0]
+    # 2 is closer to 1 (small positive x-component) than to 0 (pure x-axis).
+    assert result[2] == [1]
+
+
+def test_nearest_neighbours_caps_at_k_and_excludes_self():
+    cents = {i: np.array([float(i), 1.0]) for i in range(6)}
+    result = nearest_neighbours(cents, k=3)
+
+    assert len(result) == 6
+    for cid, neighbours in result.items():
+        assert len(neighbours) <= 3
+        assert cid not in neighbours
+
+
+def test_nearest_neighbours_single_cluster_has_no_neighbours():
+    result = nearest_neighbours({0: np.array([1.0, 0.0])}, k=3)
+    assert result == {0: []}
