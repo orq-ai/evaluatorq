@@ -976,6 +976,7 @@ async def test_generated_datapoint_first_message_has_simulation_span(
         CommunicationStyle,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
 
     persona = Persona(
@@ -996,6 +997,7 @@ async def test_generated_datapoint_first_message_has_simulation_span(
         async with with_simulation_span('orq.simulation.first_message_generation', None):
             datapoint = await _generate_single_datapoint(gen, persona, scenario)
 
+    assert isinstance(datapoint, SimulationDatapoint)
     assert datapoint.first_message == 'Hello there'
     pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     first_msg = _find(span_collector, 'orq.simulation.first_message_generation')

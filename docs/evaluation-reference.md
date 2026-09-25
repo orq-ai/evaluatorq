@@ -313,7 +313,7 @@ Against a provider concurrency limit, size the request ceiling instead:
 await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=20)
 ```
 
-Unset, the ceiling is 10 concurrent requests, and that default also covers calls made outside `evaluatorq()`, such as a standalone `run_pairwise()`. Pass `-1` at the top level to disable the default ceiling. To bound code that is not an entry point, wrap it in `async with evaluatorq.llm_concurrency_limit(n):`. Nested limits stack: a block set to 5 inside a run set to 10 has a ceiling of 5, while a block set to 20 or `-1` inside that run remains under the run's ceiling of 10.
+Unset, the ceiling is 10 concurrent requests, and that default also covers calls made outside `evaluatorq()`, such as a standalone `run_pairwise()`. Two unconfigured runs in the same event loop share that default cap of 10, protecting the provider from their combined load; a run with an explicit `llm_parallelism=` has its own budget. Pass `-1` at the top level to disable the default ceiling. To bound code that is not an entry point, wrap it in `async with evaluatorq.llm_concurrency_limit(n):`. Nested limits stack: a block set to 5 inside a run set to 10 has a ceiling of 5, while a block set to 20 or `-1` inside that run remains under the run's ceiling of 10.
 
 This counts requests, not tasks, so it holds however the fan-out nests. It is a concurrency bound rather than a rate limit — ten slots against 10s calls is about 60 requests/minute, but the same ten slots become 300/minute if the provider speeds up to 2s.
 

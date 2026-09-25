@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_client import resolve_results_base_url
-from evaluatorq.common.llm_limit import llm_concurrency_limit
+from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
 from evaluatorq.common.parallelism import resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
@@ -2176,12 +2176,18 @@ async def _resolve_or_generate_datapoints(
                 'orq.simulation.scenario_count': len(scenarios),
             },
         ) as gen_span:
-            # Concurrency is bounded by the run-scoped LLM ceiling, not by batching.
-            results = await asyncio.gather(
-                *[_generate_single_datapoint(first_msg_gen, p, s) for p, s in pairs],
-                return_exceptions=True,
-            )
-            generated = _keep_generated_datapoints(pairs, results, gen_span)
+            # Keep pending tasks proportional to the request ceiling. An explicit
+            # A top-level -1 leaves both request and task concurrency unbounded.
+            limit = active_llm_parallelism()
+            batch_size = len(pairs) if limit is None else limit * 2
+            generated: list[SimulationDatapoint] = []
+            for start in range(0, len(pairs), batch_size):
+                batch = pairs[start : start + batch_size]
+                results = await asyncio.gather(
+                    *[_generate_single_datapoint(first_msg_gen, p, s) for p, s in batch],
+                    return_exceptions=True,
+                )
+                generated.extend(_keep_generated_datapoints(batch, results, gen_span))
             if gen_span is not None:
                 gen_span.set_attribute('orq.simulation.generated_count', len(generated))
                 gen_span.set_attribute('orq.simulation.failed_count', len(pairs) - len(generated))
@@ -2227,22 +2233,27 @@ async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -
     return out
 
 
+@dataclass(frozen=True)
+class _FirstMessageFailure:
+    error: Exception
+
+
 def _keep_generated_datapoints(
     pairs: list[tuple[Persona, Scenario]],
-    results: list[SimulationDatapoint | BaseException],
+    results: list[SimulationDatapoint | _FirstMessageFailure | BaseException],
     gen_span: Any,
 ) -> list[SimulationDatapoint]:
     """Keep the pairs whose first message generated; log and record each failure."""
     generated: list[SimulationDatapoint] = []
     for (p, s), outcome in zip(pairs, results, strict=True):
-        if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
-            raise outcome
         if isinstance(outcome, BaseException):
+            raise outcome
+        if isinstance(outcome, _FirstMessageFailure):
             logger.warning(
                 'first-message generation failed for persona=%r scenario=%r: %r — skipping',
                 p.name,
                 s.name,
-                outcome,
+                outcome.error,
             )
             # The per-pair span is gone, so the phase span carries
             # the failure identity instead — otherwise a partial
@@ -2253,8 +2264,8 @@ def _keep_generated_datapoints(
                     {
                         'orq.simulation.persona': p.name,
                         'orq.simulation.scenario': s.name,
-                        'error.type': type(outcome).__name__,
-                        'error.message': str(outcome),
+                        'error.type': type(outcome.error).__name__,
+                        'error.message': str(outcome.error),
                     },
                 )
             continue
@@ -2264,12 +2275,15 @@ def _keep_generated_datapoints(
 
 async def _generate_single_datapoint(
     gen: FirstMessageGenerator, persona: Persona, scenario: Scenario
-) -> SimulationDatapoint:
+) -> SimulationDatapoint | _FirstMessageFailure:
     from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 
     # ponytail: no per-pair span — the caller wraps the whole generation phase
     # in a single orq.simulation.first_message_generation span.
-    first_message = await gen.generate(persona, scenario)
+    try:
+        first_message = await gen.generate(persona, scenario)
+    except Exception as exc:  # noqa: BLE001 - only model-call failures drop a pair
+        return _FirstMessageFailure(exc)
     return generate_datapoint(persona, scenario, first_message)
 
 

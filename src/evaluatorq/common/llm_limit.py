@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 from contextvars import ContextVar
+from threading import Lock
 from typing import TYPE_CHECKING
 from weakref import WeakKeyDictionary
 
@@ -62,15 +63,21 @@ class _Budget:
     def __init__(self, limit: int) -> None:
         self._limit = limit
         self._semaphores: WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = WeakKeyDictionary()
+        self._lock = Lock()
+
+    @property
+    def limit(self) -> int:
+        return self._limit
 
     def semaphore(self) -> asyncio.Semaphore | None:
         if self._limit == UNBOUNDED:
             return None
         loop = asyncio.get_running_loop()
-        semaphore = self._semaphores.get(loop)
-        if semaphore is None:
-            semaphore = self._semaphores[loop] = asyncio.Semaphore(self._limit)
-        return semaphore
+        with self._lock:
+            semaphore = self._semaphores.get(loop)
+            if semaphore is None:
+                semaphore = self._semaphores[loop] = asyncio.Semaphore(self._limit)
+            return semaphore
 
 
 # Inherited by child tasks through the context copy. The default budget is shared
@@ -80,10 +87,17 @@ _DEFAULT_BUDGET = _Budget(DEFAULT_LLM_PARALLELISM)
 _llm_budgets: ContextVar[tuple[_Budget, ...]] = ContextVar('evaluatorq_llm_budgets', default=())
 
 
+def active_llm_parallelism() -> int | None:
+    """Return the tightest active ceiling, or ``None`` when explicitly unbounded."""
+    budgets = _llm_budgets.get() or (_DEFAULT_BUDGET,)
+    finite = [budget.limit for budget in budgets if budget.limit != UNBOUNDED]
+    return min(finite) if finite else None
+
+
 class llm_concurrency_limit:  # noqa: N801 - used as a context manager, named like one
     """Bound concurrent LLM requests within this block.
 
-    ``None`` sets nothing: enclosing limits apply, else the default of
+    ``None`` sets nothing: enclosing limits apply, else the shared default of
     ``DEFAULT_LLM_PARALLELISM``. ``-1`` (``UNBOUNDED``) adds no ceiling; at the
     top level it disables the default. Nested limits stack, so an inner limit
     cannot raise or disable an outer ceiling.

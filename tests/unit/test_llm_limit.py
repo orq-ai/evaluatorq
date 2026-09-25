@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -11,6 +12,7 @@ import pytest
 from evaluatorq.common.llm_limit import (
     DEFAULT_LLM_PARALLELISM,
     UNBOUNDED,
+    active_llm_parallelism,
     check_llm_parallelism_option,
     llm_concurrency_limit,
     llm_slot,
@@ -75,6 +77,20 @@ def test_default_ceiling_survives_one_asyncio_run_per_call() -> None:
         assert peak.peak == DEFAULT_LLM_PARALLELISM
 
 
+def test_default_budget_works_across_event_loop_threads() -> None:
+    def batch() -> int:
+        peak = _Peak()
+
+        async def run() -> None:
+            await asyncio.gather(*(peak.call() for _ in range(DEFAULT_LLM_PARALLELISM + 2)))
+
+        asyncio.run(run())
+        return peak.peak
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(lambda _: batch(), range(2))) == [DEFAULT_LLM_PARALLELISM] * 2
+
+
 @pytest.mark.asyncio
 async def test_limit_does_not_leak_out_of_its_block() -> None:
     peak = _Peak()
@@ -94,6 +110,7 @@ def test_rejects_a_limit_below_one_other_than_unbounded(bad: int) -> None:
 async def test_minus_one_disables_the_ceiling() -> None:
     peak = _Peak()
     async with llm_concurrency_limit(UNBOUNDED):
+        assert active_llm_parallelism() is None
         await asyncio.gather(*(peak.call() for _ in range(DEFAULT_LLM_PARALLELISM * 3)))
     assert peak.peak == DEFAULT_LLM_PARALLELISM * 3
 
@@ -225,6 +242,7 @@ async def test_nested_limits_honor_every_finite_budget(outer: int, inner: int, e
     peak = _Peak()
     async with llm_concurrency_limit(outer):
         async with llm_concurrency_limit(inner):
+            assert active_llm_parallelism() == expected
             await asyncio.gather(*(peak.call() for _ in range(12)))
     assert peak.peak == expected
 

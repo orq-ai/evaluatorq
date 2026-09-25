@@ -10,6 +10,7 @@ HTML tags that GitHub-Flavored Markdown and most modern renderers support.
 
 from __future__ import annotations
 
+import html
 import operator
 from typing import TYPE_CHECKING, Any
 
@@ -525,7 +526,13 @@ def _render_turn_depth_analysis_section(section: ReportSection) -> str:
 def _render_pipeline_warnings_section(section: ReportSection) -> str:
     warnings: list[str] = section.data.get('warnings', [])
     lines = [f'## {section.title}', '', '> [!WARNING]', '> This run was degraded. Read the results with these in mind:']
-    lines.extend(f'> - {w}' for w in warnings)
+    markdown_special = frozenset('\\`*_{}[]#+-.|')
+    for warning in warnings:
+        for index, line in enumerate(str(warning).splitlines() or ['']):
+            escaped = html.escape(
+                ''.join(f'\\{char}' if char in markdown_special else char for char in line), quote=False
+            )
+            lines.append(('> - ' if index == 0 else '>   ') + escaped)
     return '\n'.join(lines)
 
 

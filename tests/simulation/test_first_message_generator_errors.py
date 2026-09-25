@@ -11,6 +11,8 @@ Covers:
 from __future__ import annotations
 
 # ruff: noqa: S101
+import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -219,3 +221,89 @@ async def test_datapoint_generator_raises_when_every_pair_fails():
 
     with pytest.raises(RuntimeError, match="failed for all 1"):
         await gen.generate_from_combinations([_persona()], [_scenario()])
+
+
+@pytest.mark.asyncio
+async def test_datapoint_generator_preserves_empty_input() -> None:
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    gen = DatapointGenerator(config=LLMCallConfig(model="gpt-4o", client=MagicMock()))
+    assert await gen.generate_from_combinations([], [_scenario()]) == []
+
+
+@pytest.mark.asyncio
+async def test_datapoint_construction_error_is_not_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    gen = DatapointGenerator(config=LLMCallConfig(model="gpt-4o", client=MagicMock()))
+    gen._first_message_generator.generate = AsyncMock(return_value="hello")  # type: ignore[method-assign]
+
+    def fail_construction(*_args: object) -> None:
+        raise ValueError('malformed datapoint')
+
+    monkeypatch.setattr('evaluatorq.simulation.generators.datapoint_generator.generate_datapoint', fail_construction)
+    with pytest.raises(ValueError, match='malformed datapoint'):
+        await gen.generate_from_combinations([_persona()], [_scenario()])
+
+
+@pytest.mark.asyncio
+async def test_simulation_datapoint_construction_error_is_not_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.api import _resolve_or_generate_datapoints
+
+    async def fake_generate(*_args: object) -> str:
+        return 'hello'
+
+    def fail_construction(*_args: object) -> None:
+        raise ValueError('malformed datapoint')
+
+    monkeypatch.setattr(FirstMessageGenerator, 'generate', fake_generate)
+    monkeypatch.setattr('evaluatorq.simulation.utils.prompt_builders.generate_datapoint', fail_construction)
+    with pytest.raises(ValueError, match='malformed datapoint'):
+        await _resolve_or_generate_datapoints(
+            caller='simulate',
+            datapoints=None,
+            personas=[_persona()],
+            scenarios=[_scenario()],
+            dataset_id=None,
+            llm_config=LLMCallConfig(model='test'),
+            generation_client=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('limit', [2, -1])
+async def test_simulation_limits_pending_generation_tasks(monkeypatch: pytest.MonkeyPatch, limit: int) -> None:
+    from evaluatorq.common.llm_limit import llm_concurrency_limit
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.api import _resolve_or_generate_datapoints
+
+    live = 0
+    peak = 0
+
+    async def fake_generate(*_args: object) -> str:
+        nonlocal live, peak
+        live += 1
+        peak = max(peak, live)
+        await asyncio.to_thread(time.sleep, 0.01)
+        live -= 1
+        return 'hello'
+
+    monkeypatch.setattr(FirstMessageGenerator, 'generate', fake_generate)
+    async with llm_concurrency_limit(limit):
+        datapoints = await _resolve_or_generate_datapoints(
+            caller='simulate',
+            datapoints=None,
+            personas=[_persona()],
+            scenarios=[_scenario(f'goal-{i}') for i in range(30)],
+            dataset_id=None,
+            llm_config=LLMCallConfig(model='test'),
+            generation_client=MagicMock(),
+        )
+    assert len(datapoints) == 30
+    if limit == -1:
+        assert peak == 30
+    else:
+        assert peak <= 4

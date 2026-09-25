@@ -28,5 +28,23 @@ def test_no_section_without_warnings() -> None:
 def test_markdown_and_html_show_the_warning() -> None:
     report = _report([_WARNING])
     assert _WARNING in export_markdown(report)
-    # HTML (and the dashboard, which embeds this body) escapes the quotes.
+    # The standalone HTML export renders the same warning section.
     assert 'strategy generation failed (HTTP 429)' in render_report_body(report)
+
+
+def test_warning_lines_cannot_escape_the_markdown_callout() -> None:
+    warning = 'HTTP 429\n# Forged heading\n<script>alert(1)</script>\n> [!NOTE]'
+    markdown = export_markdown(_report([warning]))
+    assert '> - HTTP 429' in markdown
+    assert '>   \\# Forged heading' in markdown
+    assert '>   &lt;script&gt;alert(1)&lt;/script&gt;' in markdown
+    assert '>   &gt; \\[!NOTE\\]' in markdown
+    assert '<script>' not in markdown
+
+
+def test_dashboard_shows_run_warnings() -> None:
+    from evaluatorq.dashboard.report_tabs import redteam_report_tabs
+
+    html = redteam_report_tabs('rid', _report([_WARNING]))
+    assert 'id="section-pipeline_warnings"' in html
+    assert 'strategy generation failed (HTTP 429)' in html
