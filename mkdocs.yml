@@ -151,6 +151,7 @@ plugins:
           - pairwise-judging.md: Pairwise comparison judging.
           - evaluator-template-variables.md: Reference for pointwise and pairwise jury template variables.
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
+          - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
         Setup:
           - installation.md: Installing evaluatorq and its extras.
           - components.md: The four components and which one answers your question.
@@ -275,6 +276,7 @@ nav:
           - Overview: guides/agent-simulation.md
           - In an evaluatorq Run: guides/simulation-in-evaluatorq.md
       - Dashboard: dashboard.md
+      - Trace Finder: trace-finder.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Vulnerabilities & Frameworks: guides/vulnerabilities-and-frameworks.md

@@ -241,6 +241,17 @@ def _looks_like_capability_rejection(exc: APIStatusError, keywords: tuple[str, .
     return any(kw in err_body for kw in keywords)
 
 
+def _rejection_message(exc: APIStatusError) -> str:
+    # Provider bodies can echo prompts; name only fixed capability clues in logs.
+    body = str(getattr(exc, 'body', None) or getattr(exc, 'message', '') or '').lower()
+    if 'oneof' in body:
+        return 'schema uses oneOf, which the provider rejected'
+    for keyword in _SCHEMA_KEYWORDS + _TOOL_KEYWORDS:
+        if keyword in body:
+            return f'provider rejected {keyword}'
+    return 'provider rejected the requested capability'
+
+
 def _looks_like_schema_rejection(exc: APIStatusError) -> bool:
     return _looks_like_capability_rejection(exc, _SCHEMA_KEYWORDS)
 
@@ -493,7 +504,7 @@ async def _generate_structured_via_responses(
             if e.status_code == 404:
                 cause = 'no Responses endpoint (HTTP 404)'
             elif e.status_code == 400 and _looks_like_schema_rejection(e):
-                cause = 'Responses structured output rejected (HTTP 400)'
+                cause = f'Responses structured output rejected (HTTP 400: {_rejection_message(e)})'
             else:
                 raise
             logger.warning('%s: %s, falling back to chat.completions', label, cause)
@@ -641,7 +652,7 @@ async def _parse_rung(
     except APIStatusError as e:
         if e.status_code != 400 or not _looks_like_capability_rejection(e, rejection_keywords):
             raise
-        logger.warning('%s: %s', label, rejected)
+        logger.warning('%s: %s (provider said: %s)', label, rejected, _rejection_message(e))
         return None, None
     except LengthFinishReasonError as exc:
         raise _truncated_output_error(

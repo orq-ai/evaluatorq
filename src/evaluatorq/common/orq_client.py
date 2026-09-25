@@ -14,8 +14,15 @@ SDK, nothing else.
 
 from __future__ import annotations
 
+import json
 import os
-from typing import TYPE_CHECKING
+import shutil
+import stat
+import subprocess
+from pathlib import Path
+from typing import TYPE_CHECKING, NamedTuple
+
+from loguru import logger
 
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
@@ -54,3 +61,103 @@ def resolve_orq_client(api_key: str | None = None, base_url: str | None = None) 
         raise ImportError(_INSTALL_HINT) from e
 
     return Orq(api_key=key, server_url=base_url or orq_server_url())
+
+
+async def close_orq_client(client: Orq) -> None:
+    """Close both transports owned by an Orq SDK client, when they were created."""
+    async_exit = getattr(client, '__aexit__', None)
+    sync_exit = getattr(client, '__exit__', None)
+    try:
+        if async_exit is not None:
+            await async_exit(None, None, None)
+    finally:
+        if sync_exit is not None:
+            sync_exit(None, None, None)
+
+
+class OrqProfile(NamedTuple):
+    """One credentials profile from the ``orq`` CLI."""
+
+    name: str
+    api_key: str
+    server: str | None
+    active: bool
+
+
+def _stored_profile_keys(path: Path) -> dict[str, str]:
+    """Read CLI-managed API keys from its private local credential file."""
+    try:
+        if os.name != 'nt' and stat.S_IMODE(path.stat().st_mode) & 0o077:
+            logger.warning('Orq profile credentials at {} are not private; run orq doctor --fix', path)
+            return {}
+        stored = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        logger.warning('Could not read Orq profile credentials at {}: {}', path, exc)
+        return {}
+    rows = stored.get('profiles') if isinstance(stored, dict) else None
+    if not isinstance(rows, dict):
+        return {}
+    return {
+        name: key
+        for name, entry in rows.items()
+        if isinstance(name, str)
+        and isinstance(entry, dict)
+        and isinstance(key := entry.get('api_key'), str)
+        and key
+        and '*' not in key
+    }
+
+
+def list_orq_profiles(timeout: float = 5.0) -> tuple[OrqProfile, ...]:
+    """Profiles the installed ``orq`` CLI knows, or none when it is missing, fails, or has no keys.
+
+    The CLI masks keys in its JSON output, so masked entries are resolved from
+    its private local credential file. Profiles without an API key are skipped.
+    """
+    binary = shutil.which('orq')
+    if binary is None:
+        return ()
+    environment = os.environ.copy()
+    environment.pop('ORQ_VERBOSE', None)
+    environment.pop('ORQ_JMESPATH', None)
+    try:
+        result = subprocess.run(
+            [binary, 'auth', 'profile', 'list', '-o', 'json', '--no-input'],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        listing = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        logger.warning('Could not read profiles from the installed orq CLI: {}', exc)
+        return ()
+    rows = listing.get('profiles') if isinstance(listing, dict) else listing
+    if not isinstance(rows, list):
+        logger.warning(
+            'Could not read profiles from the installed orq CLI (exit {}): {}',
+            result.returncode,
+            result.stderr.strip()[:200] or 'unexpected JSON response',
+        )
+        return ()
+    stored_keys = _stored_profile_keys(Path.home() / '.orq' / 'credentials.json')
+    profiles: list[OrqProfile] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name, api_key = row.get('name'), row.get('api_key')
+        if isinstance(name, str) and name and isinstance(api_key, str) and api_key:
+            resolved_key = stored_keys.get(name) if '*' in api_key else api_key
+            if not resolved_key:
+                logger.warning('Skipping Orq profile {} because its API key is unavailable', name)
+                continue
+            server = row.get('server')
+            profiles.append(
+                OrqProfile(
+                    name, resolved_key, server if isinstance(server, str) and server else None, bool(row.get('active'))
+                )
+            )
+    return tuple(profiles)

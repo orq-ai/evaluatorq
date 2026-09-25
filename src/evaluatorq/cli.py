@@ -97,6 +97,30 @@ def dashboard(
         int,
         typer.Option(help='Port for the dashboard server.'),
     ] = 8080,
+    no_browser: Annotated[  # noqa: FBT002 — Typer exposes this as a named flag
+        bool,
+        typer.Option('--no-browser', help='Start the dashboard without opening a browser.'),
+    ] = False,
+    compiler_model: Annotated[
+        str | None,
+        typer.Option('--compiler-model', help='Finder compiler model override.'),
+    ] = None,
+    classifier_model: Annotated[
+        str | None,
+        typer.Option('--classifier-model', help='Finder classifier model override.'),
+    ] = None,
+    window_days: Annotated[
+        int | None,
+        typer.Option('--window-days', min=1, max=90, help='Finder search window in days.'),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option('--limit', min=1, max=5000, help='Finder trace limit.'),
+    ] = None,
+    parallelism: Annotated[
+        int | None,
+        typer.Option('--parallelism', min=1, max=200, help='Finder classifier concurrency.'),
+    ] = None,
 ) -> None:
     """Launch the FastHTML dashboard (preview — still in development).
 
@@ -111,8 +135,20 @@ def dashboard(
     resolves.  The direct URL for that report is printed so you can open it
     immediately instead of landing on the index listing.
     """
+    import os
+
     from evaluatorq.dashboard.launch import serve
     from evaluatorq.dashboard.library import report_id
+
+    for value, env_name in (
+        (compiler_model, 'EVALUATORQ_COMPILER_MODEL'),
+        (classifier_model, 'EVALUATORQ_CLASSIFIER_MODEL'),
+        (window_days, 'EVALUATORQ_FINDER_WINDOW_DAYS'),
+        (limit, 'EVALUATORQ_FINDER_LIMIT'),
+        (parallelism, 'EVALUATORQ_FINDER_PARALLELISM'),
+    ):
+        if value is not None:
+            os.environ[env_name] = str(value)
 
     roots: list[Path] | None
     direct_rids: list[str] = []
@@ -146,7 +182,7 @@ def dashboard(
     for rid in direct_rids:
         typer.echo(f'Direct report URL: http://{host}:{port}/r/{rid}')
 
-    serve(roots, host=host, port=port)
+    serve(roots, host=host, port=port, open_browser=not no_browser)
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +199,15 @@ def _register_subapps(app: typer.Typer) -> None:
     """
     from evaluatorq.redteam.cli import app as redteam_app
     from evaluatorq.simulation.cli import app as sim_app
+    from evaluatorq.trace_finder.cli import _FIND_EPILOG, find
 
     app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
     app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
+    app.command(
+        'find',
+        help='Find recent Orq traces with a natural-language classifier task.',
+        epilog=_FIND_EPILOG,
+    )(find)
 
 
 def main() -> None:

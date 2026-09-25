@@ -3,13 +3,16 @@ rule (no workspace slug ⇒ no button, never a broken link)."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from evaluatorq.dashboard import trace_links
 
 
 @pytest.fixture(autouse=True)
-def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
+def _clear_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE'):
         monkeypatch.delenv(var, raising=False)
 

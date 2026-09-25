@@ -210,12 +210,30 @@ class ClassifyResponse(BaseModel):
     model: str | None = None
 
 
+class ClassifyRequest(BaseModel):
+    """Several questions about one ``state``, answered in one ``/classify`` round trip."""
+
+    state: dict[str, Any] | str | list[Any]
+    questions: dict[str, ClassifyQuestion] = Field(min_length=1)  # the request's state wins over each question's state
+
+
 class JudgeError(StrEnum):
     TIMEOUT = 'timeout'
     PARSE = 'parse'
     API_CONNECTION = 'api_connection'
     API_STATUS = 'api_status'
     UNKNOWN = 'unknown'
+
+
+class ClassifyOutcome(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    response: ClassifyResponse | None = None
+    token_usage: TokenUsage | None = None
+    raw_content: str = ''
+    error_kind: JudgeError | None = None
+    error_message: str | None = None
+    error_exc: Exception | None = None
 
 
 class JudgeOutcome(BaseModel):
@@ -656,13 +674,98 @@ def _classify_verdict(question: ClassifyQuestion, answer: ClassifyAnswer) -> tup
     )
 
 
+async def run_classify(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    request: ClassifyRequest,
+    span_attributes: dict[str, Any] | None = None,
+) -> ClassifyOutcome:
+    """Call ``/classify`` once for all questions in ``request`` and validate the reply.
+
+    The caller owns retry policy. This helper owns the classify span, timeout, wire
+    response validation, and mapping provider failures into ``ClassifyOutcome``.
+    """
+    warn_unread_config_fields(cfg, frozenset({'timeout_ms', 'retry_count'}), caller='run_classify')
+    client = without_client_retries(client)
+    raw_payload = ''
+    usage: TokenUsage | None = None
+    try:
+        async with with_llm_span(
+            model=model,
+            operation='classify',
+            attributes=span_attributes or {},
+        ) as span:
+            payload, usage = await execute_classify(
+                client=client,
+                model=model,
+                request=request,
+                span=span,
+                timeout_s=cfg.timeout_ms / 1000.0,
+            )
+            raw_payload = json.dumps(payload, default=str)
+            response = ClassifyResponse.model_validate(payload)
+            missing = sorted(set(request.questions) - set(response.answers))
+            if missing:
+                logger.error(
+                    'Judge [{}] classify reply is missing answers for {} (received={})',
+                    model,
+                    missing,
+                    sorted(response.answers),
+                )
+                return ClassifyOutcome(
+                    error_kind=JudgeError.PARSE,
+                    error_message=(
+                        f'classify reply is missing answers for: {", ".join(missing)} '
+                        f'(received: {", ".join(sorted(response.answers))})'
+                    ),
+                    token_usage=usage,
+                    raw_content=response.model_dump_json(),
+                )
+            answer = response.answers.get('verdict')
+            if answer is not None:
+                set_span_attrs(
+                    span,
+                    {
+                        'judge.confidence': answer.confidence,
+                        'judge.probabilities': (
+                            json.dumps(answer.probabilities) if answer.probabilities is not None else None
+                        ),
+                    },
+                )
+            return ClassifyOutcome(response=response, token_usage=usage, raw_content=response.model_dump_json())
+    except (asyncio.TimeoutError, APITimeoutError) as exc:
+        logger.error('Judge [{}] classify call timed out after {}ms', model, cfg.timeout_ms)
+        return ClassifyOutcome(
+            error_kind=JudgeError.TIMEOUT,
+            error_message=f'timed out after {cfg.timeout_ms}ms',
+            error_exc=exc,
+        )
+    except ValidationError as exc:
+        logger.error('Judge [{}] classify reply did not validate: {}', model, exc)
+        return ClassifyOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=f'classify reply from {model} did not validate: {exc}',
+            token_usage=usage,
+            raw_content=raw_payload,
+        )
+    except (APIConnectionError, APIStatusError) as exc:
+        kind = _classify(exc)
+        logger.error('Judge [{}] classify API error ({}): {}', model, kind.value, exc)
+        return ClassifyOutcome(error_kind=kind, error_message=str(exc), error_exc=exc)
+    except Exception as exc:
+        logger.exception('Judge [{}] classify call failed (unknown): {}', model, exc)
+        return ClassifyOutcome(error_kind=JudgeError.UNKNOWN, error_message=str(exc), error_exc=exc)
+
+
 async def _classify_judge(
     *,
     client: AsyncOpenAI,
     model: str,
     cfg: LLMCallConfig,
     question: ClassifyQuestion,
-    span: Any,
+    span_attributes: dict[str, Any] | None = None,
 ) -> JudgeOutcome:
     """Judge via the Orq router's ``/classify`` endpoint — the only endpoint a classify model serves.
 
@@ -672,47 +775,39 @@ async def _classify_judge(
     answer that cannot be read at all is a `JudgeError.PARSE`, not an abstention,
     so a broken verdict is never counted as a judge declining to call it.
 
-    `execute_classify` hands back the decoded wire payload untouched — it owns the
-    call, not the result shape — so validating it against `ClassifyResponse` is this
-    leg's job. A payload that does not validate keeps its raw body on the outcome:
-    the caller's ``raw_content`` still holds the placeholder it was initialised with,
-    so reporting the failure without the body would name a reply nobody saw.
+    `run_classify` owns the decoded response shape and all provider error mapping;
+    this function only translates the ``verdict`` answer into the neutral judge
+    payload used by the existing judge surfaces.
     """
-    payload, usage = await execute_classify(
+    outcome = await run_classify(
         client=client,
         model=model,
-        question=question,
-        span=span,
-        timeout_s=cfg.timeout_ms / 1000.0,
+        cfg=cfg,
+        request=ClassifyRequest(state=question.state, questions={'verdict': question}),
+        span_attributes=span_attributes,
     )
-    try:
-        response = ClassifyResponse.model_validate(payload)
-    except ValidationError as e:
-        raw_payload = json.dumps(payload, default=str)
-        logger.error(
-            'Judge [{}] classify reply did not validate ({}) | raw (truncated): {}',
-            model,
-            e,
-            raw_payload[:500],
+    error_exc = outcome.error_exc
+    if error_exc is not None:
+        raise error_exc
+    if outcome.error_kind is not None:
+        return JudgeOutcome(
+            error_kind=outcome.error_kind,
+            error_message=outcome.error_message,
+            token_usage=outcome.token_usage,
+            raw_content=outcome.raw_content,
+            endpoint='classify',
         )
+    response = outcome.response
+    if response is None:
         return JudgeOutcome(
             error_kind=JudgeError.PARSE,
-            error_message=f'classify reply from {model} did not validate: {e}',
-            token_usage=usage,
-            raw_content=raw_payload,
+            error_message='classify reply produced no response',
+            token_usage=outcome.token_usage,
+            raw_content=outcome.raw_content,
             endpoint='classify',
         )
     raw = response.model_dump_json()
-    answer = response.answers.get('verdict')
-    if answer is None:
-        logger.error('Judge [{}] classify reply carried no verdict answer (keys={})', model, list(response.answers))
-        return JudgeOutcome(
-            error_kind=JudgeError.PARSE,
-            error_message=f'classify reply carried no verdict answer (keys={sorted(response.answers)})',
-            token_usage=usage,
-            raw_content=raw,
-            endpoint='classify',
-        )
+    answer = response.answers['verdict']
     verdict = _classify_verdict(question, answer)
     if verdict is None:
         logger.error(
@@ -725,24 +820,15 @@ async def _classify_judge(
         return JudgeOutcome(
             error_kind=JudgeError.PARSE,
             error_message=f'classify answer is not a readable {question.kind} verdict',
-            token_usage=usage,
+            token_usage=outcome.token_usage,
             raw_content=raw,
             endpoint='classify',
         )
     value, explanation = verdict
-    set_span_attrs(
-        span,
-        {
-            'judge.confidence': answer.confidence,
-            # `is not None`, not truthiness: an empty distribution is something the
-            # model said, and recording it as absent would read as "never reported".
-            'judge.probabilities': json.dumps(answer.probabilities) if answer.probabilities is not None else None,
-        },
-    )
     answer_output = answer.model_dump(mode='json', exclude_none=True)
     return JudgeOutcome(
         payload=EvaluatorResponsePayload(value=value, explanation=explanation, abstain=False),
-        token_usage=usage,
+        token_usage=outcome.token_usage,
         raw_content=json.dumps(answer_output),
         raw_output=answer_output,
         endpoint='classify',
@@ -911,12 +997,13 @@ async def _attempt(
     # "raw (truncated)" line would describe a different call than the one that failed.
     raw_content[0] = '{}'
     if classify_question is not None:
-        async with with_llm_span(
+        return await _classify_judge(
+            client=client,
             model=model,
-            operation='classify',
-            attributes=span_attributes or {},
-        ) as span:
-            return await _classify_judge(client=client, model=model, cfg=cfg, question=classify_question, span=span)
+            cfg=cfg,
+            question=classify_question,
+            span_attributes=span_attributes,
+        )
     # Default for judges: the Responses endpoint is the one the Orq router
     # prices, so a judge call records cost like a target call does (RES-1295).
     # Set `api='chat_completions'` on the evaluator config to opt out.

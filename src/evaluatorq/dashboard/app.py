@@ -4,7 +4,7 @@
 
 - ``GET /``                   → combined Dashboard landing (no ``surface``), or a
                                per-kind run list when ``?surface=redteam|sim|pairwise``
-- ``GET /settings``           → settings stub screen (matches the v1 design nav)
+- ``GET /settings``           → editable settings plus read-only runtime details
 - ``GET /r/{rid}``            → embedded report view in the dashboard shell
 - ``GET /r/{rid}/export``     → standalone HTML export (alias: export.html)
 - ``GET /r/{rid}/export.html``→ standalone HTML export (full document)
@@ -26,30 +26,39 @@ a concern in the task-3 report.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
+import os
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
+from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
-from starlette.responses import Response
+from starlette.responses import RedirectResponse, Response
 
 # Starlette 1.3.x / FastHTML 0.12.x compat shim. Must be imported, not deferred to
 # serve(): the patch has to be live when build_app() constructs the FastHTML app, and
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
+from evaluatorq.dashboard.orq_scope import discover_orq_scope
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
+from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
+from evaluatorq.dashboard.trace_finder.routes import initialize_finder_settings, register_finder_routes
 from evaluatorq.dashboard.view import (
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
@@ -66,6 +75,13 @@ from evaluatorq.dashboard.view import (
     search_results,
     settings_body,
     sim_overview_body,
+)
+from evaluatorq.trace_finder.settings import (
+    DashboardSettings,
+    credential_fingerprint,
+    effective_settings,
+    load_settings,
+    save_settings,
 )
 
 _STATIC_DIR = Path(__file__).parent / 'static'
@@ -129,12 +145,15 @@ def _csv_safe(value: object) -> object:
     return value
 
 
-def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str]]]:
+def _settings_config(
+    roots: list[Path] | None,
+    profile: OrqProfile | None = None,
+    *,
+    settings: DashboardSettings | None = None,
+) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
     stores being scanned, the default sim model, and API-key presence with a
     masked suffix (never the full value)."""
-    import os
-
     from evaluatorq.dashboard.library import default_roots
     from evaluatorq.dashboard.orq_workspace import classify_host, resolve_base_url, resolve_slug
     from evaluatorq.simulation.types import DEFAULT_MODEL
@@ -143,11 +162,28 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
     store_paths = [str(p) for p in scan_roots] or ['—']
     from evaluatorq.dashboard.apply_ui import APPLY_MODEL_ENV, DEFAULT_APPLY_MODEL, apply_model
 
+    settings = settings or effective_settings()
     config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
     config.append(('Default sim model', DEFAULT_MODEL))
     model = apply_model()
-    source = f'{APPLY_MODEL_ENV}' if model != DEFAULT_APPLY_MODEL else 'default'
-    config.append(('Apply-recommendations model', f'{model} ({source})'))
+    source = (
+        APPLY_MODEL_ENV
+        if os.environ.get(APPLY_MODEL_ENV, '').strip()
+        else 'saved'
+        if model != DEFAULT_APPLY_MODEL
+        else 'default'
+    )
+    config.extend((
+        ('Apply-recommendations model', f'{model} ({source})'),
+        ('Orq profile', settings.orq_profile or 'environment'),
+    ))
+    if settings.orq_profile is not None and profile is None:
+        config.append(('Orq profile status', 'unavailable — choose Environment or another profile'))
+    if profile is not None:
+        config.extend((
+            ('Selected profile API key', _mask_key(profile.api_key)),
+            ('Selected profile host', profile.server or DEFAULT_ORQ_BASE_URL),
+        ))
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
         value = os.environ.get(var)
         config.append((label, _mask_key(value) if value else 'not set'))
@@ -158,6 +194,7 @@ def _settings_config(roots: list[Path] | None) -> list[tuple[str, str | list[str
     config.extend([
         ('Orq host', f'{host} ({classify_host(host)})'),
         ('Orq workspace', resolve_slug() or 'from experiment URL'),
+        ('Orq project', settings.orq_project_name or 'all accessible projects'),
     ])
     return config
 
@@ -201,10 +238,135 @@ def _index(req: Request) -> NotStr:
     return NotStr(page(label, body, active_surface=surface))
 
 
-def _settings(req: Request) -> NotStr:
+async def _settings(req: Request) -> NotStr:
     roots = _roots(req)
-    body = settings_body(_settings_config(roots))
+    settings = effective_settings()
+    profiles = await asyncio.to_thread(list_orq_profiles)
+    if 'profile' in req.query_params:
+        requested = req.query_params['profile']
+        if not requested or any(profile.name == requested and '*' not in profile.api_key for profile in profiles):
+            settings = settings.model_copy(
+                update={
+                    'orq_profile': requested or None,
+                    'orq_profile_host': None,
+                    'orq_workspace': None,
+                    'orq_project_id': None,
+                    'orq_project_name': None,
+                }
+            )
+    scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
+    body = settings_body(
+        _settings_config(roots, next((p for p in profiles if p.name == settings.orq_profile), None), settings=settings),
+        settings,
+        saved=req.query_params.get('saved') == '1',
+        preview='profile' in req.query_params,
+        profiles=profiles,
+        scope=scope,
+    )
     return NotStr(page('Settings', body, active_nav='settings'))
+
+
+async def _save_settings(req: Request) -> Response | NotStr:
+    """Validate and persist the settings form, or render field errors."""
+    form_data = await req.form()
+    rejected = request_rejected(req, form_data)
+    if rejected:
+        roots = _roots(req)
+        body = settings_body(_settings_config(roots), effective_settings(), errors={'form': rejected})
+        return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
+    roots = _roots(req)
+    # Window, limit and parallelism are tuned per run on the Trace search page; the form only carries models.
+    # Carry them over from the saved file, not the effective view, so env overrides never get persisted.
+    current = load_settings()
+    values = _submitted_settings_values(form_data, current)
+    profiles = await asyncio.to_thread(list_orq_profiles)
+    errors: dict[str, str] = {}
+    settings: DashboardSettings | None = None
+    try:
+        settings = DashboardSettings.model_validate(values)
+    except ValidationError as exc:
+        for detail in exc.errors():
+            location = detail.get('loc', ())
+            field = str(location[0]) if location else 'form'
+            errors[field] = str(detail.get('msg', 'Invalid value'))
+    if (
+        settings is not None
+        and 'orq_profile' in form_data
+        and settings.orq_profile is not None
+        and settings.orq_profile not in {p.name for p in profiles}
+    ):
+        errors['orq_profile'] = 'The orq CLI does not know this profile'
+    selected_profile = next((p for p in profiles if settings is not None and p.name == settings.orq_profile), None)
+    if selected_profile is not None and '*' in selected_profile.api_key:
+        errors['orq_profile'] = 'The installed orq CLI masks this profile key; use Environment credentials.'
+    scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile if settings else None)
+    if settings is not None:
+        settings = settings.model_copy(
+            update={
+                'orq_profile_host': (selected_profile.server or DEFAULT_ORQ_BASE_URL) if selected_profile else None,
+                'orq_credential_fingerprint': credential_fingerprint(
+                    selected_profile.api_key if selected_profile else os.environ.get('ORQ_API_KEY'),
+                    (selected_profile.server or DEFAULT_ORQ_BASE_URL)
+                    if selected_profile
+                    else os.environ.get('ORQ_BASE_URL'),
+                ),
+            }
+        )
+        if scope.workspace_key and settings.orq_workspace and settings.orq_workspace != scope.workspace_key:
+            errors['orq_workspace'] = 'This workspace does not match the selected credential.'
+        if settings.orq_project_id:
+            project = next((item for item in scope.projects if item.id == settings.orq_project_id), None)
+            if project is None:
+                errors['orq_project_id'] = 'This project is not available to the selected credential.'
+            else:
+                settings = settings.model_copy(update={'orq_project_name': project.name})
+        else:
+            settings = settings.model_copy(update={'orq_project_name': None})
+    if settings is None or errors:
+        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles, scope=scope)
+        return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
+
+    await asyncio.to_thread(save_settings, settings)
+    async with req.app.state.finder_store_lock:
+        req.app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+        if settings.orq_profile is not None and req.app.state.finder_profile is None:
+            logger.warning(
+                'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
+            )
+        old_store = getattr(req.app.state, 'finder_store', None)
+        req.app.state.finder_settings = effective_settings()
+        req.app.state.finder_generation += 1
+        for state_name in ('finder_store', 'finder_catalogue_cache'):
+            if hasattr(req.app.state, state_name):
+                delattr(req.app.state, state_name)
+    if old_store is not None:
+        # Retire the old store after removing it from app state so new requests cannot acquire it.
+        await old_store.close()
+    req.app.state.finder_unavailable_reason = None
+    return RedirectResponse('/settings?saved=1', status_code=303)
+
+
+def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
+    """Keep environment model overrides out of the saved file when the form was unchanged."""
+    values: dict[str, object] = {
+        name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
+    }
+    for name, env_name in (
+        ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
+        ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),
+        ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
+    ):
+        override = os.environ.get(env_name, '').strip()
+        if override and values[name] == override:
+            values[name] = getattr(current, name)
+    values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
+    values['orq_profile_host'] = current.orq_profile_host
+    values['orq_credential_fingerprint'] = current.orq_credential_fingerprint
+    values['orq_workspace'] = form_data.get('orq_workspace', current.orq_workspace)
+    values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
+    values['orq_project_name'] = current.orq_project_name
+    values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
+    return values
 
 
 def _search(req: Request) -> NotStr:
@@ -550,6 +712,7 @@ def register_report_routes(app: FastHTML) -> None:
     """Register the report routes on *app*."""
     app.get('/')(_index)
     app.get('/settings')(_settings)
+    app.post('/settings')(_save_settings)
     app.get('/search')(_search)
     app.get('/r/{rid}')(_report_view)
     app.get('/r/{rid}/sim/agent-card')(_sim_agent_card)
@@ -573,13 +736,26 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         A ``FastHTML`` ASGI application ready to be served or tested via
         ``starlette.testclient.TestClient``.
     """
+
+    @asynccontextmanager
+    async def lifespan(runtime: FastHTML) -> Any:
+        try:
+            yield
+        finally:
+            store = getattr(runtime.state, 'finder_store', None)
+            if store is not None:
+                await store.close()
+                del runtime.state.finder_store
+
     app = FastHTML(
         surreal=False,
         htmx=False,
         default_hdrs=False,
         pico=False,
+        lifespan=lifespan,
     )
     app.state.roots = roots
+    initialize_finder_settings(app)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for
     # /r/{rid}/export.html, export.md, export.csv, export.json etc.
@@ -608,6 +784,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: GET /compare/sim*  — side-by-side sim run comparison
     # ------------------------------------------------------------------
     register_sim_compare_routes(app, roots)
+
+    # ------------------------------------------------------------------
+    # Routes: /find — classifier trace finder
+    # ------------------------------------------------------------------
+    register_finder_routes(app)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

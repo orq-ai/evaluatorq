@@ -263,14 +263,14 @@ dependencies = [
   "loguru>=0.6.0",
   "typer>=0.12.0",
   "openai>=1.92.0,<4.0.0",
-  "orq-ai-sdk>=4.12",
+  "orq-ai-sdk>=4.14",
 ]
 
   [project.license]
   text = "MIT"
 
   [project.optional-dependencies]
-  orq = [ "orq-ai-sdk>=4.12" ]
+  orq = [ "orq-ai-sdk>=4.14" ]
   otel = [
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",
@@ -287,11 +287,12 @@ dependencies = [
   "vl-convert-python>=1.6.0"
 ]
   simulation = [
-  "orq-ai-sdk>=4.12",
+  "orq-ai-sdk>=4.14",
   "vl-convert-python>=1.6.0"
 ]
   dashboard = [
   "python-fasthtml>=0.12.0,<0.15.0",
+  "python-dotenv>=1.0.0,<2.0.0",
   "uvicorn>=0.30.0",
   "vl-convert-python>=1.6.0"
 ]
@@ -359,7 +360,7 @@ dev = [
   "pytest-timeout>=2.3.0",
   "basedpyright>=1.21.0",
   "ruff>=0.14.3",
-  "orq-ai-sdk>=4.12",
+  "orq-ai-sdk>=4.14",
   "anthropic>=0.75.0",
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",

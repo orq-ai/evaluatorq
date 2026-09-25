@@ -33,6 +33,7 @@ Public entry points:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import secrets
@@ -43,9 +44,14 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
-from evaluatorq.common.orq_client import resolve_orq_client
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, resolve_orq_client
 from evaluatorq.common.reports import esc
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.dashboard.security import _CSRF_TOKEN as _SECURITY_CSRF_TOKEN
+from evaluatorq.dashboard.security import CSRF_FIELD as _SECURITY_CSRF_FIELD
+from evaluatorq.dashboard.security import csrf_field, request_rejected
+from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -57,11 +63,11 @@ if TYPE_CHECKING:
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'
 
-# One process-wide CSRF token, minted into every apply form. A cross-origin page
-# cannot read this dashboard's HTML, so it cannot supply the token - which closes
-# the form-POST CSRF hole on the dashboard's state-changing routes (review).
-CSRF_FIELD = 'csrf'
-_CSRF_TOKEN = secrets.token_urlsafe(32)
+# Aliases kept for existing tests; the canonical helpers live in dashboard.security.
+CSRF_FIELD = _SECURITY_CSRF_FIELD
+_CSRF_TOKEN = _SECURITY_CSRF_TOKEN
+_csrf_field = csrf_field
+_request_rejected = request_rejected
 
 # Server-side previews keyed by a SINGLE-USE token. Confirm accepts only the
 # token, so the write is exactly what this server previewed - "what you saw is
@@ -85,23 +91,15 @@ def _pop_preview(token: str) -> dict[str, Any] | None:
         return _PREVIEWS.pop(token, None)
 
 
-def _csrf_field() -> str:
-    return f'<input type="hidden" name="{CSRF_FIELD}" value="{_CSRF_TOKEN}">'
-
-
-def _request_rejected(req: Request, form: Any) -> str | None:
-    """CSRF/origin gate for the apply routes. Returns an error message or None.
-
-    Two independent checks: the form must echo the per-process token (unreadable
-    cross-origin), and when the browser sends Sec-Fetch-Site it must be a
-    same-origin (or direct) request. Absent headers pass - test clients and
-    older browsers do not send them; the token check still holds then."""
-    sec_fetch = req.headers.get('sec-fetch-site', '')
-    if sec_fetch and sec_fetch not in ('same-origin', 'none'):
-        return 'Cross-origin request rejected.'
-    if str(form.get(CSRF_FIELD) or '') != _CSRF_TOKEN:
-        return 'Stale or missing form token; reload the page and try again.'
-    return None
+def _credential_identity(profile: OrqProfile | None) -> tuple[str, str, str]:
+    """Identify the credentials a preview used without retaining another copy of its API key."""
+    key = profile.api_key if profile is not None else os.environ.get('ORQ_API_KEY', '')
+    host = (
+        (profile.server or DEFAULT_ORQ_BASE_URL)
+        if profile is not None
+        else os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
+    )
+    return (profile.name if profile is not None else '', host.rstrip('/'), hashlib.sha256(key.encode()).hexdigest())
 
 
 # Model for the instruction-merge call. It used to default to its own literal,
@@ -114,7 +112,7 @@ DEFAULT_APPLY_MODEL = DEFAULT_PIPELINE_MODEL
 
 def apply_model() -> str:
     """The model used to merge recommendations into agent instructions."""
-    return os.environ.get(APPLY_MODEL_ENV, '').strip() or DEFAULT_APPLY_MODEL
+    return effective_settings().apply_model
 
 
 # ---------------------------------------------------------------------------
@@ -253,14 +251,18 @@ def render_rec_apply_button(rid: str, category: str, rec: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _drawer(title: str, body: str, footer: str = '') -> str:
-    """Right-hand drawer shell: overlay + panel; the close button empties the mount."""
+def drawer(
+    title: str, body: str, footer: str = '', *, dismiss_route: str = '/apply/dismiss', drawer_id: str = DRAWER_ID
+) -> str:
+    """Right-hand drawer shell: overlay + panel; the close button empties the mount.
+
+    Shared by the apply and finder surfaces; each passes its own dismiss route and mount id."""
     close = (
         f'<button class="rt-drawer-close" aria-label="Close" '
-        f'hx-get="/apply/dismiss" hx-target="#{DRAWER_ID}" hx-swap="innerHTML">&times;</button>'
+        f'hx-get="{dismiss_route}" hx-target="#{drawer_id}" hx-swap="innerHTML">&times;</button>'
     )
     overlay = (
-        f'<div class="rt-drawer-overlay" hx-get="/apply/dismiss" hx-target="#{DRAWER_ID}" hx-swap="innerHTML"></div>'
+        f'<div class="rt-drawer-overlay" hx-get="{dismiss_route}" hx-target="#{drawer_id}" hx-swap="innerHTML"></div>'
     )
     footer_html = f'<div class="rt-drawer-footer">{footer}</div>' if footer else ''
     return (
@@ -274,7 +276,7 @@ def _drawer(title: str, body: str, footer: str = '') -> str:
 
 
 def render_error_drawer(message: str) -> str:
-    return _drawer('Apply recommendations', f'<p class="rt-drawer-error">{esc(message)}</p>')
+    return drawer('Apply recommendations', f'<p class="rt-drawer-error">{esc(message)}</p>')
 
 
 def _diff_html(diff: str) -> str:
@@ -378,7 +380,7 @@ def render_preview_drawer(
         )
     )
     if unchanged:
-        return _drawer('Preview: no change', body)
+        return drawer('Preview: no change', body)
 
     safe_rid = esc(rid)
     footer = (
@@ -390,7 +392,7 @@ def render_preview_drawer(
         f'hx-target="#{DRAWER_ID}" hx-swap="innerHTML">Cancel</button>'
         '<span class="rt-drawer-footnote">Applies the diff above, as a new minor version of the agent.</span>'
     )
-    return _drawer('Preview changes', body, footer)
+    return drawer('Preview changes', body, footer)
 
 
 def render_applied_drawer(agent_key: str, applied_count: int, new_version: str | None) -> str:
@@ -416,7 +418,7 @@ def render_applied_drawer(agent_key: str, applied_count: int, new_version: str |
         'see the updated state. Review the new version in the Orq UI before routing traffic to it.</p>'
         '</div>'
     )
-    return _drawer('Applied', body)
+    return drawer('Applied', body)
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +462,7 @@ def record_applied_on_report(path: Path, recommendations: list[str], field: str 
 # ---------------------------------------------------------------------------
 
 
-def _build_clients() -> tuple[Any, Any, str]:
+def _build_clients(profile: OrqProfile | None) -> tuple[Any, Any, str]:
     """(orq_client, llm_client, model) for the apply flow, or raise ValueError.
 
     The call config (temperature, retries) follows the red-team pipeline's
@@ -468,19 +470,24 @@ def _build_clients() -> tuple[Any, Any, str]:
     (``EVALUATORQ_APPLY_MODEL``, default ``openai/gpt-5.6-luna``), shown on the
     Settings page.
     """
-    api_key = os.environ.get('ORQ_API_KEY', '')
+    api_key = profile.api_key if profile is not None else os.environ.get('ORQ_API_KEY', '')
     if not api_key:
         raise ValueError('ORQ_API_KEY is not set; the dashboard cannot reach the Orq API to apply recommendations.')
-    from evaluatorq.redteam.backends.registry import create_async_llm_client
+    if '*' in api_key:
+        raise ValueError('The selected Orq credential has no usable API key; choose another profile or Environment.')
     from evaluatorq.redteam.contracts import PIPELINE_CONFIG
 
+    host = (profile.server or DEFAULT_ORQ_BASE_URL) if profile is not None else None
     try:
-        orq_client = resolve_orq_client(api_key)
+        orq_client = resolve_orq_client(api_key, base_url=host)
     except ImportError as e:  # pragma: no cover - extra not installed
         raise ValueError("The 'orq-ai-sdk' package is required to apply recommendations (install extra 'orq').") from e
-    llm_client = create_async_llm_client(
-        role_config=PIPELINE_CONFIG.evaluator.as_call_config(), max_retries=PIPELINE_CONFIG.retry_count
-    )
+    llm_client = resolve_llm_client(
+        None if profile is not None else PIPELINE_CONFIG.evaluator.as_call_config().client,
+        extra_api_key=api_key,
+        orq_host=host,
+        max_retries=PIPELINE_CONFIG.retry_count,
+    ).client
     return orq_client, llm_client, apply_model()
 
 
@@ -512,6 +519,7 @@ async def _confirm_response(
     """
     from evaluatorq.common.apply import read_instructions, write_instructions
     from evaluatorq.dashboard import library
+    from evaluatorq.dashboard.trace_finder.routes import _profile
 
     form = await req.form()
     rejected = _request_rejected(req, form)
@@ -550,7 +558,13 @@ async def _confirm_response(
         )
 
     try:
-        orq_client, _llm_client, _model = _build_clients()
+        profile = _profile(req.app)
+        if 'credential_identity' in entry and entry['credential_identity'] != _credential_identity(profile):
+            return Response(
+                render_error_drawer('The Orq credentials changed after this preview; run the preview again.'),
+                media_type='text/html',
+            )
+        orq_client, _llm_client, _model = _build_clients(profile)
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
@@ -671,6 +685,8 @@ async def _preview_response(
     bullet(s), run ``apply(apply=False)``, and render the drawer. Only the
     loader, enable gate, narrowing, and apply wrapper differ between surfaces.
     """
+    from evaluatorq.dashboard.trace_finder.routes import _profile
+
     if obj is None:
         return Response(not_found_html, status_code=404, media_type='text/html')
     if enable_error:
@@ -692,7 +708,8 @@ async def _preview_response(
         return Response(render_error_drawer(narrow_error), media_type='text/html')
 
     try:
-        orq_client, llm_client, model = _build_clients()
+        profile = _profile(req.app)
+        orq_client, llm_client, model = _build_clients(profile)
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')
 
@@ -716,6 +733,7 @@ async def _preview_response(
         'original_instructions': result.original_instructions,
         'new_instructions': result.new_instructions,
         'recommendations': list(result.recommendations),
+        'credential_identity': _credential_identity(profile),
     })
     return Response(
         render_preview_drawer(rid, result, area, surface=surface, breakdown=breakdown, confirm_token=token),

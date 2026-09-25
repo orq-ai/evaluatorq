@@ -30,7 +30,7 @@ try:  # noqa: RUF067
 except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, not installed
     __version__ = '0.0.0.dev0'
 
-from .common.judge import ClassifyQuestion
+from .common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
 from .common.trace_input import fetch_traces
 from .contracts import AgentResponse
 from .deployment import (
@@ -96,7 +96,9 @@ __all__ = [
     # Types
     'BTFit',
     'BTSigmaAggregation',
+    'ClassifyOutcome',
     'ClassifyQuestion',
+    'ClassifyRequest',
     'DataPoint',
     'DataPointComplete',
     'DataPointDict',
@@ -152,6 +154,7 @@ __all__ = [
     'orq_evaluator',
     'repetition_consistency',
     'repetition_consistency_raw',
+    'run_classify',
     'run_pairwise',
     # Built-in evaluators
     'string_contains_evaluator',

@@ -186,7 +186,7 @@ Simulation owns its `exit_on_failure=True` gate for dropped rows, so it can drop
 
 ## Dashboard
 
-Every red team and simulation run is saved locally. `eq dashboard` serves them all — filter findings, read transcripts, compare runs, export HTML/CSV/JSON.
+Every red team and simulation run is saved locally. `eq dashboard` serves them all — filter findings, read transcripts, compare runs, export HTML/CSV/JSON, and use **Trace search** to turn a natural-language question into classifier judgments over recent Orq traces. See the [Trace finder guide](https://orq-ai.github.io/evaluatorq/trace-finder/) for the dashboard and `eq find` workflows.
 
 ```bash
 eq dashboard
