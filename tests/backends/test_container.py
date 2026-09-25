@@ -122,6 +122,41 @@ def test_isolation_warning_includes_privileged_true() -> None:
     assert isolation_breaking_flags(['--privileged=true']) == ['--privileged=true']
 
 
+@pytest.mark.parametrize(
+    'run_args',
+    [
+        ('--entrypoint', 'sleep'),
+        ('--entrypoint=sleep',),
+        ('-v', '/other:/evq-lease'),
+        ('--volume=/other:/evq-home',),
+        ('--mount', 'type=bind,source=/other,target=/evq-lease/beat'),
+        ('--mount=type=bind,source=/other,destination=/evq-home',),
+        ('--rm=false',),
+        ('--user', '0:0'),
+        ('-u0:0',),
+        ('--security-opt', 'no-new-privileges=false'),
+        ('--security-opt=no-new-privileges=false',),
+    ],
+)
+def test_managed_run_args_are_rejected(run_args: tuple[str, ...]) -> None:
+    with pytest.raises(pydantic.ValidationError, match='cannot override evaluatorq-managed'):
+        DockerOptions(run_args=run_args)
+
+
+def test_raw_environment_flags_warn_at_options_construction() -> None:
+    seen: list[str] = []
+    sink = logger.add(lambda m: seen.append(str(m)), level='WARNING')
+    try:
+        DockerOptions(run_args=('--env-file=secrets.env',))
+    finally:
+        logger.remove(sink)
+    assert any('bypass pass_env filtering' in message for message in seen)
+
+
+def test_security_opt_can_disable_no_new_privileges_only_with_opt_in() -> None:
+    assert DockerOptions(run_args=('--security-opt', 'no-new-privileges=false'), allow_privilege_escalation=True)
+
+
 def test_agent_spec_container_fields_are_required() -> None:
     base = AgentSpec.model_fields
     for field in ('container_permission', 'container_extra_args', 'provider_env'):

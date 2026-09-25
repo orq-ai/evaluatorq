@@ -54,6 +54,7 @@ ISOLATION_FLAGS = frozenset({
     '--uts=host',
 })
 ISOLATION_PAIRS = frozenset({'--pid', '--network', '--net', '--ipc', '--userns', '--uts'})
+_MANAGED_VALUE_FLAGS = frozenset({'--entrypoint', '--user', '-u'})
 
 
 class DockerOptions(BaseModel):
@@ -74,6 +75,9 @@ class DockerOptions(BaseModel):
     def podman_does_not_accept_docker_context(self) -> DockerOptions:
         if self.binary == 'podman' and self.context is not None:
             raise ValueError("Podman does not use Docker's --context; select a connection with CONTAINER_CONNECTION")
+        validate_managed_run_args(self.run_args, allow_privilege_escalation=self.allow_privilege_escalation)
+        if raw_environment_flags(self.run_args):
+            logger.warning('DockerOptions.run_args contains raw environment flags; these bypass pass_env filtering')
         return self
 
     @field_validator('workdir')
@@ -181,6 +185,53 @@ def unsafe_mounts(run_args: Sequence[str], root: Path) -> list[str]:
         elif mount_source or src.startswith(('.', '~')) or '/' in src:
             unsafe.append(src)
     return unsafe
+
+
+def raw_environment_flags(run_args: Sequence[str]) -> list[str]:
+    """Return raw Docker environment flags that bypass ``pass_env`` selection."""
+    return [
+        arg
+        for arg in run_args
+        if arg in ('-e', '--env', '--env-file')
+        or arg.startswith(('--env=', '--env-file=', '-e')) and arg != '-e'
+    ]
+
+
+def validate_managed_run_args(run_args: Sequence[str], *, allow_privilege_escalation: bool = False) -> None:
+    """Reject run flags that replace lifecycle controls supplied by evaluatorq."""
+    args = list(run_args)
+    violations: list[str] = []
+    for i, arg in enumerate(args):
+        flag, eq, value = arg.partition('=')
+        mount_flag = flag if flag in ('--volume', '-v', '--mount') else '-v' if arg.startswith('-v') else None
+        mount_value = value if eq and mount_flag else args[i + 1] if mount_flag and i + 1 < len(args) else arg[2:] if mount_flag else ''
+        if flag in _MANAGED_VALUE_FLAGS or arg.startswith('-u') and arg != '-u':
+            violations.append(arg)
+            continue
+        if mount_flag:
+            target = _mount_target(mount_flag, mount_value)
+            if target and (target in ('/evq-lease', '/evq-home') or target.startswith(('/evq-lease/', '/evq-home/'))):
+                violations.append(arg if eq or arg.startswith('-v') and arg != '-v' else f'{arg} {mount_value}')
+        if flag == '--rm' and eq and value.lower() in ('false', '0', 'no'):
+            violations.append(arg)
+        if not allow_privilege_escalation and flag == '--security-opt':
+            security_opt = value if eq else args[i + 1] if i + 1 < len(args) else ''
+            if security_opt.lower() == 'no-new-privileges=false':
+                violations.append(arg if eq else f'{arg} {security_opt}')
+    if violations:
+        raise ValueError(
+            'run_args cannot override evaluatorq-managed entrypoint, user, auto-remove, lease/home mounts, '
+            'or no-new-privileges unless privilege escalation is enabled: '
+            + ', '.join(repr(value) for value in violations)
+        )
+
+
+def _mount_target(flag: str, value: str) -> str | None:
+    if flag == '--mount':
+        fields = dict(part.partition('=')[::2] for part in value.split(','))
+        return fields.get('target') or fields.get('dst') or fields.get('destination')
+    parts = value.split(':')
+    return parts[1] if len(parts) > 1 else None
 
 
 class LiveContainer(BaseModel):
