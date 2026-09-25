@@ -594,6 +594,21 @@ class CodingAgentTarget(AgentTarget):
         if timeout_ms <= 0 or max_turn_ms <= 0:
             raise ValueError('timeout_ms and max_turn_ms must be positive')
         self._spec = AGENTS[agent]
+        self._kwargs: dict[str, Any] = {
+            'launcher': launcher,
+            'orq': orq,
+            'model': model,
+            'system_prompt': system_prompt,
+            'permission_mode': permission_mode,
+            'extra_args': list(extra_args) if extra_args else None,
+            'workdir': workdir,
+            'keep_workdir': keep_workdir,
+            'skills': list(skills) if skills else None,
+            'timeout_ms': timeout_ms,
+            'max_turn_ms': max_turn_ms,
+            'env': dict(env) if env else None,
+            'container': container,
+        }
         self._container = container
         if container is not None:
             if permission_mode is None:
@@ -619,21 +634,6 @@ class CodingAgentTarget(AgentTarget):
                 f'CodingAgentTarget({agent}): no system-prompt flag; '
                 'prepending system_prompt to the conversation instead'
             )
-        self._kwargs: dict[str, Any] = {
-            'launcher': launcher,
-            'orq': orq,
-            'model': model,
-            'system_prompt': system_prompt,
-            'permission_mode': permission_mode,
-            'extra_args': list(extra_args) if extra_args else None,
-            'workdir': workdir,
-            'keep_workdir': keep_workdir,
-            'skills': list(skills) if skills else None,
-            'timeout_ms': timeout_ms,
-            'max_turn_ms': max_turn_ms,
-            'env': dict(env) if env else None,
-            'container': container,
-        }
         self._agent: AgentName = agent
         self._launcher: Launcher = launcher
         self._orq = orq

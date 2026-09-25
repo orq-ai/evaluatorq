@@ -38,3 +38,19 @@ Confirmed the test coverage checks default image tag shape, frozen options, abso
 ## Concerns
 
 None within Task 5 scope. Container lifecycle and execution wiring remain for Tasks 6–7.
+
+## Review fixes
+
+Added focused regression tests before changing the implementation. The RED command `uv run pytest tests/backends/test_container.py -q` reported `4 failed, 12 passed in 0.16s`: Podman accepted a Docker context, `--mount` ignored a plain relative bind source, `--privileged=true` was not reported, and container defaults had overwritten original constructor values in `_kwargs`.
+
+The GREEN command `uv run pytest tests/backends/test_container.py -q` reported `16 passed in 0.10s`.
+
+The backend suite command `uv run pytest tests/backends -q` reported `96 passed in 12.23s`.
+
+The source lint command `uv run ruff check src/evaluatorq/backends/container.py src/evaluatorq/backends/coding_agent.py src/evaluatorq/backends/__init__.py` reported `All checks passed!`.
+
+The formatting command `uv run ruff format --check src/evaluatorq/backends/container.py src/evaluatorq/backends/coding_agent.py src/evaluatorq/backends/__init__.py` reported `3 files already formatted`.
+
+The changes reject Podman `context` with a validation error directing callers to `CONTAINER_CONNECTION`, flag plain relative sources on `--mount` bind mounts while allowing named volumes, recognize `--privileged=true`, and retain caller inputs in `_kwargs` before calculating container defaults so `new()` resolves defaults afresh. The `docker run` test now checks contiguous argv token sequences instead of joining tokens into a string.
+
+Review self-check: these changes stay in the Task 5 option, helper, target-initialization, test, and report paths; no container lifecycle wiring was added. No remaining concerns.

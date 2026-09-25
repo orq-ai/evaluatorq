@@ -36,24 +36,29 @@ def test_options_frozen_and_workdir_absolute() -> None:
         opts.image = 'x'  # pyright: ignore[reportAttributeAccessIssue]
 
 
+def test_podman_context_is_rejected() -> None:
+    with pytest.raises(pydantic.ValidationError, match='CONTAINER_CONNECTION'):
+        DockerOptions(binary='podman', context='remote')
+
+
 def test_run_argv(tmp_path: Path) -> None:
     opts = DockerOptions(image='img:1', context='orbstack', workdir='/app', run_args=('--memory', '4g'))
     argv = build_run_argv(opts, name='evq-claude-abcd1234', root=tmp_path, uid=501, gid=20)
     assert argv[:4] == ['docker', '--context', 'orbstack', 'run']
-    joined = ' '.join(argv)
-    for part in (
-        '-d --rm --init --entrypoint sh',
-        '--name evq-claude-abcd1234',
-        '--label evaluatorq.coding-agent=1',
-        '--user 501:20',
-        '-e HOME=/evq-home',
-        f'-v {tmp_path / "home"}:/evq-home',
-        f'-v {tmp_path / "lease"}:/evq-lease:ro',
-        f'-v {tmp_path / "work"}:/app -w /app',
-        '--security-opt no-new-privileges',
-        '--memory 4g img:1 -c',
-    ):
-        assert part in joined, part
+    expected_parts = (
+        ['-d', '--rm', '--init', '--entrypoint', 'sh'],
+        ['--name', 'evq-claude-abcd1234'],
+        ['--label', 'evaluatorq.coding-agent=1'],
+        ['--user', '501:20'],
+        ['-e', 'HOME=/evq-home'],
+        ['-v', f'{tmp_path / "home"}:/evq-home'],
+        ['-v', f'{tmp_path / "lease"}:/evq-lease:ro'],
+        ['-v', f'{tmp_path / "work"}:/app', '-w', '/app'],
+        ['--security-opt', 'no-new-privileges'],
+        ['--memory', '4g', 'img:1', '-c'],
+    )
+    for part in expected_parts:
+        assert any(argv[i : i + len(part)] == part for i in range(len(argv) - len(part) + 1)), part
     assert argv[-1] == watchdog_script()
 
 
@@ -99,10 +104,15 @@ def test_unsafe_mounts(tmp_path: Path) -> None:
         '-v/var:/v',
         '--mount', 'type=bind,source=/,target=/host',
         '--mount=type=bind,src=./rel,target=/r',
+        '--mount=type=bind,source=secrets,target=/secrets',
         '-v', f'{inside}:/in',
         '-v', 'named-volume:/data',
     ]
-    assert unsafe_mounts(args, tmp_path) == ['/', '/etc', '/var', '/', './rel']
+    assert unsafe_mounts(args, tmp_path) == ['/', '/etc', '/var', '/', './rel', 'secrets']
+
+
+def test_isolation_warning_includes_privileged_true() -> None:
+    assert isolation_breaking_flags(['--privileged=true']) == ['--privileged=true']
 
 
 def test_agent_spec_container_fields_are_required() -> None:
@@ -127,6 +137,22 @@ def test_new_carries_container_options() -> None:
     clone = CodingAgentTarget('claude', container=opts).new()
     assert clone._container == opts
     assert clone._permission_mode == 'bypassPermissions'
+
+
+def test_new_keeps_caller_values_before_container_defaults() -> None:
+    implicit = CodingAgentTarget('claude', container=DockerOptions())
+    assert implicit._kwargs['permission_mode'] is None
+    assert implicit._kwargs['extra_args'] is None
+    assert implicit.new()._permission_mode == 'bypassPermissions'
+
+    explicit = CodingAgentTarget(
+        'claude', container=DockerOptions(), permission_mode='read-only', extra_args=['--custom']
+    )
+    assert explicit._kwargs['permission_mode'] == 'read-only'
+    assert explicit._kwargs['extra_args'] == ['--custom']
+    clone = explicit.new()
+    assert clone._permission_mode == 'read-only'
+    assert clone._extra_args == ['--custom']
 
 
 def test_run_args_and_reserved_env_warn_at_construction() -> None:

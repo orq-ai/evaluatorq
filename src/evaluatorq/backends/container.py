@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -59,6 +59,12 @@ class DockerOptions(BaseModel):
     run_args: tuple[str, ...] = ()
     pass_env: tuple[str, ...] | None = None
     allow_privilege_escalation: bool = False
+
+    @model_validator(mode='after')
+    def podman_does_not_accept_docker_context(self) -> DockerOptions:
+        if self.binary == 'podman' and self.context is not None:
+            raise ValueError("Podman does not use Docker's --context; select a connection with CONTAINER_CONNECTION")
+        return self
 
     @field_validator('workdir')
     @classmethod
@@ -123,7 +129,7 @@ def forwarded_env_names(
 def isolation_breaking_flags(run_args: Sequence[str]) -> list[str]:
     found: list[str] = []
     for i, arg in enumerate(run_args):
-        if arg in ISOLATION_FLAGS or arg.startswith('--cap-add'):
+        if arg in ISOLATION_FLAGS or arg == '--privileged=true' or arg.startswith('--cap-add'):
             found.append(arg)
         elif arg in ISOLATION_PAIRS and i + 1 < len(run_args) and run_args[i + 1] == 'host':
             found.append(f'{arg} host')
@@ -133,7 +139,7 @@ def isolation_breaking_flags(run_args: Sequence[str]) -> list[str]:
 def unsafe_mounts(run_args: Sequence[str], root: Path) -> list[str]:
     """Return bind-mount host sources outside ``root`` and relative host sources."""
     args = list(run_args)
-    sources: list[str] = []
+    sources: list[tuple[str, bool]] = []
     for i, arg in enumerate(args):
         flag, eq, value = arg.partition('=')
         if arg in ('-v', '--volume', '--mount'):
@@ -149,16 +155,18 @@ def unsafe_mounts(run_args: Sequence[str], root: Path) -> list[str]:
         if flag == '--mount':
             fields = dict(part.partition('=')[::2] for part in value.split(','))
             src = fields.get('source') or fields.get('src')
+            if fields.get('type') == 'volume':
+                src = None
         else:
             src = value.split(':', 1)[0] if ':' in value else None
         if src:
-            sources.append(src)
+            sources.append((src, flag == '--mount'))
     resolved_root = root.resolve()
     unsafe: list[str] = []
-    for src in sources:
+    for src, mount_source in sources:
         if src.startswith('/'):
             if not Path(src).resolve().is_relative_to(resolved_root):
                 unsafe.append(src)
-        elif src.startswith(('.', '~')) or '/' in src:
+        elif mount_source or src.startswith(('.', '~')) or '/' in src:
             unsafe.append(src)
     return unsafe
