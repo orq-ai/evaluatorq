@@ -793,13 +793,17 @@ class CodingAgentTarget(AgentTarget):
                 'the agent can reach it'
             )
         name = f'{opts.name_prefix}-{self._agent}-{uuid.uuid4().hex[:8]}'
-        beat = root / 'lease' / 'beat'
+        lease_dir = root / 'lease' / name
+        lease_dir.mkdir()
+        beat = lease_dir / 'beat'
         write_beat(beat, 0)
         register(name, LiveContainer(binary=opts.binary, context=opts.context, beat=beat))
         self._owned.append(name)
         self._container_name = name
         try:
-            started = await self._docker(build_run_argv(opts, name=name, root=root, uid=os.getuid(), gid=os.getgid()))
+            started = await self._docker(
+                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=os.getuid(), gid=os.getgid())
+            )
         except BaseException:
             await self._drop_container_shielded()
             raise

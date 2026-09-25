@@ -30,7 +30,7 @@ case "$1" in
   exec) env | sed 's/^/ENV /' >> "$FAKE_LOG"; cat - >/dev/null
         [ -n "$FAKE_EXEC_SLEEP" ] && sleep "$FAKE_EXEC_SLEEP"
         [ -n "$FAKE_STDOUT" ] && cat "$FAKE_STDOUT"; exit ${FAKE_EXEC_EXIT:-0};;
-  rm) [ -n "$FAKE_RM_SLEEP" ] && sleep "$FAKE_RM_SLEEP"; echo REMOVED >> "$FAKE_LOG"; exit 0;;
+  rm) [ -n "$FAKE_RM_SLEEP" ] && sleep "$FAKE_RM_SLEEP"; [ -n "$FAKE_RM_EXIT" ] && exit "$FAKE_RM_EXIT"; echo REMOVED >> "$FAKE_LOG"; exit 0;;
 esac
 """
 
@@ -307,6 +307,32 @@ async def test_restart_between_turns(docker, monkeypatch, tmp_path, marker: bool
     assert len(runs) == 2 and first not in runs[1]
     assert list(c.LIVE_CONTAINERS) != [first] and len(c.LIVE_CONTAINERS) == 1
     assert f'{root / "home"}:/evq-home' in runs[1] and f'{root / "work"}:/work' in runs[1]
+    await target.close()
+
+
+@pytest.mark.asyncio
+async def test_failed_restart_removal_does_not_renew_old_container_lease(docker, monkeypatch, tmp_path) -> None:
+    binary, _, calls = docker
+    target = _target(binary)
+    await target.respond([Message(role='user', content='first')])
+    old_name, old_live = next(iter(c.LIVE_CONTAINERS.items()))
+    old_beat = old_live.beat
+    old_value = old_beat.read_text()
+
+    stopped = tmp_path / 'stopped'
+    stopped.write_text('')
+    monkeypatch.setenv('FAKE_STOPPED', str(stopped))
+    monkeypatch.setenv('FAKE_RM_EXIT', '1')
+    await target.respond([Message(role='user', content='second')])
+
+    new_name, new_live = next(iter(c.LIVE_CONTAINERS.items()))
+    assert new_name != old_name
+    assert new_live.beat != old_beat
+    assert old_beat.exists()
+    c.heartbeat_once(123)
+    assert old_beat.read_text() == old_value
+    assert new_live.beat.read_text() == '123'
+    assert len(calls('run')) == 2
     await target.close()
 
 

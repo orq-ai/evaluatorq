@@ -107,7 +107,12 @@ def watchdog_script(check_s: int = LEASE_CHECK_S) -> str:
     )
 
 
-def build_run_argv(opts: DockerOptions, *, name: str, root: Path, uid: int, gid: int) -> list[str]:
+def build_run_argv(
+    opts: DockerOptions, *, name: str, root: Path, uid: int, gid: int, lease_dir: Path | None = None
+) -> list[str]:
+    """Build a container command, mounting its private lease beside shared workdir state."""
+    if lease_dir is None:
+        lease_dir = root / 'lease'
     argv = [
         *opts.cli(), 'run', '-d', '--rm', '--init', '--entrypoint', 'sh',
         '--name', name,
@@ -117,7 +122,7 @@ def build_run_argv(opts: DockerOptions, *, name: str, root: Path, uid: int, gid:
         '--user', f'{uid}:{gid}',
         '-e', 'HOME=/evq-home',
         '-v', f'{root / "home"}:/evq-home',
-        '-v', f'{root / "lease"}:/evq-lease:ro',
+        '-v', f'{lease_dir}:/evq-lease:ro',
         '-v', f'{root / "work"}:{opts.workdir}', '-w', opts.workdir,
     ]  # fmt: skip
     if not opts.allow_privilege_escalation:
