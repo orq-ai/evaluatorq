@@ -168,11 +168,38 @@ class DatapointGenerator:
             first_message = await self._first_message_generator.generate(persona, scenario)
             return generate_datapoint(persona, scenario, first_message)
 
-        tasks = list(starmap(generate_single, combinations))
-        datapoints = await asyncio.gather(*tasks)
+        # A failed opening fails its datapoint only; a canned stand-in would be
+        # simulated and judged as if it were real.
+        outcomes = await asyncio.gather(*starmap(generate_single, combinations), return_exceptions=True)
+        datapoints: list[SimulationDatapoint] = []
+        for (persona, scenario), outcome in zip(combinations, outcomes, strict=True):
+            if isinstance(outcome, SimulationDatapoint):
+                datapoints.append(outcome)
+                continue
+            if not isinstance(outcome, Exception):
+                raise outcome
+            logger.warning(
+                'First-message generation failed for persona=%r scenario=%r (%s); dropping this datapoint',
+                persona.name,
+                scenario.name,
+                outcome,
+            )
 
-        logger.info('Generated %d datapoints', len(datapoints))
-        return list(datapoints)
+        if not datapoints:
+            raise RuntimeError(
+                f'First-message generation failed for all {len(combinations)} persona x scenario pairs; '
+                'the warnings above name each one.'
+            )
+        if len(datapoints) < len(combinations):
+            logger.warning(
+                'Generated %d of %d datapoints; %d failed first-message generation and were dropped',
+                len(datapoints),
+                len(combinations),
+                len(combinations) - len(datapoints),
+            )
+        else:
+            logger.info('Generated %d datapoints', len(datapoints))
+        return datapoints
 
     @staticmethod
     def _apply_perturbations(

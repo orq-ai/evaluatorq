@@ -2,8 +2,9 @@
 
 Covers:
 - 4xx APIStatusError re-raised (auth + client errors are not silently masked)
-- 5xx / 429 APIStatusError returns generic fallback (keeps a long run alive)
-- empty content returns generic fallback
+- 5xx / 429 APIStatusError surviving retries is raised, never replaced by a canned message
+- empty or refused content is retried, then raises FirstMessageGenerationError
+- truncation raises without retry
 - leading/trailing quote stripping on returned message
 """
 
@@ -16,7 +17,10 @@ import httpx
 import pytest
 from openai import APIStatusError
 
-from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
+from evaluatorq.simulation.generators.first_message_generator import (
+    FirstMessageGenerationError,
+    FirstMessageGenerator,
+)
 from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
 
 
@@ -110,19 +114,16 @@ class TestFirstMessageGeneratorErrors:
             await gen.generate(_persona(), _scenario())
         assert exc_info.value.status_code == 403
 
-    async def test_500_falls_back_to_generic_message(self):
-        # Persistent server error (survived with_retry) — fall back to keep a
-        # long run alive rather than abort it.
-        client = _client_raising(_api_error(500))
+    @pytest.mark.parametrize("status", [500, 429])
+    async def test_persistent_server_error_is_raised_not_masked(self, status):
+        # Survived with_retry: the datapoint fails rather than being simulated
+        # on a canned opening line.
+        client = _client_raising(_api_error(status))
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
-        result = await gen.generate(_persona(), _scenario("reset my pw"))
-        assert result == "Hi, I need help with: reset my pw"
-
-    async def test_429_falls_back_to_generic_message(self):
-        client = _client_raising(_api_error(429))
-        gen = FirstMessageGenerator(model="gpt-4o", client=client)
-        result = await gen.generate(_persona(), _scenario("rate limited"))
-        assert result == "Hi, I need help with: rate limited"
+        with pytest.raises(APIStatusError) as exc_info:
+            await gen.generate(_persona(), _scenario("reset my pw"))
+        assert exc_info.value.status_code == status
+        assert client.responses.create.await_count > 1  # retried before giving up
 
     async def test_400_is_reraised_not_masked(self):
         # A 4xx client error (bad request / model-not-found) is a real
@@ -133,46 +134,36 @@ class TestFirstMessageGeneratorErrors:
             await gen.generate(_persona(), _scenario("xyz"))
         assert exc_info.value.status_code == 400
 
-    async def test_empty_content_falls_back_to_generic(self):
-        client = _client_with_response("")
+    @pytest.mark.parametrize("content", ["", None])
+    async def test_empty_content_retries_then_raises(self, content):
+        client = _client_with_response(content)
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
-        result = await gen.generate(_persona(), _scenario("login issue"))
-        assert result == "Hi, I need help with: login issue"
+        with pytest.raises(FirstMessageGenerationError, match="empty content"):
+            await gen.generate(_persona(), _scenario("login issue"))
+        assert client.responses.create.await_count == 3
 
-    async def test_none_content_falls_back_to_generic(self):
-        client = _client_with_response(None)
+    @pytest.mark.parametrize("stop_reason", ["length", "max_output_tokens"])
+    @pytest.mark.parametrize("content", ["", "partial opening"])
+    async def test_truncation_raises_without_retry(self, stop_reason, content):
+        client = _client_with_response(content, stop_reason=stop_reason)
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
-        result = await gen.generate(_persona(), _scenario("login"))
-        assert result == "Hi, I need help with: login"
-
-    async def test_length_stop_reason_falls_back_without_retry(self):
-        client = _client_with_response("", stop_reason="length")
-        gen = FirstMessageGenerator(model="gpt-4o", client=client)
-        result = await gen.generate(_persona(), _scenario("truncated"))
-        assert result == "Hi, I need help with: truncated"
+        with pytest.raises(FirstMessageGenerationError, match="truncated"):
+            await gen.generate(_persona(), _scenario("truncated"))
         assert client.responses.create.await_count == 1
 
-    @pytest.mark.parametrize('stop_reason', ['length', 'max_output_tokens'])
-    async def test_partial_length_response_falls_back_without_retry(self, stop_reason):
-        client = _client_with_response('partial opening', stop_reason=stop_reason)
-        gen = FirstMessageGenerator(model="gpt-4o", client=client)
-        result = await gen.generate(_persona(), _scenario("partial"))
-        assert result == "Hi, I need help with: partial"
-        assert client.responses.create.await_count == 1
-
-    async def test_refusal_falls_back_without_retry(self):
+    async def test_refusal_retries_then_raises(self):
         client = _client_with_response("", refusal="not allowed")
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
-        result = await gen.generate(_persona(), _scenario("refused"))
-        assert result == "Hi, I need help with: refused"
-        assert client.responses.create.await_count == 1
+        with pytest.raises(FirstMessageGenerationError, match="refused"):
+            await gen.generate(_persona(), _scenario("refused"))
+        assert client.responses.create.await_count == 3
 
-    async def test_empty_content_retries_before_fallback(self):
-        client = _client_with_responses("", "I need help logging in")
+    async def test_empty_content_retries_until_a_message_arrives(self):
+        client = _client_with_responses("", "", "I need help logging in")
         gen = FirstMessageGenerator(model="gpt-4o", client=client)
         result = await gen.generate(_persona(), _scenario("login"))
         assert result == "I need help logging in"
-        assert client.responses.create.await_count == 2
+        assert client.responses.create.await_count == 3
 
     async def test_leading_and_trailing_double_quotes_stripped(self):
         client = _client_with_response('"hello there"')
@@ -191,3 +182,40 @@ class TestFirstMessageGeneratorErrors:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         with pytest.raises(ValueError, match="ORQ_API_KEY"):
             FirstMessageGenerator(model="gpt-4o")
+
+
+@pytest.mark.asyncio
+async def test_datapoint_generator_drops_only_the_failed_pair(caplog):
+    """One failed opening fails its datapoint, not the batch, and the drop count is logged."""
+    import logging
+
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    gen = DatapointGenerator(config=LLMCallConfig(model="gpt-4o", client=MagicMock()))
+
+    async def fake_generate(persona: Persona, scenario: Scenario) -> str:
+        if scenario.name == "bad":
+            raise FirstMessageGenerationError("empty content")
+        return f"hello from {scenario.name}"
+
+    gen._first_message_generator.generate = fake_generate  # type: ignore[method-assign]
+    scenarios = [Scenario(name="good", goal="g"), Scenario(name="bad", goal="b")]
+
+    with caplog.at_level(logging.WARNING):
+        datapoints = await gen.generate_from_combinations([_persona()], scenarios)
+
+    assert [dp.first_message for dp in datapoints] == ["hello from good"]
+    assert "Generated 1 of 2 datapoints" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_datapoint_generator_raises_when_every_pair_fails():
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    gen = DatapointGenerator(config=LLMCallConfig(model="gpt-4o", client=MagicMock()))
+    gen._first_message_generator.generate = AsyncMock(side_effect=FirstMessageGenerationError("x"))  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="failed for all 1"):
+        await gen.generate_from_combinations([_persona()], [_scenario()])

@@ -2165,8 +2165,6 @@ async def _resolve_or_generate_datapoints(
         first_msg_gen = FirstMessageGenerator(client=gen_client, config=resolved)
         pairs = [(p, s) for p in personas for s in scenarios]
 
-        generated: list[SimulationDatapoint] = []
-        batch_size = 5
         # One span for the whole generation phase; the per-pair LLM calls nest
         # under it as the client's own spans.
         async with with_simulation_span(
@@ -2178,35 +2176,12 @@ async def _resolve_or_generate_datapoints(
                 'orq.simulation.scenario_count': len(scenarios),
             },
         ) as gen_span:
-            for i in range(0, len(pairs), batch_size):
-                batch = pairs[i : i + batch_size]
-                batch_results = await asyncio.gather(
-                    *[_generate_single_datapoint(first_msg_gen, p, s) for p, s in batch],
-                    return_exceptions=True,
-                )
-                for (p, s), outcome in zip(batch, batch_results, strict=True):
-                    if isinstance(outcome, BaseException):
-                        logger.warning(
-                            'first-message generation failed for persona=%r scenario=%r: %r — skipping',
-                            p.name,
-                            s.name,
-                            outcome,
-                        )
-                        # The per-pair span is gone, so the phase span carries
-                        # the failure identity instead — otherwise a partial
-                        # failure is only visible in the logs.
-                        if gen_span is not None:
-                            gen_span.add_event(
-                                'orq.simulation.first_message_generation_failed',
-                                {
-                                    'orq.simulation.persona': p.name,
-                                    'orq.simulation.scenario': s.name,
-                                    'error.type': type(outcome).__name__,
-                                    'error.message': str(outcome),
-                                },
-                            )
-                        continue
-                    generated.append(outcome)
+            # Concurrency is bounded by the run-scoped LLM ceiling, not by batching.
+            results = await asyncio.gather(
+                *[_generate_single_datapoint(first_msg_gen, p, s) for p, s in pairs],
+                return_exceptions=True,
+            )
+            generated = _keep_generated_datapoints(pairs, results, gen_span)
             if gen_span is not None:
                 gen_span.set_attribute('orq.simulation.generated_count', len(generated))
                 gen_span.set_attribute('orq.simulation.failed_count', len(pairs) - len(generated))
@@ -2214,6 +2189,13 @@ async def _resolve_or_generate_datapoints(
             if not generated:
                 raise RuntimeError(
                     'first-message generation produced no datapoints - every persona x scenario pair failed'
+                )
+            if len(generated) < len(pairs):
+                logger.warning(
+                    'Generated %d of %d datapoints; %d failed first-message generation and were dropped',
+                    len(generated),
+                    len(pairs),
+                    len(pairs) - len(generated),
                 )
         return generated
     finally:
@@ -2243,6 +2225,41 @@ async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -
     if not out:
         raise ValueError(f'Dataset {dataset_id!r} returned zero simulation-compatible datapoints')
     return out
+
+
+def _keep_generated_datapoints(
+    pairs: list[tuple[Persona, Scenario]],
+    results: list[SimulationDatapoint | BaseException],
+    gen_span: Any,
+) -> list[SimulationDatapoint]:
+    """Keep the pairs whose first message generated; log and record each failure."""
+    generated: list[SimulationDatapoint] = []
+    for (p, s), outcome in zip(pairs, results, strict=True):
+        if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
+            raise outcome
+        if isinstance(outcome, BaseException):
+            logger.warning(
+                'first-message generation failed for persona=%r scenario=%r: %r — skipping',
+                p.name,
+                s.name,
+                outcome,
+            )
+            # The per-pair span is gone, so the phase span carries
+            # the failure identity instead — otherwise a partial
+            # failure is only visible in the logs.
+            if gen_span is not None:
+                gen_span.add_event(
+                    'orq.simulation.first_message_generation_failed',
+                    {
+                        'orq.simulation.persona': p.name,
+                        'orq.simulation.scenario': s.name,
+                        'error.type': type(outcome).__name__,
+                        'error.message': str(outcome),
+                    },
+                )
+            continue
+        generated.append(outcome)
+    return generated
 
 
 async def _generate_single_datapoint(
