@@ -157,6 +157,16 @@ async def test_unknown_label_fails_before_any_call(monkeypatch: pytest.MonkeyPat
         await pipeline.insights(_population(), labels=('unknown-label',), runs_dir=tmp_path)
 
 
+@pytest.mark.asyncio
+async def test_invalid_config_fails_before_starting_manifest(tmp_path: Path) -> None:
+    from evaluatorq.common.run_manifest import list_manifests
+
+    with pytest.raises(ValueError, match='max_clusters must be positive'):
+        await pipeline.insights(_population(), dimensions=('intent',), max_clusters=0, runs_dir=tmp_path)
+
+    assert list_manifests(tmp_path) == []
+
+
 def test_noise_outlier_is_not_a_priority_member() -> None:
     from evaluatorq.insights.models import ClusterAssignment, InsightsConfig, LabelSpec, TraceInsight
     from evaluatorq.insights.priority import priority_points
@@ -465,6 +475,65 @@ async def test_small_sentiment_groups_cluster_and_warn_when_umap_skipped(monkeyp
     assert traces[5].assignments['sentiment'].base == 'unclassified'
     assert 'dimension:sentiment' in traces[5].errors
     assert result.n_failed == 1
-    assert sum('UMAP skipped' in warning for warning in result.warnings) == 2
-    assert 'UMAP skipped' in messages.getvalue()
+    assert sum('UMAP unavailable' in warning for warning in result.warnings) == 2
+    assert 'UMAP unavailable' in messages.getvalue()
     assert 'marked unclassified' in messages.getvalue()
+
+
+@pytest.mark.asyncio
+async def test_cluster_merges_cannot_cross_top_level_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    import numpy as np
+    from openai import AsyncOpenAI
+
+    from evaluatorq.insights import cluster, merge, reduce
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.models import TraceInsight
+
+    traces = [
+        TraceInsight(
+            trace_id=f't{i}', span_id=f's{i}', timestamp=datetime.now(timezone.utc), summary=_summary()
+        )
+        for i in range(5)
+    ]
+    tree = cluster.ClusterTree(
+        base_labels=np.asarray([0, 0, 1, 1, 1]), top_of_base={0: 0, 1: 1}, n_base=2, n_top=2
+    )
+    monkeypatch.setattr(cluster, 'cluster_two_level', lambda *args, **kwargs: tree)
+    monkeypatch.setattr(cluster, 'nearest_neighbours', lambda _cents: {0: [1], 1: [0]})
+
+    async def embeddings(texts, **kwargs):
+        return {text: [float(index + 1), 1.0] for index, text in enumerate(texts)}
+
+    async def descriptions(members, **kwargs):
+        return {key: ClusterName(name=f'base {key}', description='details') for key in members}
+
+    async def top_descriptions(children, **kwargs):
+        return {key: ClusterName(name=f'top {key}', description='details') for key in children}
+
+    captured_neighbours = []
+
+    async def no_merge(names, examples, neighbours, **kwargs):
+        captured_neighbours.append(neighbours)
+        return {key: key for key in names}
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', top_descriptions)
+    monkeypatch.setattr(merge, 'merge_similar', no_merge)
+    monkeypatch.setattr(reduce, 'reduce_3d', lambda _vectors: None)
+    cache = InsightsCache(enabled=False)
+    try:
+        result = await pipeline._build_dimension(
+            'intent', traces, client=cast('AsyncOpenAI', object()), cache=cache,
+            embedding_model='unused', summary_model='unused', max_clusters=15, max_subclusters=15,
+            outlier_zscore=None, parallelism=10, classifier_model='typesafe/jev-latest',
+        )
+    finally:
+        cache.close()
+
+    assert captured_neighbours == [{0: [], 1: []}]
+    tops = {cluster.id: cluster for cluster in result.clusters if cluster.level == 'top'}
+    bases = [cluster for cluster in result.clusters if cluster.level == 'base']
+    assert {top.size for top in tops.values()} == {2, 3}
+    assert all(top.size == sum(base.size for base in bases if base.parent_id == top.id) for top in tops.values())

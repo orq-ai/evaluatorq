@@ -123,6 +123,8 @@ async def merge_similar(
     Returns every cluster id in `names` mapped to its representative id (a
     cluster that merged into nothing maps to itself).
     """
+    if parallelism < 1:
+        raise ValueError('parallelism must be positive')
     parent = {cluster_id: cluster_id for cluster_id in names}
     pairs = _candidate_pairs(names, neighbours)
     semaphore = asyncio.Semaphore(parallelism)

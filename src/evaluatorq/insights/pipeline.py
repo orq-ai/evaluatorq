@@ -167,7 +167,6 @@ async def _build_dimension(  # noqa: C901
         group_indices[None] = list(range(len(usable)))
 
     next_base = next_top = 0
-    vector_map: dict[str, list[float]] = {}
     for group, indices in group_indices.items():
         if len(indices) == 1:
             warning = f'dimension {dimension} group {group!r} has one signal trace; marked unclassified'
@@ -180,7 +179,8 @@ async def _build_dimension(  # noqa: C901
         texts = [usable[i][1] for i in indices]
         embedded = await embed_texts(texts, client=client, model=embedding_model, cache=cache)
         vectors = np.asarray([embedded[text] for text in texts], dtype=float)
-        tree = cluster_two_level(
+        tree = await asyncio.to_thread(
+            cluster_two_level,
             vectors,
             max_clusters=max_clusters,
             max_subclusters=max_subclusters,
@@ -222,8 +222,16 @@ async def _build_dimension(  # noqa: C901
         if described and all(isinstance(value, str) for value in described.values()):
             raise RuntimeError('describe failed for every base cluster')
         names = {key: value for key, value in described.items() if isinstance(value, ClusterName)}
+        same_top_neighbours = {
+            base_id: [
+                neighbour
+                for neighbour in neighbours.get(base_id, [])
+                if tree.top_of_base.get(neighbour) == tree.top_of_base.get(base_id)
+            ]
+            for base_id in base_ids
+        }
         representatives = await merge_similar(
-            names, examples, neighbours, client=client, model=classifier_model, parallelism=parallelism
+            names, examples, same_top_neighbours, client=client, model=classifier_model, parallelism=parallelism
         )
         merged: dict[int, list[int]] = {}
         for base_id in base_ids:
@@ -303,13 +311,13 @@ async def _build_dimension(  # noqa: C901
                 )
             )
 
-        coords = reduce_3d(vectors)
+        coords = await asyncio.to_thread(reduce_3d, vectors)
         if coords is not None:
             for i, coord in enumerate(coords):
                 trace = usable[indices[i]][0]
                 trace.coords[dimension] = (float(coord[0]), float(coord[1]), float(coord[2]))
         else:
-            warning = f'dimension {dimension} group {group!r}: UMAP skipped for {len(indices)} traces (need at least 5)'
+            warning = f'dimension {dimension} group {group!r}: UMAP unavailable for {len(indices)} traces'
             result.warnings.append(warning)
             logger.warning(warning)
     result.n_failed = sum(bool(trace.errors) for trace in traces)
@@ -338,12 +346,18 @@ async def insights(  # noqa: C901
 ) -> InsightsRun:
     """Run trace Insights and persist the partial or complete result with a manifest."""
     specs = _label_specs(labels, dimensions)  # resolve unknown presets before client construction or I/O
+    for limit_name, limit_value in (
+        ('max_clusters', max_clusters),
+        ('max_subclusters', max_subclusters),
+        ('parallelism', parallelism),
+    ):
+        if limit_value < 1:
+            raise ValueError(f'{limit_name} must be positive')
     settings = effective_settings()
     compiler_model = compiler_model or settings.compiler_model
     run_id = str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()
-    writer = start_manifest(run_id=run_id, surface='insights', run_name=name, runs_dir=directory)
     now = datetime.now(timezone.utc)
     config = InsightsConfig(
         labels=specs,
@@ -374,6 +388,7 @@ async def insights(  # noqa: C901
         counts={},
         warnings=[],
     )
+    writer = start_manifest(run_id=run_id, surface='insights', run_name=name, runs_dir=directory)
     resolved_llm = None
     llm_owned = False
     own_orq = orq_client is None

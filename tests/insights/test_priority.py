@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from evaluatorq.insights.models import Cluster, DimensionResult, LabelAnswer, TraceInsight
+from evaluatorq.insights.models import Cluster, DimensionResult, LabelAnswer, LabelSpec, TraceInsight
 from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, MADE_ERRORS
 from evaluatorq.insights.priority import priority_points
 
@@ -216,3 +216,17 @@ def test_made_errors_value_is_true_not_truthy() -> None:
     assert points is not None
     assert points[0].error_share == 0.5
     assert MADE_ERRORS.kind == 'noul'
+
+
+def test_non_score_satisfaction_label_skips_priority_without_cast_failure() -> None:
+    choice = LabelSpec(name='customer_satisfaction', kind='choice', instructions='choose')
+    traces = [_trace('t1')]
+    traces[0].labels['customer_satisfaction'] = LabelAnswer(
+        value='happy', confidence=0.9, probabilities=None, error=None
+    )
+    dimension = _dimension([_base_cluster('base-1', ['t1'])])
+
+    points, reason = priority_points(traces, dimension, satisfaction_spec=choice)
+
+    assert points is None
+    assert reason is not None and 'must be a score label' in reason

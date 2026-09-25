@@ -269,6 +269,61 @@ async def test_export_path_keeps_matched_only_and_warns_on_missing_ids(
 
 
 @pytest.mark.asyncio
+async def test_export_path_reloads_merged_filters_and_pinned_time_range(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export = _run_export(['t1'], filters=ExportFilters(agent_name=('explicit-bot',)))
+    export = export.model_copy(
+        update={
+            'generated_filters': ExportFilters(agent_name=('generated-bot',), model=('gpt-5',)),
+            'generated_numeric': ExportNumericFilters(tokens_min=20, tokens_max=300),
+            'start': None,
+            'end': None,
+        }
+    )
+    export_path = tmp_path / 'export.json'
+    export_path.write_text(export.model_dump_json())
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=(make_trace('t1'),))
+
+    resolved = await resolve_population(
+        InsightsPopulation.from_finder_export(export_path),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+
+    call = FakeSource.calls[0]
+    assert call['facets'].agent_name == frozenset({'explicit-bot'})
+    assert call['facets'].model == frozenset({'gpt-5'})
+    assert call['numeric'].tokens_min == 5
+    assert call['numeric'].tokens_max == 300
+    assert call['start'] < export.traces[0].timestamp < call['end']
+    assert call['limit'] == export.limit
+    assert [trace.trace_id for trace in resolved.traces] == ['t1']
+
+
+@pytest.mark.asyncio
+async def test_export_path_with_no_matched_ids_skips_live_reload(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    export_path = tmp_path / 'export.json'
+    export_path.write_text(_run_export([]).model_dump_json())
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+
+    resolved = await resolve_population(
+        InsightsPopulation.from_finder_export(export_path),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+
+    assert resolved.traces == []
+    assert resolved.n_scanned == 0
+    assert FakeSource.calls == []
+
+
+@pytest.mark.asyncio
 async def test_export_path_bad_json_raises_population_error(tmp_path: Any) -> None:
     export_path = tmp_path / 'export.json'
     export_path.write_text('not json')

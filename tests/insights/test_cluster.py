@@ -138,3 +138,26 @@ def test_nearest_neighbours_caps_at_k_and_excludes_self():
 def test_nearest_neighbours_single_cluster_has_no_neighbours():
     result = nearest_neighbours({0: np.array([1.0, 0.0])}, k=3)
     assert result == {0: []}
+
+
+def test_empty_input_returns_empty_tree():
+    tree = cluster_two_level(np.empty((0, 32)))
+
+    assert tree.n_base == 0
+    assert tree.n_top == 0
+    assert tree.top_of_base == {}
+    assert tree.base_labels.size == 0
+
+
+@pytest.mark.parametrize(
+    'limits',
+    [
+        {'max_clusters': 0},
+        {'max_subclusters': 0},
+        {'min_cluster_size': 0},
+        {'max_clusters': -1},
+    ],
+)
+def test_non_positive_limits_are_rejected(limits):
+    with pytest.raises(ValueError, match='must be positive'):
+        cluster_two_level(np.ones((10, 3)), **limits)

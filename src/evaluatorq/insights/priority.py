@@ -54,6 +54,11 @@ def priority_points(
     produced point's `error_share` default to `0.0`, and that default is
     always named in the returned `reason`.
     """
+    if satisfaction_spec.kind != 'score':
+        reason = f'the {satisfaction_label!r} label must be a score label for the priority matrix'
+        logger.warning('Insights priority matrix for dimension {!r} skipped: {}', dimension.name, reason)
+        return None, reason
+
     satisfaction_requested = any(satisfaction_label in trace.labels for trace in run_traces)
     if not satisfaction_requested:
         reason = f'the {satisfaction_label!r} label was not requested for this run'

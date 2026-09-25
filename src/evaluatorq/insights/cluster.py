@@ -173,7 +173,18 @@ def cluster_two_level(
     L2-normalises first. Below `2 * min_cluster_size` points there is too little signal
     to split: everything is one base cluster under one top cluster.
     """
+    for name, value in (
+        ('max_clusters', max_clusters),
+        ('max_subclusters', max_subclusters),
+        ('min_cluster_size', min_cluster_size),
+    ):
+        if value < 1:
+            raise ValueError(f'{name} must be positive')
+    if vectors.ndim != 2:
+        raise ValueError('vectors must be a two-dimensional matrix')
     n = vectors.shape[0]
+    if n == 0:
+        return ClusterTree(base_labels=np.empty(0, dtype=int), top_of_base={}, n_base=0, n_top=0)
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     safe_norms = np.where(norms == 0, 1.0, norms)
     normed = vectors / safe_norms
