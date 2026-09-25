@@ -12,7 +12,15 @@ from starlette.responses import Response
 
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
-from evaluatorq.dashboard.insights_views import TABS, full_page, landing, running_page, tab_content, unreadable_page
+from evaluatorq.dashboard.insights_views import (
+    TABS,
+    full_page,
+    landing,
+    map_payload,
+    running_page,
+    tab_content,
+    unreadable_page,
+)
 from evaluatorq.insights.models import InsightsRun
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 
@@ -104,7 +112,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             return _html('<p class="insights-empty">Insights run not found.</p>', 404)
         query = {
             key: req.query_params[key]
-            for key in ('dimension', 'cluster', 'label', 'value')
+            for key in ('dimension', 'cluster', 'label', 'value', 'row', 'row_value', 'column', 'column_value')
             if req.query_params.get(key)
         }
         if req.headers.get('HX-Request', '').casefold() == 'true':
@@ -142,15 +150,19 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         )
 
     @app.get('/insights/{run_id}/map.json')
-    def insights_map_json(run_id: str) -> Response:
+    def insights_map_json(req: Request, run_id: str) -> Response:
         _, loaded = _entries(get_insights_runs_dir())
         resolved = _resolve(run_id, loaded)
         if resolved is None or not isinstance(resolved[1], InsightsRun):
             return Response(
                 '{"points": [], "legend": [], "color_scale": null}', status_code=404, media_type='application/json'
             )
-        # Task 13 fills the map point and colour payload; keep the endpoint stable now.
-        return Response(json.dumps({'points': [], 'legend': [], 'color_scale': None}), media_type='application/json')
+        payload = map_payload(
+            resolved[1],
+            req.query_params.get('dimension', next(iter(resolved[1].dimensions), '')),
+            req.query_params.get('color_by', 'cluster'),
+        )
+        return Response(json.dumps(payload), media_type='application/json')
 
     @app.get('/insights/{run_id}/export.json')
     def insights_export(run_id: str) -> Response:

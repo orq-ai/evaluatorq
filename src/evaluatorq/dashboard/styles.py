@@ -2826,6 +2826,23 @@ _INSIGHTS_CSS = """
 .insights-empty,.insights-empty-state { color:var(--text-muted); font-size:12.5px; }
 .insights-empty-state { padding:28px; border:1px dashed var(--border-default); border-radius:10px; background:var(--surface-card); }
 .insights-empty-state h2,.insights-empty-state h3 { margin:0 0 8px; color:var(--text-strong); }
+.insights-view-toggle { display:inline-flex; overflow:hidden; border:1px solid var(--border-default); border-radius:6px; }
+.insights-view-toggle button { padding:6px 10px; border:0; background:var(--surface-card); color:var(--text-muted); font:inherit; cursor:pointer; }
+.insights-view-toggle button.active { background:var(--accent); color:white; }
+.insights-map-view { margin-top:8px; }
+.insights-map-toolbar,.insights-chart-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:0 0 12px; color:var(--text-muted); font-size:12px; }
+.insights-map-toolbar label,.insights-chart-controls label { display:flex; align-items:center; gap:6px; }
+.insights-map-toolbar select,.insights-chart-controls select { padding:6px 8px; border:1px solid var(--border-default); border-radius:6px; background:var(--surface-card); color:var(--text-strong); font:inherit; }
+.insights-map-layout { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(260px,1fr); gap:12px; }
+.insights-map-chart { min-width:0; height:470px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-card); }
+.insights-map-empty { padding:18px; border:1px dashed var(--border-default); border-radius:8px; background:var(--surface-card); color:var(--text-muted); }
+.insights-map-empty h4 { margin:0 0 6px; color:var(--text-strong); }
+.insights-map-empty p { margin:0; }
+.finder-analyze-matches { margin:16px 0; padding:16px; border:1px solid var(--border-subtle); border-radius:10px; background:var(--surface-card); }
+.finder-analyze-matches h3 { margin:0 0 6px; color:var(--text-strong); }
+.finder-analyze-matches p { color:var(--text-muted); font-size:12.5px; }
+.finder-analyze-matches label { display:block; margin:12px 0 4px; color:var(--text-muted); font-size:11px; font-weight:700; }
+.finder-analyze-matches pre { overflow:auto; margin:0; padding:10px; border-radius:6px; background:var(--surface-sunken); font-size:12px; }
 @media (max-width:850px) { .insights-layout { grid-template-columns:1fr; }.insights-rail { border-right:0; border-bottom:1px solid var(--border-subtle); padding:0 0 12px; }.insights-dimensions { grid-template-columns:1fr; } }
 """
 

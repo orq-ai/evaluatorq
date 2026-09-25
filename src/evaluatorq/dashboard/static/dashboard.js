@@ -66,6 +66,113 @@
         window.__orqVegaViews[id] = r;
       });
     });
+    initInsightsMaps(scope);
+  });
+
+  function mapTraces(payload) {
+    if (payload.color_mode === 'continuous') {
+      return [{
+        type: 'scatter3d', mode: 'markers', name: 'traces',
+        x: payload.points.map(function (p) { return p.x; }),
+        y: payload.points.map(function (p) { return p.y; }),
+        z: payload.points.map(function (p) { return p.z; }),
+        text: payload.points.map(function (p) { return p.trace_id + ' · ' + p.cluster_name; }),
+        customdata: payload.points.map(function (p) { return [p.cluster_id, p.trace_id]; }),
+        hovertemplate: '%{text}<extra></extra>',
+        marker: { size: 4, color: payload.points.map(function (p) { return p.color_value; }),
+          colorscale: payload.color_scale, cmin: 0, cmax: 1, showscale: true,
+          colorbar: { title: 'Label value', thickness: 10 }, opacity: .85 }
+      }];
+    }
+    var groups = payload.color_mode === 'category'
+      ? payload.legend.map(function (item) { return { id: item.name, name: item.name, color: item.color, symbol: item.symbol }; })
+      : payload.legend.map(function (item) { return { id: item.cluster_id, name: item.name, color: item.color, symbol: item.symbol }; });
+    return groups.map(function (group) {
+      var points = payload.points.filter(function (p) {
+        return (payload.color_mode === 'category' ? String(p.label_value) : p.cluster_id) === group.id;
+      });
+      return { type: 'scatter3d', mode: 'markers', name: group.name,
+        x: points.map(function (p) { return p.x; }), y: points.map(function (p) { return p.y; }),
+        z: points.map(function (p) { return p.z; }), text: points.map(function (p) { return p.trace_id; }),
+        customdata: points.map(function (p) { return [p.cluster_id, p.trace_id]; }),
+        hovertemplate: '%{text}<extra>' + group.name + '</extra>',
+        marker: { size: 4, color: group.color, symbol: group.symbol || 'circle', opacity: .85 } };
+    });
+  }
+
+  function drawInsightsMap(el) {
+    window.Plotly = window.Plotly || window.moduleName;
+    if (!el || !window.Plotly || el.offsetParent === null) return;
+    var selector = el.closest('.insights-map-view').querySelector('[data-map-color]');
+    var colorBy = selector ? selector.value : 'cluster';
+    var baseUrl = el.getAttribute('data-map-url').replace(/color_by=[^&]*/, 'color_by=' + encodeURIComponent(colorBy));
+    fetch(baseUrl).then(function (response) { return response.json(); }).then(function (payload) {
+      var parent = el.parentElement;
+      var empty = parent.querySelector('[data-map-empty]');
+      if (!payload.points.length) {
+        if (!empty) {
+          empty = document.createElement('div');
+          empty.className = 'insights-map-empty';
+          empty.setAttribute('data-map-empty', '');
+          empty.setAttribute('role', 'status');
+          parent.insertBefore(empty, el.nextSibling);
+        }
+        empty.textContent = 'Map unavailable: no traces have coordinates and a readable value for this colour.';
+        empty.hidden = false;
+        return;
+      }
+      if (empty) empty.hidden = true;
+      var sand = payload.grid_color;
+      var bg = payload.background_color;
+      var axis = function (title) { return { title: { text: title }, showgrid: true, gridcolor: sand,
+        zeroline: false, showbackground: true, backgroundcolor: bg, showticklabels: true }; };
+      var layout = { margin: { l: 0, r: 0, t: 5, b: 0 }, showlegend: true,
+        legend: { bgcolor: 'rgba(255,255,255,.8)', font: { size: 11 } },
+        scene: { xaxis: axis('UMAP 1'), yaxis: axis('UMAP 2'), zaxis: axis('UMAP 3'),
+          bgcolor: '#fff', aspectmode: 'cube' }, paper_bgcolor: '#fff' };
+      window.Plotly.react(el, mapTraces(payload), layout, { displaylogo: false, responsive: true });
+      el.removeAllListeners && el.removeAllListeners('plotly_click');
+      el.on('plotly_click', function (event) {
+        var point = event.points && event.points[0];
+        var cluster = point && point.customdata && point.customdata[0];
+        var layout = el.closest('.insights-map-layout');
+        var panel = layout ? layout.querySelector('[data-map-detail]') : document.getElementById('insights-cluster-detail');
+        if (!panel) return;
+        if (!cluster || cluster === 'noise') {
+          panel.innerHTML = '<p class="insights-empty">This point is noise and has no cluster details.</p>';
+          return;
+        }
+        if (window.htmx) window.htmx.ajax('GET', '/insights/' + encodeURIComponent(el.getAttribute('data-run-id')) + '/cluster/' + encodeURIComponent(cluster), { target: panel, swap: 'innerHTML' });
+        else panel.textContent = cluster;
+      });
+    }).catch(function () {});
+  }
+
+  function initInsightsMaps(scope) {
+    if (!scope || !scope.querySelectorAll) return;
+    scope.querySelectorAll('.insights-map-chart').forEach(drawInsightsMap);
+  }
+
+  document.addEventListener('DOMContentLoaded', function () { initInsightsMaps(document); });
+  document.body.addEventListener('change', function (evt) {
+    if (evt.target.matches('[data-map-color]')) drawInsightsMap(evt.target.closest('.insights-map-view').querySelector('.insights-map-chart'));
+  });
+  document.body.addEventListener('click', function (evt) {
+    var crosstabLink = evt.target.closest('#insights-crosstab a[href*="/tab/traces?row="]');
+    if (crosstabLink && window.htmx) {
+      evt.preventDefault();
+      history.pushState(null, '', crosstabLink.href);
+      window.htmx.ajax('GET', crosstabLink.href, { target: '#insights-content', swap: 'innerHTML' });
+      return;
+    }
+    var toggle = evt.target.closest('[data-insights-view]');
+    if (toggle) {
+      var section = toggle.closest('.insights-dimension');
+      var mode = toggle.getAttribute('data-insights-view');
+      section.querySelectorAll('[data-insights-mode]').forEach(function (view) { view.hidden = view.getAttribute('data-insights-mode') !== mode; });
+      section.querySelectorAll('[data-insights-view]').forEach(function (button) { button.classList.toggle('active', button === toggle); });
+      if (mode === 'map') drawInsightsMap(section.querySelector('.insights-map-chart'));
+    }
   });
 
   // ⌘K / Ctrl+K focuses the global report search; Escape clears + blurs it.
