@@ -554,6 +554,29 @@ def remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+async def finish_task_uninterruptibly(task: asyncio.Future[Any]) -> None:
+    """Wait for a shielded operation despite repeated caller cancellation, consuming its result."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:  # noqa: PERF203 — the caller may cancel this wait more than once.
+            continue
+        except (OSError, subprocess.TimeoutExpired):
+            break
+    with contextlib.suppress(BaseException):
+        task.result()
+
+
+async def await_shielded(awaitable: Awaitable[Any]) -> Any:
+    """Await an operation through cancellation, including repeated cancellation requests."""
+    task = asyncio.ensure_future(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await finish_task_uninterruptibly(task)
+        raise
+
+
 class CodingAgentTarget(AgentTarget):
     """Run a local coding-agent CLI as the system under test.
 
@@ -704,8 +727,7 @@ class CodingAgentTarget(AgentTarget):
         except asyncio.CancelledError:
             # `to_thread` cannot stop subprocess.run. Wait for its bounded result before allowing cleanup
             # to issue `rm`, so a slow `docker run` cannot create a container after cleanup has passed.
-            with contextlib.suppress(Exception):
-                await asyncio.shield(operation)
+            await finish_task_uninterruptibly(operation)
             raise
         except FileNotFoundError as exc:
             raise CodingAgentUnavailableError('cli.not_found', f'{opts.binary!r} not found on PATH') from exc
@@ -752,9 +774,13 @@ class CodingAgentTarget(AgentTarget):
         register(name, LiveContainer(binary=opts.binary, context=opts.context, beat=beat))
         self._owned.append(name)
         self._container_name = name
-        started = await self._docker(build_run_argv(opts, name=name, root=root, uid=os.getuid(), gid=os.getgid()))
+        try:
+            started = await self._docker(build_run_argv(opts, name=name, root=root, uid=os.getuid(), gid=os.getgid()))
+        except BaseException:
+            await self._drop_container_shielded()
+            raise
         if started.returncode != 0:
-            await self._drop_container()
+            await self._drop_container_shielded()
             raise CodingAgentUnavailableError(
                 'cli.container_start', f'{opts.binary} run failed: {started.stderr[-STDERR_EXCERPT_CHARS:].strip()}'
             )
@@ -767,6 +793,9 @@ class CodingAgentTarget(AgentTarget):
         if name and live:
             await remove_containers_async(live.binary, live.context, [name])
 
+    async def _drop_container_shielded(self) -> None:
+        await await_shielded(self._drop_container())
+
     async def _prepare_container_exec(
         self, argv: list[str]
     ) -> tuple[list[str], Callable[[], Awaitable[None]] | None, str | None]:
@@ -778,7 +807,7 @@ class CodingAgentTarget(AgentTarget):
         try:
             name = await self._ensure_container(root)
         except asyncio.CancelledError:
-            await asyncio.shield(self._drop_container())
+            await self._drop_container_shielded()
             raise
         return (
             build_exec_argv(self._container, name=name, env_names=self._forward_env, agent_argv=argv),
@@ -832,7 +861,7 @@ class CodingAgentTarget(AgentTarget):
             kill_group(proc)
             self._proc = None
         if self._container is not None:
-            await asyncio.shield(self._drop_container())
+            await self._drop_container_shielded()
         if self._root is None:
             return
         lease = self._root / 'lease'
@@ -903,9 +932,14 @@ class CodingAgentTarget(AgentTarget):
                             'evaluatorq.coding_agent.container.restarts': self._restarts,
                         },
                     )
-                returncode, stdout, stderr = await self._run(
-                    argv, stdin_text, cwd=workdir, env=env, on_early_exit=on_early_exit
-                )
+                try:
+                    returncode, stdout, stderr = await self._run(
+                        argv, stdin_text, cwd=workdir, env=env, on_early_exit=on_early_exit
+                    )
+                except BaseException:
+                    if on_early_exit is not None:
+                        await await_shielded(on_early_exit())
+                    raise
             except CodingAgentError as exc:
                 set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': exc.kill_reason})
                 raise
@@ -922,9 +956,7 @@ class CodingAgentTarget(AgentTarget):
                 )
             if self._container is not None and returncode == 137:
                 log_kill(self._agent, 'container_lost', f'container {name} was removed while the agent ran')
-                if name is not None:
-                    unregister(name)
-                self._container_name = None
+                await self._drop_container_shielded()
                 raise CodingAgentUnavailableError(
                     'cli.timeout', 'the container was removed while the agent was running'
                 )
@@ -1017,13 +1049,7 @@ class CodingAgentTarget(AgentTarget):
             kill_group(proc, force=not finished)
             self._proc = None
             if not finished and on_early_exit is not None:
-                cleanup = asyncio.ensure_future(on_early_exit())
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    # Cancellation must not escape while the container is still registered or running.
-                    await cleanup
-                    raise
+                await await_shielded(on_early_exit())
             if stdin_task is not None:
                 stdin_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

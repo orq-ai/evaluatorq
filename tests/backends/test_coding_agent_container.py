@@ -22,12 +22,13 @@ printf 'ARGV %s\n' "$*" >> "$FAKE_LOG"
 case "$1" in
   image) exit ${FAKE_IMAGE_EXIT:-0};;
   ps) exit 0;;
-  run) [ -n "$FAKE_RUN_EXIT" ] && { echo "daemon down" >&2; exit $FAKE_RUN_EXIT; }; echo cid; exit 0;;
+  run) [ -n "$FAKE_RUN_SLEEP" ] && sleep "$FAKE_RUN_SLEEP"
+       [ -n "$FAKE_RUN_EXIT" ] && { echo "daemon down" >&2; exit $FAKE_RUN_EXIT; }; echo CREATED >> "$FAKE_LOG"; echo cid; exit 0;;
   inspect) if [ -f "$FAKE_STOPPED" ]; then rm "$FAKE_STOPPED"; echo false; else echo true; fi; exit 0;;
   exec) env | sed 's/^/ENV /' >> "$FAKE_LOG"; cat - >/dev/null
         [ -n "$FAKE_EXEC_SLEEP" ] && sleep "$FAKE_EXEC_SLEEP"
         [ -n "$FAKE_STDOUT" ] && cat "$FAKE_STDOUT"; exit ${FAKE_EXEC_EXIT:-0};;
-  rm) exit 0;;
+  rm) [ -n "$FAKE_RM_SLEEP" ] && sleep "$FAKE_RM_SLEEP"; echo REMOVED >> "$FAKE_LOG"; exit 0;;
 esac
 """
 
@@ -57,11 +58,17 @@ def _target(binary: str, **kw) -> CodingAgentTarget:
     return CodingAgentTarget('claude', container=DockerOptions(binary=binary, image='img:1', **opts), **kw)
 
 
+def _log_has(log: Path, text: str) -> bool:
+    return log.exists() and text in log.read_text()
+
+
 @pytest.mark.asyncio
 async def test_turn_runs_in_one_container_and_close_removes_it(docker, monkeypatch) -> None:
     binary, log, calls = docker
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'sk-secret')
-    target = _target(binary, env={'EXTRA': 'x'}, opts={'workdir': '/app', 'name_prefix': 'task-7', 'context': 'orbstack'})
+    target = _target(
+        binary, env={'EXTRA': 'x'}, opts={'workdir': '/app', 'name_prefix': 'task-7', 'context': 'orbstack'}
+    )
     await target.respond([Message(role='user', content='hi')])
     await target.respond([Message(role='user', content='again')])
     assert len(calls('run')) == 1 and len(calls('exec')) == 2
@@ -100,9 +107,33 @@ async def test_container_start_failure(docker, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('exit_code,code', [(127, 'cli.agent_not_found'), (126, 'cli.agent_not_found'), (137, 'cli.timeout')])
+@pytest.mark.parametrize('failure', ['timeout', 'oserror'])
+async def test_docker_run_control_error_removes_registered_name(docker, monkeypatch, failure: str) -> None:
+    binary, _, calls = docker
+    import subprocess
+
+    real_run = subprocess.run
+
+    def fail_run(argv, *args, **kwargs):
+        if 'run' in argv:
+            if failure == 'timeout':
+                raise subprocess.TimeoutExpired(argv, 0.01)
+            raise OSError('docker run failed before returning a status')
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, 'run', fail_run)
+    with pytest.raises((subprocess.TimeoutExpired, OSError)):
+        await _target(binary).respond([Message(role='user', content='x')])
+    assert calls('rm')
+    assert c.LIVE_CONTAINERS == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'exit_code,code', [(127, 'cli.agent_not_found'), (126, 'cli.agent_not_found'), (137, 'cli.timeout')]
+)
 async def test_exec_exit_codes(docker, monkeypatch, exit_code: int, code: str) -> None:
-    binary, _, _ = docker
+    binary, _, calls = docker
     monkeypatch.setenv('FAKE_EXEC_EXIT', str(exit_code))
     target = _target(binary)
     with pytest.raises(CodingAgentUnavailableError) as info:
@@ -110,7 +141,26 @@ async def test_exec_exit_codes(docker, monkeypatch, exit_code: int, code: str) -
     assert info.value.code == code
     if code == 'cli.agent_not_found':
         assert 'img:1' in info.value.message
+    if exit_code == 137:
+        assert calls('rm')
+        assert c.LIVE_CONTAINERS == {}
     await target.close()
+
+
+@pytest.mark.asyncio
+async def test_exec_process_creation_error_removes_container(docker, monkeypatch) -> None:
+    binary, _, calls = docker
+    target = _target(binary)
+
+    async def fail_exec(*args, **kwargs):
+        raise FileNotFoundError('docker exec client could not start')
+
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', fail_exec)
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        await target.respond([Message(role='user', content='x')])
+    assert info.value.code == 'cli.not_found'
+    assert calls('rm')
+    assert c.LIVE_CONTAINERS == {}
 
 
 @pytest.mark.asyncio
@@ -130,35 +180,49 @@ async def test_idle_timeout_removes_container(docker, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_cancellation_removes_container_before_propagating(docker, monkeypatch) -> None:
-    binary, _, calls = docker
+    binary, log, calls = docker
     monkeypatch.setenv('FAKE_EXEC_SLEEP', '30')
+    monkeypatch.setenv('FAKE_RM_SLEEP', '0.3')
     target = _target(binary)
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
     while not calls('exec'):
         await asyncio.sleep(0.05)
     task.cancel()
+    while not calls('rm'):
+        await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    assert not task.done()
+    while not _log_has(log, 'REMOVED'):
+        await asyncio.sleep(0.01)
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert len(calls('rm')) == 1
+    assert len(calls('rm')) == 1 and c.LIVE_CONTAINERS == {}
     await target.close()
 
 
 @pytest.mark.asyncio
 async def test_cancel_during_run_still_cleans_up(docker, monkeypatch) -> None:
-    binary, _, calls = docker
+    binary, log, calls = docker
     target = _target(binary)
-    monkeypatch.setattr(
-        'evaluatorq.backends.coding_agent.build_run_argv',
-        lambda *a, **k: ['sh', '-c', 'sleep 30'],
-    )
+    monkeypatch.setenv('FAKE_RUN_SLEEP', '0.3')
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
     while not c.LIVE_CONTAINERS:
         await asyncio.sleep(0.01)
     task.cancel()
+    await asyncio.sleep(0.05)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    assert not task.done()
+    while not _log_has(log, 'CREATED'):
+        await asyncio.sleep(0.01)
+    while not calls('rm'):
+        await asyncio.sleep(0.01)
     with pytest.raises(asyncio.CancelledError):
         await task
-    await target.close()
     assert c.LIVE_CONTAINERS == {} and calls('rm')
+    assert log.read_text().index('CREATED') < log.read_text().index('REMOVED')
+    await target.close()
 
 
 @pytest.mark.asyncio
