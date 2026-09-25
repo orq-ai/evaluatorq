@@ -5,16 +5,25 @@ Nothing here knows about agents or turns. ``coding_agent.py`` builds on these pi
 
 from __future__ import annotations
 
+import asyncio
+import atexit
 import importlib.metadata
 import os
 import re
+import signal
+import socket
+import subprocess
+import threading
+import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from loguru import logger
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
+    from types import FrameType
 
 
 def image_tag_version() -> str:
@@ -91,8 +100,6 @@ def watchdog_script(check_s: int = LEASE_CHECK_S) -> str:
 
 
 def build_run_argv(opts: DockerOptions, *, name: str, root: Path, uid: int, gid: int) -> list[str]:
-    import socket
-
     argv = [
         *opts.cli(), 'run', '-d', '--rm', '--init', '--entrypoint', 'sh',
         '--name', name,
@@ -170,3 +177,207 @@ def unsafe_mounts(run_args: Sequence[str], root: Path) -> list[str]:
         elif mount_source or src.startswith(('.', '~')) or '/' in src:
             unsafe.append(src)
     return unsafe
+
+
+class LiveContainer(BaseModel):
+    """Identity and lease file for a container owned by this process."""
+
+    model_config = ConfigDict(frozen=True)
+
+    binary: str
+    context: str | None
+    beat: Path
+
+
+# Name to container for every container this process started and has not removed.
+# Mutations are synchronous; readers iterate snapshots because heartbeat runs in a thread.
+LIVE_CONTAINERS: dict[str, LiveContainer] = {}
+BEAT_WARNED: set[str] = set()
+HOOKS_LOCK = threading.Lock()
+hooks_installed = False
+heartbeat_thread: threading.Thread | None = None
+
+
+def register(name: str, live: LiveContainer) -> None:
+    """Track a container and ensure process cleanup and heartbeat are active."""
+    LIVE_CONTAINERS[name] = live
+    install_exit_hooks()
+    start_heartbeat()
+
+
+def unregister(name: str) -> LiveContainer | None:
+    """Forget a container, which also stops renewing its lease."""
+    BEAT_WARNED.discard(name)
+    return LIVE_CONTAINERS.pop(name, None)
+
+
+def remove_containers(binary: str, context: str | None, names: Sequence[str], *, timeout_s: float = 10) -> list[str]:
+    """Remove containers in one batch, retry once, and return names that still fail."""
+    pending = list(dict.fromkeys(names))
+    reason = 'unknown removal error'
+    for _attempt in range(2):
+        if not pending:
+            return []
+        argv = [*cli_prefix(binary, context), 'rm', '-f', *pending]
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            reason = str(exc)
+        else:
+            if proc.returncode == 0:
+                return []
+            lines = [line for line in proc.stderr.splitlines() if line.strip()]
+
+            def mentions(line: str, name: str) -> bool:
+                return re.search(rf'(?<![A-Za-z0-9_.-]){re.escape(name)}(?![A-Za-z0-9_.-])', line) is not None
+
+            missing = {
+                name for name in pending if any(mentions(line, name) and 'No such container' in line for line in lines)
+            }
+            failed = [name for name in pending if name not in missing and any(mentions(line, name) for line in lines)]
+            if not failed and lines and all('No such container' in line for line in lines):
+                return []
+            pending = failed or [name for name in pending if name not in missing] or pending
+            reason = proc.stderr.strip() or f'command exited with status {proc.returncode}'
+    command = ' '.join([*cli_prefix(binary, context), 'rm', '-f', *pending])
+    logger.error(
+        f'could not remove container(s) {", ".join(pending)}: {reason}. Their lease ends them within '
+        f'{LEASE_CHECK_S * 2}s; to remove now run: {command}'
+    )
+    return pending
+
+
+async def remove_containers_async(binary: str, context: str | None, names: Sequence[str]) -> list[str]:
+    """Run the synchronous removal primitive off the event loop."""
+    return await asyncio.to_thread(remove_containers, binary, context, names)
+
+
+def remove_all(reason: str) -> None:
+    """Remove all registered containers, grouped by engine and context."""
+    snapshot = list(LIVE_CONTAINERS.items())
+    if not snapshot:
+        return
+    groups: dict[tuple[str, str | None], list[str]] = {}
+    for name, live in snapshot:
+        unregister(name)
+        groups.setdefault((live.binary, live.context), []).append(name)
+    for (binary, context), names in groups.items():
+        logger.warning(f'host_exit ({reason}): removing container(s) {", ".join(names)}')
+        remove_containers(binary, context, names)
+
+
+def release_containers(owned: list[str]) -> None:
+    """Finalizer target that removes containers owned by an unclosed target."""
+    for name in owned:
+        live = unregister(name)
+        if live is not None:
+            logger.warning(f'CodingAgentTarget was garbage-collected without close(); removing container {name}')
+            remove_containers(live.binary, live.context, [name])
+
+
+def write_beat(path: Path, value: int) -> None:
+    """Atomically replace a lease heartbeat counter."""
+    temporary = path.with_name(f'{path.name}.tmp')
+    temporary.write_text(str(value))
+    temporary.replace(path)
+
+
+def heartbeat_once(counter: int) -> None:
+    """Renew all currently registered leases, warning only once for each failing name."""
+    for name, live in list(LIVE_CONTAINERS.items()):
+        try:
+            write_beat(live.beat, counter)
+        except OSError as exc:  # noqa: PERF203
+            if name not in BEAT_WARNED:
+                BEAT_WARNED.add(name)
+                logger.warning(f'heartbeat for container {name} failed ({exc}); its lease ends it if this persists')
+
+
+def heartbeat_loop() -> None:
+    counter = 0
+    while True:
+        time.sleep(HEARTBEAT_S)
+        counter += 1
+        heartbeat_once(counter)
+
+
+def start_heartbeat() -> None:
+    """Start one daemon thread to renew leases independently of the event loop."""
+    global heartbeat_thread
+    with HOOKS_LOCK:
+        if heartbeat_thread is None:
+            heartbeat_thread = threading.Thread(
+                target=heartbeat_loop, name='evaluatorq-container-heartbeat', daemon=True
+            )
+            heartbeat_thread.start()
+
+
+def make_signal_handler(previous: Any) -> Callable[[int, FrameType | None], None]:
+    """Build a signal handler that cleans up then chains or restores default behavior."""
+
+    def handler(signum: int, frame: FrameType | None) -> None:
+        remove_all(signal.Signals(signum).name)
+        if callable(previous):
+            previous(signum, frame)
+        elif previous != signal.SIG_IGN:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+    return handler
+
+
+def install_exit_hooks() -> None:
+    """Install atexit and signal cleanup hooks once, when first container is registered."""
+    global hooks_installed
+    with HOOKS_LOCK:
+        if hooks_installed:
+            return
+        hooks_installed = True
+    atexit.register(remove_all, 'atexit')
+    if threading.current_thread() is not threading.main_thread():
+        logger.warning(
+            'container cleanup: not on the main thread, so no SIGTERM/SIGHUP handler; '
+            'relying on atexit, labels and the lease'
+        )
+        return
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, make_signal_handler(signal.getsignal(sig)))
+
+
+def pid_alive(pid: int) -> bool:
+    """Return whether a PID exists or is inaccessible to this process."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def sweep_orphans(binary: str, context: str | None) -> None:
+    """Remove labelled containers on this host whose owning process is no longer alive."""
+    fmt = f'{{{{.Names}}}}\t{{{{.Label "{HOST_PID_LABEL}"}}}}\t{{{{.Label "{HOST_LABEL}"}}}}'
+    argv = [*cli_prefix(binary, context), 'ps', '-a', '--filter', f'label={CONTAINER_LABEL}=1', '--format', fmt]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning(f'orphan sweep skipped: {exc}')
+        return
+    if proc.returncode != 0:
+        logger.warning(f'orphan sweep skipped: {proc.stderr.strip()}')
+        return
+    host, dead = socket.gethostname(), []
+    for line in proc.stdout.splitlines():
+        name, pid, owner = [*line.split('\t'), '', ''][:3]
+        if owner != host:
+            continue
+        if not pid.isdigit():
+            logger.warning(
+                f'orphan sweep: container {name} has an unreadable host-pid label {pid!r}; leaving it to its lease'
+            )
+            continue
+        if not pid_alive(int(pid)):
+            logger.warning(f'orphan_sweep: removing container {name}, its host process {pid} is gone')
+            dead.append(name)
+    remove_containers(binary, context, dead)
