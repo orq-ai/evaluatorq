@@ -571,3 +571,52 @@ async def test_simulate_threads_target_agent_knobs(monkeypatch):
     assert captured["target_agent_timeout_ms"] == 999_000
     assert captured["max_target_retries"] == 9
     assert captured["target_reasoning_effort"] == "low"
+
+
+@pytest.mark.asyncio
+async def test_generate_threads_generation_instructions(monkeypatch):
+    """RES-1087 review: generate() had no coverage that generation_instructions reaches the shared
+    generation seam. A dropped keyword gives unsteered output and no error, so pin it."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    captured: dict[str, object] = {}
+
+    async def capture_generate_datapoints_inner(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return [_make_datapoint("dp-0")], MagicMock(), False, None
+
+    with patch(
+        "evaluatorq.simulation.api._generate_datapoints_inner",
+        new=capture_generate_datapoints_inner,
+    ):
+        await generate(agent_description="test agent", generation_instructions="reply in German")
+
+    assert captured["generation_instructions"] == "reply in German"
+
+
+@pytest.mark.asyncio
+async def test_generate_and_simulate_threads_generation_instructions(monkeypatch):
+    """generate_and_simulate() must also thread the steer to the generation seam."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    captured: dict[str, object] = {}
+
+    async def capture_generate_datapoints_inner(**kwargs):  # noqa: ANN003
+        captured.update(kwargs)
+        return [_make_datapoint("dp-0")], MagicMock(), False, None
+
+    with (
+        patch(
+            "evaluatorq.simulation.api._generate_datapoints_inner",
+            new=capture_generate_datapoints_inner,
+        ),
+        patch(
+            "evaluatorq.simulation.api._simulate_via_evaluatorq",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        await generate_and_simulate(
+            agent_description="test agent",
+            target=lambda messages: "ok",
+            generation_instructions="EU consumer-law framing",
+        )
+
+    assert captured["generation_instructions"] == "EU consumer-law framing"

@@ -39,6 +39,7 @@ Targets — provide **exactly one**:
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--persona-seed` | `str` (repeatable) / `None` | Archetype seed for a persona, e.g. `"angry retiree"` (repeatable). Each seed becomes one persona the LLM fleshes out — overrides `--num-personas`. Omit to auto-generate. |
 | `--scenario-seed` | `str` (repeatable) / `None` | Situation seed for a scenario, e.g. `"disputes a refund denial"` (repeatable). Each seed becomes one scenario — overrides `--num-scenarios`. Omit to auto-generate. |
+| `--generation-instructions` | `str` / `''` | Free-text steer applied to every generated persona AND scenario, e.g. `"enterprise B2B buyers, replying in German"`. Stacks on top of any seeds and `--edge-case-percentage`. Empty leaves the built-in prompts unchanged. |
 | `--target-reasoning-effort` | `str \| None` / `None` | Reasoning effort pinned on the target agent under test (`agent:<key>` targets only). Distinct from the user-simulator's and judge's own reasoning effort, which comes from `EVALUATORQ_REASONING_EFFORT` — see [Tuning](../tuning.md). |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
@@ -132,6 +133,7 @@ eq sim generate --datapoints dp.jsonl --agent-description "..."
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--persona-seed` | `str` (repeatable) / `None` | Archetype seed for a persona, e.g. `"angry retiree"` (repeatable). Each seed becomes one persona the LLM fleshes out — overrides `--num-personas`. Omit to auto-generate. |
 | `--scenario-seed` | `str` (repeatable) / `None` | Situation seed for a scenario, e.g. `"disputes refund denial"` (repeatable). Each seed becomes one scenario — overrides `--num-scenarios`. Omit to auto-generate. |
+| `--generation-instructions` | `str` / `''` | Free-text steer applied to every generated persona AND scenario, e.g. `"enterprise B2B buyers, replying in German"`. Stacks on top of any seeds and `--edge-case-percentage`. Empty leaves the built-in prompts unchanged. |
 | `--dataset-format` | `bool` / `False` | Write Orq dataset-row envelopes instead of raw simulation datapoints. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
