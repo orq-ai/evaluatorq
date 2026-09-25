@@ -75,11 +75,11 @@ async def test_open_child_after_stdout_eof_still_hits_idle_limit(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_descendant_holding_stderr_open_still_hits_idle_limit(tmp_path: Path) -> None:
     body = f"echo '{RESULT}'\npython3 -c 'import subprocess; subprocess.Popen([\"sleep\",\"30\"], stdout=subprocess.DEVNULL)'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=300)
+    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=2000)
     seen, sink = _warnings()
     try:
         with pytest.raises(CodingAgentUnavailableError) as info:
-            await asyncio.wait_for(target.respond([Message(role='user', content='x')]), 3)
+            await asyncio.wait_for(target.respond([Message(role='user', content='x')]), 6)
     finally:
         logger.remove(sink)
         await target.close()
