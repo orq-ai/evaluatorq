@@ -21,12 +21,13 @@ import os
 import shutil
 import signal
 import tempfile
+import types
 import weakref
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
 
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
@@ -78,8 +79,7 @@ class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheri
     """``cli.not_found``, ``cli.timeout`` and ``cli.prompt_too_long``: a retry replays the same outcome, so the loop stops."""
 
 
-@dataclass(frozen=True)
-class OrqLaunchOptions:
+class OrqLaunchOptions(BaseModel):
     """Flags for ``orq launch``; honoured only under ``launcher='orq'``.
 
     ``mcp=False`` renders ``--no-mcp``, ``skills=False`` renders ``--no-skills``, ``base_url``
@@ -87,6 +87,8 @@ class OrqLaunchOptions:
     workspace selection are not launch flags: set ``ORQ_PROFILE`` or ``ORQ_API_KEY`` through the
     target's ``env``.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     mcp: bool = True
     skills: bool = True
@@ -106,8 +108,9 @@ class OrqLaunchOptions:
         return flags
 
 
-@dataclass(frozen=True)
-class AgentSpec:
+class AgentSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     binary: str
     output_args: tuple[str, ...]
     model_flag: str
@@ -119,7 +122,7 @@ class AgentSpec:
     stdin_marker: tuple[str, ...] = ()
 
 
-AGENTS: dict[str, AgentSpec] = {
+AGENTS: types.MappingProxyType[str, AgentSpec] = types.MappingProxyType({
     'claude': AgentSpec(
         binary='claude',
         output_args=('-p', '--output-format', 'stream-json', '--verbose'),
@@ -148,7 +151,9 @@ AGENTS: dict[str, AgentSpec] = {
         skills_dir='.agents/skills',
         tools=('bash', 'read', 'edit', 'write', 'glob', 'grep'),
     ),
-}
+})
+if set(AGENTS) != set(get_args(AgentName)):
+    raise RuntimeError(f'AGENTS {sorted(AGENTS)} does not match AgentName {sorted(get_args(AgentName))}')
 
 
 def build_argv(
@@ -233,12 +238,11 @@ def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_
     return f'{PROMPT_INSTRUCTION}\n{block}'
 
 
-@dataclass
-class ParsedTurn:
+class ParsedTurn(BaseModel):
     """What one agent run said, before the exit-code and error-order checks in ``respond()``."""
 
     text: str | None = None
-    tool_calls: list[ToolCallOutputItem] = field(default_factory=list)
+    tool_calls: list[ToolCallOutputItem] = Field(default_factory=list)
     usage: Usage | None = None
     session_id: str | None = None
     model: str | None = None
@@ -496,11 +500,11 @@ def parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     return turn
 
 
-PARSERS: dict[str, Callable[[list[dict[str, Any]]], ParsedTurn]] = {
+PARSERS: types.MappingProxyType[str, Callable[[list[dict[str, Any]]], ParsedTurn]] = types.MappingProxyType({
     'claude': parse_claude,
     'codex': parse_codex,
     'opencode': parse_opencode,
-}
+})
 
 
 def parse_events(agent: AgentName, events: list[dict[str, Any]]) -> ParsedTurn:
