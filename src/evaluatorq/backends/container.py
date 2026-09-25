@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import importlib.metadata
 import os
 import re
@@ -263,6 +264,31 @@ CONTAINER_LOCK = threading.RLock()
 atexit_installed = False
 signal_hooks_installed = False
 heartbeat_thread: threading.Thread | None = None
+_installed_signal_handlers: dict[signal.Signals, Any] = {}
+
+
+def _reset_after_fork() -> None:
+    """Drop parent-owned container state and synchronization primitives in the child."""
+    globals().update(
+        LIVE_CONTAINERS={},
+        BEAT_WARNED=set(),
+        CONTAINER_LOCK=threading.RLock(),
+        HOOKS_LOCK=threading.Lock(),
+    )
+    global heartbeat_thread, signal_hooks_installed
+    heartbeat_thread = None
+
+    # The atexit callback is inherited with the process and remains useful for child-owned containers.
+    # Keep its flag set so register() does not stack a second copy in the child.
+    for sig, previous in _installed_signal_handlers.items():
+        with contextlib.suppress(OSError, ValueError):
+            signal.signal(sig, previous)
+    _installed_signal_handlers.clear()
+    signal_hooks_installed = False
+
+
+if hasattr(os, 'register_at_fork'):
+    os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def register(name: str, live: LiveContainer) -> None:
@@ -418,7 +444,9 @@ def install_exit_hooks() -> None:
         return
     if should_install_signals:
         for sig in (signal.SIGTERM, signal.SIGHUP):
-            signal.signal(sig, make_signal_handler(signal.getsignal(sig)))
+            previous = signal.getsignal(sig)
+            _installed_signal_handlers[sig] = previous
+            signal.signal(sig, make_signal_handler(previous))
 
 
 def pid_alive(pid: int) -> bool:
