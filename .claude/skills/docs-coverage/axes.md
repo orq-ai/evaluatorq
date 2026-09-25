@@ -12,7 +12,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 |---|---|---|
 | **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()` |
 | **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard`) |
-| **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget`, `CodingAgentTarget` (claude / codex / opencode × direct / orq launcher) |
+| **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget`, `CodingAgentTarget` (claude / codex / opencode × direct / orq launcher × host / container) |
 | **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
 | **data source** | `evaluatorq()` / `red_team()` dataset params, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` |
@@ -91,6 +91,7 @@ Marked `N/A` in the matrix, never reported as a gap.
 | `evaluatorq()` × data source `generated` | the core loop runs your jobs over rows you supply. Nothing in it generates data — that is what `generate()` and the red-team dynamic pipeline are for |
 | `evaluatorq()` × data source `replay` | replay is `previous_run=` / `--from-run`, which exists on `red_team()` and `simulate()` only. `evaluatorq()` has no run store to replay from; `ExperimentInput` is the nearest thing and is its own documented data source |
 | `simulate()` / `generate_and_simulate()` × data source `HuggingFace` | same as above — the five simulation sources are `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. No HuggingFace form exists |
+| container mode × remote `context` with host-path workdir mount | the bind mount resolves on the remote host, which cannot see the local temporary workdir |
 
 ## Tiers
 
