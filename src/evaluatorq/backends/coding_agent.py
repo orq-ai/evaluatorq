@@ -554,6 +554,18 @@ def remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _remove_tree_if_owner(pid: int, path: Path) -> None:
+    """Finalizer callback that cannot remove a parent process's workdir after fork."""
+    if os.getpid() == pid:
+        remove_tree(path)
+
+
+def _release_containers_if_owner(pid: int, owned: list[str]) -> None:
+    """Finalizer callback that cannot remove containers inherited across fork."""
+    if os.getpid() == pid:
+        release_containers(owned)
+
+
 async def finish_task_uninterruptibly(task: asyncio.Future[Any]) -> None:
     """Wait for a shielded operation despite repeated caller cancellation, consuming its result."""
     while not task.done():
@@ -704,12 +716,15 @@ class CodingAgentTarget(AgentTarget):
             else []
         )
         self._root: Path | None = None
+        self._creator_pid = os.getpid()
         self._container_name: str | None = None
         self._restarts = 0
         self._image_checked = False
         self._owned: list[str] = []
         self._container_finalizer: weakref.finalize[Any, Any] | None = (
-            weakref.finalize(self, release_containers, self._owned) if container else None
+            weakref.finalize(self, _release_containers_if_owner, self._creator_pid, self._owned)
+            if container
+            else None
         )
         self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
         self._proc: asyncio.subprocess.Process | None = None
@@ -857,7 +872,7 @@ class CodingAgentTarget(AgentTarget):
             shutil.rmtree(root, ignore_errors=True)
             raise
         if not self._keep_workdir:
-            self._finalizer = weakref.finalize(self, remove_tree, root)
+            self._finalizer = weakref.finalize(self, _remove_tree_if_owner, self._creator_pid, root)
         self._root = root
         self._workdir = dst
         return dst
@@ -865,8 +880,16 @@ class CodingAgentTarget(AgentTarget):
     def new(self) -> CodingAgentTarget:
         return type(self)(self._agent, **self._kwargs)
 
+    def _require_creator_process(self, operation: str) -> None:
+        if os.getpid() != self._creator_pid:
+            raise RuntimeError(
+                f'CodingAgentTarget.{operation}() cannot use a target inherited across os.fork(); '
+                'call target.new() in the child process to create a process-owned target'
+            )
+
     async def close(self) -> None:
         """Kill a live process group and release the temp workdir. Idempotent."""
+        self._require_creator_process('close')
         proc = self._proc
         if proc is not None:
             kill_group(proc)
@@ -905,6 +928,7 @@ class CodingAgentTarget(AgentTarget):
         return None
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
+        self._require_creator_process('respond')
         workdir = self._ensure_workdir()
         prompt = render_prompt(
             messages, system_prompt=self._system_prompt, inline_system=self._spec.system_prompt_flag is None
