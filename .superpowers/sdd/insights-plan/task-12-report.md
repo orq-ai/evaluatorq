@@ -29,4 +29,20 @@ The Map, Crosstab, and Priority views render explicit placeholders for Task 13. 
 
 ## Concerns
 
-The validated-model cache is used for readable run files, as required, but `store.list_runs` validates the directory entries before the cache lookup. This means repeated page requests still perform one uncached validation per run; the existing `list_runs` interface does not expose paths without parsing. The map endpoint and Map, Crosstab, and Priority views are intentionally incomplete until Task 13.
+The Map, Crosstab, and Priority views and map payload remain placeholders for Task 13.
+
+
+## Review fixes
+
+The header now reads the pipeline echo's top-level query, facets, numeric bounds, start, end, and limit; its fixture uses that persisted shape. Traces displays active dimension/cluster and label/value chips, with individual removal links and a clear-all link that preserve the remaining filters. Ordinary navigation or refresh on a tab URL renders the full shell and selects that tab; requests carrying `HX-Request: true` still receive only the fragment.
+
+The dashboard now lists matching run paths by modification time and passes each readable path directly to `library.load_model_cached(path, InsightsRun.model_validate)`. This avoids parsing every run once through `store.list_runs` and then again through the cache, and it avoids duplicating the store's Pydantic validation rules. Validation and read errors are logged and kept as unreadable entries; unknown schema versions follow the same path. The focused tests verify a single model validation across repeat page requests, unknown-version visibility, and newest-first ordering.
+
+- `uv run pytest tests/dashboard/test_insights_page.py -q` — passed; 10 passed.
+- `uv run ruff check src` — passed.
+- `uv run ruff format --check src` — passed; 263 files already formatted.
+- `uv run basedpyright` — passed; 0 errors, 0 warnings, 0 notes.
+- `uv run pytest -m 'not integration' tests/insights tests/test_reuse_guardrails.py tests/dashboard/test_insights_page.py` — passed; 139 passed, 2 expected UMAP warnings.
+- `git diff --check` — passed.
+
+Remaining concern: Map, Crosstab, and Priority content and the map JSON payload are still reserved for Task 13.
