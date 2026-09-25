@@ -29,18 +29,31 @@ def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
     directory = runs_dir or get_insights_runs_dir()
     directory.mkdir(parents=True, exist_ok=True)
     stamp = run.created_at.astimezone(timezone.utc).strftime('%Y%m%d-%H%M%S')
-    path = directory / f'insights_{stamp}_{_slug(run.run_name)}.json'
+    base_name = f'insights_{stamp}_{_slug(run.run_name)}'
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode='w', encoding='utf-8', dir=directory, prefix=f'.{path.name}.', suffix='.tmp', delete=False
+            mode='w', encoding='utf-8', dir=directory, prefix=f'.{base_name}.', suffix='.tmp', delete=False
         ) as handle:
             temporary = Path(handle.name)
             handle.write(run.model_dump_json(indent=2))
             handle.write('\n')
             handle.flush()
             os.fsync(handle.fileno())
-        temporary.replace(path)
+        suffix = 1
+        while True:
+            name = base_name if suffix == 1 else f'{base_name}-{suffix}'
+            path = directory / f'{name}.json'
+            try:
+                # A hard link creates the final name atomically only when it is
+                # unused, so simultaneous same-second runs cannot replace one
+                # another. The temp file is in the same directory/filesystem.
+                os.link(temporary, path)
+                break
+            except FileExistsError:
+                suffix += 1
+        with contextlib.suppress(OSError):
+            temporary.unlink()
     except Exception:
         if temporary is not None:
             with contextlib.suppress(OSError):
