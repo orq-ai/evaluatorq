@@ -120,6 +120,10 @@ def test_unsafe_mounts(tmp_path: Path) -> None:
 
 def test_isolation_warning_includes_privileged_true() -> None:
     assert isolation_breaking_flags(['--privileged=true']) == ['--privileged=true']
+    assert isolation_breaking_flags(['--privileged=1', '--privileged=t']) == ['--privileged=1', '--privileged=t']
+    assert isolation_breaking_flags(['--volumes-from', 'legacy', '--volumes-from=shared']) == [
+        '--volumes-from legacy', '--volumes-from=shared'
+    ]
 
 
 @pytest.mark.parametrize(
@@ -127,12 +131,22 @@ def test_isolation_warning_includes_privileged_true() -> None:
     [
         ('--entrypoint', 'sleep'),
         ('--entrypoint=sleep',),
+        ('--name', 'shared'),
+        ('--name=shared',),
+        ('--label', 'evaluatorq.coding-agent=0'),
+        ('--label=evaluatorq.host-pid=123',),
+        ('--label', 'evaluatorq.host=other'),
         ('-v', '/other:/evq-lease'),
+        ('-v', '/evq-lease'),
         ('-v/other:/evq-lease', '--cpus', '1'),
         ('--volume=/other:/evq-home',),
         ('--mount', 'type=bind,source=/other,target=/evq-lease/beat'),
         ('--mount=type=bind,source=/other,destination=/evq-home',),
+        ('--mount=type=bind,source=/other,target=/evq-home/../evq-lease/beat',),
+        ('--volume=/other:/evq-home/a/../../evq-home',),
         ('--rm=false',),
+        ('--rm=f',),
+        ('--rm=F',),
         ('--user', '0:0'),
         ('-u0:0',),
         ('--security-opt', 'no-new-privileges=false'),

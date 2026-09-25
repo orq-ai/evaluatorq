@@ -10,6 +10,7 @@ import atexit
 import contextlib
 import importlib.metadata
 import os
+import posixpath
 import re
 import shlex
 import signal
@@ -55,6 +56,7 @@ ISOLATION_FLAGS = frozenset({
     '--uts=host',
 })
 ISOLATION_PAIRS = frozenset({'--pid', '--network', '--net', '--ipc', '--userns', '--uts'})
+RESERVED_LABELS = frozenset({CONTAINER_LABEL, HOST_PID_LABEL, HOST_LABEL})
 _MANAGED_VALUE_FLAGS = frozenset({'--entrypoint', '--user', '-u'})
 
 
@@ -142,8 +144,12 @@ def forwarded_env_names(
 def isolation_breaking_flags(run_args: Sequence[str]) -> list[str]:
     found: list[str] = []
     for i, arg in enumerate(run_args):
-        if arg in ISOLATION_FLAGS or arg == '--privileged=true' or arg.startswith('--cap-add'):
+        flag, eq, value = arg.partition('=')
+        privileged_enabled = flag == '--privileged' and eq and value.lower() in ('1', 't', 'true')
+        if arg in ISOLATION_FLAGS or privileged_enabled or arg.startswith('--cap-add'):
             found.append(arg)
+        elif flag == '--volumes-from':
+            found.append(arg if eq else f'{arg} {run_args[i + 1]}' if i + 1 < len(run_args) else arg)
         elif arg in ISOLATION_PAIRS and i + 1 < len(run_args) and run_args[i + 1] == 'host':
             found.append(f'{arg} host')
     return found
@@ -215,11 +221,17 @@ def validate_managed_run_args(run_args: Sequence[str], *, allow_privilege_escala
         if flag in _MANAGED_VALUE_FLAGS or (arg.startswith('-u') and arg != '-u'):
             violations.append(arg)
             continue
+        if flag == '--name' or (
+            flag == '--label'
+            and _label_key(value if eq else args[i + 1] if i + 1 < len(args) else '') in RESERVED_LABELS
+        ):
+            violations.append(arg if eq else f'{arg} {args[i + 1] if i + 1 < len(args) else ""}'.rstrip())
+            continue
         if mount_flag:
             target = _mount_target(mount_flag, mount_value)
-            if target and (target in ('/evq-lease', '/evq-home') or target.startswith(('/evq-lease/', '/evq-home/'))):
+            if _is_reserved_mount_target(target):
                 violations.append(arg if eq or (arg.startswith('-v') and arg != '-v') else f'{arg} {mount_value}')
-        if flag == '--rm' and eq and value.lower() in ('false', '0', 'no'):
+        if flag == '--rm' and eq and value.lower() in ('f', 'false', '0'):
             violations.append(arg)
         if not allow_privilege_escalation and flag == '--security-opt':
             security_opt = value if eq else args[i + 1] if i + 1 < len(args) else ''
@@ -241,7 +253,20 @@ def _mount_target(flag: str, value: str) -> str | None:
             fields[key] = field_value
         return fields.get('target') or fields.get('dst') or fields.get('destination')
     parts = value.split(':')
-    return parts[1] if len(parts) > 1 else None
+    if len(parts) > 1:
+        return parts[1]
+    return value if value.startswith('/') else None
+
+
+def _is_reserved_mount_target(target: str | None) -> bool:
+    if target is None:
+        return False
+    normalized = posixpath.normpath(target)
+    return normalized in ('/evq-lease', '/evq-home') or normalized.startswith(('/evq-lease/', '/evq-home/'))
+
+
+def _label_key(label: str) -> str:
+    return label.partition('=')[0]
 
 
 class LiveContainer(BaseModel):
