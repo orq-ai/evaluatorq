@@ -128,6 +128,7 @@ def test_isolation_warning_includes_privileged_true() -> None:
         ('--entrypoint', 'sleep'),
         ('--entrypoint=sleep',),
         ('-v', '/other:/evq-lease'),
+        ('-v/other:/evq-lease', '--cpus', '1'),
         ('--volume=/other:/evq-home',),
         ('--mount', 'type=bind,source=/other,target=/evq-lease/beat'),
         ('--mount=type=bind,source=/other,destination=/evq-home',),

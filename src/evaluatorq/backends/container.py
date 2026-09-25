@@ -193,7 +193,7 @@ def raw_environment_flags(run_args: Sequence[str]) -> list[str]:
         arg
         for arg in run_args
         if arg in ('-e', '--env', '--env-file')
-        or arg.startswith(('--env=', '--env-file=', '-e')) and arg != '-e'
+        or (arg.startswith(('--env=', '--env-file=', '-e')) and arg != '-e')
     ]
 
 
@@ -204,14 +204,21 @@ def validate_managed_run_args(run_args: Sequence[str], *, allow_privilege_escala
     for i, arg in enumerate(args):
         flag, eq, value = arg.partition('=')
         mount_flag = flag if flag in ('--volume', '-v', '--mount') else '-v' if arg.startswith('-v') else None
-        mount_value = value if eq and mount_flag else args[i + 1] if mount_flag and i + 1 < len(args) else arg[2:] if mount_flag else ''
-        if flag in _MANAGED_VALUE_FLAGS or arg.startswith('-u') and arg != '-u':
+        if not mount_flag:
+            mount_value = ''
+        elif eq:
+            mount_value = value
+        elif mount_flag == '-v' and arg != '-v':
+            mount_value = arg[2:]
+        else:
+            mount_value = args[i + 1] if i + 1 < len(args) else ''
+        if flag in _MANAGED_VALUE_FLAGS or (arg.startswith('-u') and arg != '-u'):
             violations.append(arg)
             continue
         if mount_flag:
             target = _mount_target(mount_flag, mount_value)
             if target and (target in ('/evq-lease', '/evq-home') or target.startswith(('/evq-lease/', '/evq-home/'))):
-                violations.append(arg if eq or arg.startswith('-v') and arg != '-v' else f'{arg} {mount_value}')
+                violations.append(arg if eq or (arg.startswith('-v') and arg != '-v') else f'{arg} {mount_value}')
         if flag == '--rm' and eq and value.lower() in ('false', '0', 'no'):
             violations.append(arg)
         if not allow_privilege_escalation and flag == '--security-opt':
@@ -228,7 +235,10 @@ def validate_managed_run_args(run_args: Sequence[str], *, allow_privilege_escala
 
 def _mount_target(flag: str, value: str) -> str | None:
     if flag == '--mount':
-        fields = dict(part.partition('=')[::2] for part in value.split(','))
+        fields: dict[str, str] = {}
+        for part in value.split(','):
+            key, _, field_value = part.partition('=')
+            fields[key] = field_value
         return fields.get('target') or fields.get('dst') or fields.get('destination')
     parts = value.split(':')
     return parts[1] if len(parts) > 1 else None
