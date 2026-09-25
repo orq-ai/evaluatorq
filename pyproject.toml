@@ -296,8 +296,14 @@ dependencies = [
   "uvicorn>=0.30.0",
   "vl-convert-python>=1.6.0"
 ]
+  insights = [
+  "evaluatorq[orq]",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "umap-learn>=0.5.6"
+]
   all = [
-  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard]"
+  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard,insights]"
 ]
 
   [project.scripts]
