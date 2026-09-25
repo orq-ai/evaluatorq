@@ -4221,16 +4221,22 @@ def _collect_filter_warnings(*, prepared_targets: list[PreparedTarget]) -> list[
         for cat_key, cat_meta in fm.items():
             if cat_key.startswith('_') or not isinstance(cat_meta, dict):
                 continue
-            if cat_meta.get('total_selected', 0) == 0:
-                gen_error = cat_meta.get('generation_error')
-                if gen_error:
-                    filter_warnings.append(
-                        f'Category {cat_key!r}: zero strategies selected (generation error: {gen_error})'
-                    )
-                else:
-                    filter_warnings.append(
-                        f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
-                    )
+            gen_error = cat_meta.get('generation_error')
+            selected = cat_meta.get('total_selected', 0)
+            if selected == 0 and gen_error:
+                filter_warnings.append(
+                    f'Category {cat_key!r}: zero strategies selected (generation error: {gen_error})'
+                )
+            elif selected == 0:
+                filter_warnings.append(
+                    f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
+                )
+            elif gen_error:
+                # Hardcoded strategies still ran, so coverage is reduced rather than absent.
+                filter_warnings.append(
+                    f'Category {cat_key!r}: strategy generation failed ({gen_error}); '
+                    f'ran {selected} hardcoded strateg{"y" if selected == 1 else "ies"} only'
+                )
 
     return filter_warnings
 
