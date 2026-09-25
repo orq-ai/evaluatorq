@@ -793,48 +793,22 @@ class CodingAgentTarget(AgentTarget):
             if stdin_text is not None and proc.stdin is not None
             else None
         )
-        loop = asyncio.get_running_loop()
         idle_s, hard_s = self.timeout_ms / 1000, self.max_turn_ms / 1000
-        started = last_output = loop.time()
-        stdout = bytearray()
+        stdout = b''
         finished = False
+        proc_wait_task: asyncio.Task[int] | None = None
         try:
-            while True:
-                now = loop.time()
-                if now >= started + hard_s:
-                    event_count = stdout.count(b'\n')
-                    detail = f'turn exceeded {hard_s:.0f}s ({event_count} events)'
-                    log_kill(self._agent, 'hard_cap', detail)
-                    raise CodingAgentUnavailableError('cli.timeout', detail, kill_reason='hard_cap')
-                if now >= last_output + idle_s:
-                    stamp = time.strftime('%H:%M:%S', time.localtime(time.time() - (now - last_output)))
-                    detail = (
-                        f'no output for {idle_s:.0f}s (last event: {describe_last_event(bytes(stdout))} at {stamp})'
-                    )
-                    log_kill(self._agent, 'idle_timeout', detail)
-                    raise CodingAgentUnavailableError('cli.timeout', detail, kill_reason='idle_timeout')
-                wait = min(last_output + idle_s, started + hard_s) - now
-                try:
-                    chunk = await asyncio.wait_for(proc.stdout.read(READ_CHUNK_BYTES), timeout=wait)
-                except asyncio.TimeoutError:
-                    continue
-                if not chunk:
-                    break
-                stdout.extend(chunk)
-                last_output = loop.time()
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=max(0.001, started + hard_s - loop.time()))
-            except asyncio.TimeoutError:
-                event_count = stdout.count(b'\n')
-                detail = f'turn exceeded {hard_s:.0f}s ({event_count} events)'
-                log_kill(self._agent, 'hard_cap', detail)
-                raise CodingAgentUnavailableError('cli.timeout', detail, kill_reason='hard_cap') from None
+            stdout, started, last_output = await read_stdout(proc.stdout, self._agent, idle_s=idle_s, hard_s=hard_s)
+            proc_wait_task = asyncio.create_task(proc.wait())
+            await wait_until_deadline(proc_wait_task, self._agent, stdout, started, last_output, idle_s, hard_s)
+            await wait_until_deadline(stderr_task, self._agent, stdout, started, last_output, idle_s, hard_s)
+            stderr = stderr_task.result()
             finished = True
         except asyncio.CancelledError:
             log_kill(self._agent, 'cancelled', 'the caller cancelled the turn')
             raise
         finally:
-            kill_group(proc)
+            kill_group(proc, force=not finished)
             self._proc = None
             if not finished and on_early_exit is not None:
                 await asyncio.shield(on_early_exit())
@@ -842,18 +816,72 @@ class CodingAgentTarget(AgentTarget):
                 stdin_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await stdin_task
-            if finished:
-                stderr = await stderr_task
-            else:
+            if not finished:
                 stderr_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await stderr_task
+                if proc_wait_task is not None:
+                    proc_wait_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await proc_wait_task
         return proc.returncode or 0, stdout.decode(errors='replace'), stderr.decode(errors='replace')
 
 
 def log_kill(agent: str, reason: str, detail: str) -> None:
     """The one log line every early end of an agent run writes, so a report row can say which limit fired."""
     logger.warning(f'CodingAgentTarget({agent}) {reason}: {detail}')
+
+
+def deadline_error(
+    agent: str, stdout: bytes, started: float, last_output: float, idle_s: float, hard_s: float, now: float
+) -> CodingAgentUnavailableError | None:
+    if now >= started + hard_s:
+        event_count = stdout.count(b'\n')
+        detail = f'turn exceeded {hard_s:.0f}s ({event_count} events)'
+        log_kill(agent, 'hard_cap', detail)
+        return CodingAgentUnavailableError('cli.timeout', detail, kill_reason='hard_cap')
+    if now >= last_output + idle_s:
+        stamp = time.strftime('%H:%M:%S', time.localtime(time.time() - (now - last_output)))
+        detail = f'no output for {idle_s:.0f}s (last event: {describe_last_event(stdout)} at {stamp})'
+        log_kill(agent, 'idle_timeout', detail)
+        return CodingAgentUnavailableError('cli.timeout', detail, kill_reason='idle_timeout')
+    return None
+
+
+async def read_stdout(
+    stream: asyncio.StreamReader, agent: str, *, idle_s: float, hard_s: float
+) -> tuple[bytes, float, float]:
+    started = last_output = asyncio.get_running_loop().time()
+    stdout = bytearray()
+    while True:
+        now = asyncio.get_running_loop().time()
+        expired = deadline_error(agent, bytes(stdout), started, last_output, idle_s, hard_s, now)
+        if expired is not None:
+            raise expired
+        wait = min(last_output + idle_s, started + hard_s) - now
+        try:
+            chunk = await asyncio.wait_for(stream.read(READ_CHUNK_BYTES), timeout=wait)
+        except asyncio.TimeoutError:
+            continue
+        if not chunk:
+            return bytes(stdout), started, last_output
+        stdout.extend(chunk)
+        last_output = asyncio.get_running_loop().time()
+
+
+async def wait_until_deadline(
+    task: asyncio.Task[Any], agent: str, stdout: bytes, started: float, last_output: float, idle_s: float, hard_s: float
+) -> Any:
+    loop = asyncio.get_running_loop()
+    while True:
+        now = loop.time()
+        expired = deadline_error(agent, stdout, started, last_output, idle_s, hard_s, now)
+        if expired is not None:
+            raise expired
+        if task.done():
+            return task.result()
+        remaining = min(started + hard_s, last_output + idle_s) - now
+        await asyncio.wait({task}, timeout=remaining)
 
 
 def describe_last_event(stdout: bytes) -> str:
@@ -911,8 +939,8 @@ def parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     return events
 
 
-def kill_group(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is not None:
+def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
+    if proc.returncode is not None and not force:
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)
