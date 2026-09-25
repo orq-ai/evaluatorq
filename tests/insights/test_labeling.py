@@ -217,6 +217,49 @@ async def test_concurrency_never_exceeds_parallelism(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('parallelism', [0, -1])
+async def test_parallelism_must_be_positive(parallelism: int) -> None:
+    with pytest.raises(ValueError, match='parallelism must be greater than zero'):
+        await label_traces([], labels=[], compiled=None, client=_client(), model='typesafe/jev-latest', parallelism=parallelism)
+
+
+@pytest.mark.asyncio
+async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    original_project = labeling_module.project_trace
+
+    def sometimes_fail(trace):
+        if trace.trace_id == 'bad':
+            raise ValueError('malformed trace')
+        return original_project(trace)
+
+    monkeypatch.setattr(labeling_module, 'project_trace', sometimes_fail)
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        return ClassifyOutcome(
+            response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')})
+        )
+
+    monkeypatch.setattr(labeling_module, 'run_classify', fake_run_classify)
+    progress: list[tuple[int, int]] = []
+    outcomes = await label_traces(
+        [make_trace('bad'), make_trace('good')],
+        labels=[SENTIMENT],
+        compiled=None,
+        client=_client(),
+        model='typesafe/jev-latest',
+        on_progress=lambda completed, total: progress.append((completed, total)),
+    )
+
+    assert outcomes[0].error == 'malformed trace'
+    assert outcomes[0].answers['sentiment'].error == 'malformed trace'
+    assert outcomes[1].error is None
+    assert outcomes[1].answers['sentiment'].value == 'positive'
+    assert len(progress) == 2
+
+
+@pytest.mark.asyncio
 async def test_noul_label_keeps_bool_value_and_raw_probability(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
         return ClassifyOutcome(

@@ -159,3 +159,10 @@ def test_summary_prompt_has_no_scalar_fields_from_upstream() -> None:
     # summary schema or its prompt.
     for dropped in ('user_frustration', 'customer_satisfaction', 'made_errors', 'concerning_score'):
         assert dropped not in SUMMARY_PROMPT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('parallelism', [0, -1])
+async def test_summarize_parallelism_must_be_positive(parallelism: int, cache: InsightsCache) -> None:
+    with pytest.raises(ValueError, match='parallelism must be greater than zero'):
+        await summarize_traces([], client=fake_client(), model='openai/gpt-6-luna', cache=cache, parallelism=parallelism)

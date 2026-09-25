@@ -79,13 +79,12 @@ async def embed_texts(
         batch = missing[start : start + batch_size]
         try:
             response = await _embed_batch(client, model=model, batch=batch)
+            for text, item in zip(batch, response.data, strict=True):
+                new_vectors[text] = item.embedding
         except Exception as exc:
             message = str(exc)
             logger.warning('Insights embedding batch of {} text(s) failed: {}', len(batch), message)
             raise EmbeddingError(f'embedding batch failed: {message}') from exc
-
-        for text, item in zip(batch, response.data, strict=True):
-            new_vectors[text] = item.embedding
 
     if new_vectors:
         cache.put_vectors(model, new_vectors)
