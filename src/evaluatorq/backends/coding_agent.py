@@ -55,7 +55,7 @@ Launcher = Literal['direct', 'orq']
 # 30 s under the retry helper's DEFAULT_TARGET_TIMEOUT_MS so this ceiling fires first: the helper starts its
 # clock before the agent process exists, and its own timeout is a retried target.timeout, not cli.timeout.
 DEFAULT_CODING_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS - 30_000
-_STDERR_EXCERPT_CHARS = 4000
+STDERR_EXCERPT_CHARS = 4000
 
 
 class CodingAgentError(Exception):
@@ -107,7 +107,7 @@ class OrqLaunchOptions:
 
 
 @dataclass(frozen=True)
-class _AgentSpec:
+class AgentSpec:
     binary: str
     output_args: tuple[str, ...]
     model_flag: str
@@ -119,8 +119,8 @@ class _AgentSpec:
     stdin_marker: tuple[str, ...] = ()
 
 
-_AGENTS: dict[str, _AgentSpec] = {
-    'claude': _AgentSpec(
+AGENTS: dict[str, AgentSpec] = {
+    'claude': AgentSpec(
         binary='claude',
         output_args=('-p', '--output-format', 'stream-json', '--verbose'),
         model_flag='--model',
@@ -129,7 +129,7 @@ _AGENTS: dict[str, _AgentSpec] = {
         skills_dir='.claude/skills',
         tools=('Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch'),
     ),
-    'codex': _AgentSpec(
+    'codex': AgentSpec(
         binary='codex',
         output_args=('exec', '--json', '--skip-git-repo-check'),
         model_flag='-m',
@@ -139,7 +139,7 @@ _AGENTS: dict[str, _AgentSpec] = {
         tools=('shell', 'apply_patch'),
         stdin_marker=('-',),
     ),
-    'opencode': _AgentSpec(
+    'opencode': AgentSpec(
         binary='opencode',
         output_args=('run', '--format', 'json'),
         model_flag='--model',
@@ -169,7 +169,7 @@ def build_argv(
     opencode prompts go through ``orq launch -p`` and stdin is closed, because codex appends any
     open stdin to the prompt. Claude under ``orq`` still reads stdin.
     """
-    spec = _AGENTS[agent]
+    spec = AGENTS[agent]
     if permission_mode is not None and spec.permission_flag is None:
         raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
 
@@ -193,14 +193,14 @@ def build_argv(
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
 
 
-_PROMPT_INSTRUCTION = (
+PROMPT_INSTRUCTION = (
     'You are continuing the conversation below. It is a JSON array of chat messages in order; '
     '"tool" entries are the results of your own earlier tool calls. Reply to the last "user" message. '
     'Do not restate the transcript.'
 )
 
 
-def _message_to_dict(message: Message) -> dict[str, Any]:
+def message_to_dict(message: Message) -> dict[str, Any]:
     if message.role == 'tool':
         return {
             'role': 'tool',
@@ -228,9 +228,9 @@ def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_
     entries: list[dict[str, Any]] = []
     if inline_system and system_prompt:
         entries.append({'role': 'system', 'content': system_prompt})
-    entries += [_message_to_dict(m) for m in messages]
+    entries += [message_to_dict(m) for m in messages]
     block = delimit(json.dumps(entries, ensure_ascii=False, indent=None), tag='conversation')
-    return f'{_PROMPT_INSTRUCTION}\n{block}'
+    return f'{PROMPT_INSTRUCTION}\n{block}'
 
 
 @dataclass
@@ -246,7 +246,7 @@ class ParsedTurn:
     agent_error: str | None = None
 
 
-def _tool_call(
+def tool_call(
     *,
     call_id: str,
     name: str,
@@ -264,7 +264,7 @@ def _tool_call(
     )
 
 
-def _usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> Usage | None:
+def usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> Usage | None:
     """``Usage.extract`` for one agent usage record; ``None`` plus a warning when a required count is absent."""
     if usage_block is None:
         return None
@@ -275,7 +275,7 @@ def _usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> U
     return Usage.extract(usage_block, calls=1)
 
 
-def _opencode_usage(tokens: Any) -> dict[str, Any] | None:
+def opencode_usage(tokens: Any) -> dict[str, Any] | None:
     """Spell OpenCode's ``step_finish.tokens`` block in the canonical names ``Usage.extract`` reads.
 
     OpenCode uses bare ``input``/``output``/``reasoning`` and a nested ``cache`` object; those words are
@@ -297,7 +297,7 @@ def _opencode_usage(tokens: Any) -> dict[str, Any] | None:
     return {k: v for k, v in renamed.items() if v is not None}
 
 
-def _heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
+def heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
     """The ``modelUsage`` entry with the most tokens; the first key is often an auxiliary model."""
     if not model_usage:
         return None
@@ -306,15 +306,15 @@ def _heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
 
 # Stream events claude emits every turn that carry no text, tool call or usage: `system` (init, hooks,
 # status) and `rate_limit_event`. Skipped silently so the unknown-event warning stays meaningful.
-_CLAUDE_HOUSEKEEPING_EVENTS = frozenset({'system', 'rate_limit_event'})
+CLAUDE_HOUSEKEEPING_EVENTS = frozenset({'system', 'rate_limit_event'})
 
 
-def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
+def parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     calls: dict[str, ToolCallOutputItem] = {}
     order: list[str] = []
     last_text: list[str] = []
-    content_events = [e for e in events if e.get('type') not in _CLAUDE_HOUSEKEEPING_EVENTS]
+    content_events = [e for e in events if e.get('type') not in CLAUDE_HOUSEKEEPING_EVENTS]
     for event in content_events:
         kind = event.get('type')
         if kind == 'assistant':
@@ -323,7 +323,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
             for block in event.get('message', {}).get('content', []) or []:
                 if block.get('type') == 'tool_use':
                     call_id = str(block.get('id'))
-                    calls[call_id] = _tool_call(
+                    calls[call_id] = tool_call(
                         call_id=call_id,
                         name=str(block.get('name')),
                         arguments=block.get('input', {}),
@@ -354,11 +354,11 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
             turn.text = result_text if isinstance(result_text, str) else (''.join(last_text) or None)
             if event.get('is_error'):
                 turn.agent_error = result_text if isinstance(result_text, str) else str(event.get('subtype'))
-            turn.usage = _usage_or_none('claude', event.get('usage'), ('input_tokens', 'output_tokens'))
-            turn.model = turn.model or _heaviest_model(event.get('modelUsage') or {})
+            turn.usage = usage_or_none('claude', event.get('usage'), ('input_tokens', 'output_tokens'))
+            turn.model = turn.model or heaviest_model(event.get('modelUsage') or {})
             for denial in event.get('permission_denials') or []:
                 call_id = str(denial.get('tool_use_id') or f'denied-{len(order)}')
-                denied = _tool_call(
+                denied = tool_call(
                     call_id=call_id,
                     name=str(denial.get('tool_name')),
                     arguments=denial.get('tool_input', {}),
@@ -376,7 +376,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     return turn
 
 
-def _codex_status(item: dict[str, Any]) -> Literal['in_progress', 'completed', 'incomplete']:
+def codex_status(item: dict[str, Any]) -> Literal['in_progress', 'completed', 'incomplete']:
     status = item.get('status')
     if status == 'completed' and (item.get('exit_code') in (None, 0)):
         return 'completed'
@@ -385,7 +385,7 @@ def _codex_status(item: dict[str, Any]) -> Literal['in_progress', 'completed', '
     return 'incomplete'
 
 
-def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
+def parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     calls: dict[str, ToolCallOutputItem] = {}
     order: list[str] = []
@@ -396,7 +396,7 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
         elif kind == 'turn.failed':
             turn.agent_error = str((event.get('error') or {}).get('message') or 'turn.failed')
         elif kind == 'turn.completed':
-            turn.usage = _usage_or_none('codex', event.get('usage'), ('input_tokens', 'output_tokens'))
+            turn.usage = usage_or_none('codex', event.get('usage'), ('input_tokens', 'output_tokens'))
         elif kind in ('item.started', 'item.completed'):
             item = event.get('item') or {}
             item_id = str(item.get('id'))
@@ -406,29 +406,29 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
             elif item_type == 'error':
                 logger.warning(f'codex reported: {item.get("message")}')
             elif item_type == 'command_execution':
-                calls[item_id] = _tool_call(
+                calls[item_id] = tool_call(
                     call_id=item_id,
                     name='shell',
                     arguments={'command': item.get('command')},
                     result=item.get('aggregated_output') if kind == 'item.completed' else None,
-                    status=_codex_status(item),
+                    status=codex_status(item),
                 )
             elif item_type == 'file_change':
-                calls[item_id] = _tool_call(
+                calls[item_id] = tool_call(
                     call_id=item_id,
                     name='apply_patch',
                     arguments={'changes': item.get('changes', [])},
                     result='applied' if item.get('status') == 'completed' else None,
-                    status=_codex_status(item),
+                    status=codex_status(item),
                 )
             elif item_type == 'mcp_tool_call':
                 error = item.get('error') or {}
-                calls[item_id] = _tool_call(
+                calls[item_id] = tool_call(
                     call_id=item_id,
                     name=f'{item.get("server")}.{item.get("tool")}',
                     arguments=item.get('arguments', {}),
                     result=error.get('message') if error else tool_result_to_text(item.get('result')),
-                    status='incomplete' if error else _codex_status(item),
+                    status='incomplete' if error else codex_status(item),
                 )
             else:
                 logger.warning(f'codex skipped unknown item type: {item_type}')
@@ -441,7 +441,7 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
     return turn
 
 
-def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
+def parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     last_text: str | None = None
     cost = 0.0
@@ -461,7 +461,7 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             )
             call_id = str(part.get('callID') or part.get('id'))
             turn.tool_calls.append(
-                _tool_call(
+                tool_call(
                     call_id=call_id,
                     name=str(part.get('tool')),
                     arguments=state.get('input', {}),
@@ -475,8 +475,8 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             )
         elif kind == 'step_finish':
             saw_step_finish = True
-            step_usage = _usage_or_none(
-                'opencode', _opencode_usage(part.get('tokens')), ('input_tokens', 'output_tokens')
+            step_usage = usage_or_none(
+                'opencode', opencode_usage(part.get('tokens')), ('input_tokens', 'output_tokens')
             )
             if step_usage is not None:
                 turn.usage = step_usage if turn.usage is None else turn.usage + step_usage
@@ -496,19 +496,19 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     return turn
 
 
-_PARSERS: dict[str, Callable[[list[dict[str, Any]]], ParsedTurn]] = {
-    'claude': _parse_claude,
-    'codex': _parse_codex,
-    'opencode': _parse_opencode,
+PARSERS: dict[str, Callable[[list[dict[str, Any]]], ParsedTurn]] = {
+    'claude': parse_claude,
+    'codex': parse_codex,
+    'opencode': parse_opencode,
 }
 
 
 def parse_events(agent: AgentName, events: list[dict[str, Any]]) -> ParsedTurn:
     """Pure: one agent's JSONL events to a `ParsedTurn`. Unknown event types are skipped."""
-    return _PARSERS[agent](events)
+    return PARSERS[agent](events)
 
 
-def _remove_tree(path: Path) -> None:
+def remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
@@ -559,11 +559,11 @@ class CodingAgentTarget(AgentTarget):
         env: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
-        if agent not in _AGENTS:
-            raise ValueError(f'Unknown coding agent {agent!r}; expected one of {sorted(_AGENTS)}')
+        if agent not in AGENTS:
+            raise ValueError(f'Unknown coding agent {agent!r}; expected one of {sorted(AGENTS)}')
         if launcher not in ('direct', 'orq'):
             raise ValueError(f'Unknown launcher {launcher!r}; expected "direct" or "orq"')
-        self._spec = _AGENTS[agent]
+        self._spec = AGENTS[agent]
         if permission_mode is not None and self._spec.permission_flag is None:
             raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
         if orq is not None and launcher == 'direct':
@@ -630,7 +630,7 @@ class CodingAgentTarget(AgentTarget):
             shutil.rmtree(dst, ignore_errors=True)
             raise
         if not self._keep_workdir:
-            self._finalizer = weakref.finalize(self, _remove_tree, dst)
+            self._finalizer = weakref.finalize(self, remove_tree, dst)
         self._workdir = dst
         return dst
 
@@ -641,14 +641,14 @@ class CodingAgentTarget(AgentTarget):
         """Kill a live process group and release the temp workdir. Idempotent."""
         proc = self._proc
         if proc is not None:
-            _kill_group(proc)
+            kill_group(proc)
             self._proc = None
         if self._workdir is None:
             return
         if self._keep_workdir:
             logger.info(f'CodingAgentTarget({self._agent}): keeping workdir {self._workdir}')
         else:
-            _remove_tree(self._workdir)
+            remove_tree(self._workdir)
             if self._finalizer is not None:
                 self._finalizer.detach()
         self._workdir = None
@@ -695,12 +695,12 @@ class CodingAgentTarget(AgentTarget):
         ) as span:
             returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir)
             set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
-            stderr_excerpt = stderr[-_STDERR_EXCERPT_CHARS:]
+            stderr_excerpt = stderr[-STDERR_EXCERPT_CHARS:]
             if returncode != 0:
                 raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
-            events = _parse_jsonl(stdout)
+            events = parse_jsonl(stdout)
             if stdout.strip() and not events:
-                raise CodingAgentError('cli.parse_error', f'no JSON events in stdout: {stdout[:_STDERR_EXCERPT_CHARS]}')
+                raise CodingAgentError('cli.parse_error', f'no JSON events in stdout: {stdout[:STDERR_EXCERPT_CHARS]}')
             try:
                 turn = parse_events(self._agent, events)
             except Exception as exc:  # Any parser crash is a parse error, not a target crash.
@@ -754,12 +754,12 @@ class CodingAgentTarget(AgentTarget):
                 'cli.timeout', f'{argv[0]} produced no result within {self.timeout_ms / 1000:.0f}s'
             ) from exc
         finally:
-            _kill_group(proc)
+            kill_group(proc)
             self._proc = None
         return proc.returncode or 0, stdout.decode(errors='replace'), stderr.decode(errors='replace')
 
 
-def _parse_jsonl(stdout: str) -> list[dict[str, Any]]:
+def parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for line in stdout.splitlines():
         line = line.strip()
@@ -775,7 +775,7 @@ def _parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     return events
 
 
-def _kill_group(proc: asyncio.subprocess.Process) -> None:
+def kill_group(proc: asyncio.subprocess.Process) -> None:
     if proc.returncode is not None:
         return
     with contextlib.suppress(ProcessLookupError):
