@@ -38,6 +38,13 @@ def test_default_image_tag_is_docker_safe() -> None:
 def test_options_frozen_and_workdir_absolute() -> None:
     with pytest.raises(pydantic.ValidationError):
         DockerOptions(workdir='app')
+    for workdir in ('/evq-lease', '/evq-lease/child', '/evq-home', '/evq-home/child', '/evq-home/../evq-home'):
+        with pytest.raises(pydantic.ValidationError, match='overlaps evaluatorq-managed'):
+            DockerOptions(workdir=workdir)
+    with pytest.raises(pydantic.ValidationError, match='overlaps evaluatorq-managed'):
+        DockerOptions(workdir='/')
+    for workdir in ('/evq-home/../work', '/work', '/app'):
+        assert DockerOptions(workdir=workdir).workdir == workdir
     opts = DockerOptions()
     with pytest.raises(pydantic.ValidationError):
         opts.image = 'x'  # pyright: ignore[reportAttributeAccessIssue]
@@ -285,6 +292,24 @@ def test_heartbeat_writes_registered_and_warns_once(fake_docker, tmp_path) -> No
     c.unregister('g')
     c.heartbeat_once(3)
     assert (good / 'beat').read_text() == '2'
+
+
+def test_heartbeat_warns_again_after_recovery(fake_docker, tmp_path) -> None:
+    beat = tmp_path / 'missing' / 'beat'
+    c.LIVE_CONTAINERS['recovering'] = c.LiveContainer(binary='docker', context=None, beat=beat)
+    seen: list[str] = []
+    sink = logger.add(lambda message: seen.append(str(message)), level='WARNING')
+    try:
+        c.heartbeat_once(1)
+        beat.parent.mkdir()
+        c.heartbeat_once(2)
+        beat.unlink()
+        beat.parent.rmdir()
+        c.heartbeat_once(3)
+    finally:
+        logger.remove(sink)
+        c.unregister('recovering')
+    assert sum('heartbeat for container recovering failed' in message for message in seen) == 2
 
 
 @pytest.mark.parametrize('shell', ['sh', 'busybox'])

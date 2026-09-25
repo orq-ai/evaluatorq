@@ -88,6 +88,13 @@ class DockerOptions(BaseModel):
     def workdir_must_be_absolute(cls, value: str) -> str:
         if not value.startswith('/'):
             raise ValueError(f'workdir must be an absolute container path, got {value!r}')
+        normalized = posixpath.normpath(value)
+        managed_mounts = ('/evq-lease', '/evq-home')
+        if any(
+            normalized == mount or normalized.startswith(f'{mount}/') or mount.startswith(f'{normalized.rstrip("/")}/')
+            for mount in managed_mounts
+        ):
+            raise ValueError(f'workdir {value!r} overlaps evaluatorq-managed container mounts /evq-lease and /evq-home')
         return value
 
     def cli(self) -> list[str]:
@@ -413,6 +420,7 @@ def heartbeat_once(counter: int) -> None:
         for name, live in list(LIVE_CONTAINERS.items()):
             try:
                 write_beat(live.beat, counter)
+                BEAT_WARNED.discard(name)
             except OSError as exc:  # noqa: PERF203
                 if name not in BEAT_WARNED:
                     BEAT_WARNED.add(name)
