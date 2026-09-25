@@ -14,7 +14,7 @@ from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.insights_views import TABS, full_page, landing, running_page, tab_content, unreadable_page
 from evaluatorq.insights.models import InsightsRun
-from evaluatorq.insights.store import get_insights_runs_dir
+from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,21 +23,7 @@ if TYPE_CHECKING:
 def _entries(directory: Path) -> tuple[list[tuple[str, str, str]], dict[str, tuple[Path, InsightsRun | str]]]:
     entries: list[tuple[str, str, str]] = []
     loaded: dict[str, tuple[Path, InsightsRun | str]] = {}
-    try:
-        paths = list(directory.glob('insights_*.json'))
-    except OSError as exc:
-        logger.warning('Could not list Insights run files in {}: {}', directory, exc)
-        paths = []
-
-    def mtime(path: Path) -> int:
-        try:
-            return path.stat().st_mtime_ns
-        except OSError as exc:
-            logger.warning('Could not stat Insights run file {}: {}', path, exc)
-            return 0
-
-    paths.sort(key=mtime, reverse=True)
-    for path in paths:
+    for path in list_run_paths(directory):
         try:
             run: InsightsRun | str = library.load_model_cached(path, InsightsRun.model_validate)
         except (OSError, ValueError, TypeError) as exc:

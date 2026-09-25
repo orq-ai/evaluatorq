@@ -67,14 +67,29 @@ def load_run(path: Path) -> InsightsRun:
     return InsightsRun.model_validate_json(path.read_text(encoding='utf-8'))
 
 
+def list_run_paths(runs_dir: Path | None = None) -> list[Path]:
+    """Return Insights run paths newest first, without reading or validating their JSON."""
+    directory = runs_dir or get_insights_runs_dir()
+    try:
+        paths = list(directory.glob('insights_*.json'))
+    except OSError as exc:
+        logger.warning('Could not list Insights run files in {}: {}', directory, exc)
+        return []
+
+    def mtime(path: Path) -> int:
+        try:
+            return path.stat().st_mtime_ns
+        except OSError as exc:
+            logger.warning('Could not stat Insights run file {}: {}', path, exc)
+            return 0
+
+    return sorted(paths, key=mtime, reverse=True)
+
+
 def list_runs(runs_dir: Path | None = None) -> list[tuple[Path, InsightsRun | str]]:
     """Load run files newest first, retaining corrupt files as visible errors."""
-    directory = runs_dir or get_insights_runs_dir()
-    if not directory.is_dir():
-        return []
-    paths = sorted(directory.glob('insights_*.json'), key=lambda item: item.stat().st_mtime, reverse=True)
     result: list[tuple[Path, InsightsRun | str]] = []
-    for path in paths:
+    for path in list_run_paths(runs_dir):
         try:
             result.append((path, load_run(path)))
         except (OSError, ValueError) as exc:  # noqa: PERF203 - preserve each corrupt file in the listing
