@@ -689,7 +689,6 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
                 category_index = categories.index(category)
                 color_value = category_index
                 marker_color = QUALITATIVE[category_index % len(QUALITATIVE)]
-                symbol = 'circle'
         point = {
             'trace_id': trace.trace_id,
             'x': coords[0],
@@ -727,7 +726,7 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
         'points': points,
         'legend': legend_items,
         'color_scale': color_scale,
-        'color_mode': 'continuous' if is_continuous else 'category',
+        'color_mode': 'cluster' if not label_name else 'continuous' if is_continuous else 'category',
         'grid_color': COLORS['sand_400'],
         'background_color': COLORS['sand_100'],
     }

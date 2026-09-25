@@ -143,6 +143,8 @@ def test_map_json_shape_palette_noise_diamond_and_numeric_label(tmp_path, monkey
     assert points['trace-1']['color'] == QUALITATIVE[0]
     assert points['trace-10']['color'] == COLORS['sand_400']
     assert points['trace-9']['symbol'] == 'diamond'
+    assert payload['color_mode'] == 'cluster'
+    assert {item['cluster_id'] for item in payload['legend']} >= {'base-1', 'base-9', 'noise'}
     numeric = (
         TestClient(build_app())
         .get('/insights/map-run/map.json?dimension=intent&color_by=label%3Acustomer_satisfaction')
@@ -156,6 +158,12 @@ def test_map_json_shape_palette_noise_diamond_and_numeric_label(tmp_path, monkey
     )
     assert isinstance(choice['points'][0]['color_value'], int)
     assert choice['points'][0]['color'] == QUALITATIVE[0]
+    assert {point['trace_id']: point for point in choice['points']}['trace-9']['symbol'] == 'diamond'
+    renderer = Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js'
+    assert (
+        "payload.color_mode === 'category'\n          ? String(p.label_value) + '|' + p.symbol\n          : p.cluster_id"
+        in renderer.read_text(encoding='utf-8')
+    )
 
 
 def test_crosstab_spec_has_both_axes_and_links_cells_to_filtered_traces():
