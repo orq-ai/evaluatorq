@@ -28,7 +28,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--evaluator-model` | `str` / `openai/gpt-5.6-luna` | Model for OWASP evaluation scoring. |
 | `--min-evaluation-coverage` | `float` / `0.8` | Fraction of attacks that must produce a verdict, else exit non-zero. `0` warns instead of failing; a run where nothing could be scored still exits non-zero regardless. See **Exit codes** below. |
 | `--datapoint-parallelism` | `int` / `10` | Maximum concurrent datapoints/jobs. `--parallelism` is a deprecated alias. |
-| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
+| `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
 | `--target-timeout-ms` | `int` / `240000` | Per-call timeout (ms) for target invocations. Raise it for a slow self-hosted or tool-heavy target. |
 | `--max-target-retries` | `int` (0–10) / `2` | Retries for a failed target *transport* call before abandoning its attacker turn. A retry never consumes a new attacker turn or changes the transcript. Distinct from `--retry-count`. |
 | `--retry-count` | `int` (0–10) / `3` | Retries (after the initial call) for pipeline-owned LLM calls and Orq context/enrichment/cleanup — the attacker and generator calls, not the target. `0` disables. |

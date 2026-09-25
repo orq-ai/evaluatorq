@@ -34,7 +34,7 @@ Targets — provide **exactly one**:
 | `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, persona/scenario/first-message generation, the recommendations pass and the executive summary. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
-| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
+| `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--persona-seed` | `str` (repeatable) / `None` | Archetype seed for a persona, e.g. `"angry retiree"` (repeatable). Each seed becomes one persona the LLM fleshes out — overrides `--num-personas`. Omit to auto-generate. |
@@ -79,7 +79,7 @@ There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only.
 | `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, the recommendations pass and the executive summary. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Defaults to the replayed run's cap with `--from-run`. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. `--parallelism` is a deprecated alias. |
-| `--llm-parallelism` | `int` / unset | Ceiling on in-flight LLM requests for the whole run. |
+| `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
 | `--evaluator` | `str` (repeatable) / API defaults | Evaluator name(s). Repeatable. |
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
@@ -158,6 +158,7 @@ Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and build
 | `--extend` | `int` / `0` | Also generate N distribution-matched datapoints on top of the direct per-trace ones (extra LLM calls). `0` disables extension. |
 | `--agent-description` | `str \| None` | Agent description used for `--extend` generation. Optional; inferred from the traffic profile if omitted. |
 | `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for persona/scenario inference and extension generation. |
+| `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests while building datapoints. `-1` disables it. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
 

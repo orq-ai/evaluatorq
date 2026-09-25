@@ -262,7 +262,7 @@ from evaluatorq.pairwise import pairwise_consensus, reconcile_pair, run_pairwise
 
 `run_pairwise()` is also re-exported at the top level as `evaluatorq.run_pairwise`; `reconcile_pair()` and `pairwise_consensus()` are not. `run_jury()` is internal to `evaluatorq.common.jury` and is not part of the public top-level API.
 
-Judge fan-out is bounded by the run-scoped LLM ceiling (`evaluatorq(llm_parallelism=...)`): every judge call routes through the shared LLM path and takes a slot, so all judges, orderings, and concurrent `compare()` calls share one run-wide cap rather than a per-run one.
+Judge fan-out is bounded by the shared LLM ceiling: every judge call routes through the shared LLM path and takes a slot, so all judges, orderings, and concurrent `compare()` calls share one cap. It defaults to 10 concurrent requests; `-1` disables it. Inside `evaluatorq()` set it with `llm_parallelism=`; around a standalone call, wrap it in `async with evaluatorq.llm_concurrency_limit(n):`.
 
 ## Where to next
 

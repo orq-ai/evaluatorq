@@ -794,7 +794,7 @@ async def evaluatorq(
         parallelism: Deprecated alias for ``datapoint_parallelism``.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole run,
               counted per request rather than per task, so it holds however the
-              datapoint/job/evaluator/jury fan-out nests. Unbounded by default. This
+              datapoint/job/evaluator/jury fan-out nests. Defaults to 10; -1 disables it. This
               is the knob to set against a provider concurrency limit; ``datapoint_parallelism``
               bounds tasks, and one task can issue many requests. Only requests routed
               through evaluatorq are counted — wrap a job's own provider calls in

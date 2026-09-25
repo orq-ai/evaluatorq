@@ -28,7 +28,7 @@ async def evaluatorq(
 | `jobs` | `list[Job]` \| `None` | required when `inference=True` | Jobs to run on each data point; omitted and ignored when `inference=False` |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `datapoint_parallelism` | `int` (≥1) | `10` | Number of concurrent datapoints. The former name `parallelism` still works, deprecated |
-| `llm_parallelism` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
+| `llm_parallelism` | `int` (≥1, or `-1`) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. `None` applies the default of 10; `-1` disables the ceiling |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
@@ -310,15 +310,17 @@ await evaluatorq("parallel-eval", data=[...], jobs=[...], datapoint_parallelism=
 Against a provider concurrency limit, size the request ceiling instead:
 
 ```python
-await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=10)
+await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=20)
 ```
+
+Unset, the ceiling is 10 concurrent requests, and that default also covers calls made outside `evaluatorq()`, such as a standalone `run_pairwise()`. Pass `-1` to disable the ceiling. To bound code that is not an entry point, wrap it in `async with evaluatorq.llm_concurrency_limit(n):`.
 
 This counts requests, not tasks, so it holds however the fan-out nests. It is a concurrency bound rather than a rate limit — ten slots against 10s calls is about 60 requests/minute, but the same ten slots become 300/minute if the provider speeds up to 2s.
 
 Requests evaluatorq issues itself (judges, juries, simulation agents, the red-team pipeline) take a slot automatically. A job that calls a provider SDK directly is invisible to the budget unless you wrap it:
 
 ```python
-from evaluatorq.common.llm_limit import llm_slot
+from evaluatorq import llm_slot
 
 async def my_job(data_point, row_index):
     async with llm_slot():

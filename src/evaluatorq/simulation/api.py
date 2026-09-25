@@ -299,8 +299,8 @@ async def simulate(
         datapoint_parallelism: Maximum number of concurrent simulations (tasks).
             Defaults to 10.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
-            run, counted per request rather than per simulation. Unbounded by
-            default. Set this, not ``datapoint_parallelism``, against a provider
+            run, counted per request rather than per simulation. Defaults to
+            10; -1 disables it. Set this, not ``datapoint_parallelism``, against a provider
             concurrency limit: one simulation issues a request per turn per
             agent, so ``datapoint_parallelism`` cannot be sized against one.
             Covers the user simulator, the judge and datapoint generation; a

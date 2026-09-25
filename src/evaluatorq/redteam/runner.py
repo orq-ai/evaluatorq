@@ -1356,7 +1356,7 @@ async def red_team(
             Defaults to 10.
         parallelism: Deprecated alias for ``datapoint_parallelism``.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
-            run, counted per request rather than per job. Unbounded by default.
+            run, counted per request rather than per job. Defaults to 10; -1 disables it.
             Set this, not ``datapoint_parallelism``, against a provider concurrency
             limit: one job issues many requests, so ``datapoint_parallelism`` cannot
             be sized against one. Covers the pipeline, judges and strategy generation;
@@ -2187,7 +2187,6 @@ async def _prepare_target(
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
-    datapoint_parallelism: int,
     generate_strategies: bool,
     generated_strategy_count: int,
     max_dynamic_datapoints: int | None,
@@ -2858,7 +2857,6 @@ class _TargetPrepInputs:
     max_turns: int
     max_per_category: int | None
     attack_model: str
-    datapoint_parallelism: int
     generate_strategies: bool
     generated_strategy_count: int
     max_dynamic_datapoints: int | None
@@ -2894,7 +2892,6 @@ async def _prepare_string_targets(*, inputs: _TargetPrepInputs) -> list[Prepared
     max_turns = inputs.max_turns
     max_per_category = inputs.max_per_category
     attack_model = inputs.attack_model
-    datapoint_parallelism = inputs.datapoint_parallelism
     generate_strategies = inputs.generate_strategies
     generated_strategy_count = inputs.generated_strategy_count
     max_dynamic_datapoints = inputs.max_dynamic_datapoints
@@ -2928,7 +2925,6 @@ async def _prepare_string_targets(*, inputs: _TargetPrepInputs) -> list[Prepared
         max_turns=max_turns,
         max_per_category=max_per_category,
         attack_model=attack_model,
-        datapoint_parallelism=datapoint_parallelism,
         generate_strategies=generate_strategies,
         generated_strategy_count=generated_strategy_count,
         max_dynamic_datapoints=max_dynamic_datapoints,
@@ -3013,7 +3009,6 @@ class _AgentTargetDatapointInputs:
     generated_strategy_count: int
     at_llm_client: AsyncOpenAI | None
     attack_model: str
-    datapoint_parallelism: int
     attacker_instructions: str | None
     pipeline_config: LLMConfig | None
     at_caps: dict[int, AgentCapabilities]
@@ -3039,7 +3034,6 @@ async def _generate_agent_target_datapoints(
     generated_strategy_count = inputs.generated_strategy_count
     at_llm_client = inputs.at_llm_client
     attack_model = inputs.attack_model
-    datapoint_parallelism = inputs.datapoint_parallelism
     attacker_instructions = inputs.attacker_instructions
     pipeline_config = inputs.pipeline_config
     at_caps = inputs.at_caps
@@ -3484,7 +3478,6 @@ async def _run_dynamic_or_hybrid(
             max_turns=max_turns,
             max_per_category=max_per_category,
             attack_model=attack_model,
-            datapoint_parallelism=datapoint_parallelism,
             generate_strategies=generate_strategies,
             generated_strategy_count=generated_strategy_count,
             max_dynamic_datapoints=max_dynamic_datapoints,
@@ -3564,7 +3557,6 @@ async def _run_dynamic_or_hybrid(
                         generated_strategy_count=generated_strategy_count,
                         at_llm_client=at_llm_client,
                         attack_model=attack_model,
-                        datapoint_parallelism=datapoint_parallelism,
                         attacker_instructions=attacker_instructions,
                         pipeline_config=pipeline_config,
                         at_caps=at_caps,

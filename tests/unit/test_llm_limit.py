@@ -8,7 +8,13 @@ from typing import Any, cast
 
 import pytest
 
-from evaluatorq.common.llm_limit import llm_concurrency_limit, llm_slot
+from evaluatorq.common.llm_limit import (
+    DEFAULT_LLM_PARALLELISM,
+    UNBOUNDED,
+    check_llm_parallelism_option,
+    llm_concurrency_limit,
+    llm_slot,
+)
 
 
 class _Peak:
@@ -51,10 +57,22 @@ async def test_bound_survives_nested_fan_out() -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_limit_leaves_calls_unbounded() -> None:
+async def test_no_limit_applies_the_default_ceiling() -> None:
     peak = _Peak()
-    await asyncio.gather(*(peak.call() for _ in range(8)))
-    assert peak.peak == 8
+    await asyncio.gather(*(peak.call() for _ in range(DEFAULT_LLM_PARALLELISM * 2)))
+    assert peak.peak == DEFAULT_LLM_PARALLELISM
+
+
+def test_default_ceiling_survives_one_asyncio_run_per_call() -> None:
+    """The default semaphore is per loop; a shared one breaks the second asyncio.run."""
+    for _ in range(2):
+        peak = _Peak()
+
+        async def batch(peak: _Peak = peak) -> None:
+            await asyncio.gather(*(peak.call() for _ in range(DEFAULT_LLM_PARALLELISM + 2)))
+
+        asyncio.run(batch())
+        assert peak.peak == DEFAULT_LLM_PARALLELISM
 
 
 @pytest.mark.asyncio
@@ -63,14 +81,80 @@ async def test_limit_does_not_leak_out_of_its_block() -> None:
     async with llm_concurrency_limit(2):
         await peak.call()
     await asyncio.gather(*(peak.call() for _ in range(6)))
-    assert peak.peak == 6
+    assert peak.peak == 6  # below the default ceiling, so no longer bounded by 2
+
+
+@pytest.mark.parametrize('bad', [0, -2])
+def test_rejects_a_limit_below_one_other_than_unbounded(bad: int) -> None:
+    with pytest.raises(ValueError, match='must be >= 1'):
+        llm_concurrency_limit(bad)
 
 
 @pytest.mark.asyncio
-async def test_rejects_a_limit_below_one() -> None:
-    with pytest.raises(ValueError, match='must be >= 1'):
-        async with llm_concurrency_limit(0):
-            pass
+async def test_minus_one_disables_the_ceiling() -> None:
+    peak = _Peak()
+    async with llm_concurrency_limit(UNBOUNDED):
+        await asyncio.gather(*(peak.call() for _ in range(DEFAULT_LLM_PARALLELISM * 3)))
+    assert peak.peak == DEFAULT_LLM_PARALLELISM * 3
+
+
+def test_explicit_limit_survives_one_asyncio_run_per_call() -> None:
+    """A sync `with` spanning two asyncio.run calls must not reuse a loop-bound semaphore."""
+    peaks = [_Peak(), _Peak()]
+    with llm_concurrency_limit(2):
+        for peak in peaks:
+
+            async def batch(peak: _Peak = peak) -> None:
+                await asyncio.gather(*(peak.call() for _ in range(6)))
+
+            asyncio.run(batch())
+    assert [p.peak for p in peaks] == [2, 2]
+
+
+def test_evaluatorq_params_accept_minus_one_and_reject_zero() -> None:
+    from pydantic import ValidationError
+
+    from evaluatorq.types import EvaluatorParams
+
+    assert EvaluatorParams(data=[], inference=False, llm_parallelism=-1).llm_parallelism == -1
+    with pytest.raises(ValidationError, match='must be >= 1'):
+        EvaluatorParams(data=[], inference=False, llm_parallelism=0)
+
+
+def test_cli_option_accepts_minus_one_and_rejects_zero() -> None:
+    import typer
+
+    assert check_llm_parallelism_option(-1) == -1
+    assert check_llm_parallelism_option(None) is None
+    with pytest.raises(typer.BadParameter, match='must be >= 1'):
+        check_llm_parallelism_option(0)
+
+
+@pytest.mark.parametrize(
+    ('module', 'func', 'removed'),
+    [
+        ('evaluatorq.pairwise', 'run_pairwise', 'max_concurrency'),
+        ('evaluatorq.llm_jury', 'llm_jury_pairwise', 'max_concurrency'),
+        ('evaluatorq.llm_jury', 'PairwiseComparator', 'max_concurrency'),
+        ('evaluatorq.common.jury', 'run_jury', 'max_concurrency'),
+        ('evaluatorq.simulation.generators.datapoint_generator', 'DatapointGenerator', 'rate_limit_delay'),
+        ('evaluatorq.simulation.generators.datapoint_generator', 'DatapointGenerator', 'max_concurrent_calls'),
+        ('evaluatorq.redteam.adaptive.strategy_planner', 'plan_strategies_for_categories', 'generation_parallelism'),
+        ('evaluatorq.redteam.adaptive.strategy_planner', 'plan_strategies_for_vulnerabilities', 'generation_parallelism'),
+        ('evaluatorq.redteam.adaptive.pipeline', 'generate_dynamic_datapoints', 'datapoint_parallelism'),
+        (
+            'evaluatorq.redteam.adaptive.pipeline',
+            'generate_dynamic_datapoints_for_vulnerabilities',
+            'datapoint_parallelism',
+        ),
+    ],
+)
+def test_per_call_site_knobs_are_gone(module: str, func: str, removed: str) -> None:
+    """The llm_parallelism ceiling replaced these; a second knob would nest and multiply again."""
+    import importlib
+    import inspect
+
+    assert removed not in inspect.signature(getattr(importlib.import_module(module), func)).parameters
 
 
 @pytest.mark.asyncio
