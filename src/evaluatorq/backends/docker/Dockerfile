@@ -10,5 +10,5 @@ RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} @openai/code
       opencode-ai@${OPENCODE_VERSION} @orq-ai/cli@${ORQ_CLI_VERSION}
 COPY entrypoint.sh /usr/local/bin/evq-entrypoint
 RUN chmod 0755 /usr/local/bin/evq-entrypoint
-RUN chmod 0666 /etc/passwd && useradd -m -u 1000 agent
+RUN useradd -m -u 1001 agent && chmod 0666 /etc/passwd
 USER agent
