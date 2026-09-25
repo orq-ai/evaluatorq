@@ -51,6 +51,7 @@ from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
+from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import discover_orq_scope
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
@@ -789,6 +790,11 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: /find — classifier trace finder
     # ------------------------------------------------------------------
     register_finder_routes(app)
+
+    # ------------------------------------------------------------------
+    # Routes: /insights — read-only trace intelligence review
+    # ------------------------------------------------------------------
+    register_insights_routes(app)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

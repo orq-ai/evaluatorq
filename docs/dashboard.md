@@ -1,9 +1,11 @@
 # Dashboard
 
 !!! note "The UI — FastHTML `eq dashboard`"
-    The combined `eq dashboard` documented here is the only way to browse saved runs interactively. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses the default red-team, simulation and pairwise stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
+    The combined `eq dashboard` documented here opens the report index for red-team, simulation and pairwise runs. Its canonical invocation scans a run directory and opens the multi-run FastHTML UI — `eq dashboard` (no path) browses the default stores, and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link to that report.
 
 evaluatorq ships a built-in web dashboard for browsing red-team, simulation and pairwise reports.  It is powered by **FastHTML** (a lightweight Python web framework) and served locally via **uvicorn**.  There is no external service dependency — everything runs on your machine.
+
+The separate **Insights** sidebar page at `/insights` reads `.evaluatorq/insights-runs`, outside this report index. See the [Trace Insights guide](insights.md) for how to create and review those runs.
 
 ![The evaluatorq combined dashboard — stat band, runs by type, attack-resistance, findings by severity, token usage, and recent runs.](assets/dashboard-index.png){ .dashboard-shot }
 

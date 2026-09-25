@@ -1,6 +1,6 @@
 # Components
 
-evaluatorq is four things in one package: an evaluation runner, a red teamer, an agent simulator, and a set of LLM judges the first three share. They answer different questions, and picking the wrong one is the most expensive mistake available at the start.
+evaluatorq covers five tasks in one package: evaluating outputs, red teaming agents, simulating conversations, judging with LLMs, and analyzing Orq traces with Trace Insights. They answer different questions, and picking the wrong one is the most expensive mistake available at the start.
 
 Read this page once, before your first run. It says which component answers your question and what each one needs from you. How to use the one you picked is in its own guide.
 
@@ -12,8 +12,9 @@ Read this page once, before your first run. It says which component answers your
 | An agent, no test data | How does it hold up over a real multi-turn conversation? | `simulate()`, `generate_and_simulate()` | `evaluatorq.simulation` | `eq sim` |
 | An agent you are about to expose to users | How does someone break it? | `red_team()` | `evaluatorq.redteam` | `eq redteam` |
 | Outputs and a quality question no string match answers | Is this answer good — and is one answer better than another? | `llm_jury()`, `run_pairwise()` | `evaluatorq` | Python only |
+| Recent Orq traces | What repeated requests, labels, and failure patterns appear in this population? | `insights()` | `evaluatorq.insights` | `eq insights`, dashboard `/insights` |
 
-Only the first and last are top-level exports. `from evaluatorq import red_team` raises `ImportError` — red teaming and simulation live in subpackages of the same base install. What some of them need on top of it is in [Installation](installation.md).
+`evaluatorq()`, `llm_jury()`, and `run_pairwise()` import from the top-level `evaluatorq` package. `red_team()`, simulation, and `insights()` live in subpackages of the same base install. What some of them need on top of it is in [Installation](installation.md).
 
 A **datapoint** is one row: inputs plus, usually, an `expected_output`. A **target** is the live system under test. A **judge** is an LLM scoring an output against a rubric; several judges voting are a **jury**.
 
@@ -21,7 +22,7 @@ A **datapoint** is one row: inputs plus, usually, an `expected_output`. A **targ
 
 The core loop. You bring datapoints and one or more **jobs** — async functions that turn a datapoint into an output — and evaluatorq runs every job over every datapoint in parallel, then applies each evaluator to the results. Two jobs become two columns, which is how you compare a change against what you had before.
 
-It needs data you already have, in one of the three shapes `data=` accepts: rows written inline, an Orq dataset via `DatasetIdInput`, or a past experiment's recorded responses via `ExperimentInput` — see [Data sources](evaluation-reference.md#data-sources). Production traces are none of the three until you turn them into one: collect the rows into an Orq dataset, or read them into `DataPoint`s yourself. Simulation is the surface with a direct trace path, `eq sim from-traces`. If you have no data at all, that is what the other two components are for.
+It needs data you already have, in one of the shapes `data=` accepts: rows written inline, an Orq dataset via `DatasetIdInput`, an experiment's recorded responses via `ExperimentInput`, or recorded trace output via `TraceInput` — see [Data sources](evaluation-reference.md#data-sources). To label traces and discover clusters across a filtered Orq population, use [Trace Insights](insights.md). The `eq sim from-traces` command turns recent conversations into simulation datapoints. If you have no data at all, simulation and red teaming can create conversations to evaluate.
 
 ```python
 from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
@@ -30,6 +31,14 @@ from evaluatorq import DataPoint, evaluatorq, job, string_contains_evaluator
 It is the one component that needs no API key: a local job scored by a local evaluator runs on the base install alone, as the [runnable example on the Installation page](installation.md#what-the-base-install-already-does) does. Swap either for a model call and you need a key — see [Configuration](configuration.md).
 
 → [Getting Started](guides/getting-started.md), [Evaluation reference](evaluation-reference.md)
+
+## Trace Insights — `insights()`
+
+Trace Insights reads an Orq trace population directly. It keeps the filter-defined population separate from fixed classifier labels and discovered clusters, then saves a JSON run for review on the dashboard's separate **Insights** page. Install `evaluatorq[insights]` to run it from Python or the CLI, and add `dashboard` to review the saved result locally.
+
+Use it to find recurring requests, assistant failures, or sentiment patterns across recent traces.
+
+→ [Trace Insights guide](insights.md)
 
 ## Simulation — `simulate()`
 

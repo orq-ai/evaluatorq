@@ -667,7 +667,22 @@ def body(
         )
     if snapshot.state == 'idle':
         return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}'
-    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
+    analyze = ''
+    if snapshot.state == 'completed' and snapshot.compiled is not None:
+        export_name = f'trace-finder-{snapshot.generation}.json'
+        python = (
+            'from evaluatorq.insights import InsightsPopulation, insights_sync\n\n'
+            f'population = InsightsPopulation.from_finder_export("{export_name}")\n'
+            'run = insights_sync(population)'
+        )
+        analyze = (
+            '<section class="finder-analyze-matches"><h3>Analyze matches</h3>'
+            '<p>Download this completed finder export, then use it as the Insights population.</p>'
+            f'<p><a class="btn-secondary" href="/find/export.json">Download {esc(export_name)}</a></p>'
+            f'<label>CLI</label><pre><code>eq insights --from-finder {esc(export_name)}</code></pre>'
+            f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
+        )
+    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}{analyze}'
 
 
 def page_html(

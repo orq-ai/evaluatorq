@@ -1,0 +1,1 @@
+- plotly.js-gl3d-dist-min 4.1.1 — MIT — https://cdn.jsdelivr.net/npm/plotly.js-gl3d-dist-min@4.1.1/plotly-gl3d.min.js
