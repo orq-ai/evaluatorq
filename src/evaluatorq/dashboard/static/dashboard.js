@@ -84,16 +84,16 @@
           colorbar: { title: 'Label value', thickness: 10 }, opacity: .85 }
       }];
     }
-    var groups;
+    let groups;
     if (payload.color_mode === 'category') {
       groups = [];
-      var categorySeen = {};
-      var categorySymbols = {};
+      const categorySeen = {};
+      const categorySymbols = {};
       payload.points.forEach(function (point) {
-        var category = String(point.label_value);
-        var key = category + '|' + point.symbol;
+        const category = String(point.label_value);
+        const key = category + '|' + point.symbol;
         if (categorySymbols[key]) return;
-        var showLegend = !categorySeen[category];
+        const showLegend = !categorySeen[category];
         categorySeen[category] = true;
         categorySymbols[key] = true;
         groups.push({ id: key, category: category, name: category, color: point.color,
@@ -105,7 +105,7 @@
       });
     }
     return groups.map(function (group) {
-      var points = payload.points.filter(function (p) {
+      const points = payload.points.filter(function (p) {
         return (payload.color_mode === 'category'
           ? String(p.label_value) + '|' + p.symbol
           : p.cluster_id) === group.id;
@@ -120,15 +120,38 @@
     });
   }
 
+  function showInsightsMapError(el, error) {
+    const parent = el.parentElement;
+    let empty = parent.querySelector('[data-map-empty]');
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.className = 'insights-map-empty';
+      empty.setAttribute('data-map-empty', '');
+      empty.setAttribute('role', 'status');
+      parent.insertBefore(empty, el.nextSibling);
+    }
+    empty.textContent = 'Map unavailable: could not load map data.';
+    empty.hidden = false;
+    console.error('Insights map failed', error);
+  }
+
   function drawInsightsMap(el) {
     window.Plotly = window.Plotly || window.moduleName;
-    if (!el || !window.Plotly || el.offsetParent === null) return;
-    var selector = el.closest('.insights-map-view').querySelector('[data-map-color]');
-    var colorBy = selector ? selector.value : 'cluster';
-    var baseUrl = el.getAttribute('data-map-url').replace(/color_by=[^&]*/, 'color_by=' + encodeURIComponent(colorBy));
-    fetch(baseUrl).then(function (response) { return response.json(); }).then(function (payload) {
-      var parent = el.parentElement;
-      var empty = parent.querySelector('[data-map-empty]');
+    if (!el || el.offsetParent === null) return;
+    if (!window.Plotly) {
+      showInsightsMapError(el, new Error('Plotly is unavailable'));
+      return;
+    }
+    const selector = el.closest('.insights-map-view').querySelector('[data-map-color]');
+    const colorBy = selector ? selector.value : 'cluster';
+    const baseUrl = el.getAttribute('data-map-url').replace(/color_by=[^&]*/, 'color_by=' + encodeURIComponent(colorBy));
+    fetch(baseUrl).then(function (response) {
+      if (!response.ok) throw new Error('Map request failed with status ' + response.status);
+      return response.json();
+    }).then(function (payload) {
+      if (payload.error) throw new Error(payload.error);
+      const parent = el.parentElement;
+      let empty = parent.querySelector('[data-map-empty]');
       if (!payload.points.length) {
         if (!empty) {
           empty = document.createElement('div');
@@ -142,30 +165,33 @@
         return;
       }
       if (empty) empty.hidden = true;
-      var sand = payload.grid_color;
-      var bg = payload.background_color;
-      var axis = function (title) { return { title: { text: title }, showgrid: true, gridcolor: sand,
+      const sand = payload.grid_color;
+      const bg = payload.background_color;
+      const axis = function (title) { return { title: { text: title }, showgrid: true, gridcolor: sand,
         zeroline: false, showbackground: true, backgroundcolor: bg, showticklabels: true }; };
-      var layout = { margin: { l: 0, r: 0, t: 5, b: 0 }, showlegend: true,
+      const layout = { margin: { l: 0, r: 0, t: 5, b: 0 }, showlegend: true,
         legend: { bgcolor: 'rgba(255,255,255,.8)', font: { size: 11 } },
         scene: { xaxis: axis('UMAP 1'), yaxis: axis('UMAP 2'), zaxis: axis('UMAP 3'),
           bgcolor: '#fff', aspectmode: 'cube' }, paper_bgcolor: '#fff' };
-      window.Plotly.react(el, mapTraces(payload), layout, { displaylogo: false, responsive: true });
-      el.removeAllListeners && el.removeAllListeners('plotly_click');
-      el.on('plotly_click', function (event) {
-        var point = event.points && event.points[0];
-        var cluster = point && point.customdata && point.customdata[0];
-        var layout = el.closest('.insights-map-layout');
-        var panel = layout ? layout.querySelector('[data-map-detail]') : document.getElementById('insights-cluster-detail');
-        if (!panel) return;
-        if (!cluster || cluster === 'noise') {
-          panel.innerHTML = '<p class="insights-empty">This point is noise and has no cluster details.</p>';
-          return;
-        }
-        if (window.htmx) window.htmx.ajax('GET', '/insights/' + encodeURIComponent(el.getAttribute('data-run-id')) + '/cluster/' + encodeURIComponent(cluster), { target: panel, swap: 'innerHTML' });
-        else panel.textContent = cluster;
+      return Promise.resolve(window.Plotly.react(el, mapTraces(payload), layout, { displaylogo: false, responsive: true })).then(function () {
+        el.removeAllListeners && el.removeAllListeners('plotly_click');
+        el.on('plotly_click', function (event) {
+          const point = event.points && event.points[0];
+          const cluster = point && point.customdata && point.customdata[0];
+          const mapLayout = el.closest('.insights-map-layout');
+          const panel = mapLayout ? mapLayout.querySelector('[data-map-detail]') : document.getElementById('insights-cluster-detail');
+          if (!panel) return;
+          if (!cluster || cluster === 'noise') {
+            panel.innerHTML = '<p class="insights-empty">This point is noise and has no cluster details.</p>';
+            return;
+          }
+          if (window.htmx) window.htmx.ajax('GET', '/insights/' + encodeURIComponent(el.getAttribute('data-run-id')) + '/cluster/' + encodeURIComponent(cluster), { target: panel, swap: 'innerHTML' });
+          else panel.textContent = cluster;
+        });
       });
-    }).catch(function () {});
+    }).catch(function (error) {
+      showInsightsMapError(el, error);
+    });
   }
 
   function initInsightsMaps(scope) {
