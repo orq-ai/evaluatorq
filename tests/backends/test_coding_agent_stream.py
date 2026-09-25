@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
+from evaluatorq.backends import coding_agent
 from evaluatorq.backends.coding_agent import CodingAgentTarget, CodingAgentUnavailableError, describe_last_event
 from evaluatorq.contracts import Message
 
@@ -100,6 +101,25 @@ async def test_hard_cap_fires_on_steady_output(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sustained_stderr_resets_idle_limit(tmp_path: Path) -> None:
+    body = 'for i in 1 2 3 4; do echo progress >&2; sleep 0.4; done\n' + f"echo '{RESULT}'\n"
+    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=500)
+    response = await target.respond([Message(role='user', content='x')])
+    assert response.text == 'done'
+    await target.close()
+
+
+@pytest.mark.asyncio
+async def test_idle_timeout_after_stderr_stops(tmp_path: Path) -> None:
+    body = 'echo progress >&2; sleep 30\n'
+    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=300)
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        await asyncio.wait_for(target.respond([Message(role='user', content='x')]), 3)
+    assert info.value.kill_reason == 'idle_timeout'
+    await target.close()
+
+
+@pytest.mark.asyncio
 async def test_stderr_flood_does_not_stall(tmp_path: Path) -> None:
     body = 'head -c 1048576 /dev/zero | tr "\\0" x >&2\n' + f"echo '{RESULT}'\n"
     target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=5000)
@@ -109,13 +129,34 @@ async def test_stderr_flood_does_not_stall(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_one_megabyte_line_parses(tmp_path: Path) -> None:
+async def test_one_megabyte_line_parses_without_copying_for_each_deadline_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     big = 'y' * 1_048_576
     result = RESULT.replace('"done"', f'"{big}"')
     (tmp_path / 'out.jsonl').write_text(result + '\n')
     target = CodingAgentTarget('claude', env=_agent(tmp_path, f'cat {tmp_path / "out.jsonl"}\n'), timeout_ms=5000)
+    original_deadline_error = coding_agent.deadline_error
+    buffers: list[int] = []
+
+    def inspect_buffer(
+        agent: str,
+        stdout: bytes | bytearray,
+        started: float,
+        last_output: float,
+        idle_s: float,
+        hard_s: float,
+        now: float,
+    ):
+        if isinstance(stdout, bytearray):
+            buffers.append(id(stdout))
+        return original_deadline_error(agent, stdout, started, last_output, idle_s, hard_s, now)
+
+    monkeypatch.setattr(coding_agent, 'deadline_error', inspect_buffer)
     response = await target.respond([Message(role='user', content='x')])
     assert len(response.text) == 1_048_576
+    assert len(buffers) > 5
+    assert len(set(buffers)) == 1
     await target.close()
 
 

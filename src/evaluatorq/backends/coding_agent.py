@@ -995,9 +995,7 @@ class CodingAgentTarget(AgentTarget):
                         },
                     )
                 try:
-                    returncode, stdout, stderr = await self._run(
-                        argv, stdin_text, cwd=workdir, env=env, on_early_exit=on_early_exit
-                    )
+                    returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir, env=env)
                 except BaseException:
                     if on_early_exit is not None:
                         await await_shielded(on_early_exit())
@@ -1059,13 +1057,12 @@ class CodingAgentTarget(AgentTarget):
         *,
         cwd: Path,
         env: dict[str, str],
-        on_early_exit: Callable[[], Awaitable[None]] | None = None,
     ) -> tuple[int, str, str]:
         """Run one agent process; end it on the idle limit, the hard cap, an error or cancellation.
 
-        Stdout is read in chunks and every chunk resets the idle deadline, so neither a long JSONL line nor
-        a partial one can stall or crash the read. Stderr is drained concurrently into a bounded tail.
-        ``on_early_exit`` runs after the process group is killed, only when the turn did not finish on its own.
+        Stdout and stderr are drained concurrently, and chunks from either stream reset the idle deadline.
+        Stdout is read in chunks, so neither a long JSONL line nor a partial one can stall or crash the read.
+        The caller owns container cleanup after this method has killed the process group on early exit.
         """
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -1090,7 +1087,14 @@ class CodingAgentTarget(AgentTarget):
             kill_group(proc)
             self._proc = None
             raise RuntimeError('coding-agent process was created without stdout and stderr pipes')
-        stderr_task = asyncio.create_task(drain_tail(proc.stderr, STDERR_EXCERPT_CHARS * 4))
+        activity = [asyncio.get_running_loop().time()]
+        stderr_task = asyncio.create_task(
+            drain_tail(
+                proc.stderr,
+                STDERR_EXCERPT_CHARS * 4,
+                on_chunk=lambda: activity.__setitem__(0, asyncio.get_running_loop().time()),
+            )
+        )
         stdin_task = (
             asyncio.create_task(feed_stdin(proc.stdin, stdin_text.encode()))
             if stdin_text is not None and proc.stdin is not None
@@ -1101,10 +1105,12 @@ class CodingAgentTarget(AgentTarget):
         finished = False
         proc_wait_task: asyncio.Task[int] | None = None
         try:
-            stdout, started, last_output = await read_stdout(proc.stdout, self._agent, idle_s=idle_s, hard_s=hard_s)
+            stdout, started = await read_stdout(
+                proc.stdout, self._agent, idle_s=idle_s, hard_s=hard_s, activity=activity
+            )
             proc_wait_task = asyncio.create_task(proc.wait())
-            await wait_until_deadline(proc_wait_task, self._agent, stdout, started, last_output, idle_s, hard_s)
-            await wait_until_deadline(stderr_task, self._agent, stdout, started, last_output, idle_s, hard_s)
+            await wait_until_deadline(proc_wait_task, self._agent, stdout, started, activity, idle_s, hard_s)
+            await wait_until_deadline(stderr_task, self._agent, stdout, started, activity, idle_s, hard_s)
             stderr = stderr_task.result()
             finished = True
         except asyncio.CancelledError:
@@ -1113,8 +1119,6 @@ class CodingAgentTarget(AgentTarget):
         finally:
             kill_group(proc, force=not finished)
             self._proc = None
-            if not finished and on_early_exit is not None:
-                await await_shielded(on_early_exit())
             if stdin_task is not None:
                 stdin_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1136,7 +1140,7 @@ def log_kill(agent: str, reason: str, detail: str) -> None:
 
 
 def deadline_error(
-    agent: str, stdout: bytes, started: float, last_output: float, idle_s: float, hard_s: float, now: float
+    agent: str, stdout: bytes | bytearray, started: float, last_output: float, idle_s: float, hard_s: float, now: float
 ) -> CodingAgentUnavailableError | None:
     if now >= started + hard_s:
         event_count = stdout.count(b'\n')
@@ -1152,42 +1156,48 @@ def deadline_error(
 
 
 async def read_stdout(
-    stream: asyncio.StreamReader, agent: str, *, idle_s: float, hard_s: float
-) -> tuple[bytes, float, float]:
-    started = last_output = asyncio.get_running_loop().time()
+    stream: asyncio.StreamReader, agent: str, *, idle_s: float, hard_s: float, activity: list[float]
+) -> tuple[bytes, float]:
+    started = asyncio.get_running_loop().time()
     stdout = bytearray()
     while True:
         now = asyncio.get_running_loop().time()
-        expired = deadline_error(agent, bytes(stdout), started, last_output, idle_s, hard_s, now)
+        expired = deadline_error(agent, stdout, started, activity[0], idle_s, hard_s, now)
         if expired is not None:
             raise expired
-        wait = min(last_output + idle_s, started + hard_s) - now
+        wait = min(activity[0] + idle_s, started + hard_s) - now
         try:
             chunk = await asyncio.wait_for(stream.read(READ_CHUNK_BYTES), timeout=wait)
         except asyncio.TimeoutError:
             continue
         if not chunk:
-            return bytes(stdout), started, last_output
+            return bytes(stdout), started
         stdout.extend(chunk)
-        last_output = asyncio.get_running_loop().time()
+        activity[0] = asyncio.get_running_loop().time()
 
 
 async def wait_until_deadline(
-    task: asyncio.Task[Any], agent: str, stdout: bytes, started: float, last_output: float, idle_s: float, hard_s: float
+    task: asyncio.Task[Any],
+    agent: str,
+    stdout: bytes,
+    started: float,
+    activity: list[float],
+    idle_s: float,
+    hard_s: float,
 ) -> Any:
     loop = asyncio.get_running_loop()
     while True:
         now = loop.time()
-        expired = deadline_error(agent, stdout, started, last_output, idle_s, hard_s, now)
+        expired = deadline_error(agent, stdout, started, activity[0], idle_s, hard_s, now)
         if expired is not None:
             raise expired
         if task.done():
             return task.result()
-        remaining = min(started + hard_s, last_output + idle_s) - now
+        remaining = min(started + hard_s, activity[0] + idle_s) - now
         await asyncio.wait({task}, timeout=remaining)
 
 
-def describe_last_event(stdout: bytes) -> str:
+def describe_last_event(stdout: bytes | bytearray) -> str:
     """Return the last complete JSON event type and the tool or item it names, when present."""
     for line in reversed(stdout.splitlines()):
         try:
@@ -1209,10 +1219,14 @@ def describe_last_event(stdout: bytes) -> str:
     return 'none'
 
 
-async def drain_tail(stream: asyncio.StreamReader, keep_bytes: int) -> bytes:
+async def drain_tail(
+    stream: asyncio.StreamReader, keep_bytes: int, *, on_chunk: Callable[[], None] | None = None
+) -> bytes:
     """Drain a stream to EOF, retaining only its final ``keep_bytes``."""
     tail = bytearray()
     while chunk := await stream.read(READ_CHUNK_BYTES):
+        if on_chunk is not None:
+            on_chunk()
         tail.extend(chunk)
         del tail[:-keep_bytes]
     return bytes(tail)
