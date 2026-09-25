@@ -25,7 +25,7 @@ case "$1" in
          exit ${FAKE_IMAGE_EXIT:-0};;
   ps) exit 0;;
   run) [ -n "$FAKE_RUN_SLEEP" ] && sleep "$FAKE_RUN_SLEEP"
-       [ -n "$FAKE_RUN_EXIT" ] && { echo "daemon down" >&2; exit $FAKE_RUN_EXIT; }; echo CREATED >> "$FAKE_LOG"; echo cid; exit 0;;
+       [ -n "$FAKE_RUN_EXIT" ] && { echo "daemon down" >&2; exit $FAKE_RUN_EXIT; }; echo CREATED >> "$FAKE_LOG"; [ -n "$FAKE_RUN_STOPPED" ] && touch "$FAKE_STOPPED"; echo cid; exit 0;;
   inspect) if [ -f "$FAKE_STOPPED" ]; then rm "$FAKE_STOPPED"; echo false; else echo true; fi; exit 0;;
   exec) env | sed 's/^/ENV /' >> "$FAKE_LOG"; cat - >/dev/null
         [ -n "$FAKE_EXEC_SLEEP" ] && sleep "$FAKE_EXEC_SLEEP"
@@ -138,9 +138,25 @@ async def test_docker_run_control_error_removes_registered_name(docker, monkeypa
         return real_run(argv, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, 'run', fail_run)
-    with pytest.raises((subprocess.TimeoutExpired, OSError)):
+    with pytest.raises(CodingAgentUnavailableError) as info:
         await _target(binary).respond([Message(role='user', content='x')])
+    assert info.value.code == 'cli.container_start'
+    assert 'run control call failed' in info.value.message
     assert calls('rm')
+    assert c.LIVE_CONTAINERS == {}
+
+
+@pytest.mark.asyncio
+async def test_container_that_exits_immediately_is_removed(docker, monkeypatch, tmp_path: Path) -> None:
+    binary, _, calls = docker
+    stopped = tmp_path / 'stopped'
+    monkeypatch.setenv('FAKE_STOPPED', str(stopped))
+    monkeypatch.setenv('FAKE_RUN_STOPPED', '1')
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        await _target(binary).respond([Message(role='user', content='x')])
+    assert info.value.code == 'cli.container_start'
+    assert 'not running' in info.value.message
+    assert calls('inspect') and calls('rm')
     assert c.LIVE_CONTAINERS == {}
 
 

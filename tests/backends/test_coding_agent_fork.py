@@ -46,7 +46,7 @@ def test_inherited_target_is_rejected_but_new_target_is_process_owned(tmp_path: 
                     outcomes.append('unexpected success')
             fresh = target.new()
             outcomes.append('fresh owner' if fresh._creator_pid == os.getpid() else 'wrong owner')
-            coding_agent_module._remove_tree_if_owner(target._creator_pid, root)
+            coding_agent_module.remove_tree_if_owner(target._creator_pid, root)
             os.write(write_fd, '\n'.join(outcomes).encode())
         finally:
             os.close(write_fd)

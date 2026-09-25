@@ -87,8 +87,9 @@ class CodingAgentError(Exception):
     """A coding-agent turn failed. ``code`` is one of the ``cli.*`` codes ``map_error`` reports.
 
     Codes: ``cli.not_found``, ``cli.timeout`` (idle limit and hard cap; non-retryable, see
-    `CodingAgentUnavailableError`), ``cli.exit.<code>``, ``cli.no_result``, ``cli.parse_error``,
-    ``cli.agent_error``.
+    `CodingAgentUnavailableError`), ``cli.container_start``, ``cli.image_missing``,
+    ``cli.prompt_too_long``, ``cli.agent_not_found``, ``cli.exit.<code>``, ``cli.no_result``,
+    ``cli.parse_error``, and ``cli.agent_error``.
     """
 
     def __init__(self, code: str, message: str, *, kill_reason: str | None = None) -> None:
@@ -101,7 +102,10 @@ class CodingAgentError(Exception):
 class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheritance]
     CodingAgentError, NonRetryableTargetError
 ):
-    """``cli.not_found``, ``cli.timeout`` and ``cli.prompt_too_long``: a retry replays the same outcome, so the loop stops."""
+    """Non-retryable codes: ``cli.not_found``, ``cli.timeout``, ``cli.prompt_too_long``,
+    ``cli.agent_not_found``, ``cli.image_missing``, and ``cli.container_start``. Retrying these
+    outcomes repeats the same failure, so the retry loop stops.
+    """
 
 
 class OrqLaunchOptions(BaseModel):
@@ -554,13 +558,13 @@ def remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
-def _remove_tree_if_owner(pid: int, path: Path) -> None:
+def remove_tree_if_owner(pid: int, path: Path) -> None:
     """Finalizer callback that cannot remove a parent process's workdir after fork."""
     if os.getpid() == pid:
         remove_tree(path)
 
 
-def _release_containers_if_owner(pid: int, owned: list[str]) -> None:
+def release_containers_if_owner(pid: int, owned: list[str]) -> None:
     """Finalizer callback that cannot remove containers inherited across fork."""
     if os.getpid() == pid:
         release_containers(owned)
@@ -722,7 +726,7 @@ class CodingAgentTarget(AgentTarget):
         self._image_checked = False
         self._owned: list[str] = []
         self._container_finalizer: weakref.finalize[Any, Any] | None = (
-            weakref.finalize(self, _release_containers_if_owner, self._creator_pid, self._owned) if container else None
+            weakref.finalize(self, release_containers_if_owner, self._creator_pid, self._owned) if container else None
         )
         self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
         self._proc: asyncio.subprocess.Process | None = None
@@ -749,6 +753,14 @@ class CodingAgentTarget(AgentTarget):
             raise
         except FileNotFoundError as exc:
             raise CodingAgentUnavailableError('cli.not_found', f'{opts.binary!r} not found on PATH') from exc
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            operation_name = next(
+                (arg for arg in argv if arg in {'image', 'run', 'inspect', 'exec', 'rm', 'ps'}), 'control'
+            )
+            detail = str(exc)[:STDERR_EXCERPT_CHARS].strip() or type(exc).__name__
+            raise CodingAgentUnavailableError(
+                'cli.container_start', f'{opts.binary} {operation_name} control call failed: {detail}'
+            ) from exc
 
     async def _ensure_container(self, root: Path) -> str:
         opts = self._container
@@ -812,6 +824,19 @@ class CodingAgentTarget(AgentTarget):
             raise CodingAgentUnavailableError(
                 'cli.container_start', f'{opts.binary} run failed: {started.stderr[-STDERR_EXCERPT_CHARS:].strip()}'
             )
+        try:
+            state = await self._docker([*opts.cli(), 'inspect', '-f', '{{.State.Running}}', name])
+        except BaseException:
+            await self._drop_container_shielded()
+            raise
+        if state.returncode != 0 or state.stdout.strip() != 'true':
+            await self._drop_container_shielded()
+            detail = state.stderr[-STDERR_EXCERPT_CHARS:].strip() or state.stdout[-STDERR_EXCERPT_CHARS:].strip()
+            raise CodingAgentUnavailableError(
+                'cli.container_start',
+                f'{opts.binary} run exited successfully but container {name} was not running'
+                f'{f": {detail}" if detail else ""}',
+            )
         return name
 
     async def _drop_container(self) -> None:
@@ -874,7 +899,7 @@ class CodingAgentTarget(AgentTarget):
             shutil.rmtree(root, ignore_errors=True)
             raise
         if not self._keep_workdir:
-            self._finalizer = weakref.finalize(self, _remove_tree_if_owner, self._creator_pid, root)
+            self._finalizer = weakref.finalize(self, remove_tree_if_owner, self._creator_pid, root)
         self._root = root
         self._workdir = dst
         return dst
