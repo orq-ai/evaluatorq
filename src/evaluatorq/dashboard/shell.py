@@ -123,6 +123,12 @@ _NAV: list[tuple[str, str, str, str]] = [
         FIND_ICON,
     ),
     (
+        'insights',
+        'Insights',
+        '/insights',
+        '<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-7"/>',
+    ),
+    (
         'settings',
         'Settings',
         '/settings',
