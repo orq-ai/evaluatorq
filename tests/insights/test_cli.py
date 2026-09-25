@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from click import unstyle
 from typer.testing import CliRunner
 
 from evaluatorq import cli as cli_root
@@ -32,8 +33,9 @@ def test_help_lists_population_and_clustering_options() -> None:
     result = CliRunner().invoke(_app(), ['insights', '--help'], env={'COLUMNS': '120'})
 
     assert result.exit_code == 0, result.output
+    help_text = unstyle(result.output)
     for option in ('--query', '--label', '--dimension', '--from-finder', '--max-clusters'):
-        assert option in result.output
+        assert option in help_text
 
 
 def test_repeated_labels_resolve_preset_and_json_spec(
