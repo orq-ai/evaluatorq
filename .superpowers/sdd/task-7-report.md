@@ -2,7 +2,7 @@
 
 ## Status
 
-DONE_WITH_CONCERNS. Container mode and the lifecycle fixes are integrated in `CodingAgentTarget`; focused container tests pass. The full backend suite still has one unrelated timing-sensitive stderr/idle test failure, documented below.
+DONE_WITH_CONCERNS. Container mode and the lifecycle fixes are integrated in `CodingAgentTarget`; focused tests and the latest full backend suite pass. One earlier full-suite run hit a documented timing-sensitive stderr/idle test failure.
 
 ## RED
 
@@ -67,3 +67,28 @@ Added regressions for Docker run timeout and OS errors after registration, exec 
 ## Follow-up commit
 
 `fix(backends): complete coding agent container cleanup (RES-1628)`.
+
+## Re-review follow-up: restart removal and exit 137 tracing
+
+### RED
+
+Added a restart test that delays fake `rm`, cancels the second turn twice while the old container is being removed, and checks that removal completes before the cancelled task returns. Strengthened the exit 137 case to check the error kill reason, span kill reason, and completed `rm`. Ran `uv run pytest tests/backends/test_coding_agent_container.py -q -k 'cancel_during_restart_removal or exec_exit_codes'` — **2 passed, 2 failed in 5.72s**. Restart cancellation returned before the fake removal finished, and exit 137 lacked `kill_reason='container_lost'` and its span attribute.
+
+### GREEN
+
+- `uv run pytest tests/backends/test_coding_agent_container.py -q -k 'cancel_during_restart_removal or exec_exit_codes'` — **4 passed, 16 deselected in 1.68s**.
+- `uv run pytest tests/backends/test_coding_agent_container.py -q` — **20 passed in 6.82s**.
+- `uv run pytest tests/backends -q` — **127 passed, 1 skipped in 26.42s**.
+- `uv run ruff check src` — **All checks passed**.
+- `uv run ruff format --check src` — **227 files already formatted**.
+- `uv run basedpyright` — **0 errors, 0 warnings, 0 notes**.
+
+The preceding lifecycle review run intermittently failed the short-idle stderr descendant test in the full suite, though it passed alone. The latest sequential full backend run passes; this timing flake remains documented for visibility.
+
+### Changes
+
+Restarting a stopped container now waits through cancellation for the old container's unregister-and-remove operation. Exit 137 removes the container first, sets `CodingAgentUnavailableError.kill_reason` to `container_lost`, and records `evaluatorq.coding_agent.kill_reason=container_lost` on the span.
+
+## Re-review commit
+
+`fix(backends): wait for restart removal and trace container loss (RES-1628)`.

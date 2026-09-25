@@ -11,6 +11,7 @@ from loguru import logger
 
 from evaluatorq.backends import DockerOptions
 from evaluatorq.backends import container as c
+from evaluatorq.backends import coding_agent as coding_agent_module
 from evaluatorq.backends.coding_agent import CodingAgentTarget, CodingAgentUnavailableError
 from evaluatorq.contracts import Message
 
@@ -136,6 +137,14 @@ async def test_exec_exit_codes(docker, monkeypatch, exit_code: int, code: str) -
     binary, _, calls = docker
     monkeypatch.setenv('FAKE_EXEC_EXIT', str(exit_code))
     target = _target(binary)
+    span_attrs: dict[str, object] = {}
+    original_set_span_attrs = coding_agent_module.set_span_attrs
+
+    def record_span_attrs(span, attrs):
+        span_attrs.update(attrs)
+        original_set_span_attrs(span, attrs)
+
+    monkeypatch.setattr(coding_agent_module, 'set_span_attrs', record_span_attrs)
     with pytest.raises(CodingAgentUnavailableError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.code == code
@@ -144,6 +153,9 @@ async def test_exec_exit_codes(docker, monkeypatch, exit_code: int, code: str) -
     if exit_code == 137:
         assert calls('rm')
         assert c.LIVE_CONTAINERS == {}
+        assert _log_has(docker[1], 'REMOVED')
+        assert info.value.kill_reason == 'container_lost'
+        assert span_attrs['evaluatorq.coding_agent.kill_reason'] == 'container_lost'
     await target.close()
 
 
@@ -222,6 +234,35 @@ async def test_cancel_during_run_still_cleans_up(docker, monkeypatch) -> None:
         await task
     assert c.LIVE_CONTAINERS == {} and calls('rm')
     assert log.read_text().index('CREATED') < log.read_text().index('REMOVED')
+    await target.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_restart_removal_waits_until_old_container_is_removed(docker, monkeypatch, tmp_path) -> None:
+    binary, log, calls = docker
+    target = _target(binary)
+    await target.respond([Message(role='user', content='first')])
+    old_name = next(iter(c.LIVE_CONTAINERS))
+    stopped = tmp_path / 'stopped'
+    stopped.write_text('')
+    monkeypatch.setenv('FAKE_STOPPED', str(stopped))
+    monkeypatch.setenv('FAKE_RM_SLEEP', '0.3')
+
+    task = asyncio.create_task(target.respond([Message(role='user', content='second')]))
+    while not calls('rm'):
+        await asyncio.sleep(0.01)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    task.cancel()
+    await asyncio.sleep(0.05)
+    assert not task.done()
+    while not _log_has(log, 'REMOVED'):
+        await asyncio.sleep(0.01)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert old_name not in c.LIVE_CONTAINERS
+    assert c.LIVE_CONTAINERS == {}
+    assert log.read_text().index(f'rm -f {old_name}') < log.read_text().index('REMOVED')
     await target.close()
 
 

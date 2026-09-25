@@ -750,7 +750,7 @@ class CodingAgentTarget(AgentTarget):
                 f'container {old_name} stopped between turns ({cause or "cause unknown"}); recreating it. '
                 'Files in the workdir and home survive; processes the agent started in the background do not',
             )
-            await self._drop_container()
+            await self._drop_container_shielded()
             self._restarts += 1
         elif not self._image_checked:
             inspected = await self._docker([*opts.cli(), 'image', 'inspect', opts.image])
@@ -957,8 +957,11 @@ class CodingAgentTarget(AgentTarget):
             if self._container is not None and returncode == 137:
                 log_kill(self._agent, 'container_lost', f'container {name} was removed while the agent ran')
                 await self._drop_container_shielded()
+                set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': 'container_lost'})
                 raise CodingAgentUnavailableError(
-                    'cli.timeout', 'the container was removed while the agent was running'
+                    'cli.timeout',
+                    'the container was removed while the agent was running',
+                    kill_reason='container_lost',
                 )
             if returncode != 0:
                 raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
