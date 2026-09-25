@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -18,6 +19,7 @@ from evaluatorq.trace_finder.classifier import (
     parse_datapoint_result,
     run_classifier,
 )
+from evaluatorq.trace_finder.debug import cli_debug
 from evaluatorq.trace_finder.models import CompiledQuery, TraceProjection, TraceClassification, TraceRecord
 from evaluatorq.trace_finder.projection import serialize_projection
 
@@ -80,6 +82,37 @@ def _projection() -> TraceProjection:
         omitted_messages=0,
         omitted_bytes=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_trace_classifier_request_and_response_are_debug_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value='frustrated', explanation='The customer is frustrated.'),
+            raw_content='{"choice":"frustrated"}',
+            endpoint='classify',
+        )
+
+    monkeypatch.setattr(classifier, 'run_judge', fake_run_judge)
+    monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), format='{message}', level='DEBUG')
+    scorer = cast(Any, build_classifier_evaluator(_compiled(), model='typesafe/jev-latest', client=cast(Any, 'client'))['scorer'])
+    params = {'data': build_datapoint(_trace(), _projection()), 'output': 'classifier state prepared'}
+    try:
+        await scorer(params)
+        assert not any('Trace finder trace classifier request' in message for message in messages)
+        with cli_debug(active=True):
+            await scorer(params)
+    finally:
+        logger.remove(sink_id)
+
+    request_line = next(message for message in messages if 'Trace finder trace classifier request' in message)
+    request_body = json.loads(request_line.split(' input=', 1)[1])
+    assert request_body['state'] == _projection().payload
+    assert request_body['questions']['verdict']['type'] == 'choice'
+    assert 'state' not in request_body['questions']['verdict']
+    assert any('Trace finder trace classifier response' in message and 'frustrated' in message for message in messages)
 
 
 def test_build_datapoint_preserves_identifiers_projection_and_replay_marker() -> None:

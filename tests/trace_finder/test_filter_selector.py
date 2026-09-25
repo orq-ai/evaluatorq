@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 import pytest
+from loguru import logger
 
 from evaluatorq.trace_finder import filter_selector as filter_selector_module
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyResponse, JudgeError
 from evaluatorq.trace_finder.filter_selector import FilterSelectionError, select_filters, select_filters_with_response
+from evaluatorq.trace_finder.debug import cli_debug
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 
@@ -23,6 +26,34 @@ def catalogue() -> FacetCatalogue:
         agent_name=(),
         tool_name=(),
     )
+
+
+@pytest.mark.asyncio
+async def test_filter_request_and_response_are_debug_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_classify(**kwargs: Any) -> ClassifyOutcome:
+        return ClassifyOutcome(
+            response=ClassifyResponse(answers={'project': ClassifyAnswer(type='choice', choice='project_0')})
+        )
+
+    monkeypatch.setattr(filter_selector_module, 'run_classify', fake_run_classify)
+    monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), format='{message}', level='DEBUG')
+    try:
+        await select_filters_with_response(cast(Any, object()), 'typesafe/jev-latest', FacetCatalogue(project=('Demos',)), 'Demos')
+        assert not any('Trace finder filter classify request' in message for message in messages)
+        with cli_debug(active=True):
+            await select_filters_with_response(
+                cast(Any, object()), 'typesafe/jev-latest', FacetCatalogue(project=('Demos',)), 'Demos'
+            )
+    finally:
+        logger.remove(sink_id)
+
+    request_line = next(message for message in messages if 'Trace finder filter classify request' in message)
+    request_body = json.loads(request_line.split(' input=', 1)[1])
+    assert request_body['state'] == {'query': 'Demos'}
+    assert request_body['questions']['project']['type'] == 'choice'
+    assert any('Trace finder filter classify response' in message and 'project_0' in message for message in messages)
 
 
 @pytest.mark.asyncio

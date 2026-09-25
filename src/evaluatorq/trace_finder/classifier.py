@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
@@ -9,10 +10,12 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_judge
+from evaluatorq.common.llm_call import classify_request_body
 from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig
 from evaluatorq.evaluatorq import evaluatorq
 from evaluatorq.types import DataPoint, DataPointResult, EvaluationResult, Evaluator, ScorerParameter
 
+from .debug import enabled as debug_enabled
 from .models import CompiledQuery, TraceClassification, TraceProjection, TraceRecord
 
 if TYPE_CHECKING:
@@ -37,7 +40,15 @@ def build_classifier_evaluator(compiled: CompiledQuery, *, model: str, client: A
 
     async def score(params: ScorerParameter) -> EvaluationResult:
         state = params['data'].inputs['classifier_state']
+        trace_id = params['data'].inputs['trace_id']
         question = compiled.task.model_copy(update={'state': state})
+        if debug_enabled():
+            logger.debug(
+                'Trace finder trace classifier request trace_id={} model={} input={}',
+                trace_id,
+                model,
+                json.dumps(classify_request_body(model, question.state, {'verdict': question}), ensure_ascii=False),
+            )
         outcome = await run_judge(
             client=client,
             model=model,
@@ -47,6 +58,15 @@ def build_classifier_evaluator(compiled: CompiledQuery, *, model: str, client: A
             span_attributes={'orq.llm.purpose': 'judge'},
             classify=question,
         )
+        if debug_enabled():
+            logger.debug(
+                'Trace finder trace classifier response trace_id={} model={} endpoint={} output={} error={}',
+                trace_id,
+                model,
+                outcome.endpoint,
+                outcome.raw_content or (json.dumps(outcome.raw_output) if outcome.raw_output is not None else ''),
+                outcome.error_message,
+            )
         return _outcome_result(outcome, model=model)
 
     return {'name': 'classifier', 'scorer': score}

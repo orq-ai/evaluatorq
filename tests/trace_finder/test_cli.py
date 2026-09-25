@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -215,11 +216,48 @@ def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path
 
     assert result.exit_code == 0, result.output
     assert 'Matched traces' in result.output
+    assert 'judged' not in result.output
     assert output.exists()
     assert 'trace-cli-1' in output.read_text()
     assert store.request is not None
     assert store.request.population.facets.project == frozenset({'support-agent'})
     assert store.request.population.numeric.tokens_min == 100
+
+
+def test_find_debug_flag_shows_progress(monkeypatch: Any) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: FakeStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', '--debug'])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count('1/1 judged') == 1
+
+
+@pytest.mark.asyncio
+async def test_find_debug_progress_skips_unchanged_polls() -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+    from evaluatorq.trace_finder.debug import cli_debug
+
+    class PollStore:
+        polls = 0
+
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            return RunSnapshot(state='compiling')
+
+        async def snapshot(self) -> RunSnapshot:
+            self.polls += 1
+            return RunSnapshot(state='completed', total=1, completed=1) if self.polls == 3 else RunSnapshot(state='compiling')
+
+    output = io.StringIO()
+    with cli_debug(active=True):
+        await find_cli._run(PollStore(), cast(Any, object()), Console(file=output))
+
+    assert output.getvalue().count('COMPILING') == 1
+    assert output.getvalue().count('COMPLETED') == 1
 
 
 @pytest.mark.parametrize('use_flag', [True, False])

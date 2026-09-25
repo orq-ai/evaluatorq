@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import TYPE_CHECKING, Literal
@@ -11,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, Valida
 
 from evaluatorq.common.structured_output import generate_structured
 
+from .debug import enabled as debug_enabled
 from .models import CompiledQuery, LegendItem, NumericFilters, ThresholdSelection, ValueSelection
 
 if TYPE_CHECKING:
@@ -204,13 +206,18 @@ async def compile_query(
     if not normalized:
         raise ValueError('Enter a semantic trace query before compiling.')
 
+    messages = [
+        {'role': 'system', 'content': COMPILER_INSTRUCTIONS},
+        {'role': 'user', 'content': normalized},
+    ]
+    if debug_enabled():
+        logger.debug(
+            'Trace finder compiler request model={} messages={}', model, json.dumps(messages, ensure_ascii=False)
+        )
     result = await generate_structured(
         client,
         model=model,
-        messages=[
-            {'role': 'system', 'content': COMPILER_INSTRUCTIONS},
-            {'role': 'user', 'content': normalized},
-        ],
+        messages=messages,
         response_format=CompilerWireQuery,
         max_tokens=2000,
         label='trace_finder.compile',
@@ -218,6 +225,8 @@ async def compile_query(
         config=cfg,
     )
     if result.parsed is None:
+        if debug_enabled():
+            logger.debug('Trace finder compiler response model={} raw={}', model, result.raw)
         raise CompileError(f'Compiler returned no structured task. Raw: {result.raw[:300]}')
 
     wire = (
@@ -225,6 +234,8 @@ async def compile_query(
         if isinstance(result.parsed, CompilerWireQuery)
         else CompilerWireQuery.model_validate(result.parsed)
     )
+    if debug_enabled():
+        logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
     try:
         compiled, numeric = wire.to_domain()
         numeric = _tighten_strict_bounds(normalized, numeric)

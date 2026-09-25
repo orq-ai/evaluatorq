@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -9,9 +10,11 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, ClassifyResponse, run_classify
+from evaluatorq.common.llm_call import classify_request_body
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.contracts import LLMCallConfig
 
+from .debug import enabled as debug_enabled
 from .models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 if TYPE_CHECKING:
@@ -78,6 +81,12 @@ async def select_filters_with_response(
 
     request = ClassifyRequest(state={'query': normalized}, questions=questions)
     call_cfg = cfg if cfg is not None else LLMCallConfig(model=model, timeout_ms=FILTER_TIMEOUT_MS)
+    if debug_enabled():
+        logger.debug(
+            'Trace finder filter classify request model={} input={}',
+            model,
+            json.dumps(classify_request_body(model, request.state, request.questions), ensure_ascii=False),
+        )
 
     async def classify_once() -> ClassifyOutcome:
         outcome = await run_classify(
@@ -86,6 +95,13 @@ async def select_filters_with_response(
             cfg=call_cfg,
             request=request,
         )
+        if debug_enabled():
+            logger.debug(
+                'Trace finder filter classify response model={} output={} error={}',
+                model,
+                outcome.raw_content or (outcome.response.model_dump_json() if outcome.response is not None else ''),
+                outcome.error_message,
+            )
         if outcome.error_kind is not None:
             error = outcome.error_exc
             if isinstance(error, Exception):

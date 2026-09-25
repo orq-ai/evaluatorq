@@ -76,7 +76,7 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 |---|---|---|---|
 | `EVALUATORQ_DIR` | No | `.evaluatorq` in the current directory | Base directory for the run store, where both red teaming (`runs/`) and simulation (`sim-runs/`) persist reports. Must point at the store directory itself (e.g. `/tmp/x/.evaluatorq`), not its parent — only the working-directory fallback appends `.evaluatorq`. Empty is treated as unset. |
 | `EQ_DEBUG` | No | unset | Set to any non-empty value to show the full traceback on CLI errors instead of the one-line message. CLI-wide; distinct from `ORQ_DEBUG`, which only affects tracing diagnostics. |
-| `EVALUATORQ_LOG_LEVEL` | No | `INFO` | Log level for the dashboard server. Accepts any level name (e.g. `DEBUG`). The default also hides httpx's one line per Orq call; any explicit level shows them. |
+| `EVALUATORQ_LOG_LEVEL` | No | `INFO` | Dashboard server log level. `DEBUG` logs finder model requests and responses, including trace content, in CLI and dashboard runs; `eq find` also prints changed progress. The default suppresses httpx's per-request INFO line; explicit `INFO` or `DEBUG` allows it. |
 
 ### Dashboard
 

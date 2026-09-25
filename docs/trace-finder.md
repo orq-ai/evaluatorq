@@ -29,6 +29,8 @@ The finder plans the query before it spends a classifier call on each trace:
 
 The compiler and facet selector run concurrently, so a slow facet catalogue does not wait for semantic compilation. The facet catalogue follows the current search window, and dashboard windows are bounded to 1–90 days. The population is fixed before per-trace judging begins; changing a finder control does nothing until you submit the form again, which starts a new run.
 
+The finder does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable that tracing.
+
 ## Dashboard workflow
 
 The finder has two modes. **Immediate** compiles the task, loads the population, and starts judging. **Review first** stops after compilation and population selection so you can edit the question, verdict rule, and filters before any per-trace classifier calls begin. The review shows the filter model's selected metadata values separately from the classifier task; open **View structured LLM output** to inspect the filter model's complete structured response, including dimensions it left unfiltered. If filter selection fails, the review shows the error and keeps your explicit filters.
@@ -81,7 +83,9 @@ The dashboard command accepts finder overrides for `--compiler-model`, `--classi
 
 ## CLI reference
 
-`eq find` runs an immediate finder query and prints progress followed by a newest-first table of matched traces. Add `--json PATH` to write the completed run export. The command cancels a run that has not finished after two hours. If any trace classification fails, the command exits with status 1 and does not write the JSON file.
+`eq find` runs an immediate finder query with a terminal activity indicator, then prints a newest-first table of matched traces. Add `--json PATH` to write the completed run export. Pass `--debug` to print progress when it changes, the compiler request and structured output, and the filter and per-trace classifier requests and responses. For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. Debug output includes projected conversation content, so treat saved logs as trace data. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same finder diagnostics in CLI and dashboard runs.
+
+The command cancels a run that has not finished after two hours. If any trace classification fails, the command exits with status 1 and does not write the JSON file.
 
 Pass `--profile NAME` to use that `orq` CLI profile for both trace retrieval and model calls. It overrides the saved profile and environment credentials. Without the flag, the saved profile applies; choose **Environment** in Settings to use `ORQ_API_KEY` and `ORQ_BASE_URL`. A saved project ID limits the CLI trace population only while the profile, key, and API host still match the saved selection. If you rotate a key or change hosts, save the project again in Settings; use `--project` to choose a project facet for one run.
 
@@ -94,6 +98,7 @@ The command accepts these options:
 
 | Option | Meaning |
 |---|---|
+| `--debug` | Print changed progress and compiler and classifier request and response data, including trace content. |
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
 | `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |
 | `--parallelism INTEGER` (`1`–`200`) | Concurrent classify calls. |

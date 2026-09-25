@@ -7,6 +7,7 @@ import json
 from typing import Any, cast
 
 import pytest
+from loguru import logger
 from pydantic import ValidationError
 
 from evaluatorq.trace_finder.compiler import (
@@ -17,6 +18,7 @@ from evaluatorq.trace_finder.compiler import (
     compile_query,
 )
 from evaluatorq.trace_finder.models import CompiledQuery, ValueSelection
+from evaluatorq.trace_finder.debug import cli_debug
 
 
 def choice_document() -> dict[str, Any]:
@@ -84,6 +86,27 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     assert calls[0]['label'] == 'trace_finder.compile'
     assert calls[0]['max_tokens'] == 2000
     assert calls[0]['api'] == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_compiler_request_and_output_are_debug_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(choice_document()))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(str(message)), format='{message}', level='DEBUG')
+    try:
+        await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+        assert not any('Trace finder compiler request' in message for message in messages)
+        with cli_debug(active=True):
+            await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+    finally:
+        logger.remove(sink_id)
+
+    assert any('Trace finder compiler request' in message and 'find billing requests' in message for message in messages)
+    assert any('Trace finder compiler response' in message and 'billing' in message for message in messages)
 
 
 @pytest.mark.asyncio

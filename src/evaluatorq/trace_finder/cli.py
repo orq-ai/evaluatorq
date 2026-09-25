@@ -26,6 +26,8 @@ from evaluatorq.common.orq_client import (
 )
 
 from .compiler import CompileError
+from .debug import cli_debug
+from .debug import enabled as debug_enabled
 from .export import export_json
 from .filter_selector import FilterSelectionError
 from .models import (
@@ -50,6 +52,8 @@ _FIND_EPILOG = examples(
     'eq find "mentions a refund" --project support-agent --model gpt-5.6-luna',
     '# use credentials from an orq CLI profile',
     'eq find "mentions a refund" --profile research --limit 20',
+    '# inspect compiler and classifier requests and responses',
+    'eq find "mentions a refund" --limit 10 --debug',
     '# save the completed run without printing trace content',
     'eq find "contains a frustrated customer" --json finder.json',
 )
@@ -137,6 +141,10 @@ def _print_progress(console: Console, snapshot: RunSnapshot) -> None:
     console.print(line)
 
 
+def _progress_key(snapshot: RunSnapshot) -> tuple[str, int, int, int, int]:
+    return snapshot.state, snapshot.completed, snapshot.total, snapshot.matched, snapshot.failed
+
+
 def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
     table = Table(title='Matched traces')
     for column in ('Trace ID', 'Verdict', 'Confidence', 'Project', 'Model', 'Time'):
@@ -167,14 +175,19 @@ def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
 
 async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot:
     snapshot = await store.compile(request, wait=False)
-    _print_progress(console, snapshot)
+    last_progress = _progress_key(snapshot)
+    if debug_enabled():
+        _print_progress(console, snapshot)
 
     async def poll() -> RunSnapshot:
-        nonlocal snapshot
+        nonlocal snapshot, last_progress
         while snapshot.state not in {'completed', 'failed', 'cancelled'}:
             await asyncio.sleep(0.5)
             snapshot = await store.snapshot_for_render() if isinstance(store, RunStore) else await store.snapshot()
-            _print_progress(console, snapshot)
+            progress = _progress_key(snapshot)
+            if debug_enabled() and progress != last_progress:
+                _print_progress(console, snapshot)
+                last_progress = progress
         return await store.snapshot() if isinstance(store, RunStore) else snapshot
 
     try:
@@ -207,6 +220,10 @@ async def _close_clients(resolved: Any, orq: Any) -> None:
 
 def find(
     query: Annotated[str, typer.Argument(help='Natural-language question to classify against recent traces.')],
+    debug: Annotated[  # noqa: FBT002 — named CLI flag
+        bool,
+        typer.Option('--debug', help='Show progress and model requests and responses, including trace content.'),
+    ] = False,
     profile: Annotated[
         str | None,
         typer.Option(
@@ -318,7 +335,13 @@ def find(
         )
         store = build_run_store(settings, client=client, orq=orq)
         runner_entered = True
-        snapshot = asyncio.run(_run_with_cleanup(store, request, Console(), resolved, orq))
+        console = Console()
+        with cli_debug(active=debug):
+            if debug_enabled():
+                snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq))
+            else:
+                with console.status('Finding traces…'):
+                    snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq))
     except (CompileError, FilterSelectionError, OrqSourceError, TimeoutError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None

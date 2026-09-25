@@ -504,6 +504,21 @@ async def execute_response(
     )
 
 
+def classify_request_body(
+    model: str,
+    state: dict[str, Any] | str | list[Any],
+    questions: dict[str, ClassifyQuestion],
+) -> dict[str, Any]:
+    """Build the exact body sent to the Orq ``/classify`` endpoint."""
+    wire_questions: dict[str, dict[str, Any]] = {}
+    for name, current in questions.items():
+        wire_question: dict[str, Any] = {'type': current.kind, 'instructions': current.instructions}
+        if current.criteria is not None:
+            wire_question['criteria'] = current.criteria
+        wire_questions[name] = wire_question
+    return {'model': model, 'state': state, 'questions': wire_questions}
+
+
 async def execute_classify(
     *,
     client: AsyncOpenAI,
@@ -553,24 +568,11 @@ async def execute_classify(
         request = cast('ClassifyRequest', request)
         questions = request.questions
         state = request.state
-    wire_questions: dict[str, dict[str, Any]] = {}
-    for name, current in questions.items():
-        wire_question: dict[str, Any] = {
-            'type': current.kind,
-            'instructions': current.instructions,
-        }
-        if current.criteria is not None:
-            wire_question['criteria'] = current.criteria
-        wire_questions[name] = wire_question
-
     # No `apply_pipeline_metadata` here: the /classify wire contract accepts only
     # model, state and questions, so a metadata block is an unknown key on a body
     # the router validates strictly.
-    body: dict[str, Any] = {
-        'model': model,
-        'state': state,
-        'questions': wire_questions,
-    }
+    body = classify_request_body(model, state, questions)
+    wire_questions = body['questions']
 
     # `apply_trace_headers` merges into `params['extra_headers']`, the SDK's
     # per-method spelling; `post` takes the same headers under `options`.

@@ -23,8 +23,6 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, NamedTuple
 
-from loguru import logger
-
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
@@ -95,12 +93,8 @@ def resolve_results_base_url(
     """
     if client_routes_through_orq(client):
         host = str(client.base_url).rstrip('/')  # pyright: ignore[reportOptionalMemberAccess]
-        resolved = host[: -len(ORQ_ROUTER_SUFFIX)].rstrip('/')
-        logger.debug('Results upload host resolved from inference client: {}', resolved)
-        return resolved
-    resolved = os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
-    logger.debug('Results upload host resolved from env/default: {}', resolved)
-    return resolved
+        return host[: -len(ORQ_ROUTER_SUFFIX)].rstrip('/')
+    return os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
 
 
 def resolve_llm_client(
