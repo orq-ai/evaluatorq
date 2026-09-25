@@ -722,9 +722,7 @@ class CodingAgentTarget(AgentTarget):
         self._image_checked = False
         self._owned: list[str] = []
         self._container_finalizer: weakref.finalize[Any, Any] | None = (
-            weakref.finalize(self, _release_containers_if_owner, self._creator_pid, self._owned)
-            if container
-            else None
+            weakref.finalize(self, _release_containers_if_owner, self._creator_pid, self._owned) if container else None
         )
         self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
         self._proc: asyncio.subprocess.Process | None = None

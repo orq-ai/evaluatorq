@@ -193,8 +193,7 @@ def raw_environment_flags(run_args: Sequence[str]) -> list[str]:
     return [
         arg
         for arg in run_args
-        if arg in ('-e', '--env', '--env-file')
-        or (arg.startswith(('--env=', '--env-file=', '-e')) and arg != '-e')
+        if arg in ('-e', '--env', '--env-file') or (arg.startswith(('--env=', '--env-file=', '-e')) and arg != '-e')
     ]
 
 
