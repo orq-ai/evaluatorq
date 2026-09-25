@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+from loguru import logger
 
 from evaluatorq.common.judge import (
     ClassifyAnswer,
@@ -42,6 +43,13 @@ SENTIMENT = LabelSpec(
     kind='choice',
     instructions='Classify sentiment.',
     criteria={'positive': 'happy', 'negative': 'unhappy'},
+)
+
+MADE_ERRORS = LabelSpec(
+    name='made_errors',
+    kind='noul',
+    instructions='Decide whether the assistant made an error.',
+    criteria={'true': 'the assistant made an error', 'false': 'no assistant errors'},
 )
 
 INTENT_MATCH = CompiledQuery(
@@ -206,3 +214,62 @@ async def test_concurrency_never_exceeds_parallelism(monkeypatch: pytest.MonkeyP
 
     assert len(outcomes) == 20
     assert max_in_flight <= 3
+
+
+@pytest.mark.asyncio
+async def test_noul_label_keeps_bool_value_and_raw_probability(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        return ClassifyOutcome(
+            response=ClassifyResponse(
+                answers={'made_errors': ClassifyAnswer(type='noul', noul=0.82, confidence=0.6)},
+            )
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+
+    trace = make_trace('t1')
+    outcomes = await label_traces(
+        [trace],
+        labels=[MADE_ERRORS],
+        compiled=None,
+        client=_client(),
+        model='typesafe/jev-latest',
+    )
+
+    answer = outcomes[0].answers['made_errors']
+    assert answer.error is None
+    assert answer.value is True
+    assert answer.confidence == 0.6
+    assert answer.probabilities == {'true': 0.82, 'false': pytest.approx(0.18)}
+
+
+@pytest.mark.asyncio
+async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        return ClassifyOutcome(
+            response=ClassifyResponse(
+                # 'choice' answer for a 'noul' question: unreadable, not missing.
+                answers={'made_errors': ClassifyAnswer(type='choice', choice='true')},
+            )
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+
+    trace = make_trace('t1')
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        outcomes = await label_traces(
+            [trace],
+            labels=[MADE_ERRORS],
+            compiled=None,
+            client=_client(),
+            model='typesafe/jev-latest',
+        )
+    finally:
+        logger.remove(sink_id)
+
+    answer = outcomes[0].answers['made_errors']
+    assert answer.error is not None
+    assert answer.value is None
+    assert any('t1' in message and 'made_errors' in message and 'unreadable' in message for message in messages)

@@ -62,12 +62,14 @@ def _default_cfg(model: str) -> LLMCallConfig:
 def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnswer:
     """Read the field matching `question.kind`, mirroring `judge._classify_verdict` so labels and the finder agree.
 
-    `noul` -> the threshold-derived boolean verdict (not the raw probability;
-    `noul_threshold` is exactly what turns one into the other, matching the
-    finder's own classify -> value mapping). `choice` -> the label string plus
-    its probability distribution. `score` -> the level index normalized to
-    [0, 1]. Any shape mismatch (wrong `answer.type`, an out-of-criteria choice,
-    an out-of-range score) is unreadable and reported as `error`, never guessed.
+    `noul` -> the threshold-derived boolean verdict (`noul_threshold` is exactly
+    what turns the probability into that boolean, matching the finder's own
+    classify -> value mapping), with the raw probability preserved as
+    `probabilities={'true': answer.noul, 'false': 1 - answer.noul}` rather than
+    discarded. `choice` -> the label string plus its probability distribution.
+    `score` -> the level index normalized to [0, 1]. Any shape mismatch (wrong
+    `answer.type`, an out-of-criteria choice, an out-of-range score) is
+    unreadable and reported as `error`, never guessed; the caller logs it.
     """
     if answer.type != question.kind:
         return LabelAnswer(
@@ -84,7 +86,7 @@ def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnsw
         return LabelAnswer(
             value=answer.noul >= question.noul_threshold,
             confidence=answer.confidence,
-            probabilities=None,
+            probabilities={'true': answer.noul, 'false': 1 - answer.noul},
             error=None,
         )
     if question.kind == 'choice':
@@ -191,7 +193,15 @@ async def _label_one(
                 value=None, confidence=None, probabilities=None, error=f'no answer returned for label {label.name!r}'
             )
             continue
-        answers[label.name] = _map_answer(questions[label.name], answer)
+        mapped = _map_answer(questions[label.name], answer)
+        if mapped.error is not None:
+            logger.warning(
+                'Insights label classify answer for trace {} label {!r} is unreadable: {}',
+                trace.trace_id,
+                label.name,
+                mapped.error,
+            )
+        answers[label.name] = mapped
 
     matched: bool | None = None
     if compiled is not None:
@@ -202,7 +212,15 @@ async def _label_one(
             )
         else:
             mapped_match = _map_answer(questions[MATCH_KEY], match_answer)
-            matched = None if mapped_match.error is not None else matches_selection(mapped_match.value, compiled)
+            if mapped_match.error is not None:
+                logger.warning(
+                    'Insights label classify population-match answer for trace {} is unreadable: {}',
+                    trace.trace_id,
+                    mapped_match.error,
+                )
+                matched = None
+            else:
+                matched = matches_selection(mapped_match.value, compiled)
 
     return LabelOutcome(trace=trace, answers=answers, matched=matched, error=None)
 
