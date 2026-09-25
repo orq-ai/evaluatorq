@@ -654,6 +654,11 @@ class CodingAgentTarget(AgentTarget):
         }
         self._container = container
         if container is not None:
+            if container.allow_privilege_escalation:
+                logger.warning(
+                    f'CodingAgentTarget({agent}): allow_privilege_escalation=True drops no-new-privileges; '
+                    'the writable /etc/passwd lets the agent become root inside the container'
+                )
             if permission_mode is None:
                 permission_mode = self._spec.container_permission
             extra_args = [
