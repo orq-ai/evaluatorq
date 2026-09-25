@@ -8,6 +8,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -310,3 +311,90 @@ def test_release_containers_for_finalizer(fake_docker, tmp_path) -> None:
     c.release_containers(['a', 'gone'])
     assert log.read_text().splitlines() == ['rm -f a']
     assert 'a' not in c.LIVE_CONTAINERS
+
+
+def test_worker_first_exit_hooks_still_install_signals_on_main_thread(monkeypatch) -> None:
+    registered: list[tuple[object, ...]] = []
+    installed_signals: list[signal.Signals] = []
+    monkeypatch.setattr(c, 'atexit_installed', False)
+    monkeypatch.setattr(c, 'signal_hooks_installed', False)
+    monkeypatch.setattr(c.atexit, 'register', lambda *args: registered.append(args))
+    monkeypatch.setattr(c.signal, 'signal', lambda sig, handler: installed_signals.append(sig))
+
+    worker = threading.Thread(target=c.install_exit_hooks)
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert registered
+    assert installed_signals == []
+
+    c.install_exit_hooks()
+    assert installed_signals == [signal.SIGTERM, signal.SIGHUP]
+
+
+def test_unregister_waits_for_inflight_heartbeat_write(fake_docker, tmp_path, monkeypatch) -> None:
+    beat = tmp_path / 'beat'
+    beat.write_text('initial')
+    c.LIVE_CONTAINERS['a'] = c.LiveContainer(binary='docker', context=None, beat=beat)
+    write_entered, allow_write, unregister_attempted, unregister_returned = (
+        threading.Event(), threading.Event(), threading.Event(), threading.Event()
+    )
+    real_lock = c.CONTAINER_LOCK
+
+    class TrackedLock:
+        def __enter__(self):
+            if threading.current_thread().name == 'cleanup-worker':
+                unregister_attempted.set()
+            real_lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            real_lock.release()
+
+    monkeypatch.setattr(c, 'CONTAINER_LOCK', TrackedLock())
+    real_write = c.write_beat
+    writes: list[int] = []
+
+    def blocked_write(path: Path, value: int) -> None:
+        writes.append(value)
+        write_entered.set()
+        assert allow_write.wait(timeout=2)
+        real_write(path, value)
+
+    monkeypatch.setattr(c, 'write_beat', blocked_write)
+    heart = threading.Thread(target=c.heartbeat_once, args=(1,))
+    heart.start()
+    assert write_entered.wait(timeout=2)
+
+    def unregister() -> None:
+        c.unregister('a')
+        unregister_returned.set()
+
+    cleanup = threading.Thread(target=unregister, name='cleanup-worker')
+    cleanup.start()
+    assert unregister_attempted.wait(timeout=2)
+    assert not unregister_returned.is_set()
+    allow_write.set()
+    heart.join(timeout=2)
+    cleanup.join(timeout=2)
+    assert not heart.is_alive()
+    assert not cleanup.is_alive()
+    assert unregister_returned.is_set()
+    c.heartbeat_once(2)
+    assert writes == [1]
+    assert beat.read_text() == '1'
+
+
+def test_remove_error_shell_quotes_manual_command(fake_docker, monkeypatch) -> None:
+    _, log = fake_docker
+    binary = str(Path(log.parent) / 'docker engine')
+    Path(binary).write_text(FAKE_DOCKER)
+    Path(binary).chmod(Path(binary).stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv('FAKE_RM_FAIL', 'b')
+    seen: list[str] = []
+    sink = logger.add(lambda message: seen.append(str(message)), level='ERROR')
+    try:
+        assert c.remove_containers(binary, None, ['b']) == ['b']
+    finally:
+        logger.remove(sink)
+    assert any(f"run: '{binary}' rm -f b" in message for message in seen)

@@ -10,6 +10,7 @@ import atexit
 import importlib.metadata
 import os
 import re
+import shlex
 import signal
 import socket
 import subprocess
@@ -160,7 +161,10 @@ def unsafe_mounts(run_args: Sequence[str], root: Path) -> list[str]:
         else:
             continue
         if flag == '--mount':
-            fields = dict(part.partition('=')[::2] for part in value.split(','))
+            fields: dict[str, str] = {}
+            for part in value.split(','):
+                key, _, field_value = part.partition('=')
+                fields[key] = field_value
             src = fields.get('source') or fields.get('src')
             if fields.get('type') == 'volume':
                 src = None
@@ -194,21 +198,25 @@ class LiveContainer(BaseModel):
 LIVE_CONTAINERS: dict[str, LiveContainer] = {}
 BEAT_WARNED: set[str] = set()
 HOOKS_LOCK = threading.Lock()
-hooks_installed = False
+CONTAINER_LOCK = threading.RLock()
+atexit_installed = False
+signal_hooks_installed = False
 heartbeat_thread: threading.Thread | None = None
 
 
 def register(name: str, live: LiveContainer) -> None:
     """Track a container and ensure process cleanup and heartbeat are active."""
-    LIVE_CONTAINERS[name] = live
+    with CONTAINER_LOCK:
+        LIVE_CONTAINERS[name] = live
     install_exit_hooks()
     start_heartbeat()
 
 
 def unregister(name: str) -> LiveContainer | None:
     """Forget a container, which also stops renewing its lease."""
-    BEAT_WARNED.discard(name)
-    return LIVE_CONTAINERS.pop(name, None)
+    with CONTAINER_LOCK:
+        BEAT_WARNED.discard(name)
+        return LIVE_CONTAINERS.pop(name, None)
 
 
 def remove_containers(binary: str, context: str | None, names: Sequence[str], *, timeout_s: float = 10) -> list[str]:
@@ -239,7 +247,7 @@ def remove_containers(binary: str, context: str | None, names: Sequence[str], *,
                 return []
             pending = failed or [name for name in pending if name not in missing] or pending
             reason = proc.stderr.strip() or f'command exited with status {proc.returncode}'
-    command = ' '.join([*cli_prefix(binary, context), 'rm', '-f', *pending])
+    command = shlex.join([*cli_prefix(binary, context), 'rm', '-f', *pending])
     logger.error(
         f'could not remove container(s) {", ".join(pending)}: {reason}. Their lease ends them within '
         f'{LEASE_CHECK_S * 2}s; to remove now run: {command}'
@@ -254,7 +262,8 @@ async def remove_containers_async(binary: str, context: str | None, names: Seque
 
 def remove_all(reason: str) -> None:
     """Remove all registered containers, grouped by engine and context."""
-    snapshot = list(LIVE_CONTAINERS.items())
+    with CONTAINER_LOCK:
+        snapshot = list(LIVE_CONTAINERS.items())
     if not snapshot:
         return
     groups: dict[tuple[str, str | None], list[str]] = {}
@@ -284,13 +293,14 @@ def write_beat(path: Path, value: int) -> None:
 
 def heartbeat_once(counter: int) -> None:
     """Renew all currently registered leases, warning only once for each failing name."""
-    for name, live in list(LIVE_CONTAINERS.items()):
-        try:
-            write_beat(live.beat, counter)
-        except OSError as exc:  # noqa: PERF203
-            if name not in BEAT_WARNED:
-                BEAT_WARNED.add(name)
-                logger.warning(f'heartbeat for container {name} failed ({exc}); its lease ends it if this persists')
+    with CONTAINER_LOCK:
+        for name, live in list(LIVE_CONTAINERS.items()):
+            try:
+                write_beat(live.beat, counter)
+            except OSError as exc:  # noqa: PERF203
+                if name not in BEAT_WARNED:
+                    BEAT_WARNED.add(name)
+                    logger.warning(f'heartbeat for container {name} failed ({exc}); its lease ends it if this persists')
 
 
 def heartbeat_loop() -> None:
@@ -327,21 +337,27 @@ def make_signal_handler(previous: Any) -> Callable[[int, FrameType | None], None
 
 
 def install_exit_hooks() -> None:
-    """Install atexit and signal cleanup hooks once, when first container is registered."""
-    global hooks_installed
+    """Install atexit cleanup once and signal hooks when called on the main thread."""
+    global atexit_installed, signal_hooks_installed
+    on_main_thread = threading.current_thread() is threading.main_thread()
     with HOOKS_LOCK:
-        if hooks_installed:
-            return
-        hooks_installed = True
-    atexit.register(remove_all, 'atexit')
-    if threading.current_thread() is not threading.main_thread():
+        should_register_atexit = not atexit_installed
+        if should_register_atexit:
+            atexit_installed = True
+        should_install_signals = on_main_thread and not signal_hooks_installed
+        if should_install_signals:
+            signal_hooks_installed = True
+    if should_register_atexit:
+        atexit.register(remove_all, 'atexit')
+    if not on_main_thread:
         logger.warning(
             'container cleanup: not on the main thread, so no SIGTERM/SIGHUP handler; '
             'relying on atexit, labels and the lease'
         )
         return
-    for sig in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(sig, make_signal_handler(signal.getsignal(sig)))
+    if should_install_signals:
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(sig, make_signal_handler(signal.getsignal(sig)))
 
 
 def pid_alive(pid: int) -> bool:
