@@ -155,17 +155,19 @@ def dashboard(
 
 
 def _register_subapps(app: typer.Typer) -> None:
-    """Register the redteam and sim sub-apps.
+    """Register the redteam, sim, and coding-agent sub-apps.
 
     Their deps are core, so a failing import here means a broken install — let it
     surface (via run_guarded) rather than silently dropping the subcommand
     (clig.dev: no silent failure).
     """
+    from evaluatorq.backends.coding_agent_cli import app as coding_agent_app
     from evaluatorq.redteam.cli import app as redteam_app
     from evaluatorq.simulation.cli import app as sim_app
 
     app.add_typer(redteam_app, name='redteam', help='Red teaming commands.')
     app.add_typer(sim_app, name='sim', help='Agent simulation pipeline.')
+    app.add_typer(coding_agent_app, name='coding-agent', help='Coding-agent target utilities.')
 
 
 def main() -> None:
