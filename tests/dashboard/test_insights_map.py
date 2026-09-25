@@ -48,7 +48,7 @@ def _map_run() -> InsightsRun:
             name='All requests',
             description='',
             size=10,
-            trace_ids=[f'trace-{index}' for index in range(10)],
+            trace_ids=[f'trace-{index}' for index in range(1, 11)],
             example_trace_ids=['trace-1'],
         )
     ]
@@ -162,6 +162,29 @@ def test_map_json_shape_palette_noise_diamond_and_numeric_label(tmp_path, monkey
     assert {point['trace_id']: point for point in choice['points']}['trace-9']['symbol'] == 'diamond'
 
 
+def test_map_json_reports_unknown_or_unsupported_colour_label(tmp_path, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    run = _map_run()
+    unsupported = LabelSpec(name='intent_text', kind='noul', instructions='Summarize intent.')
+    run = run.model_copy(
+        update={
+            'labels': {
+                **run.labels,
+                'intent_text': LabelResult(spec=unsupported, counts={}, mean_confidence=None, n_low_confidence=0, n_failed=0),
+            }
+        }
+    )
+    _write_run(tmp_path, run)
+
+    client = TestClient(build_app())
+    response = client.get('/insights/map-run/map.json?dimension=intent&color_by=label%3Amissing')
+    unsupported_response = client.get('/insights/map-run/map.json?dimension=intent&color_by=label%3Aintent_text')
+
+    assert response.status_code == 200
+    assert response.json()['error'] == 'Unknown or unsupported colour label: missing'
+    assert unsupported_response.json()['error'] == 'Unknown or unsupported colour label: intent_text'
+
+
 def test_crosstab_spec_has_both_axes_and_links_cells_to_filtered_traces():
     markup = insights_views.crosstab(_map_run(), {'row': 'dimension:intent', 'column': 'label:customer_satisfaction'})
     spec = json.loads(markup.split('data-vega-for="insights-crosstab">', 1)[1].split('</script>', 1)[0])
@@ -213,10 +236,17 @@ def test_completed_finder_run_shows_analyze_matches_command_and_python(monkeypat
     assert 'insights_sync(population)' in html
 
 
-def test_plotly_asset_exists_for_wheel_packaging():
+def test_plotly_asset_exists_in_source_tree():
     asset = Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/plotly-gl3d.min.js'
     assert asset.is_file()
     assert asset.read_text(encoding='utf-8').startswith('/**\n* plotly.js (gl3d - minified) v4.1.1')
+
+
+def test_cluster_detail_returns_content_for_existing_detail_panel():
+    markup = insights_views.cluster_detail(_map_run(), 'base-1')
+
+    assert markup.startswith('<div class="insights-detail-kicker">Cluster · intent</div>')
+    assert '<section class="insights-detail">' not in markup
 
 
 def test_dimensions_has_tree_map_toggle_and_missing_coordinate_state():

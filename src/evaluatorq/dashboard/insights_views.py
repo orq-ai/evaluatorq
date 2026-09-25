@@ -197,7 +197,7 @@ def _find_cluster(run: InsightsRun, cluster_id: str) -> tuple[str, Cluster] | No
 def cluster_detail(run: InsightsRun, cluster_id: str) -> str:
     found = _find_cluster(run, cluster_id)
     if found is None:
-        return '<section class="insights-detail"><p class="insights-empty">Cluster not found.</p></section>'
+        return '<p class="insights-empty">Cluster not found.</p>'
     dimension, cluster = found
     members = [trace for trace in run.traces if trace.trace_id in set(cluster.trace_ids)]
     label_rows = []
@@ -230,11 +230,11 @@ def cluster_detail(run: InsightsRun, cluster_id: str) -> str:
     label_html = ''.join(label_rows) or '<p class="insights-empty">No label answers for this cluster.</p>'
     example_html = ''.join(examples) or '<p class="insights-empty">No example traces available.</p>'
     return (
-        '<section class="insights-detail"><div class="insights-detail-kicker">Cluster · '
+        '<div class="insights-detail-kicker">Cluster · '
         f'{esc(dimension)}</div><h3>{esc(cluster.name)}</h3><p>{esc(cluster.description) or "No description available."}</p>'
         f'<div class="insights-detail-kicker">Labels in this cluster</div>{label_html}'
         f'<div class="insights-detail-kicker">Example traces</div>{example_html}'
-        f'<a class="insights-action" href="{traces_href}" hx-get="{traces_href}" hx-target="#insights-content" hx-push-url="true">Show all {cluster.size} in Traces →</a></section>'
+        f'<a class="insights-action" href="{traces_href}" hx-get="{traces_href}" hx-target="#insights-content" hx-push-url="true">Show all {cluster.size} in Traces →</a>'
     )
 
 
@@ -646,6 +646,16 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
     cluster_by_id = {item.id: item for item in base_clusters}
     label_name = color_by.removeprefix('label:') if color_by.startswith('label:') else None
     label_spec = next((item.spec for key, item in run.labels.items() if key == label_name), None)
+    if color_by != 'cluster' and (label_spec is None or label_spec.kind not in {'choice', 'score'}):
+        return {
+            'error': f'Unknown or unsupported colour label: {label_name or color_by}',
+            'points': [],
+            'legend': [],
+            'color_scale': None,
+            'color_mode': 'cluster',
+            'grid_color': COLORS['sand_400'],
+            'background_color': COLORS['sand_100'],
+        }
     is_continuous = label_spec is not None and label_spec.kind == 'score'
     categories = (
         sorted({
