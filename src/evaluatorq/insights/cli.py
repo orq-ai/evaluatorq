@@ -177,6 +177,27 @@ def insights_cmd(
     if from_finder is not None and query is not None:
         emit_error('--from-finder cannot be combined with --query')
         raise typer.Exit(code=2)
+    if from_finder is not None:
+        population_options = (
+            ('--window-days', window_days is not None),
+            ('--limit', limit is not None),
+            ('--project', bool(project)),
+            ('--model', bool(model)),
+            ('--provider', bool(provider)),
+            ('--status', bool(status)),
+            ('--product', bool(product)),
+            ('--trace-type', bool(trace_type)),
+            ('--agent', bool(agent)),
+            ('--tool', bool(tool)),
+            ('--tokens-min', tokens_min is not None),
+            ('--tokens-max', tokens_max is not None),
+            ('--duration-ms-min', duration_ms_min is not None),
+            ('--duration-ms-max', duration_ms_max is not None),
+        )
+        conflicting = [name for name, used in population_options if used]
+        if conflicting:
+            emit_error(f'--from-finder cannot be combined with population options: {", ".join(conflicting)}')
+            raise typer.Exit(code=2)
     if query is not None and not query.strip():
         emit_error('--query must not be empty')
         raise typer.Exit(code=2)

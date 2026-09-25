@@ -72,7 +72,7 @@ The `eq insights` command accepts trace population filters, label presets or JSO
 eq insights --query "customers asking about refunds" --agent support-bot --label sentiment --label customer_satisfaction --dimension intent --dimension failure --limit 500 --json refunds-insights.json
 ```
 
-The command prints cluster and label summaries, failed-trace counts, and the stored run path. Use `--from-finder PATH` to use matched trace IDs from a finder export instead of `--query`. `--no-cache` disables the local summary and embedding cache. The classifier and summary model options default to `typesafe/jev-latest` and `openai/gpt-6-luna` respectively.
+The command prints cluster and label summaries, failed-trace counts, and the stored run path. Use `--from-finder PATH` to use matched trace IDs from a finder export instead of `--query`; the command rejects other population filters, `--window-days`, and `--limit` alongside it. `--no-cache` disables the local summary and embedding cache. The classifier and summary model options default to `typesafe/jev-latest` and `openai/gpt-6-luna` respectively.
 
 After a finder run completes, its **Analyze matches** section lets you download the finder export. Pass the downloaded filename to `--from-finder`; Insights selects only the matched trace IDs from that export. For a file named `trace-finder-42.json`, this command reviews those matches:
 
