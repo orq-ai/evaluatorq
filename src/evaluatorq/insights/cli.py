@@ -15,6 +15,7 @@ from rich.table import Table
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.trace_finder.cli import _facets
+from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import NumericFilters
 from evaluatorq.trace_finder.settings import effective_settings
 
@@ -52,6 +53,14 @@ def _stored_run_path(run: InsightsRun) -> Path | None:
         if isinstance(stored, InsightsRun) and stored.run_id == run.run_id:
             return path
     return None
+
+
+def _validate_finder_export(path: Path) -> None:
+    """Reject unreadable or invalid finder exports as CLI input errors before running Insights."""
+    try:
+        RunExport.model_validate_json(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f'could not read a valid finder export from {path}: {exc}') from exc
 
 
 def _print_run(run: InsightsRun, run_path: Path | None) -> None:
@@ -189,6 +198,8 @@ def insights_cmd(
             duration_ms_max=duration_ms_max,
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
+        if from_finder is not None:
+            _validate_finder_export(from_finder)
         population = (
             InsightsPopulation.from_finder_export(from_finder)
             if from_finder is not None
