@@ -55,3 +55,17 @@ Output listed `evaluatorq/backends/docker/Dockerfile` (695 bytes) and `evaluator
 The runtime entrypoint is not an image `ENTRYPOINT`; it repairs a missing passwd entry when needed and then uses `exec`. The image installs the four pinned CLIs, marks the script executable, and creates a non-root default user. The command uses `cli_prefix` and returns the container builder's exit code. The wheel contains both assets. `dist/` did not exist before this build and was left in place.
 
 Concerns: none.
+
+## Follow-up review: expanded tests
+
+Added coverage for the missing-UID repair branch by putting a fake `id` command first on `PATH`. It reports UID/GID 4242 and reports `id -un` as unsuccessful until the temporary passwd file contains the appended `evq` entry. Two invocations now verify the command executes both times and exactly one entry is appended. The CLI test also covers a custom tag, two repeated build arguments, default tag behavior, and the missing-binary error.
+
+RED command: `uv run pytest tests/backends/test_coding_agent_cli.py -q`.
+
+RED output: `1 failed, 3 passed`; the missing-binary test found exit code 2 and the expected parameter error, but its initial assertion expected a phrase on one line. Typer's Rich error panel wrapped the phrase, so the assertion was corrected to normalize output whitespace and check the wrapped message pieces.
+
+GREEN command: `uv run pytest tests/backends/test_coding_agent_cli.py -q`.
+
+GREEN output: `4 passed in 1.41s`.
+
+Follow-up checks: `uv run ruff check src` output `All checks passed!`; `uv run basedpyright` output `0 errors, 0 warnings, 0 notes`. Production code was unchanged.
