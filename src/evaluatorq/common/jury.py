@@ -558,10 +558,11 @@ async def run_jury(
     judge with no replacements) so an outage aborts loudly rather than producing
     inconclusive verdicts on every datapoint.
 
-    Concurrency is bounded by the run-scoped LLM ceiling (see
-    ``common.llm_limit``): every judge call routes through ``common.llm_call``
-    and takes a slot, so the whole panel's fan-out is capped run-wide rather
-    than per jury run.
+    Built-in judges route their provider calls through ``common.llm_call`` and
+    take a slot under the run's LLM ceiling. A custom ``judge_fn`` that calls a
+    provider directly must wrap that call in ``common.llm_limit.llm_slot()``;
+    ``run_jury`` does not reserve a slot around the callback because a built-in
+    judge may make several nested LLM calls.
 
     The deliberation runs inside an ``orq.jury`` span with the panel's
     aggregate attributes; each judge opens a child ``orq.judge`` span, and the

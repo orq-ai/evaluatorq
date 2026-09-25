@@ -10,9 +10,11 @@ import logging
 from itertools import starmap
 from typing import Any
 
+from evaluatorq.common.llm_limit import active_llm_parallelism
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerator,
+    is_recoverable_first_message_failure,
 )
 from evaluatorq.simulation.generators.persona_generator import PersonaGenerator
 from evaluatorq.simulation.generators.scenario_generator import ScenarioGenerator
@@ -168,23 +170,27 @@ class DatapointGenerator:
 
         # A failed opening fails its datapoint only; a canned stand-in would be
         # simulated and judged as if it were real.
-        outcomes = await asyncio.gather(
-            *starmap(self._first_message_generator.generate, combinations),
-            return_exceptions=True,
-        )
+        limit = active_llm_parallelism()
+        batch_size = len(combinations) if limit is None else limit * 2
         datapoints: list[SimulationDatapoint] = []
-        for (persona, scenario), outcome in zip(combinations, outcomes, strict=True):
-            if isinstance(outcome, BaseException):
-                if not isinstance(outcome, Exception):
-                    raise outcome
-                logger.warning(
-                    'First-message generation failed for persona=%r scenario=%r (%s); dropping this datapoint',
-                    persona.name,
-                    scenario.name,
-                    outcome,
-                )
-                continue
-            datapoints.append(generate_datapoint(persona, scenario, outcome))
+        for start in range(0, len(combinations), batch_size):
+            batch = combinations[start : start + batch_size]
+            outcomes = await asyncio.gather(
+                *starmap(self._first_message_generator.generate, batch),
+                return_exceptions=True,
+            )
+            for (persona, scenario), outcome in zip(batch, outcomes, strict=True):
+                if isinstance(outcome, BaseException):
+                    if not isinstance(outcome, Exception) or not is_recoverable_first_message_failure(outcome):
+                        raise outcome
+                    logger.warning(
+                        'First-message generation failed for persona=%r scenario=%r (%s); dropping this datapoint',
+                        persona.name,
+                        scenario.name,
+                        outcome,
+                    )
+                    continue
+                datapoints.append(generate_datapoint(persona, scenario, outcome))
 
         if not datapoints:
             raise RuntimeError(

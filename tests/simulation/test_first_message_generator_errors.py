@@ -224,6 +224,38 @@ async def test_datapoint_generator_raises_when_every_pair_fails():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('status', [401, 400])
+async def test_datapoint_generator_propagates_provider_configuration_errors(status: int) -> None:
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    gen = DatapointGenerator(config=LLMCallConfig(model='gpt-4o', client=MagicMock()))
+    gen._first_message_generator.generate = AsyncMock(side_effect=_api_error(status))  # type: ignore[method-assign]
+
+    with pytest.raises(APIStatusError) as exc_info:
+        await gen.generate_from_combinations([_persona()], [_scenario()])
+    assert exc_info.value.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_datapoint_generator_drops_transient_provider_failure() -> None:
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    gen = DatapointGenerator(config=LLMCallConfig(model='gpt-4o', client=MagicMock()))
+
+    async def fake_generate(persona: Persona, scenario: Scenario) -> str:
+        del persona
+        if scenario.name == 'bad':
+            raise _api_error(429)
+        return 'hello'
+
+    gen._first_message_generator.generate = fake_generate  # type: ignore[method-assign]
+    datapoints = await gen.generate_from_combinations([_persona()], [Scenario(name='bad', goal='b'), _scenario()])
+    assert [datapoint.first_message for datapoint in datapoints] == ['hello']
+
+
+@pytest.mark.asyncio
 async def test_datapoint_generator_preserves_empty_input() -> None:
     from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.generators import DatapointGenerator
@@ -307,3 +339,51 @@ async def test_simulation_limits_pending_generation_tasks(monkeypatch: pytest.Mo
         assert peak == 30
     else:
         assert peak <= 4
+
+
+@pytest.mark.asyncio
+async def test_direct_datapoint_generator_limits_pending_tasks() -> None:
+    from evaluatorq.common.llm_limit import llm_concurrency_limit
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators import DatapointGenerator
+
+    gen = DatapointGenerator(config=LLMCallConfig(model='gpt-4o', client=MagicMock()))
+    live = 0
+    peak = 0
+
+    async def fake_generate(persona: Persona, scenario: Scenario) -> str:
+        nonlocal live, peak
+        del persona, scenario
+        live += 1
+        peak = max(peak, live)
+        await asyncio.to_thread(time.sleep, 0.01)
+        live -= 1
+        return 'hello'
+
+    gen._first_message_generator.generate = fake_generate  # type: ignore[method-assign]
+    async with llm_concurrency_limit(2):
+        datapoints = await gen.generate_from_combinations([_persona()], [_scenario(f'goal-{i}') for i in range(30)])
+    assert len(datapoints) == 30
+    assert peak <= 4
+
+
+@pytest.mark.asyncio
+async def test_simulation_propagates_first_message_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.api import _resolve_or_generate_datapoints
+
+    async def fail_generate(*_args: object) -> str:
+        raise _api_error(401)
+
+    monkeypatch.setattr(FirstMessageGenerator, 'generate', fail_generate)
+    with pytest.raises(APIStatusError) as exc_info:
+        await _resolve_or_generate_datapoints(
+            caller='simulate',
+            datapoints=None,
+            personas=[_persona()],
+            scenarios=[_scenario()],
+            dataset_id=None,
+            llm_config=LLMCallConfig(model='test'),
+            generation_client=MagicMock(),
+        )
+    assert exc_info.value.status_code == 401

@@ -1485,7 +1485,9 @@ async def test_first_message_generation_span_records_failures(
 
     fake_client = MagicMock()
     fake_client.responses = MagicMock()
-    fake_client.responses.create = AsyncMock(side_effect=RuntimeError('boom'))
+    from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerationError
+
+    fake_client.responses.create = AsyncMock(side_effect=FirstMessageGenerationError('no usable message'))
 
     from evaluatorq.simulation.api import _resolve_or_generate_datapoints
     from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario

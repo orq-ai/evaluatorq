@@ -2282,7 +2282,11 @@ async def _generate_single_datapoint(
     # in a single orq.simulation.first_message_generation span.
     try:
         first_message = await gen.generate(persona, scenario)
-    except Exception as exc:  # noqa: BLE001 - only model-call failures drop a pair
+    except Exception as exc:
+        from evaluatorq.simulation.generators.first_message_generator import is_recoverable_first_message_failure
+
+        if not is_recoverable_first_message_failure(exc):
+            raise
         return _FirstMessageFailure(exc)
     return generate_datapoint(persona, scenario, first_message)
 

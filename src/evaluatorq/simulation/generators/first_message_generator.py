@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 from evaluatorq.common.llm_call import execute_response
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
-from evaluatorq.common.retry import with_retry
+from evaluatorq.common.retry import _is_retryable_error, with_retry
 from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
@@ -47,6 +47,15 @@ _CONTENT_ATTEMPTS = 3
 
 class FirstMessageGenerationError(RuntimeError):
     """The model produced no usable first message; the datapoint should fail."""
+
+
+def is_recoverable_first_message_failure(exc: Exception) -> bool:
+    """Drop one pair for unusable output or an exhausted transient provider failure.
+
+    Authentication, request/configuration, and unexpected errors must abort the
+    batch so callers do not mistake incomplete input for a valid dataset.
+    """
+    return isinstance(exc, FirstMessageGenerationError) or _is_retryable_error(exc)
 
 
 _FIRST_MESSAGE_PROMPT = """You are generating the authentic first message a user would type to a support agent.
