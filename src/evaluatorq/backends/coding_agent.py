@@ -9,6 +9,9 @@ runs ``orq launch <agent>`` so every model call goes through the Orq gateway wit
 skills and MCP server attached.
 
 Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()`` never retries.
+
+With container mode, one long-lived container belongs to each target clone and each turn runs through
+``docker exec``. ``close()``, cancellation, and early turn termination remove that container.
 """
 
 from __future__ import annotations
@@ -20,9 +23,11 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import tempfile
 import time
 import types
+import uuid
 import weakref
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, get_args
@@ -30,7 +35,22 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
 
-from evaluatorq.backends.container import RESERVED_ENV, DockerOptions, isolation_breaking_flags
+from evaluatorq.backends.container import (
+    RESERVED_ENV,
+    DockerOptions,
+    LiveContainer,
+    build_exec_argv,
+    build_run_argv,
+    forwarded_env_names,
+    isolation_breaking_flags,
+    register,
+    release_containers,
+    remove_containers_async,
+    sweep_orphans,
+    unregister,
+    unsafe_mounts,
+    write_beat,
+)
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
@@ -648,6 +668,21 @@ class CodingAgentTarget(AgentTarget):
         self.max_turn_ms = max_turn_ms
         self._env = dict(env or {})
         self._workdir: Path | None = None
+        self._forward_env = (
+            forwarded_env_names(
+                container, launcher=launcher, provider_env=self._spec.provider_env, caller_env=self._env
+            )
+            if container
+            else []
+        )
+        self._root: Path | None = None
+        self._container_name: str | None = None
+        self._restarts = 0
+        self._image_checked = False
+        self._owned: list[str] = []
+        self._container_finalizer: weakref.finalize[Any, Any] | None = (
+            weakref.finalize(self, release_containers, self._owned) if container else None
+        )
         self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
         self._proc: asyncio.subprocess.Process | None = None
 
@@ -656,10 +691,110 @@ class CodingAgentTarget(AgentTarget):
         """The private working directory, ``None`` until the first turn creates it."""
         return self._workdir
 
+    async def _docker(self, argv: list[str], *, timeout_s: float = 60) -> subprocess.CompletedProcess[str]:
+        """Run one bounded Docker control call with the host environment."""
+        opts = self._container
+        if opts is None:
+            raise RuntimeError('container options are required for Docker calls')
+        operation = asyncio.create_task(
+            asyncio.to_thread(subprocess.run, argv, capture_output=True, text=True, timeout=timeout_s, check=False)
+        )
+        try:
+            return await asyncio.shield(operation)
+        except asyncio.CancelledError:
+            # `to_thread` cannot stop subprocess.run. Wait for its bounded result before allowing cleanup
+            # to issue `rm`, so a slow `docker run` cannot create a container after cleanup has passed.
+            with contextlib.suppress(Exception):
+                await asyncio.shield(operation)
+            raise
+        except FileNotFoundError as exc:
+            raise CodingAgentUnavailableError('cli.not_found', f'{opts.binary!r} not found on PATH') from exc
+
+    async def _ensure_container(self, root: Path) -> str:
+        opts = self._container
+        if opts is None:
+            raise RuntimeError('container options are required to start a container')
+        if self._container_name is not None:
+            state = await self._docker([*opts.cli(), 'inspect', '-f', '{{.State.Running}}', self._container_name])
+            if state.returncode == 0 and state.stdout.strip() == 'true':
+                return self._container_name
+            old_name = self._container_name
+            marker = root / 'home' / '.evq-exit'
+            cause = marker.read_text().strip() if marker.exists() else None
+            marker.unlink(missing_ok=True)
+            log_kill(
+                self._agent,
+                'lease_expired' if cause else 'container_lost',
+                f'container {old_name} stopped between turns ({cause or "cause unknown"}); recreating it. '
+                'Files in the workdir and home survive; processes the agent started in the background do not',
+            )
+            await self._drop_container()
+            self._restarts += 1
+        elif not self._image_checked:
+            inspected = await self._docker([*opts.cli(), 'image', 'inspect', opts.image])
+            if inspected.returncode != 0:
+                build_dir = Path(__file__).parent / 'docker'
+                raise CodingAgentUnavailableError(
+                    'cli.image_missing',
+                    f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '
+                    f'or `{opts.binary} build -t {opts.image} {build_dir}`',
+                )
+            self._image_checked = True
+            await asyncio.to_thread(sweep_orphans, opts.binary, opts.context)
+        for source in unsafe_mounts(opts.run_args, root):
+            logger.warning(
+                f'CodingAgentTarget({self._agent}): run_args mount source {source!r} is outside the private workdir; '
+                'the agent can reach it'
+            )
+        name = f'{opts.name_prefix}-{self._agent}-{uuid.uuid4().hex[:8]}'
+        beat = root / 'lease' / 'beat'
+        write_beat(beat, 0)
+        register(name, LiveContainer(binary=opts.binary, context=opts.context, beat=beat))
+        self._owned.append(name)
+        self._container_name = name
+        started = await self._docker(build_run_argv(opts, name=name, root=root, uid=os.getuid(), gid=os.getgid()))
+        if started.returncode != 0:
+            await self._drop_container()
+            raise CodingAgentUnavailableError(
+                'cli.container_start', f'{opts.binary} run failed: {started.stderr[-STDERR_EXCERPT_CHARS:].strip()}'
+            )
+        return name
+
+    async def _drop_container(self) -> None:
+        """Unregister and remove this target's current container."""
+        name, self._container_name = self._container_name, None
+        live = unregister(name) if name else None
+        if name and live:
+            await remove_containers_async(live.binary, live.context, [name])
+
+    async def _prepare_container_exec(
+        self, argv: list[str]
+    ) -> tuple[list[str], Callable[[], Awaitable[None]] | None, str | None]:
+        if self._container is None:
+            return argv, None, None
+        root = self._root
+        if root is None:
+            raise RuntimeError('container workdir root was not initialized')
+        try:
+            name = await self._ensure_container(root)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._drop_container())
+            raise
+        return (
+            build_exec_argv(self._container, name=name, env_names=self._forward_env, agent_argv=argv),
+            (self._drop_container),
+            name,
+        )
+
     def _ensure_workdir(self) -> Path:
         if self._workdir is not None:
             return self._workdir
-        dst = Path(tempfile.mkdtemp(prefix=f'evaluatorq-{self._agent}-'))
+        root = Path(tempfile.mkdtemp(prefix=f'evaluatorq-{self._agent}-'))
+        dst = root / 'work' if self._container is not None else root
+        if self._container is not None:
+            dst.mkdir()
+            (root / 'home').mkdir()
+            (root / 'lease').mkdir()
         try:
             if self._source_workdir is not None:
                 shutil.copytree(self._source_workdir, dst, symlinks=True, dirs_exist_ok=True)
@@ -674,12 +809,16 @@ class CodingAgentTarget(AgentTarget):
                 link = skills_dir / skill.name
                 if link.exists() or link.is_symlink():
                     raise FileExistsError(f'skill {skill.name!r} already exists in {skills_dir}; refusing to shadow it')
-                link.symlink_to(skill.resolve(), target_is_directory=True)
+                if self._container is not None:
+                    shutil.copytree(skill.resolve(), link, symlinks=True)
+                else:
+                    link.symlink_to(skill.resolve(), target_is_directory=True)
         except BaseException:
-            shutil.rmtree(dst, ignore_errors=True)
+            shutil.rmtree(root, ignore_errors=True)
             raise
         if not self._keep_workdir:
-            self._finalizer = weakref.finalize(self, remove_tree, dst)
+            self._finalizer = weakref.finalize(self, remove_tree, root)
+        self._root = root
         self._workdir = dst
         return dst
 
@@ -692,15 +831,23 @@ class CodingAgentTarget(AgentTarget):
         if proc is not None:
             kill_group(proc)
             self._proc = None
-        if self._workdir is None:
+        if self._container is not None:
+            await asyncio.shield(self._drop_container())
+        if self._root is None:
             return
+        lease = self._root / 'lease'
+        if lease.exists():
+            remove_tree(lease)
         if self._keep_workdir:
             logger.info(f'CodingAgentTarget({self._agent}): keeping workdir {self._workdir}')
         else:
-            remove_tree(self._workdir)
-            if self._finalizer is not None:
-                self._finalizer.detach()
+            remove_tree(self._root)
+        if self._finalizer is not None:
+            self._finalizer.detach()
+        if self._container_finalizer is not None:
+            self._container_finalizer.detach()
         self._workdir = None
+        self._root = None
 
     async def get_agent_context(self) -> AgentContext:
         tools = [ToolInfo(name=name) for name in self._spec.tools]
@@ -732,6 +879,10 @@ class CodingAgentTarget(AgentTarget):
             orq=self._orq,
             prompt=prompt,
         )
+        on_early_exit: Callable[[], Awaitable[None]] | None = None
+        env = {**os.environ, **self._env}
+        agent_binary = argv[0]
+        argv, on_early_exit, name = await self._prepare_container_exec(argv)
         async with with_llm_span(
             model=self._model or self._agent,
             operation='chat',
@@ -743,8 +894,17 @@ class CodingAgentTarget(AgentTarget):
             },
         ) as span:
             try:
+                if self._container is not None:
+                    set_span_attrs(
+                        span,
+                        {
+                            'evaluatorq.coding_agent.container.image': self._container.image,
+                            'evaluatorq.coding_agent.container.name': name,
+                            'evaluatorq.coding_agent.container.restarts': self._restarts,
+                        },
+                    )
                 returncode, stdout, stderr = await self._run(
-                    argv, stdin_text, cwd=workdir, env={**os.environ, **self._env}
+                    argv, stdin_text, cwd=workdir, env=env, on_early_exit=on_early_exit
                 )
             except CodingAgentError as exc:
                 set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': exc.kill_reason})
@@ -754,6 +914,20 @@ class CodingAgentTarget(AgentTarget):
                 raise
             set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
             stderr_excerpt = stderr[-STDERR_EXCERPT_CHARS:]
+            if self._container is not None and returncode in (126, 127):
+                raise CodingAgentUnavailableError(
+                    'cli.agent_not_found',
+                    f'{agent_binary!r} or evq-entrypoint is missing from image {self._container.image!r}: '
+                    f'{stderr_excerpt}',
+                )
+            if self._container is not None and returncode == 137:
+                log_kill(self._agent, 'container_lost', f'container {name} was removed while the agent ran')
+                if name is not None:
+                    unregister(name)
+                self._container_name = None
+                raise CodingAgentUnavailableError(
+                    'cli.timeout', 'the container was removed while the agent was running'
+                )
             if returncode != 0:
                 raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
             events = parse_jsonl(stdout)
@@ -843,7 +1017,13 @@ class CodingAgentTarget(AgentTarget):
             kill_group(proc, force=not finished)
             self._proc = None
             if not finished and on_early_exit is not None:
-                await asyncio.shield(on_early_exit())
+                cleanup = asyncio.ensure_future(on_early_exit())
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    # Cancellation must not escape while the container is still registered or running.
+                    await cleanup
+                    raise
             if stdin_task is not None:
                 stdin_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
