@@ -20,8 +20,8 @@ from evaluatorq.common.orq_client import (
     list_orq_profiles,
     resolve_orq_client,
 )
-from evaluatorq.dashboard.finder_views import drawer, facet_menu, fragment, missing_trace_drawer, page_html
 from evaluatorq.dashboard.security import request_rejected
+from evaluatorq.dashboard.trace_finder.views import drawer, facet_menu, fragment, missing_trace_drawer, page_html
 from evaluatorq.trace_finder import (
     CompiledQuery,
     FacetSelection,

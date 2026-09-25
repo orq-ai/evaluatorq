@@ -146,6 +146,45 @@ def test_log_bridge_writes_the_console_off_the_event_loop(monkeypatch: pytest.Mo
     assert mock_logger.add.call_args.kwargs['level'] == logging.INFO
 
 
+def test_log_bridge_reuses_stalled_console_writer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated setup must not start another writer when the first console write is stuck."""
+    import io
+    import threading
+
+    from evaluatorq.dashboard import launch
+
+    stalled = threading.Event()
+    resume = threading.Event()
+
+    class StalledStream(io.TextIOBase):
+        def write(self, text: str) -> int:
+            stalled.set()
+            resume.wait(timeout=5)
+            return len(text)
+
+    monkeypatch.setattr(launch, '_console_bridge', None)
+    monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
+    stream = StalledStream()
+    with (
+        patch.object(launch.sys, 'stderr', stream),
+        patch('evaluatorq.dashboard.launch.logging.basicConfig'),
+        patch('evaluatorq.dashboard.launch.logger') as mock_logger,
+    ):
+        launch._install_log_bridge()
+        sink = mock_logger.add.call_args.args[0]
+        try:
+            sink.write('blocked\n')
+            assert stalled.wait(timeout=2)
+            launch._install_log_bridge()
+            mock_logger.remove.assert_called_once_with()
+            mock_logger.add.assert_called_once()
+            assert launch._console_bridge is not None
+            assert launch._console_bridge.sink is sink
+        finally:
+            resume.set()
+            sink.stop()
+
+
 def test_console_sink_drops_lines_instead_of_blocking_when_the_console_stalls() -> None:
     """Log calls return at once while the console stalls; the drop count is reported once it resumes."""
     import io

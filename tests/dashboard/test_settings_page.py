@@ -13,7 +13,7 @@ from starlette.testclient import TestClient
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import apply_ui
-from evaluatorq.dashboard import finder_routes
+from evaluatorq.dashboard.trace_finder import routes as finder_routes
 from evaluatorq.dashboard.orq_scope import OrqProject, OrqScope
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model

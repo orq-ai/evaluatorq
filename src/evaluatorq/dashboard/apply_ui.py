@@ -519,7 +519,7 @@ async def _confirm_response(
     """
     from evaluatorq.common.apply import read_instructions, write_instructions
     from evaluatorq.dashboard import library
-    from evaluatorq.dashboard.finder_routes import _profile
+    from evaluatorq.dashboard.trace_finder.routes import _profile
 
     form = await req.form()
     rejected = _request_rejected(req, form)
@@ -685,7 +685,7 @@ async def _preview_response(
     bullet(s), run ``apply(apply=False)``, and render the drawer. Only the
     loader, enable gate, narrowing, and apply wrapper differ between surfaces.
     """
-    from evaluatorq.dashboard.finder_routes import _profile
+    from evaluatorq.dashboard.trace_finder.routes import _profile
 
     if obj is None:
         return Response(not_found_html, status_code=404, media_type='text/html')

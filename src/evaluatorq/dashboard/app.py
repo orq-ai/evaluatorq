@@ -51,7 +51,6 @@ from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
-from evaluatorq.dashboard.finder_routes import initialize_finder_settings, register_finder_routes
 from evaluatorq.dashboard.orq_scope import discover_orq_scope
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
@@ -59,6 +58,7 @@ from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
+from evaluatorq.dashboard.trace_finder.routes import initialize_finder_settings, register_finder_routes
 from evaluatorq.dashboard.view import (
     RUN_PAGE_SIZES,
     SURFACE_LABELS,

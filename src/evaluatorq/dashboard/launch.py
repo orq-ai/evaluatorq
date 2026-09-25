@@ -16,6 +16,7 @@ import socket
 import sys
 import threading
 import webbrowser
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 from urllib.request import urlopen
@@ -97,6 +98,11 @@ class _DroppingConsoleSink:
         """Use Loguru's stream sink so ``logger.remove()`` calls ``stop()``."""
         self(message)
 
+    @property
+    def active(self) -> bool:
+        """Whether the writer can still receive lines from a reused bridge."""
+        return not self._stop_requested.is_set() and self._thread.is_alive()
+
     def stop(self) -> None:
         """Drain queued lines on removal without hanging forever on a stalled terminal."""
         with self._state_lock:
@@ -137,6 +143,17 @@ class _DroppingConsoleSink:
                 self._disable()
 
 
+@dataclass(frozen=True)
+class _ConsoleBridge:
+    logger: object
+    stream: TextIO
+    level: int | str
+    sink: _DroppingConsoleSink
+
+
+_console_bridge: _ConsoleBridge | None = None
+
+
 def _install_log_bridge() -> None:
     """Route all stdlib logging (uvicorn access-log, starlette, etc.) through
     loguru.  ``force=True`` replaces any pre-existing root-logger handlers.
@@ -146,10 +163,21 @@ def _install_log_bridge() -> None:
     INFO line. Override with ``EVALUATORQ_LOG_LEVEL=DEBUG`` (or any level name)
     when diagnosing; the override shows httpx lines again.
     """
+    global _console_bridge
     override = os.environ.get('EVALUATORQ_LOG_LEVEL', '').upper()
     level: int | str = override or logging.INFO
-    logger.remove()
-    logger.add(_DroppingConsoleSink(sys.stderr), level=level, colorize=True)
+    bridge = _console_bridge
+    if not (
+        bridge is not None
+        and bridge.logger is logger
+        and bridge.stream is sys.stderr
+        and bridge.level == level
+        and bridge.sink.active
+    ):
+        logger.remove()
+        sink = _DroppingConsoleSink(sys.stderr)
+        logger.add(sink, level=level, colorize=True)
+        _console_bridge = _ConsoleBridge(logger, sys.stderr, level, sink)
     logging.basicConfig(handlers=[_InterceptHandler()], level=level, force=True)
     # One INFO line per Orq call; a run classifies hundreds of traces.
     # Undo that suppression when a later install requests diagnostic output.

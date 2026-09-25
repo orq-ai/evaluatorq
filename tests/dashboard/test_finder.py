@@ -10,7 +10,7 @@ from typing import Any, Literal
 import pytest
 from starlette.testclient import TestClient
 
-from evaluatorq.dashboard import finder_routes, finder_views
+from evaluatorq.dashboard.trace_finder import routes as finder_routes, views as finder_views
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.dashboard.trace_links import trace_span_url
@@ -682,7 +682,7 @@ def test_find_facets_uses_submitted_window_without_a_query(setup_finder, monkeyp
 
 
 def test_find_trace_drawer_renders_genai_parts_from_responses_spans() -> None:
-    from evaluatorq.dashboard.finder_views import _message_text
+    from evaluatorq.dashboard.trace_finder.views import _message_text
 
     user = {'role': 'user', 'parts': [{'type': 'text', 'content': 'Review this diff'}]}
     reasoning = {'role': 'assistant', 'parts': [{'type': 'reasoning', 'content': '[encrypted]'}]}
@@ -719,7 +719,7 @@ def test_find_trace_drawer_explains_a_trace_missing_from_the_current_run(setup_f
     ],
 )
 def test_status_indicator_names_each_run_phase(snapshot: RunSnapshot, label: str, kind: str) -> None:
-    from evaluatorq.dashboard.finder_views import status_indicator
+    from evaluatorq.dashboard.trace_finder.views import status_indicator
 
     html = status_indicator(snapshot)
     assert f'finder-status {kind}' in html
@@ -737,7 +737,7 @@ def test_status_indicator_names_each_run_phase(snapshot: RunSnapshot, label: str
 def test_working_phases_show_matching_field_and_progress(
     phase: Literal['planning', 'loading_traces', 'starting_classification'], heading: str, detail: str
 ) -> None:
-    from evaluatorq.dashboard.finder_views import field
+    from evaluatorq.dashboard.trace_finder.views import field
 
     html = field(RunSnapshot(state='compiling', phase=phase))
     assert heading in html
