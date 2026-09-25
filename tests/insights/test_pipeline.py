@@ -202,15 +202,95 @@ def test_noise_outlier_is_not_a_priority_member() -> None:
     assert 't1' not in dimension.clusters[0].trace_ids
 
 
+
+@pytest.mark.asyncio
+async def test_compiled_query_excludes_false_matches_before_summary_and_dimensions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(3)]
+    compiled = object()
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces, compiled=compiled))
+
+    async def label(*args, **kwargs):
+        return [
+            SimpleNamespace(trace=traces[0], answers={}, matched=True, error=None),
+            SimpleNamespace(trace=traces[1], answers={}, matched=False, error=None),
+            SimpleNamespace(trace=traces[2], answers={}, matched=None, error=None),
+        ]
+
+    summarized: list[str] = []
+    async def summarize(selected, **kwargs):
+        summarized.extend(trace.trace_id for trace in selected)
+        return {trace.trace_id: _summary() for trace in selected}
+
+    dimension_ids: list[str] = []
+    async def dimension(name, selected, **kwargs):
+        dimension_ids.extend(trace.trace_id for trace in selected)
+        return _dimension_result(name)
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', summarize)
+    monkeypatch.setattr(pipeline, '_build_dimension', dimension)
+    run = await pipeline.insights(_population(), dimensions=('intent',), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    assert [trace.trace_id for trace in run.traces] == ['trace-0', 'trace-2']
+    assert summarized == ['trace-0', 'trace-2']
+    assert dimension_ids == ['trace-0', 'trace-2']
+    assert run.population['n_matched'] == 1
+    assert run.population['n_failed_match'] == 1
+    assert run.traces[1].errors['match'] == 'population match could not be determined'
+
+
+@pytest.mark.asyncio
+async def test_partial_label_answer_failures_do_not_fail_label_stage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.insights.models import LabelAnswer, LabelSpec
+
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(6)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    failed = LabelSpec(name='first', kind='choice', instructions='first')
+    valid = LabelSpec(name='second', kind='choice', instructions='second')
+
+    async def label(*args, **kwargs):
+        return [
+            SimpleNamespace(
+                trace=trace,
+                answers={
+                    'first': LabelAnswer(value=None, confidence=None, probabilities=None, error='missing answer'),
+                    'second': LabelAnswer(value='valid', confidence=0.9, probabilities=None, error=None),
+                },
+                matched=None,
+                error=None,
+            )
+            for trace in traces
+        ]
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+    async def dimension(name, *args, **kwargs):
+        return _dimension_result(name)
+    monkeypatch.setattr(pipeline, '_build_dimension', dimension)
+    run = await pipeline.insights(_population(), labels=(failed, valid), dimensions=('intent',), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    assert not any(failure.stage == 'label' for failure in run.stage_failures)
+    assert run.labels['first'].n_failed == len(traces)
+    assert run.labels['second'].counts == {'valid': len(traces)}
+
+
 def _population():
     from evaluatorq.insights.models import InsightsPopulation
 
     return InsightsPopulation()
 
 
-def _resolve(traces):
+def _resolve(traces, *, compiled=None):
     async def resolve(*args, **kwargs):
-        return _resolved(traces)
+        return _resolved(traces, compiled=compiled)
     return resolve
 
 
@@ -226,8 +306,8 @@ def _summarize(traces):
     return summarize
 
 
-def _resolved(traces):
-    return ResolvedPopulation(traces=traces, compiled=None, echo={'mode': 'filter'}, n_scanned=len(traces))
+def _resolved(traces, *, compiled=None):
+    return ResolvedPopulation(traces=traces, compiled=compiled, echo={'mode': 'filter'}, n_scanned=len(traces))
 
 
 def _labels(traces):
@@ -283,3 +363,46 @@ async def test_three_signal_traces_skip_dimension(monkeypatch: pytest.MonkeyPatc
         cache.close()
     assert not result.clusters
     assert result.warnings and 'only 3 traces' in result.warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_small_sentiment_groups_log_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    from io import StringIO
+
+    from loguru import logger
+    from openai import AsyncOpenAI
+
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.models import LabelAnswer, TraceInsight
+
+    traces = [
+        TraceInsight(
+            trace_id=f't{i}', span_id=f's{i}', timestamp=datetime.now(timezone.utc),
+            summary=_summary(),
+            labels={
+                'sentiment': LabelAnswer(
+                    value='positive' if i < 3 else 'negative', confidence=1.0, probabilities=None, error=None,
+                )
+            },
+        )
+        for i in range(6)
+    ]
+    messages = StringIO()
+    sink_id = logger.add(messages, level='WARNING')
+
+    async def embeddings(*args, **kwargs):
+        pytest.fail('three-member sentiment groups should be skipped before embedding')
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    cache = InsightsCache(enabled=False)
+    try:
+        result = await pipeline._build_dimension(
+            'sentiment', traces, client=cast('AsyncOpenAI', object()), cache=cache,
+            embedding_model='unused', summary_model='unused', max_clusters=15, max_subclusters=15,
+            outlier_zscore=None, parallelism=10, classifier_model='typesafe/jev-latest',
+        )
+    finally:
+        cache.close()
+        logger.remove(sink_id)
+    assert len(result.warnings) == 2
+    assert 'skipped' in messages.getvalue()

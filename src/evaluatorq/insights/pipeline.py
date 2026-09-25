@@ -170,7 +170,9 @@ async def _build_dimension(  # noqa: C901
     vector_map: dict[str, list[float]] = {}
     for group, indices in group_indices.items():
         if len(indices) < 5:
-            result.warnings.append(f'dimension {dimension} group {group!r} skipped: only {len(indices)} signal traces')
+            warning = f'dimension {dimension} group {group!r} skipped: only {len(indices)} signal traces'
+            result.warnings.append(warning)
+            logger.warning(warning)
             continue
         texts = [usable[i][1] for i in indices]
         embedded = await embed_texts(texts, client=client, model=embedding_model, cache=cache)
@@ -384,7 +386,12 @@ async def insights(  # noqa: C901
                 compiler_model=compiler_model,
                 classifier_model=classifier_model,
             )
-            run.population = {**resolved.echo, 'n_scanned': resolved.n_scanned, 'n_matched': len(resolved.traces)}
+            run.population = {
+                **resolved.echo,
+                'n_scanned': resolved.n_scanned,
+                'n_matched': len(resolved.traces) if resolved.compiled is None else 0,
+                'n_failed_match': 0,
+            }
             run.traces = [
                 TraceInsight(
                     trace_id=trace.trace_id,
@@ -417,9 +424,20 @@ async def insights(  # noqa: C901
                 model=classifier_model,
                 parallelism=parallelism,
             )
-            by_id = {trace.trace_id: trace for trace in run.traces}
+            original_by_id = {trace.trace_id: trace for trace in run.traces}
+            retained_trace_ids: set[str] = set()
+            n_matched = len(outcomes) if resolved.compiled is None else 0
+            n_failed_match = 0
             for outcome in outcomes:
-                item = by_id[outcome.trace.trace_id]
+                if resolved.compiled is not None and outcome.matched is False:
+                    continue
+                retained_trace_ids.add(outcome.trace.trace_id)
+                if resolved.compiled is not None:
+                    if outcome.matched is True:
+                        n_matched += 1
+                    else:
+                        n_failed_match += 1
+                item = original_by_id[outcome.trace.trace_id]
                 item.labels.update(outcome.answers)
                 if outcome.error:
                     item.errors['label'] = outcome.error
@@ -427,7 +445,16 @@ async def insights(  # noqa: C901
                     failed_labels = [key for key, answer in outcome.answers.items() if answer.error is not None]
                     if failed_labels:
                         item.errors['label'] = 'unreadable label answer(s): ' + ', '.join(failed_labels)
-            all_label_failed = bool(specs) and all('label' in trace.errors for trace in run.traces)
+                if resolved.compiled is not None and outcome.matched is None:
+                    item.errors['match'] = outcome.error or 'population match could not be determined'
+            run.traces = [trace for trace in run.traces if trace.trace_id in retained_trace_ids]
+            run.population['n_matched'] = n_matched
+            run.population['n_failed_match'] = n_failed_match
+            all_label_failed = (
+                bool(outcomes)
+                and bool(specs or resolved.compiled is not None)
+                and all(outcome.error is not None for outcome in outcomes)
+            )
             label_error = 'every label request failed' if all_label_failed else None
             if label_error:
                 run.status = 'error'
@@ -437,10 +464,14 @@ async def insights(  # noqa: C901
 
             _stage(writer, 'summary')
             summaries = await summarize_traces(
-                resolved.traces, client=resolved_llm, model=summary_model, cache=cache_store, parallelism=parallelism
+                [outcome.trace for outcome in outcomes if outcome.trace.trace_id in retained_trace_ids],
+                client=resolved_llm,
+                model=summary_model,
+                cache=cache_store,
+                parallelism=parallelism,
             )
             for trace_id, summary in summaries.items():
-                item = by_id[trace_id]
+                item = original_by_id[trace_id]
                 if isinstance(summary, str):
                     item.errors['summary'] = summary
                 else:
