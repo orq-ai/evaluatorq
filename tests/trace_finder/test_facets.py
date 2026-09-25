@@ -111,15 +111,39 @@ async def test_duplicate_project_names_keep_distinct_id_labels() -> None:
     assert catalogue.project == ('Research (project-1)', 'Research (project-2)')
 
 
-@pytest.mark.parametrize(('fail_status', 'has_more'), [(True, False), (False, True)])
 @pytest.mark.asyncio
-async def test_load_facet_catalogue_rejects_unavailable_or_incomplete_values(
-    fail_status: bool, has_more: bool
-) -> None:
-    client = FakeClient(fail_status=fail_status, has_more=has_more)
+async def test_load_facet_catalogue_rejects_unavailable_values() -> None:
+    client = FakeClient(fail_status=True)
     start = datetime(2026, 9, 1, tzinfo=timezone.utc)
-    with pytest.raises((RuntimeError, ValueError), match='status'):
+    with pytest.raises(RuntimeError, match='status'):
         await load_facet_catalogue(cast(Any, client), start=start, end=start)
+
+
+@pytest.mark.asyncio
+async def test_load_facet_catalogue_keeps_ranked_values_when_one_facet_overflows() -> None:
+    client = FakeClient(has_more=True)
+    original_facets = client.traces.list_facet_values_async
+
+    async def facets(**kwargs: object) -> object:
+        if kwargs['field'] == 'status':
+            return SimpleNamespace(
+                values=[
+                    SimpleNamespace(value='rare', count=1),
+                    SimpleNamespace(value='common', count=25),
+                    SimpleNamespace(value='middle', count=4),
+                ],
+                has_more=True,
+            )
+        return await original_facets(**kwargs)
+
+    client.traces.list_facet_values_async = facets
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
+    catalogue = await load_facet_catalogue(cast(Any, client), start=start, end=start)
+
+    assert catalogue.status == ('common', 'middle', 'rare')
+    assert catalogue.project == ('Research',)
+    assert catalogue.truncated_facets == frozenset({'status'})
 
 
 @pytest.mark.asyncio

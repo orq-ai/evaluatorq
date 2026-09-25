@@ -116,8 +116,8 @@ def facet_menu(
     subs: list[str] = []
     for name, label in FACET_LABELS:
         numeric_facet = name in NUMERIC_FACET_NAMES
-        values = _facet_values(catalogue, name)
         selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
+        values = tuple(dict.fromkeys((*_facet_values(catalogue, name), *sorted(selected_values))))
         if numeric_facet:
             minimum = getattr(numeric, f'{name}_min', None) if numeric is not None else None
             maximum = getattr(numeric, f'{name}_max', None) if numeric is not None else None
@@ -130,13 +130,24 @@ def facet_menu(
             )
         else:
             count = len(selected_values)
-            body = (
-                ''.join(
-                    f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}><span>{esc(value)}</span></label>'
-                    for value in values
-                )
-                or '<p class="finder-empty">No values in this window.</p>'
+            options = ''.join(
+                f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}><span>{esc(value)}</span></label>'
+                for value in values
             )
+            if options:
+                overflow = (
+                    '<p class="facet-note">More values exist in Orq; showing the returned values ranked by frequency.</p>'
+                    if catalogue is not None and name in catalogue.truncated_facets
+                    else ''
+                )
+                body = (
+                    f'<input class="facet-search" type="search" placeholder="Search values" aria-label="Search {esc(label)} values" autocomplete="off">'
+                    f'<div class="facet-values">{options}</div>'
+                    '<p class="facet-no-results" hidden>No matching values in this list.</p>'
+                    f'{overflow}'
+                )
+            else:
+                body = '<p class="finder-empty">No values in this window.</p>'
         count_html = f'<span class="count">{count}</span>' if count else ''
         items.append(
             f'<button type="button" class="facet-item" data-facet="{esc(name)}" aria-haspopup="true" '

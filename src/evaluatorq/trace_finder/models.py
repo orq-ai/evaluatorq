@@ -123,7 +123,7 @@ class FacetSelection(BaseModel):
 
 
 class FacetCatalogue(BaseModel):
-    """The values available for each trace metadata facet."""
+    """Available trace facet values and fields whose returned values were truncated."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -135,6 +135,7 @@ class FacetCatalogue(BaseModel):
     provider: tuple[str, ...] = ()
     agent_name: tuple[str, ...] = ()
     tool_name: tuple[str, ...] = ()
+    truncated_facets: frozenset[FacetName] = frozenset()
 
 
 class NumericFilters(BaseModel):

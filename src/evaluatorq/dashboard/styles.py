@@ -2650,6 +2650,12 @@ _FINDER_CSS = """
 .finder-facets .facet-sub { position:absolute; top:0; left:206px; min-width:240px; max-width:360px; max-height:420px; overflow:auto; padding:6px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:12px; box-shadow:var(--shadow-lg); animation:finder-sub-in .15s cubic-bezier(.22,1,.36,1); }
 @keyframes finder-sub-in { from { opacity:0; transform:translateX(-6px); } to { opacity:1; transform:none; } }
 .finder-facets .facet-sub .hd { padding:6px 10px 4px; font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); }
+.finder-facets .facet-search { box-sizing:border-box; width:calc(100% - 12px); margin:4px 6px 8px; padding:7px 9px; border:1px solid var(--border-default); border-radius:7px; background:var(--surface-card); color:var(--text-strong); font:inherit; font-size:12px; }
+.finder-facets .facet-search:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.finder-facets .facet-values { max-height:290px; overflow-y:auto; }
+.finder-facets .facet-values label[hidden] { display:none; }
+.finder-facets .facet-no-results,.finder-facets .facet-note { margin:5px 10px 8px; color:var(--text-muted); font-size:11px; line-height:1.4; }
+.finder-facets .facet-no-results[hidden] { display:none; }
 .finder-facets .facet-sub label { display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:8px; color:var(--text-body); font-size:12px; cursor:pointer; transition:background .15s ease-out; }
 .finder-facets .facet-sub label:hover { background:var(--surface-sunken); color:var(--text-strong); }
 .finder-facets .facet-sub label input[type=number] { width:96px; height:26px; border:1px solid var(--border-default); border-radius:6px; padding:0 6px; font-family:var(--font-mono); font-size:12px; }

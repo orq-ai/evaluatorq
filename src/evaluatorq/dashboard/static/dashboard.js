@@ -161,6 +161,20 @@
     if (item && !item.classList.contains('is-active')) showFacet(item);
   });
 
+  document.body.addEventListener('input', function (evt) {
+    const search = evt.target.closest('.finder-facets .facet-search');
+    if (!search) return;
+    const sub = search.closest('.facet-sub');
+    const query = search.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    sub.querySelectorAll('.facet-values label').forEach(function (option) {
+      const matches = option.textContent.toLocaleLowerCase().includes(query);
+      option.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    sub.querySelector('.facet-no-results').hidden = visible !== 0;
+  });
+
   // Unticking a value in the menu must also drop the hidden input the chip row submits.
   document.body.addEventListener('change', function (evt) {
     const box = evt.target;

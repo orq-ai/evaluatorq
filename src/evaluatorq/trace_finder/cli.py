@@ -56,6 +56,8 @@ _FIND_EPILOG = examples(
     'eq find "mentions a refund" --limit 10 --debug',
     '# save the completed run without printing trace content',
     'eq find "contains a frustrated customer" --json finder.json',
+    '# export only matching trace records',
+    'eq find "mentions a refund" --positive-only --json matches.json',
 )
 
 
@@ -254,6 +256,12 @@ def find(
         ),
     ] = None,
     json_path: Annotated[Path | None, typer.Option('--json', help='Write the completed run export to PATH.')] = None,
+    positive_only: Annotated[  # noqa: FBT002 — named CLI flag
+        bool,
+        typer.Option(
+            '--positive-only', help='Keep only matching trace records in --json; the terminal table already does.'
+        ),
+    ] = False,
     project: Annotated[list[str] | None, typer.Option('--project', help='Project facet; repeatable.')] = None,
     model: Annotated[list[str] | None, typer.Option('--model', help='Model facet; repeatable.')] = None,
     provider: Annotated[list[str] | None, typer.Option('--provider', help='Provider facet; repeatable.')] = None,
@@ -359,7 +367,7 @@ def find(
         raise typer.Exit(code=1)
     if json_path is not None:
         try:
-            json_path.write_text(export_json(snapshot), encoding='utf-8')
+            json_path.write_text(export_json(snapshot, matched_only=positive_only), encoding='utf-8')
         except (OSError, ValueError) as exc:
             emit_error(f'Could not write JSON export to {json_path}: {exc}')
             raise typer.Exit(code=1) from None

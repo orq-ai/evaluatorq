@@ -667,6 +667,25 @@ def test_find_facets_menu_lists_catalogue_values(setup_finder, monkeypatch: pyte
     assert 'gpt-5.6-luna' in response.text
 
 
+def test_find_facets_menu_searches_returned_values_and_marks_overflow(
+    setup_finder, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _store, client = setup_finder
+
+    async def load_catalogue(app: Any, window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue(model=('popular-model', 'rare-model'), truncated_facets=frozenset({'model'}))
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    response = client.get('/find/facets?facet_model=older-selection')
+
+    assert response.status_code == 200
+    assert 'aria-label="Search model values"' in response.text
+    assert response.text.index('popular-model') < response.text.index('rare-model')
+    assert 'name="facet_model" value="older-selection" checked' in response.text
+    assert 'More values exist in Orq' in response.text
+    assert 'class="facet-values"' in response.text
+
+
 def test_find_facets_uses_submitted_window_without_a_query(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
     _store, client = setup_finder
     windows: list[int | None] = []

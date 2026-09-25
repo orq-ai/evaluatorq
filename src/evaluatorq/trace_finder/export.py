@@ -145,8 +145,8 @@ class RunExport(BaseModel):
     matched_trace_ids: list[str]
 
 
-def build_export(run: RunSnapshot) -> RunExport:
-    """Build a metadata-only export from the detached run snapshot."""
+def build_export(run: RunSnapshot, *, matched_only: bool = False) -> RunExport:
+    """Build a metadata-only export, optionally retaining only matched traces."""
 
     if run.request is None or run.compiled is None:
         raise ValueError('run has no request and compiled task to export')
@@ -160,6 +160,8 @@ def build_export(run: RunSnapshot) -> RunExport:
         selected.append(trace)
     selected.sort(key=lambda trace: trace.timestamp, reverse=True)
     traces = tuple(_export_trace(trace, run.results.get(trace.trace_id)) for trace in selected)
+    if matched_only:
+        traces = tuple(trace for trace in traces if trace.matched and trace.error is None)
 
     return RunExport(
         query=run.request.query,
@@ -194,10 +196,10 @@ def build_export(run: RunSnapshot) -> RunExport:
     )
 
 
-def export_json(run: RunSnapshot) -> str:
-    """Return the pretty-printed JSON document for one run."""
+def export_json(run: RunSnapshot, *, matched_only: bool = False) -> str:
+    """Return one pretty-printed run, optionally with only matched trace rows."""
 
-    return build_export(run).model_dump_json(indent=2)
+    return build_export(run, matched_only=matched_only).model_dump_json(indent=2)
 
 
 def _export_task(compiled: CompiledQuery) -> ExportTask:

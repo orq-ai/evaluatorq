@@ -8,6 +8,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ### Notable defaults
 
+- **`eq find --positive-only` keeps only matching trace records in its JSON export.** The terminal table still shows matches and a full-run summary, JSON counts describe the full run, and debug diagnostics still show every classifier call.
 - **`eq dashboard` now reads `.env` from the launch directory and opens the local dashboard in a browser when the server starts.** Already exported environment variables take precedence; the browser opens once, not on each hot reload.
 - **Dashboard Settings can save an Orq profile, workspace, and project together.** The selected profile supplies the API key and host, its workspace slug supplies Orq trace links, and the selected project ID limits dashboard Trace search. Changing profiles refreshes the available workspace and projects before saving. The CLI's masked profile keys are resolved from its private local credential file; no key is written to dashboard settings. The `eq find` CLI uses the saved profile and project by default; `--profile` and `--project` override them for one run.
 - **The trace finder defaults to a seven-day window, a 500-trace population default (maximum 5000), 100-way classify concurrency, `openai/gpt-5.6-luna` for compilation, and `typesafe/jev-latest` for classification.** Override the models through the dashboard Settings page; set the window, limit and parallelism per run on the Trace search page, through the finder flags, or through the documented environment variables.

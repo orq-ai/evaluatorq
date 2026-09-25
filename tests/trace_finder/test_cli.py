@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -222,6 +223,48 @@ def test_find_writes_json_and_prints_fake_trace(monkeypatch: Any, tmp_path: Path
     assert store.request is not None
     assert store.request.population.facets.project == frozenset({'support-agent'})
     assert store.request.population.numeric.tokens_min == 100
+
+
+def test_find_positive_only_filters_json_and_keeps_summary(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    class MixedStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            negative = _trace().model_copy(update={'trace_id': 'trace-cli-negative'})
+            return replace(
+                snapshot,
+                trace_ids=(*snapshot.trace_ids, negative.trace_id),
+                traces=(*snapshot.traces, negative),
+                results={
+                    **snapshot.results,
+                    negative.trace_id: TraceClassification(
+                        trace_id=negative.trace_id,
+                        span_id=negative.span_id,
+                        value='no',
+                        matched=False,
+                        raw_result={'value': 'no'},
+                    ),
+                },
+                total=2,
+                completed=2,
+            )
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: MixedStore())
+    output = tmp_path / 'positive.json'
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests', '--positive-only', '--json', str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert 'trace-cli-1' in result.output
+    assert 'trace-cli-negative' not in result.output
+    assert 'Summary: 1 matched of 2; 0 failed.' in result.output
+    exported = json.loads(output.read_text())
+    assert [trace['trace_id'] for trace in exported['traces']] == ['trace-cli-1']
+    assert exported['counts']['total'] == 2
+    assert exported['counts']['matched'] == 1
 
 
 def test_find_debug_flag_shows_progress(monkeypatch: Any) -> None:

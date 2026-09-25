@@ -122,6 +122,16 @@ def test_build_export_is_conversation_free_and_contains_all_filters() -> None:
         assert secret not in encoded
 
 
+def test_matched_only_export_keeps_run_totals_and_only_positive_trace_records() -> None:
+    exported = build_export(run(), matched_only=True)
+
+    assert [trace.trace_id for trace in exported.traces] == ['trace-2']
+    assert exported.matched_trace_ids == ['trace-2']
+    assert exported.counts.total == 3
+    assert exported.counts.matched == 1
+    assert [trace['trace_id'] for trace in json.loads(export_json(run(), matched_only=True))['traces']] == ['trace-2']
+
+
 def test_export_models_have_explicit_allow_lists_and_no_snapshot_file_fields() -> None:
     assert set(ExportTrace.model_fields) == {
         'trace_id',
