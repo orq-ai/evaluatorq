@@ -21,6 +21,7 @@ import os
 import shutil
 import signal
 import tempfile
+import time
 import types
 import weakref
 from pathlib import Path
@@ -33,7 +34,6 @@ from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
 from evaluatorq.contracts import (
-    DEFAULT_TARGET_TIMEOUT_MS,
     AgentContext,
     AgentResponse,
     AgentTarget,
@@ -48,29 +48,33 @@ from evaluatorq.contracts import (
 from evaluatorq.openresponses.convert_models import FunctionCallStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 AgentName = Literal['claude', 'codex', 'opencode']
 Launcher = Literal['direct', 'orq']
 
-# 30 s under the retry helper's DEFAULT_TARGET_TIMEOUT_MS so this ceiling fires first: the helper starts its
-# clock before the agent process exists, and its own timeout is a retried target.timeout, not cli.timeout.
-DEFAULT_CODING_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS - 30_000
+# Idle limit: the turn ends when the agent writes nothing for this long. Coding agents opt out of the
+# retry helper's wall clock (manages_own_timeout), so this is not tied to DEFAULT_TARGET_TIMEOUT_MS.
+DEFAULT_CODING_AGENT_TIMEOUT_MS = 300_000
+# Hard cap: wall clock of one turn, however busy the agent is.
+DEFAULT_CODING_AGENT_MAX_TURN_MS = 7_200_000
 STDERR_EXCERPT_CHARS = 4000
+READ_CHUNK_BYTES = 65_536
 
 
 class CodingAgentError(Exception):
     """A coding-agent turn failed. ``code`` is one of the ``cli.*`` codes ``map_error`` reports.
 
-    Codes: ``cli.not_found``, ``cli.timeout`` (both non-retryable, see
+    Codes: ``cli.not_found``, ``cli.timeout`` (idle limit and hard cap; non-retryable, see
     `CodingAgentUnavailableError`), ``cli.exit.<code>``, ``cli.no_result``, ``cli.parse_error``,
     ``cli.agent_error``.
     """
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, kill_reason: str | None = None) -> None:
         super().__init__(f'{code}: {message}')
         self.code = code
         self.message = message
+        self.kill_reason = kill_reason
 
 
 class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheritance]
@@ -541,10 +545,14 @@ class CodingAgentTarget(AgentTarget):
     under ``direct``. ``model`` is the agent's own flag under ``direct`` and ``orq launch --model
     provider/id`` under ``orq``.
 
-    ``env`` overlays ``os.environ``; caller-supplied values win. ``timeout_ms`` is the per-turn ceiling
-    and defaults to 30 s under the retry helper's, so a hung agent surfaces as ``cli.timeout`` and is
-    not retried; raise both together when you raise ``target_agent_timeout_ms``.
+    ``env`` overlays ``os.environ``; caller-supplied values win. ``timeout_ms`` is the idle limit: the
+    maximum time without agent output. ``max_turn_ms`` is the wall-clock hard cap. Both raise the
+    non-retryable ``cli.timeout`` error. Coding agents enforce these limits themselves, so the runner's
+    ``target_agent_timeout_ms`` does not apply.
     """
+
+    # The idle and hard limits below fully bound each respond call.
+    manages_own_timeout = True
 
     def __init__(
         self,
@@ -560,6 +568,7 @@ class CodingAgentTarget(AgentTarget):
         keep_workdir: bool = False,
         skills: list[Path] | None = None,
         timeout_ms: int = DEFAULT_CODING_AGENT_TIMEOUT_MS,
+        max_turn_ms: int = DEFAULT_CODING_AGENT_MAX_TURN_MS,
         env: dict[str, str] | None = None,
     ) -> None:
         super().__init__()
@@ -567,6 +576,8 @@ class CodingAgentTarget(AgentTarget):
             raise ValueError(f'Unknown coding agent {agent!r}; expected one of {sorted(AGENTS)}')
         if launcher not in ('direct', 'orq'):
             raise ValueError(f'Unknown launcher {launcher!r}; expected "direct" or "orq"')
+        if timeout_ms <= 0 or max_turn_ms <= 0:
+            raise ValueError('timeout_ms and max_turn_ms must be positive')
         self._spec = AGENTS[agent]
         if permission_mode is not None and self._spec.permission_flag is None:
             raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
@@ -588,6 +599,7 @@ class CodingAgentTarget(AgentTarget):
             'keep_workdir': keep_workdir,
             'skills': list(skills) if skills else None,
             'timeout_ms': timeout_ms,
+            'max_turn_ms': max_turn_ms,
             'env': dict(env) if env else None,
         }
         self._agent: AgentName = agent
@@ -601,6 +613,7 @@ class CodingAgentTarget(AgentTarget):
         self._keep_workdir = keep_workdir
         self._skills = [Path(s) for s in skills or []]
         self.timeout_ms = timeout_ms
+        self.max_turn_ms = max_turn_ms
         self._env = dict(env or {})
         self._workdir: Path | None = None
         self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
@@ -697,7 +710,16 @@ class CodingAgentTarget(AgentTarget):
                 'evaluatorq.coding_agent.launcher': self._launcher,
             },
         ) as span:
-            returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir)
+            try:
+                returncode, stdout, stderr = await self._run(
+                    argv, stdin_text, cwd=workdir, env={**os.environ, **self._env}
+                )
+            except CodingAgentError as exc:
+                set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': exc.kill_reason})
+                raise
+            except asyncio.CancelledError:
+                set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': 'cancelled'})
+                raise
             set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
             stderr_excerpt = stderr[-STDERR_EXCERPT_CHARS:]
             if returncode != 0:
@@ -727,13 +749,26 @@ class CodingAgentTarget(AgentTarget):
                 response_id=turn.session_id,
             )
 
-    async def _run(self, argv: list[str], stdin_text: str | None, *, cwd: Path) -> tuple[int, str, str]:
-        """Run one agent process in its own process group; kill the group on timeout, error or cancel."""
+    async def _run(
+        self,
+        argv: list[str],
+        stdin_text: str | None,
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        on_early_exit: Callable[[], Awaitable[None]] | None = None,
+    ) -> tuple[int, str, str]:
+        """Run one agent process; end it on the idle limit, the hard cap, an error or cancellation.
+
+        Stdout is read in chunks and every chunk resets the idle deadline, so neither a long JSONL line nor
+        a partial one can stall or crash the read. Stderr is drained concurrently into a bounded tail.
+        ``on_early_exit`` runs after the process group is killed, only when the turn did not finish on its own.
+        """
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=cwd,
-                env={**os.environ, **self._env},
+                env=env,
                 stdin=asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -748,19 +783,116 @@ class CodingAgentTarget(AgentTarget):
                 'cli.prompt_too_long', f'{argv[0]} argv exceeds the OS limit; the rendered transcript is too long'
             ) from exc
         self._proc = proc
+        if proc.stdout is None or proc.stderr is None:
+            kill_group(proc)
+            self._proc = None
+            raise RuntimeError('coding-agent process was created without stdout and stderr pipes')
+        stderr_task = asyncio.create_task(drain_tail(proc.stderr, STDERR_EXCERPT_CHARS * 4))
+        stdin_task = (
+            asyncio.create_task(feed_stdin(proc.stdin, stdin_text.encode()))
+            if stdin_text is not None and proc.stdin is not None
+            else None
+        )
+        loop = asyncio.get_running_loop()
+        idle_s, hard_s = self.timeout_ms / 1000, self.max_turn_ms / 1000
+        started = last_output = loop.time()
+        stdout = bytearray()
+        finished = False
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(stdin_text.encode() if stdin_text is not None else None),
-                timeout=self.timeout_ms / 1000,
-            )
-        except asyncio.TimeoutError as exc:
-            raise CodingAgentUnavailableError(
-                'cli.timeout', f'{argv[0]} produced no result within {self.timeout_ms / 1000:.0f}s'
-            ) from exc
+            while True:
+                now = loop.time()
+                if now >= started + hard_s:
+                    event_count = stdout.count(b'\n')
+                    detail = f'turn exceeded {hard_s:.0f}s ({event_count} events)'
+                    log_kill(self._agent, 'hard_cap', detail)
+                    raise CodingAgentUnavailableError('cli.timeout', detail, kill_reason='hard_cap')
+                if now >= last_output + idle_s:
+                    stamp = time.strftime('%H:%M:%S', time.localtime(time.time() - (now - last_output)))
+                    detail = (
+                        f'no output for {idle_s:.0f}s (last event: {describe_last_event(bytes(stdout))} at {stamp})'
+                    )
+                    log_kill(self._agent, 'idle_timeout', detail)
+                    raise CodingAgentUnavailableError('cli.timeout', detail, kill_reason='idle_timeout')
+                wait = min(last_output + idle_s, started + hard_s) - now
+                try:
+                    chunk = await asyncio.wait_for(proc.stdout.read(READ_CHUNK_BYTES), timeout=wait)
+                except asyncio.TimeoutError:
+                    continue
+                if not chunk:
+                    break
+                stdout.extend(chunk)
+                last_output = loop.time()
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=max(0.001, started + hard_s - loop.time()))
+            except asyncio.TimeoutError:
+                event_count = stdout.count(b'\n')
+                detail = f'turn exceeded {hard_s:.0f}s ({event_count} events)'
+                log_kill(self._agent, 'hard_cap', detail)
+                raise CodingAgentUnavailableError('cli.timeout', detail, kill_reason='hard_cap') from None
+            finished = True
+        except asyncio.CancelledError:
+            log_kill(self._agent, 'cancelled', 'the caller cancelled the turn')
+            raise
         finally:
             kill_group(proc)
             self._proc = None
+            if not finished and on_early_exit is not None:
+                await asyncio.shield(on_early_exit())
+            if stdin_task is not None:
+                stdin_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stdin_task
+            if finished:
+                stderr = await stderr_task
+            else:
+                stderr_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stderr_task
         return proc.returncode or 0, stdout.decode(errors='replace'), stderr.decode(errors='replace')
+
+
+def log_kill(agent: str, reason: str, detail: str) -> None:
+    """The one log line every early end of an agent run writes, so a report row can say which limit fired."""
+    logger.warning(f'CodingAgentTarget({agent}) {reason}: {detail}')
+
+
+def describe_last_event(stdout: bytes) -> str:
+    """Return the last complete JSON event type and the tool or item it names, when present."""
+    for line in reversed(stdout.splitlines()):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        item = event.get('item')
+        part = event.get('part')
+        detail = (item.get('type') if isinstance(item, dict) else None) or (
+            part.get('tool') if isinstance(part, dict) else None
+        )
+        message = event.get('message')
+        content = message.get('content') if isinstance(message, dict) else None
+        if detail is None and isinstance(content, list) and content and isinstance(content[-1], dict):
+            detail = content[-1].get('name') or content[-1].get('type')
+        return f'{event.get("type")} {detail}' if detail else str(event.get('type'))
+    return 'none'
+
+
+async def drain_tail(stream: asyncio.StreamReader, keep_bytes: int) -> bytes:
+    """Drain a stream to EOF, retaining only its final ``keep_bytes``."""
+    tail = bytearray()
+    while chunk := await stream.read(READ_CHUNK_BYTES):
+        tail.extend(chunk)
+        del tail[:-keep_bytes]
+    return bytes(tail)
+
+
+async def feed_stdin(stdin: asyncio.StreamWriter, data: bytes) -> None:
+    """Write the prompt, tolerating an agent that exits before reading it."""
+    with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+        stdin.write(data)
+        await stdin.drain()
+    stdin.close()
 
 
 def parse_jsonl(stdout: str) -> list[dict[str, Any]]:

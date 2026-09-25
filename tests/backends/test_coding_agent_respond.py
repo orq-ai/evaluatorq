@@ -175,6 +175,7 @@ async def test_timeout_kills_and_is_non_retryable(tmp_path: Path) -> None:
     with pytest.raises(CodingAgentUnavailableError) as info:
         await task
     assert info.value.code == 'cli.timeout'
+    assert info.value.kill_reason == 'idle_timeout'
     _assert_gone(int(pidfile.read_text()))
 
 
