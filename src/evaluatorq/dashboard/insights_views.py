@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
 from evaluatorq.common.reports import esc
+from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
+from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 
@@ -134,7 +136,9 @@ def dimensions(run: InsightsRun, selected_cluster: str | None = None) -> str:
         (
             '<div class="insights-dimension-control"><label for="insights-dimension">Dimension</label>'
             f'<select id="insights-dimension" name="dimension" onchange="document.querySelectorAll(\'.insights-dimension\').forEach(function(s){{s.hidden=s.dataset.dimension!==this.value}}.bind(this))">{controls}</select>'
-            '<span>Tree view</span></div>'
+            '<div class="insights-view-toggle" role="group" aria-label="Dimension view">'
+            '<button type="button" class="active" data-insights-view="tree">Tree</button>'
+            '<button type="button" data-insights-view="map">Map</button></div></div>'
         )
     ]
     for index, (name, dimension) in enumerate(run.dimensions.items()):
@@ -170,8 +174,10 @@ def dimensions(run: InsightsRun, selected_cluster: str | None = None) -> str:
                 f'<div class="insights-cluster-row muted"><span>No signal</span><span class="insights-count">{dimension.n_no_signal}</span></div>'
             )
         hidden = ' hidden' if index else ''
+        tree = f'<div class="insights-tree" data-insights-mode="tree">{"".join(rows)}</div>'
+        map_html = _dimension_map(run, name)
         parts.append(
-            f'<section class="insights-dimension" data-dimension="{esc(name)}"{hidden}><h3>{esc(name.title())}</h3><div class="insights-tree">{"".join(rows)}</div></section>'
+            f'<section class="insights-dimension" data-dimension="{esc(name)}"{hidden}><h3>{esc(name.title())}</h3>{tree}{map_html}</section>'
         )
     side = '<section id="insights-cluster-detail" class="insights-detail"><p class="insights-empty">Select a cluster to see its details and example traces.</p></section>'
     return f'<div class="insights-dimensions"><div class="insights-tree-column">{"".join(parts)}</div>{side}</div>'
@@ -288,6 +294,10 @@ def traces(
     cluster: str | None = None,
     label: str | None = None,
     value: str | None = None,
+    row: str | None = None,
+    row_value: str | None = None,
+    column: str | None = None,
+    column_value: str | None = None,
 ) -> str:
     active_filters: list[tuple[str, str]] = []
     if dimension and cluster:
@@ -303,6 +313,8 @@ def traces(
         active_filters.append((f'{dimension} = {label_text}', 'cluster'))
     if label is not None:
         active_filters.append((f'{label} = {value}' if value is not None else label, 'label'))
+    if row and row_value is not None and column and column_value is not None:
+        active_filters.append((f'{row_value} x {column_value}', 'crosstab'))
     chips = []
     for text, field in active_filters:
         remaining = {
@@ -314,9 +326,11 @@ def traces(
         if field == 'cluster':
             remaining.pop('dimension', None)
             remaining.pop('cluster', None)
-        else:
+        elif field == 'label':
             remaining.pop('label', None)
             remaining.pop('value', None)
+        else:
+            remaining = {}
         remaining = {key: item for key, item in remaining.items() if item is not None}
         href = f'/insights/{quote(run.run_id, safe="")}/tab/traces'
         if remaining:
@@ -348,6 +362,10 @@ def traces(
             for trace in filtered
             if (answer := trace.labels.get(label)) is not None and (value is None or str(answer.value) == value)
         ]
+    if row and row_value is not None:
+        filtered = [trace for trace in filtered if _cross_value(run, trace, row) == row_value]
+    if column and column_value is not None:
+        filtered = [trace for trace in filtered if _cross_value(run, trace, column) == column_value]
     if not filtered:
         return (
             f'{active_filter_bar}<section class="insights-empty-state"><h3>No traces match these filters</h3>'
@@ -359,6 +377,373 @@ def traces(
         f'{active_filter_bar}<div class="insights-table-wrap"><table class="insights-table"><thead><tr>{head}</tr></thead>'
         f'<tbody>{"".join(_trace_row(run, trace) for trace in filtered)}</tbody></table></div>'
     )
+
+
+def _cross_value(run: InsightsRun, trace: TraceInsight, field: str) -> str | None:
+    """Return a top-level dimension or successful label value for a crosstab field."""
+    kind, _, name = field.partition(':')
+    if kind == 'dimension':
+        assignment = trace.assignments.get(name)
+        if assignment is None:
+            return None
+        dimension = run.dimensions.get(name)
+        cluster = (
+            next(
+                (item for item in dimension.clusters if item.id == assignment.top),
+                None,
+            )
+            if dimension
+            else None
+        )
+        return cluster.name if cluster else assignment.top
+    if kind == 'label':
+        answer = trace.labels.get(name)
+        return str(answer.value) if answer is not None and answer.error is None and answer.value is not None else None
+    return None
+
+
+def _cross_fields(run: InsightsRun) -> list[tuple[str, str]]:
+    return [
+        *((f'dimension:{name}', f'{name.title()} cluster') for name in run.dimensions),
+        *((f'label:{name}', name) for name in run.labels),
+    ]
+
+
+def crosstab(run: InsightsRun, query: dict[str, str]) -> str:
+    fields = _cross_fields(run)
+    if len(fields) < 2:
+        return '<section class="insights-empty-state"><h3>Crosstab unavailable</h3><p>Add at least two dimensions or labels to compare trace counts.</p></section>'
+    default_row, default_column = fields[0][0], fields[1][0]
+    row = query.get('row') if query.get('row') in dict(fields) else default_row
+    fallback_column = next((key for key, _ in fields if key != row), default_column)
+    column = (
+        query.get('column') if query.get('column') in dict(fields) and query.get('column') != row else fallback_column
+    )
+    row_name, column_name = dict(fields)[row], dict(fields)[column]
+    rows = sorted({v for trace in run.traces if (v := _cross_value(run, trace, row)) is not None})
+    columns = sorted({v for trace in run.traces if (v := _cross_value(run, trace, column)) is not None})
+    if not rows or not columns:
+        return '<section class="insights-empty-state"><h3>No crosstab values</h3><p>No traces have readable values for both selected fields.</p></section>'
+    counts: dict[tuple[str, str], int] = {}
+    for trace in run.traces:
+        y = _cross_value(run, trace, row)
+        x = _cross_value(run, trace, column)
+        if x is not None and y is not None:
+            counts[y, x] = counts.get((y, x), 0) + 1
+    maximum = max(counts.values(), default=1)
+    cell_rows = []
+    run_url = quote(run.run_id, safe='')
+    for y in rows:
+        for x in columns:
+            count = counts.get((y, x), 0)
+            href = f'/insights/{run_url}/tab/traces?' + urlencode({
+                'row': row,
+                'row_value': y,
+                'column': column,
+                'column_value': x,
+            })
+            cell_rows.append({'x': x, 'y': y, 'count': count, 'text': str(count), 'href': href})
+    spec = {
+        'data': {'values': cell_rows},
+        'layer': [
+            {
+                'mark': {'type': 'rect', 'tooltip': True, 'cursor': 'pointer'},
+                'encoding': {
+                    'x': {'field': 'x', 'type': 'nominal', 'title': column_name},
+                    'y': {'field': 'y', 'type': 'nominal', 'title': row_name},
+                    'color': {
+                        'field': 'count',
+                        'type': 'quantitative',
+                        'scale': {'domain': [0, maximum], 'range': [color for _, color in ORQ_SCALE_HEAT]},
+                        'legend': {'title': 'Trace count'},
+                    },
+                    'href': {'field': 'href', 'type': 'nominal'},
+                },
+            },
+            {
+                'mark': {'type': 'text', 'fontSize': 11, 'color': COLORS['ink_700']},
+                'encoding': {
+                    'x': {'field': 'x', 'type': 'nominal'},
+                    'y': {'field': 'y', 'type': 'nominal'},
+                    'text': {'field': 'text', 'type': 'nominal'},
+                },
+            },
+        ],
+        'width': {'step': 100},
+        'height': {'step': 32},
+    }
+    row_options = ''.join(
+        f'<option value="{esc(key)}"{" selected" if key == row else ""}>{esc(label)}</option>' for key, label in fields
+    )
+    col_options = ''.join(
+        f'<option value="{esc(key)}"{" selected" if key == column else ""}>{esc(label)}</option>'
+        for key, label in fields
+        if key != row
+    )
+    form = (
+        f'<form class="insights-chart-controls" hx-get="/insights/{run_url}/tab/crosstab" hx-target="#insights-content" hx-push-url="true">'
+        f'<label>Rows <select name="row">{row_options}</select></label>'
+        f'<label>Columns <select name="column">{col_options}</select></label>'
+        '<button type="submit" class="insights-action">Update</button></form>'
+    )
+    return f'{form}{render_embed(spec, "insights-crosstab")}'
+
+
+def priority_matrix(run: InsightsRun) -> str:
+    points = run.priority
+    if not points:
+        reason = run.priority_reason or 'Priority data is not available for this run.'
+        return (
+            f'<section class="insights-empty-state"><h3>Priority matrix unavailable</h3><p>{esc(reason)}</p></section>'
+        )
+    max_volume = max(point.volume for point in points)
+    volumes = sorted(point.volume for point in points)
+    median_volume = (
+        volumes[len(volumes) // 2]
+        if len(volumes) % 2
+        else sum(volumes[len(volumes) // 2 - 1 : len(volumes) // 2 + 1]) / 2
+    )
+    x_max = max_volume * 1.1
+    x_left = median_volume / 2
+    x_right = (median_volume + x_max) / 2
+    labels = [
+        {'x': x_right, 'y': 0.25, 'text': 'fix first'},
+        {'x': x_right, 'y': 0.78, 'text': 'watch'},
+        {'x': x_left, 'y': 0.78, 'text': 'fine'},
+        {'x': x_left, 'y': 0.25, 'text': 'niche'},
+    ]
+    spec = {
+        'data': {
+            'values': [
+                {
+                    'name': p.name,
+                    'volume': p.volume,
+                    'satisfaction': p.mean_satisfaction,
+                    'error_share': p.error_share,
+                    'cluster_id': p.cluster_id,
+                }
+                for p in points
+            ]
+        },
+        'layer': [
+            {
+                'mark': {'type': 'circle', 'opacity': 0.82},
+                'encoding': {
+                    'x': {
+                        'field': 'volume',
+                        'type': 'quantitative',
+                        'title': 'Trace volume',
+                        'scale': {'domain': [0, x_max]},
+                    },
+                    'y': {
+                        'field': 'satisfaction',
+                        'type': 'quantitative',
+                        'title': 'Mean satisfaction',
+                        'scale': {'domain': [0, 1]},
+                    },
+                    'size': {
+                        'field': 'error_share',
+                        'type': 'quantitative',
+                        'title': 'Error share',
+                        'scale': {'range': [60, 900]},
+                    },
+                    'color': {
+                        'field': 'error_share',
+                        'type': 'quantitative',
+                        'scale': {'domain': [0, 1], 'range': [color for _, color in ORQ_SCALE_HEAT]},
+                        'legend': {'title': 'Error share'},
+                    },
+                    'tooltip': [
+                        {'field': 'name'},
+                        {'field': 'volume'},
+                        {'field': 'satisfaction'},
+                        {'field': 'error_share'},
+                    ],
+                },
+            },
+            {
+                'data': {'values': [{'volume': median_volume}]},
+                'mark': {'type': 'rule', 'strokeDash': [5, 4], 'color': COLORS['ink_700']},
+                'encoding': {'x': {'field': 'volume', 'type': 'quantitative'}},
+            },
+            {
+                'data': {'values': [{'satisfaction': 0.5}]},
+                'mark': {'type': 'rule', 'strokeDash': [5, 4], 'color': COLORS['ink_700']},
+                'encoding': {'y': {'field': 'satisfaction', 'type': 'quantitative'}},
+            },
+            {
+                'data': {'values': labels},
+                'mark': {'type': 'text', 'fontSize': 12, 'fontWeight': 'bold', 'color': COLORS['teal_400']},
+                'encoding': {
+                    'x': {'field': 'x', 'type': 'quantitative'},
+                    'y': {'field': 'y', 'type': 'quantitative'},
+                    'text': {'field': 'text'},
+                },
+            },
+        ],
+        'width': 'container',
+        'height': 360,
+    }
+    return render_embed(spec, 'insights-priority')
+
+
+def _map_empty(reason: str) -> str:
+    return f'<div class="insights-map-empty"><h4>Map unavailable: {esc(reason)}</h4></div>'
+
+
+def _dimension_map(
+    run: InsightsRun,
+    dimension_name: str,
+    *,
+    initially_visible: bool = False,
+    include_detail: bool = False,
+) -> str:
+    hidden = '' if initially_visible else ' hidden'
+    dimension = run.dimensions.get(dimension_name)
+    if dimension is None:
+        return f'<div data-insights-mode="map"{hidden}>{_map_empty("This dimension is not part of the run.")}</div>'
+    if not any(dimension_name in trace.coords for trace in run.traces):
+        reason = (
+            dimension.warnings[0] if dimension.warnings else 'UMAP coordinates were not produced for this dimension.'
+        )
+        return f'<div data-insights-mode="map"{hidden}>{_map_empty(reason)}</div>'
+    color_options = ['<option value="cluster">Clusters</option>']
+    color_options.extend(f'<option value="label:{esc(name)}">{esc(name)}</option>' for name in run.labels)
+    chart = (
+        f'<div id="insights-map-{quote(dimension_name, safe="")}" class="insights-map-chart" '
+        f'data-run-id="{esc(run.run_id)}" data-map-dimension="{esc(dimension_name)}" data-map-url="/insights/{quote(run.run_id, safe="")}/map.json?dimension={quote(dimension_name, safe="")}&amp;color_by=cluster"></div>'
+    )
+    detail = (
+        '<section class="insights-detail" data-map-detail><p class="insights-empty">Select a point to see its cluster details and example traces.</p></section>'
+        if include_detail
+        else ''
+    )
+    layout = f'<div class="insights-map-layout">{chart}{detail}</div>' if include_detail else chart
+    return (
+        f'<div class="insights-map-view" data-insights-mode="map"{hidden}><div class="insights-map-toolbar">'
+        f'<label>Colour by <select data-map-color data-dimension="{esc(dimension_name)}">{"".join(color_options)}</select></label>'
+        f'<span>{len(run.traces)} traces · UMAP 3D</span></div>'
+        f'{layout}</div>'
+    )
+
+
+def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster') -> dict[str, object]:
+    """Build the browser map's coordinates, cluster palette, and optional label colours."""
+    dimension = run.dimensions.get(dimension_name)
+    if dimension is None:
+        return {
+            'points': [],
+            'legend': [],
+            'color_scale': None,
+            'color_mode': 'cluster',
+            'grid_color': COLORS['sand_400'],
+            'background_color': COLORS['sand_100'],
+        }
+    base_clusters = [item for item in dimension.clusters if item.level == 'base']
+    cluster_by_id = {item.id: item for item in base_clusters}
+    label_name = color_by.removeprefix('label:') if color_by.startswith('label:') else None
+    label_spec = next((item.spec for key, item in run.labels.items() if key == label_name), None)
+    is_continuous = label_spec is not None and label_spec.kind == 'score'
+    categories = (
+        sorted({
+            str(trace.labels[label_name].value)
+            for trace in run.traces
+            if label_name in trace.labels
+            and trace.labels[label_name].error is None
+            and trace.labels[label_name].value is not None
+        })
+        if label_name and not is_continuous
+        else []
+    )
+    color_scale: list[list[float | str]] | None = (
+        (ORQ_SCALE_GOOD_BAD if 'satisfaction' in (label_name or '') else ORQ_SCALE_HEAT) if is_continuous else None
+    )
+    points: list[dict[str, object]] = []
+    legend: dict[str, dict[str, str]] = {}
+    for trace in run.traces:
+        coords = trace.coords.get(dimension_name)
+        if coords is None:
+            continue
+        assignment = trace.assignments.get(dimension_name)
+        cluster_id = assignment.base if assignment is not None else 'noise'
+        cluster = cluster_by_id.get(cluster_id)
+        cluster_index = next((index for index, item in enumerate(base_clusters) if item.id == cluster_id), -1)
+        color = _cluster_color(cluster_index) if cluster_index >= 0 else COLORS['sand_400']
+        symbol = 'diamond' if cluster_index >= 8 else 'circle'
+        color_value: object = cluster.name if cluster else 'noise'
+        marker_color = color
+        label_category: str | None = None
+        if label_name:
+            answer = trace.labels.get(label_name)
+            if answer is None or answer.error is not None or answer.value is None:
+                continue
+            if is_continuous:
+                if not isinstance(answer.value, (int, float)) or isinstance(answer.value, bool):
+                    continue
+                value = min(1.0, max(0.0, float(answer.value)))
+                color_value = 1.0 - value if 'satisfaction' in label_name else value
+                marker_color = ''
+            else:
+                category = str(answer.value)
+                label_category = category
+                category_index = categories.index(category)
+                color_value = category_index
+                marker_color = QUALITATIVE[category_index % len(QUALITATIVE)]
+                symbol = 'circle'
+        point = {
+            'trace_id': trace.trace_id,
+            'x': coords[0],
+            'y': coords[1],
+            'z': coords[2],
+            'cluster_id': cluster_id,
+            'cluster_name': cluster.name if cluster else 'noise',
+            'color_value': color_value,
+            'color': marker_color,
+            'symbol': symbol,
+        }
+        if label_category is not None:
+            point['label_value'] = label_category
+        points.append(point)
+        if not label_name:
+            legend.setdefault(
+                cluster_id,
+                {
+                    'cluster_id': cluster_id,
+                    'name': cluster.name if cluster else 'noise',
+                    'color': color,
+                    'symbol': symbol,
+                },
+            )
+        elif label_category is not None:
+            legend.setdefault(
+                label_category,
+                {'cluster_id': label_category, 'name': label_category, 'color': marker_color, 'symbol': symbol},
+            )
+    if is_continuous:
+        legend_items: list[dict[str, str]] = []
+    else:
+        legend_items = list(legend.values())
+    return {
+        'points': points,
+        'legend': legend_items,
+        'color_scale': color_scale,
+        'color_mode': 'continuous' if is_continuous else 'category',
+        'grid_color': COLORS['sand_400'],
+        'background_color': COLORS['sand_100'],
+    }
+
+
+def _cluster_color(index: int) -> str:
+    base = QUALITATIVE[index % len(QUALITATIVE)]
+    if index < len(QUALITATIVE):
+        return base
+    target = COLORS['sand_100']
+    blend = 0.45
+    channels = [
+        round(int(base[offset : offset + 2], 16) * (1 - blend) + int(target[offset : offset + 2], 16) * blend)
+        for offset in (1, 3, 5)
+    ]
+    return '#' + ''.join(f'{channel:02x}' for channel in channels)
 
 
 def tab_content(run: InsightsRun, tab: str, *, query: dict[str, str] | None = None) -> str:
@@ -374,12 +759,21 @@ def tab_content(run: InsightsRun, tab: str, *, query: dict[str, str] | None = No
             cluster=query.get('cluster'),
             label=query.get('label'),
             value=query.get('value'),
+            row=query.get('row'),
+            row_value=query.get('row_value'),
+            column=query.get('column'),
+            column_value=query.get('column_value'),
         )
     if tab == 'map':
-        return '<section class="insights-empty-state"><h3>Map view is being prepared</h3><p>Map rendering will be available in a later dashboard update.</p></section>'
+        name = query.get('dimension') or next(iter(run.dimensions), '')
+        return (
+            _dimension_map(run, name, initially_visible=True, include_detail=True)
+            if name
+            else _map_empty('No dimensions are available for mapping.')
+        )
     if tab == 'crosstab':
-        return '<section class="insights-empty-state"><h3>Crosstab view is being prepared</h3><p>Cross-tabulated counts will be available in a later dashboard update.</p></section>'
-    return f'<section class="insights-empty-state"><h3>Priority matrix unavailable</h3><p>{esc(run.priority_reason or "Priority data is not available for this run.")}</p></section>'
+        return crosstab(run, query or {})
+    return priority_matrix(run)
 
 
 def full_page(
@@ -397,7 +791,7 @@ def full_page(
         f'<div id="insights-content">{tab_content(run, active_tab, query=query)}</div>'
         '</div></div>'
     )
-    return page('Insights', body, active_nav='insights')
+    return page('Insights', body + '<script src="/static/plotly-gl3d.min.js" defer></script>', active_nav='insights')
 
 
 def landing(entries: list[tuple[str, str, str]]) -> str:
