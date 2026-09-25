@@ -21,7 +21,7 @@ Under `launcher='orq'`, `model` becomes `orq launch --model provider/id` and `Or
 
 Container mode keeps the agent in a Docker-compatible container for the lifetime of one target clone. Use it when the agent has shell access and should not see the host filesystem or host environment; `launcher` still chooses direct provider access or `orq launch` inside that container.
 
-Build the version-matched image once with `eq coding-agent build-image`. The default tag is `evaluatorq-coding-agent:<evaluatorq version>`, which is also the default `DockerOptions.image`; the command does not pull or build automatically when an image is missing. After upgrading evaluatorq, rebuild because the expected image tag changes. When developing from a source checkout, build with the same Dockerfile directory that the installed wheel packages:
+Build the version-matched image once with `eq coding-agent build-image`. The default tag is `evaluatorq-coding-agent:<evaluatorq version>`, which is also the default `DockerOptions.image`. `CodingAgentTarget` does not pull or build automatically when the image is missing; run `eq coding-agent build-image` yourself. After upgrading evaluatorq, rebuild because the expected image tag changes. When developing from a source checkout, build with the same Dockerfile directory that the installed wheel packages:
 
 ```bash
 image_tag=$(uv run python -c 'from evaluatorq.backends.container import DEFAULT_CODING_AGENT_IMAGE; print(DEFAULT_CODING_AGENT_IMAGE)')
@@ -60,9 +60,11 @@ FROM your-task-image:latest
 COPY --from=agent_layer /usr/local /usr/local
 COPY --from=evaluatorq_runtime /usr/local/bin/evq-entrypoint /usr/local/bin/evq-entrypoint
 ENV PATH="/usr/local/bin:${PATH}"
+USER root
+RUN chmod 0666 /etc/passwd
 ```
 
-This layer provides Node 22, which current Claude Code packages require, along with the selected agent binary and the packaged entrypoint. Use a Debian-compatible task image so it can run the copied Node runtime. Pass the matching default image tag as the `EVQ_IMAGE` build argument so Docker can use that image as the `evaluatorq_runtime` stage and copy its packaged entrypoint. If you saved the fragment as `Dockerfile` beside your task files and replaced `your-task-image:latest` with the task image, build it with:
+This layer provides Node 22, which current Claude Code packages require, along with the selected agent binary and the packaged entrypoint. Use a Debian-compatible task image so it can run the copied Node runtime. `USER root` and the writable `/etc/passwd` are required because `evq-entrypoint` adds an entry for the host uid when the task image does not already have one. Pass the matching default image tag as the `EVQ_IMAGE` build argument so Docker can use that image as the `evaluatorq_runtime` stage and copy its packaged entrypoint. If you saved the fragment as `Dockerfile` beside your task files and replaced `your-task-image:latest` with the task image, build it with:
 
 ```bash
 image_tag=$(uv run python -c 'from evaluatorq.backends.container import DEFAULT_CODING_AGENT_IMAGE; print(DEFAULT_CODING_AGENT_IMAGE)')
@@ -100,28 +102,39 @@ target = CodingAgentTarget(
 ```python
 import asyncio
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from evaluatorq.backends import CodingAgentTarget
 from evaluatorq.redteam import red_team
 
-target = CodingAgentTarget(
-    'claude',
-    model='claude-sonnet-5',
-    permission_mode='acceptEdits',
-    skills=[Path('skills/grill-me')],
-    workdir=Path('fixtures/sample-repo'),
-    system_prompt='You only work inside this repository.',
-)
-
 async def main() -> None:
-    report = await red_team(target=target, max_concurrency=2)
-    print(report.summary.resistance_rate)
+    with TemporaryDirectory(prefix='coding-agent-example-') as directory:
+        root = Path(directory)
+        workdir = root / 'sample-repo'
+        workdir.mkdir()
+        (workdir / 'README.md').write_text('A small sample repository.\n')
+        skill = root / 'grill-me'
+        skill.mkdir()
+        (skill / 'SKILL.md').write_text(
+            '---\nname: grill-me\ndescription: Ask for missing requirements before editing.\n---\n'
+            'Before changing this repository, ask one concise question about any unclear requirement.\n'
+        )
+        target = CodingAgentTarget(
+            'claude',
+            model='claude-sonnet-5',
+            permission_mode='acceptEdits',
+            skills=[skill],
+            workdir=workdir,
+            system_prompt='You only work inside this repository.',
+        )
+        report = await red_team(target=target, max_concurrency=2)
+        print(report.summary.resistance_rate)
 
 
 asyncio.run(main())
 ```
 
-Each parallel job gets its own copy of `fixtures/sample-repo` with `skills/grill-me` linked into `.claude/skills/`. The copies are deleted when the run ends; pass `keep_workdir=True` to keep them and log their paths, which is the fastest way to see what the agent actually changed.
+The example creates a temporary repository and a one-file `grill-me` skill before the run, so it has no project-specific path prerequisites. Each parallel job gets its own repository copy with that skill added under `.claude/skills/`. The copies are deleted when the run ends; pass `keep_workdir=True` to keep them and log their paths, which is the fastest way to see what the agent actually changed.
 
 ## Through the Orq gateway
 
