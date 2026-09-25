@@ -1638,6 +1638,7 @@ ReportSectionKind = Literal[
     'errors',
     'recommendations',
     # Red-team-specific
+    'pipeline_warnings',
     'focus_areas',
     'vulnerability_breakdown',
     'category_breakdown',

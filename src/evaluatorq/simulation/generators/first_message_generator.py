@@ -6,15 +6,13 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, cast
 
-from openai import APIStatusError
-
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
 from evaluatorq.common.llm_call import execute_response
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
-from evaluatorq.common.retry import with_retry
+from evaluatorq.common.retry import _is_retryable_error, with_retry
 from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
@@ -41,6 +39,24 @@ _READ_CONFIG_FIELDS = frozenset({
 
 # An opening line is a small, fast call; a minute is already pathological.
 _TIMEOUT_S = 60.0
+
+# Attempts for a reply with no usable text (empty or refused). Transport errors
+# are retried separately, inside each attempt, by `with_retry`.
+_CONTENT_ATTEMPTS = 3
+
+
+class FirstMessageGenerationError(RuntimeError):
+    """The model produced no usable first message; the datapoint should fail."""
+
+
+def is_recoverable_first_message_failure(exc: Exception) -> bool:
+    """Drop one pair for unusable output or an exhausted transient provider failure.
+
+    Authentication, request/configuration, and unexpected errors must abort the
+    batch so callers do not mistake incomplete input for a valid dataset.
+    """
+    return isinstance(exc, FirstMessageGenerationError) or _is_retryable_error(exc)
+
 
 _FIRST_MESSAGE_PROMPT = """You are generating the authentic first message a user would type to a support agent.
 
@@ -127,7 +143,14 @@ class FirstMessageGenerator:
     async def generate(self, persona: Persona, scenario: Scenario) -> str:
         """Generate a first message for a simulation.
 
-        Retry is owned by ``with_retry``; client retries are disabled.
+        Transport errors are retried by ``with_retry`` (client retries are
+        disabled); an empty or refused reply is retried up to
+        ``_CONTENT_ATTEMPTS`` times.
+
+        Raises:
+            FirstMessageGenerationError: no usable message was produced. There is
+                no canned fallback: the caller fails that datapoint instead.
+            APIStatusError: the provider call failed after retries.
         """
         persona_context = build_persona_system_prompt(persona)
         scenario_context = build_scenario_user_context(scenario)
@@ -150,83 +173,52 @@ Keep it natural - this is how they would actually open a conversation."""
             ],
         )
 
-        try:
-            async with with_llm_span(
-                model=self._model,
-                operation='responses',
-                max_tokens=_MAX_OUTPUT_TOKENS,
-                temperature=self._config.temperature,
-                purpose='first_message',
-            ) as span:
-                record_llm_input(
-                    span,
-                    [
-                        {'role': str(m['role']), 'content': str(m.get('content', ''))}  # pyright: ignore[reportAttributeAccessIssue]
-                        for m in messages
-                    ],
-                )
-                # RES-1295: `generate()` returns a bare `str`, so the usage
-                # execute_response now prices has nowhere to go — carrying it
-                # would mean widening this public return type. See "What the
-                # totals do not include" in docs/guides/red-teaming.md.
-                message = ''
-                for attempt in range(2):
-                    response, _usage = await with_retry(
-                        lambda: execute_response(
-                            client=self._client,
-                            model=self._model,
-                            messages=cast('list[dict[str, Any]]', messages),
-                            span=span,
-                            timeout_s=self._config.timeout_s(_TIMEOUT_S),
-                            max_output_tokens=_MAX_OUTPUT_TOKENS,
-                            **self._config.set_values('temperature', 'reasoning_effort', 'extra_body', 'extra_kwargs'),
-                        ),
-                        label='FirstMessageGenerator.generate',
-                    )
-
-                    refusal = first_responses_refusal(response)
-                    if refusal is not None:
-                        logger.warning('FirstMessageGenerator: model refused first message: %s', refusal)
-                        break
-                    if responses_stop_reason(response) == 'length':
-                        logger.warning(
-                            'FirstMessageGenerator: response truncated at max_output_tokens=%s before any text; '
-                            'raise the budget to get a persona-shaped opening',
-                            _MAX_OUTPUT_TOKENS,
-                        )
-                        break
-                    message = re.sub(r'^["\']|["\']$', '', (response.output_text or '').strip())
-                    if message:
-                        break
-                    # A reasoning model can spend the whole budget before it
-                    # answers, so empty text here often means truncation rather
-                    # than a lazy model. Retrying at the same budget would
-                    # truncate identically — name the cause and stop.
-                    if attempt == 0:
-                        logger.info('FirstMessageGenerator: LLM returned empty content, retrying once')
-                else:
-                    message = ''
-
-            if not message:
-                logger.warning('FirstMessageGenerator: LLM returned empty content after retry, using generic fallback')
-                return f'Hi, I need help with: {scenario.goal}'
-
-            logger.debug('Generated first message: %s...', message[:100])
-            return message
-
-        except APIStatusError as e:
-            # Re-raise client errors (auth, bad request, model-not-found, …) —
-            # those are real misconfigurations, not transient, and a canned
-            # message would silently mask them. Only fall back for persistent
-            # server (5xx) / rate-limit (429) errors that survived with_retry, so
-            # a long run isn't aborted by an infra blip; log loudly so the
-            # degraded input is visible.
-            if e.status_code < 500 and e.status_code != 429:
-                raise
-            logger.warning(
-                'FirstMessageGenerator: generation failed after retries (HTTP %s); '
-                'using a generic first message for this datapoint. Error: %s',
-                e.status_code,
-                e,
+        async with with_llm_span(
+            model=self._model,
+            operation='responses',
+            max_tokens=_MAX_OUTPUT_TOKENS,
+            temperature=self._config.temperature,
+            purpose='first_message',
+        ) as span:
+            record_llm_input(
+                span,
+                [
+                    {'role': str(m['role']), 'content': str(m.get('content', ''))}  # pyright: ignore[reportAttributeAccessIssue]
+                    for m in messages
+                ],
             )
-            return f'Hi, I need help with: {scenario.goal}'
+            # RES-1295: `generate()` returns a bare `str`, so the usage
+            # execute_response now prices has nowhere to go — carrying it
+            # would mean widening this public return type. See "What the
+            # totals do not include" in docs/guides/red-teaming.md.
+            failure = 'no attempt made'
+            for attempt in range(1, _CONTENT_ATTEMPTS + 1):
+                response, _usage = await with_retry(
+                    lambda: execute_response(
+                        client=self._client,
+                        model=self._model,
+                        messages=cast('list[dict[str, Any]]', messages),
+                        span=span,
+                        timeout_s=self._config.timeout_s(_TIMEOUT_S),
+                        max_output_tokens=_MAX_OUTPUT_TOKENS,
+                        **self._config.set_values('temperature', 'reasoning_effort', 'extra_body', 'extra_kwargs'),
+                    ),
+                    label='FirstMessageGenerator.generate',
+                )
+
+                if responses_stop_reason(response) == 'length':
+                    # Retrying at the same budget would truncate identically.
+                    raise FirstMessageGenerationError(
+                        f'response truncated at max_output_tokens={_MAX_OUTPUT_TOKENS}; '
+                        'raise the budget to get a persona-shaped opening'
+                    )
+                refusal = first_responses_refusal(response)
+                message = re.sub(r'^["\']|["\']$', '', (response.output_text or '').strip())
+                if refusal is None and message:
+                    logger.debug('Generated first message: %s...', message[:100])
+                    return message
+                failure = f'model refused: {refusal}' if refusal is not None else 'empty content'
+                if attempt < _CONTENT_ATTEMPTS:
+                    logger.info('FirstMessageGenerator: %s, retrying (attempt %d)', failure, attempt + 1)
+
+        raise FirstMessageGenerationError(f'no usable first message after {_CONTENT_ATTEMPTS} attempts ({failure})')

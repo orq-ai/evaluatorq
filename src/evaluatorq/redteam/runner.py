@@ -1356,7 +1356,7 @@ async def red_team(
             Defaults to 10.
         parallelism: Deprecated alias for ``datapoint_parallelism``.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
-            run, counted per request rather than per job. Unbounded by default.
+            run, counted per request rather than per job. Defaults to 10; -1 disables it.
             Set this, not ``datapoint_parallelism``, against a provider concurrency
             limit: one job issues many requests, so ``datapoint_parallelism`` cannot
             be sized against one. Covers the pipeline, judges and strategy generation;
@@ -2187,7 +2187,6 @@ async def _prepare_target(
     max_turns: int,
     max_per_category: int | None,
     attack_model: str,
-    datapoint_parallelism: int,
     generate_strategies: bool,
     generated_strategy_count: int,
     max_dynamic_datapoints: int | None,
@@ -2282,7 +2281,6 @@ async def _prepare_target(
                 generated_strategy_count=generated_strategy_count,
                 llm_client=resolved_llm_client,
                 attack_model=attack_model,
-                datapoint_parallelism=datapoint_parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
@@ -2301,7 +2299,6 @@ async def _prepare_target(
                 generated_strategy_count=generated_strategy_count,
                 llm_client=resolved_llm_client,
                 attack_model=attack_model,
-                datapoint_parallelism=datapoint_parallelism,
                 attacker_instructions=attacker_instructions,
                 pipeline_config=pipeline_config,
                 agent_capabilities=prefetched_agent_capabilities,
@@ -2860,7 +2857,6 @@ class _TargetPrepInputs:
     max_turns: int
     max_per_category: int | None
     attack_model: str
-    datapoint_parallelism: int
     generate_strategies: bool
     generated_strategy_count: int
     max_dynamic_datapoints: int | None
@@ -2896,7 +2892,6 @@ async def _prepare_string_targets(*, inputs: _TargetPrepInputs) -> list[Prepared
     max_turns = inputs.max_turns
     max_per_category = inputs.max_per_category
     attack_model = inputs.attack_model
-    datapoint_parallelism = inputs.datapoint_parallelism
     generate_strategies = inputs.generate_strategies
     generated_strategy_count = inputs.generated_strategy_count
     max_dynamic_datapoints = inputs.max_dynamic_datapoints
@@ -2930,7 +2925,6 @@ async def _prepare_string_targets(*, inputs: _TargetPrepInputs) -> list[Prepared
         max_turns=max_turns,
         max_per_category=max_per_category,
         attack_model=attack_model,
-        datapoint_parallelism=datapoint_parallelism,
         generate_strategies=generate_strategies,
         generated_strategy_count=generated_strategy_count,
         max_dynamic_datapoints=max_dynamic_datapoints,
@@ -3015,7 +3009,6 @@ class _AgentTargetDatapointInputs:
     generated_strategy_count: int
     at_llm_client: AsyncOpenAI | None
     attack_model: str
-    datapoint_parallelism: int
     attacker_instructions: str | None
     pipeline_config: LLMConfig | None
     at_caps: dict[int, AgentCapabilities]
@@ -3041,7 +3034,6 @@ async def _generate_agent_target_datapoints(
     generated_strategy_count = inputs.generated_strategy_count
     at_llm_client = inputs.at_llm_client
     attack_model = inputs.attack_model
-    datapoint_parallelism = inputs.datapoint_parallelism
     attacker_instructions = inputs.attacker_instructions
     pipeline_config = inputs.pipeline_config
     at_caps = inputs.at_caps
@@ -3073,7 +3065,6 @@ async def _generate_agent_target_datapoints(
             generated_strategy_count=generated_strategy_count,
             llm_client=at_llm_client,
             attack_model=attack_model,
-            datapoint_parallelism=datapoint_parallelism,
             attacker_instructions=attacker_instructions,
             pipeline_config=pipeline_config,
             agent_capabilities=at_pref_caps,
@@ -3091,7 +3082,6 @@ async def _generate_agent_target_datapoints(
             generated_strategy_count=generated_strategy_count,
             llm_client=at_llm_client,
             attack_model=attack_model,
-            datapoint_parallelism=datapoint_parallelism,
             attacker_instructions=attacker_instructions,
             pipeline_config=pipeline_config,
             agent_capabilities=at_pref_caps,
@@ -3488,7 +3478,6 @@ async def _run_dynamic_or_hybrid(
             max_turns=max_turns,
             max_per_category=max_per_category,
             attack_model=attack_model,
-            datapoint_parallelism=datapoint_parallelism,
             generate_strategies=generate_strategies,
             generated_strategy_count=generated_strategy_count,
             max_dynamic_datapoints=max_dynamic_datapoints,
@@ -3568,7 +3557,6 @@ async def _run_dynamic_or_hybrid(
                         generated_strategy_count=generated_strategy_count,
                         at_llm_client=at_llm_client,
                         attack_model=attack_model,
-                        datapoint_parallelism=datapoint_parallelism,
                         attacker_instructions=attacker_instructions,
                         pipeline_config=pipeline_config,
                         at_caps=at_caps,
@@ -4233,16 +4221,22 @@ def _collect_filter_warnings(*, prepared_targets: list[PreparedTarget]) -> list[
         for cat_key, cat_meta in fm.items():
             if cat_key.startswith('_') or not isinstance(cat_meta, dict):
                 continue
-            if cat_meta.get('total_selected', 0) == 0:
-                gen_error = cat_meta.get('generation_error')
-                if gen_error:
-                    filter_warnings.append(
-                        f'Category {cat_key!r}: zero strategies selected (generation error: {gen_error})'
-                    )
-                else:
-                    filter_warnings.append(
-                        f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
-                    )
+            gen_error = cat_meta.get('generation_error')
+            selected = cat_meta.get('total_selected', 0)
+            if selected == 0 and gen_error:
+                filter_warnings.append(
+                    f'Category {cat_key!r}: zero strategies selected (generation error: {gen_error})'
+                )
+            elif selected == 0:
+                filter_warnings.append(
+                    f'Category {cat_key!r}: zero strategies selected — no applicable strategies found for this agent.'
+                )
+            elif gen_error:
+                # Hardcoded strategies still ran, so coverage is reduced rather than absent.
+                filter_warnings.append(
+                    f'Category {cat_key!r}: strategy generation failed ({gen_error}); '
+                    f'ran {selected} hardcoded strateg{"y" if selected == 1 else "ies"} only'
+                )
 
     return filter_warnings
 

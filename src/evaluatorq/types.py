@@ -1,11 +1,12 @@
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import AfterValidator, AliasChoices, BaseModel, ConfigDict, Field, field_serializer, model_validator
 from typing_extensions import NotRequired, TypedDict
 
+from evaluatorq.common.llm_limit import check_llm_parallelism
 from evaluatorq.contracts import AgentResponse, Message, TokenUsage
 
 # Keep output permissive: OpenResponses payloads are dict-shaped and should
@@ -378,7 +379,7 @@ class EvaluatorParams(BaseModel):
               to 10; set to 1 for sequential execution. Accepts the former name
               ``parallelism``, which is deprecated.
         llm_parallelism: Ceiling on in-flight LLM requests for the whole
-              run, counted per request rather than per task. Unbounded by default.
+              run, counted per request rather than per task. Defaults to 10; -1 disables it.
               Use this against a provider concurrency limit — one datapoint can
               issue many requests, so the datapoint count cannot be sized against one.
         print_results: Whether to print results table to console. Defaults to True.
@@ -404,7 +405,7 @@ class EvaluatorParams(BaseModel):
         ge=1,
         validation_alias=AliasChoices('datapoint_parallelism', 'parallelism'),
     )
-    llm_parallelism: int | None = Field(default=None, ge=1)
+    llm_parallelism: Annotated[int | None, AfterValidator(check_llm_parallelism)] = None
     print_results: bool = Field(default=True, validation_alias='print')
     description: str | None = None
     path: str | None = None

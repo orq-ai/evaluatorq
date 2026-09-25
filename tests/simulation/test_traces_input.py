@@ -600,11 +600,12 @@ async def test_fetch_skips_non_list_spans_payload() -> None:
 
 
 @pytest.mark.asyncio
-async def test_datapoints_from_traces_inference_is_bounded_concurrent(
+async def test_datapoints_from_traces_inference_is_concurrent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Inference fans out concurrently (not sequentially) but never beyond the cap,
-    and the output preserves input order."""
+    """Inference fans out concurrently (not sequentially) and the output preserves
+    input order. The run-scoped LLM ceiling (not a per-call-site semaphore) is what
+    now bounds the fan-out, so this only asserts the fan-out and ordering."""
     import asyncio
 
     from evaluatorq.simulation import traces as traces_mod
@@ -630,7 +631,6 @@ async def test_datapoints_from_traces_inference_is_bounded_concurrent(
 
     assert [dp.id for dp in datapoints] == [f"trace-t{i}" for i in range(12)]
     assert state["peak"] > 1  # actually concurrent, not sequential
-    assert state["peak"] <= traces_mod._INFER_CONCURRENCY
 
 
 @pytest.mark.asyncio
@@ -732,9 +732,10 @@ async def test_summarize_conversations_all_fail_returns_empty_dict(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_summarize_conversations_is_bounded_concurrent(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mirrors ``test_datapoints_from_traces_inference_is_bounded_concurrent`` for the
-    map step itself, called directly rather than through a downstream mode."""
+async def test_summarize_conversations_is_concurrent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirrors ``test_datapoints_from_traces_inference_is_concurrent`` for the
+    map step itself, called directly rather than through a downstream mode. The
+    run-scoped LLM ceiling bounds the fan-out, so this only asserts concurrency."""
     import asyncio
 
     from evaluatorq.simulation import traces as traces_mod
@@ -756,7 +757,60 @@ async def test_summarize_conversations_is_bounded_concurrent(monkeypatch: pytest
 
     assert len(summaries) == 12
     assert state["peak"] > 1  # actually concurrent, not sequential
-    assert state["peak"] <= traces_mod._INFER_CONCURRENCY
+
+
+@pytest.mark.asyncio
+async def test_summarize_fan_out_is_bounded_by_the_run_ceiling() -> None:
+    """The run-scoped ceiling caps the real summarize -> generate_structured -> executor path.
+
+    The fake sits at the provider client, so the slot is taken by the production
+    executor. If any layer between summarize and the client stopped taking a slot,
+    the twelve calls would overlap past the limit and this test would fail.
+    """
+    import asyncio
+
+    from openai.types.chat.parsed_chat_completion import (
+        ParsedChatCompletion,
+        ParsedChatCompletionMessage,
+        ParsedChoice,
+    )
+
+    from evaluatorq.common.llm_limit import llm_concurrency_limit
+    from evaluatorq.simulation import traces as traces_mod
+
+    limit = 2
+    state = {"active": 0, "peak": 0}
+
+    async def parse(**_kwargs: Any) -> ParsedChatCompletion[Any]:
+        state["active"] += 1
+        state["peak"] = max(state["peak"], state["active"])
+        for _ in range(4):
+            await asyncio.sleep(0)
+        state["active"] -= 1
+        summary = traces_mod._ConversationSummary(summary="summary")
+        return ParsedChatCompletion[Any](
+            id="cmpl",
+            created=0,
+            model="fake",
+            object="chat.completion",
+            choices=[
+                ParsedChoice[Any](
+                    index=0,
+                    finish_reason="stop",
+                    message=ParsedChatCompletionMessage[Any](role="assistant", content=None, parsed=summary),
+                )
+            ],
+        )
+
+    client = MagicMock()
+    client.chat.completions.parse = parse
+
+    conversations = [_make_conversation(f"t{i}") for i in range(12)]
+    async with llm_concurrency_limit(limit):
+        summaries = await summarize_conversations(conversations, client=client)
+
+    assert len(summaries) == 12
+    assert state["peak"] == limit  # concurrent, and held at the ceiling
 
 
 @pytest.mark.asyncio

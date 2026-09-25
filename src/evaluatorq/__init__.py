@@ -31,6 +31,7 @@ except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, no
     __version__ = '0.0.0.dev0'
 
 from .common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
+from .common.llm_limit import llm_concurrency_limit, llm_slot
 from .common.trace_input import fetch_traces
 from .contracts import AgentResponse
 from .deployment import (
@@ -148,9 +149,12 @@ __all__ = [
     'invoke',
     # Helper functions
     'job',
+    # Run-scoped LLM concurrency ceiling
+    'llm_concurrency_limit',
     # LLM jury evaluator
     'llm_jury',
     'llm_jury_pairwise',
+    'llm_slot',
     'orq_evaluator',
     'repetition_consistency',
     'repetition_consistency_raw',

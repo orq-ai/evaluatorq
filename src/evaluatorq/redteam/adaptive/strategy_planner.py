@@ -52,7 +52,6 @@ async def plan_strategies_for_vulnerabilities(
     max_per_category: int | None,
     generate_additional_strategies: bool,
     generated_strategy_count: int,
-    generation_parallelism: int | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
@@ -158,30 +157,27 @@ async def plan_strategies_for_vulnerabilities(
                 'orq.redteam.num_vulnerabilities': len(vulnerabilities),
             },
         ) as strat_span:
-            effective_parallelism = max(1, generation_parallelism or len(vulnerabilities) or 1)
-            semaphore = asyncio.Semaphore(effective_parallelism)
 
             async def _generate_for_vulnerability(
                 vuln: Vulnerability,
             ) -> tuple[Vulnerability, list[AttackStrategy], str | None]:
                 try:
-                    async with semaphore:
-                        generated = await generate_strategies_for_vulnerability(
-                            vuln=vuln,
-                            agent_context=agent_context,
-                            llm_client=llm_client,
-                            model=attack_model,
-                            count=generated_strategy_count,
-                            # Generated strategies always run multi-turn: a single-turn
-                            # generated attack gets one shot with no chance to adapt, which
-                            # under-tests the agent. Multi-turn still ends early the moment
-                            # the objective is achieved, so cheap wins stay cheap.
-                            turn_type=TurnType.MULTI,
-                            max_turns=max_turns,
-                            attacker_instructions=attacker_instructions,
-                            llm_kwargs=llm_kwargs,
-                            pipeline_config=cfg,
-                        )
+                    generated = await generate_strategies_for_vulnerability(
+                        vuln=vuln,
+                        agent_context=agent_context,
+                        llm_client=llm_client,
+                        model=attack_model,
+                        count=generated_strategy_count,
+                        # Generated strategies always run multi-turn: a single-turn
+                        # generated attack gets one shot with no chance to adapt, which
+                        # under-tests the agent. Multi-turn still ends early the moment
+                        # the objective is achieved, so cheap wins stay cheap.
+                        turn_type=TurnType.MULTI,
+                        max_turns=max_turns,
+                        attacker_instructions=attacker_instructions,
+                        llm_kwargs=llm_kwargs,
+                        pipeline_config=cfg,
+                    )
                     return vuln, generated, None
                 except Exception as e:  # noqa: BLE001
                     logger.error(
@@ -254,7 +250,6 @@ async def plan_strategies_for_categories(
     max_per_category: int | None,
     generate_additional_strategies: bool,
     generated_strategy_count: int,
-    generation_parallelism: int | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
@@ -301,7 +296,6 @@ async def plan_strategies_for_categories(
         max_per_category=max_per_category,
         generate_additional_strategies=generate_additional_strategies,
         generated_strategy_count=generated_strategy_count,
-        generation_parallelism=generation_parallelism,
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
         pipeline_config=pipeline_config,
