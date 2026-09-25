@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import cast
 
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
@@ -21,6 +22,31 @@ def test_vectors_per_text_hit_and_miss(tmp_path):
     c = InsightsCache(tmp_path / 'c.sqlite')
     c.put_vectors('e', {'a': [0.5, 1.0]})
     assert c.get_vectors('e', ['a', 'b']) == {'a': [0.5, 1.0]}
+
+
+def test_large_vector_lookup_stays_below_sqlite_bind_limit(tmp_path):
+    cache = InsightsCache(tmp_path / 'c.sqlite')
+    vectors = {f'text-{index}': [float(index)] for index in range(1201)}
+    cache.put_vectors('e', vectors)
+    connection = cache._conn
+    assert connection is not None
+
+    class LimitedConnection:
+        queries = 0
+
+        def execute(self, query, params):
+            assert len(params) <= 501
+            self.queries += 1
+            return connection.execute(query, params)
+
+    limited = LimitedConnection()
+    cache._conn = cast('sqlite3.Connection', cast('object', limited))
+    try:
+        assert cache.get_vectors('e', vectors) == vectors
+        assert limited.queries == 3
+    finally:
+        cache._conn = connection
+        cache.close()
 
 
 def test_disabled_cache_never_hits(tmp_path):

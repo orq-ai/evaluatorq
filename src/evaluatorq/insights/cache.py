@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 DEFAULT_CACHE_PATH = Path('.evaluatorq/cache/insights.sqlite')
+_VECTOR_QUERY_CHUNK_SIZE = 500
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS summaries (
@@ -70,7 +71,6 @@ class InsightsCache:
     """
 
     def __init__(self, path: Path | None = None, *, enabled: bool = True) -> None:
-        self._enabled = enabled
         self._conn: sqlite3.Connection | None = None
         if not enabled:
             return
@@ -133,13 +133,18 @@ class InsightsCache:
             return {}
         hash_to_text = {_text_hash(text): text for text in texts}
         try:
-            placeholders = ','.join('?' for _ in hash_to_text)
-            # Only '?' placeholders are interpolated here, one per hashed text — no
-            # caller-supplied value ever reaches the query string itself.
-            rows = self._conn.execute(
-                f'SELECT text_hash, vector FROM vectors WHERE model = ? AND text_hash IN ({placeholders})',  # noqa: S608
-                (model, *hash_to_text.keys()),
-            ).fetchall()
+            rows = []
+            hashes = list(hash_to_text)
+            for start in range(0, len(hashes), _VECTOR_QUERY_CHUNK_SIZE):
+                chunk = hashes[start : start + _VECTOR_QUERY_CHUNK_SIZE]
+                placeholders = ','.join('?' for _ in chunk)
+                # Only '?' placeholders are interpolated here; caller text stays bound.
+                rows.extend(
+                    self._conn.execute(
+                        f'SELECT text_hash, vector FROM vectors WHERE model = ? AND text_hash IN ({placeholders})',  # noqa: S608
+                        (model, *chunk),
+                    ).fetchall()
+                )
         except sqlite3.Error as exc:
             logger.warning(f'InsightsCache.get_vectors: {exc}; treating as a miss')
             return {}

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 import typer
 from click import unstyle
 from typer.testing import CliRunner
@@ -79,6 +80,32 @@ def test_finder_export_and_query_are_usage_error() -> None:
 
     assert result.exit_code == 2, result.output
     assert '--from-finder cannot be combined with --query' in result.output
+
+
+@pytest.mark.parametrize(
+    ('option', 'value'),
+    [
+        ('--window-days', '3'),
+        ('--limit', '10'),
+        ('--project', 'project-a'),
+        ('--model', 'model-a'),
+        ('--provider', 'provider-a'),
+        ('--status', 'completed'),
+        ('--product', 'chat'),
+        ('--trace-type', 'conversation'),
+        ('--agent', 'agent-a'),
+        ('--tool', 'search'),
+        ('--tokens-min', '1'),
+        ('--tokens-max', '10'),
+        ('--duration-ms-min', '1'),
+        ('--duration-ms-max', '10'),
+    ],
+)
+def test_finder_export_rejects_population_options(option: str, value: str) -> None:
+    result = CliRunner().invoke(_app(), ['insights', '--from-finder', 'finder.json', option, value])
+
+    assert result.exit_code == 2, result.output
+    assert f'--from-finder cannot be combined with population options: {option}' in unstyle(result.output)
 
 
 def test_invalid_finder_exports_are_usage_errors_without_running_pipeline(tmp_path: Path, monkeypatch: Any) -> None:

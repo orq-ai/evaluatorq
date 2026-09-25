@@ -204,17 +204,17 @@
     if (evt.target.matches('[data-map-color]')) drawInsightsMap(evt.target.closest('.insights-map-view').querySelector('.insights-map-chart'));
   });
   document.body.addEventListener('click', function (evt) {
-    var crosstabLink = evt.target.closest('#insights-crosstab a[href*="/tab/traces?row="]');
+    const crosstabLink = evt.target.closest('#insights-crosstab a[href*="/tab/traces?row="]');
     if (crosstabLink && window.htmx) {
       evt.preventDefault();
       history.pushState(null, '', crosstabLink.href);
       window.htmx.ajax('GET', crosstabLink.href, { target: '#insights-content', swap: 'innerHTML' });
       return;
     }
-    var toggle = evt.target.closest('[data-insights-view]');
+    const toggle = evt.target.closest('[data-insights-view]');
     if (toggle) {
-      var section = toggle.closest('.insights-dimension');
-      var mode = toggle.getAttribute('data-insights-view');
+      const section = toggle.closest('.insights-dimension');
+      const mode = toggle.getAttribute('data-insights-view');
       section.querySelectorAll('[data-insights-mode]').forEach(function (view) { view.hidden = view.getAttribute('data-insights-mode') !== mode; });
       section.querySelectorAll('[data-insights-view]').forEach(function (button) { button.classList.toggle('active', button === toggle); });
       if (mode === 'map') drawInsightsMap(section.querySelector('.insights-map-chart'));
