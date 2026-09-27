@@ -71,6 +71,7 @@ def _load_mark() -> str:
 _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
 FIND_ICON = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><circle cx="11" cy="11" r="2"/>'
+TRACE_ICON = '<path d="M3 12h3l3-8 6 16 3-8h3"/>'
 
 
 def _favicon_link() -> str:
@@ -118,9 +119,15 @@ _NAV: list[tuple[str, str, str, str]] = [
     ),
     (
         'find',
-        'Traces',
+        'Trace search',
         '/find',
         FIND_ICON,
+    ),
+    (
+        'traces',
+        'Traces',
+        '/traces',
+        TRACE_ICON,
     ),
     (
         'settings',

@@ -397,7 +397,7 @@ def legend(snapshot: RunSnapshot) -> str:
     )
 
 
-def progress(snapshot: RunSnapshot) -> str:
+def progress(snapshot: RunSnapshot, *, export_url: str = '/find/export.json') -> str:
     running = snapshot.state in {'compiling', 'classifying'}
     state = {
         'planning': 'planning search',
@@ -412,7 +412,7 @@ def progress(snapshot: RunSnapshot) -> str:
     action = (
         f'<form class="finder-progress-action" hx-post="/find/cancel" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">{csrf_field()}<button class="btn-secondary" type="submit">Cancel</button><span role="status">Cancelling…</span></form>'
         if running
-        else f'<a class="btn-secondary" href="/find/export.json">Download JSON</a>{reset}'
+        else f'<a class="btn-secondary" href="{esc(export_url)}">Download JSON</a>{reset}'
         if snapshot.state == 'completed'
         else reset
     )
@@ -448,7 +448,7 @@ def progress(snapshot: RunSnapshot) -> str:
     )
 
 
-def field(snapshot: RunSnapshot, *, api_available: bool = True) -> str:
+def field(snapshot: RunSnapshot, *, api_available: bool = True, export_url: str = '/find/export.json') -> str:
     body = matrix(snapshot)
     if snapshot.state == 'idle':
         if api_available:
@@ -471,7 +471,7 @@ def field(snapshot: RunSnapshot, *, api_available: bool = True) -> str:
     elif not snapshot.traces:
         body += '<div class="finder-hint"><div class="inner"><h4>No traces loaded.</h4><p>No traces match the current window and filters.</p></div></div>'
     unavailable = ' unavailable' if snapshot.state == 'idle' and not api_available else ''
-    return f'<div class="finder-field{unavailable}">{progress(snapshot) if snapshot.state != "idle" else ""}{body}{legend(snapshot) if snapshot.compiled else ""}</div>'
+    return f'<div class="finder-field{unavailable}">{progress(snapshot, export_url=export_url) if snapshot.state != "idle" else ""}{body}{legend(snapshot) if snapshot.compiled else ""}</div>'
 
 
 def table(snapshot: RunSnapshot) -> str:
@@ -760,7 +760,7 @@ def page_html(
 
         explorer_html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
     html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error, has_rows=has_rows)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
-    return page('Traces', html, active_nav='find')
+    return page('Traces', html, active_nav='traces')
 
 
 def fragment(

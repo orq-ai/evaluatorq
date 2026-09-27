@@ -317,7 +317,7 @@ def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatc
     assert 'Loading facet values…' in page
     assert 'class="finder-facet-loading" role="status">Loading filters…' in page
     assert '<button class="add" type="button" aria-haspopup="true">+ Filter</button>' in page
-    assert 'name="window_days" value="7"' in page
+    assert 'name="window_days"' in page and 'value="7"' in page
 
     menu = client.get('/find/facets?form_id=finder-query-form&window_days=7').text
     assert loads == [7]
@@ -330,24 +330,70 @@ def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatc
     assert loads == [7]
 
 
-def test_idle_page_defaults_to_review_mode(setup_finder) -> None:
+def test_legacy_search_defaults_to_immediate_mode(setup_finder) -> None:
     _store, client = setup_finder
     html = client.get('/find').text
-    assert 'value="review" form="finder-query-form" checked' in html
+    assert 'value="immediate" form="finder-query-form" checked' in html
 
 
-def test_find_idle_page_and_nav(setup_finder) -> None:
+def test_find_idle_page_is_standalone_legacy_search_and_reuses_facets(setup_finder) -> None:
     _store, client = setup_finder
     response = client.get('/find')
+    html = response.text
     assert response.status_code == 200
-    assert 'Traces' in response.text
-    assert 'Load traces to start' in response.text
-    assert 'id="explorer-results-slot"' in response.text
-    assert 'Traces' in response.text
-    assert 'about 1,240 traces in window' not in response.text
-    assert 'class="finder-matrix idle"' not in response.text
-    assert 'data-finder-example="Frustrated customers in the support agent on production this week."' in response.text
-    assert 'id="finder-query-form"' in response.text
+    assert 'Trace search' in html
+    assert 'Find the signal.' in html
+    assert 'id="finder-query-form"' in html
+    assert 'id="finder-controls"' in html
+    assert 'class="finder-facets' in html
+    assert 'id="explorer-results-slot"' not in html
+    assert 'Load traces to start' not in html
+    assert "hx-vals='{\"surface\":\"search\"}'" in html
+    assert 'href="/traces"' in html
+
+
+def test_traces_page_is_separate_explorer_and_reuses_facet_controls(setup_finder) -> None:
+    _store, client = setup_finder
+    response = client.get('/traces')
+    html = response.text
+    assert response.status_code == 200
+    assert 'id="explorer-results-slot"' in html
+    assert 'Load traces' in html
+    assert 'id="finder-controls"' in html
+    assert 'class="finder-facets' in html
+    assert 'href="/find"' in html
+    assert 'Find the signal.' not in html
+
+
+def test_search_reset_does_not_clear_traces_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    stores: list[FakeStore] = []
+
+    async def build_store(_app: Any) -> FakeStore:
+        store = FakeStore()
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    app = build_app(roots=[tmp_path])
+    client = TestClient(app, raise_server_exceptions=True)
+    assert client.get('/traces').status_code == 200
+    assert client.get('/find').status_code == 200
+    assert len(stores) == 2
+    assert app.state.finder_store is stores[0]
+    assert app.state.finder_search_store is stores[1]
+
+    client.post('/find/run', data=csrf_data({'surface': 'search', 'query': 'frustrated customers'}))
+    assert stores[1].snapshot_value.state == 'classifying'
+    assert stores[0].snapshot_value.state == 'idle'
+    stores[1].complete()
+    assert 'href="/find/export.json?surface=search"' in client.get('/find').text
+    assert client.get('/find/export.json?surface=search').status_code == 200
+    assert client.get('/find/export.json').status_code == 404
+    client.post('/find/reset', data=csrf_data({'surface': 'search'}))
+    assert stores[1].snapshot_value.state == 'idle'
+    assert stores[0].snapshot_value.state == 'idle'
 
 
 def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -358,7 +404,7 @@ def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatc
     assert response.status_code == 200
     assert 'Set ORQ_API_KEY to load traces' in response.text
     assert '<textarea name="query"' in response.text and 'disabled' in response.text.split('<textarea name="query"', 1)[1].split('>', 1)[0]
-    assert 'class="xr-empty"' in response.text
+    assert 'id="explorer-results-slot"' not in response.text
     assert '<span class="finder-key-hint"' not in response.text
 
 
@@ -379,14 +425,14 @@ def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) 
 
 def test_full_page_polling_timer_disappears_on_terminal_fragment(setup_finder) -> None:
     store, client = setup_finder
-    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    client.post('/find/run', data=csrf_data({'surface': 'search', 'query': 'frustrated customers', 'mode': 'immediate'}))
     page = client.get('/find').text
-    assert page.count('hx-get="/find/poll"') == 1
-    assert '<div id="finder-body"><div class="finder-body-fragment" hx-get="/find/poll"' in page
+    assert page.count('hx-get="/find/poll?surface=search"') == 1
+    assert '<div id="finder-body"><div class="finder-body-fragment" hx-get="/find/poll?surface=search"' in page
 
     store.complete()
-    poll = client.get('/find/poll').text
-    assert 'hx-get="/find/poll"' not in poll
+    poll = client.get('/find/poll?surface=search').text
+    assert 'hx-get="/find/poll?surface=search"' not in poll
 
 
 def test_score_review_keeps_generated_threshold_and_colors_scores() -> None:

@@ -227,7 +227,7 @@ def _load(client: TestClient, **extra: str) -> Any:
 def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) -> None:
     store, source, client = explorer_client
     before = datetime.now(timezone.utc)
-    response = client.get('/find')
+    response = client.get('/traces')
     after = datetime.now(timezone.utc)
 
     assert response.status_code == 200
@@ -244,7 +244,7 @@ def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) 
     assert f'data-utc="{call["start"].strftime("%Y-%m-%dT%H:%M:%S")}"' in response.text
     assert f'data-utc="{call["end"].strftime("%Y-%m-%dT%H:%M:%S")}"' in response.text
 
-    client.get('/find')
+    client.get('/traces')
     assert len(source.calls) == 1
 
 
@@ -265,7 +265,7 @@ def test_server_warms_traces_and_facets_before_the_first_find_request(explorer_c
     with client:
         try:
             assert started.wait(timeout=2)
-            assert client.get('/find').status_code == 200
+            assert client.get('/traces').status_code == 200
             assert len(source.calls) == 1
             assert calls == [7]
         finally:
@@ -293,13 +293,13 @@ async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer
 
     monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://testserver') as http:
-        page = await http.get('/find')
+        page = await http.get('/traces')
         await asyncio.wait_for(started.wait(), timeout=2)
         assert page.status_code == 200
         assert 'name="window_days" value="7"' in page.text
         assert calls == [7]
 
-        await http.get('/find')
+        await http.get('/traces')
         assert calls == [7]
         menu_task = asyncio.create_task(http.get('/find/facets?window_days=7'))
         await asyncio.sleep(0)
@@ -329,7 +329,7 @@ async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer
 def test_find_page_keeps_manually_loaded_range(explorer_client) -> None:
     _, source, client = explorer_client
     _load(client)
-    response = client.get('/find')
+    response = client.get('/traces')
     assert len(source.calls) == 1
     assert 'data-utc="2026-09-27T10:00:00"' in response.text
     assert 'data-utc="2026-09-27T11:00:00"' in response.text

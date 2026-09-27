@@ -22,6 +22,7 @@ from evaluatorq.common.orq_client import (
 )
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder import explorer_views
+from evaluatorq.dashboard.trace_finder.search_views import search_fragment, search_page_html
 from evaluatorq.dashboard.trace_finder.views import (
     drawer,
     facet_menu,
@@ -169,16 +170,17 @@ async def _build_store(app: Any) -> RunStore | None:
     return build_run_store(settings, client=resolved.client, orq=orq, cleanup=cleanup)
 
 
-async def _store(app: Any) -> RunStore | None:
-    store = getattr(app.state, 'finder_store', None)
+async def _store(app: Any, *, surface: Literal['search', 'traces'] = 'traces') -> RunStore | None:
+    state_name = 'finder_search_store' if surface == 'search' else 'finder_store'
+    store = getattr(app.state, state_name, None)
     if store is not None:
         return store
     async with app.state.finder_store_lock:
-        store = getattr(app.state, 'finder_store', None)
+        store = getattr(app.state, state_name, None)
         if store is None:
             store = await _build_store(app)
             if store is not None:
-                app.state.finder_store = store
+                setattr(app.state, state_name, store)
         return store
 
 
@@ -494,8 +496,26 @@ def _html(content: str, *, status_code: int = 200) -> Response:
 
 
 def register_finder_routes(app: Any) -> None:  # noqa: C901
-    """Register the Find page and its HTMX fragments on *app*."""
+    """Register the Trace search and Traces pages with shared HTMX endpoints."""
     initialize_finder_settings(app)
+
+    def is_search(req: Request) -> bool:
+        return req.query_params.get('surface') == 'search' or getattr(req.state, 'finder_surface', None) == 'search'
+
+    async def store_for(req: Request) -> RunStore | None:
+        return await _store(req.app, surface='search' if is_search(req) else 'traces')
+
+    def render_fragment(req: Request, snapshot: RunSnapshot, settings: Any, **kwargs: Any) -> str:
+        if is_search(req):
+            return search_fragment(
+                snapshot,
+                settings,
+                error=kwargs.get('error'),
+                api_available=kwargs.get('api_available', True),
+                catalogue=kwargs.get('catalogue'),
+                pending=kwargs.get('pending', False),
+            )
+        return fragment(snapshot, settings, **kwargs)
 
     async def _explorer_html(req: Request, *, oob: bool = False, error: str | None = None) -> str:
         store = await _store(req.app)
@@ -524,6 +544,21 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
     @app.get('/find')
     async def find_page(req: Request) -> Response:
         settings = _settings(req.app)
+        store = await _store(req.app, surface='search')
+        snapshot = await store.snapshot() if store is not None else RunSnapshot()
+        return _html(
+            search_page_html(
+                snapshot,
+                settings,
+                api_available=store is not None,
+                error=_unavailable_reason(req.app) if store is None else None,
+                **_catalogue_kwargs(req.app, snapshot),
+            )
+        )
+
+    @app.get('/traces')
+    async def traces_page(req: Request) -> Response:
+        settings = _settings(req.app)
         store = await warm_initial_finder(req.app)
         api_available = store is not None
         explorer = store.explorer if store is not None else None
@@ -545,11 +580,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
     @app.post('/find/run')
     async def find_run(req: Request) -> Response:
         form = await req.form()
+        req.state.finder_surface = form.get('surface')
         rejected = request_rejected(req, form)
         if rejected:
             settings = _settings(req.app)
             return _html(
-                fragment(
+                render_fragment(
+                    req,
                     RunSnapshot(),
                     settings,
                     error=rejected,
@@ -559,10 +596,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 status_code=403,
             )
         settings = _settings(req.app)
-        store = await _store(req.app)
+        store = await store_for(req)
         if store is None:
             return _html(
-                fragment(
+                render_fragment(
+                    req,
                     RunSnapshot(),
                     settings,
                     **_catalogue_kwargs(req.app),
@@ -576,7 +614,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 explorer_view = await explorer.view() if explorer is not None else None
                 if explorer is None or explorer_view is None or not explorer_view.rows:
                     return _html(
-                        fragment(
+                        render_fragment(
+                            req,
                             await store.snapshot(),
                             settings,
                             error='Load traces first, then ask within the results.',
@@ -613,19 +652,21 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 snapshot = await store.compile(request, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(
-                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=str(exc)), status_code=422
+                render_fragment(req, RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=str(exc)),
+                status_code=422,
             )
-        return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app, snapshot)))
+        return _html(render_fragment(req, snapshot, settings, **_catalogue_kwargs(req.app, snapshot)))
 
     @app.get('/find/poll')
     async def find_poll(req: Request) -> Response:
         settings = _settings(req.app)
-        store = await _store(req.app)
+        store = await store_for(req)
         if isinstance(store, RunStore):
             snapshot = await store.snapshot_for_render()
         else:
             snapshot = await store.snapshot() if store is not None else RunSnapshot()
-        body = fragment(
+        body = render_fragment(
+            req,
             snapshot,
             settings,
             api_available=store is not None,
@@ -633,7 +674,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             **_catalogue_kwargs(req.app, snapshot),
         )
         explorer = store.explorer if store is not None else None
-        if explorer is not None:
+        if explorer is not None and not is_search(req):
             view = await explorer.view()
             if view.rows and (snapshot.state == 'classifying' or snapshot.results):
                 body += await _explorer_html(req, oob=True)
@@ -674,7 +715,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         load_kwargs.update(explorer_facets=facets, explorer_numeric=numeric, explorer_view=explorer_view)
         body_oob = (
             f'<div id="finder-body" hx-swap-oob="innerHTML">'
-            f'{fragment(snapshot, settings, **load_kwargs)}</div>'
+            f'{render_fragment(req, snapshot, settings, **load_kwargs)}</div>'
             f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows))}</div>'
         )
         return _html(await _explorer_html(req) + body_oob)
@@ -714,17 +755,20 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
     @app.post('/find/start')
     async def find_start(req: Request) -> Response:
         form = await req.form()
+        req.state.finder_surface = form.get('surface')
         rejected = request_rejected(req, form)
         if rejected:
             settings = _settings(req.app)
             return _html(
-                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected), status_code=403
+                render_fragment(req, RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected),
+                status_code=403,
             )
         settings = _settings(req.app)
-        store = await _store(req.app)
+        store = await store_for(req)
         if store is None:
             return _html(
-                fragment(
+                render_fragment(
+                    req,
                     RunSnapshot(),
                     settings,
                     **_catalogue_kwargs(req.app),
@@ -735,7 +779,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         current = await store.snapshot()
         if current.state != 'awaiting_review' or current.request is None or current.compiled is None:
             return _html(
-                fragment(
+                render_fragment(
+                    req,
                     current,
                     settings,
                     error='There is no plan waiting for review.',
@@ -751,45 +796,54 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             snapshot = await store.start(request, compiled, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(
-                fragment(current, settings, error=str(exc), **_catalogue_kwargs(req.app, current)), status_code=422
+                render_fragment(req, current, settings, error=str(exc), **_catalogue_kwargs(req.app, current)),
+                status_code=422,
             )
-        return _html(fragment(snapshot, settings, **_catalogue_kwargs(req.app, snapshot)))
+        return _html(render_fragment(req, snapshot, settings, **_catalogue_kwargs(req.app, snapshot)))
 
     @app.post('/find/cancel')
     async def find_cancel(req: Request) -> Response:
         form = await req.form()
+        req.state.finder_surface = form.get('surface')
         rejected = request_rejected(req, form)
         if rejected:
             settings = _settings(req.app)
             return _html(
-                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected), status_code=403
+                render_fragment(req, RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected),
+                status_code=403,
             )
         settings = _settings(req.app)
-        store = await _store(req.app)
+        store = await store_for(req)
         snapshot = await store.cancel() if store is not None else RunSnapshot()
         return _html(
-            fragment(snapshot, settings, api_available=store is not None, **_catalogue_kwargs(req.app, snapshot))
+            render_fragment(
+                req, snapshot, settings, api_available=store is not None, **_catalogue_kwargs(req.app, snapshot)
+            )
         )
 
     @app.post('/find/reset')
     async def find_reset(req: Request) -> Response:
         form = await req.form()
+        req.state.finder_surface = form.get('surface')
         rejected = request_rejected(req, form)
         if rejected:
             settings = _settings(req.app)
             return _html(
-                fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected), status_code=403
+                render_fragment(req, RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=rejected),
+                status_code=403,
             )
         settings = _settings(req.app)
-        store = await _store(req.app)
+        store = await store_for(req)
         snapshot = await store.reset() if store is not None else RunSnapshot()
         return _html(
-            fragment(snapshot, settings, api_available=store is not None, **_catalogue_kwargs(req.app, snapshot))
+            render_fragment(
+                req, snapshot, settings, api_available=store is not None, **_catalogue_kwargs(req.app, snapshot)
+            )
         )
 
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:
-        store = await _store(req.app)
+        store = await store_for(req)
         if store is None:
             return _html('<p class="finder-empty">Trace finding is unavailable.</p>', status_code=404)
         raw_msg = req.query_params.get('msg', '')
@@ -815,7 +869,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
 
     @app.get('/find/export.json')
     async def find_export(req: Request) -> Response:
-        store = await _store(req.app)
+        store = await store_for(req)
         if store is None:
             return Response('Not found', status_code=404, media_type='text/plain')
         snapshot = await store.snapshot()

@@ -177,22 +177,27 @@ def test_blank_model_is_rejected(client: TestClient) -> None:
 def test_saving_settings_invalidates_initialized_finder_store(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     models: list[str] = []
+    closed: list[str] = []
 
     class Store:
         explorer = None
+
+        def __init__(self, name: str = 'explorer') -> None:
+            self.name = name
 
         async def snapshot(self) -> RunSnapshot:
             return RunSnapshot()
 
         async def close(self) -> None:
-            return None
+            closed.append(self.name)
 
     async def build_store(app: Any) -> Store:
         models.append(app.state.finder_settings.compiler_model)
-        return Store()
+        return Store(f'store-{len(models)}')
 
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
     assert client.get('/find').status_code == 200
+    assert client.get('/traces').status_code == 200
 
     response = client.post(
         '/settings',
@@ -206,33 +211,38 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
         }),
     )
     assert response.status_code == 303
+    assert len(closed) == 2
+    assert len(set(closed)) == 2
+    state = getattr(client.app, 'state')
+    assert not hasattr(state, 'finder_store')
+    assert not hasattr(state, 'finder_search_store')
     assert client.get('/find').status_code == 200
     assert models[-1] == 'new/compiler'
 
 
-def test_dashboard_shutdown_closes_finder_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    closed: list[bool] = []
+def test_dashboard_shutdown_closes_finder_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[str] = []
 
     class Store:
         explorer = None
+
+        def __init__(self, name: str) -> None:
+            self.name = name
 
         async def snapshot(self) -> RunSnapshot:
             return RunSnapshot()
 
         async def close(self) -> None:
-            closed.append(True)
+            closed.append(self.name)
 
-    async def build_store(_app: Any) -> Store:
-        return Store()
-
-    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
-    monkeypatch.setattr(finder_routes, '_build_store', build_store)
     app = build_app(roots=[tmp_path])
+    app.state.finder_store = Store('explorer')
+    app.state.finder_search_store = Store('search')
     with TestClient(app) as client:
         assert client.get('/find').status_code == 200
 
-    assert closed == [True]
+    assert sorted(closed) == ['explorer', 'search']
 
 
 def test_settings_page_shows_saved_values(client: TestClient, settings_file: Path) -> None:

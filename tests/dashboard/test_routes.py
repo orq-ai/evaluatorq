@@ -19,6 +19,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.shell import page
 
 
 @pytest.fixture()
@@ -81,12 +82,20 @@ def _sim_path(roots: list[Path]) -> Path:
 
 
 class TestNav:
-    """The sidebar nav entry for the trace explorer."""
+    """The sidebar keeps trace search and trace browsing as separate pages."""
 
-    def test_nav_says_traces(self, client: TestClient) -> None:
+    def test_trace_nav_entries_are_separate(self, client: TestClient) -> None:
         html = client.get('/').text
+        assert 'href="/find"' in html
+        assert '>Trace search<' in html
+        assert 'href="/traces"' in html
         assert '>Traces<' in html
-        assert 'Trace search' not in html
+
+    def test_trace_pages_highlight_their_own_nav_item(self) -> None:
+        find_html = page('', '', active_nav='find')
+        traces_html = page('', '', active_nav='traces')
+        assert '<a class="nav-item active" href="/find">' in find_html
+        assert '<a class="nav-item active" href="/traces">' in traces_html
 
 
 class TestIndexRoute:

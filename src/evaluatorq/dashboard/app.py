@@ -338,12 +338,14 @@ async def _save_settings(req: Request) -> Response | NotStr:
                 'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
             )
         old_store = getattr(req.app.state, 'finder_store', None)
+        old_search_store = getattr(req.app.state, 'finder_search_store', None)
         old_warmup = getattr(req.app.state, 'finder_catalogue_warmup', None)
         old_initial_warmup = getattr(req.app.state, 'finder_initial_warmup', None)
         req.app.state.finder_settings = effective_settings()
         req.app.state.finder_generation += 1
         for state_name in (
             'finder_store',
+            'finder_search_store',
             'finder_catalogue_cache',
             'finder_catalogue_warmup',
             'finder_initial_warmup',
@@ -352,9 +354,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
                 delattr(req.app.state, state_name)
     await _cancel_background_task(old_initial_warmup)
     await _cancel_background_task(old_warmup[2] if old_warmup is not None else None)
-    if old_store is not None:
-        # Retire the old store after removing it from app state so new requests cannot acquire it.
-        await old_store.close()
+    # Retire both stores after removing them from app state so new requests cannot acquire them.
+    await _close_finder_stores(old_store, old_search_store)
     req.app.state.finder_unavailable_reason = None
     return RedirectResponse('/settings?saved=1', status_code=303)
 
@@ -363,6 +364,12 @@ async def _cancel_background_task(task: asyncio.Task[Any] | None) -> None:
     if task is not None and not task.done():
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def _close_finder_stores(*stores: Any) -> None:
+    for store in stores:
+        if store is not None:
+            await store.close()
 
 
 async def _warm_initial_finder_on_startup(app: FastHTML) -> None:
@@ -778,6 +785,10 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
             if store is not None:
                 await store.close()
                 del runtime.state.finder_store
+            search_store = getattr(runtime.state, 'finder_search_store', None)
+            if search_store is not None:
+                await search_store.close()
+                del runtime.state.finder_search_store
 
     app = FastHTML(
         surreal=False,
