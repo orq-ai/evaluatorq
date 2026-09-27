@@ -225,8 +225,15 @@ def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[s
     }
 
 
+def _matching_tool_result(call_id: Any, results: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
+    """Do not pair an idless call with an unrelated idless result."""
+    if not isinstance(call_id, str) or not call_id:
+        return None
+    return next((item for item in results if item.get('tool_call_id') == call_id), None)
+
+
 def _tool_result_excerpt(call_id: Any, results: tuple[dict[str, Any], ...]) -> str | None:
-    result = next((item for item in results if item.get('tool_call_id') == call_id), None)
+    result = _matching_tool_result(call_id, results)
     if result is None:
         return None
     text = _redact_tool_result_secrets(tool_result_to_text(result.get('content')))
@@ -310,7 +317,7 @@ def _parse_arguments(arguments: Any) -> Any:
 
 
 def _tool_call_status(call_id: Any, results: tuple[dict[str, Any], ...]) -> str:
-    result = next((item for item in results if item.get('tool_call_id') == call_id), None)
+    result = _matching_tool_result(call_id, results)
     if result is None:
         return 'pending'
     trace_metadata = result.get('trace_finder_metadata')

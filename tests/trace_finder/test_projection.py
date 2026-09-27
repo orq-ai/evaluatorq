@@ -158,6 +158,20 @@ def test_project_trace_keeps_tool_result_excerpts_but_drops_orphans() -> None:
     assert json.loads(projection.serialized) == projection.payload
 
 
+def test_idless_tool_call_does_not_attach_an_idless_result() -> None:
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'content': 'unrelated private result', 'status': 'failed'},
+    ))
+
+    projection = project_trace(trace)
+    call = projection.payload['messages'][0]['tool_calls'][0]
+
+    assert call['status'] == 'pending'
+    assert call['result_excerpt'] is None
+    assert 'unrelated private result' not in projection.serialized
+
+
 @pytest.mark.parametrize('failure_signal', [{'status': 'failed'}, {'is_error': True}, {'error': 'unavailable'}])
 def test_otel_tool_error_is_projected_with_error_status(failure_signal: dict[str, Any]) -> None:
     messages = _conversation_messages(

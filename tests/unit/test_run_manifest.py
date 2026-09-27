@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from pydantic import ValidationError
 
+from evaluatorq.common import run_manifest
 from evaluatorq.common.run_manifest import (
     ManifestWriter,
     list_manifests,
@@ -143,23 +144,30 @@ def test_first_progress_for_each_stage_is_flushed(tmp_path: Path) -> None:
     assert (record.completed, record.total) == (1, 3)
 
 
-def test_failed_progress_flush_does_not_advance_throttle_clock(tmp_path: Path) -> None:
+def test_failed_progress_flush_retries_latest_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = [0.0]
     started = start_manifest(run_id='failed-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
     writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
     writer.start_stage('label')
     attempts = [0]
 
-    def fail_once() -> bool:
-        attempts[0] += 1
-        return attempts[0] > 1
+    replace = run_manifest.os.replace
 
-    writer.flush = fail_once  # type: ignore[method-assign]
+    def fail_once(*args, **kwargs) -> None:
+        attempts[0] += 1
+        if attempts[0] == 1:
+            raise OSError('temporary disk error')
+        replace(*args, **kwargs)
+
+    monkeypatch.setattr(run_manifest.os, 'replace', fail_once)
     writer.stage_progress('label', 1, 3)
+    assert list_manifests(tmp_path)[0].stages[-1].completed is None
     now[0] = 0.1
     writer.stage_progress('label', 2, 3)
 
     assert attempts[0] == 2
+    record = list_manifests(tmp_path)[0].stages[-1]
+    assert (record.completed, record.total) == (2, 3)
 
 
 def test_stage_progress_ignores_invalid_counts_without_persisting_them(tmp_path: Path) -> None:

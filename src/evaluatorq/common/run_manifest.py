@@ -67,6 +67,7 @@ class ManifestWriter:
         self._last_progress_flush: dict[int, float] = {}
 
     def flush(self) -> bool:
+        """Persist the latest in-memory state; return False when the disk view still lags."""
         self.manifest.updated_at = datetime.now(tz=timezone.utc)
         # Write to a temp file in the same dir then atomically rename over the
         # target, so a SIGKILL mid-write can never leave truncated JSON that the
@@ -79,7 +80,7 @@ class ManifestWriter:
             os.replace(tmp, self.path)  # noqa: PTH105 — atomic rename is the whole point
             return True
         except OSError as exc:
-            logger.debug(f'Failed to write run manifest {self.path}: {exc}')
+            logger.warning('Failed to write run manifest {}: {}; later transitions will retry', self.path, exc)
             with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
             return False
@@ -130,7 +131,12 @@ class ManifestWriter:
         self.flush()
 
     def stage_progress(self, stage: Any, completed: int, total: int) -> None:
-        """Record completed/total on an open stage, throttling writes to once per second."""
+        """Record progress with one-second write throttling.
+
+        A failed write keeps the latest counts in memory and does not advance
+        the throttle clock, so the next callback or stage transition retries
+        them. The disk view can lag until that write succeeds.
+        """
         if (
             isinstance(completed, bool)
             or not isinstance(completed, int)

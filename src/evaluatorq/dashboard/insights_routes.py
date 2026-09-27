@@ -190,7 +190,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             profile = selected_orq_profile(req.app)
         except ValueError as exc:
             return _html(new_run_page(error=str(exc)), 422)
-        run_id = launch_insights(spec, directory, profile=profile)
+        run_id = await asyncio.to_thread(launch_insights, spec, directory, profile=profile)
         return RedirectResponse(f'/insights/{quote(run_id, safe="")}', status_code=303)
 
     @app.get('/insights/{run_id}')
