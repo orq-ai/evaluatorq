@@ -888,7 +888,7 @@ def settings_body(
         '</form>'
     )
     settings_panel = _panel(
-        'Models', 'Window, limit and parallelism are set per run on the Trace search page', f'{saved_html}{form}'
+        'Models', 'Window, limit and parallelism are set per run on the Traces page', f'{saved_html}{form}'
     )
 
     def val_html(v: str | list[str]) -> str:

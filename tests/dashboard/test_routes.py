@@ -80,6 +80,15 @@ def _sim_path(roots: list[Path]) -> Path:
     return roots[1] / 'sim_20260101_000000.json'
 
 
+class TestNav:
+    """The sidebar nav entry for the trace explorer."""
+
+    def test_nav_says_traces(self, client: TestClient) -> None:
+        html = client.get('/').text
+        assert '>Traces<' in html
+        assert 'Trace search' not in html
+
+
 class TestIndexRoute:
     """GET / — report listing."""
 
