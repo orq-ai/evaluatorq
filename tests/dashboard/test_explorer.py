@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+import json
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
 import pytest
+from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.trace_finder.columns import resolve_columns
@@ -12,6 +17,9 @@ from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.rows import TraceRow
 
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
+from evaluatorq.dashboard.app import build_app
+from evaluatorq.trace_finder.explorer import ExplorerStore
+from tests.dashboard.test_finder import FakeStore, csrf_data
 
 
 def test_parse_range_applies_browser_offset() -> None:
@@ -102,3 +110,114 @@ def test_trajectories_draws_a_row_for_a_failed_hydration() -> None:
     assert 'tv-nomsg' in html
     assert 'data-tv-msg="1"' in html
     assert '2 msgs' in html
+
+
+class FakeRowSource:
+    def __init__(self, rows: tuple[TraceRow, ...]) -> None:
+        self.rows = rows
+        self.calls: list[dict[str, Any]] = []
+
+    async def search(self, start: Any, end: Any, limit: int, *, facets: Any, numeric: Any, on_page: Any = None) -> tuple[TraceRow, ...]:
+        self.calls.append({'start': start, 'end': end, 'limit': limit, 'facets': facets})
+        if on_page is not None:
+            on_page(self.rows[:limit])
+        return self.rows[:limit]
+
+    async def hydrate_rows(self, rows: Any) -> dict[str, Any]:
+        return {row.trace_id: None for row in rows}
+
+
+@pytest.fixture
+def explorer_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    store = FakeStore()
+    source = FakeRowSource(_rows(250))
+    store.explorer = ExplorerStore(search=source.search, hydrate=source.hydrate_rows)
+    store.snapshot_for_render = store.snapshot
+    store.reset_calls = 0
+
+    async def reset() -> Any:
+        store.reset_calls += 1
+        return store.snapshot_value
+
+    store.reset = reset
+
+    async def build_store(_app: Any) -> FakeStore:
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    return store, source, TestClient(build_app(roots=[tmp_path]), raise_server_exceptions=True)
+
+
+def _load(client: TestClient, **extra: str) -> Any:
+    return client.post('/find/load', data=csrf_data({'from': '2026-09-27T10:00:00', 'to': '2026-09-27T11:00:00', 'tz_offset': '0', 'rows': '250', **extra}))
+
+
+def test_load_then_rows_then_sort_then_page(explorer_client) -> None:
+    store, source, client = explorer_client
+    response = _load(client)
+    assert response.status_code == 200
+    assert store.reset_calls == 1
+    assert source.calls[0]['limit'] == 250
+    assert 'finder-body' in response.text
+    html = client.get('/find/rows').text
+    assert 'Page 1 of 3' in html
+    html = client.get('/find/rows?sort=tokens_in&dir=desc').text
+    assert html.index('trace-0249') < html.index('trace-0248')
+    html = client.get('/find/rows?page=2').text
+    assert 'Page 3 of 3' in html
+
+
+def test_load_rejects_an_inverted_range(explorer_client) -> None:
+    _, source, client = explorer_client
+    response = client.post('/find/load', data=csrf_data({'from': '2026-09-27T12:00:00', 'to': '2026-09-27T11:00:00', 'tz_offset': '0', 'rows': '10'}))
+    assert response.status_code == 422
+    assert 'From must be before To' in response.text
+    assert source.calls == []
+
+
+def test_load_rejects_rows_out_of_range(explorer_client) -> None:
+    _, _, client = explorer_client
+    assert _load(client, rows='6000').status_code == 422
+
+
+def test_load_requires_csrf(explorer_client) -> None:
+    _, _, client = explorer_client
+    response = client.post('/find/load', data={'from': '2026-09-27T10:00:00', 'to': '2026-09-27T11:00:00', 'rows': '5'})
+    assert response.status_code == 403
+
+
+def test_columns_post_saves_choice(explorer_client, tmp_path: Path) -> None:
+    _, _, client = explorer_client
+    _load(client)
+    html = client.post('/find/columns', data=csrf_data({'columns': ['model', 'cost']})).text
+    thead = html.split('<thead>')[1].split('</thead>')[0]
+    assert 'Model' in thead and 'Cost' in thead
+    assert 'Tokens in' not in thead
+    assert json.loads((tmp_path / 'settings.json').read_text())['explorer_columns'] == ['model', 'cost']
+
+
+def test_trajectories_view_hydrates_only_the_visible_page(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    calls: list[int] = []
+    original = store.explorer._hydrate  # pyright: ignore[reportPrivateUsage]
+
+    async def counting(rows: Any) -> Any:
+        calls.append(len(rows))
+        return await original(rows)
+
+    store.explorer._hydrate = counting  # pyright: ignore[reportPrivateUsage]
+    html = client.get('/find/rows?view=trajectories').text
+    assert calls == [100]
+    assert html.count('data-tv-row=') == 100
+
+
+def test_poll_appends_explorer_results_during_classification(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    store.snapshot_value = replace(store.snapshot_value, state='classifying')
+    html = client.get('/find/poll').text
+    assert 'id="explorer-results"' in html
+    assert 'hx-swap-oob="true"' in html
