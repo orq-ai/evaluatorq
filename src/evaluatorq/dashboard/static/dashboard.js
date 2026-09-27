@@ -744,6 +744,7 @@
       delete timeInput.dataset.localised;
       explorerLocal(input);
     });
+    explorerUpdateOffsets();
   });
 
   // Trajectories: one tooltip, positioned from the hovered segment's data-* attributes.
