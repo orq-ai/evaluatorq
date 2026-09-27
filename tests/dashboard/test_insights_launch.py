@@ -20,6 +20,7 @@ from evaluatorq.dashboard.insights_launch import (
     MAX_FINDER_EXPORT_BYTES,
     InsightsLaunchPayload,
     InsightsLaunchSpec,
+    finder_export_reference_path,
     launch_insights,
 )
 from evaluatorq.insights.models import InsightsPopulation
@@ -80,18 +81,21 @@ def test_spawn_failure_is_visible_in_manifest(tmp_path: Path) -> None:
 
 
 def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    import json
     import runpy
     import tempfile
 
-    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV
+    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV, _SNAPSHOT_ENV
 
     writer = start_manifest(run_id='import-failure', surface='insights', run_name='demo', runs_dir=tmp_path)
+    reference = finder_export_reference_path(tmp_path, 'import-failure')
+    reference.parent.mkdir(parents=True)
+    reference.write_text('{}', encoding='utf-8')
     monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
     snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
     snapshot_path = snapshot_directory / 'finder-export.json'
     snapshot_path.write_text('{}', encoding='utf-8')
-    monkeypatch.setenv(_REQUEST_ENV, json.dumps({'finder_export_snapshot': str(snapshot_path)}))
+    monkeypatch.setenv(_REQUEST_ENV, '{truncated request')
+    monkeypatch.setenv(_SNAPSHOT_ENV, str(snapshot_path))
 
     def fail_import(*args, **kwargs):
         raise ImportError('missing optional dependency')
@@ -104,6 +108,7 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
     assert manifest.stage == 'setup'
     assert manifest.error is not None and 'missing optional dependency' in manifest.error
     assert not snapshot_directory.exists()
+    assert not reference.exists()
 
 
 def test_successful_worker_exit_does_not_recover_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,6 +145,80 @@ def test_worker_payload_decode_failure_marks_manifest_failed(tmp_path: Path, mon
     assert manifest.status == 'error'
     assert manifest.stage == 'setup'
     assert manifest.error == 'Missing Insights launch request'
+
+
+def test_worker_cleans_private_snapshot_when_request_json_is_truncated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tempfile
+
+    from evaluatorq.dashboard import insights_worker
+    from evaluatorq.dashboard.insights_launch import _MANIFEST_ENV, _REQUEST_ENV, _SNAPSHOT_ENV
+
+    writer = start_manifest(run_id='truncated-request', surface='insights', run_name='demo', runs_dir=tmp_path)
+    snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+    snapshot = snapshot_directory / 'finder-export.json'
+    snapshot.write_text('{}', encoding='utf-8')
+    snapshot.chmod(0o600)
+    monkeypatch.setenv(_REQUEST_ENV, '{truncated request')
+    monkeypatch.setenv(_SNAPSHOT_ENV, str(snapshot))
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+
+    assert insights_worker.main() == 1
+    assert not snapshot_directory.exists()
+    assert list_manifests(tmp_path)[0].status == 'error'
+
+
+def test_worker_cleans_private_snapshot_when_payload_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+    import tempfile
+
+    from evaluatorq.dashboard import insights_worker
+    from evaluatorq.dashboard.insights_launch import _MANIFEST_ENV, _REQUEST_ENV
+
+    writer = start_manifest(run_id='invalid-payload', surface='insights', run_name='demo', runs_dir=tmp_path)
+    snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+    snapshot = snapshot_directory / 'finder-export.json'
+    snapshot.write_text('{}', encoding='utf-8')
+    snapshot.chmod(0o600)
+    monkeypatch.setenv(
+        _REQUEST_ENV,
+        json.dumps({'spec': {'source': 'finder'}, 'finder_export_snapshot': str(snapshot)}),
+    )
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+
+    assert insights_worker.main() == 1
+
+    assert not snapshot_directory.exists()
+    manifest = list_manifests(tmp_path)[0]
+    assert manifest.status == 'error'
+    assert manifest.stage == 'setup'
+
+
+def test_worker_does_not_clean_arbitrary_snapshot_from_invalid_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    from evaluatorq.dashboard import insights_worker
+    from evaluatorq.dashboard.insights_launch import _MANIFEST_ENV, _REQUEST_ENV
+
+    writer = start_manifest(run_id='unsafe-payload', surface='insights', run_name='demo', runs_dir=tmp_path)
+    arbitrary_directory = tmp_path / 'evaluatorq-finder-snapshot-user-data'
+    arbitrary_directory.mkdir(mode=0o700)
+    arbitrary_file = arbitrary_directory / 'finder-export.json'
+    arbitrary_file.write_text('user data', encoding='utf-8')
+    monkeypatch.setenv(
+        _REQUEST_ENV,
+        json.dumps({'spec': {'source': 'finder'}, 'finder_export_snapshot': str(arbitrary_file)}),
+    )
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+
+    assert insights_worker.main() == 1
+
+    assert arbitrary_file.read_text(encoding='utf-8') == 'user data'
 
 
 def test_startup_failure_shows_in_run_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -196,6 +275,25 @@ def test_dashboard_finder_export_is_size_limited(monkeypatch: pytest.MonkeyPatch
         InsightsLaunchSpec(source='finder', finder_export='large.json')
 
 
+def test_finder_insights_launch_records_source_until_run_finishes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    export_path = export_dir / 'trace-finder-source.json'
+    export_path.write_text(_run_export(['trace-1']).model_dump_json(), encoding='utf-8')
+    spec = InsightsLaunchSpec(source='finder', finder_export=export_path.name)
+    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen'):
+        run_id = launch_insights(spec, tmp_path / 'insights-runs')
+
+    reference = finder_export_reference_path(tmp_path / 'insights-runs', run_id)
+    assert json.loads(reference.read_text(encoding='utf-8')) == {'finder_export': str(export_path)}
+    assert len(list_manifests(tmp_path / 'insights-runs')) == 1
+
+
 def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -215,7 +313,9 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     (tmp_path / 'outside.json').write_text(_run_export(['replacement-trace']).model_dump_json(), encoding='utf-8')
 
     with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
-        launch_insights(spec, tmp_path / 'runs')
+        run_id = launch_insights(spec, tmp_path / 'runs')
+    reference = finder_export_reference_path(tmp_path / 'runs', run_id)
+    assert reference.exists()
     payload_json = spawn.call_args.kwargs['env'][_REQUEST_ENV]
     monkeypatch.setenv(_REQUEST_ENV, payload_json)
     payload = read_launch_payload()
@@ -243,6 +343,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert consumed == [approved_export]
     assert consumed_source == [export_path]
     assert not payload.finder_export_snapshot.exists()
+    assert not reference.exists()
     assert list_manifests(tmp_path / 'runs')[0].status == 'completed'
 
 
@@ -255,6 +356,7 @@ def test_finder_snapshot_cleanup_without_getuid(tmp_path: Path, monkeypatch: pyt
     directory.mkdir(mode=0o700)
     snapshot = directory / 'finder-export.json'
     snapshot.write_text('{}', encoding='utf-8')
+    snapshot.chmod(0o600)
     monkeypatch.setattr(insights_worker.tempfile, 'gettempdir', lambda: str(tmp_path))
     monkeypatch.setattr(insights_worker, 'os', SimpleNamespace(name='nt'))
 

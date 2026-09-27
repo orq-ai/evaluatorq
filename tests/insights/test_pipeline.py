@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -396,6 +396,27 @@ async def test_cleanup_failure_does_not_prevent_terminal_persistence(
     assert len(manifests) == 1
     assert manifests[0].status.value == 'error'
     assert manifests[0].stage == 'population'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('selection', ['labels', 'dimensions'])
+async def test_duplicate_config_selection_fails_before_starting_manifest(
+    selection: str, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import list_manifests
+    from evaluatorq.insights.models import LabelSpec
+
+    kwargs: dict[str, Any] = {'dimensions': ('intent',), 'labels': ()}
+    if selection == 'labels':
+        spec = LabelSpec(name='duplicate', kind='choice', instructions='Classify it.')
+        kwargs['labels'] = (spec, spec)
+    else:
+        kwargs['dimensions'] = ('intent', 'intent')
+
+    with pytest.raises(ValueError, match='unique names|must not contain duplicates'):
+        await pipeline.insights(_population(), runs_dir=tmp_path, **kwargs)
+
+    assert list_manifests(tmp_path) == []
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,9 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, cast
 
+import httpx
 import typer
+from openai import OpenAIError
 from pydantic import ValidationError
 from rich.console import Console
 from rich.table import Table
@@ -312,9 +314,9 @@ def insights_cmd(
                 cache=not no_cache,
             )
         )
-    except (ImportError, ValueError) as exc:
+    except (ImportError, OSError, OpenAIError, RuntimeError, TimeoutError, ValueError, httpx.HTTPError) as exc:
         emit_error(exc)
-        raise typer.Exit(code=2) from None
+        raise typer.Exit(code=1) from None
     run_path = _stored_run_path(run)
     if json_path is not None:
         try:

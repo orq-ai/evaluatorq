@@ -13,7 +13,7 @@ from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
-from evaluatorq.trace_finder.export import export_filename
+from evaluatorq.trace_finder.export import export_filename, export_json
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 
 if TYPE_CHECKING:
@@ -671,7 +671,7 @@ def body(
         return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}'
     analyze = ''
     if snapshot.state == 'completed' and snapshot.compiled is not None:
-        export_name = export_filename(snapshot)
+        export_name = export_filename(snapshot, export_json(snapshot))
         local_filename = shlex.quote(export_name)
         python = (
             'from pathlib import Path\n'

@@ -14,6 +14,8 @@ from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the run
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 DimensionName = Literal['intent', 'failure', 'sentiment']
+BoundedRatio = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 
 
 class LabelSpec(BaseModel):
@@ -92,8 +94,8 @@ class InsightsPopulation(BaseModel):
 class LabelAnswer(BaseModel):
     """One label's answer for one trace. `error` set means the value could not be read — never guess a default."""
 
-    value: bool | float | str | None
-    confidence: float | None
+    value: bool | BoundedRatio | str | None
+    confidence: BoundedRatio | None
     probabilities: dict[str, Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]] | None
     error: str | None
 
@@ -139,7 +141,7 @@ class TraceInsight(BaseModel):
     labels: dict[str, LabelAnswer] = {}
     summary: TraceSummary | None = None
     assignments: dict[str, ClusterAssignment] = {}
-    coords: dict[str, tuple[float, float, float]] = {}
+    coords: dict[str, tuple[FiniteFloat, FiniteFloat, FiniteFloat]] = {}
     errors: dict[str, str] = {}
 
 
@@ -174,7 +176,7 @@ class LabelResult(BaseModel):
 
     spec: LabelSpec
     counts: dict[str, int]
-    mean_confidence: float | None
+    mean_confidence: BoundedRatio | None
     n_low_confidence: int
     n_failed: int
 
@@ -185,8 +187,8 @@ class PriorityPoint(BaseModel):
     cluster_id: str
     name: str
     volume: int
-    mean_satisfaction: float
-    error_share: float
+    mean_satisfaction: BoundedRatio
+    error_share: BoundedRatio
 
 
 class StageFailure(BaseModel):
@@ -209,10 +211,19 @@ class InsightsConfig(BaseModel):
     embedding_model: str = 'openai/text-embedding-3-small'
     max_clusters: int = Field(default=15, ge=1)
     max_subclusters: int = Field(default=15, ge=1)
-    outlier_zscore: float | None = Field(default=None, ge=0)
+    outlier_zscore: FiniteFloat | None = Field(default=None, ge=0)
     parallelism: int = Field(default=100, ge=1)
     priority_dimension: DimensionName = 'intent'
     cache: bool = True
+
+    @model_validator(mode='after')
+    def _selections_are_unique(self) -> Self:
+        label_names = [label.name for label in self.labels]
+        if len(label_names) != len(set(label_names)):
+            raise ValueError('labels must have unique names')
+        if len(self.dimensions) != len(set(self.dimensions)):
+            raise ValueError('dimensions must not contain duplicates')
+        return self
 
 
 class InsightsRun(BaseModel):

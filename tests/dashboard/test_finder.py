@@ -661,6 +661,64 @@ def test_finder_export_retention_keeps_recent_and_saved_insights_references(
     assert {path.name for path in exports[-50:]} <= remaining
 
 
+def test_finder_export_retention_pins_in_flight_insights_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.insights_launch import finder_export_reference_path
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, ns=(index + 1, index + 1))
+    runs_dir = tmp_path / 'insights-runs'
+    writer = start_manifest(run_id='active-run', surface='insights', run_name='active', runs_dir=runs_dir)
+    marker = finder_export_reference_path(runs_dir, 'active-run')
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'finder_export': str(exports[0])}), encoding='utf-8')
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert exports[0].exists()
+    assert marker.exists()
+
+    writer.complete()
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert not exports[0].exists()
+    assert not marker.exists()
+
+
+def test_finder_export_retention_expires_abandoned_in_flight_reference(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.insights_launch import finder_export_reference_path
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, ns=(index + 1, index + 1))
+    runs_dir = tmp_path / 'insights-runs'
+    writer = start_manifest(run_id='abandoned-run', surface='insights', run_name='abandoned', runs_dir=runs_dir)
+    marker = finder_export_reference_path(runs_dir, 'abandoned-run')
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'finder_export': str(exports[0])}), encoding='utf-8')
+    old = datetime.now(timezone.utc).timestamp() - timedelta(days=31).total_seconds()
+    os.utime(writer.path, (old, old))
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert not marker.exists()
+    assert not exports[0].exists()
+
+
 def test_find_export_filename_survives_generation_restart_without_overwriting() -> None:
     from evaluatorq.trace_finder.export import export_filename
 

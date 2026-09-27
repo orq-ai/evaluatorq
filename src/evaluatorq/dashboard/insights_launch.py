@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -29,7 +30,9 @@ Source = Literal['recent', 'query', 'finder']
 Preset = Literal['sentiment', 'customer_satisfaction']
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'
 _MANIFEST_ENV = 'EVALUATORQ_INSIGHTS_MANIFEST'
+_SNAPSHOT_ENV = 'EVALUATORQ_INSIGHTS_FINDER_SNAPSHOT'
 MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
+FINDER_EXPORT_REFERENCE_DIR = '.finder-export-leases'
 
 # The child must record import-time failures too. This tiny stdlib-only wrapper
 # runs before importing the package worker, then edits the already-created
@@ -40,7 +43,9 @@ manifest = os.environ.get("EVALUATORQ_INSIGHTS_MANIFEST")
 request = os.environ.get("EVALUATORQ_INSIGHTS_LAUNCH_REQUEST")
 def cleanup_snapshot():
     try:
-        snapshot = json.loads(request or "{}").get("finder_export_snapshot")
+        snapshot = os.environ.get("EVALUATORQ_INSIGHTS_FINDER_SNAPSHOT")
+        if not snapshot:
+            snapshot = json.loads(request or "{}").get("finder_export_snapshot")
         if not isinstance(snapshot, str) or os.path.basename(snapshot) != "finder-export.json":
             return
         directory = os.path.dirname(snapshot)
@@ -58,12 +63,28 @@ def cleanup_snapshot():
         os.rmdir(directory)
     except (OSError, ValueError, TypeError) as cleanup_error:
         print(f"Could not remove validated Finder snapshot: {cleanup_error}", file=__import__("sys").stderr)
+def cleanup_reference():
+    try:
+        directory = os.path.dirname(manifest or "")
+        name = os.path.basename(manifest or "")
+        run_id = name[:-5] if name.endswith(".json") else ""
+        if os.path.basename(directory) != ".manifests" or not run_id or not all(ch.isalnum() or ch in "-_" for ch in run_id):
+            return
+        lease_dir = os.path.join(os.path.dirname(directory), ".finder-export-leases")
+        if os.path.islink(lease_dir):
+            return
+        os.unlink(os.path.join(lease_dir, run_id + ".json"))
+    except FileNotFoundError:
+        pass
+    except OSError as cleanup_error:
+        print(f"Could not remove Finder export reference: {cleanup_error}", file=__import__("sys").stderr)
 try:
     runpy.run_module("evaluatorq.dashboard.insights_worker", run_name="__main__")
 except BaseException as exc:
     if isinstance(exc, SystemExit) and exc.code in (None, 0):
         raise
     cleanup_snapshot()
+    cleanup_reference()
     if manifest:
         try:
             with open(manifest, encoding="utf-8") as source:
@@ -89,6 +110,13 @@ except BaseException as exc:
 def get_finder_exports_dir() -> Path:
     """Return the only directory from which dashboard runs may read Finder exports."""
     return get_store_dir('finder-exports')
+
+
+def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
+    """Return the private lease path for a running Finder-sourced Insights run."""
+    if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
+        raise ValueError('Invalid Insights run ID for Finder export reference')
+    return runs_dir / FINDER_EXPORT_REFERENCE_DIR / f'{run_id}.json'
 
 
 class InsightsLaunchSpec(BaseModel):
@@ -186,9 +214,22 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
         stage_labels=dict(plan),
     )
     snapshot_path: Path | None = None
+    reference_path: Path | None = None
+    reference_temporary: Path | None = None
     try:
         finder_snapshot = spec.validated_finder_export_snapshot()
         if finder_snapshot is not None:
+            reference_path = finder_export_reference_path(runs_dir, run_id)
+            reference_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8', dir=reference_path.parent, prefix=f'.{run_id}.', suffix='.tmp', delete=False
+            ) as reference_file:
+                reference_temporary = Path(reference_file.name)
+                reference_file.write(json.dumps({'finder_export': spec.finder_export}))
+                reference_file.flush()
+                os.fsync(reference_file.fileno())
+            reference_temporary.replace(reference_path)
+            reference_temporary = None
             snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
             snapshot_path = snapshot_directory / 'finder-export.json'
             descriptor = os.open(snapshot_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -208,6 +249,10 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             _REQUEST_ENV: worker_request,
             _MANIFEST_ENV: str(writer.path),
         }
+        if snapshot_path is not None:
+            worker_env[_SNAPSHOT_ENV] = str(snapshot_path)
+        else:
+            worker_env.pop(_SNAPSHOT_ENV, None)
         if profile is not None:
             worker_env.update(ORQ_API_KEY=profile.api_key, ORQ_BASE_URL=profile.server or DEFAULT_ORQ_BASE_URL)
         log_dir = runs_dir / '.logs'
@@ -223,6 +268,10 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             )
     except OSError as exc:
         writer.fail(f'Could not start Insights worker: {exc}', stage='start')
+        if reference_path is not None:
+            reference_path.unlink(missing_ok=True)
+        if reference_temporary is not None:
+            reference_temporary.unlink(missing_ok=True)
         if snapshot_path is not None:
             shutil.rmtree(snapshot_path.parent, ignore_errors=True)
     return run_id

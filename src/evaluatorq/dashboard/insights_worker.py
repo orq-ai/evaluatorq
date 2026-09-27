@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import stat
@@ -13,7 +14,13 @@ from loguru import logger
 
 from evaluatorq.common.run_manifest import ManifestWriter
 from evaluatorq.contracts import ManifestStatus, RunManifest
-from evaluatorq.dashboard.insights_launch import _MANIFEST_ENV, MAX_FINDER_EXPORT_BYTES, read_launch_payload
+from evaluatorq.dashboard.insights_launch import (
+    _MANIFEST_ENV,
+    _SNAPSHOT_ENV,
+    MAX_FINDER_EXPORT_BYTES,
+    finder_export_reference_path,
+    read_launch_payload,
+)
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
 from evaluatorq.trace_finder.export import RunExport
@@ -32,15 +39,20 @@ def _fail_running(path: Path, error: str) -> None:
 def _cleanup_snapshot(path: Path) -> None:
     directory = path.parent
     try:
-        info = directory.stat()
+        info = directory.lstat()
+        snapshot_info = path.lstat()
         expected_root = Path(tempfile.gettempdir()).resolve()
         if (
             path.name != 'finder-export.json'
             or directory.is_symlink()
+            or not stat.S_ISREG(snapshot_info.st_mode)
             or not directory.name.startswith('evaluatorq-finder-snapshot-')
             or directory.resolve().parent != expected_root
             or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o700)
+            or (os.name != 'nt' and stat.S_IMODE(snapshot_info.st_mode) != 0o600)
             or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
+            or (hasattr(os, 'getuid') and snapshot_info.st_uid != os.getuid())
+            or {entry.name for entry in directory.iterdir()} != {path.name}
         ):
             logger.warning('Leaving untrusted Finder snapshot path in place: {}', path)
             return
@@ -49,8 +61,42 @@ def _cleanup_snapshot(path: Path) -> None:
         logger.warning('Could not remove Finder snapshot directory {}: {}', directory, exc)
 
 
+def _snapshot_candidate_from_request() -> Path | None:
+    """Recover a private Finder snapshot path when payload decoding fails.
+
+    The separate environment value survives malformed request JSON. Treat both
+    as untrusted: `_cleanup_snapshot` verifies the private temp directory,
+    owner, permissions, and expected filename before deleting anything.
+    """
+    raw = os.environ.get('EVALUATORQ_INSIGHTS_LAUNCH_REQUEST')
+    try:
+        request = json.loads(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        request = None
+    if isinstance(request, dict):
+        spec = request.get('spec')
+        snapshot = request.get('finder_export_snapshot')
+        if isinstance(spec, dict) and spec.get('source') == 'finder' and isinstance(snapshot, str):
+            return Path(snapshot)
+    snapshot = os.environ.get(_SNAPSHOT_ENV)
+    return Path(snapshot) if snapshot else None
+
+
+def _cleanup_finder_reference(runs_dir: Path, run_id: str) -> None:
+    """Release a Finder export after its Insights worker reaches a terminal state."""
+    try:
+        reference = finder_export_reference_path(runs_dir, run_id)
+        if reference.parent.is_symlink():
+            logger.warning('Leaving untrusted Finder export reference directory in place: {}', reference.parent)
+            return
+        reference.unlink(missing_ok=True)
+    except (OSError, ValueError) as exc:
+        logger.warning('Could not remove Finder export reference for run {}: {}', run_id, exc)
+
+
 def main() -> int:
     payload = None
+    unvalidated_snapshot = _snapshot_candidate_from_request()
     try:
         payload = read_launch_payload()
         spec = payload.spec
@@ -99,6 +145,10 @@ def main() -> int:
     finally:
         if payload is not None and payload.finder_export_snapshot is not None:
             _cleanup_snapshot(payload.finder_export_snapshot)
+        elif unvalidated_snapshot is not None:
+            _cleanup_snapshot(unvalidated_snapshot)
+        if payload is not None and payload.spec.source == 'finder':
+            _cleanup_finder_reference(payload.runs_dir, payload.run_id)
     return 0 if run.status == 'completed' else 1
 
 

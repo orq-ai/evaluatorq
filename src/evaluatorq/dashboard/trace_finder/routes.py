@@ -25,6 +25,7 @@ from evaluatorq.common.orq_client import (
     resolve_orq_client,
 )
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.dashboard.insights_launch import FINDER_EXPORT_REFERENCE_DIR
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder.views import drawer, facet_menu, fragment, missing_trace_drawer, page_html
 from evaluatorq.trace_finder import (
@@ -56,10 +57,11 @@ from evaluatorq.trace_finder.settings import (
 
 _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
 _FINDER_EXPORT_RETENTION = 50
+_FINDER_EXPORT_REFERENCE_MAX_AGE = timedelta(days=30)
 
 
 def _referenced_finder_exports(export_dir: Path) -> set[Path]:
-    """Find exports named by saved Insights runs so retention cannot break reuse."""
+    """Find exports named by saved or currently running Insights populations."""
     referenced: set[Path] = set()
     try:
         run_paths = list(get_store_dir('insights-runs').glob('insights_*.json'))
@@ -85,6 +87,33 @@ def _referenced_finder_exports(export_dir: Path) -> set[Path]:
         except (OSError, ValueError, TypeError, RuntimeError) as exc:
             # An unreadable saved run must not make export cleanup fail.
             logger.warning('Could not inspect Insights run {} for Finder export references: {}', run_path, exc)
+    runs_dir = get_store_dir('insights-runs')
+    manifests_dir = runs_dir / '.manifests'
+    references_dir = runs_dir / FINDER_EXPORT_REFERENCE_DIR
+    now = datetime.now(timezone.utc).timestamp()
+    for marker in references_dir.glob('*.json'):
+        try:
+            run_id = marker.stem
+            manifest_path = manifests_dir / f'{run_id}.json'
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            age = now - manifest_path.stat().st_mtime
+            if manifest.get('status') != 'running' or age > _FINDER_EXPORT_REFERENCE_MAX_AGE.total_seconds():
+                marker.unlink(missing_ok=True)
+                continue
+            data = json.loads(marker.read_text(encoding='utf-8'))
+            value = data.get('finder_export') if isinstance(data, dict) else None
+            if isinstance(value, str) and value:
+                candidate = Path(value).expanduser().resolve()
+                if (
+                    candidate.parent == export_root
+                    and candidate.name.startswith('trace-finder-')
+                    and candidate.suffix == '.json'
+                ):
+                    referenced.add(candidate)
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
+            logger.warning('Could not inspect in-flight Finder export reference {}: {}', marker, exc)
+            with contextlib.suppress(OSError):
+                marker.unlink(missing_ok=True)
     return referenced
 
 

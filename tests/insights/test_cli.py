@@ -172,6 +172,31 @@ def test_error_run_exits_one(monkeypatch: Any, minimal_run: Any) -> None:
     assert result.exit_code == 1, result.output
 
 
+def test_operational_pipeline_failure_is_reported_without_traceback(monkeypatch: Any) -> None:
+    async def fail_pipeline(population: Any, **kwargs: Any) -> Any:
+        raise OSError('connection refused')
+
+    monkeypatch.setattr(cli_module, 'insights', fail_pipeline)
+
+    result = CliRunner().invoke(_app(), ['insights'])
+
+    assert result.exit_code == 1
+    assert 'Error: connection refused' in result.output
+    assert 'Traceback' not in result.output
+
+
+def test_programmer_error_from_pipeline_is_not_hidden(monkeypatch: Any) -> None:
+    async def fail_pipeline(population: Any, **kwargs: Any) -> Any:
+        raise AssertionError('unexpected invariant failure')
+
+    monkeypatch.setattr(cli_module, 'insights', fail_pipeline)
+
+    result = CliRunner().invoke(_app(), ['insights'])
+
+    assert isinstance(result.exception, AssertionError)
+    assert 'unexpected invariant failure' in str(result.exception)
+
+
 def test_finder_export_and_query_are_usage_error() -> None:
     result = CliRunner().invoke(_app(), ['insights', '--from-finder', 'finder.json', '--query', 'refunds'])
 

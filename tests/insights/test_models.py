@@ -14,6 +14,8 @@ from evaluatorq.insights.models import (
     InsightsPopulation,
     InsightsRun,
     LabelAnswer,
+    PriorityPoint,
+    TraceInsight,
     TraceSummary,
     real_assistant_errors,
 )
@@ -65,6 +67,53 @@ def test_label_answer_rejects_invalid_probabilities(probability: float) -> None:
         LabelAnswer(value='positive', confidence=None, probabilities={'positive': probability}, error=None)
 
 
+@pytest.mark.parametrize('confidence', [float('nan'), float('inf'), float('-inf'), -0.01, 1.01])
+def test_label_answer_rejects_invalid_confidence(confidence: float) -> None:
+    with pytest.raises(ValidationError):
+        LabelAnswer(value='positive', confidence=confidence, probabilities=None, error=None)
+
+
+@pytest.mark.parametrize('score', [float('nan'), float('inf'), -0.01, 1.01])
+def test_label_answer_rejects_invalid_normalized_score(score: float) -> None:
+    with pytest.raises(ValidationError):
+        LabelAnswer(value=score, confidence=None, probabilities=None, error=None)
+
+
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    [
+        ('mean_satisfaction', float('nan')),
+        ('mean_satisfaction', -0.01),
+        ('mean_satisfaction', 1.01),
+        ('error_share', float('inf')),
+        ('error_share', -0.01),
+        ('error_share', 1.01),
+    ],
+)
+def test_priority_point_rejects_invalid_ratios(field: str, value: float) -> None:
+    payload = {
+        'cluster_id': 'base-1',
+        'name': 'Example',
+        'volume': 2,
+        'mean_satisfaction': 0.5,
+        'error_share': 0.25,
+        field: value,
+    }
+    with pytest.raises(ValidationError):
+        PriorityPoint.model_validate(payload)
+
+
+@pytest.mark.parametrize('coordinate', [float('nan'), float('inf'), float('-inf')])
+def test_trace_insight_rejects_non_finite_coordinates(coordinate: float) -> None:
+    with pytest.raises(ValidationError):
+        TraceInsight.model_validate({
+            'trace_id': 'trace-1',
+            'span_id': 'span-1',
+            'timestamp': datetime.now(timezone.utc),
+            'coords': {'intent': (coordinate, 0.0, 0.0)},
+        })
+
+
 def test_run_loads_config_fields_from_older_saved_file(minimal_run: InsightsRun) -> None:
     import json
 
@@ -77,6 +126,40 @@ def test_run_loads_config_fields_from_older_saved_file(minimal_run: InsightsRun)
     )
     loaded = InsightsRun.model_validate_json(json.dumps(payload))
     assert loaded.config.classifier_model == minimal_run.config.classifier_model
+
+
+@pytest.mark.parametrize(
+    ('path', 'value'),
+    [
+        (('traces', 0, 'labels', 'sentiment', 'confidence'), 1.5),
+        (('labels', 'sentiment', 'mean_confidence'), float('nan')),
+        (('priority', 0, 'error_share'), -0.1),
+        (('traces', 0, 'coords', 'intent', 0), float('inf')),
+    ],
+)
+def test_saved_run_rejects_invalid_persisted_floats(
+    minimal_run: InsightsRun, path: tuple[str | int, ...], value: float
+) -> None:
+    import json
+
+    payload = json.loads(minimal_run.model_dump_json())
+    if path[0] == 'priority':
+        payload['priority'] = [
+            {
+                'cluster_id': 'base-1',
+                'name': 'Example',
+                'volume': 2,
+                'mean_satisfaction': 0.5,
+                'error_share': 0.25,
+            }
+        ]
+    target = payload
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+    with pytest.raises(ValidationError):
+        InsightsRun.model_validate_json(json.dumps(payload))
 
 
 @pytest.mark.parametrize('sentinel', ['None', 'none.', ' N/A ', 'No errors', 'No errors were made.'])
@@ -123,3 +206,19 @@ def test_insights_config_accepts_minimum_numeric_limits() -> None:
     assert config.max_subclusters == 1
     assert config.parallelism == 1
     assert config.outlier_zscore == 0
+
+
+def test_insights_config_rejects_duplicate_labels_and_dimensions() -> None:
+    from evaluatorq.insights.models import LabelSpec
+
+    spec = LabelSpec(name='sentiment', kind='choice', instructions='Classify sentiment.')
+    with pytest.raises(ValidationError, match='labels must have unique names'):
+        InsightsConfig(labels=[spec, spec], dimensions=['intent'])
+    with pytest.raises(ValidationError, match='dimensions must not contain duplicates'):
+        InsightsConfig(labels=[], dimensions=['intent', 'intent'])
+
+
+def test_insights_config_json_rejects_duplicate_selections() -> None:
+    payload = '{"labels": [], "dimensions": ["intent", "intent"]}'
+    with pytest.raises(ValidationError, match='dimensions must not contain duplicates'):
+        InsightsConfig.model_validate_json(payload)

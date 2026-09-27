@@ -314,7 +314,14 @@ def test_priority_chart_contains_quadrant_labels_and_empty_state():
 
 
 def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatch, tmp_path):
-    monkeypatch.setattr(finder_views, 'export_filename', lambda _snapshot: 'trace-finder-17.json')
+    monkeypatch.setattr(finder_views, 'export_json', lambda _snapshot: 'exact-export-payload')
+    seen_payloads = []
+
+    def filename(_snapshot, payload):
+        seen_payloads.append(payload)
+        return 'trace-finder-17.json'
+
+    monkeypatch.setattr(finder_views, 'export_filename', filename)
     monkeypatch.setattr(finder_views, 'status_indicator', lambda _snapshot: '')
     monkeypatch.setattr(finder_views, 'controls', lambda *_args, **_kwargs: '')
     monkeypatch.setattr(finder_views, 'field', lambda *_args, **_kwargs: '')
@@ -332,6 +339,7 @@ def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatc
     assert 'InsightsPopulation.from_finder_export' in html
     assert "Path('trace-finder-17.json')" in rendered_examples
     assert 'insights_sync(population)' in rendered_examples
+    assert seen_payloads == ['exact-export-payload']
     assert '/Users/' not in html
     assert '/tmp/' not in html
 
