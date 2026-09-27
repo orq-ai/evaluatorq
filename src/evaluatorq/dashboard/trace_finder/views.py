@@ -317,21 +317,18 @@ def controls(
         if settings.orq_project_id
         else ''
     )
-    range_start = population.start if population else explorer_view.start if explorer_view else None
-    range_end = population.end if population else explorer_view.end if explorer_view else None
     hidden_facets = ''.join(
         f'<input type="hidden" form="{form_id}" name="facet_{name}" value="{esc(value)}">'
         for name in FACET_NAMES
         for value in sorted(getattr(carried_facets, name))
     )
     return (
-        '<div class="finder-controls" id="finder-controls">'
+        f'<div class="finder-controls" id="finder-controls"{" hidden" if explorer_view is not None else ""}>'
         f'{hidden_facets}{scope_html}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"}, generated=generated_only)}'
         f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
         f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
-        f'{explorer_views.range_inputs(range_start, range_end, settings.window_days)}'
         f'<input {keep["limit"]} type="hidden" form="{form_id}" name="limit" value="{values["limit"]}">'
         f'<input {keep["parallelism"]} type="hidden" form="{form_id}" name="parallelism" value="{values["parallelism"]}">'
         f'{count_html}</div>'

@@ -2771,6 +2771,11 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 /* Trace explorer */
 .xr { display:flex; flex-direction:column; gap:10px; }
 .xr-toolbar { display:flex; align-items:center; gap:12px; font-size:12px; color:var(--text-muted); }
+.xr-toolbar { min-height:42px; flex-wrap:wrap; }.xr-toolbar .spacer { flex:1; }.xr-toolbar-right { display:grid; grid-template-columns:minmax(185px,1fr) 72px 96px 64px 142px; gap:8px; align-items:center; }.xr-toolbar-right > * { box-sizing:border-box; }
+.xr-quickviews { display:flex; align-items:center; gap:2px; }.xr-quickviews button { border:0; border-bottom:2px solid transparent; background:transparent; padding:9px 8px 7px; color:var(--text-muted); font:inherit; cursor:pointer; }.xr-quickviews button.on { border-color:var(--accent); color:var(--text-strong); font-weight:700; }
+.xr-filter { border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-card); padding:6px 9px; color:var(--text-body); font:inherit; cursor:pointer; }.xr-chip { border:1px solid #d2e6d8; border-radius:5px; background:#eef6f0; padding:4px 7px; color:#415d52; font-size:11px; white-space:nowrap; }.xr-progress { white-space:nowrap; }
+.xr-time-menu,.xr-sort,.xr-cols { position:relative; }.xr-time-menu > summary,.xr-sort > summary,.xr-exact > summary { cursor:pointer; list-style:none; white-space:nowrap; }.xr-time-options,.xr-cols form { position:absolute; top:calc(100% + 6px); right:0; z-index:6; display:grid; gap:8px; min-width:245px; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:8px; background:#fff; box-shadow:0 8px 24px #0000001a; }.xr-time-options .xr-range { margin:2px 0; }.xr-time-options .xr-presets { display:flex; flex-wrap:wrap; gap:8px; }.xr-exact[open] { display:grid; gap:7px; }
+.xr-sort[open] { display:grid; gap:5px; }.xr-toolbar-right .xr-switch { justify-self:end; }
 .xr-cols { position:relative; }.xr-cols form { position:absolute; right:0; z-index:6; background:#fff; border:1px solid var(--border-subtle); border-radius:10px; padding:8px 12px; display:grid; gap:4px; min-width:200px; box-shadow:0 8px 24px #0000001a; }
 .xr-table td.num,.xr-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .xr-table tr.sel,.tv-r.sel { box-shadow:inset 3px 0 0 var(--traj-assistant); background:#f3f8f7; }

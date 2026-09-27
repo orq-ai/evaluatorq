@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .rows import TraceRow
 
 ViewMode = Literal['table', 'trajectories']
+QuickView = Literal['all', 'errors', 'matches']
 ExplorerState = Literal['idle', 'loading', 'loaded', 'failed']
 PAGE_ROWS = 100
 
@@ -56,9 +57,18 @@ class ExplorerView:
     page: int = 0
     view: ViewMode = 'table'
     matched_only: bool = False
+    quick_view: QuickView = 'all'
 
     def visible_rows(self, results: Mapping[str, TraceClassification] | None = None) -> tuple[TraceRow, ...]:
         rows = self.rows
+        if self.quick_view == 'errors':
+            rows = tuple(row for row in rows if row.is_error)
+        elif self.quick_view == 'matches':
+            rows = tuple(
+                row
+                for row in rows
+                if results is not None and (result := results.get(row.trace_id)) is not None and result.matched
+            )
         if self.matched_only and results:
             rows = tuple(row for row in rows if (result := results.get(row.trace_id)) is not None and result.matched)
         if self.sort is None:
@@ -142,6 +152,7 @@ class ExplorerStore:
         page: int | None = None,
         view: ViewMode | None = None,
         matched_only: bool | None = None,
+        quick_view: QuickView | None = None,
     ) -> ExplorerView:
         """Change display state; ``page`` is clamped when rendered because matches affect row count."""
         current = self._view
@@ -152,6 +163,7 @@ class ExplorerStore:
             page=max(0, page if page is not None else current.page),
             view=view if view is not None else current.view,
             matched_only=matched_only if matched_only is not None else current.matched_only,
+            quick_view=quick_view if quick_view is not None else current.quick_view,
         )
         return self._view
 

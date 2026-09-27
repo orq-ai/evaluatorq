@@ -534,7 +534,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
             return explorer_views.results(
-                ExplorerView(), resolve_columns(None), records=None, snapshot=None, oob=oob, error=error
+                ExplorerView(),
+                resolve_columns(None),
+                records=None,
+                snapshot=None,
+                oob=oob,
+                error=error,
+                window_days=_settings(req.app).window_days,
             )
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
@@ -551,6 +557,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             snapshot=snapshot,
             oob=oob,
             error=error,
+            window_days=_settings(req.app).window_days,
         )
 
     @app.get('/find')
@@ -748,6 +755,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 page=int(page) if page and page.isdigit() else (0 if params.get('sort') else None),
                 view=params.get('view') if params.get('view') in {'table', 'trajectories'} else None,
                 matched_only={'1': True, '0': False}.get(params.get('matched_only') or ''),
+                quick_view=params.get('quick_view')
+                if params.get('quick_view') in {'all', 'errors', 'matches'}
+                else None,
             )
         body = await _explorer_html(req)
         if explorer is not None:

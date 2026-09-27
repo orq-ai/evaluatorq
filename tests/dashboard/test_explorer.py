@@ -104,6 +104,8 @@ def test_range_inputs_include_local_time_fields_and_default_rows() -> None:
     assert 'name="to_time" type="time" step="1"' in html
     assert 'name="tz_offset" form="explorer-load-form"' in html
     assert 'data-explorer-preset="900"' in html
+    assert 'name="range_mode" value="relative"' in html
+    assert '<details class="xr-exact">' in html
     assert 'name="rows" type="number"' in html
     assert 'max="5000"' in html
     assert 'name="csrf"' in html
@@ -371,6 +373,14 @@ def test_load_then_rows_then_sort_then_page(explorer_client) -> None:
     assert 'Page 3 of 3' in html
 
 
+def test_rows_route_updates_quick_view_state_and_toolbar(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+    html = client.get('/find/rows?quick_view=errors').text
+    assert 'aria-pressed="true" hx-get="/find/rows?quick_view=errors"' in html
+    assert 'No errors found.' in html
+
+
 def test_load_rejects_an_inverted_range(explorer_client) -> None:
     _, source, client = explorer_client
     response = client.post(
@@ -546,6 +556,62 @@ def test_invalid_load_keeps_existing_rows(explorer_client) -> None:
     response = _load(client, **{'from': '2026-09-27T12:00:00', 'to': '2026-09-27T11:00:00'})
     assert 'From must be before To.' in response.text
     assert 'hx-get="/find/trace/trace-0000"' in response.text
+
+
+def test_shared_toolbar_keeps_columns_before_load_and_view_switch_in_both_modes() -> None:
+    columns = resolve_columns(None)
+    for mode, context in (('table', 'Columns'), ('trajectories', 'Sort')):
+        html = explorer_views.results(
+            ExplorerView(state='loaded', rows=_rows(1), view=mode), columns, records=None, snapshot=None
+        )
+        assert html.index('Filters') < html.index('All') < html.index('Errors') < html.index('AI matches')
+        assert html.index(context) < html.index('form="explorer-load-form">Load') < html.index('aria-label="View"')
+
+
+@pytest.mark.parametrize('state', ['idle', 'loading', 'loaded'])
+def test_shared_toolbar_keeps_load_and_view_switch_visible_in_all_states(state: str) -> None:
+    html = explorer_views.results(
+        ExplorerView(state=state, rows=_rows(1) if state == 'loaded' else (), limit=5),
+        resolve_columns(None),
+        records=None,
+        snapshot=None,
+    )
+    assert 'form="explorer-load-form">Load' in html
+    assert 'aria-label="View"' in html
+    assert html.count('class="xr-toolbar"') == 1
+    assert html.count('id="explorer-load-form"') == 1
+
+
+def test_quick_views_filter_only_loaded_population_and_render_empty_state() -> None:
+    from evaluatorq.trace_finder import RunSnapshot, TraceClassification
+
+    rows = _rows(3)
+    rows = (rows[0].model_copy(update={'status': 'error'}), rows[1], rows[2])
+    matches = TraceClassification(trace_id=rows[1].trace_id, span_id='s', matched=True, raw_result={})
+    outside = TraceClassification(trace_id='not-loaded', span_id='s2', matched=True, raw_result={})
+    snapshot = RunSnapshot(results={matches.trace_id: matches, outside.trace_id: outside}, within_results=True)
+    error_html = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, quick_view='errors'),
+        resolve_columns(None),
+        records=None,
+        snapshot=snapshot,
+    )
+    assert error_html.count('data-tv-row=') == 1
+    match_html = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, quick_view='matches'),
+        resolve_columns(None),
+        records=None,
+        snapshot=snapshot,
+    )
+    assert 'trace-0001' in match_html
+    assert 'trace-0000' not in match_html and 'not-loaded' not in match_html
+    empty_html = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, quick_view='matches'),
+        resolve_columns(None),
+        records=None,
+        snapshot=RunSnapshot(results={}, within_results=True),
+    )
+    assert 'No AI matches found.' in empty_html
 
 
 def test_drawer_opens_at_the_requested_message() -> None:
