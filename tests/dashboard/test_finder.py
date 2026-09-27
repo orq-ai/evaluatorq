@@ -815,3 +815,56 @@ def test_run_controls_are_preserved_across_polls_per_form(setup_finder) -> None:
     poll = client.get('/find/poll').text
     for name in ('window_days', 'limit', 'parallelism'):
         assert f'id="finder-{name}-finder-query-form" hx-preserve' in poll
+
+
+def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_finder) -> None:
+    store, client = setup_finder
+    html = client.get('/traces').text
+
+    assert '<h2 class="finder-title finder-command-title">Traces</h2>' in html
+    assert 'Ask AI' in html
+    assert '>Search<' in html
+    assert 'href="/settings" aria-label="AI configuration"' in html
+    assert 'class="finder-command-gear" style="min-width:42px;min-height:42px"' in html
+    assert html.index('id="finder-scope"') < html.index('class="finder-command-gear"') < html.index('finder-command-search')
+    assert 'value="within" form="finder-query-form"' in html
+    assert 'value="new" form="finder-query-form"' in html
+    assert 'Ask AI <span aria-hidden="true">↗</span>' not in html
+    assert 'class="finder-hint' not in html
+    assert 'type="hidden" name="mode" value="review"' in html
+    assert 'type="hidden" form="finder-query-form" name="limit"' in html
+    assert 'type="hidden" form="finder-query-form" name="parallelism"' in html
+    assert 'name="limit" value="500"' in html
+    assert 'name="parallelism" value="100"' in html
+    assert 'id="finder-body"' in html
+    assert 'id="explorer-results"' in html
+
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'review'}))
+    assert store.snapshot_value.request is not None
+    assert store.snapshot_value.request.mode == 'review'
+    assert store.snapshot_value.request.population.limit == 500
+    assert store.snapshot_value.request.parallelism == 100
+    store.complete()
+    classified = client.get('/traces').text
+    assert 'finder-progress' in classified
+    assert 'Classifier task' in classified
+    assert 'Filter selection' in classified
+    assert '<div class="finder-matrix' not in classified
+    assert '<table class="finder-table' not in classified
+    assert 'Included traces' not in classified
+
+    store.snapshot_value = replace(store.snapshot_value, state='compiling', phase='planning')
+    compiling = client.get('/traces').text
+    assert 'Planning search' in compiling
+    assert '<div class="finder-matrix' not in compiling
+    assert '<table class="finder-table' not in compiling
+
+
+def test_find_keeps_legacy_search_hero_separate_from_traces(setup_finder) -> None:
+    _store, client = setup_finder
+    html = client.get('/find').text
+
+    assert 'Find the signal.' in html
+    assert 'Find traces' in html
+    assert 'href="/settings" aria-label="AI configuration"' not in html
+    assert 'id="explorer-results"' not in html

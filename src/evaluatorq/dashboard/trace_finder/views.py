@@ -102,6 +102,28 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
     )
 
 
+def traces_command_strip(query: str, *, api_available: bool, error: str | None = None, has_rows: bool = False) -> str:
+    """Compact AI query strip used by /traces; /find keeps its own legacy search hero."""
+    disabled = '' if api_available else ' disabled'
+    error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
+    return (
+        '<section class="finder-hero finder-command">'
+        '<h2 class="finder-title finder-command-title">Traces</h2>'
+        '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
+        'hx-swap="innerHTML" hx-include="#finder-controls" hx-disabled-elt="find button">'
+        f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
+        f'<div class="col"><textarea class="finder-command-textarea" name="query" rows="1" placeholder="Ask about these traces…" required{disabled}>'
+        f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="review">'
+        '<div id="finder-scope" class="finder-seg" role="radiogroup" aria-label="Ask AI scope">'
+        f'{scope_toggle(has_rows=has_rows)}</div><a href="/settings" aria-label="AI configuration" title="AI configuration" '
+        'class="finder-command-gear" style="min-width:42px;min-height:42px">⚙</a>'
+        f'<button class="finder-go finder-command-search" type="submit"{disabled}><span class="finder-go-idle">Search</span>'
+        '<span class="finder-go-working" role="status">Searching…</span></button>'
+        '</form>'
+        f'{error_html}</section>'
+    )
+
+
 def _facet_values(catalogue: FacetCatalogue | None, name: str) -> tuple[str, ...]:
     if catalogue is None or name in NUMERIC_FACET_NAMES:
         return ()
@@ -310,8 +332,8 @@ def controls(
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
         f'{explorer_views.range_inputs(range_start, range_end, settings.window_days)}'
-        f'<span class="finder-limit-field"><span class="quiet"><b>Limit</b><input {keep["limit"]} form="{form_id}" name="limit" type="number" min="1" max="5000" value="{values["limit"]}" style="width:72px"></span></span>'
-        f'<span class="quiet"><b>Parallel</b><input {keep["parallelism"]} form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:64px"></span>'
+        f'<input {keep["limit"]} type="hidden" form="{form_id}" name="limit" value="{values["limit"]}">'
+        f'<input {keep["parallelism"]} type="hidden" form="{form_id}" name="parallelism" value="{values["parallelism"]}">'
         f'{count_html}</div>'
     )
 
@@ -728,7 +750,17 @@ def body(
     if snapshot.state == 'idle':
         unavailable = field(snapshot, api_available=False) if not api_available else ''
         return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}{unavailable}'
-    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
+    controls_html = controls(
+        snapshot,
+        settings,
+        catalogue,
+        pending=pending,
+        explorer_facets=explorer_facets,
+        explorer_numeric=explorer_numeric,
+        explorer_view=explorer_view,
+    )
+    details = task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ''
+    return f'{indicator}{controls_html}{progress(snapshot)}{details}'
 
 
 def page_html(
@@ -745,7 +777,6 @@ def page_html(
 ) -> str:
     request = snapshot.request
     query = request.query if request is not None else ''
-    mode = request.mode if request is not None else 'review'
     body_html = fragment(
         snapshot,
         settings,
@@ -759,7 +790,7 @@ def page_html(
         from evaluatorq.trace_finder.explorer import ExplorerView
 
         explorer_html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
-    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error, has_rows=has_rows)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
+    html = f'<div class="finder">{traces_command_strip(query, api_available=api_available, error=error, has_rows=has_rows)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
     return page('Traces', html, active_nav='traces')
 
 
