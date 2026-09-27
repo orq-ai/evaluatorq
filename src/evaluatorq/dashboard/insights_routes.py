@@ -109,12 +109,51 @@ async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
     api_key = profile.api_key if profile else os.environ.get('ORQ_API_KEY', '')
     credential_fingerprint = hashlib.sha256(f'{server}\0{api_key}'.encode()).hexdigest()
     cache_key = (profile.name if profile else None, credential_fingerprint, window_days)
-    cache: dict[tuple[str | None, str, int], tuple[datetime, FacetCatalogue | None]] = getattr(
-        app.state, 'insights_facet_catalogues', {}
+    generation = getattr(app.state, 'finder_generation', 0)
+    cache: dict[tuple[str | None, str, int], tuple[datetime, FacetCatalogue | None]] | None = getattr(
+        app.state, 'insights_facet_catalogues', None
     )
+    if cache is None:
+        cache = {}
+        app.state.insights_facet_catalogues = cache
     cached = cache.get(cache_key)
     if cached is not None and cached[0] > now:
         return cached[1]
+
+    in_flight: dict[tuple[int, tuple[str | None, str, int]], asyncio.Task[FacetCatalogue | None]] = getattr(
+        app.state, 'insights_facet_catalogue_tasks', {}
+    )
+    app.state.insights_facet_catalogue_tasks = in_flight
+    task_key = (generation, cache_key)
+    task = in_flight.get(task_key)
+    if task is None:
+        task = asyncio.create_task(
+            _load_catalogue(app, cache, generation, cache_key, window_days, now, profile, server)
+        )
+        in_flight[task_key] = task
+
+        def discard_finished(done: asyncio.Task[FacetCatalogue | None]) -> None:
+            if in_flight.get(task_key) is done:
+                del in_flight[task_key]
+
+        task.add_done_callback(discard_finished)
+    catalogue = await asyncio.shield(task)
+    if generation != getattr(app.state, 'finder_generation', 0):
+        return None
+    return catalogue
+
+
+async def _load_catalogue(
+    app: Any,
+    cache: dict[tuple[str | None, str, int], tuple[datetime, FacetCatalogue | None]],
+    generation: int,
+    cache_key: tuple[str | None, str, int],
+    window_days: int,
+    now: datetime,
+    profile: Any,
+    server: str,
+) -> FacetCatalogue | None:
+    """Fetch one window catalogue and cache it only while its settings are current."""
     orq = None
     try:
         orq = resolve_orq_client(profile.api_key if profile else None, base_url=server)
@@ -128,8 +167,11 @@ async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
                 await close_orq_client(orq)
             except Exception as exc:  # noqa: BLE001 — cleanup must not hide the catalogue response
                 logger.warning('Could not close the Insights facet catalogue client: {}', exc)
-    cache[cache_key] = (now + timedelta(minutes=5 if catalogue is not None else 1), catalogue)
-    app.state.insights_facet_catalogues = cache
+    if (
+        generation == getattr(app.state, 'finder_generation', 0)
+        and getattr(app.state, 'insights_facet_catalogues', None) is cache
+    ):
+        cache[cache_key] = (now + timedelta(minutes=5 if catalogue is not None else 1), catalogue)
     return catalogue
 
 

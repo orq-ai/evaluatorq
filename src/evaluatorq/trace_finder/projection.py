@@ -32,7 +32,7 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _BEARER_RE = re.compile(r'(?i)(\b(?:Bearer|Basic|Token)\s+)[A-Za-z0-9._~+/=-]+')
-_URL_CREDENTIALS_RE = re.compile(r'(?i)(https?://)[^/@\s:]+:[^/@\s]+@')
+_URI_CREDENTIALS_RE = re.compile(r'(?i)([a-z][a-z0-9+.-]*://)[^/@\s?#]*:[^/@\s?#]*@')
 _KNOWN_TOKEN_RE = re.compile(
     r'(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|'
     r'xox[baprs]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])'
@@ -275,7 +275,7 @@ def _is_sensitive_name(name: Any) -> bool:
 
 def _redact_unstructured_text(value: str) -> str:
     value = _BEARER_RE.sub(r'\1[REDACTED]', value)
-    value = _URL_CREDENTIALS_RE.sub(r'\1[REDACTED]@', value)
+    value = _URI_CREDENTIALS_RE.sub(r'\1[REDACTED]@', value)
     value = _KNOWN_TOKEN_RE.sub('[REDACTED]', value)
 
     def replace(match: re.Match[str]) -> str:

@@ -341,6 +341,42 @@ def test_tool_result_excerpt_redacts_url_userinfo_and_query_token() -> None:
     assert '[REDACTED]@example.test/api?token=[REDACTED]&retry=1 failed' in excerpt
 
 
+@pytest.mark.parametrize(('dsn', 'secret'), [
+    ('postgres://app-user:pg-live-secret@db.example.test:5432/app', 'pg-live-secret'),
+    ('redis://:redis-live-secret@cache.example.test:6379/0', 'redis-live-secret'),
+    ('mongodb+srv://svc:mongo-secret@cluster.example.test/db', 'mongo-secret'),
+])
+def test_tool_result_excerpt_redacts_credentials_for_any_uri_scheme(dsn: str, secret: str) -> None:
+    body = f'Error: connection failed for {dsn}; retry after 2 seconds'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert secret not in excerpt
+    assert '[REDACTED]@' in excerpt
+    assert excerpt.startswith('Error: connection failed for ')
+    assert excerpt.endswith('; retry after 2 seconds')
+
+
+@pytest.mark.parametrize('text', [
+    'postgres://db.example.test:5432/app has no userinfo',
+    'redis://[2001:db8::1]:6379/0 uses an IPv6 host and port',
+    'contact user:password@example.test for access',
+])
+def test_tool_result_excerpt_keeps_uri_authority_without_credentials(text: str) -> None:
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': text},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert excerpt == text
+
+
 def test_tool_result_excerpt_redacts_recognizable_unlabeled_tokens() -> None:
     body = 'Error: sk-proj-abcdefghijklmnop and ghp_abcdefghijklmnopqrst were rejected'
     trace = _trace(messages=(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
+from evaluatorq.dashboard import insights_routes
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.insights_launch import (
     MAX_FINDER_EXPORT_BYTES,
@@ -357,6 +359,70 @@ def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert resolve.call_count == 2
     assert resolve.call_args_list[0].args[0] == 'first-key'
     assert resolve.call_args_list[1].args[0] == 'second-key'
+
+
+@pytest.mark.asyncio
+async def test_concurrent_insights_facet_misses_share_one_provider_call(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    app = build_app()
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+    catalogue = FacetCatalogue(project=('shared',))
+
+    async def load(*args: object, **kwargs: object) -> FacetCatalogue:
+        nonlocal calls
+        calls += 1
+        started.set()
+        await release.wait()
+        return catalogue
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        first = asyncio.create_task(insights_routes._catalogue(app, 7))
+        await started.wait()
+        second = asyncio.create_task(insights_routes._catalogue(app, 7))
+        await asyncio.sleep(0)
+        release.set()
+        assert await asyncio.gather(first, second) == [catalogue, catalogue]
+
+    assert calls == 1
+    assert len(app.state.insights_facet_catalogues) == 1
+
+
+@pytest.mark.asyncio
+async def test_settings_generation_change_discards_stale_insights_facet_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    app = build_app()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def load(*args: object, **kwargs: object) -> FacetCatalogue:
+        started.set()
+        await release.wait()
+        return FacetCatalogue(project=('old-profile',))
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        stale = asyncio.create_task(insights_routes._catalogue(app, 7))
+        await started.wait()
+        # This is the cache invalidation performed by the successful settings save route.
+        app.state.finder_generation += 1
+        del app.state.insights_facet_catalogues
+        release.set()
+        assert await stale is None
+
+    assert not hasattr(app.state, 'insights_facet_catalogues')
 
 
 def test_facet_cache_key_tracks_same_profile_credentials_and_endpoint(
