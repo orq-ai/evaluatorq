@@ -49,7 +49,7 @@ def test_truncates_structured_text_blocks_preserving_shape_and_byte_accounting(
     assert trace.messages[0]['content'][1] == block
 
 
-def test_project_trace_preserves_visible_tool_structure_without_tool_bodies() -> None:
+def test_project_trace_keeps_tool_result_excerpts_but_drops_orphans() -> None:
     trace = _trace(
         status='failed',
         messages=(
@@ -106,12 +106,14 @@ def test_project_trace_preserves_visible_tool_structure_without_tool_bodies() ->
                         'name': 'lookup_customer',
                         'arguments': {'customer_id': 'cust_1', 'labels': ['vip']},
                         'status': 'completed',
+                        'result_excerpt': 'secret tool body: account details',
                     },
                     {
                         'id': 'call_456',
                         'name': 'charge_card',
                         'arguments': 'not valid json',
                         'status': 'error',
+                        'result_excerpt': 'secret tool body: payment declined',
                     },
                 ],
             },
@@ -120,10 +122,48 @@ def test_project_trace_preserves_visible_tool_structure_without_tool_bodies() ->
     }
     assert projection.omitted_messages == 0
     assert projection.omitted_bytes == 0
-    assert 'secret tool body' not in projection.serialized
+    assert 'secret tool body: account details' in projection.serialized
+    assert 'secret tool body: payment declined' in projection.serialized
+    assert 'secret orphan tool body' not in projection.serialized
     assert 'lookup_customer' in projection.serialized
     assert 'error' in projection.serialized
     assert json.loads(projection.serialized) == projection.payload
+
+
+def test_tool_result_excerpt_keeps_the_start_and_is_capped() -> None:
+    body = 'Error: invoice not found. ' + 'z' * 10_000
+    trace = _trace(
+        messages=(
+            {
+                'role': 'assistant',
+                'tool_calls': [
+                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}
+                ],
+            },
+            {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+        )
+    )
+    call = project_trace(trace).payload['messages'][0]['tool_calls'][0]
+    assert call['result_excerpt'].startswith('Error: invoice not found.')
+    assert len(call['result_excerpt'].encode('utf-8')) <= 256 + len('[... later bytes omitted ...]')
+
+
+def test_tool_result_excerpt_shrinks_before_the_unit_is_omitted() -> None:
+    trace = _trace(
+        messages=(
+            {
+                'role': 'assistant',
+                'tool_calls': [
+                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}
+                ],
+            },
+            {'role': 'tool', 'tool_call_id': 'c1', 'content': 'Error: boom ' + 'z' * 400},
+        )
+    )
+    projection = project_trace(trace, token_budget=260)
+    call = projection.payload['messages'][0]['tool_calls'][0]
+    assert call['name'] == 'lookup'
+    assert call['result_excerpt'] is not None and call['result_excerpt'].startswith('Error')
 
 
 def test_project_trace_keeps_a_complete_newest_suffix_and_reports_discarded_units() -> None:
@@ -202,10 +242,10 @@ def test_project_trace_tail_truncates_oversized_parsed_tool_arguments() -> None:
         )
     )
 
-    projection = project_trace(trace, token_budget=240)
+    projection = project_trace(trace, token_budget=280)
 
     projected_call = projection.payload['messages'][0]['tool_calls'][0]
-    assert projection.estimated_tokens <= 240
+    assert projection.estimated_tokens <= 280
     assert projection.omitted_bytes > 0
     assert projected_call['id'] == 'call_789'
     assert projected_call['name'] == 'search_orders'

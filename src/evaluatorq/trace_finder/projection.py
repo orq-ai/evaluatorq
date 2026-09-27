@@ -7,12 +7,16 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from evaluatorq.contracts import tool_result_to_text
+
 from .models import TraceProjection, TraceRecord
 
 MAX_TOKEN_BUDGET = 25_000
 MAX_PROJECTED_TOOL_CALLS = 32
 MAX_TOOL_FIELD_BYTES = 128
 OMISSION_MARKER = '[... earlier bytes omitted ...]'
+MAX_TOOL_RESULT_BYTES = 256
+TRAILING_OMISSION_MARKER = '[... later bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
 
@@ -119,6 +123,7 @@ def _project_assistant(message: dict[str, Any], results: tuple[dict[str, Any], .
             'name': None,
             'arguments': f'{len(source_calls) - MAX_PROJECTED_TOOL_CALLS} tool calls omitted',
             'status': 'omitted',
+            'result_excerpt': None,
         })
     projected = {
         'role': message.get('role'),
@@ -181,7 +186,13 @@ def _project_content_block(block: Any) -> dict[str, Any]:
 
 def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     if not isinstance(call, dict):
-        return {'id': None, 'name': None, 'arguments': _strip_reasoning(call), 'status': 'pending'}
+        return {
+            'id': None,
+            'name': None,
+            'arguments': _strip_reasoning(call),
+            'status': 'pending',
+            'result_excerpt': None,
+        }
 
     function = call.get('function')
     function_data = function if isinstance(function, dict) else {}
@@ -192,7 +203,24 @@ def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[s
         'name': _bounded_tool_field(function_data.get('name', call.get('name'))),
         'arguments': arguments,
         'status': _tool_call_status(call_id, results),
+        'result_excerpt': _tool_result_excerpt(call_id, results),
     }
+
+
+def _tool_result_excerpt(call_id: Any, results: tuple[dict[str, Any], ...]) -> str | None:
+    result = next((item for item in results if item.get('tool_call_id') == call_id), None)
+    if result is None:
+        return None
+    text = tool_result_to_text(result.get('content'))
+    return _head_truncate_text(text, MAX_TOOL_RESULT_BYTES)[0] if text else None
+
+
+def _head_truncate_text(value: str, retained_bytes: int) -> tuple[str, int]:
+    encoded = value.encode('utf-8')
+    if len(encoded) <= retained_bytes:
+        return value, 0
+    head = encoded[:retained_bytes].decode('utf-8', errors='ignore')
+    return head + TRAILING_OMISSION_MARKER, len(encoded) - len(head.encode('utf-8'))
 
 
 def _bounded_tool_field(value: Any) -> str | None:
@@ -278,6 +306,11 @@ def _truncatable_text_lengths(messages: tuple[dict[str, Any], ...]) -> tuple[int
                 for call in tool_calls
                 if isinstance(call, dict) and 'arguments' in call and call['arguments'] != ''
             )
+            lengths.extend(
+                len(call['result_excerpt'].encode('utf-8'))
+                for call in tool_calls
+                if isinstance(call, dict) and isinstance(call.get('result_excerpt'), str) and call['result_excerpt']
+            )
     return tuple(lengths)
 
 
@@ -327,6 +360,10 @@ def _truncate_messages(
                     if len(arguments_text.encode('utf-8')) > retained_bytes:
                         truncated_call['arguments'], omitted = _tail_truncate_text(arguments_text, retained_bytes)
                         omitted_bytes += omitted
+                excerpt = truncated_call.get('result_excerpt')
+                if isinstance(excerpt, str) and len(excerpt.encode('utf-8')) > retained_bytes:
+                    truncated_call['result_excerpt'], omitted = _head_truncate_text(excerpt, retained_bytes)
+                    omitted_bytes += omitted
                 truncated_calls.append(truncated_call)
             truncated['tool_calls'] = truncated_calls
         truncated_messages.append(truncated)
