@@ -721,11 +721,25 @@
     document.querySelectorAll('[data-explorer-tz]').forEach((el) => { el.value = String(new Date().getTimezoneOffset()); });
     document.querySelectorAll('#explorer-from, #explorer-to').forEach(explorerLocal);
     const exact = document.querySelector('[data-explorer-range-mode]')?.value === 'exact';
+    explorerUpdateRangeLabel();
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = exact; });
     const filterButton = document.querySelector('[data-explorer-filters]');
     const finder = filterButton && filterButton.closest('.finder');
     if (filterButton && finder) filterButton.setAttribute('aria-expanded', String(finder.classList.contains('filter-panel-open')));
     explorerUpdateOffsets();
+  }
+  function explorerUpdateRangeLabel(presetLabel) {
+    const label = document.querySelector('[data-explorer-range-label]');
+    if (!label) return;
+    const mode = document.querySelector('[data-explorer-range-mode]');
+    if (mode?.value === 'exact') { label.textContent = 'Exact'; return; }
+    if (presetLabel) {
+      const labels = { '15m': '15 minutes', '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
+      label.textContent = 'Last ' + (labels[presetLabel] || presetLabel);
+      return;
+    }
+    const days = Number(document.querySelector('[data-explorer-range-seconds]')?.value || 604800) / 86400;
+    label.textContent = 'Last ' + (Number.isInteger(days) ? days : days.toFixed(1)) + ' days';
   }
   document.addEventListener('submit', function (evt) {
     const form = evt.target;
@@ -763,6 +777,7 @@
     if (evt.target.closest('.xr-exact > summary')) {
       const mode = document.querySelector('[data-explorer-range-mode]');
       if (mode) mode.value = 'exact';
+      explorerUpdateRangeLabel();
       document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = true; });
     }
     const preset = evt.target.closest('[data-explorer-preset]');
@@ -771,6 +786,7 @@
     const seconds = document.querySelector('[data-explorer-range-seconds]');
     if (mode) mode.value = 'relative';
     if (seconds) seconds.value = preset.getAttribute('data-explorer-preset');
+    explorerUpdateRangeLabel(preset.textContent.trim());
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = false; });
     const to = new Date();
     const from = new Date(to.getTime() - Number(preset.getAttribute('data-explorer-preset')) * 1000);

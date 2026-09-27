@@ -821,17 +821,20 @@ def settings_body(
         return '' if value is None else str(value)
 
     fields = (
-        ('compiler_model', 'Compiler model', 'text'),
-        ('classifier_model', 'Classifier model', 'text'),
-        ('apply_model', 'Apply-recommendations model', 'text'),
+        ('compiler_model', 'Compiler model', 'text', ''),
+        ('classifier_model', 'Classifier model', 'text', ''),
+        ('apply_model', 'Apply-recommendations model', 'text', ''),
+        ('limit', 'AI trace limit', 'number', 'min="1" max="5000" step="1"'),
+        ('parallelism', 'AI parallelism', 'number', 'min="1" max="200" step="1"'),
     )
     field_rows: list[str] = []
-    for name, label, input_type in fields:
+    for name, label, input_type, input_attrs in fields:
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
-            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="{input_type}" '
+            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="{input_type}"'
+            f' {input_attrs} '
             f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
         )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
@@ -888,7 +891,7 @@ def settings_body(
         '</form>'
     )
     settings_panel = _panel(
-        'Models', 'Window, limit and parallelism are set per run on the Traces page', f'{saved_html}{form}'
+        'AI defaults', 'These values set the starting limits for trace review.', f'{saved_html}{form}'
     )
 
     def val_html(v: str | list[str]) -> str:

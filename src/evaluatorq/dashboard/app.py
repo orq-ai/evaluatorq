@@ -380,7 +380,7 @@ async def _warm_initial_finder_on_startup(app: FastHTML) -> None:
 
 
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
-    """Keep environment model overrides out of the saved file when the form was unchanged."""
+    """Keep unchanged environment overrides out of the saved file."""
     values: dict[str, object] = {
         name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
     }
@@ -392,13 +392,22 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
         override = os.environ.get(env_name, '').strip()
         if override and values[name] == override:
             values[name] = getattr(current, name)
+    for name, env_name in (
+        ('limit', 'EVALUATORQ_FINDER_LIMIT'),
+        ('parallelism', 'EVALUATORQ_FINDER_PARALLELISM'),
+    ):
+        override = os.environ.get(env_name, '').strip()
+        if override and str(form_data.get(name, '')) == override:
+            values[name] = getattr(current, name)
+        else:
+            values[name] = form_data.get(name, getattr(current, name))
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
     values['orq_profile_host'] = current.orq_profile_host
     values['orq_credential_fingerprint'] = current.orq_credential_fingerprint
     values['orq_workspace'] = form_data.get('orq_workspace', current.orq_workspace)
     values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
     values['orq_project_name'] = current.orq_project_name
-    values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
+    values['window_days'] = current.window_days
     values['explorer_columns'] = current.explorer_columns
     return values
 

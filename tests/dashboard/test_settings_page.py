@@ -68,6 +68,23 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     assert response.status_code == 303
     assert response.headers['location'] == '/settings?saved=1'
     assert 'compiler/custom' in settings_file.read_text()
+    saved = json.loads(settings_file.read_text())
+    assert saved['limit'] == 42
+    assert saved['parallelism'] == 7
+
+
+def test_settings_expose_validated_ai_limits(client: TestClient) -> None:
+    html = client.get('/settings').text
+
+    assert 'id="limit" name="limit" type="number" min="1" max="5000"' in html
+    assert 'id="parallelism" name="parallelism" type="number" min="1" max="200"' in html
+
+
+def test_ai_limits_reject_out_of_range_values(client: TestClient, settings_file: Path) -> None:
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'limit': '5001', 'parallelism': '201'}))
+
+    assert response.status_code == 422
+    assert not settings_file.exists()
 
 
 def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None:
@@ -87,7 +104,7 @@ def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None
     )
 
 
-def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings_file: Path) -> None:
+def test_invalid_numeric_field_is_rejected(client: TestClient, settings_file: Path) -> None:
     response = client.post(
         '/settings',
         data=csrf_data({
@@ -98,9 +115,9 @@ def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings
         }),
     )
 
-    assert response.status_code == 303
-    saved = json.loads(settings_file.read_text())
-    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
+    assert response.status_code == 422
+    assert 'less than or equal to 5000' in response.text
+    assert not settings_file.exists()
 
 
 def test_submitted_settings_keep_saved_explorer_columns() -> None:
@@ -124,6 +141,20 @@ def test_environment_overrides_are_not_persisted_by_save(
     saved = json.loads(settings_file.read_text())
     assert saved['limit'] == DashboardSettings.model_fields['limit'].default
     assert getattr(client.app, 'state').finder_settings.limit == 42
+
+
+def test_unchanged_environment_numeric_overrides_are_not_persisted(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '42')
+    monkeypatch.setenv('EVALUATORQ_FINDER_PARALLELISM', '9')
+
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'limit': '42', 'parallelism': '9'}))
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
+    assert saved['parallelism'] == DashboardSettings.model_fields['parallelism'].default
 
 
 def test_unchanged_environment_model_overrides_are_not_persisted(
@@ -265,8 +296,10 @@ def test_settings_page_shows_saved_values(client: TestClient, settings_file: Pat
     assert 'value="saved/classifier"' in response.text
     assert 'value="saved/apply"' in response.text
     assert 'name="window_days"' not in response.text
-    assert 'name="limit"' not in response.text
-    assert 'name="parallelism"' not in response.text
+    assert 'name="limit"' in response.text
+    assert 'value="123"' in response.text
+    assert 'name="parallelism"' in response.text
+    assert 'value="19"' in response.text
 
 
 def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> None:

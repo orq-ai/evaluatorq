@@ -12,6 +12,63 @@ equal specificity and all ``var(--…)`` references resolve.
 
 from __future__ import annotations
 
+_TRACES_DENSITY_CSS = """
+/* /traces density pass. The command strip exists only on /traces; /find keeps its search hero. */
+.finder:has(> .finder-command) { gap:0; max-width:1420px; margin:0 auto; overflow:hidden; border:1px solid #dedfe2; border-radius:10px; background:#fff; box-shadow:0 7px 28px #2928310a; color:#25232e; }
+.finder:has(> .finder-command) .finder-command { align-self:stretch; max-width:none; padding:13px 16px 0; border:0; border-radius:0; background:#fff; box-shadow:none; }
+.finder:has(> .finder-command) .finder-command-title { margin:0 0 8px; font-size:20px; line-height:1.3; letter-spacing:-.02em; }
+.finder:has(> .finder-command) .finder-command-query { gap:8px; min-height:53px; padding:5px 8px; border:0; border-top:1px solid #e5e6e9; border-bottom:1px solid #e5e6e9; border-radius:0; box-shadow:none; }
+.finder:has(> .finder-command) .finder-command-query:focus-within { box-shadow:none; }
+.finder:has(> .finder-command) .finder-ai-label { display:inline-flex; align-items:center; white-space:nowrap; padding:8px 10px; border:1px solid #f0cb9f; border-radius:6px; background:#fff4e7; color:#9a5f20; font-size:12px; font-weight:750; }
+.finder:has(> .finder-command) .finder-command-query .col { flex:1; min-width:180px; }
+.finder:has(> .finder-command) .finder-command-textarea { max-height:4em; padding:8px 4px; font-family:var(--font-sans); font-size:13px; line-height:1.35; }
+.finder:has(> .finder-command) .finder-command-query > a { display:inline-grid; place-items:center; flex:0 0 42px; width:42px; height:42px; min-width:42px!important; min-height:42px!important; box-sizing:border-box; border:1px solid #d9dbe0; border-radius:6px; color:#494753; font-size:27px; line-height:1; text-decoration:none; }
+.finder:has(> .finder-command) .finder-command-query > button { flex:0 0 94px; min-height:38px; border-radius:6px; font-size:12px; }
+.finder:has(> .finder-command) #finder-body { gap:0; }
+.finder:has(> .finder-command) #explorer-results-slot { min-width:0; }
+.finder:has(> .finder-command) .xr { gap:0; }
+.finder:has(> .finder-command) .xr-toolbar { min-height:49px; flex-wrap:wrap; gap:8px; padding:0 12px; border-bottom:1px solid #dfe1e5; }
+.finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:128px 86px 94px 57px 139px; gap:8px; margin-left:auto; }
+.finder:has(> .finder-command) .xr-toolbar-right > * { min-width:0; }
+.finder:has(> .finder-command) .xr-toolbar { order:-1; }
+.finder:has(> .finder-command) .xr-status { order:0; min-height:32px; padding:0 16px; border-bottom:1px solid #ebebed; font-size:11px; }
+.finder:has(> .finder-command) .xr-time-menu > summary,
+.finder:has(> .finder-command) .xr-toolbar-right > .quiet,
+.finder:has(> .finder-command) .xr-cols > summary,
+.finder:has(> .finder-command) .xr-sort > summary { display:flex; align-items:center; justify-content:center; box-sizing:border-box; min-height:31px; padding:5px 8px; border:1px solid #d5d8df; border-radius:6px; background:#fff; color:#4d4b56; font-size:12px; white-space:nowrap; }
+.finder:has(> .finder-command) .xr-toolbar-right > .quiet { gap:5px; }
+.finder:has(> .finder-command) .xr-toolbar-right > .quiet b { font-weight:500; }
+.finder:has(> .finder-command) #explorer-rows { width:38px!important; border:0; background:transparent; color:#4d4b56; font:inherit; text-align:center; }
+.finder:has(> .finder-command) .xr-toolbar-right .btn-secondary { min-height:31px; padding:5px 9px; border-radius:6px; background:#25232e; border-color:#25232e; color:#fff; font-size:12px; }
+.finder:has(> .finder-command) .xr-toolbar-right .finder-seg { justify-self:stretch; }
+.finder:has(> .finder-command) .xr-table-wrap { display:block; overflow-x:auto; margin:-12px 0 0; padding:0; line-height:normal; -webkit-overflow-scrolling:touch; }
+.finder:has(> .finder-command) .xr-table { min-width:1020px; border-collapse:collapse; font-size:12px; }
+.finder:has(> .finder-command) .xr-table thead { display:table-header-group!important; }
+.finder:has(> .finder-command) .xr-table tbody tr { display:table-row!important; height:auto!important; }
+.finder:has(> .finder-command) .xr-table td { display:table-cell!important; }
+.finder:has(> .finder-command) .xr-table th { padding:9px 11px; border-bottom:1px solid #dfe1e5; background:#f8f9fa; color:#686a74; font-size:10px; letter-spacing:.055em; white-space:nowrap; }
+.finder:has(> .finder-command) .xr-table td { padding:7px 11px; border-bottom:1px solid #e8e9ec; white-space:nowrap; }
+.finder:has(> .finder-command) .xr-table tbody tr:hover { background:#f8faf8; }
+.finder:has(> .finder-command) .xr-status ~ .xr-empty { margin:0 12px 12px; }
+@media (max-width:850px) {
+  body:has(.finder-command) .app-sidebar { display:none; }
+  body:has(.finder-command) .app-content { padding:12px; }
+  .finder:has(> .finder-command) .finder-command { padding:10px 12px 0; }
+  .finder:has(> .finder-command) .finder-command-query { flex-wrap:wrap; }
+  .finder:has(> .finder-command) .finder-command-query .col { flex:1 1 calc(100% - 120px); }
+  .finder:has(> .finder-command) .xr-toolbar { padding:6px 10px; }
+  .finder:has(> .finder-command) .xr-toolbar .spacer { display:none; }
+  .finder:has(> .finder-command) .xr-toolbar-right { flex:1 1 100%; width:100%; min-width:0; margin:0 0 2px; grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .finder:has(> .finder-command) .xr-toolbar-right .finder-seg { grid-column:span 2; }
+  .finder:has(> .finder-command) .xr-table { width:980px; min-width:980px; table-layout:fixed; }
+  .finder:has(> .finder-command) .xr-table th:first-child,
+  .finder:has(> .finder-command) .xr-table td:first-child { width:110px; }
+  .finder:has(> .finder-command) .xr-table th:nth-child(2),
+  .finder:has(> .finder-command) .xr-table td:nth-child(2) { width:190px; }
+}
+"""
+
+
 _DASHBOARD_CSS_HEAD = """
 /* ==== shell: sidebar + main ========================================= */
 body.eq-dashboard { margin: 0; background: var(--surface-app); }
@@ -2825,4 +2882,5 @@ DASHBOARD_CSS = (
     + _RT_REPORT_CSS
     + _SIM_COMPARE_CSS
     + _FINDER_CSS
+    + _TRACES_DENSITY_CSS
 )

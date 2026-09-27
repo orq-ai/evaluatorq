@@ -50,7 +50,7 @@ def range_inputs(start: datetime | None, end: datetime | None, window_days: int,
         '<input id="explorer-range-mode" type="hidden" name="range_mode" value="relative" form="explorer-load-form" hx-preserve data-explorer-range-mode>'
         f'<input id="explorer-range-seconds" type="hidden" name="range_seconds" value="{window_days * 86400}" form="explorer-load-form" hx-preserve data-explorer-range-seconds>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
-        f'<details class="xr-time-menu"><summary>Time range</summary><div class="xr-time-options"><span class="xr-presets">{presets}</span>'
+        f'<details class="xr-time-menu"><summary data-explorer-range-label>Last {window_days} days</summary><div class="xr-time-options"><span class="xr-presets">{presets}</span>'
         '<details class="xr-exact"><summary>Exact dates and times</summary>'
         f'<span class="quiet xr-range"><b>From</b><input id="explorer-from" class="xr-date" aria-label="From date" hx-preserve form="explorer-load-form" name="from" type="date" required data-utc="{_local_value(start)}" value="{_local_value(start)[:10]}"><input id="explorer-from-time" class="xr-time" aria-label="From time" hx-preserve form="explorer-load-form" name="from_time" type="time" step="1" required data-utc="{_local_value(start)}" value="{_local_value(start)[11:]}"></span>'
         f'<span class="quiet xr-range"><b>To</b><input id="explorer-to" class="xr-date" aria-label="To date" hx-preserve form="explorer-load-form" name="to" type="date" required data-utc="{_local_value(end)}" value="{_local_value(end)[:10]}"><input id="explorer-to-time" class="xr-time" aria-label="To time" hx-preserve form="explorer-load-form" name="to_time" type="time" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)[11:]}"></span></details></div></details>'
@@ -318,7 +318,7 @@ def results(
         body = (
             trajectories(view, records or {}, snapshot)
             if view.view == 'trajectories'
-            else table(view, columns, snapshot)
+            else f'<div class="xr-table-wrap">{table(view, columns, snapshot)}</div>'
         )
         if not visible_rows:
             label = {'errors': 'No errors found.', 'matches': 'No AI matches found.'}.get(view.quick_view)
