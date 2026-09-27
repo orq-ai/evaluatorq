@@ -174,6 +174,12 @@ def test_linkage_population_bound_rejects_without_dropping_traces():
         cluster_two_level(vectors, min_cluster_size=1)
 
 
+@pytest.mark.parametrize('outlier_zscore', [-1.0, float('nan'), float('inf')])
+def test_invalid_direct_outlier_threshold_is_rejected(outlier_zscore):
+    with pytest.raises(ValueError, match='outlier_zscore must be non-negative and finite'):
+        cluster_two_level(np.ones((10, 2)), outlier_zscore=outlier_zscore)
+
+
 @pytest.mark.parametrize('n_blobs,n_per_blob', [(3, 8), (5, 6)])
 def test_top_of_base_keys_match_present_base_ids(n_blobs, n_per_blob):
     vectors, _ = _blobs(n_blobs=n_blobs, n_per_blob=n_per_blob, seed=3)

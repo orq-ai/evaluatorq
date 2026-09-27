@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
@@ -94,7 +94,7 @@ class LabelAnswer(BaseModel):
 
     value: bool | float | str | None
     confidence: float | None
-    probabilities: dict[str, float] | None
+    probabilities: dict[str, Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]] | None
     error: str | None
 
 

@@ -153,8 +153,20 @@ def _bound_excerpts(texts: list[str]) -> list[str]:
 
 
 def _build_describe_prompt(dimension: DimensionName, member_texts: list[str], contrastive_texts: list[str]) -> str:
-    bounded_members = _bound_excerpts(member_texts)
-    bounded_contrastive = _bound_excerpts(contrastive_texts)
+    # Bound both groups together: they share one prompt and one context budget.
+    # The single pass also reserves space for representative contrastive text
+    # instead of letting member examples consume the entire allowance.
+    all_texts = member_texts + contrastive_texts
+    bounded = _bound_excerpts(all_texts)
+    if len(bounded) != len(all_texts) or any(
+        original != excerpt for original, excerpt in zip(all_texts, bounded, strict=False)
+    ):
+        logger.warning(
+            'Insights description examples were truncated to the shared {}-character context budget',
+            _MAX_CONTEXT_CHARS,
+        )
+    bounded_members = bounded[: len(member_texts)]
+    bounded_contrastive = bounded[len(member_texts) :]
     examples = delimit('\n'.join(bounded_members) if bounded_members else '(none)', tag='examples')
     contrastive = delimit('\n'.join(bounded_contrastive) if bounded_contrastive else '(none)', tag='contrastive')
     return render_template(_DIMENSION_PROMPTS[dimension], {'examples': examples, 'contrastive': contrastive})

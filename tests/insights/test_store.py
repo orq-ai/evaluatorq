@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 # ruff: noqa: S101
+import errno
 import os
 from pathlib import Path
+
+import pytest
 
 from evaluatorq.insights.store import list_run_paths, list_runs, load_run, save_run
 
@@ -30,6 +33,64 @@ def test_same_name_and_second_never_overwrites(tmp_path: Path, minimal_run) -> N
     assert second.name == 'insights_20260901-000000_minimal-run-2.json'
     assert load_run(first).run_id == 'run-1'
     assert load_run(second).run_id == 'run-2'
+
+
+def test_save_run_falls_back_when_hard_links_are_unsupported(tmp_path: Path, minimal_run, monkeypatch) -> None:
+    def unsupported_link(source: Path, destination: Path) -> None:
+        raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
+
+    monkeypatch.setattr(os, 'link', unsupported_link)
+    original_replace = Path.replace
+
+    def inspect_replace(source: Path, destination: Path) -> Path:
+        assert load_run(destination) == minimal_run
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(Path, 'replace', inspect_replace)
+
+    path = save_run(minimal_run, tmp_path)
+
+    assert load_run(path) == minimal_run
+    assert not path.is_symlink()
+
+
+def test_save_run_fallback_does_not_overwrite_collision(tmp_path: Path, minimal_run, monkeypatch) -> None:
+    original = tmp_path / 'insights_20260901-000000_minimal-run.json'
+    original.write_text('keep this file', encoding='utf-8')
+
+    def unsupported_link(source: Path, destination: Path) -> None:
+        raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
+
+    monkeypatch.setattr(os, 'link', unsupported_link)
+
+    saved = save_run(minimal_run, tmp_path)
+
+    assert original.read_text(encoding='utf-8') == 'keep this file'
+    assert saved.name == 'insights_20260901-000000_minimal-run-2.json'
+    assert load_run(saved) == minimal_run
+
+
+def test_save_run_uses_exclusive_copy_when_links_are_unavailable(tmp_path: Path, minimal_run, monkeypatch) -> None:
+    def unsupported_link(*args) -> None:
+        raise OSError(errno.EOPNOTSUPP, 'links are unsupported')
+
+    monkeypatch.setattr(os, 'link', unsupported_link)
+    monkeypatch.setattr(os, 'symlink', unsupported_link)
+
+    path = save_run(minimal_run, tmp_path)
+
+    assert load_run(path) == minimal_run
+
+
+def test_save_run_does_not_hide_unrelated_link_errors(tmp_path: Path, minimal_run, monkeypatch) -> None:
+    def permission_denied(*args) -> None:
+        raise OSError(errno.ENOSPC, 'disk is full')
+
+    monkeypatch.setattr(os, 'link', permission_denied)
+
+    with pytest.raises(OSError, match='disk is full'):
+        save_run(minimal_run, tmp_path)
+    assert list_run_paths(tmp_path) == []
 
 
 def test_list_run_paths_is_newest_first_and_missing_directory_is_empty(tmp_path: Path) -> None:

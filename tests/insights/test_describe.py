@@ -36,20 +36,35 @@ def test_describe_prompt_bounds_excerpts_and_preserves_their_ends() -> None:
     assert 'contrastive-tail' in prompt
 
 
-def test_describe_prompt_context_budget_keeps_all_selected_examples() -> None:
+def test_describe_prompt_context_budget_is_shared_by_both_example_groups() -> None:
     members = [f'member-{index}-' + ('x' * 2000) for index in range(10)]
     contrastive = [f'contrastive-{index}-' + ('y' * 2000) for index in range(9)]
 
-    bounded_members = describe_module._bound_excerpts(members)
-    bounded_contrastive = describe_module._bound_excerpts(contrastive)
+    prompt = describe_module._build_describe_prompt('intent', members, contrastive)
+    bounded = describe_module._bound_excerpts(members + contrastive)
 
-    assert len('\n'.join(bounded_members)) <= describe_module._MAX_CONTEXT_CHARS
-    assert len('\n'.join(bounded_contrastive)) <= describe_module._MAX_CONTEXT_CHARS
-    assert len(bounded_members) == len(members)
-    assert len(bounded_contrastive) == len(contrastive)
-    assert all(len(text) <= describe_module._MAX_EXCERPT_CHARS for text in bounded_members + bounded_contrastive)
-    assert all(f'member-{index}-' in text for index, text in enumerate(bounded_members))
-    assert all(f'contrastive-{index}-' in text for index, text in enumerate(bounded_contrastive))
+    assert len(bounded) == len(members) + len(contrastive)
+    assert len('\n'.join(bounded[: len(members)])) + len('\n'.join(bounded[len(members) :])) <= describe_module._MAX_CONTEXT_CHARS
+    assert all(len(text) <= describe_module._MAX_EXCERPT_CHARS for text in bounded)
+    assert all(f'member-{index}-' in text for index, text in enumerate(bounded[: len(members)]))
+    assert all(f'contrastive-{index}-' in text for index, text in enumerate(bounded[len(members) :]))
+    assert 'member-0-' in prompt and 'contrastive-0-' in prompt
+
+
+def test_describe_prompt_logs_when_shared_budget_truncates_examples(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[tuple[str, tuple[Any, ...]]] = []
+    monkeypatch.setattr(describe_module, '_MAX_CONTEXT_CHARS', 160)
+    monkeypatch.setattr(describe_module.logger, 'warning', lambda message, *args: warnings.append((message, args)))
+
+    prompt = describe_module._build_describe_prompt(
+        'intent', ['member-' + ('m' * 100)], ['contrastive-' + ('c' * 100)]
+    )
+
+    assert 'member-' in prompt and 'excerpt truncated' in prompt
+    assert 'contrastive-' in prompt
+    assert warnings == [
+        ('Insights description examples were truncated to the shared {}-character context budget', (160,))
+    ]
 
 
 @pytest.mark.asyncio

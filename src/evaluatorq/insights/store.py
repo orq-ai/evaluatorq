@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import os
 import re
 import tempfile
@@ -25,7 +26,7 @@ def _slug(value: str) -> str:
 
 
 def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
-    """Atomically save a run JSON and return its path."""
+    """Save a run JSON without overwriting an existing run and return its path."""
     directory = runs_dir or get_insights_runs_dir()
     directory.mkdir(parents=True, exist_ok=True)
     stamp = run.created_at.astimezone(timezone.utc).strftime('%Y%m%d-%H%M%S')
@@ -52,6 +53,48 @@ def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
                 break
             except FileExistsError:
                 suffix += 1
+            except OSError as exc:
+                if exc.errno not in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}:
+                    raise
+                # A symlink to the completed staging file gives readers a
+                # valid report until the final atomic replacement. Its
+                # creation still fails when another run owns the name.
+                try:
+                    path.symlink_to(temporary.name)
+                except FileExistsError:
+                    suffix += 1
+                    continue
+                except OSError:
+                    logger.warning(
+                        'Hard links and symlinks are unavailable in {}; saving run with a non-atomic copy', directory
+                    )
+                else:
+                    try:
+                        temporary.replace(path)
+                    except Exception:
+                        with contextlib.suppress(OSError):
+                            if path.is_symlink() and path.readlink() == Path(temporary.name):
+                                path.unlink()
+                        raise
+                    break
+                # Last resort: reserve the name exclusively so this copy
+                # cannot overwrite an existing run.
+                try:
+                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                except FileExistsError:
+                    suffix += 1
+                    continue
+                try:
+                    with os.fdopen(descriptor, 'wb') as output, temporary.open('rb') as source:
+                        while chunk := source.read(1024 * 1024):
+                            output.write(chunk)
+                        output.flush()
+                        os.fsync(output.fileno())
+                except Exception:
+                    with contextlib.suppress(OSError):
+                        path.unlink(missing_ok=True)
+                    raise
+                break
         with contextlib.suppress(OSError):
             temporary.unlink()
     except Exception:

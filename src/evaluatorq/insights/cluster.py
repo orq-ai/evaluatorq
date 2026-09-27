@@ -10,6 +10,7 @@ no LLM or network calls, so there is no retry layer here.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any
@@ -211,6 +212,8 @@ def cluster_two_level(
     ):
         if value < 1:
             raise ValueError(f'{name} must be positive')
+    if outlier_zscore is not None and (not math.isfinite(outlier_zscore) or outlier_zscore < 0):
+        raise ValueError('outlier_zscore must be non-negative and finite')
     if vectors.ndim != 2:
         raise ValueError('vectors must be a two-dimensional matrix')
     n = vectors.shape[0]

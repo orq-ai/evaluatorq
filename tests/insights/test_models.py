@@ -13,6 +13,7 @@ from evaluatorq.insights.models import (
     InsightsConfig,
     InsightsPopulation,
     InsightsRun,
+    LabelAnswer,
     TraceSummary,
     real_assistant_errors,
 )
@@ -49,6 +50,19 @@ def test_from_finder_export_sets_path_only() -> None:
 
 def test_run_round_trips_json(minimal_run: InsightsRun) -> None:
     assert InsightsRun.model_validate_json(minimal_run.model_dump_json()) == minimal_run
+
+
+@pytest.mark.parametrize('probability', [0.0, 1.0, 0, 1])
+def test_label_answer_accepts_probability_edges(probability: float | int) -> None:
+    answer = LabelAnswer(value='positive', confidence=None, probabilities={'positive': probability}, error=None)
+
+    assert answer.probabilities == {'positive': float(probability)}
+
+
+@pytest.mark.parametrize('probability', [float('nan'), float('inf'), float('-inf'), -0.01, 1.01])
+def test_label_answer_rejects_invalid_probabilities(probability: float) -> None:
+    with pytest.raises(ValidationError):
+        LabelAnswer(value='positive', confidence=None, probabilities={'positive': probability}, error=None)
 
 
 def test_run_loads_config_fields_from_older_saved_file(minimal_run: InsightsRun) -> None:
