@@ -119,6 +119,10 @@ For recent traces or a semantic query, set the window and choose any project, ag
 
 Each run has a state file under `.evaluatorq/insights-runs/.manifests/<run-id>.json` and a report in `.evaluatorq/insights-runs/`. The state file records the stage plan, current stage, outcomes, errors, and report path. If a run fails before writing its report, it still appears in the dashboard with the failed stage and error. The worker log is under `.evaluatorq/insights-runs/.logs/<run-id>.log`.
 
+The JSON report stores provider usage and cost by stage in `cost_by_stage`. A missing stage key means no provider calls ran; a `null` value means calls ran but the provider returned no usage. If only some calls have a model catalogue price, the run header says “priced for N of M calls” and the displayed dollar amount is a lower bound. “Cost unknown” means calls ran but none had a usable price.
+
+On the run overview, stage dots show each stage's status and a count shows how many are complete. The run page shows the current stage and completed stages out of the plan. Label and Summary stages also show completed traces out of the total, such as `running 27/100`; those counts update while the run is active and remain in the saved manifest.
+
 For the finder’s **Analyze matches** handoff, see [Trace Finder](trace-finder.md).
 
 ## Failures and cache
