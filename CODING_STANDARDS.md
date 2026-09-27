@@ -46,6 +46,7 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 - **Account for every provider request.** Fallback attempts and failed structured-output attempts cost tokens too, so they reach usage and cost tracking.
 - **Stable text goes before varying text.** Text stuck behind a placeholder is uncacheable however stable it is, because a breakpoint is per-message and cannot split one. The OWASP judge rubrics are the standing example: ~1500 stable tokens sit around the transcript placeholders and none of them can be marked.
 - **Test the risk that motivated the change.** Test observable contracts, not internals. When concurrency or a provider response shape caused the bug, the test exercises that concurrency or that shape.
+- **Pass arguments by keyword in new code.** Call `f(model=model, max_tokens=512)`, not `f(model, 512)`, because a positional call silently binds the wrong value when a signature gains or reorders a parameter. Positional-only parameters (`len(x)`, `str(x)`, `isinstance(x, T)`) are exempt. Existing positional calls are not a finding unless the change touches them.
 
 ## Where this repo overrides common smells
 
