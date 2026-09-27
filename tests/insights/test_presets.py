@@ -18,6 +18,12 @@ def test_every_preset_is_a_valid_classify_question() -> None:
         assert isinstance(spec.to_question({'messages': []}), ClassifyQuestion)
 
 
+def test_concerning_preset_uses_classifier_level_indices() -> None:
+    criteria = presets.CONCERNING.criteria
+    assert isinstance(criteria, list)
+    assert [level.split(' ', 1)[0] for level in criteria] == [str(index) for index in range(len(criteria))]
+
+
 def test_registry_is_frozen() -> None:
     with pytest.raises(TypeError):
         presets.LABEL_PRESETS['x'] = presets.SENTIMENT  # type: ignore[index]  # pyright: ignore[reportIndexIssue]

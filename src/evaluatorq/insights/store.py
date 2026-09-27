@@ -60,7 +60,7 @@ def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
                 # valid report until the final atomic replacement. Its
                 # creation still fails when another run owns the name.
                 try:
-                    path.symlink_to(temporary.name)
+                    path.symlink_to(temporary.resolve())
                 except FileExistsError:
                     suffix += 1
                     continue
@@ -73,7 +73,7 @@ def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
                         temporary.replace(path)
                     except Exception:
                         with contextlib.suppress(OSError):
-                            if path.is_symlink() and path.readlink() == Path(temporary.name):
+                            if path.is_symlink() and path.readlink() == temporary.resolve():
                                 path.unlink()
                         raise
                     break

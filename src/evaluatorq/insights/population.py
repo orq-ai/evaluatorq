@@ -5,8 +5,8 @@ Three mutually exclusive paths, matching `InsightsPopulation`'s own fields:
 - **Query path** (`pop.query` set): compile the semantic query with `compile_query`
   and select generated facet/numeric filters with `select_filters_with_response`
   concurrently (mirrors `trace_finder/run_store.py`'s `_plan`), merge them under the
-  caller's explicit facets/numeric (explicit wins — reuses `run_store._merge_facets`/
-  `_merge_numeric` directly; they're module-private but not duplicated here), then
+  caller's explicit facets/numeric (explicit wins through `run_store.merge_facets`/
+  `merge_numeric`), then
   load with `OrqTraceSource`.
 - **Finder export path** (`pop.finder_export` set): read a `RunExport` JSON, reload
   its merged filters and the pinned matches' timestamp range through `OrqTraceSource`,
@@ -42,7 +42,7 @@ from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.filter_selector import select_filters_with_response
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.orq_source import OrqTraceSource
-from evaluatorq.trace_finder.run_store import _merge_facets, _merge_numeric  # reportPrivateUsage is off; see docstring
+from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -166,8 +166,8 @@ async def _resolve_from_query(
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    merged_facets = _merge_facets(pop.facets, generated_facets)
-    merged_numeric = _merge_numeric(pop.numeric, plan.numeric)
+    merged_facets = merge_facets(pop.facets, generated_facets)
+    merged_numeric = merge_numeric(pop.numeric, plan.numeric)
 
     traces = await _load_traces(
         orq, start=start, end=end, limit=pop.limit, facets=merged_facets, numeric=merged_numeric
@@ -199,8 +199,8 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
         except Exception as error:
             raise PopulationError(f'loading finder export {pop.finder_export} failed: {error}') from error
 
-    facets = _merge_facets(_facets_from_export(export.filters), _facets_from_export(export.generated_filters))
-    numeric = _merge_numeric(
+    facets = merge_facets(_facets_from_export(export.filters), _facets_from_export(export.generated_filters))
+    numeric = merge_numeric(
         NumericFilters(**export.numeric.model_dump()), NumericFilters(**export.generated_numeric.model_dump())
     )
 

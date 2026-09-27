@@ -54,6 +54,25 @@ def test_save_run_falls_back_when_hard_links_are_unsupported(tmp_path: Path, min
     assert not path.is_symlink()
 
 
+def test_fallback_symlink_is_readable_with_relative_runs_dir(tmp_path: Path, minimal_run, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def unsupported_link(source: Path, destination: Path) -> None:
+        raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
+
+    monkeypatch.setattr(os, 'link', unsupported_link)
+    original_replace = Path.replace
+
+    def inspect_replace(source: Path, destination: Path) -> Path:
+        assert load_run(destination) == minimal_run
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(Path, 'replace', inspect_replace)
+
+    path = save_run(minimal_run, Path('runs'))
+    assert load_run(path) == minimal_run
+
+
 def test_save_run_fallback_does_not_overwrite_collision(tmp_path: Path, minimal_run, monkeypatch) -> None:
     original = tmp_path / 'insights_20260901-000000_minimal-run.json'
     original.write_text('keep this file', encoding='utf-8')
