@@ -10,6 +10,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.apply_ui import drawer as drawer_shell
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
@@ -255,8 +256,8 @@ def controls(
         f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
         f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
-        f'<span class="quiet"><b>Window</b><input {keep["window_days"]} form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px" '
-        f'hx-get="/find/facets?form_id={form_id}" hx-trigger="change" hx-include="#finder-controls" hx-target=".finder-facets" hx-swap="outerHTML" hx-indicator=".finder-facet-loading"></span>'
+        f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
+        f'{explorer_views.range_inputs(population.start if population else None, population.end if population else None, settings.window_days)}'
         f'<span class="quiet"><b>Limit</b><input {keep["limit"]} form="{form_id}" name="limit" type="number" min="1" max="5000" value="{values["limit"]}" style="width:72px"></span>'
         f'<span class="quiet"><b>Parallel</b><input {keep["parallelism"]} form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:64px"></span>'
         f'{count_html}</div>'
@@ -666,7 +667,8 @@ def body(
             f'{filter_output_panel(snapshot)}'
         )
     if snapshot.state == 'idle':
-        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}'
+        unavailable = field(snapshot, api_available=False) if not api_available else ''
+        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{unavailable}'
     return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
 
 
@@ -678,13 +680,19 @@ def page_html(
     error: str | None = None,
     catalogue: FacetCatalogue | None = None,
     pending: bool = False,
+    explorer_html: str = '',
 ) -> str:
     request = snapshot.request
     query = request.query if request is not None else ''
-    mode = request.mode if request is not None else 'immediate'
+    mode = request.mode if request is not None else 'review'
     body_html = fragment(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)
-    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body">{body_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
-    return page('Trace search', html, active_nav='find')
+    if not explorer_html:
+        from evaluatorq.trace_finder.columns import resolve_columns
+        from evaluatorq.trace_finder.explorer import ExplorerView
+
+        explorer_html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
+    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
+    return page('Traces', html, active_nav='find')
 
 
 def fragment(

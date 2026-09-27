@@ -316,7 +316,7 @@ def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatc
     assert 'Loading facet values…' in page
     assert 'class="finder-facet-loading" role="status">Loading filters…' in page
     assert '<button class="add" type="button" aria-haspopup="true">+ Filter</button>' in page
-    assert 'name="window_days" type="number" min="1" max="90" value="7" style="width:64px" hx-get="/find/facets?form_id=finder-query-form" hx-trigger="change"' in page
+    assert 'name="window_days" value="7"' in page
 
     menu = client.get('/find/facets?form_id=finder-query-form&window_days=7').text
     assert loads == [7]
@@ -329,14 +329,10 @@ def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatc
     assert loads == [7]
 
 
-def test_switching_to_immediate_resets_an_open_review(setup_finder) -> None:
-    """The Immediate radio posts a reset only while a review panel (its start form) is on the page."""
+def test_idle_page_defaults_to_review_mode(setup_finder) -> None:
     _store, client = setup_finder
     html = client.get('/find').text
-    assert (
-        'value="immediate" form="finder-query-form" checked hx-post="/find/reset" '
-        'hx-trigger="change[document.getElementById(\'finder-start-form\')]" hx-include="#finder-query-form"'
-    ) in html
+    assert 'value="review" form="finder-query-form" checked' in html
 
 
 def test_find_idle_page_and_nav(setup_finder) -> None:
@@ -344,10 +340,11 @@ def test_find_idle_page_and_nav(setup_finder) -> None:
     response = client.get('/find')
     assert response.status_code == 200
     assert 'Find the signal.' in response.text
-    assert 'Every dot is a trace' in response.text
-    assert 'Trace search' in response.text
+    assert 'Load traces to start' in response.text
+    assert 'id="explorer-results-slot"' in response.text
+    assert 'Traces' in response.text
     assert 'about 1,240 traces in window' not in response.text
-    assert 'class="finder-matrix idle"' in response.text
+    assert 'class="finder-matrix idle"' not in response.text
     assert 'data-finder-example="Frustrated customers in the support agent on production this week."' in response.text
     assert 'id="finder-query-form"' in response.text
 

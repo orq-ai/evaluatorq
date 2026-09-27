@@ -679,4 +679,72 @@
     var mount = document.getElementById(DRAWER);
     if (mount && mount.querySelector('.rt-drawer-body--loading')) mount.innerHTML = '';
   });
+  // Explorer: browser timezone, local From/To, presets.
+  function explorerLocal(input) {
+    const utc = input.getAttribute('data-utc');
+    if (!utc || input.dataset.localised) return;
+    const d = new Date(utc + 'Z');
+    const pad = (n) => String(n).padStart(2, '0');
+    input.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    input.dataset.localised = '1';
+  }
+  function explorerInit() {
+    document.querySelectorAll('[data-explorer-tz]').forEach((el) => { el.value = String(new Date().getTimezoneOffset()); });
+    document.querySelectorAll('#explorer-from, #explorer-to').forEach(explorerLocal);
+  }
+  document.addEventListener('DOMContentLoaded', explorerInit);
+  document.body.addEventListener('htmx:afterSettle', explorerInit);
+  document.addEventListener('click', function (evt) {
+    const preset = evt.target.closest('[data-explorer-preset]');
+    if (!preset) return;
+    const to = new Date();
+    const from = new Date(to.getTime() - Number(preset.getAttribute('data-explorer-preset')) * 1000);
+    [['#explorer-from', from], ['#explorer-to', to]].forEach(([sel, d]) => {
+      const input = document.querySelector(sel);
+      if (!input) return;
+      input.setAttribute('data-utc', d.toISOString().slice(0, 19));
+      delete input.dataset.localised;
+      explorerLocal(input);
+    });
+  });
+
+  // Trajectories: one tooltip, positioned from the hovered segment's data-* attributes.
+  document.addEventListener('mouseover', function (evt) {
+    const seg = evt.target.closest('.tv-segs i[data-tv-msg]');
+    const tv = evt.target.closest('.tv');
+    const tip = tv && tv.querySelector('.tv-tip');
+    if (!tip) return;
+    if (!seg) { tip.hidden = true; return; }
+    const d = seg.dataset;
+    tip.replaceChildren();
+    const h = document.createElement('div'); h.className = 'h';
+    const sw = document.createElement('i'); sw.className = seg.className;
+    const k = document.createElement('b'); k.textContent = d.tvKind;
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = d.tvN;
+    h.append(sw, k, n);
+    const sub = document.createElement('div'); sub.className = 'sub';
+    if (d.tvTool) { const t = document.createElement('span'); t.className = 'tool'; t.textContent = d.tvTool; sub.append(t); }
+    const tk = document.createElement('span'); tk.className = 'tk'; tk.textContent = d.tvTok; sub.append(tk);
+    const pre = document.createElement('pre'); pre.textContent = d.tvP;
+    const foot = document.createElement('div'); foot.className = 'c'; foot.textContent = 'Click to open this message ↗';
+    tip.append(h, sub, pre, foot);
+    tip.hidden = false;
+    const box = tv.getBoundingClientRect(); const r = seg.getBoundingClientRect();
+    const left = Math.min(Math.max(8, r.left - box.left + r.width / 2 - 160), box.width - 328);
+    tip.style.left = left + 'px';
+    tip.style.top = (r.bottom - box.top + 10) + 'px';
+  });
+
+  // Segment click opens the drawer at that message; the row's own hx-get handles every other click.
+  document.addEventListener('click', function (evt) {
+    const seg = evt.target.closest('.tv-segs i[data-tv-msg]');
+    const row = evt.target.closest('[data-tv-row]');
+    if (row) {
+      document.querySelectorAll('[data-tv-row].sel').forEach((el) => el.classList.remove('sel'));
+      row.classList.add('sel');
+    }
+    if (!seg || !row) return;
+    evt.stopPropagation();
+    htmx.ajax('GET', '/find/trace/' + encodeURIComponent(row.getAttribute('data-tv-row')) + '?msg=' + seg.getAttribute('data-tv-msg'), { target: '#finder-drawer', swap: 'innerHTML' });
+  }, true);
 })();
