@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.template_engine import render_template
+
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
     from evaluatorq.simulation.types import SimulationDatapoint
@@ -82,7 +84,10 @@ def describe_agent(seeds: list[SimulationDatapoint]) -> str:
             len(seeds),
         )
         return 'A general-purpose assistant agent; extend the seed personas and scenarios below.'
-    return 'An agent whose users pursue goals such as: ' + '; '.join(goals[:10])
+    return render_template(
+        'An agent whose users pursue goals such as: {{goals}}',
+        {'goals': '; '.join(goals[:10])},
+    )
 
 
 def seed_context(seeds: list[SimulationDatapoint]) -> str:
@@ -94,6 +99,18 @@ def seed_context(seeds: list[SimulationDatapoint]) -> str:
     personas = {dp.persona.name: dp.persona for dp in seeds}
     scenarios = {dp.scenario.name: dp.scenario for dp in seeds}
 
+    persona_lines = [
+        render_template('- {{name}}: {{background}}', {'name': p.name, 'background': p.background})
+        for p in personas.values()
+    ]
+    scenario_lines = [
+        render_template(
+            '- {{name}}: {{goal}} ({{context}})' if s.context else '- {{name}}: {{goal}}',
+            {'name': s.name, 'goal': s.goal, 'context': s.context},
+        )
+        for s in scenarios.values()
+    ]
+
     lines = [
         (
             'The following personas and scenarios come from a previous run. '
@@ -102,9 +119,9 @@ def seed_context(seeds: list[SimulationDatapoint]) -> str:
         ),
         '',
         'Seed personas:',
+        *persona_lines,
+        '',
+        'Seed scenarios:',
+        *scenario_lines,
     ]
-    lines += [f'- {p.name}: {p.background}' for p in personas.values()]
-    lines.append('')
-    lines.append('Seed scenarios:')
-    lines += [f'- {s.name}: {s.goal}' + (f' ({s.context})' if s.context else '') for s in scenarios.values()]
     return '\n'.join(lines)

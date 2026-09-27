@@ -513,10 +513,17 @@ results = await simulate(
 To generate *more* cases in the same distribution as a dataset rather than replaying it, use `extend_from_dataset()`. It feeds the dataset's personas and scenarios to the generators as seeds and returns new, similar-but-not-duplicate datapoints:
 
 ```python
+from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation import extend_from_dataset, simulate
 
-extra = await extend_from_dataset("my-simulation-cases", num_personas=3, num_scenarios=5)
-results = await simulate(evaluation_name="extended", datapoints=extra, target="agent:my-support-agent")
+config = LLMCallConfig(model="gpt-6-luna")
+extra = await extend_from_dataset("my-simulation-cases", num_personas=3, num_scenarios=5, llm_config=config)
+results = await simulate(
+    evaluation_name="extended",
+    datapoints=extra,
+    target="agent:my-support-agent",
+    llm_config=config,
+)
 ```
 
 This mirrors `extend_from_experiment()`; the dataset's direct loader is `datapoints_from_dataset()`.
