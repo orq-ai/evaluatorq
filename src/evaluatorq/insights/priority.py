@@ -107,6 +107,8 @@ def priority_points(
     by_id = {trace.trace_id: trace for trace in run_traces}
 
     points: list[PriorityPoint] = []
+    clusters_with_satisfaction = 0
+    clusters_without_summaries = 0
     for cluster in dimension.clusters:
         if cluster.level != 'base':
             continue
@@ -129,12 +131,15 @@ def priority_points(
             )
             continue
 
+        clusters_with_satisfaction += 1
         error_share = (
             _label_error_share(members, errors_label, cluster.id, dimension.name)
             if errors_requested
             else _summary_error_share(members, cluster.id, dimension.name)
         )
         if error_share is None:
+            if not errors_requested:
+                clusters_without_summaries += 1
             continue
 
         points.append(
@@ -148,7 +153,17 @@ def priority_points(
         )
 
     if not points:
-        reason = f'no base cluster in dimension {dimension.name!r} has a {satisfaction_label!r} answer'
+        if (
+            not errors_requested
+            and clusters_with_satisfaction > 0
+            and clusters_without_summaries == clusters_with_satisfaction
+        ):
+            reason = (
+                f'no base cluster in dimension {dimension.name!r} with a {satisfaction_label!r} answer '
+                'has a summary assistant_errors value'
+            )
+        else:
+            reason = f'no base cluster in dimension {dimension.name!r} has a {satisfaction_label!r} answer'
         logger.warning('Insights priority matrix skipped: {}', reason)
         return None, reason
 

@@ -158,6 +158,8 @@ def test_errors_label_absent_and_summaries_missing_skips_cluster() -> None:
     assert points is None
     assert reason is not None
     assert 'no base cluster' in reason
+    assert 'summary assistant_errors' in reason
+    assert 'customer_satisfaction' in reason
 
 
 def test_errors_label_absent_uses_summaries_and_excludes_missing_summary() -> None:
