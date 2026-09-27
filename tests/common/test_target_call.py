@@ -422,12 +422,22 @@ async def test_self_timed_target_own_limit_uses_nonretryable_error() -> None:
             self.calls += 1
             raise OwnLimit('own limit')
 
+    def map_own_limit(exc: Exception) -> tuple[str, str] | None:
+        return 'cli.timeout', f'own deadline: {exc}'
+
     target = SelfTimed(0)
     result = await call_target_with_retry(
-        target, [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=2
+        target,
+        [Message(role='user', content='x')],
+        target_agent_timeout_ms=100,
+        max_target_retries=2,
+        map_error=map_own_limit,
     )
 
     assert target.calls == result.attempts == 1
+    assert result.error is not None
+    assert result.error.code == 'cli.timeout'
+    assert result.error.message == '[ERROR: own deadline: own limit]'
     assert result.error_details == {
         'exception_type': 'OwnLimit',
         'raw_message': 'own limit',
