@@ -20,6 +20,7 @@ from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import (
     DEFAULT_ORQ_BASE_URL,
+    OrqProfile,
     close_orq_client,
     list_orq_profiles,
     resolve_orq_client,
@@ -44,6 +45,22 @@ from .run_store import RunStore
 from .settings import credential_fingerprint, effective_settings
 
 MAX_FIND_WAIT_SECONDS = 2 * 60 * 60
+
+
+def resolve_cli_profile(name: str | None) -> OrqProfile | None:
+    """Use an explicitly named or saved Orq profile without falling back when it is unavailable."""
+    if name is None:
+        return None
+    selected = next((candidate for candidate in list_orq_profiles() if candidate.name == name), None)
+    if selected is None:
+        raise ValueError(f'Orq profile {name!r} is unavailable. Check `orq auth profile list`.')
+    if '*' in selected.api_key:
+        raise ValueError(
+            f'Orq profile {name!r} has a masked key that evaluatorq cannot read. '
+            'Run `orq doctor --fix` or use ORQ_API_KEY.'
+        )
+    return selected
+
 
 _FIND_EPILOG = examples(
     '# find traces whose conversations match a semantic question',
@@ -291,17 +308,8 @@ def find(
     })
     orq = None
     try:
-        selected = None
         profile_name = profile if profile is not None else settings.orq_profile
-        if profile_name is not None:
-            selected = next((candidate for candidate in list_orq_profiles() if candidate.name == profile_name), None)
-            if selected is None:
-                raise ValueError(f'Orq profile {profile_name!r} is unavailable. Check `orq auth profile list`.')
-            if '*' in selected.api_key:
-                raise ValueError(
-                    f'Orq profile {profile_name!r} has a masked key that evaluatorq cannot read. '
-                    'Run `orq doctor --fix` or use ORQ_API_KEY.'
-                )
+        selected = resolve_cli_profile(profile_name)
         if selected is None:
             fingerprint = credential_fingerprint(os.environ.get('ORQ_API_KEY'), os.environ.get('ORQ_BASE_URL'))
             orq = resolve_orq_client()

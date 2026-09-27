@@ -461,10 +461,12 @@ def test_switching_back_to_environment_clears_app_profile(
     monkeypatch.setenv('ORQ_BASE_URL', 'https://env.orq.ai')
 
     assert client.post('/settings', data=csrf_data({**_MODELS, 'orq_profile': 'staging'})).status_code == 303
+    getattr(client.app, 'state').insights_facet_catalogues = {7: object()}
     assert client.post('/settings', data=csrf_data({**_MODELS, 'orq_profile': ''})).status_code == 303
 
     assert json.loads(settings_file.read_text())['orq_profile'] is None
     assert getattr(client.app, 'state').finder_profile is None
+    assert not hasattr(getattr(client.app, 'state'), 'insights_facet_catalogues')
     assert os.environ['ORQ_API_KEY'] == 'from-env'
     assert os.environ['ORQ_BASE_URL'] == 'https://env.orq.ai'
 

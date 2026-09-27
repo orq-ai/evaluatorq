@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 from typing_extensions import Self
 
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
 from evaluatorq.insights.presets import LABEL_PRESETS
@@ -83,7 +84,7 @@ class InsightsLaunchPayload(BaseModel):
     spec: InsightsLaunchSpec
 
 
-def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path) -> str:
+def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqProfile | None = None) -> str:
     """Create a visible manifest, then spawn a worker that survives dashboard reloads."""
     run_id = str(uuid.uuid4())
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
@@ -97,6 +98,9 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path) -> str:
         stage_labels=dict(plan),
     )
     payload = InsightsLaunchPayload(run_id=run_id, run_name=run_name, runs_dir=runs_dir, spec=spec)
+    worker_env = {**os.environ, _REQUEST_ENV: payload.model_dump_json()}
+    if profile is not None:
+        worker_env.update(ORQ_API_KEY=profile.api_key, ORQ_BASE_URL=profile.server or DEFAULT_ORQ_BASE_URL)
     log_dir = runs_dir / '.logs'
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -106,7 +110,7 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path) -> str:
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                env={**os.environ, _REQUEST_ENV: payload.model_dump_json()},
+                env=worker_env,
                 start_new_session=True,
             )
     except OSError as exc:

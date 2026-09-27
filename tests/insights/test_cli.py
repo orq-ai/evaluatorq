@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 import typer
@@ -11,6 +13,7 @@ from click import unstyle
 from typer.testing import CliRunner
 
 from evaluatorq import cli as cli_root
+from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.insights import cli as cli_module
 from evaluatorq.insights.models import LabelSpec
 from evaluatorq.trace_finder.export import (
@@ -22,6 +25,8 @@ from evaluatorq.trace_finder.export import (
     ExportValuesSelection,
     RunExport,
 )
+from evaluatorq.trace_finder import cli as finder_cli
+from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 
 
 def _app() -> typer.Typer:
@@ -35,8 +40,83 @@ def test_help_lists_population_and_clustering_options() -> None:
 
     assert result.exit_code == 0, result.output
     help_text = unstyle(result.output)
-    for option in ('--query', '--label', '--dimension', '--from-finder', '--max-clusters'):
+    for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--max-clusters'):
         assert option in help_text
+
+
+@pytest.mark.parametrize(
+    ('override', 'expected_key', 'expected_host'),
+    [(False, 'saved-key', 'https://saved.example'), (True, 'override-key', 'https://my.orq.ai')],
+)
+def test_cli_uses_selected_profile_for_traces_and_models(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    minimal_run: Any,
+    override: bool,
+    expected_key: str,
+    expected_host: str,
+) -> None:
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(settings_path))
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    save_settings(DashboardSettings.model_validate({'orq_profile': 'saved'}), settings_path)
+    profiles = (
+        OrqProfile('saved', 'saved-key', 'https://saved.example', False),
+        OrqProfile('override', 'override-key', None, False),
+    )
+    monkeypatch.setattr(finder_cli, 'list_orq_profiles', lambda: profiles)
+    orq = object()
+    llm = SimpleNamespace(close=AsyncMock())
+    captured: dict[str, Any] = {}
+    closed_orq = AsyncMock()
+
+    async def fake_insights(population: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return minimal_run
+
+    def fake_orq(*args: Any, **kwargs: Any) -> Any:
+        captured['orq_args'] = (args, kwargs)
+        return orq
+
+    def fake_llm(**kwargs: Any) -> Any:
+        captured['llm_args'] = kwargs
+        return SimpleNamespace(client=llm, owned=True)
+
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    monkeypatch.setattr(cli_module, '_stored_run_path', lambda run: None)
+    monkeypatch.setattr(cli_module, 'resolve_orq_client', fake_orq)
+    monkeypatch.setattr(cli_module, 'resolve_llm_client', fake_llm)
+    monkeypatch.setattr(cli_module, 'close_orq_client', closed_orq)
+
+    args = ['insights', '--profile', 'override'] if override else ['insights']
+    result = CliRunner().invoke(_app(), args)
+
+    assert result.exit_code == 0, result.output
+    assert captured['orq_args'] == ((expected_key,), {'base_url': expected_host})
+    assert captured['llm_args']['extra_api_key'] == expected_key
+    assert captured['llm_args']['orq_host'] == expected_host
+    assert captured['orq_client'] is orq
+    assert captured['llm_client'] is llm
+    closed_orq.assert_awaited_once_with(orq)
+    llm.close.assert_awaited_once()
+
+
+def test_missing_selected_profile_does_not_use_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(settings_path))
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    save_settings(DashboardSettings.model_validate({'orq_profile': 'deleted'}), settings_path)
+    monkeypatch.setattr(finder_cli, 'list_orq_profiles', lambda: ())
+    client = AsyncMock()
+    monkeypatch.setattr(cli_module, 'resolve_orq_client', client)
+
+    result = CliRunner().invoke(_app(), ['insights'])
+
+    assert result.exit_code == 2
+    assert "Orq profile 'deleted' is unavailable" in result.output
+    client.assert_not_called()
 
 
 def test_repeated_labels_resolve_preset_and_json_spec(

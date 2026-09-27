@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 from starlette.testclient import TestClient
 
+from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.insights_launch import InsightsLaunchPayload, InsightsLaunchSpec, launch_insights
@@ -19,6 +20,7 @@ from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, SENTIMENT
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import save_run
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.settings import DashboardSettings
 from tests.dashboard.test_insights_page import minimal_run
 
 
@@ -96,6 +98,93 @@ def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> N
         launch_insights(spec, tmp_path)
     payload = InsightsLaunchPayload.model_validate_json(spawn.call_args.kwargs['env']['EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'])
     assert payload.spec.population().facets == facets
+
+
+@pytest.mark.parametrize(
+    ('host', 'expected_host'),
+    [('https://profile.example', 'https://profile.example'), (None, 'https://my.orq.ai')],
+)
+def test_selected_profile_controls_facets_and_worker_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str | None, expected_host: str
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.example')
+    client = TestClient(build_app())
+    profile = OrqProfile('staging', 'profile-key', host, False)
+    getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'staging'})
+    getattr(client.app, 'state').finder_profile = profile
+    page = client.get('/insights/new')
+    token = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert token is not None
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+        patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn,
+    ):
+        assert client.get('/insights/facets?window_days=7').status_code == 200
+        response = client.post(
+            '/insights/runs',
+            data={'csrf': token.group(1), 'source': 'recent', 'dimensions': 'intent'},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    resolve.assert_called_once_with('profile-key', base_url=expected_host)
+    worker_env = spawn.call_args.kwargs['env']
+    assert worker_env['ORQ_API_KEY'] == 'profile-key'
+    assert worker_env['ORQ_BASE_URL'] == expected_host
+    assert 'profile-key' not in list_manifests(tmp_path / 'insights-runs')[0].model_dump_json()
+
+
+def test_missing_selected_profile_never_uses_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    client = TestClient(build_app())
+    getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'deleted'})
+    getattr(client.app, 'state').finder_profile = None
+    page = client.get('/insights/new')
+    token = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert token is not None
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client') as resolve,
+        patch('evaluatorq.dashboard.insights_routes.launch_insights') as launch,
+    ):
+        facets = client.get('/insights/facets?window_days=7')
+        start = client.post(
+            '/insights/runs',
+            data={'csrf': token.group(1), 'source': 'recent', 'dimensions': 'intent'},
+            follow_redirects=False,
+        )
+
+    assert 'Facet values are unavailable' in facets.text
+    assert start.status_code == 422
+    assert 'Orq profile deleted is unavailable' in start.text
+    resolve.assert_not_called()
+    launch.assert_not_called()
+
+
+def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'first'})
+    getattr(client.app, 'state').finder_profile = OrqProfile('first', 'first-key', None, False)
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        client.get('/insights/facets?window_days=7')
+        getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'second'})
+        getattr(client.app, 'state').finder_profile = OrqProfile('second', 'second-key', None, False)
+        client.get('/insights/facets?window_days=7')
+
+    assert resolve.call_count == 2
+    assert resolve.call_args_list[0].args[0] == 'first-key'
+    assert resolve.call_args_list[1].args[0] == 'second-key'
 
 
 def test_facet_options_use_selected_window_and_keep_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

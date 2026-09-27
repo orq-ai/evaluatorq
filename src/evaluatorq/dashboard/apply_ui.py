@@ -519,7 +519,7 @@ async def _confirm_response(
     """
     from evaluatorq.common.apply import read_instructions, write_instructions
     from evaluatorq.dashboard import library
-    from evaluatorq.dashboard.trace_finder.routes import _profile
+    from evaluatorq.dashboard.trace_finder.routes import selected_orq_profile
 
     form = await req.form()
     rejected = _request_rejected(req, form)
@@ -558,7 +558,7 @@ async def _confirm_response(
         )
 
     try:
-        profile = _profile(req.app)
+        profile = selected_orq_profile(req.app)
         if 'credential_identity' in entry and entry['credential_identity'] != _credential_identity(profile):
             return Response(
                 render_error_drawer('The Orq credentials changed after this preview; run the preview again.'),
@@ -685,7 +685,7 @@ async def _preview_response(
     bullet(s), run ``apply(apply=False)``, and render the drawer. Only the
     loader, enable gate, narrowing, and apply wrapper differ between surfaces.
     """
-    from evaluatorq.dashboard.trace_finder.routes import _profile
+    from evaluatorq.dashboard.trace_finder.routes import selected_orq_profile
 
     if obj is None:
         return Response(not_found_html, status_code=404, media_type='text/html')
@@ -708,7 +708,7 @@ async def _preview_response(
         return Response(render_error_drawer(narrow_error), media_type='text/html')
 
     try:
-        profile = _profile(req.app)
+        profile = selected_orq_profile(req.app)
         orq_client, llm_client, model = _build_clients(profile)
     except ValueError as e:
         return Response(render_error_drawer(str(e)), media_type='text/html')

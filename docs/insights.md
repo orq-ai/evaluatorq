@@ -18,7 +18,7 @@ The run writes its JSON result to `.evaluatorq/insights-runs/` and its manifest 
 
 ## Run from Python
 
-Call `insights()` with an `InsightsPopulation` and optional labels and discovered dimensions. This example restricts the population to one agent and adds a custom label alongside two presets. It reads live traces and makes model requests through Orq, so set `ORQ_API_KEY` or use an active Orq CLI profile before running it.
+Call `insights()` with an `InsightsPopulation` and optional labels and discovered dimensions. This example restricts the population to one agent and adds a custom label alongside two presets. It reads live traces and makes model requests through Orq, so set `ORQ_API_KEY` before running it.
 
 Install the `insights` extra before importing this package path with `uv add "evaluatorq[insights]"`.
 
@@ -66,7 +66,7 @@ asyncio.run(main())
 
 ## Run from the CLI
 
-The `eq insights` command accepts trace population filters, label presets or JSON files, and discovered dimensions. Install `evaluatorq[insights]` and set `ORQ_API_KEY` or use an active Orq CLI profile before starting a run. With `--query`, Insights asks the classifier to match traces and removes non-matches. Requested labels are sent with the same per-trace request, and traces whose match judgment fails remain in the run with an error. Filter-only runs and `--from-finder` runs do not ask a new match question.
+The `eq insights` command accepts trace population filters, label presets or JSON files, and discovered dimensions. Install `evaluatorq[insights]` and use `ORQ_API_KEY`, the profile selected in dashboard Settings, or an explicit `--profile NAME`. An explicit profile wins over Settings, and Settings wins over the environment. The selected profile supplies its API key and host for both traces and model calls; if it is unavailable, the command exits with an error instead of using another key. With `--query`, Insights asks the classifier to match traces and removes non-matches. Requested labels are sent with the same per-trace request, and traces whose match judgment fails remain in the run with an error. Filter-only runs and `--from-finder` runs do not ask a new match question.
 
 ```bash
 eq insights --query "customers asking about refunds" --agent support-bot --label sentiment --label customer_satisfaction --dimension intent --dimension failure --limit 500 --json refunds-insights.json
@@ -106,6 +106,8 @@ eq insights --query "customers asking about refunds" --label ./resolution-label.
 Start the dashboard with the `dashboard` and `insights` extras, then open **Insights** in the sidebar. The run list shows saved runs and their status. Select a run to inspect discovered dimensions as a cluster tree or 3D map, review label distributions and confidence, compare dimensions or labels in a crosstab, filter the trace table, or open a trace in Orq. The priority matrix is available when the run includes the customer-satisfaction label; otherwise the page explains why it is empty.
 
 To start a run from the dashboard, click **+ New Run**. Choose recent traces, a semantic query, or a Finder JSON export stored on the dashboard machine. Then select built-in labels and discovered dimensions, review the expected stages, and click **Start run**. The dashboard opens the new run immediately. The run list and run page show each stage as pending, running, completed, error, or skipped; the page refreshes while the run is active. The stages reflect your source, labels, and dimensions. The worker continues if the dashboard is restarted. For more filters and custom labels, use `eq insights` or the Python API.
+
+The dashboard uses the Orq profile selected in **Settings** for both facet values and the run worker, including the profile's API key and host. With **Environment** selected, it uses `ORQ_API_KEY` and `ORQ_BASE_URL`. If a saved profile is unavailable, the wizard cannot start a run until you select another profile or Environment. `eq insights` also reads the saved profile and accepts `--profile` to override it. The Python API uses environment credentials unless you pass clients explicitly.
 
 For recent traces or a semantic query, set the window and choose any project, agent, model, provider, status, product, trace type, or tool values shown under **Filter by facets**. The values come from Orq for that window and reload when you change it. Multiple values within one facet include any matching value; different facets must all match. Your choices are shown on the review step and applied before the trace limit. A Finder export already fixes its population, so the wizard does not add facet filters to that source. If Orq cannot provide the facet list, the wizard says so; check the connection before starting a run that needs filters.
 

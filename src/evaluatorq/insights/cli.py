@@ -14,7 +14,9 @@ from rich.table import Table
 
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_errors import emit_error
-from evaluatorq.trace_finder.cli import _facets
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, resolve_orq_client
+from evaluatorq.trace_finder.cli import _facets, resolve_cli_profile
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import NumericFilters
 from evaluatorq.trace_finder.settings import effective_settings
@@ -25,6 +27,25 @@ from .pipeline import insights
 from .store import list_runs
 
 _DIMENSIONS: tuple[DimensionName, ...] = ('intent', 'failure', 'sentiment')
+
+
+async def _run_insights_with_profile(
+    population: InsightsPopulation, profile: OrqProfile | None, **kwargs: Any
+) -> InsightsRun:
+    if profile is None:
+        return await insights(population, **kwargs)
+    host = profile.server or DEFAULT_ORQ_BASE_URL
+    orq = resolve_orq_client(profile.api_key, base_url=host)
+    resolved = None
+    try:
+        resolved = resolve_llm_client(extra_api_key=profile.api_key, orq_host=host, require_orq=True, max_retries=0)
+        return await insights(population, orq_client=orq, llm_client=resolved.client, **kwargs)
+    finally:
+        try:
+            await close_orq_client(orq)
+        finally:
+            if resolved is not None and resolved.owned:
+                await resolved.client.close()
 
 
 def _resolve_labels(values: list[str] | None) -> list[LabelSpec]:
@@ -105,6 +126,10 @@ def _print_run(run: InsightsRun, run_path: Path | None) -> None:
 
 def insights_cmd(
     query: Annotated[str | None, typer.Option('--query', help='Optional semantic question to select traces.')] = None,
+    profile: Annotated[
+        str | None,
+        typer.Option('--profile', help='Orq CLI profile for traces and model calls; overrides saved settings.'),
+    ] = None,
     from_finder: Annotated[
         Path | None,
         typer.Option('--from-finder', help='Hydrate the population from an eq find JSON export.'),
@@ -219,6 +244,7 @@ def insights_cmd(
             duration_ms_max=duration_ms_max,
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
+        selected_profile = resolve_cli_profile(profile if profile is not None else settings.orq_profile)
         if from_finder is not None:
             _validate_finder_export(from_finder)
         population = (
@@ -247,8 +273,9 @@ def insights_cmd(
 
     try:
         run = asyncio.run(
-            insights(
+            _run_insights_with_profile(
                 population,
+                selected_profile,
                 labels=labels,
                 dimensions=dimensions,
                 max_clusters=max_clusters,
@@ -262,7 +289,7 @@ def insights_cmd(
                 cache=not no_cache,
             )
         )
-    except ValueError as exc:
+    except (ImportError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=2) from None
     run_path = _stored_run_path(run)

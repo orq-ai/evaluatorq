@@ -12,7 +12,7 @@ from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import RedirectResponse, Response
 
-from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights
@@ -28,6 +28,7 @@ from evaluatorq.dashboard.insights_views import (
     unreadable_page,
 )
 from evaluatorq.dashboard.security import request_rejected
+from evaluatorq.dashboard.trace_finder.routes import selected_orq_profile
 from evaluatorq.insights.models import InsightsRun
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.trace_finder.facets import load_facet_catalogue
@@ -85,13 +86,24 @@ def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> 
 async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
     """Cache Orq facet values for the selected window; failures remain visible in the wizard."""
     now = datetime.now(timezone.utc)
-    cache: dict[int, tuple[datetime, FacetCatalogue | None]] = getattr(app.state, 'insights_facet_catalogues', {})
-    cached = cache.get(window_days)
+    try:
+        profile = selected_orq_profile(app)
+    except ValueError as exc:
+        logger.warning('Insights facet values are unavailable: {}', exc)
+        return None
+    cache_key = (profile.name if profile else None, window_days)
+    cache: dict[tuple[str | None, int], tuple[datetime, FacetCatalogue | None]] = getattr(
+        app.state, 'insights_facet_catalogues', {}
+    )
+    cached = cache.get(cache_key)
     if cached is not None and cached[0] > now:
         return cached[1]
     orq = None
     try:
-        orq = resolve_orq_client()
+        orq = resolve_orq_client(
+            profile.api_key if profile else None,
+            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+        )
         catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
     except Exception as exc:  # noqa: BLE001 — provider errors render a visible unavailable state
         logger.warning('Insights facet values are unavailable for the {}-day window: {}', window_days, exc)
@@ -102,7 +114,7 @@ async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
                 await close_orq_client(orq)
             except Exception as exc:  # noqa: BLE001 — cleanup must not hide the catalogue response
                 logger.warning('Could not close the Insights facet catalogue client: {}', exc)
-    cache[window_days] = (now + timedelta(minutes=5 if catalogue is not None else 1), catalogue)
+    cache[cache_key] = (now + timedelta(minutes=5 if catalogue is not None else 1), catalogue)
     app.state.insights_facet_catalogues = cache
     return catalogue
 
@@ -174,7 +186,12 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             entries, _, manifests = _entries(directory)
             message = '; '.join(error['msg'] for error in exc.errors())
             return _html(new_run_page(entries, manifests, error=message), 422)
-        run_id = launch_insights(spec, directory)
+        try:
+            profile = selected_orq_profile(req.app)
+        except ValueError as exc:
+            entries, _, manifests = _entries(directory)
+            return _html(new_run_page(entries, manifests, error=str(exc)), 422)
+        run_id = launch_insights(spec, directory, profile=profile)
         return RedirectResponse(f'/insights/{quote(run_id, safe="")}', status_code=303)
 
     @app.get('/insights/{run_id}')

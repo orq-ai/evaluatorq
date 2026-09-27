@@ -379,7 +379,7 @@ async def _save_settings(req: Request) -> Response | NotStr:
         old_store = getattr(req.app.state, 'finder_store', None)
         req.app.state.finder_settings = effective_settings()
         req.app.state.finder_generation += 1
-        for state_name in ('finder_store', 'finder_catalogue_cache'):
+        for state_name in ('finder_store', 'finder_catalogue_cache', 'insights_facet_catalogues'):
             if hasattr(req.app.state, state_name):
                 delattr(req.app.state, state_name)
     if old_store is not None:

@@ -90,7 +90,7 @@ def _settings(app: Any) -> Any:
     return settings
 
 
-def _profile(app: Any) -> OrqProfile | None:
+def selected_orq_profile(app: Any) -> OrqProfile | None:
     settings = _settings(app)
     profile: OrqProfile | None = getattr(app.state, 'finder_profile', None)
     if settings.orq_profile is not None and profile is None:
@@ -104,14 +104,14 @@ def _profile(app: Any) -> OrqProfile | None:
 
 def _api_available(app: Any) -> bool:
     try:
-        return _profile(app) is not None or bool(os.environ.get('ORQ_API_KEY', '').strip())
+        return selected_orq_profile(app) is not None or bool(os.environ.get('ORQ_API_KEY', '').strip())
     except ValueError:
         return False
 
 
 def _unavailable_reason(app: Any) -> str:
     try:
-        _profile(app)
+        selected_orq_profile(app)
     except ValueError as exc:
         return str(exc)
     failure = getattr(app.state, 'finder_unavailable_reason', None)
@@ -125,7 +125,7 @@ async def _build_store(app: Any) -> RunStore | None:
     settings = _settings(app)
     resolved = None
     try:
-        profile = _profile(app)
+        profile = selected_orq_profile(app)
         resolved = resolve_llm_client(
             extra_api_key=profile.api_key if profile else None,
             orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
@@ -188,7 +188,7 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
             return catalogue
     orq = None
     try:
-        profile = _profile(app)
+        profile = selected_orq_profile(app)
         orq = resolve_orq_client(
             profile.api_key if profile else None,
             base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
