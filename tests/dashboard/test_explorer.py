@@ -229,3 +229,47 @@ def test_poll_appends_explorer_results_during_classification(explorer_client) ->
     html = client.get('/find/poll').text
     assert 'id="explorer-results"' in html
     assert 'hx-swap-oob="true"' in html
+
+
+def test_drawer_opens_at_the_requested_message() -> None:
+    from evaluatorq.dashboard.trace_finder.views import drawer
+    from evaluatorq.trace_finder import TraceDetail
+
+    trace = TraceRecord(schema_version=1, trace_id='t1', span_id='s', timestamp=datetime(2026, 9, 27, tzinfo=timezone.utc),
+                        project='p', model='gpt-5.6-luna', provider='openai', status='ok', product='chat', trace_type='agent',
+                        messages=({'role': 'user', 'content': 'hi'}, {'role': 'assistant', 'content': 'hello'}, {'role': 'user', 'content': 'bye'}))
+    html = drawer(TraceDetail(trace=trace, projection=None, classification=None), msg=2)
+    assert 'id="msg-2"' in html
+    assert html.count('<details class="fd-msg') == 3
+    assert 'fd-msg k-assistant on" id="msg-2" data-msg="2" open' in html
+    assert 'class="fd-mini"' in html
+    assert html.count('data-mini-msg=') == 3
+
+
+def test_trace_route_falls_back_to_explorer_rows(explorer_client) -> None:
+    store, source, client = explorer_client
+    _load(client)
+    trace_id = source.rows[0].trace_id
+
+    async def records(ids: Any) -> dict[str, Any]:
+        return {trace_id: TraceRecord(schema_version=1, trace_id=trace_id, span_id='s', timestamp=datetime(2026, 9, 27, tzinfo=timezone.utc),
+                                      project='p', model='gpt-5.6-luna', provider='openai', status='ok', product='chat', trace_type='agent',
+                                      messages=({'role': 'user', 'content': 'hi'},))}
+
+    store.explorer.records = records
+    store.trace_detail = lambda _id: _none()
+    html = client.get(f'/find/trace/{trace_id}?msg=1').text
+    assert 'id="msg-1"' in html
+    assert 'support' in html
+
+
+def test_trace_route_explains_missing_messages(explorer_client) -> None:
+    store, source, client = explorer_client
+    _load(client)
+    store.trace_detail = lambda _id: _none()
+    html = client.get(f'/find/trace/{source.rows[0].trace_id}').text
+    assert 'messages could not be loaded' in html
+
+
+async def _none() -> None:
+    return None

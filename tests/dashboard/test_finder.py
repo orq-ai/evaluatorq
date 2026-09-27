@@ -581,7 +581,7 @@ def test_find_trace_drawer_renders_thread_and_classifier_input(setup_finder, mon
     assert 'Raw result' in drawer.text
     assert 'This is the third time' in drawer.text
     assert drawer.text.count('<details class="fd-msg') == 2
-    assert '<summary><span class="role">user <span class="fd-msg-index">1</span>' in drawer.text
+    assert '<summary><span class="role"><b>User</b></span><em>#1 · ~' in drawer.text
     assert '<span class="fd-msg-preview">This is the third time I am asking.</span>' in drawer.text
     assert '<div class="fd-msg-content">This is the third time I am asking.</div>' in drawer.text
     assert 'eqFinderTab(this' in drawer.text

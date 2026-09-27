@@ -747,4 +747,31 @@
     evt.stopPropagation();
     htmx.ajax('GET', '/find/trace/' + encodeURIComponent(row.getAttribute('data-tv-row')) + '?msg=' + seg.getAttribute('data-tv-msg'), { target: '#finder-drawer', swap: 'innerHTML' });
   }, true);
+
+  // Drawer: scroll the thread (not the page) to the selected message, and move the selection locally.
+  function drawerSelect(root, index) {
+    root.querySelectorAll('.fd-msg').forEach((el) => {
+      const on = el.getAttribute('data-msg') === String(index);
+      el.classList.toggle('on', on);
+      el.open = on;
+    });
+    root.querySelectorAll('.fd-mini i').forEach((el) => el.classList.toggle('on', el.getAttribute('data-mini-msg') === String(index)));
+    const list = root.querySelector('#fd-thread');
+    const target = root.querySelector('#msg-' + index);
+    if (list && target) list.scrollTop = target.offsetTop - list.offsetTop - list.clientHeight / 2 + target.clientHeight / 2;
+  }
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail.target && evt.detail.target.id === 'finder-drawer') {
+      const on = evt.detail.target.querySelector('.fd-msg.on');
+      if (on) drawerSelect(evt.detail.target, on.getAttribute('data-msg'));
+    }
+  });
+  document.addEventListener('click', function (evt) {
+    const mini = evt.target.closest('.fd-mini i[data-mini-msg]');
+    const summary = evt.target.closest('.fd-msg > summary');
+    const root = document.getElementById('finder-drawer');
+    if (!root || (!mini && !summary)) return;
+    if (summary) evt.preventDefault();
+    drawerSelect(root, mini ? mini.getAttribute('data-mini-msg') : summary.parentElement.getAttribute('data-msg'));
+  });
 })();

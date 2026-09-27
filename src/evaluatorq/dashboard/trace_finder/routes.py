@@ -32,6 +32,7 @@ from evaluatorq.trace_finder import (
     RunRequest,
     RunSnapshot,
     RunStore,
+    TraceDetail,
     build_run_store,
     effective_settings,
     export_json,
@@ -665,12 +666,25 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         store = await _store(req.app)
         if store is None:
             return _html('<p class="finder-empty">Trace finding is unavailable.</p>', status_code=404)
+        raw_msg = req.query_params.get('msg', '')
+        msg = int(raw_msg) if raw_msg.isdigit() else None
+        row = await store.explorer.row(trace_id) if store.explorer is not None else None
         detail = await store.trace_detail(trace_id)
+        if detail is None and row is not None and store.explorer is not None:
+            record = (await store.explorer.records([trace_id])).get(trace_id)
+            if record is None:
+                logger.warning('Find drawer could not load messages for explorer trace {}', trace_id)
+                return _html(
+                    missing_trace_drawer(
+                        trace_id, reason='The messages could not be loaded for this trace. Open it in Orq instead.'
+                    )
+                )
+            detail = TraceDetail(trace=record, projection=None, classification=None)
         if detail is None:
             # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
             logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)
             return _html(missing_trace_drawer(trace_id))
-        return _html(drawer(detail))
+        return _html(drawer(detail, msg=msg, row=row))
 
     @app.get('/find/export.json')
     async def find_export(req: Request) -> Response:

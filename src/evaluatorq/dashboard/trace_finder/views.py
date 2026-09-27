@@ -13,7 +13,9 @@ from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
+from evaluatorq.trace_finder.columns import fmt_cost, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
+from evaluatorq.trace_finder.trajectory import KIND_LABELS, Kind, Segment, segments
 
 if TYPE_CHECKING:
     from evaluatorq.trace_finder import (
@@ -25,6 +27,7 @@ if TYPE_CHECKING:
         RunSnapshot,
         TraceClassification,
         TraceDetail,
+        TraceRow,
     )
 
 
@@ -711,7 +714,9 @@ def fragment(
     return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)}</div>'
 
 
-def drawer(detail: TraceDetail, *, experiment_url: str | None = None) -> str:
+def drawer(
+    detail: TraceDetail, *, experiment_url: str | None = None, msg: int | None = None, row: TraceRow | None = None
+) -> str:
     trace = detail.trace
     result = detail.classification
     result_html = (
@@ -723,11 +728,42 @@ def drawer(detail: TraceDetail, *, experiment_url: str | None = None) -> str:
             else f'<p role="alert">Failed: {esc(result.error)}</p>'
         )
     )
-    messages = ''.join(_thread_message(message, index) for index, message in enumerate(trace.messages, start=1))
+    segs = segments(trace.messages)
+    by_message: dict[int, list[Segment]] = {}
+    for segment in segs:
+        by_message.setdefault(segment.index, []).append(segment)
+    selected = msg if msg is not None and 1 <= msg <= len(trace.messages) else 1
+    messages = ''.join(
+        _thread_message(
+            message,
+            index,
+            selected=index == selected,
+            kind=by_message[index][0].kind if by_message.get(index) else 'other',
+            label=next((s.label for s in by_message.get(index, []) if s.label), None),
+            tokens=sum(s.tokens for s in by_message.get(index, [])),
+        )
+        for index, message in enumerate(trace.messages, start=1)
+    )
+    mini = ''.join(
+        f'<i class="k-{s.kind}{" on" if s.index == selected else ""}" style="flex-grow:{s.tokens}" data-mini-msg="{s.index}"></i>'
+        for s in segs
+    )
+    mini_html = f'<div class="fd-mini">{mini}</div>' if segs else ''
     payload = json.dumps(detail.projection.payload if detail.projection else {}, indent=2, ensure_ascii=False)
     raw = json.dumps(result.raw_result if result else {}, indent=2, ensure_ascii=False)
     thread_html = messages or '<p class="finder-empty">No messages.</p>'
+    row_header = ''
+    if row is not None:
+        models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
+        row_header = (
+            f'<div class="fd-row-head"><span class="tv dot {"err" if row.status == "error" else "ok"}"></span>'
+            f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
+            f'<div class="fd-row-meta">Started {esc(fmt_time(row.started_at))} · {esc(fmt_tokens(row.tokens_in))} in → '
+            f'{esc(fmt_tokens(row.tokens_out))} out · {esc(fmt_tokens(row.cached_tokens))} cache · '
+            f'{esc(fmt_cost(row.cost_total, row.currency))}</div>'
+        )
     body_html = (
+        f'{row_header}{mini_html}'
         f'<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
         f'<dt>project</dt><dd>{esc(trace.project)}</dd><dt>model</dt><dd>{esc(trace.model)}</dd><dt>time</dt><dd>{esc(trace.timestamp.isoformat())}</dd></dl>'
         f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.compiled))}"></span>{result_html}</div>'
@@ -749,8 +785,8 @@ def drawer(detail: TraceDetail, *, experiment_url: str | None = None) -> str:
     )
 
 
-def missing_trace_drawer(trace_id: str) -> str:
-    body = (
+def missing_trace_drawer(trace_id: str, *, reason: str | None = None) -> str:
+    body = reason or (
         '<p class="finder-empty">This trace is not part of the current run. Results live in memory only, so a '
         'dashboard restart or a new search clears them. Run the search again to reopen it.</p>'
     )
@@ -764,15 +800,19 @@ def _message_text(message: dict[str, object]) -> str:
     return '\n'.join(text for block in blocks if (text := _block_text(block)))
 
 
-def _thread_message(message: dict[str, object], index: int) -> str:
+def _thread_message(
+    message: dict[str, object], index: int, *, selected: bool, kind: Kind, label: str | None, tokens: int
+) -> str:
     role = str(message.get('role', 'unknown'))
     content = _message_text(message)
     preview = ' '.join(content.split())
     if len(preview) > 100:
         preview = preview[:100].rstrip() + '…'
+    name = KIND_LABELS.get(kind, role)
+    tool = f' · <span class="mono">{esc(label)}</span>' if label else ''
     return (
-        f'<details class="fd-msg {"user" if role == "user" else "assistant"}" open>'
-        f'<summary><span class="role">{esc(role)} <span class="fd-msg-index">{index}</span></span>'
+        f'<details class="fd-msg k-{esc(kind)}{" on" if selected else ""}" id="msg-{index}" data-msg="{index}"{" open" if selected else ""}>'
+        f'<summary><span class="role"><b>{esc(name)}</b>{tool}</span><em>#{index} · ~{tokens:,} tok</em>'
         f'<span class="fd-msg-preview">{esc(preview)}</span></summary>'
         f'<div class="fd-msg-content">{esc(content)}</div></details>'
     )
