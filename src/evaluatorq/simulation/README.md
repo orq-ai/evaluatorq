@@ -24,7 +24,7 @@ Two async functions, same target shapes and knobs:
 from evaluatorq.simulation import simulate
 
 results = await simulate(
-    evaluation_name="support-agent-sim",
+    run_name="support-agent-sim",
     target=my_async_agent,            # or target="agent:<key>" / target=AgentTarget
     personas=[persona],
     scenarios=[scenario],
@@ -32,6 +32,8 @@ results = await simulate(
     evaluator_names=["goal_achieved", "criteria_met"],
 )
 ```
+
+`run_name` labels this execution in run records, results, and traces. It is optional, and the existing `evaluation_name` keyword remains supported.
 
 A runnable, narrated walkthrough lives in [`examples/agent_simulation_intro.ipynb`](../../../examples/agent_simulation_intro.ipynb).
 
@@ -72,11 +74,31 @@ Override the user-simulator or judge entirely by passing pre-built `BaseAgent` i
 
 Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`, `terminated_by`, `rules_broken`, `criteria_results`, and the full `messages` transcript.
 
-`exit_on_failure=True` (default) makes a run raise `SimulationDroppedError` when a datapoint is dropped — drop it straight into a CI step. Evaluator score failures are returned in the results for callers to inspect. Pass `exit_on_failure=False` for interactive runs where dropped rows should surface as warnings instead.
+`raise_on_execution_failure=True` (default) makes a run raise `SimulationDroppedError` when a datapoint is dropped or ends in error or timeout. Evaluator score failures are returned in the results for callers to inspect. Pass `raise_on_execution_failure=False` for interactive runs where execution failures should surface as warnings instead. Both `simulate()` and `generate_and_simulate()` also accept `experiment_description` for the uploaded Orq experiment, `orq_folder_path` for its destination folder, and `report_path` for a local JSON report written with `save=True`. The earlier `exit_on_failure`, `evaluation_description`, `orq_results_path`, and `report` keywords remain aliases.
 
 ## Datasets
 
-Set `dataset_id="..."` to pull simulation datapoints from a named Orq dataset instead of inline personas/scenarios. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`).
+An Orq dataset is a stored collection of simulation datapoints. Use its ID, not its display name: `eq sim upload-dataset --input cases.jsonl --name "Support cases"` prints the ID when it creates one. Direct replay reads `ORQ_API_KEY`; extension also accepts an explicit `api_key`.
+
+- **Direct** — set `dataset_id="..."` to pull the dataset's rows as datapoints. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`). CLI: `eq sim simulate --dataset-id`.
+- **Extension** — `extend_from_dataset()` uses the dataset's personas and scenarios as examples and returns only newly generated datapoints. Identical seed objects appear once in the prompt; same-named objects with different content remain separate examples. It does not change the stored dataset. Similarity and uniqueness are prompt guidance, not guarantees.
+
+Extension sends every distinct seed object to the model. Large datasets can increase prompt cost or exceed its context window; use a smaller dataset of representative cases for generation.
+
+`num_personas` and `num_scenarios` request counts. The result can differ from their product because the generators may return a different number of personas or scenarios, or fail to generate an opening message for an individual pair. An explicit `api_key` authenticates both dataset fetching and generation through Orq, unless `llm_config.client` supplies the generation client.
+
+```python
+from evaluatorq.simulation import extend_from_dataset, simulate
+
+# direct: replay the dataset's rows
+results = await simulate(run_name="support-dataset-replay", dataset_id="ds_abc", target=...)
+
+# extension: generate fresh datapoints seeded by the dataset without changing it
+extra = await extend_from_dataset("ds_abc", num_personas=3, num_scenarios=5)
+results = await simulate(run_name="support-dataset-extended", datapoints=extra, target=...)
+```
+
+`run_name` is an optional label for this simulation execution in its run record, results, and traces. It is a name you choose, not the dataset ID or an evaluator. `dataset_id` selects the stored input cases; `target` is the agent being tested. The older `evaluation_name` keyword still works as an alias; if you pass both, their values must match.
 
 ## Experiments
 
@@ -89,11 +111,11 @@ A prior Orq experiment run can seed simulations two ways (requires `ORQ_API_KEY`
 from evaluatorq.simulation import extend_from_experiment, simulate
 
 # direct: replay the experiment's rows
-results = await simulate(evaluation_name="replay", experiment_id="ex_abc", target=...)
+results = await simulate(run_name="replay", experiment_id="ex_abc", target=...)
 
 # extension: generate fresh datapoints seeded by the run
 extra = await extend_from_experiment("ex_abc", num_personas=3, num_scenarios=5)
-results = await simulate(evaluation_name="extended", datapoints=extra, target=...)
+results = await simulate(run_name="extended", datapoints=extra, target=...)
 ```
 
 ## Data sources
@@ -104,7 +126,7 @@ Where cases come from, and what you can do with each. **Replay** re-runs the exa
 |--------|:---------------------------:|:-----------------------:|
 | Inline `personas` + `scenarios` | ✅ | — (they *are* the new cases) |
 | JSONL datapoints (`--datapoints` / `load_datapoints_from_jsonl()`) | ✅ | ⚠️ manual (hand-pick seeds) |
-| Orq dataset (`dataset_id=`) | ✅ | ⚠️ manual |
+| Orq dataset (`dataset_id=`) | ✅ | ✅ `extend_from_dataset()` |
 | Previous run (`previous_run="<id>"` / `--from-run`, or export to JSONL via `eq sim generate --datapoints`) | ✅ | ⚠️ manual |
 | Orq experiment (`experiment_id=`) | ✅ | ✅ `extend_from_experiment()` |
 | Production traces (`datapoints_from_traces` / `eq sim from-traces`) | ✅ | ✅ `extend_from_traces()` |
@@ -142,7 +164,7 @@ from evaluatorq.simulation import (
 conversations = await fetch_trace_conversations(limit=20)
 datapoints = await datapoints_from_traces(conversations)          # direct
 datapoints += await extend_from_traces(conversations, num_datapoints=10)  # extension
-results = await simulate(evaluation_name="from-traces", datapoints=datapoints, target=...)
+results = await simulate(run_name="from-traces", datapoints=datapoints, target=...)
 ```
 
 On the CLI:
