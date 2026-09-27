@@ -145,6 +145,8 @@ async def _build_dimension(  # noqa: C901
     usable: list[tuple[TraceInsight, str]] = []
     n_no_signal = 0
     for trace in traces:
+        if 'summary' in trace.errors:
+            continue
         text = _source(trace, dimension)
         if text is None or not text.strip():
             n_no_signal += 1
@@ -510,9 +512,19 @@ async def insights(  # noqa: C901
                         item.errors['summary'] = summary
                     else:
                         item.summary = summary
-                _stage_end(writer, 'summary')
+                summary_errors = [value for value in summaries.values() if isinstance(value, str)]
+                summary_error = (
+                    f'every summary request failed: {summary_errors[0]}'
+                    if summaries and len(summary_errors) == len(summaries)
+                    else None
+                )
+                if summary_error:
+                    run.status = 'error'
+                    run.stage_failures.append(StageFailure(stage='summary', message=summary_error))
+                    logger.warning('Insights summary stage failed: {}', summary_error)
+                _stage_end(writer, 'summary', summary_error)
 
-                for dimension in dimensions:
+                for dimension in dimensions if summary_error is None else ():
                     stage_name = f'dimension:{dimension}'
                     _stage(writer, stage_name)
                     try:

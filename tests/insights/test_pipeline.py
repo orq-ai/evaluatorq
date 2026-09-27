@@ -331,6 +331,70 @@ async def test_all_false_query_matches_finish_as_empty_without_summary_or_dimens
     assert list_manifests(tmp_path)[0].status.value == 'completed'
 
 
+@pytest.mark.asyncio
+async def test_every_summary_failing_fails_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(3)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+
+    async def all_fail(*args, **kwargs):
+        return {trace.trace_id: 'summary: model not enabled' for trace in traces}
+
+    async def must_not_cluster(*args, **kwargs):
+        pytest.fail('dimensions must be skipped when every summary failed')
+
+    monkeypatch.setattr(pipeline, 'summarize_traces', all_fail)
+    monkeypatch.setattr(pipeline, '_build_dimension', must_not_cluster)
+    run = await pipeline.insights(_population(), runs_dir=tmp_path)
+    assert run.status == 'error'
+    assert [failure.stage for failure in run.stage_failures] == ['summary']
+    assert 'model not enabled' in run.stage_failures[0].message
+
+
+@pytest.mark.asyncio
+async def test_failed_summaries_are_not_counted_as_no_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai import AsyncOpenAI
+
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.models import TraceInsight
+
+    clean = [
+        TraceInsight(
+            trace_id=f'c{i}', span_id='s', timestamp=datetime.now(timezone.utc), summary=_summary()
+        )
+        for i in range(4)
+    ]
+    failed = [
+        TraceInsight(
+            trace_id=f'f{i}',
+            span_id='s',
+            timestamp=datetime.now(timezone.utc),
+            errors={'summary': 'summary: boom'},
+        )
+        for i in range(2)
+    ]
+    cache = InsightsCache(enabled=False)
+    try:
+        result = await pipeline._build_dimension(
+            'failure',
+            clean + failed,
+            client=cast('AsyncOpenAI', object()),
+            cache=cache,
+            embedding_model='unused',
+            summary_model='unused',
+            max_clusters=15,
+            max_subclusters=15,
+            outlier_zscore=None,
+            parallelism=10,
+            classifier_model='unused',
+        )
+    finally:
+        cache.close()
+    assert result.n_no_signal == 4
+    assert result.n_failed == 2
+
+
 def _population():
     from evaluatorq.insights.models import InsightsPopulation
 
