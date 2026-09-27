@@ -249,6 +249,29 @@ def _optional_value(form: Any, name: str) -> object | None:
     return raw
 
 
+MAX_RANGE = timedelta(days=30)
+
+
+def parse_range(from_value: str, to_value: str, tz_offset: str | None) -> tuple[datetime, datetime]:
+    """Turn two ``datetime-local`` values and the browser's ``getTimezoneOffset()`` into UTC bounds."""
+    try:
+        offset = timedelta(minutes=-int(tz_offset or ''))
+    except ValueError:
+        logger.warning('Explorer time range has no usable browser offset {!r}; reading it as UTC', tz_offset)
+        offset = timedelta(0)
+    zone = timezone(offset)
+    try:
+        start = datetime.fromisoformat(from_value).replace(tzinfo=zone).astimezone(timezone.utc)
+        end = datetime.fromisoformat(to_value).replace(tzinfo=zone).astimezone(timezone.utc)
+    except ValueError as exc:
+        raise ValueError('From and To must be full dates and times.') from exc
+    if start >= end:
+        raise ValueError('From must be before To.')
+    if end - start > MAX_RANGE:
+        raise ValueError('The time range can be at most 30 days, the API retention.')
+    return start, end
+
+
 def _run_request(
     form: Any,
     settings: Any,
