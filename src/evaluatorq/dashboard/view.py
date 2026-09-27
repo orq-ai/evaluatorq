@@ -957,30 +957,41 @@ def settings_body(  # noqa: C901
             ),
         ),
     )
-    auth_rows.append('<div class="settings-auth-choices" role="radiogroup" aria-label="Authentication method">')
-    for value, title, description, detail in cards:
+    auth_rows.extend((
+        '<p class="settings-auth-step">1 · Choose a method</p>',
+        '<div class="settings-auth-choices" role="radiogroup" aria-label="Authentication method">',
+    ))
+    for value, title, description, _detail in cards:
         checked = ' checked' if method == value else ''
         auth_rows.append(
             '<div class="settings-auth-choice">'
             f'<label class="settings-auth-card"><input type="radio" name="orq_auth_method" value="{value}"{checked}>'
             f'<span class="settings-auth-card-copy"><strong>{esc(title)}</strong><small>{esc(description)}</small></span>'
-            '<span class="settings-auth-card-check" aria-hidden="true"></span></label>'
-            f'<div class="settings-auth-detail">{detail}</div></div>'
+            '<span class="settings-auth-card-check" aria-hidden="true"></span></label></div>'
         )
     auth_rows.append('</div>')
     selected_profile = next((profile for profile in profiles if profile.name == chosen), None)
-    if method == 'cli_profile' and chosen and selected_profile is None:
-        source_note = f'The saved Orq CLI profile “{chosen}” is unavailable. Choose another credential source.'
-    elif method == 'cli_profile' and chosen and selected_profile is not None and '*' in selected_profile.api_key:
-        source_note = f'The saved Orq CLI profile “{chosen}” does not expose its API key. Choose another source.'
-    elif method == 'cli_profile' and chosen:
-        source_note = 'Uses the API key and host from this local Orq CLI profile. Settings saves its name, not its key.'
-    elif method == 'environment':
-        source_note = 'Uses ORQ_API_KEY and ORQ_BASE_URL from this dashboard process.'
+    if chosen and selected_profile is None:
+        profile_note = f'The saved Orq CLI profile “{chosen}” is unavailable. Choose another credential source.'
+    elif chosen and selected_profile is not None and '*' in selected_profile.api_key:
+        profile_note = f'The saved Orq CLI profile “{chosen}” does not expose its API key. Choose another source.'
+    elif chosen:
+        profile_note = (
+            'Uses the API key and host from this local Orq CLI profile. Settings saves its name, not its key.'
+        )
     else:
-        source_note = ''
-    if source_note:
-        auth_rows.append(f'<p class="settings-auth-note">{esc(source_note)}</p>')
+        profile_note = 'Choose a local Orq CLI API-key profile.'
+    auth_rows.extend((
+        '<div class="settings-auth-config"><p class="settings-auth-step">2 · Configure the method</p>',
+        '<div class="settings-auth-details">',
+    ))
+    for value, _title, _description, detail in cards:
+        if value == 'environment':
+            detail = '<p class="settings-auth-note">Uses ORQ_API_KEY and ORQ_BASE_URL from this dashboard process.</p>'
+        elif value == 'cli_profile':
+            detail += f'<p class="settings-auth-note">{esc(profile_note)}</p>'
+        auth_rows.append(f'<div class="settings-auth-detail" data-auth-method="{value}">{detail}</div>')
+    auth_rows.append('</div>')
     if scope is not None:
         workspace = setting_value('orq_workspace')
         if not chosen:
@@ -995,6 +1006,7 @@ def settings_body(  # noqa: C901
             f'{_scope_settings_rows(scope, workspace=workspace, chosen_project=chosen_project, errors=errors)}'
             '</div>'
         )
+    auth_rows.append('</div>')
     models_panel = _panel(
         'Models',
         'Window, limit and parallelism are set per run on the Trace search page',

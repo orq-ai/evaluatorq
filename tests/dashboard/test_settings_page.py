@@ -366,6 +366,19 @@ def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient,
     assert 'key-staging' not in html
 
 
+def test_authentication_choices_keep_method_fields_in_a_shared_second_step(client: TestClient) -> None:
+    html = client.get('/settings').text
+    choices = html.split('<div class="settings-auth-choices"', 1)[1].split('<div class="settings-auth-config">', 1)[0]
+    details = html.split('<div class="settings-auth-config">', 1)[1].split('</form>', 1)[0]
+
+    assert choices.count('class="settings-auth-choice"') == 4
+    assert 'name="orq_profile"' not in choices
+    assert 'name="orq_api_key_entry"' not in choices
+    assert 'data-auth-method="cli_profile"' in details
+    assert 'data-auth-method="cli_oauth"' in details
+    assert 'data-auth-method="stored_api_key"' in details
+
+
 def test_entered_api_key_is_encrypted_and_selected_method_survives_reload(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

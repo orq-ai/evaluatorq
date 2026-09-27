@@ -482,17 +482,23 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .model-pick .model-custom { box-sizing: border-box; width: calc(100% - 12px); margin: 4px 6px 8px; }
 .settings-field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }
 .settings-auth-panel { border-left: 3px solid var(--teal-600); }
-.settings-auth-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px 0 2px; }
-.settings-auth-choice { min-width: 0; border: 1px solid var(--border-default); border-radius: 12px; background: var(--surface-card); overflow: hidden; }
+.settings-auth-step { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.settings-auth-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; padding: 12px 0 2px; }
+.settings-auth-choice { min-width: 0; height: 100%; border: 1px solid var(--border-default); border-radius: 12px; background: var(--surface-card); overflow: hidden; }
 .settings-auth-choice:has(input[type="radio"]:checked) { border-color: var(--teal-600); box-shadow: 0 0 0 1px var(--teal-600); }
-.settings-auth-card { display: flex; align-items: flex-start; gap: 11px; padding: 15px; cursor: pointer; }
+.settings-auth-card { display: flex; align-items: flex-start; gap: 11px; min-height: 82px; height: 100%; padding: 15px; cursor: pointer; }
 .settings-auth-card input { margin: 3px 0 0; flex: 0 0 auto; accent-color: var(--teal-600); }
 .settings-auth-card-copy { display: grid; gap: 4px; min-width: 0; }
 .settings-auth-card-copy strong { color: var(--text-strong); font-size: 13px; font-weight: 650; }
 .settings-auth-card-copy small { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
 .settings-auth-card-check { display: none; }
-.settings-auth-detail { display: none; padding: 0 15px 15px 40px; gap: 7px; }
-.settings-auth-choice:has(input[type="radio"]:checked) .settings-auth-detail { display: grid; }
+.settings-auth-config { min-height: 188px; margin-top: 16px; padding: 16px 18px; border: 1px solid var(--border-default); border-radius: 12px; background: var(--surface-sunken); }
+.settings-auth-config > .settings-auth-step { margin: 0 0 14px; }
+.settings-auth-detail { display: none; max-width: 640px; gap: 7px; }
+.settings-auth-panel:has(input[value="environment"]:checked) .settings-auth-detail[data-auth-method="environment"],
+.settings-auth-panel:has(input[value="cli_profile"]:checked) .settings-auth-detail[data-auth-method="cli_profile"],
+.settings-auth-panel:has(input[value="cli_oauth"]:checked) .settings-auth-detail[data-auth-method="cli_oauth"],
+.settings-auth-panel:has(input[value="stored_api_key"]:checked) .settings-auth-detail[data-auth-method="stored_api_key"] { display: grid; }
 .settings-auth-detail-label { color: var(--text-muted); font-size: 11px; font-weight: 650; }
 .settings-auth-detail input, .settings-auth-detail select { width: 100%; min-width: 0; }
 .settings-auth-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
@@ -501,16 +507,15 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .eq-auth-toast.is-warning { border-left-color: var(--teal-600); }
 .eq-auth-toast a { color: var(--teal-600); font-weight: 650; white-space: nowrap; }
 .eq-auth-toast button { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 18px; line-height: 1; }
-.settings-auth-note { margin: 8px 0 12px 184px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.settings-auth-note { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 .settings-scope-note { margin: 8px 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-.settings-auth-panel:has(input[name="orq_auth_method"][value="stored_api_key"]:checked) :is(.settings-auth-note,.settings-auth-scope),
-.settings-auth-panel:has(input[name="orq_auth_method"][value="cli_oauth"]:checked) :is(.settings-auth-note,.settings-auth-scope) { display: none; }
+.settings-auth-panel:has(input[name="orq_auth_method"][value="stored_api_key"]:checked) .settings-auth-scope,
+.settings-auth-panel:has(input[name="orq_auth_method"][value="cli_oauth"]:checked) .settings-auth-scope { display: none; }
 .settings-save { align-self: flex-start; }
 @media (max-width: 600px) {
   body.eq-dashboard:has(.settings-auth-panel) .config-row { flex-direction: column; align-items: stretch; gap: 6px; }
   body.eq-dashboard:has(.settings-auth-panel) .config-key { flex-basis: auto; }
   body.eq-dashboard:has(.settings-auth-panel) .config-val { width: 100%; }
-  .settings-auth-note { margin-left: 0; }
   .settings-auth-choices { grid-template-columns: 1fr; }
 }
 
