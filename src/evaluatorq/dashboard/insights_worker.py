@@ -126,10 +126,10 @@ def main() -> int:
                 raw_snapshot = snapshot_file.read(MAX_FINDER_EXPORT_BYTES + 1)
             if len(raw_snapshot) > MAX_FINDER_EXPORT_BYTES:
                 raise ValueError('Missing or oversized validated Finder export snapshot')
-            RunExport.model_validate_json(raw_snapshot)
+            validated_export = RunExport.model_validate_json(raw_snapshot)
             run = asyncio.run(
                 insights(
-                    InsightsPopulation.from_finder_export(snapshot),
+                    InsightsPopulation.from_finder_export(snapshot, export=validated_export),
                     labels=spec.label_specs(),
                     dimensions=spec.dimension_names(),
                     parallelism=spec.parallelism,

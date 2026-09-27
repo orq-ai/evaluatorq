@@ -550,6 +550,31 @@ def test_finder_export_directory_replacement_during_open_is_rejected(
         InsightsLaunchSpec(source='finder', finder_export='approved.json')
 
 
+def test_finder_export_descriptor_closes_when_fdopen_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import os
+
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    (exports / 'approved.json').write_text(_run_export(['trace-1']).model_dump_json(), encoding='utf-8')
+    opened_descriptors: list[int] = []
+
+    def fail_fdopen(descriptor: int, _mode: str):
+        opened_descriptors.append(descriptor)
+        raise OSError('fdopen failed')
+
+    monkeypatch.setattr(insights_launch.os, 'fdopen', fail_fdopen)
+
+    with pytest.raises(ValidationError, match='Could not read a valid Finder export'):
+        InsightsLaunchSpec(source='finder', finder_export='approved.json')
+
+    assert len(opened_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened_descriptors[0])
+
+
 def test_dashboard_finder_export_is_size_limited(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     exports = tmp_path / 'finder-exports'
@@ -979,6 +1004,17 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert payload.finder_export_snapshot is not None
     assert payload.finder_export_snapshot.read_text(encoding='utf-8') == approved_export
 
+    replacement_export = _run_export(['replacement-after-validation']).model_dump_json()
+    original_from_finder_export = InsightsPopulation.from_finder_export
+    snapshot_replacement: list[str] = []
+
+    def replace_snapshot_after_validation(cls, path: Path, *, export=None):
+        path.write_text(replacement_export, encoding='utf-8')
+        snapshot_replacement.append(path.read_text(encoding='utf-8'))
+        return original_from_finder_export(path, export=export)
+
+    monkeypatch.setattr(InsightsPopulation, 'from_finder_export', classmethod(replace_snapshot_after_validation))
+
     consumed: list[str] = []
     consumed_source: list[Path | None] = []
 
@@ -987,8 +1023,10 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
         from evaluatorq.contracts import RunManifest
 
         assert population.finder_export is not None
+        snapshot = population.finder_export_snapshot()
+        assert snapshot is not None
         consumed_source.append(kwargs.get('_finder_export_source'))
-        consumed.append(population.finder_export.read_text(encoding='utf-8'))
+        consumed.extend(snapshot.matched_trace_ids)
         manifest_path = tmp_path / 'runs' / '.manifests' / f'{payload.run_id}.json'
         manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
         ManifestWriter(manifest, manifest_path).complete()
@@ -997,7 +1035,8 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     monkeypatch.setattr(insights_worker, 'insights', capture_population)
     monkeypatch.setenv(_REQUEST_ENV, payload_json)
     assert insights_worker.main() == 0
-    assert consumed == [approved_export]
+    assert consumed == ['approved-trace']
+    assert snapshot_replacement == [replacement_export]
     assert consumed_source == [export_path]
     assert not payload.finder_export_snapshot.exists()
     assert not reference.exists()

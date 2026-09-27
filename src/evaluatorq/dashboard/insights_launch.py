@@ -486,7 +486,12 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
             if not stat.S_ISDIR(directory_before.st_mode):
                 raise ValueError('Finder export directory must be a regular directory.')
             descriptor = os.open(path, os.O_RDONLY)
-        with os.fdopen(descriptor, 'rb') as export_file:
+        try:
+            export_file = os.fdopen(descriptor, 'rb')
+        except OSError:
+            os.close(descriptor)
+            raise
+        with export_file:
             opened = os.fstat(export_file.fileno())
             current = path.lstat()
             if os.name == 'nt':
