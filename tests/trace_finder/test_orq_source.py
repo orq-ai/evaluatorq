@@ -855,3 +855,27 @@ async def test_hydrate_rows_returns_none_for_a_failed_trace() -> None:
     assert records['ok'] is not None
     assert records['ok'].messages[0]['content'] == 'hello'
     assert records['empty'] is None
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_limit_below_one() -> None:
+    source = make_source(FakeOrq(FakeTraces({})))
+
+    with pytest.raises(OrqSourceError, match='limit must be at least 1'):
+        await source.search(START, END, 0, facets=FacetSelection(), numeric=NumericFilters())
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_start_after_end() -> None:
+    source = make_source(FakeOrq(FakeTraces({})))
+
+    with pytest.raises(OrqSourceError, match='start must not be after end'):
+        await source.search(END, START, 1, facets=FacetSelection(), numeric=NumericFilters())
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_naive_datetime() -> None:
+    source = make_source(FakeOrq(FakeTraces({})))
+
+    with pytest.raises(OrqSourceError, match='start must include a timezone offset'):
+        await source.search(datetime(2026, 9, 20), END, 1, facets=FacetSelection(), numeric=NumericFilters())

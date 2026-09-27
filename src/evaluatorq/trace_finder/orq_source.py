@@ -242,12 +242,7 @@ class OrqTraceSource:
         facets: FacetSelection,
         numeric: NumericFilters,
     ) -> Snapshot:
-        if limit < 1:
-            raise OrqSourceError('limit must be at least 1')
-        resolved_end = _aware_bound(end, 'end') if end is not None else datetime.now(timezone.utc)
-        resolved_start = _aware_bound(start, 'start') if start is not None else resolved_end - DEFAULT_LOOKBACK
-        if resolved_start > resolved_end:
-            raise OrqSourceError('start must not be after end')
+        resolved_start, resolved_end = _check_window(start, end, limit)
         return await self._load(resolved_start, resolved_end, min(limit, MAX_LIVE_TRACES), facets, numeric)
 
     async def _load(
@@ -390,11 +385,7 @@ class OrqTraceSource:
         on_page: Callable[[tuple[TraceRow, ...]], None] | None = None,
     ) -> tuple[TraceRow, ...]:
         """Return up to *limit* table rows, newest first, from summaries alone (no span fetches)."""
-        if limit < 1:
-            raise OrqSourceError('limit must be at least 1')
-        start, end = _aware_bound(start, 'start'), _aware_bound(end, 'end')
-        if start > end:
-            raise OrqSourceError('start must not be after end')
+        start, end = _check_window(start, end, limit)
         limit = min(limit, MAX_LIVE_TRACES)
         project_names = await _project_names(self._client)
         oql = build_oql(facets, numeric, project_names)
@@ -914,6 +905,17 @@ def _aware_bound(value: datetime, name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise OrqSourceError(f'{name} must include a timezone offset')
     return value.astimezone(timezone.utc)
+
+
+def _check_window(start: datetime | None, end: datetime | None, limit: int) -> tuple[datetime, datetime]:
+    """Validate a trace search window and return its resolved UTC bounds."""
+    if limit < 1:
+        raise OrqSourceError('limit must be at least 1')
+    resolved_end = _aware_bound(end, 'end') if end is not None else datetime.now(timezone.utc)
+    resolved_start = _aware_bound(start, 'start') if start is not None else resolved_end - DEFAULT_LOOKBACK
+    if resolved_start > resolved_end:
+        raise OrqSourceError('start must not be after end')
+    return resolved_start, resolved_end
 
 
 def _raw_trace_summaries(payload: dict[str, Any] | None) -> list[dict[str, Any]]:
