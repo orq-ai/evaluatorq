@@ -766,6 +766,51 @@ def test_finder_export_retention_keeps_recent_handoff_exports_over_limit(
     assert {path.name for path in export_dir.glob('trace-finder-*.json')} == {path.name for path in exports}
 
 
+def test_finder_export_pruning_cannot_delete_a_concurrent_replacement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, ns=(index + 1, index + 1))
+    target = exports[0]
+    unlink_started = threading.Event()
+    continue_unlink = threading.Event()
+    save_started = threading.Event()
+    save_finished = threading.Event()
+    original_unlink = Path.unlink
+
+    def pause_target_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == target:
+            unlink_started.set()
+            assert continue_unlink.wait(timeout=5)
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', pause_target_unlink)
+    prune_thread = threading.Thread(target=finder_routes._prune_finder_exports, args=(export_dir,))
+    prune_thread.start()
+    assert unlink_started.wait(timeout=5)
+
+    def save_replacement() -> None:
+        save_started.set()
+        finder_routes._save_finder_export(export_dir, target.name, '{"replacement": true}')
+        save_finished.set()
+
+    save_thread = threading.Thread(target=save_replacement)
+    save_thread.start()
+    assert save_started.wait(timeout=5)
+    assert not save_finished.wait(timeout=0.1)
+    continue_unlink.set()
+    prune_thread.join(timeout=5)
+    save_thread.join(timeout=5)
+
+    assert not prune_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert json.loads(target.read_text(encoding='utf-8')) == {'replacement': True}
+
+
 def test_finder_export_retention_pins_in_flight_insights_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -786,7 +831,7 @@ def test_finder_export_retention_pins_in_flight_insights_source(
     writer = start_manifest(run_id='active-run', surface='insights', run_name='active', runs_dir=runs_dir)
     marker = finder_export_reference_path(runs_dir, 'active-run')
     ensure_private_finder_reference_dir(marker.parent)
-    marker.write_text(json.dumps({'finder_export': str(exports[0])}), encoding='utf-8')
+    marker.write_text(json.dumps({'finder_export': exports[0].name}), encoding='utf-8')
     marker.chmod(0o600)
 
     finder_routes._prune_finder_exports(export_dir)

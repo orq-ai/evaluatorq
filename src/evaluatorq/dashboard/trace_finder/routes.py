@@ -7,6 +7,7 @@ import contextlib
 import json
 import os
 import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -63,6 +64,37 @@ _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bo
 _FINDER_EXPORT_RETENTION = 50
 _FINDER_EXPORT_HANDOFF_GRACE = timedelta(hours=1)
 _FINDER_EXPORT_REFERENCE_MAX_AGE = timedelta(days=30)
+_FINDER_EXPORT_THREAD_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _finder_export_lock(export_dir: Path):
+    """Serialize Finder export replacement and pruning across threads and Unix processes."""
+    export_dir.mkdir(parents=True, exist_ok=True)
+    with _FINDER_EXPORT_THREAD_LOCK:
+        lock_path = export_dir / '.finder-export.lock'
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, 'O_NOFOLLOW'):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(lock_path, flags, 0o600)
+        try:
+            if hasattr(os, 'fchmod'):
+                os.fchmod(descriptor, 0o600)
+            try:
+                import fcntl
+            except ImportError:  # Windows has no fcntl; the thread lock still protects local requests.
+                logger.warning(
+                    'Finder export file locking is unavailable; cleanup is serialized only within this process'
+                )
+                yield
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 def _referenced_finder_exports(export_dir: Path) -> set[Path] | None:
@@ -132,7 +164,8 @@ def _inflight_finder_export(
         value = data.get('finder_export')
         if not isinstance(value, str) or not value:
             return None, False
-        candidate = Path(value).expanduser().resolve()
+        candidate_path = Path(value).expanduser()
+        candidate = (candidate_path if candidate_path.is_absolute() else export_root / candidate_path).resolve()
         if (
             candidate.parent == export_root
             and candidate.name.startswith('trace-finder-')
@@ -147,6 +180,15 @@ def _inflight_finder_export(
 
 def _prune_finder_exports(export_dir: Path) -> None:
     """Keep recent handoff exports, the newest older exports, and saved Insights sources."""
+    try:
+        with _finder_export_lock(export_dir):
+            _prune_finder_exports_locked(export_dir)
+    except OSError as exc:
+        logger.warning('Could not prune saved Finder exports in {}: {}', export_dir, exc)
+
+
+def _prune_finder_exports_locked(export_dir: Path) -> None:
+    """Prune exports while the cross-process export lock is held."""
     try:
         files = [path for path in export_dir.glob('trace-finder-*.json') if path.is_file() and not path.is_symlink()]
         files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
@@ -168,22 +210,22 @@ def _prune_finder_exports(export_dir: Path) -> None:
 
 def _save_finder_export(export_dir: Path, export_name: str, payload: str) -> None:
     """Persist one completed export and prune older unreferenced files off-loop."""
-    temporary: Path | None = None
-    try:
-        export_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
-        ) as handle:
-            temporary = Path(handle.name)
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        temporary.replace(export_dir / export_name)
-    finally:
-        if temporary is not None:
-            with contextlib.suppress(OSError):
-                temporary.unlink(missing_ok=True)
-    _prune_finder_exports(export_dir)
+    with _finder_export_lock(export_dir):
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(export_dir / export_name)
+        finally:
+            if temporary is not None:
+                with contextlib.suppress(OSError):
+                    temporary.unlink(missing_ok=True)
+        _prune_finder_exports_locked(export_dir)
 
 
 class FinderRunForm(BaseModel):

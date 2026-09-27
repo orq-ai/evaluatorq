@@ -34,6 +34,9 @@ def test_subapps_register_without_optional_insights_numerical_dependencies():
         sys.meta_path.insert(0, BlockOptionalNumerics())
 
         from evaluatorq import cli
+        import evaluatorq.insights.cli
+
+        assert 'evaluatorq.insights.pipeline' not in sys.modules
 
         app = typer.Typer()
         cli._register_subapps(app)

@@ -89,21 +89,9 @@
       else link.removeAttribute('aria-current');
     });
   }
-  window.addEventListener('popstate', function (evt) {
+  document.body.addEventListener('htmx:historyRestore', syncInsightsTab);
+  window.addEventListener('popstate', function () {
     syncInsightsTab();
-    // Re-fetch only entries created by Insights chart links. HTMX, the report
-    // tabs, and other dashboard features own their own history entries.
-    if (!evt.state || !evt.state.insightsCustom) return;
-    const nav = document.querySelector('.insights-tabs');
-    const hasMatchingTab = nav && Array.from(nav.querySelectorAll('a')).some(function (link) {
-      return new URL(link.href).pathname === window.location.pathname;
-    });
-    if (hasMatchingTab && window.htmx) {
-      window.htmx.ajax('GET', window.location.href, {
-        target: '#insights-content',
-        swap: 'innerHTML'
-      });
-    }
   });
 
   function mapTraces(payload) {
@@ -309,13 +297,6 @@
         const visible = viewer.querySelector('[data-map-projection-panel]:not([hidden]) .insights-map-chart');
         if (visible && window.Plotly && window.Plotly.Plots) window.Plotly.Plots.resize(visible);
       }, 100);
-      return;
-    }
-    const crosstabLink = evt.target.closest('#insights-crosstab a[href]');
-    if (crosstabLink && window.htmx) {
-      evt.preventDefault();
-      history.pushState({ insightsCustom: true }, '', crosstabLink.href);
-      window.htmx.ajax('GET', crosstabLink.href, { target: '#insights-content', swap: 'innerHTML' });
       return;
     }
     const toggle = evt.target.closest('[data-insights-view]');

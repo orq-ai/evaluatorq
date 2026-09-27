@@ -25,9 +25,15 @@ from evaluatorq.trace_finder.settings import effective_settings
 
 from . import presets
 from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec
-from .pipeline import insights
 
 _DIMENSIONS: tuple[DimensionName, ...] = ('intent', 'failure', 'sentiment')
+
+
+async def insights(*args: Any, **kwargs: Any) -> InsightsRun:
+    """Load the optional analysis pipeline only when the command is executed."""
+    from .pipeline import insights as run_insights
+
+    return await run_insights(*args, **kwargs)
 
 
 async def _run_insights_with_profile(

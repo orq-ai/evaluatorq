@@ -543,6 +543,19 @@ def test_linux_process_identity_handles_parenthesis_in_command_name(monkeypatch:
     assert insights_launch._read_worker_process_identity(123) == ('linux:987654', False)
 
 
+def test_windows_worker_liveness_check_does_not_call_os_kill(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setattr(insights_launch.sys, 'platform', 'win32')
+
+    def unexpected_kill(_pid: int, _signal: int) -> None:
+        raise AssertionError('Windows os.kill(pid, 0) terminates the worker')
+
+    monkeypatch.setattr(insights_launch.os, 'kill', unexpected_kill)
+
+    assert insights_launch._worker_process_is_alive(12345, 'old-start-marker')
+
+
 def test_stale_reconciliation_treats_overflowing_worker_pid_as_uncertain(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

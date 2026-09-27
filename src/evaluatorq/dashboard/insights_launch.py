@@ -192,6 +192,10 @@ def _worker_process_is_alive(pid: object, expected_identity: object = None) -> b
     """Return whether the recorded worker still exists with its original identity."""
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not hasattr(os, 'kill'):
         return True
+    if sys.platform == 'win32':
+        # On Windows os.kill(pid, 0) terminates the process instead of probing it.
+        logger.warning('Cannot safely verify Insights worker PID {} on Windows; leaving its run active', pid)
+        return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
