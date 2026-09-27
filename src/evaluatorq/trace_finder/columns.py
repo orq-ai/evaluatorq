@@ -90,7 +90,6 @@ class Column:
     render: Callable[[TraceRow], str]
     numeric: bool = False
     default: bool = False
-    needs_results: bool = False  # drawn only once a classification has results; the view renders its cell
 
 
 MATCH = 'match'
@@ -145,7 +144,7 @@ _ENTRIES = (
     Column('session', 'Session', lambda r: r.session_id, lambda r: _text(r.session_id)),
     Column('thread', 'Thread', lambda r: r.thread_id, lambda r: _text(r.thread_id)),
     Column('trace_id', 'Trace ID', lambda r: r.trace_id, lambda r: f'<span class="mono">{esc(r.trace_id)}</span>'),
-    Column(MATCH, 'Match', lambda r: None, _dash, default=True, needs_results=True),  # noqa: ARG005
+    Column(MATCH, 'AI match', lambda r: None, _dash, default=True),  # noqa: ARG005
 )
 COLUMNS: Mapping[str, Column] = MappingProxyType({column.key: column for column in _ENTRIES})
 DEFAULT_COLUMNS: tuple[str, ...] = tuple(column.key for column in _ENTRIES if column.default)

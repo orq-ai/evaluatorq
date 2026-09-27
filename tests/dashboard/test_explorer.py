@@ -888,7 +888,7 @@ def test_large_within_run_is_forced_through_review(explorer_client) -> None:
     assert captured['request'].population.limit == 600
 
 
-def test_match_column_appears_only_with_results_and_can_be_hidden(explorer_client) -> None:
+def test_ai_match_column_is_visible_before_results_and_can_be_hidden(explorer_client) -> None:
     import dataclasses
 
     from evaluatorq.dashboard.trace_finder.explorer_views import table
@@ -898,15 +898,17 @@ def test_match_column_appears_only_with_results_and_can_be_hidden(explorer_clien
     store, _, client = explorer_client
     _load(client)
     view = asyncio.run(store.explorer.view())
-    assert '>Match<' not in table(view, resolve_columns(None), None)
+    initial = table(view, resolve_columns(None), None)
+    assert '>AI match<' in initial
+    assert '<td class="muted">—</td>' in initial
     first = view.rows[0].trace_id
     snapshot = dataclasses.replace(
         store.snapshot_value,
         results={first: TraceClassification(trace_id=first, span_id='s', matched=True, raw_result={})},
         within_results=True,
     )
-    assert '>Match<' in table(view, resolve_columns(None), snapshot)
-    assert '>Match<' not in table(view, resolve_columns(['status', 'model']), snapshot)
+    assert '>AI match<' in table(view, resolve_columns(None), snapshot)
+    assert '>AI match<' not in table(view, resolve_columns(['status', 'model']), snapshot)
 
 
 def test_generated_filter_chip_carries_ai_badge() -> None:

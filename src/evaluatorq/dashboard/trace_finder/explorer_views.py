@@ -86,7 +86,6 @@ def _drawer_attrs(trace_id: str, msg: int | None = None) -> str:
 def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None) -> str:
     snapshot = _within_snapshot(snapshot)
     results = snapshot.results if snapshot is not None and snapshot.results else None
-    columns = [c for c in columns if results or not c.needs_results]
     heads = ''
     for column in columns:
         arrow = (' ↓' if view.descending else ' ↑') if view.sort == column.key else ''

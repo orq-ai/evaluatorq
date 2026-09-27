@@ -31,3 +31,19 @@ Patch staging was used. The cached diff was checked before committing and contai
 The time cell formats the existing UTC timestamp as a time and date on separate lines. Trace and agent text use the shared HTML escaping helper, and AI result labels continue to use the shared result color and value formatting helpers.
 
 The compact status mapping treats `ok` and `success` as Success and `error` and `failed` as Error; any other source status remains visible verbatim and escaped. No integration or live trace tests were run because this task changes only table presentation.
+
+## Review follow-up: keep AI match visible before classification
+
+The header is now `AI match`, and the default column stays in the table before classification with an em dash in each row. Removing the result-dependent column filter leaves explicit column selection unchanged; match sorting still preserves input order when no results exist and uses classification results when they do.
+
+Red command: `uv run pytest tests/dashboard/test_explorer.py::test_ai_match_column_is_visible_before_results_and_can_be_hidden -q`.
+
+Red result: 1 failed because the initial table omitted the `AI match` header.
+
+Green command: `uv run pytest tests/dashboard/test_explorer.py tests/trace_finder/test_columns.py -q`.
+
+Green result: 68 passed in 1.49s.
+
+Lint command: `uv run ruff check src/evaluatorq/dashboard/trace_finder src/evaluatorq/trace_finder/columns.py`.
+
+Lint result: all checks passed.
