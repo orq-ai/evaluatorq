@@ -348,3 +348,11 @@ def test_match_column_appears_only_with_results_and_can_be_hidden(explorer_clien
     )
     assert '>Match<' in table(view, resolve_columns(None), snapshot)
     assert '>Match<' not in table(view, resolve_columns(['status', 'model']), snapshot)
+
+
+def test_generated_filter_chip_carries_ai_badge() -> None:
+    from evaluatorq.dashboard.trace_finder.views import _facet_chips
+    from evaluatorq.trace_finder.models import FacetSelection
+
+    html = _facet_chips(FacetSelection(model=frozenset({'gpt-5.6-luna', 'claude-sonnet-5'})), generated=FacetSelection(model=frozenset({'gpt-5.6-luna'})))
+    assert html.count('ai-badge') == 1

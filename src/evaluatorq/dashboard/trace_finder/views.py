@@ -224,7 +224,7 @@ def _facet_chips(
                 f'facet_{name}',
                 value,
                 f'{esc(label)} {esc(value)}',
-                ai=bool(generated and value in getattr(generated, name) and value not in getattr(selection, name)),
+                ai=bool(generated and value in getattr(generated, name)),
             )
             for value in sorted(getattr(selection, name, frozenset()))
         )
