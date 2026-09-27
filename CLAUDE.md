@@ -97,24 +97,6 @@ Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 
-## Package Map
-
-```
-src/evaluatorq/
-├── evaluatorq.py, evaluators.py, pairwise*.py  # Core evaluation + pairwise entry points
-├── contracts.py, types.py   # Cross-subpackage data models (RunManifest, LLMConfig, …)
-├── cli.py                   # CLI entry point (evaluatorq / eq)
-├── common/                  # SHARED MACHINERY — read the table below before writing anything here or near it
-├── redteam/                 # eq redteam: adaptive/ (pipeline), backends/, frameworks/, reports/
-├── simulation/              # eq simulate: runner/, agents/, generators/, reports/
-├── dashboard/               # FastHTML dashboard (eq dashboard)
-├── openresponses/           # OpenAI Responses API integration
-├── tracing/                 # OTel setup + evaluation/run/job spans
-└── integrations/            # LangChain, LangGraph, CrewAI, pydantic-ai, openai-agents
-```
-
-Read the directory itself for the file list — it is always current, this file is not.
-
 ## Need X? Use Y. Do not reinvent.
 
 `common/` is the shared layer. Every module there exists because two surfaces drifted apart and a review consolidated them. Adding a third copy is the failure mode this table exists to prevent.

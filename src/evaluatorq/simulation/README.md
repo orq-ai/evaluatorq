@@ -81,7 +81,9 @@ An Orq dataset is a stored collection of simulation datapoints. Use its ID, not 
 - **Direct** — set `dataset_id="..."` to pull the dataset's rows as datapoints. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`). CLI: `eq sim simulate --dataset-id`.
 - **Extension** — `extend_from_dataset()` uses the dataset's personas and scenarios as examples and returns only newly generated datapoints. Identical seed objects appear once in the prompt; same-named objects with different content remain separate examples. It does not change the stored dataset. Similarity and uniqueness are prompt guidance, not guarantees.
 
-`num_personas` and `num_scenarios` request counts; the result uses the counts actually generated. An explicit `api_key` authenticates both dataset fetching and generation through Orq, unless `llm_config.client` supplies the generation client.
+Extension sends every distinct seed object to the model. Large datasets can increase prompt cost or exceed its context window; use a smaller dataset of representative cases for generation.
+
+`num_personas` and `num_scenarios` request counts. The result can differ from their product because the generators may return a different number of personas or scenarios, or fail to generate an opening message for an individual pair. An explicit `api_key` authenticates both dataset fetching and generation through Orq, unless `llm_config.client` supplies the generation client.
 
 ```python
 from evaluatorq.simulation import extend_from_dataset, simulate

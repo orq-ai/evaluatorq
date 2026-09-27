@@ -514,6 +514,8 @@ results = await simulate(
 
 To **extend** the coverage, call `extend_from_dataset()` with that same ID. It reads the stored personas and scenarios as examples, then asks the model for new cases of similar kinds. Exact repeats are included once in the generation prompt, while distinct personas or scenarios with the same name remain separate examples. It returns only new datapoints; it does not change the Orq dataset or include its original rows. The request is guidance to the model, so matching frequencies and avoiding duplicates are not guaranteed.
 
+Extension sends every distinct seed object to the model. A large dataset can make that prompt expensive or too long for the model's context window; use a smaller dataset of representative cases when generating new ones.
+
 This example uses `ORQ_API_KEY` from the setup above and the default simulation model, `openai/gpt-5.6-luna`. Replace the dataset ID and agent key with yours:
 
 ```python
