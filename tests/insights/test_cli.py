@@ -15,7 +15,8 @@ from typer.testing import CliRunner
 from evaluatorq import cli as cli_root
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.insights import cli as cli_module
-from evaluatorq.insights.models import LabelSpec
+from evaluatorq.insights.models import LabelResult, LabelSpec
+from evaluatorq.insights.presets import CONCERNING, USER_FRUSTRATION
 from evaluatorq.trace_finder.export import (
     ExportCounts,
     ExportFilters,
@@ -42,6 +43,20 @@ def test_help_lists_population_and_clustering_options() -> None:
     help_text = unstyle(result.output)
     for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--max-clusters', '--classifier-model'):
         assert option in help_text
+
+
+@pytest.mark.parametrize('spec', [CONCERNING, USER_FRUSTRATION])
+def test_score_preset_display_does_not_repeat_level_index(minimal_run: Any, capsys: pytest.CaptureFixture[str], spec: LabelSpec) -> None:
+    result = LabelResult(spec=spec, counts={'0': 1}, mean_confidence=None, n_low_confidence=0, n_failed=0)
+    run = minimal_run.model_copy(update={'labels': {spec.name: result}})
+
+    cli_module._print_run(run, None)
+
+    output = unstyle(capsys.readouterr().out)
+    assert isinstance(spec.criteria, list)
+    description = spec.criteria[0].split(':', 1)[0].removeprefix('0 ')
+    assert f'0 · {description}' in output
+    assert '0 · 0 ' not in output
 
 
 @pytest.mark.parametrize(

@@ -122,7 +122,8 @@ def _print_run(run: InsightsRun, run_path: Path | None) -> None:
             if label.spec.kind == 'score' and isinstance(label.spec.criteria, list) and value.isdigit():
                 index = int(value)
                 if index < len(label.spec.criteria):
-                    display_value = f'{value} · {label.spec.criteria[index].split(":", 1)[0]}'
+                    criterion = label.spec.criteria[index].split(':', 1)[0]
+                    display_value = f'{value} · {criterion.removeprefix(f"{value} ")}'
             table.add_row(display_value, f'{count:,}')
         if label.n_failed:
             table.add_row('Failed / unclassified', f'{label.n_failed:,}')
