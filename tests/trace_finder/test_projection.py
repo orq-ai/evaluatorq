@@ -29,6 +29,15 @@ def test_parts_text_block_with_content_key_is_kept() -> None:
     assert text in project_trace(trace).serialized
 
 
+def test_chat_shaped_parts_text_is_normalized_into_message_content() -> None:
+    messages = _conversation_messages({
+        'input': [{'role': 'user', 'parts': [{'type': 'text', 'text': 'Keep this request.'}]}],
+        'output': [{'role': 'assistant', 'parts': [{'type': 'text', 'text': 'Keep this answer.'}]}],
+    })
+
+    assert [message['content'] for message in messages] == ['Keep this request.', 'Keep this answer.']
+
+
 def test_dict_content_text_slot_is_truncated_to_fit_the_projection_budget() -> None:
     text = 'prefix-' + 'x' * 2000 + '-tail'
     trace = _trace(messages=({'role': 'user', 'content': {'type': 'text', 'content': text}},))
@@ -331,6 +340,50 @@ def test_tool_result_excerpt_redacts_recognizable_unlabeled_tokens() -> None:
     assert 'ghp_abcdefghijklmnopqrst' not in excerpt
     assert excerpt.startswith('Error: ')
     assert excerpt.endswith(' were rejected')
+
+
+def test_tool_result_excerpt_redacts_escaped_json_and_nested_provider_credentials() -> None:
+    body = json.dumps({
+        'error': 'provider rejected request',
+        'details': {
+            'api_key': 'abc"def',
+            'aws_secret_access_key': 'aws-live-secret',
+            'x-goog-api-key': 'google-live-key',
+        },
+        'retryable': True,
+    })
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+    decoded = json.loads(excerpt)
+
+    assert decoded['error'] == 'provider rejected request'
+    assert decoded['retryable'] is True
+    assert decoded['details'] == {
+        'api_key': '[REDACTED]',
+        'aws_secret_access_key': '[REDACTED]',
+        'x-goog-api-key': '[REDACTED]',
+    }
+    assert 'aws-live-secret' not in excerpt
+    assert 'google-live-key' not in excerpt
+
+
+def test_tool_result_excerpt_redacts_multiline_escaped_text_assignments() -> None:
+    body = 'Error: provider failed\napi_key="line one\\\" still secret\nline two"\nRetry after 2 seconds.'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert excerpt.startswith('Error: provider failed')
+    assert 'line one' not in excerpt
+    assert 'line two' not in excerpt
+    assert 'Retry after 2 seconds.' in excerpt
 
 
 def test_tool_result_excerpt_exact_byte_cap_includes_marker_with_unicode() -> None:

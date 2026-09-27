@@ -352,6 +352,16 @@ def test_htmx_swap_initializes_maps_without_vega_embed():
     assert handler.count('initInsightsMaps(scope);') == 1
 
 
+def test_category_map_legend_tracks_names_without_object_property_collisions():
+    script = Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js'
+    source = script.read_text(encoding='utf-8')
+    category_branch = source.split("if (payload.color_mode === 'category') {", 1)[1].split("} else {", 1)[0]
+
+    assert 'const categorySeen = new Set();' in category_branch
+    assert 'categorySeen.has(category)' in category_branch
+    assert 'categorySeen.add(category)' in category_branch
+
+
 def test_cluster_detail_returns_content_for_existing_detail_panel():
     markup = insights_views.cluster_detail(_map_run(), 'base-1')
 

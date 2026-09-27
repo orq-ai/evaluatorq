@@ -127,6 +127,52 @@ def test_dashboard_finder_export_is_size_limited(monkeypatch: pytest.MonkeyPatch
         InsightsLaunchSpec(source='finder', finder_export='large.json')
 
 
+def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+    from evaluatorq.dashboard.insights_launch import _REQUEST_ENV, read_launch_payload
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    export_path = exports / 'finder.json'
+    approved_export = _run_export(['approved-trace']).model_dump_json()
+    export_path.write_text(approved_export, encoding='utf-8')
+    spec = InsightsLaunchSpec(source='finder', finder_export='finder.json', labels=[], dimensions=['intent'])
+
+    export_path.unlink()
+    export_path.symlink_to(tmp_path / 'outside.json')
+    (tmp_path / 'outside.json').write_text(_run_export(['replacement-trace']).model_dump_json(), encoding='utf-8')
+
+    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+        launch_insights(spec, tmp_path / 'runs')
+    payload_json = spawn.call_args.kwargs['env'][_REQUEST_ENV]
+    monkeypatch.setenv(_REQUEST_ENV, payload_json)
+    payload = read_launch_payload()
+    assert payload.finder_export_snapshot is not None
+    assert payload.finder_export_snapshot.read_text(encoding='utf-8') == approved_export
+
+    consumed: list[str] = []
+
+    async def capture_population(population, **kwargs):
+        from evaluatorq.common.run_manifest import ManifestWriter
+        from evaluatorq.contracts import RunManifest
+
+        assert population.finder_export is not None
+        consumed.append(population.finder_export.read_text(encoding='utf-8'))
+        manifest_path = tmp_path / 'runs' / '.manifests' / f'{payload.run_id}.json'
+        manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
+        ManifestWriter(manifest, manifest_path).complete()
+        return type('CompletedRun', (), {'status': 'completed'})()
+
+    monkeypatch.setattr(insights_worker, 'insights', capture_population)
+    monkeypatch.setenv(_REQUEST_ENV, payload_json)
+    assert insights_worker.main() == 0
+    assert consumed == [approved_export]
+    assert list_manifests(tmp_path / 'runs')[0].status == 'completed'
+
+
 def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> None:
     facets = FacetSelection(status=frozenset({'error'}), provider=frozenset({'openai', 'anthropic'}))
     spec = InsightsLaunchSpec(source='query', query='refunds', window_days=3, facets=facets)

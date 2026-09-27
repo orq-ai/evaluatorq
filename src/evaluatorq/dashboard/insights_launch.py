@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
@@ -46,6 +49,11 @@ class InsightsLaunchSpec(BaseModel):
     parallelism: int = Field(default=20, ge=1, le=200)
     labels: list[Preset] = Field(default_factory=list)
     dimensions: list[DimensionName] = Field(default_factory=lambda: ['intent'])
+    _finder_export_snapshot: str | None = PrivateAttr(default=None)
+
+    def validated_finder_export_snapshot(self) -> str | None:
+        """Return the bounded Finder JSON captured during source validation."""
+        return self._finder_export_snapshot
 
     @model_validator(mode='after')
     def validate_source(self) -> Self:
@@ -74,6 +82,7 @@ class InsightsLaunchSpec(BaseModel):
                         f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
                     )
                 RunExport.model_validate_json(raw)
+                self._finder_export_snapshot = raw.decode('utf-8')
             except (OSError, ValueError) as exc:
                 raise ValueError(f'Could not read a valid Finder export: {exc}') from exc
             self.finder_export = str(path)
@@ -105,6 +114,7 @@ class InsightsLaunchPayload(BaseModel):
     run_name: str
     runs_dir: Path
     spec: InsightsLaunchSpec
+    finder_export_snapshot: Path | None = None
 
 
 def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqProfile | None = None) -> str:
@@ -120,12 +130,28 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
         planned_stages=[name for name, _ in plan],
         stage_labels=dict(plan),
     )
-    payload = InsightsLaunchPayload(run_id=run_id, run_name=run_name, runs_dir=runs_dir, spec=spec)
-    worker_env = {**os.environ, _REQUEST_ENV: payload.model_dump_json()}
-    if profile is not None:
-        worker_env.update(ORQ_API_KEY=profile.api_key, ORQ_BASE_URL=profile.server or DEFAULT_ORQ_BASE_URL)
-    log_dir = runs_dir / '.logs'
+    snapshot_path: Path | None = None
     try:
+        finder_snapshot = spec.validated_finder_export_snapshot()
+        if finder_snapshot is not None:
+            snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+            snapshot_path = snapshot_directory / 'finder-export.json'
+            descriptor = os.open(snapshot_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as snapshot_file:
+                snapshot_file.write(finder_snapshot)
+        # Serialize the already validated spec without asking Pydantic to validate
+        # the mutable Finder path a second time.
+        worker_request = json.dumps({
+            'run_id': run_id,
+            'run_name': run_name,
+            'runs_dir': str(runs_dir),
+            'spec': spec.model_dump(mode='json'),
+            'finder_export_snapshot': str(snapshot_path) if snapshot_path is not None else None,
+        })
+        worker_env = {**os.environ, _REQUEST_ENV: worker_request}
+        if profile is not None:
+            worker_env.update(ORQ_API_KEY=profile.api_key, ORQ_BASE_URL=profile.server or DEFAULT_ORQ_BASE_URL)
+        log_dir = runs_dir / '.logs'
         log_dir.mkdir(parents=True, exist_ok=True)
         with (log_dir / f'{run_id}.log').open('a', encoding='utf-8') as log:
             subprocess.Popen(
@@ -138,6 +164,8 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             )
     except OSError as exc:
         writer.fail(f'Could not start Insights worker: {exc}', stage='start')
+        if snapshot_path is not None:
+            shutil.rmtree(snapshot_path.parent, ignore_errors=True)
     return run_id
 
 
@@ -145,4 +173,17 @@ def read_launch_payload() -> InsightsLaunchPayload:
     raw = os.environ.pop(_REQUEST_ENV, None)
     if raw is None:
         raise ValueError('Missing Insights launch request')
-    return InsightsLaunchPayload.model_validate_json(raw)
+    data = json.loads(raw)
+    spec_data = dict(data['spec'])
+    finder_source = spec_data.get('source') == 'finder'
+    finder_path = spec_data.get('finder_export', '')
+    if finder_source:
+        # Validate all user-selected options while neutralizing the original
+        # pathname, which may have changed since launch validation.
+        spec_data['source'] = 'recent'
+        spec_data['finder_export'] = ''
+    data['spec'] = spec_data
+    payload = InsightsLaunchPayload.model_validate(data)
+    if finder_source:
+        payload.spec = payload.spec.model_copy(update={'source': 'finder', 'finder_export': finder_path})
+    return payload

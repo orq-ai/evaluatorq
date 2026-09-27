@@ -21,12 +21,21 @@ TRAILING_OMISSION_MARKER = '[... later bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
 SUCCESS_STATUSES = frozenset({'completed', 'success', 'succeeded', 'ok'})
-_SENSITIVE_VALUE = r'(?P<quote>[\"\']?)(?P<name>(?:x-)?(?:api[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|session[_-]?token|id[_-]?token|token|auth(?:orization)?|password|passwd|secret|credentials?))(?P=quote)(?P<sep>\s*[:=]\s*)(?P<value>\"[^\"]*\"|\'[^\']*\'|[^\s,;&]+)'
-_SENSITIVE_ASSIGNMENT_RE = re.compile(_SENSITIVE_VALUE, re.IGNORECASE)
-_BEARER_RE = re.compile(r'(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+')
+_SENSITIVE_NAME = (
+    r'(?:[\w.-]*(?:api[_-]?key|private[_-]?key|access[_-]?key|secret|credential|'
+    r'password|passwd|token|authorization|auth)[\w.-]*|aws_access_key_id)'
+)
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    rf'(?P<quote>["\']?)(?P<name>{_SENSITIVE_NAME})(?P=quote)'
+    rf'(?P<sep>\s*[:=]\s*)'
+    rf'(?P<value>(?P<value_quote>["\'])(?:\\.|(?!(?P=value_quote))[\s\S])*?(?P=value_quote)|[^\s,;&]+)',
+    re.IGNORECASE,
+)
+_BEARER_RE = re.compile(r'(?i)(\b(?:Bearer|Basic|Token)\s+)[A-Za-z0-9._~+/=-]+')
 _URL_CREDENTIALS_RE = re.compile(r'(?i)(https?://)[^/@\s:]+:[^/@\s]+@')
 _KNOWN_TOKEN_RE = re.compile(
-    r'(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])'
+    r'(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|'
+    r'xox[baprs]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])'
 )
 
 
@@ -225,14 +234,45 @@ def _tool_result_excerpt(call_id: Any, results: tuple[dict[str, Any], ...]) -> s
 
 
 def _redact_tool_result_secrets(value: str) -> str:
-    """Mask common credential fields and token shapes while preserving error text."""
+    """Mask labeled credentials in JSON or text while preserving diagnostic context."""
+    try:
+        decoded = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        decoded = None
+    else:
+        return _canonical_json(_redact_json_credentials(decoded))
+    return _redact_unstructured_text(value)
+
+
+def _redact_json_credentials(value: Any) -> Any:
+    """Recursively redact credential-shaped JSON fields without dropping error details."""
+    if isinstance(value, dict):
+        return {
+            key: '[REDACTED]' if _is_sensitive_name(key) else _redact_json_credentials(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_json_credentials(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_json_credentials(item) for item in value]
+    if isinstance(value, str):
+        return _redact_unstructured_text(value)
+    return value
+
+
+def _is_sensitive_name(name: Any) -> bool:
+    if not isinstance(name, str):
+        return False
+    return re.search(_SENSITIVE_NAME, name.replace(' ', '_'), re.IGNORECASE) is not None
+
+
+def _redact_unstructured_text(value: str) -> str:
     value = _BEARER_RE.sub(r'\1[REDACTED]', value)
     value = _URL_CREDENTIALS_RE.sub(r'\1[REDACTED]@', value)
     value = _KNOWN_TOKEN_RE.sub('[REDACTED]', value)
 
     def replace(match: re.Match[str]) -> str:
-        secret_value = match.group('value')
-        quote = secret_value[0] if secret_value.startswith(('"', "'")) else ''
+        quote = match.group('value_quote') or ''
         return (
             f'{match.group("quote")}{match.group("name")}{match.group("quote")}'
             f'{match.group("sep")}{quote}[REDACTED]{quote}'

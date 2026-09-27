@@ -678,7 +678,7 @@ def test_conversation_messages_preserves_tool_calls() -> None:
 def test_conversation_messages_preserves_content_parts() -> None:
     parts = [{'type': 'text', 'text': 'part'}]
     assert _conversation_messages({'messages': [{'role': 'user', 'parts': parts}]}) == [
-        {'role': 'user', 'parts': parts}
+        {'role': 'user', 'parts': parts, 'content': 'part'}
     ]
 
 

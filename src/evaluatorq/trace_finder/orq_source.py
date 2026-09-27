@@ -638,7 +638,20 @@ def _normalised_messages(
 ) -> list[dict[str, Any]]:
     message_format = detect_message_format(value)
     if message_format == 'chat_completions' or _has_chat_text_parts(value):
-        return _message_list(value, default_role=default_role)
+        messages = _message_list(value, default_role=default_role)
+        # Chat shaped payloads can still carry OTel-style ``parts`` instead of
+        # ``content``. Keep their text usable by downstream chat consumers.
+        for message in messages:
+            parts = message.get('parts')
+            if message.get('content') is None and isinstance(parts, list):
+                text = [
+                    part_text
+                    for part in parts
+                    if isinstance(part, Mapping) and isinstance(part_text := part.get('text'), str)
+                ]
+                if text:
+                    message['content'] = ''.join(text)
+        return messages
     parsed, _ = parse_messages(value, hinted=message_format, default_role=default_role or 'user')
     messages = [message.to_chat_completion() for message in parsed]
     if message_format == 'otel_genai':

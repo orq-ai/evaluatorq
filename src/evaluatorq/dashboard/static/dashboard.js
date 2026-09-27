@@ -122,14 +122,14 @@
     let groups;
     if (payload.color_mode === 'category') {
       groups = [];
-      const categorySeen = {};
+      const categorySeen = new Set();
       const categorySymbols = {};
       payload.points.forEach(function (point) {
         const category = String(point.label_value);
         const key = category + '|' + point.symbol;
         if (categorySymbols[key]) return;
-        const showLegend = !categorySeen[category];
-        categorySeen[category] = true;
+        const showLegend = !categorySeen.has(category);
+        categorySeen.add(category);
         categorySymbols[key] = true;
         groups.push({ id: key, category: category, name: category, color: point.color,
           symbol: point.symbol, showLegend: showLegend });
