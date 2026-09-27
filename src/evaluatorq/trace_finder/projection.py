@@ -168,6 +168,9 @@ def _project_content_block(block: Any) -> dict[str, Any]:
         return {'type': kind, 'text': text}
     if isinstance(text, dict) and isinstance(text.get('value'), str):
         return {'type': kind, 'text': {'value': text['value']}}
+    content = block.get('content')
+    if isinstance(content, str):
+        return {'type': kind, 'text': content}
     try:
         if len(_canonical_json(block).encode('utf-8')) <= 512:
             return _strip_reasoning(block)

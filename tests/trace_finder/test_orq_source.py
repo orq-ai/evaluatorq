@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace, TracebackType
 from typing import Any, cast
@@ -679,6 +680,73 @@ def test_conversation_messages_preserves_content_parts() -> None:
     assert _conversation_messages({'messages': [{'role': 'user', 'parts': parts}]}) == [
         {'role': 'user', 'parts': parts}
     ]
+
+
+LONG = 'Why was my invoice 4411 charged twice? ' * 60
+
+
+def _otel_payload() -> dict[str, Any]:
+    return {
+        'attributes': {
+            'gen_ai': {
+                'input': [{'role': 'user', 'parts': [{'type': 'text', 'content': LONG}]}],
+                'output': [
+                    {
+                        'role': 'assistant',
+                        'parts': [
+                            {
+                                'type': 'tool_call',
+                                'id': 'c1',
+                                'name': 'lookup_invoice',
+                                'arguments': {'id': 4411},
+                            }
+                        ],
+                    },
+                    {
+                        'role': 'tool',
+                        'parts': [
+                            {
+                                'type': 'tool_call_response',
+                                'id': 'c1',
+                                'response': 'Error: invoice service unavailable',
+                            }
+                        ],
+                    },
+                    {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'Your invoice was paid.'}]},
+                ],
+            }
+        }
+    }
+
+
+def test_conversation_messages_normalises_otel_parts() -> None:
+    messages = _conversation_messages(_otel_payload())
+    assert messages[0] == {'role': 'user', 'content': LONG}
+    assert messages[1]['tool_calls'][0]['function']['name'] == 'lookup_invoice'
+    assert messages[2]['role'] == 'tool' and messages[2]['tool_call_id'] == 'c1'
+    assert 'invoice service unavailable' in messages[2]['content']
+    assert messages[3] == {'role': 'assistant', 'content': 'Your invoice was paid.'}
+
+
+def test_conversation_messages_normalises_otel_parts_given_as_json_string() -> None:
+    payload = _otel_payload()
+    payload['attributes']['gen_ai'] = {
+        key: json.dumps(value) for key, value in payload['attributes']['gen_ai'].items()
+    }
+    assert _conversation_messages(payload) == _conversation_messages(_otel_payload())
+
+
+def test_conversation_messages_normalises_responses_items() -> None:
+    payload = {
+        'input': [
+            {'role': 'user', 'content': 'refund order 9'},
+            {'type': 'function_call', 'call_id': 'c9', 'name': 'refund', 'arguments': '{"order": 9}'},
+            {'type': 'function_call_output', 'call_id': 'c9', 'output': 'Error: order not found'},
+        ]
+    }
+    messages = _conversation_messages(payload)
+    assert any(m.get('tool_calls') and m['tool_calls'][0]['function']['name'] == 'refund' for m in messages)
+    assert any(m['role'] == 'tool' and 'order not found' in m['content'] for m in messages)
 
 
 def namespace(**values: Any) -> SimpleNamespace:

@@ -17,6 +17,12 @@ def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
     assert estimate_tokens(serialized) == len(serialized.encode('utf-8'))
 
 
+def test_parts_text_block_with_content_key_is_kept() -> None:
+    text = 'x' * 2000
+    trace = _trace(messages=({'role': 'user', 'content': [{'type': 'text', 'content': text}]},))
+    assert text in project_trace(trace).serialized
+
+
 @pytest.mark.parametrize('block_type', ['text', 'input_text', 'output_text'])
 @pytest.mark.parametrize('nested_text', [False, True])
 def test_truncates_structured_text_blocks_preserving_shape_and_byte_accounting(

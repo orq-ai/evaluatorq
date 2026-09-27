@@ -12,9 +12,11 @@ from contextlib import suppress
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
+
+from evaluatorq.common.trace_input import detect_message_format, parse_messages
 
 from .facets import _project_names, project_labels
 from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
@@ -614,21 +616,52 @@ def _conversation_messages(payload: Any) -> list[dict[str, Any]]:
         return []
     attributes = _mapping(payload.get('attributes'))
     gen_ai = _mapping(attributes.get('gen_ai'))
-    direct = _message_list(payload.get('messages'))
+    direct = _normalised_messages(payload.get('messages'))
     if _usable(direct):
         return direct
 
     inputs = [gen_ai.get('input'), attributes.get('gen_ai.input'), payload.get('input')]
     outputs = [gen_ai.get('output'), attributes.get('gen_ai.output'), payload.get('output')]
-    messages = next((parsed for value in inputs if (parsed := _message_list(value, default_role='user'))), [])
+    messages = next((parsed for value in inputs if (parsed := _normalised_messages(value, default_role='user'))), [])
     output_messages = next(
-        (parsed for value in outputs if (parsed := _message_list(value, default_role='assistant'))),
+        (parsed for value in outputs if (parsed := _normalised_messages(value, default_role='assistant'))),
         [],
     )
     for message in output_messages:
         if not messages or message != messages[-1]:
             messages.append(message)
     return messages
+
+
+def _normalised_messages(
+    value: Any, *, default_role: Literal['user', 'assistant'] | None = None
+) -> list[dict[str, Any]]:
+    message_format = detect_message_format(value)
+    if message_format == 'chat_completions' or _has_chat_text_parts(value):
+        return _message_list(value, default_role=default_role)
+    parsed, _ = parse_messages(value, hinted=message_format, default_role=default_role or 'user')
+    return [message.to_chat_completion() for message in parsed]
+
+
+def _has_chat_text_parts(value: Any) -> bool:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return False
+    if isinstance(value, dict):
+        value = value.get('messages', [value])
+    if not isinstance(value, list):
+        return False
+    messages_with_parts = [message for message in value if isinstance(message, dict) and 'parts' in message]
+    return bool(messages_with_parts) and all(
+        isinstance(message.get('parts'), list)
+        and all(
+            isinstance(part, dict) and isinstance(part.get('text'), str) and 'content' not in part
+            for part in message['parts']
+        )
+        for message in messages_with_parts
+    )
 
 
 def _message_list(value: Any, *, default_role: str | None = None) -> list[dict[str, Any]]:
