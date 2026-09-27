@@ -1774,6 +1774,17 @@ class StageRecord(BaseModel):
     completed: int | None = None
     total: int | None = None
 
+    @model_validator(mode='after')
+    def validate_progress(self) -> StageRecord:
+        """Keep persisted stage progress within its meaningful range."""
+        if self.completed is not None and self.completed < 0:
+            raise ValueError('completed must be non-negative')
+        if self.total is not None and self.total < 0:
+            raise ValueError('total must be non-negative')
+        if self.completed is not None and self.total is not None and self.completed > self.total:
+            raise ValueError('completed must not exceed total')
+        return self
+
     @property
     def duration_seconds(self) -> float | None:
         if self.ended_at is None:

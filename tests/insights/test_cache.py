@@ -5,10 +5,30 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import struct
+from collections.abc import Callable, Iterator
+from pathlib import Path
 from typing import cast
+
+import pytest
 
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
+
+
+@pytest.fixture
+def cache_factory() -> Iterator[Callable[..., InsightsCache]]:
+    caches: list[InsightsCache] = []
+
+    def create(path: Path | None = None, *, enabled: bool = True) -> InsightsCache:
+        cache = InsightsCache(path, enabled=enabled)
+        caches.append(cache)
+        return cache
+
+    try:
+        yield create
+    finally:
+        for cache in caches:
+            cache.close()
 
 
 def test_prompt_hash_is_full_sha256_digest():
@@ -17,15 +37,12 @@ def test_prompt_hash_is_full_sha256_digest():
     assert len(prompt_hash(text)) == 64
 
 
-def test_default_cache_follows_run_store_directory(tmp_path, monkeypatch):
+def test_default_cache_follows_run_store_directory(tmp_path, monkeypatch, cache_factory):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
-    cache = InsightsCache()
-    try:
-        cache.put_vectors('e', {'a': [0.5]})
-        assert (tmp_path / 'cache' / 'insights.sqlite').is_file()
-        assert cache.get_vectors('e', ['a']) == {'a': [0.5]}
-    finally:
-        cache.close()
+    cache = cache_factory()
+    cache.put_vectors('e', {'a': [0.5]})
+    assert (tmp_path / 'cache' / 'insights.sqlite').is_file()
+    assert cache.get_vectors('e', ['a']) == {'a': [0.5]}
 
 
 def test_vector_payload_uses_portable_float_byte_order():
@@ -37,8 +54,8 @@ def test_vector_payload_uses_portable_float_byte_order():
     assert _unpack_vector(blob) == [0.5, 1.0]
 
 
-def test_summary_hit_requires_same_model_and_prompt(tmp_path):
-    c = InsightsCache(tmp_path / 'c.sqlite')
+def test_summary_hit_requires_same_model_and_prompt(tmp_path, cache_factory):
+    c = cache_factory(tmp_path / 'c.sqlite')
     s = TraceSummary(summary='s', request='r', task=None, topic=None, sentiment_explanation=None)
     c.put_summary('t', 'sp', 'm1', prompt_hash('p1'), s)
     assert c.get_summary('t', 'sp', 'm1', prompt_hash('p1')) == s
@@ -46,14 +63,14 @@ def test_summary_hit_requires_same_model_and_prompt(tmp_path):
     assert c.get_summary('t', 'sp', 'm2', prompt_hash('p1')) is None
 
 
-def test_vectors_per_text_hit_and_miss(tmp_path):
-    c = InsightsCache(tmp_path / 'c.sqlite')
+def test_vectors_per_text_hit_and_miss(tmp_path, cache_factory):
+    c = cache_factory(tmp_path / 'c.sqlite')
     c.put_vectors('e', {'a': [0.5, 1.0]})
     assert c.get_vectors('e', ['a', 'b']) == {'a': [0.5, 1.0]}
 
 
-def test_large_vector_lookup_stays_below_sqlite_bind_limit(tmp_path):
-    cache = InsightsCache(tmp_path / 'c.sqlite')
+def test_large_vector_lookup_stays_below_sqlite_bind_limit(tmp_path, cache_factory):
+    cache = cache_factory(tmp_path / 'c.sqlite')
     vectors = {f'text-{index}': [float(index)] for index in range(1201)}
     cache.put_vectors('e', vectors)
     connection = cache._conn
@@ -77,32 +94,32 @@ def test_large_vector_lookup_stays_below_sqlite_bind_limit(tmp_path):
         cache.close()
 
 
-def test_disabled_cache_never_hits(tmp_path):
-    c = InsightsCache(tmp_path / 'c.sqlite', enabled=False)
+def test_disabled_cache_never_hits(tmp_path, cache_factory):
+    c = cache_factory(tmp_path / 'c.sqlite', enabled=False)
     c.put_vectors('e', {'a': [1.0]})
     assert c.get_vectors('e', ['a']) == {}
 
 
-def test_corrupt_file_degrades_to_miss(tmp_path, caplog):
+def test_corrupt_file_degrades_to_miss(tmp_path, caplog, cache_factory):
     p = tmp_path / 'c.sqlite'
     p.write_bytes(b'not sqlite')
-    assert InsightsCache(p).get_vectors('e', ['a']) == {}
+    assert cache_factory(p).get_vectors('e', ['a']) == {}
 
 
-def test_unwritable_cache_directory_disables_cache(tmp_path, monkeypatch):
+def test_unwritable_cache_directory_disables_cache(tmp_path, monkeypatch, cache_factory):
     def fail_mkdir(*args, **kwargs):
         raise PermissionError('read only')
 
     monkeypatch.setattr('pathlib.Path.mkdir', fail_mkdir)
-    cache = InsightsCache(tmp_path / 'cache.sqlite')
+    cache = cache_factory(tmp_path / 'cache.sqlite')
 
     assert cache.get_vectors('e', ['a']) == {}
     cache.put_vectors('e', {'a': [1.0]})
 
 
-def test_corrupt_vector_row_is_miss_but_valid_rows_survive(tmp_path):
+def test_corrupt_vector_row_is_miss_but_valid_rows_survive(tmp_path, cache_factory):
     path = tmp_path / 'cache.sqlite'
-    cache = InsightsCache(path)
+    cache = cache_factory(path)
     cache.put_vectors('e', {'good': [0.5, 1.0]})
     with sqlite3.connect(path) as conn:
         conn.execute('INSERT INTO vectors (model, text_hash, vector) VALUES (?, ?, ?)', ('e', 'bad-hash', b'bad'))
@@ -114,9 +131,9 @@ def test_corrupt_vector_row_is_miss_but_valid_rows_survive(tmp_path):
     assert cache.get_vectors('e', ['good', 'bad']) == {'good': [0.5, 1.0]}
 
 
-def test_aligned_truncation_and_same_length_corruption_are_cache_misses(tmp_path):
+def test_aligned_truncation_and_same_length_corruption_are_cache_misses(tmp_path, cache_factory):
     path = tmp_path / 'cache.sqlite'
-    cache = InsightsCache(path)
+    cache = cache_factory(path)
     cache.put_vectors('e', {'good': [0.5, 1.0], 'short': [0.25, 0.75], 'tampered': [1.0, 2.0]})
 
     from evaluatorq.insights.cache import _text_hash
@@ -131,8 +148,8 @@ def test_aligned_truncation_and_same_length_corruption_are_cache_misses(tmp_path
     assert cache.get_vectors('e', ['good', 'short', 'tampered']) == {'good': [0.5, 1.0]}
 
 
-def test_invalid_vectors_are_skipped_without_aborting_valid_writes(tmp_path):
-    cache = InsightsCache(tmp_path / 'cache.sqlite')
+def test_invalid_vectors_are_skipped_without_aborting_valid_writes(tmp_path, cache_factory):
+    cache = cache_factory(tmp_path / 'cache.sqlite')
     vectors = {
         'good': [0.5, 1.0],
         'not-numeric': cast('list[float]', ['bad']),

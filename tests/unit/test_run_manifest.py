@@ -3,14 +3,18 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, cast
+
+import pytest
+from pydantic import ValidationError
 
 from evaluatorq.common.run_manifest import (
     ManifestWriter,
     list_manifests,
     start_manifest,
 )
-from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunSummary
+from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, RunSummary
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -60,6 +64,43 @@ def test_per_stage_status_and_timing(tmp_path: Path) -> None:
     run_duration = m.duration_seconds
     assert run_duration is not None
     assert run_duration >= 0
+
+
+@pytest.mark.parametrize(('completed', 'total'), [(-1, 4), (1, -1), (5, 4)])
+def test_persisted_manifest_rejects_invalid_stage_progress(completed: int, total: int) -> None:
+    persisted = {
+        'run_id': 'r1',
+        'surface': 'sim',
+        'run_name': 'demo',
+        'started_at': '2025-01-01T00:00:00Z',
+        'updated_at': '2025-01-01T00:00:00Z',
+        'stages': [
+            {
+                'name': 'population',
+                'started_at': '2025-01-01T00:00:00Z',
+                'completed': completed,
+                'total': total,
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        RunManifest.model_validate_json(json.dumps(persisted))
+
+
+def test_persisted_manifest_allows_missing_stage_progress() -> None:
+    persisted = {
+        'run_id': 'r1',
+        'surface': 'sim',
+        'run_name': 'demo',
+        'started_at': '2025-01-01T00:00:00Z',
+        'updated_at': '2025-01-01T00:00:00Z',
+        'stages': [{'name': 'population', 'started_at': '2025-01-01T00:00:00Z'}],
+    }
+
+    [stage] = RunManifest.model_validate_json(json.dumps(persisted)).stages
+    assert stage.completed is None
+    assert stage.total is None
 
 
 def test_stage_progress_throttles_and_always_writes_the_last_count(tmp_path: Path) -> None:

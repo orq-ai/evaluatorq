@@ -413,7 +413,7 @@ async def test_compiled_query_excludes_false_matches_before_summary_and_dimensio
         return [
             SimpleNamespace(trace=traces[0], answers={}, matched=True, error=None),
             SimpleNamespace(trace=traces[1], answers={}, matched=False, error=None),
-            SimpleNamespace(trace=traces[2], answers={}, matched=None, error=None),
+            SimpleNamespace(trace=traces[2], answers={}, matched=None, error='classifier response was unreadable'),
         ]
 
     summarized: list[str] = []
@@ -432,12 +432,12 @@ async def test_compiled_query_excludes_false_matches_before_summary_and_dimensio
     run = await pipeline.insights(_population(), dimensions=('intent',), runs_dir=tmp_path)
 
     assert run.status == 'completed'
-    assert [trace.trace_id for trace in run.traces] == ['trace-0', 'trace-2']
-    assert summarized == ['trace-0', 'trace-2']
-    assert dimension_ids == ['trace-0', 'trace-2']
+    assert [trace.trace_id for trace in run.traces] == ['trace-0']
+    assert summarized == ['trace-0']
+    assert dimension_ids == ['trace-0']
     assert run.population['n_matched'] == 1
     assert run.population['n_failed_match'] == 1
-    assert run.traces[1].errors['match'] == 'population match could not be determined'
+    assert any('trace-2' in warning and 'classifier response was unreadable' in warning for warning in run.warnings)
 
 
 @pytest.mark.asyncio

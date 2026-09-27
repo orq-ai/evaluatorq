@@ -515,13 +515,21 @@ async def insights(  # noqa: C901
             for outcome in outcomes:
                 if resolved.compiled is not None and outcome.matched is False:
                     continue
-                retained_trace_ids.add(outcome.trace.trace_id)
                 if resolved.compiled is not None:
                     if outcome.matched is True:
                         n_matched += 1
                     else:
                         n_failed_match += 1
                 item = original_by_id[outcome.trace.trace_id]
+                if resolved.compiled is not None and outcome.matched is None:
+                    message = outcome.error or 'population match could not be determined'
+                    item.errors['match'] = message
+                    run.warnings.append(
+                        f'Trace {outcome.trace.trace_id} was excluded because its population match '
+                        f'could not be determined: {message}'
+                    )
+                    continue
+                retained_trace_ids.add(outcome.trace.trace_id)
                 item.labels.update(outcome.answers)
                 if outcome.error:
                     item.errors['label'] = outcome.error
@@ -529,8 +537,6 @@ async def insights(  # noqa: C901
                     failed_labels = [key for key, answer in outcome.answers.items() if answer.error is not None]
                     if failed_labels:
                         item.errors['label'] = 'unreadable label answer(s): ' + ', '.join(failed_labels)
-                if resolved.compiled is not None and outcome.matched is None:
-                    item.errors['match'] = outcome.error or 'population match could not be determined'
             run.traces = [trace for trace in run.traces if trace.trace_id in retained_trace_ids]
             run.population['n_matched'] = n_matched
             run.population['n_failed_match'] = n_failed_match
