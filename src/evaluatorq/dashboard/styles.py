@@ -2763,6 +2763,8 @@ _FINDER_CSS = """
 .xr-cols { position:relative; }.xr-cols form { position:absolute; right:0; z-index:6; background:#fff; border:1px solid var(--border-subtle); border-radius:10px; padding:8px 12px; display:grid; gap:4px; min-width:200px; box-shadow:0 8px 24px #0000001a; }
 .xr-table td.num,.xr-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .xr-table tr.sel,.tv-r.sel { box-shadow:inset 3px 0 0 var(--traj-assistant); background:#f3f8f7; }
+.cachebar { display:inline-block; width:34px; height:4px; background:#ece9e4; border-radius:2px; margin-right:6px; vertical-align:middle; }
+.cachebar i { display:block; height:4px; border-radius:2px; background:var(--traj-assistant); }
 .xr-pager { display:flex; gap:14px; justify-content:center; font-size:12px; color:var(--text-muted); }
 .xr-presets { display:inline-flex; gap:7px; }
 .xr-empty { padding:24px; text-align:center; color:var(--text-muted); background:var(--surface-card); border:1px solid var(--border-subtle); border-radius:10px; }
