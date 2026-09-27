@@ -9,6 +9,9 @@ runs ``orq launch <agent>`` so every model call goes through the Orq gateway wit
 skills and MCP server attached.
 
 Retry lives in ``common.target_call.call_target_with_retry`` only. ``respond()`` never retries.
+
+With container mode, one long-lived container belongs to each target clone and each turn runs through
+``docker exec``. ``close()``, cancellation, and early turn termination remove that container.
 """
 
 from __future__ import annotations
@@ -20,19 +23,38 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import tempfile
+import time
+import types
+import uuid
 import weakref
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from loguru import logger
+from pydantic import BaseModel, ConfigDict, Field
 
+from evaluatorq.backends.container import (
+    RESERVED_ENV,
+    DockerOptions,
+    LiveContainer,
+    build_exec_argv,
+    build_run_argv,
+    forwarded_env_names,
+    isolation_breaking_flags,
+    register,
+    release_containers,
+    remove_containers_async,
+    sweep_orphans,
+    unregister,
+    unsafe_mounts,
+    write_beat,
+)
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
 from evaluatorq.contracts import (
-    DEFAULT_TARGET_TIMEOUT_MS,
     AgentContext,
     AgentResponse,
     AgentTarget,
@@ -47,39 +69,46 @@ from evaluatorq.contracts import (
 from evaluatorq.openresponses.convert_models import FunctionCallStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 AgentName = Literal['claude', 'codex', 'opencode']
 Launcher = Literal['direct', 'orq']
 
-# 30 s under the retry helper's DEFAULT_TARGET_TIMEOUT_MS so this ceiling fires first: the helper starts its
-# clock before the agent process exists, and its own timeout is a retried target.timeout, not cli.timeout.
-DEFAULT_CODING_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS - 30_000
-_STDERR_EXCERPT_CHARS = 4000
+# Idle limit: the turn ends when the agent writes nothing for this long. Coding agents opt out of the
+# retry helper's wall clock (manages_own_timeout), so this is not tied to DEFAULT_TARGET_TIMEOUT_MS.
+DEFAULT_CODING_AGENT_TIMEOUT_MS = 300_000
+# Hard cap: wall clock of one turn, however busy the agent is.
+DEFAULT_CODING_AGENT_MAX_TURN_MS = 7_200_000
+STDERR_EXCERPT_CHARS = 4000
+READ_CHUNK_BYTES = 65_536
 
 
 class CodingAgentError(Exception):
     """A coding-agent turn failed. ``code`` is one of the ``cli.*`` codes ``map_error`` reports.
 
-    Codes: ``cli.not_found``, ``cli.timeout`` (both non-retryable, see
-    `CodingAgentUnavailableError`), ``cli.exit.<code>``, ``cli.no_result``, ``cli.parse_error``,
-    ``cli.agent_error``.
+    Codes: ``cli.not_found``, ``cli.timeout`` (idle limit and hard cap; non-retryable, see
+    `CodingAgentUnavailableError`), ``cli.container_start``, ``cli.image_missing``,
+    ``cli.prompt_too_long``, ``cli.agent_not_found``, ``cli.exit.<code>``, ``cli.no_result``,
+    ``cli.parse_error``, and ``cli.agent_error``.
     """
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, kill_reason: str | None = None) -> None:
         super().__init__(f'{code}: {message}')
         self.code = code
         self.message = message
+        self.kill_reason = kill_reason
 
 
 class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheritance]
     CodingAgentError, NonRetryableTargetError
 ):
-    """``cli.not_found``, ``cli.timeout`` and ``cli.prompt_too_long``: a retry replays the same outcome, so the loop stops."""
+    """Non-retryable codes: ``cli.not_found``, ``cli.timeout``, ``cli.prompt_too_long``,
+    ``cli.agent_not_found``, ``cli.image_missing``, and ``cli.container_start``. Retrying these
+    outcomes repeats the same failure, so the retry loop stops.
+    """
 
 
-@dataclass(frozen=True)
-class OrqLaunchOptions:
+class OrqLaunchOptions(BaseModel):
     """Flags for ``orq launch``; honoured only under ``launcher='orq'``.
 
     ``mcp=False`` renders ``--no-mcp``, ``skills=False`` renders ``--no-skills``, ``base_url``
@@ -88,10 +117,22 @@ class OrqLaunchOptions:
     target's ``env``.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     mcp: bool = True
     skills: bool = True
     base_url: str | None = None
     fetch_models: bool = True
+
+    def __init__(
+        self,
+        mcp: bool = True,  # noqa: FBT001, FBT002 - preserve the public dataclass constructor
+        skills: bool = True,  # noqa: FBT001, FBT002 - preserve the public dataclass constructor
+        base_url: str | None = None,
+        fetch_models: bool = True,  # noqa: FBT001, FBT002 - preserve the public dataclass constructor
+    ) -> None:
+        """Keep the public dataclass's positional constructor while validating with Pydantic."""
+        super().__init__(mcp=mcp, skills=skills, base_url=base_url, fetch_models=fetch_models)
 
     def to_flags(self) -> list[str]:
         flags: list[str] = []
@@ -106,8 +147,9 @@ class OrqLaunchOptions:
         return flags
 
 
-@dataclass(frozen=True)
-class _AgentSpec:
+class AgentSpec(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     binary: str
     output_args: tuple[str, ...]
     model_flag: str
@@ -115,12 +157,15 @@ class _AgentSpec:
     system_prompt_flag: str | None
     skills_dir: str
     tools: tuple[str, ...]
+    container_permission: str | None
+    container_extra_args: tuple[str, ...]
+    provider_env: tuple[str, ...]
     # Empty means the binary reads stdin whenever no positional prompt is given.
     stdin_marker: tuple[str, ...] = ()
 
 
-_AGENTS: dict[str, _AgentSpec] = {
-    'claude': _AgentSpec(
+AGENTS: types.MappingProxyType[str, AgentSpec] = types.MappingProxyType({
+    'claude': AgentSpec(
         binary='claude',
         output_args=('-p', '--output-format', 'stream-json', '--verbose'),
         model_flag='--model',
@@ -128,8 +173,11 @@ _AGENTS: dict[str, _AgentSpec] = {
         system_prompt_flag='--append-system-prompt',
         skills_dir='.claude/skills',
         tools=('Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch'),
+        container_permission='bypassPermissions',
+        container_extra_args=(),
+        provider_env=('ANTHROPIC_API_KEY',),
     ),
-    'codex': _AgentSpec(
+    'codex': AgentSpec(
         binary='codex',
         output_args=('exec', '--json', '--skip-git-repo-check'),
         model_flag='-m',
@@ -137,9 +185,13 @@ _AGENTS: dict[str, _AgentSpec] = {
         system_prompt_flag=None,
         skills_dir='.agents/skills',
         tools=('shell', 'apply_patch'),
+        # Codex's own sandbox often cannot start inside a container; the container is the sandbox.
+        container_permission='danger-full-access',
+        container_extra_args=(),
+        provider_env=('OPENAI_API_KEY',),
         stdin_marker=('-',),
     ),
-    'opencode': _AgentSpec(
+    'opencode': AgentSpec(
         binary='opencode',
         output_args=('run', '--format', 'json'),
         model_flag='--model',
@@ -147,8 +199,13 @@ _AGENTS: dict[str, _AgentSpec] = {
         system_prompt_flag=None,
         skills_dir='.agents/skills',
         tools=('bash', 'read', 'edit', 'write', 'glob', 'grep'),
+        container_permission=None,
+        container_extra_args=('--auto',),
+        provider_env=('ANTHROPIC_API_KEY', 'OPENAI_API_KEY'),
     ),
-}
+})
+if set(AGENTS) != set(get_args(AgentName)):
+    raise RuntimeError(f'AGENTS {sorted(AGENTS)} does not match AgentName {sorted(get_args(AgentName))}')
 
 
 def build_argv(
@@ -169,7 +226,7 @@ def build_argv(
     opencode prompts go through ``orq launch -p`` and stdin is closed, because codex appends any
     open stdin to the prompt. Claude under ``orq`` still reads stdin.
     """
-    spec = _AGENTS[agent]
+    spec = AGENTS[agent]
     if permission_mode is not None and spec.permission_flag is None:
         raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
 
@@ -193,14 +250,14 @@ def build_argv(
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
 
 
-_PROMPT_INSTRUCTION = (
+PROMPT_INSTRUCTION = (
     'You are continuing the conversation below. It is a JSON array of chat messages in order; '
     '"tool" entries are the results of your own earlier tool calls. Reply to the last "user" message. '
     'Do not restate the transcript.'
 )
 
 
-def _message_to_dict(message: Message) -> dict[str, Any]:
+def message_to_dict(message: Message) -> dict[str, Any]:
     if message.role == 'tool':
         return {
             'role': 'tool',
@@ -228,17 +285,16 @@ def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_
     entries: list[dict[str, Any]] = []
     if inline_system and system_prompt:
         entries.append({'role': 'system', 'content': system_prompt})
-    entries += [_message_to_dict(m) for m in messages]
+    entries += [message_to_dict(m) for m in messages]
     block = delimit(json.dumps(entries, ensure_ascii=False, indent=None), tag='conversation')
-    return f'{_PROMPT_INSTRUCTION}\n{block}'
+    return f'{PROMPT_INSTRUCTION}\n{block}'
 
 
-@dataclass
-class ParsedTurn:
+class ParsedTurn(BaseModel):
     """What one agent run said, before the exit-code and error-order checks in ``respond()``."""
 
     text: str | None = None
-    tool_calls: list[ToolCallOutputItem] = field(default_factory=list)
+    tool_calls: list[ToolCallOutputItem] = Field(default_factory=list)
     usage: Usage | None = None
     session_id: str | None = None
     model: str | None = None
@@ -246,7 +302,7 @@ class ParsedTurn:
     agent_error: str | None = None
 
 
-def _tool_call(
+def tool_call(
     *,
     call_id: str,
     name: str,
@@ -264,7 +320,7 @@ def _tool_call(
     )
 
 
-def _usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> Usage | None:
+def usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> Usage | None:
     """``Usage.extract`` for one agent usage record; ``None`` plus a warning when a required count is absent."""
     if usage_block is None:
         return None
@@ -275,7 +331,7 @@ def _usage_or_none(agent: str, usage_block: Any, required: tuple[str, str]) -> U
     return Usage.extract(usage_block, calls=1)
 
 
-def _opencode_usage(tokens: Any) -> dict[str, Any] | None:
+def opencode_usage(tokens: Any) -> dict[str, Any] | None:
     """Spell OpenCode's ``step_finish.tokens`` block in the canonical names ``Usage.extract`` reads.
 
     OpenCode uses bare ``input``/``output``/``reasoning`` and a nested ``cache`` object; those words are
@@ -297,7 +353,7 @@ def _opencode_usage(tokens: Any) -> dict[str, Any] | None:
     return {k: v for k, v in renamed.items() if v is not None}
 
 
-def _heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
+def heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
     """The ``modelUsage`` entry with the most tokens; the first key is often an auxiliary model."""
     if not model_usage:
         return None
@@ -306,15 +362,15 @@ def _heaviest_model(model_usage: dict[str, dict[str, Any]]) -> str | None:
 
 # Stream events claude emits every turn that carry no text, tool call or usage: `system` (init, hooks,
 # status) and `rate_limit_event`. Skipped silently so the unknown-event warning stays meaningful.
-_CLAUDE_HOUSEKEEPING_EVENTS = frozenset({'system', 'rate_limit_event'})
+CLAUDE_HOUSEKEEPING_EVENTS = frozenset({'system', 'rate_limit_event'})
 
 
-def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
+def parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     calls: dict[str, ToolCallOutputItem] = {}
     order: list[str] = []
     last_text: list[str] = []
-    content_events = [e for e in events if e.get('type') not in _CLAUDE_HOUSEKEEPING_EVENTS]
+    content_events = [e for e in events if e.get('type') not in CLAUDE_HOUSEKEEPING_EVENTS]
     for event in content_events:
         kind = event.get('type')
         if kind == 'assistant':
@@ -323,7 +379,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
             for block in event.get('message', {}).get('content', []) or []:
                 if block.get('type') == 'tool_use':
                     call_id = str(block.get('id'))
-                    calls[call_id] = _tool_call(
+                    calls[call_id] = tool_call(
                         call_id=call_id,
                         name=str(block.get('name')),
                         arguments=block.get('input', {}),
@@ -354,11 +410,11 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
             turn.text = result_text if isinstance(result_text, str) else (''.join(last_text) or None)
             if event.get('is_error'):
                 turn.agent_error = result_text if isinstance(result_text, str) else str(event.get('subtype'))
-            turn.usage = _usage_or_none('claude', event.get('usage'), ('input_tokens', 'output_tokens'))
-            turn.model = turn.model or _heaviest_model(event.get('modelUsage') or {})
+            turn.usage = usage_or_none('claude', event.get('usage'), ('input_tokens', 'output_tokens'))
+            turn.model = turn.model or heaviest_model(event.get('modelUsage') or {})
             for denial in event.get('permission_denials') or []:
                 call_id = str(denial.get('tool_use_id') or f'denied-{len(order)}')
-                denied = _tool_call(
+                denied = tool_call(
                     call_id=call_id,
                     name=str(denial.get('tool_name')),
                     arguments=denial.get('tool_input', {}),
@@ -376,7 +432,7 @@ def _parse_claude(events: list[dict[str, Any]]) -> ParsedTurn:
     return turn
 
 
-def _codex_status(item: dict[str, Any]) -> Literal['in_progress', 'completed', 'incomplete']:
+def codex_status(item: dict[str, Any]) -> Literal['in_progress', 'completed', 'incomplete']:
     status = item.get('status')
     if status == 'completed' and (item.get('exit_code') in (None, 0)):
         return 'completed'
@@ -385,7 +441,7 @@ def _codex_status(item: dict[str, Any]) -> Literal['in_progress', 'completed', '
     return 'incomplete'
 
 
-def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
+def parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     calls: dict[str, ToolCallOutputItem] = {}
     order: list[str] = []
@@ -396,7 +452,7 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
         elif kind == 'turn.failed':
             turn.agent_error = str((event.get('error') or {}).get('message') or 'turn.failed')
         elif kind == 'turn.completed':
-            turn.usage = _usage_or_none('codex', event.get('usage'), ('input_tokens', 'output_tokens'))
+            turn.usage = usage_or_none('codex', event.get('usage'), ('input_tokens', 'output_tokens'))
         elif kind in ('item.started', 'item.completed'):
             item = event.get('item') or {}
             item_id = str(item.get('id'))
@@ -406,29 +462,29 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
             elif item_type == 'error':
                 logger.warning(f'codex reported: {item.get("message")}')
             elif item_type == 'command_execution':
-                calls[item_id] = _tool_call(
+                calls[item_id] = tool_call(
                     call_id=item_id,
                     name='shell',
                     arguments={'command': item.get('command')},
                     result=item.get('aggregated_output') if kind == 'item.completed' else None,
-                    status=_codex_status(item),
+                    status=codex_status(item),
                 )
             elif item_type == 'file_change':
-                calls[item_id] = _tool_call(
+                calls[item_id] = tool_call(
                     call_id=item_id,
                     name='apply_patch',
                     arguments={'changes': item.get('changes', [])},
                     result='applied' if item.get('status') == 'completed' else None,
-                    status=_codex_status(item),
+                    status=codex_status(item),
                 )
             elif item_type == 'mcp_tool_call':
                 error = item.get('error') or {}
-                calls[item_id] = _tool_call(
+                calls[item_id] = tool_call(
                     call_id=item_id,
                     name=f'{item.get("server")}.{item.get("tool")}',
                     arguments=item.get('arguments', {}),
                     result=error.get('message') if error else tool_result_to_text(item.get('result')),
-                    status='incomplete' if error else _codex_status(item),
+                    status='incomplete' if error else codex_status(item),
                 )
             else:
                 logger.warning(f'codex skipped unknown item type: {item_type}')
@@ -441,7 +497,7 @@ def _parse_codex(events: list[dict[str, Any]]) -> ParsedTurn:
     return turn
 
 
-def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
+def parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     turn = ParsedTurn()
     last_text: str | None = None
     cost = 0.0
@@ -461,7 +517,7 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             )
             call_id = str(part.get('callID') or part.get('id'))
             turn.tool_calls.append(
-                _tool_call(
+                tool_call(
                     call_id=call_id,
                     name=str(part.get('tool')),
                     arguments=state.get('input', {}),
@@ -475,8 +531,8 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
             )
         elif kind == 'step_finish':
             saw_step_finish = True
-            step_usage = _usage_or_none(
-                'opencode', _opencode_usage(part.get('tokens')), ('input_tokens', 'output_tokens')
+            step_usage = usage_or_none(
+                'opencode', opencode_usage(part.get('tokens')), ('input_tokens', 'output_tokens')
             )
             if step_usage is not None:
                 turn.usage = step_usage if turn.usage is None else turn.usage + step_usage
@@ -496,20 +552,55 @@ def _parse_opencode(events: list[dict[str, Any]]) -> ParsedTurn:
     return turn
 
 
-_PARSERS: dict[str, Callable[[list[dict[str, Any]]], ParsedTurn]] = {
-    'claude': _parse_claude,
-    'codex': _parse_codex,
-    'opencode': _parse_opencode,
-}
+PARSERS: types.MappingProxyType[str, Callable[[list[dict[str, Any]]], ParsedTurn]] = types.MappingProxyType({
+    'claude': parse_claude,
+    'codex': parse_codex,
+    'opencode': parse_opencode,
+})
 
 
 def parse_events(agent: AgentName, events: list[dict[str, Any]]) -> ParsedTurn:
     """Pure: one agent's JSONL events to a `ParsedTurn`. Unknown event types are skipped."""
-    return _PARSERS[agent](events)
+    return PARSERS[agent](events)
 
 
-def _remove_tree(path: Path) -> None:
+def remove_tree(path: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
+
+
+def remove_tree_if_owner(pid: int, path: Path) -> None:
+    """Finalizer callback that cannot remove a parent process's workdir after fork."""
+    if os.getpid() == pid:
+        remove_tree(path)
+
+
+def release_containers_if_owner(pid: int, owned: list[str]) -> None:
+    """Finalizer callback that cannot remove containers inherited across fork."""
+    if os.getpid() == pid:
+        release_containers(owned)
+
+
+async def finish_task_uninterruptibly(task: asyncio.Future[Any]) -> None:
+    """Wait for a shielded operation despite repeated caller cancellation, consuming its result."""
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:  # noqa: PERF203 — the caller may cancel this wait more than once.
+            continue
+        except (OSError, subprocess.TimeoutExpired):
+            break
+    with contextlib.suppress(BaseException):
+        task.result()
+
+
+async def await_shielded(awaitable: Awaitable[Any]) -> Any:
+    """Await an operation through cancellation, including repeated cancellation requests."""
+    task = asyncio.ensure_future(awaitable)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        await finish_task_uninterruptibly(task)
+        raise
 
 
 class CodingAgentTarget(AgentTarget):
@@ -537,10 +628,14 @@ class CodingAgentTarget(AgentTarget):
     under ``direct``. ``model`` is the agent's own flag under ``direct`` and ``orq launch --model
     provider/id`` under ``orq``.
 
-    ``env`` overlays ``os.environ``; caller-supplied values win. ``timeout_ms`` is the per-turn ceiling
-    and defaults to 30 s under the retry helper's, so a hung agent surfaces as ``cli.timeout`` and is
-    not retried; raise both together when you raise ``target_agent_timeout_ms``.
+    ``env`` overlays ``os.environ``; caller-supplied values win. ``timeout_ms`` is the idle limit: the
+    maximum time without agent output. ``max_turn_ms`` is the wall-clock hard cap. Both raise the
+    non-retryable ``cli.timeout`` error. Coding agents enforce these limits themselves, so the runner's
+    ``target_agent_timeout_ms`` does not apply.
     """
+
+    # The idle and hard limits below fully bound each respond call.
+    manages_own_timeout = True
 
     def __init__(
         self,
@@ -556,23 +651,18 @@ class CodingAgentTarget(AgentTarget):
         keep_workdir: bool = False,
         skills: list[Path] | None = None,
         timeout_ms: int = DEFAULT_CODING_AGENT_TIMEOUT_MS,
+        max_turn_ms: int = DEFAULT_CODING_AGENT_MAX_TURN_MS,
         env: dict[str, str] | None = None,
+        container: DockerOptions | None = None,
     ) -> None:
         super().__init__()
-        if agent not in _AGENTS:
-            raise ValueError(f'Unknown coding agent {agent!r}; expected one of {sorted(_AGENTS)}')
+        if agent not in AGENTS:
+            raise ValueError(f'Unknown coding agent {agent!r}; expected one of {sorted(AGENTS)}')
         if launcher not in ('direct', 'orq'):
             raise ValueError(f'Unknown launcher {launcher!r}; expected "direct" or "orq"')
-        self._spec = _AGENTS[agent]
-        if permission_mode is not None and self._spec.permission_flag is None:
-            raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
-        if orq is not None and launcher == 'direct':
-            logger.warning(f'CodingAgentTarget({agent}): orq options given but launcher is "direct"; ignoring them')
-        if system_prompt and self._spec.system_prompt_flag is None:
-            logger.warning(
-                f'CodingAgentTarget({agent}): no system-prompt flag; '
-                'prepending system_prompt to the conversation instead'
-            )
+        if timeout_ms <= 0 or max_turn_ms <= 0:
+            raise ValueError('timeout_ms and max_turn_ms must be positive')
+        self._spec = AGENTS[agent]
         self._kwargs: dict[str, Any] = {
             'launcher': launcher,
             'orq': orq,
@@ -584,8 +674,40 @@ class CodingAgentTarget(AgentTarget):
             'keep_workdir': keep_workdir,
             'skills': list(skills) if skills else None,
             'timeout_ms': timeout_ms,
+            'max_turn_ms': max_turn_ms,
             'env': dict(env) if env else None,
+            'container': container,
         }
+        self._container = container
+        if container is not None:
+            if container.allow_privilege_escalation:
+                logger.warning(
+                    f'CodingAgentTarget({agent}): allow_privilege_escalation=True drops no-new-privileges; '
+                    'the writable /etc/passwd lets the agent become root inside the container'
+                )
+            if permission_mode is None:
+                permission_mode = self._spec.container_permission
+            extra_args = [
+                *(extra_args or []),
+                *(a for a in self._spec.container_extra_args if a not in (extra_args or [])),
+            ]
+            for flag in isolation_breaking_flags(container.run_args):
+                logger.warning(f'CodingAgentTarget({agent}): run_args {flag!r} undoes the container isolation')
+            dropped = [key for key in RESERVED_ENV if key in (env or {})]
+            if dropped:
+                logger.warning(
+                    f'CodingAgentTarget({agent}): env {", ".join(dropped)} not forwarded into the container; '
+                    'it applies to the docker client only'
+                )
+        if permission_mode is not None and self._spec.permission_flag is None:
+            raise ValueError(f'{agent} has no permission-mode flag; pass its own flags through extra_args instead')
+        if orq is not None and launcher == 'direct':
+            logger.warning(f'CodingAgentTarget({agent}): orq options given but launcher is "direct"; ignoring them')
+        if system_prompt and self._spec.system_prompt_flag is None:
+            logger.warning(
+                f'CodingAgentTarget({agent}): no system-prompt flag; '
+                'prepending system_prompt to the conversation instead'
+            )
         self._agent: AgentName = agent
         self._launcher: Launcher = launcher
         self._orq = orq
@@ -597,8 +719,25 @@ class CodingAgentTarget(AgentTarget):
         self._keep_workdir = keep_workdir
         self._skills = [Path(s) for s in skills or []]
         self.timeout_ms = timeout_ms
+        self.max_turn_ms = max_turn_ms
         self._env = dict(env or {})
         self._workdir: Path | None = None
+        self._forward_env = (
+            forwarded_env_names(
+                container, launcher=launcher, provider_env=self._spec.provider_env, caller_env=self._env
+            )
+            if container
+            else []
+        )
+        self._root: Path | None = None
+        self._creator_pid = os.getpid()
+        self._container_name: str | None = None
+        self._restarts = 0
+        self._image_checked = False
+        self._owned: list[str] = []
+        self._container_finalizer: weakref.finalize[Any, Any] | None = (
+            weakref.finalize(self, release_containers_if_owner, self._creator_pid, self._owned) if container else None
+        )
         self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
         self._proc: asyncio.subprocess.Process | None = None
 
@@ -607,10 +746,147 @@ class CodingAgentTarget(AgentTarget):
         """The private working directory, ``None`` until the first turn creates it."""
         return self._workdir
 
+    async def _docker(self, argv: list[str], *, timeout_s: float = 60) -> subprocess.CompletedProcess[str]:
+        """Run one bounded Docker control call with the host environment."""
+        opts = self._container
+        if opts is None:
+            raise RuntimeError('container options are required for Docker calls')
+        operation = asyncio.create_task(
+            asyncio.to_thread(subprocess.run, argv, capture_output=True, text=True, timeout=timeout_s, check=False)
+        )
+        try:
+            return await asyncio.shield(operation)
+        except asyncio.CancelledError:
+            # `to_thread` cannot stop subprocess.run. Wait for its bounded result before allowing cleanup
+            # to issue `rm`, so a slow `docker run` cannot create a container after cleanup has passed.
+            await finish_task_uninterruptibly(operation)
+            raise
+        except FileNotFoundError as exc:
+            raise CodingAgentUnavailableError('cli.not_found', f'{opts.binary!r} not found on PATH') from exc
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            operation_name = next(
+                (arg for arg in argv if arg in {'image', 'run', 'inspect', 'exec', 'rm', 'ps'}), 'control'
+            )
+            detail = str(exc)[:STDERR_EXCERPT_CHARS].strip() or type(exc).__name__
+            raise CodingAgentUnavailableError(
+                'cli.container_start', f'{opts.binary} {operation_name} control call failed: {detail}'
+            ) from exc
+
+    async def _ensure_container(self, root: Path) -> str:
+        opts = self._container
+        if opts is None:
+            raise RuntimeError('container options are required to start a container')
+        if self._container_name is not None:
+            state = await self._docker([*opts.cli(), 'inspect', '-f', '{{.State.Running}}', self._container_name])
+            if state.returncode == 0 and state.stdout.strip() == 'true':
+                return self._container_name
+            old_name = self._container_name
+            marker = root / 'home' / '.evq-exit'
+            cause = marker.read_text().strip() if marker.exists() else None
+            marker.unlink(missing_ok=True)
+            log_kill(
+                self._agent,
+                'lease_expired' if cause else 'container_lost',
+                f'container {old_name} stopped between turns ({cause or "cause unknown"}); recreating it. '
+                'Files in the workdir and home survive; processes the agent started in the background do not',
+            )
+            await self._drop_container_shielded()
+            self._restarts += 1
+        elif not self._image_checked:
+            inspected = await self._docker([*opts.cli(), 'image', 'inspect', opts.image])
+            if inspected.returncode != 0:
+                build_dir = Path(__file__).parent / 'docker'
+                detail = inspected.stderr[-STDERR_EXCERPT_CHARS:].strip()
+                if any(phrase in detail.lower() for phrase in ('no such image', 'no such object', 'image not known')):
+                    raise CodingAgentUnavailableError(
+                        'cli.image_missing',
+                        f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '
+                        f'or `{opts.binary} build -t {opts.image} {build_dir}`',
+                    )
+                raise CodingAgentUnavailableError(
+                    'cli.container_start',
+                    f'{opts.binary} image inspect failed: {detail or "Docker returned no error details"}',
+                )
+            self._image_checked = True
+            await asyncio.to_thread(sweep_orphans, opts.binary, opts.context)
+        for source in unsafe_mounts(opts.run_args, root):
+            logger.warning(
+                f'CodingAgentTarget({self._agent}): run_args mount source {source!r} is outside the private workdir; '
+                'the agent can reach it'
+            )
+        name = f'{opts.name_prefix}-{self._agent}-{uuid.uuid4().hex[:8]}'
+        lease_dir = root / 'lease' / name
+        lease_dir.mkdir()
+        beat = lease_dir / 'beat'
+        write_beat(beat, 0)
+        register(name, LiveContainer(binary=opts.binary, context=opts.context, beat=beat))
+        self._owned.append(name)
+        self._container_name = name
+        try:
+            started = await self._docker(
+                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=os.getuid(), gid=os.getgid())
+            )
+        except BaseException:
+            await self._drop_container_shielded()
+            raise
+        if started.returncode != 0:
+            await self._drop_container_shielded()
+            raise CodingAgentUnavailableError(
+                'cli.container_start', f'{opts.binary} run failed: {started.stderr[-STDERR_EXCERPT_CHARS:].strip()}'
+            )
+        try:
+            state = await self._docker([*opts.cli(), 'inspect', '-f', '{{.State.Running}}', name])
+        except BaseException:
+            await self._drop_container_shielded()
+            raise
+        if state.returncode != 0 or state.stdout.strip() != 'true':
+            await self._drop_container_shielded()
+            detail = state.stderr[-STDERR_EXCERPT_CHARS:].strip() or state.stdout[-STDERR_EXCERPT_CHARS:].strip()
+            raise CodingAgentUnavailableError(
+                'cli.container_start',
+                f'{opts.binary} run exited successfully but container {name} was not running'
+                f'{f": {detail}" if detail else ""}',
+            )
+        return name
+
+    async def _drop_container(self) -> None:
+        """Unregister and remove this target's current container."""
+        name, self._container_name = self._container_name, None
+        live = unregister(name) if name else None
+        if name and live:
+            await remove_containers_async(live.binary, live.context, [name])
+
+    async def _drop_container_shielded(self) -> None:
+        await await_shielded(self._drop_container())
+
+    async def _prepare_container_exec(
+        self, argv: list[str]
+    ) -> tuple[list[str], Callable[[], Awaitable[None]] | None, str | None]:
+        if self._container is None:
+            return argv, None, None
+        root = self._root
+        if root is None:
+            raise RuntimeError('container workdir root was not initialized')
+        try:
+            name = await self._ensure_container(root)
+        except asyncio.CancelledError:
+            await self._drop_container_shielded()
+            raise
+        return (
+            build_exec_argv(self._container, name=name, env_names=self._forward_env, agent_argv=argv),
+            (self._drop_container),
+            name,
+        )
+
     def _ensure_workdir(self) -> Path:
         if self._workdir is not None:
             return self._workdir
-        dst = Path(tempfile.mkdtemp(prefix=f'evaluatorq-{self._agent}-'))
+        root = Path(tempfile.mkdtemp(prefix=f'evaluatorq-{self._agent}-'))
+        dst = root / 'work' if self._container is not None else root
+        if self._container is not None:
+            dst.mkdir()
+            (root / 'home').mkdir()
+            (root / 'lease').mkdir()
         try:
             if self._source_workdir is not None:
                 shutil.copytree(self._source_workdir, dst, symlinks=True, dirs_exist_ok=True)
@@ -625,33 +901,53 @@ class CodingAgentTarget(AgentTarget):
                 link = skills_dir / skill.name
                 if link.exists() or link.is_symlink():
                     raise FileExistsError(f'skill {skill.name!r} already exists in {skills_dir}; refusing to shadow it')
-                link.symlink_to(skill.resolve(), target_is_directory=True)
+                if self._container is not None:
+                    shutil.copytree(skill.resolve(), link, symlinks=True)
+                else:
+                    link.symlink_to(skill.resolve(), target_is_directory=True)
         except BaseException:
-            shutil.rmtree(dst, ignore_errors=True)
+            shutil.rmtree(root, ignore_errors=True)
             raise
         if not self._keep_workdir:
-            self._finalizer = weakref.finalize(self, _remove_tree, dst)
+            self._finalizer = weakref.finalize(self, remove_tree_if_owner, self._creator_pid, root)
+        self._root = root
         self._workdir = dst
         return dst
 
     def new(self) -> CodingAgentTarget:
         return type(self)(self._agent, **self._kwargs)
 
+    def _require_creator_process(self, operation: str) -> None:
+        if os.getpid() != self._creator_pid:
+            raise RuntimeError(
+                f'CodingAgentTarget.{operation}() cannot use a target inherited across os.fork(); '
+                'call target.new() in the child process to create a process-owned target'
+            )
+
     async def close(self) -> None:
         """Kill a live process group and release the temp workdir. Idempotent."""
+        self._require_creator_process('close')
         proc = self._proc
         if proc is not None:
-            _kill_group(proc)
+            kill_group(proc)
             self._proc = None
-        if self._workdir is None:
+        if self._container is not None:
+            await self._drop_container_shielded()
+        if self._root is None:
             return
+        lease = self._root / 'lease'
+        if lease.exists():
+            remove_tree(lease)
         if self._keep_workdir:
             logger.info(f'CodingAgentTarget({self._agent}): keeping workdir {self._workdir}')
         else:
-            _remove_tree(self._workdir)
-            if self._finalizer is not None:
-                self._finalizer.detach()
+            remove_tree(self._root)
+        if self._finalizer is not None:
+            self._finalizer.detach()
+        if self._container_finalizer is not None:
+            self._container_finalizer.detach()
         self._workdir = None
+        self._root = None
 
     async def get_agent_context(self) -> AgentContext:
         tools = [ToolInfo(name=name) for name in self._spec.tools]
@@ -669,6 +965,7 @@ class CodingAgentTarget(AgentTarget):
         return None
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
+        self._require_creator_process('respond')
         workdir = self._ensure_workdir()
         prompt = render_prompt(
             messages, system_prompt=self._system_prompt, inline_system=self._spec.system_prompt_flag is None
@@ -683,6 +980,10 @@ class CodingAgentTarget(AgentTarget):
             orq=self._orq,
             prompt=prompt,
         )
+        on_early_exit: Callable[[], Awaitable[None]] | None = None
+        env = {**os.environ, **self._env}
+        agent_binary = argv[0]
+        argv, on_early_exit, name = await self._prepare_container_exec(argv)
         async with with_llm_span(
             model=self._model or self._agent,
             operation='chat',
@@ -693,43 +994,94 @@ class CodingAgentTarget(AgentTarget):
                 'evaluatorq.coding_agent.launcher': self._launcher,
             },
         ) as span:
-            returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir)
-            set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
-            stderr_excerpt = stderr[-_STDERR_EXCERPT_CHARS:]
-            if returncode != 0:
-                raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
-            events = _parse_jsonl(stdout)
-            if stdout.strip() and not events:
-                raise CodingAgentError('cli.parse_error', f'no JSON events in stdout: {stdout[:_STDERR_EXCERPT_CHARS]}')
+            turn_succeeded = False
             try:
-                turn = parse_events(self._agent, events)
-            except Exception as exc:  # Any parser crash is a parse error, not a target crash.
-                raise CodingAgentError('cli.parse_error', f'could not parse {self._agent} output: {exc!r}') from exc
-            if turn.agent_error is not None:
-                raise CodingAgentError('cli.agent_error', f'{turn.agent_error} {stderr_excerpt}'.strip())
-            if turn.text is None or not turn.text.strip():
-                raise CodingAgentError('cli.no_result', f'exit 0 but no final assistant message: {stderr_excerpt}')
-            if turn.usage is None:
-                logger.warning(f'CodingAgentTarget({self._agent}): no usage in output; usage is None')
-            else:
-                record_token_usage(span, usage=turn.usage, total_cost=turn.cost_usd)
-            set_span_attrs(
-                span, {'evaluatorq.coding_agent.cost_usd': turn.cost_usd, 'gen_ai.response.id': turn.session_id}
-            )
-            return AgentResponse(
-                output=[*turn.tool_calls, TextOutputItem(text=turn.text, annotations=[])],
-                usage=turn.usage,
-                model=turn.model or self._model,
-                response_id=turn.session_id,
-            )
+                if self._container is not None:
+                    set_span_attrs(
+                        span,
+                        {
+                            'evaluatorq.coding_agent.container.image': self._container.image,
+                            'evaluatorq.coding_agent.container.name': name,
+                            'evaluatorq.coding_agent.container.restarts': self._restarts,
+                        },
+                    )
+                returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir, env=env)
+                set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
+                stderr_excerpt = stderr[-STDERR_EXCERPT_CHARS:]
+                if self._container is not None and returncode in (126, 127):
+                    raise CodingAgentUnavailableError(
+                        'cli.agent_not_found',
+                        f'{agent_binary!r} or evq-entrypoint is missing from image {self._container.image!r}: '
+                        f'{stderr_excerpt}',
+                    )
+                if self._container is not None and returncode == 137:
+                    log_kill(self._agent, 'container_lost', f'container {name} was removed while the agent ran')
+                    await self._drop_container_shielded()
+                    set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': 'container_lost'})
+                    raise CodingAgentUnavailableError(
+                        'cli.timeout',
+                        'the container was removed while the agent was running',
+                        kill_reason='container_lost',
+                    )
+                if returncode != 0:
+                    raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
+                events = parse_jsonl(stdout)
+                if stdout.strip() and not events:
+                    raise CodingAgentError(
+                        'cli.parse_error', f'no JSON events in stdout: {stdout[:STDERR_EXCERPT_CHARS]}'
+                    )
+                try:
+                    turn = parse_events(self._agent, events)
+                except Exception as exc:  # Any parser crash is a parse error, not a target crash.
+                    raise CodingAgentError('cli.parse_error', f'could not parse {self._agent} output: {exc!r}') from exc
+                if turn.agent_error is not None:
+                    raise CodingAgentError('cli.agent_error', f'{turn.agent_error} {stderr_excerpt}'.strip())
+                if turn.text is None or not turn.text.strip():
+                    raise CodingAgentError('cli.no_result', f'exit 0 but no final assistant message: {stderr_excerpt}')
+                if turn.usage is None:
+                    logger.warning(f'CodingAgentTarget({self._agent}): no usage in output; usage is None')
+                else:
+                    record_token_usage(span, usage=turn.usage, total_cost=turn.cost_usd)
+                set_span_attrs(
+                    span, {'evaluatorq.coding_agent.cost_usd': turn.cost_usd, 'gen_ai.response.id': turn.session_id}
+                )
+                response = AgentResponse(
+                    output=[*turn.tool_calls, TextOutputItem(text=turn.text, annotations=[])],
+                    usage=turn.usage,
+                    model=turn.model or self._model,
+                    response_id=turn.session_id,
+                )
+                turn_succeeded = True
+                return response
+            except CodingAgentError as exc:
+                set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': exc.kill_reason})
+                raise
+            except asyncio.CancelledError:
+                set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': 'cancelled'})
+                raise
+            finally:
+                if not turn_succeeded and on_early_exit is not None:
+                    await await_shielded(on_early_exit())
 
-    async def _run(self, argv: list[str], stdin_text: str | None, *, cwd: Path) -> tuple[int, str, str]:
-        """Run one agent process in its own process group; kill the group on timeout, error or cancel."""
+    async def _run(
+        self,
+        argv: list[str],
+        stdin_text: str | None,
+        *,
+        cwd: Path,
+        env: dict[str, str],
+    ) -> tuple[int, str, str]:
+        """Run one agent process; end it on the idle limit, the hard cap, an error or cancellation.
+
+        Stdout and stderr are drained concurrently, and chunks from either stream reset the idle deadline.
+        Stdout is read in chunks, so neither a long JSONL line nor a partial one can stall or crash the read.
+        The caller owns container cleanup after this method has killed the process group on early exit.
+        """
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=cwd,
-                env={**os.environ, **self._env},
+                env=env,
                 stdin=asyncio.subprocess.PIPE if stdin_text is not None else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -744,22 +1096,164 @@ class CodingAgentTarget(AgentTarget):
                 'cli.prompt_too_long', f'{argv[0]} argv exceeds the OS limit; the rendered transcript is too long'
             ) from exc
         self._proc = proc
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(stdin_text.encode() if stdin_text is not None else None),
-                timeout=self.timeout_ms / 1000,
-            )
-        except asyncio.TimeoutError as exc:
-            raise CodingAgentUnavailableError(
-                'cli.timeout', f'{argv[0]} produced no result within {self.timeout_ms / 1000:.0f}s'
-            ) from exc
-        finally:
-            _kill_group(proc)
+        if proc.stdout is None or proc.stderr is None:
+            kill_group(proc)
             self._proc = None
+            raise RuntimeError('coding-agent process was created without stdout and stderr pipes')
+        activity = [asyncio.get_running_loop().time()]
+        stderr_task = asyncio.create_task(
+            drain_tail(
+                proc.stderr,
+                STDERR_EXCERPT_CHARS * 4,
+                on_chunk=lambda: activity.__setitem__(0, asyncio.get_running_loop().time()),
+            )
+        )
+        stdin_task = (
+            asyncio.create_task(feed_stdin(proc.stdin, stdin_text.encode()))
+            if stdin_text is not None and proc.stdin is not None
+            else None
+        )
+        idle_s, hard_s = self.timeout_ms / 1000, self.max_turn_ms / 1000
+        stdout = b''
+        finished = False
+        proc_wait_task: asyncio.Task[int] | None = None
+        try:
+            stdout, started = await read_stdout(
+                proc.stdout, self._agent, idle_s=idle_s, hard_s=hard_s, activity=activity
+            )
+            proc_wait_task = asyncio.create_task(proc.wait())
+            await wait_until_deadline(proc_wait_task, self._agent, stdout, started, activity, idle_s, hard_s)
+            await wait_until_deadline(stderr_task, self._agent, stdout, started, activity, idle_s, hard_s)
+            stderr = stderr_task.result()
+            finished = True
+        except asyncio.CancelledError:
+            log_kill(self._agent, 'cancelled', 'the caller cancelled the turn')
+            raise
+        finally:
+            kill_group(proc, force=not finished)
+            self._proc = None
+            if stdin_task is not None:
+                stdin_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stdin_task
+            if not finished:
+                stderr_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stderr_task
+                if proc_wait_task is not None:
+                    proc_wait_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await proc_wait_task
         return proc.returncode or 0, stdout.decode(errors='replace'), stderr.decode(errors='replace')
 
 
-def _parse_jsonl(stdout: str) -> list[dict[str, Any]]:
+def log_kill(agent: str, reason: str, detail: str) -> None:
+    """The one log line every early end of an agent run writes, so a report row can say which limit fired."""
+    logger.warning(f'CodingAgentTarget({agent}) {reason}: {detail}')
+
+
+def deadline_error(
+    agent: str, stdout: bytes | bytearray, started: float, last_output: float, idle_s: float, hard_s: float, now: float
+) -> CodingAgentUnavailableError | None:
+    if now >= started + hard_s:
+        event_count = stdout.count(b'\n')
+        detail = f'turn exceeded {hard_s:.0f}s ({event_count} events)'
+        log_kill(agent, 'hard_cap', detail)
+        return CodingAgentUnavailableError('cli.timeout', detail, kill_reason='hard_cap')
+    if now >= last_output + idle_s:
+        stamp = time.strftime('%H:%M:%S', time.localtime(time.time() - (now - last_output)))
+        detail = f'no output for {idle_s:.0f}s (last event: {describe_last_event(stdout)} at {stamp})'
+        log_kill(agent, 'idle_timeout', detail)
+        return CodingAgentUnavailableError('cli.timeout', detail, kill_reason='idle_timeout')
+    return None
+
+
+async def read_stdout(
+    stream: asyncio.StreamReader, agent: str, *, idle_s: float, hard_s: float, activity: list[float]
+) -> tuple[bytes, float]:
+    started = asyncio.get_running_loop().time()
+    stdout = bytearray()
+    while True:
+        now = asyncio.get_running_loop().time()
+        expired = deadline_error(agent, stdout, started, activity[0], idle_s, hard_s, now)
+        if expired is not None:
+            raise expired
+        wait = min(activity[0] + idle_s, started + hard_s) - now
+        try:
+            chunk = await asyncio.wait_for(stream.read(READ_CHUNK_BYTES), timeout=wait)
+        except asyncio.TimeoutError:
+            continue
+        if not chunk:
+            return bytes(stdout), started
+        stdout.extend(chunk)
+        activity[0] = asyncio.get_running_loop().time()
+
+
+async def wait_until_deadline(
+    task: asyncio.Task[Any],
+    agent: str,
+    stdout: bytes,
+    started: float,
+    activity: list[float],
+    idle_s: float,
+    hard_s: float,
+) -> Any:
+    loop = asyncio.get_running_loop()
+    while True:
+        now = loop.time()
+        expired = deadline_error(agent, stdout, started, activity[0], idle_s, hard_s, now)
+        if expired is not None:
+            raise expired
+        if task.done():
+            return task.result()
+        remaining = min(started + hard_s, activity[0] + idle_s) - now
+        await asyncio.wait({task}, timeout=remaining)
+
+
+def describe_last_event(stdout: bytes | bytearray) -> str:
+    """Return the last complete JSON event type and the tool or item it names, when present."""
+    for line in reversed(stdout.splitlines()):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        item = event.get('item')
+        part = event.get('part')
+        detail = (item.get('type') if isinstance(item, dict) else None) or (
+            part.get('tool') if isinstance(part, dict) else None
+        )
+        message = event.get('message')
+        content = message.get('content') if isinstance(message, dict) else None
+        if detail is None and isinstance(content, list) and content and isinstance(content[-1], dict):
+            detail = content[-1].get('name') or content[-1].get('type')
+        return f'{event.get("type")} {detail}' if detail else str(event.get('type'))
+    return 'none'
+
+
+async def drain_tail(
+    stream: asyncio.StreamReader, keep_bytes: int, *, on_chunk: Callable[[], None] | None = None
+) -> bytes:
+    """Drain a stream to EOF, retaining only its final ``keep_bytes``."""
+    tail = bytearray()
+    while chunk := await stream.read(READ_CHUNK_BYTES):
+        if on_chunk is not None:
+            on_chunk()
+        tail.extend(chunk)
+        del tail[:-keep_bytes]
+    return bytes(tail)
+
+
+async def feed_stdin(stdin: asyncio.StreamWriter, data: bytes) -> None:
+    """Write the prompt, tolerating an agent that exits before reading it."""
+    with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+        stdin.write(data)
+        await stdin.drain()
+    stdin.close()
+
+
+def parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for line in stdout.splitlines():
         line = line.strip()
@@ -775,8 +1269,8 @@ def _parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     return events
 
 
-def _kill_group(proc: asyncio.subprocess.Process) -> None:
-    if proc.returncode is not None:
+def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
+    if proc.returncode is not None and not force:
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)

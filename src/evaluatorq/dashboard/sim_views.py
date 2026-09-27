@@ -397,7 +397,7 @@ def _render_criteria_column(entry: SimulationEntry) -> str:
         )
 
     # Empty state: a criteria block that vanishes on zero rows is
-    # indistinguishable from a bug (CLAUDE.md house rule).
+    # indistinguishable from a bug (CODING_STANDARDS.md).
     list_html = (
         f'<ul class="sim-criteria-list">{"".join(items)}</ul>'
         if items

@@ -18,7 +18,7 @@ import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
@@ -62,10 +62,29 @@ if TYPE_CHECKING:
     EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
 
 logger = logging.getLogger(__name__)
+_AliasValue = TypeVar('_AliasValue')
 
 # Re-exported from here for back-compat (``simulation.__init__`` imports it from
 # api); the canonical definition lives in ``simulation.exceptions``.
 from evaluatorq.simulation.exceptions import SimulationDroppedError
+
+
+def _resolve_run_name(*, evaluation_name: str, run_name: str | None) -> str:
+    """Accept either public name without allowing conflicting labels for one run."""
+    if run_name is None:
+        return evaluation_name
+    if evaluation_name and evaluation_name != run_name:
+        raise ValueError('run_name and evaluation_name must match when both are supplied')
+    return run_name
+
+
+def _resolve_keyword_alias(
+    *, old_name: str, old_value: _AliasValue | None, new_name: str, new_value: _AliasValue | None
+) -> _AliasValue | None:
+    """Accept either public keyword and reject conflicting values before starting a run."""
+    if old_value is not None and new_value is not None and old_value != new_value:
+        raise ValueError(f'{old_name} and {new_name} must match when both are supplied')
+    return new_value if new_value is not None else old_value
 
 
 def _validate_datapoint_sources(
@@ -224,6 +243,7 @@ def _compose_sim_hooks(
 async def simulate(
     *,
     evaluation_name: str = '',
+    run_name: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
@@ -251,10 +271,14 @@ async def simulate(
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
+    experiment_description: str | None = None,
     orq_results_path: str | None = None,
-    exit_on_failure: bool = True,
+    orq_folder_path: str | None = None,
+    exit_on_failure: bool | None = None,
+    raise_on_execution_failure: bool | None = None,
     save: bool = False,
     report: str | Path | None = None,
+    report_path: str | Path | None = None,
     executive_summary: bool = True,
     recommendations: bool | SimulationRecommendationConfig = False,
 ) -> list[SimulationResult]:
@@ -267,6 +291,9 @@ async def simulate(
     callers continue to work.
 
     Args:
+        evaluation_name: Existing label for this simulation run; equivalent to ``run_name``.
+        run_name: Optional label for this simulation run, its results, and traces. When both names
+            are supplied, they must match.
         target: The agent under test. Accepts a ``str`` (``"agent:<key>"`` or bare
             ``"<key>"`` → hosted Orq agent via the Responses router;
             ``"deployment:<key>"`` → Orq deployment), an ``AgentTarget``
@@ -373,28 +400,33 @@ async def simulate(
         upload_results: When ``True`` (the default) and ``ORQ_API_KEY`` is set,
             results are uploaded to the Orq platform as an experiment. Pass
             ``False`` to suppress the upload (e.g. for local-only runs).
-        evaluation_description: Optional human-readable note passed straight
+        experiment_description: Optional human-readable note passed straight
             through to ``evaluatorq(description=...)`` and shown as the
             experiment's description in the Orq UI. Pure metadata — nothing
             branches on it, and it only matters when results are uploaded
             (``upload_results=True``). Leave ``None`` for local-only runs.
-        orq_results_path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
-        exit_on_failure: When ``True`` (the default), exit non-zero if any
+        evaluation_description: Existing alias for ``experiment_description``.
+        orq_folder_path: Optional Orq folder path (e.g. ``"MyProject/MyFolder"``).
+        orq_results_path: Existing alias for ``orq_folder_path``.
+        raise_on_execution_failure: When ``True`` (the default), raise if any
             datapoint failed to produce a conversation — *dropped* (a job raised
             with no result cached) or ended in ``error``/``timeout`` — by raising
             ``SimulationDroppedError`` from ``simulate()`` itself (the "CI gating
             for free" benefit). Scorer verdicts (``pass_``, e.g. goal not
-            achieved) are reporting only and never exit the process: an
+            achieved) are reporting only and never raise: an
             underperforming but otherwise healthy run still returns its results.
             Pass ``False`` for interactive / exploratory runs where a dead row
             should surface as a warning + error metadata instead.
+        exit_on_failure: Existing alias for ``raise_on_execution_failure``.
         save: When ``True``, persist the completed run to the local run store
-            (``.evaluatorq/sim-runs/`` unless ``report`` is set). Unlike the CLI
+            (``.evaluatorq/sim-runs/`` unless ``report_path`` is set). Unlike the CLI
             (which auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK
             defaults to ``save=False`` — the caller opts in.
-        report: Optional path to write the full SimulationRun report JSON
-            (results + scorer averages + metadata). When omitted and ``save``
-            is ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+        report_path: Optional path for the full SimulationRun report JSON
+            (results + scorer averages + metadata), written when ``save=True``.
+            When omitted and ``save`` is ``True``, the run is auto-saved under
+            ``.evaluatorq/sim-runs/``.
+        report: Existing alias for ``report_path``.
         executive_summary: When ``True`` (the default), generate the LLM
             narrative summary and store it on the returned run — and in any
             saved file — so the dashboard shows saved prose instead of the
@@ -445,7 +477,7 @@ async def simulate(
 
     async def main() -> None:
         results = await simulate(
-            evaluation_name='basic-simulation-example',
+            run_name='basic-simulation-example',
             target=support_agent,
             personas=[persona],
             scenarios=[scenario],
@@ -458,6 +490,34 @@ async def simulate(
     asyncio.run(main())
     ```
     """
+    evaluation_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
+    evaluation_description = _resolve_keyword_alias(
+        old_name='evaluation_description',
+        old_value=evaluation_description,
+        new_name='experiment_description',
+        new_value=experiment_description,
+    )
+    orq_results_path = _resolve_keyword_alias(
+        old_name='orq_results_path',
+        old_value=orq_results_path,
+        new_name='orq_folder_path',
+        new_value=orq_folder_path,
+    )
+    exit_on_failure = _resolve_keyword_alias(
+        old_name='exit_on_failure',
+        old_value=exit_on_failure,
+        new_name='raise_on_execution_failure',
+        new_value=raise_on_execution_failure,
+    )
+    if exit_on_failure is None:
+        exit_on_failure = True
+    report = _resolve_keyword_alias(
+        old_name='report',
+        old_value=report,
+        new_name='report_path',
+        new_value=report_path,
+    )
+
     datapoint_parallelism = resolve_datapoint_parallelism(
         datapoint_parallelism, parallelism, default=10, caller='simulate'
     )
@@ -646,6 +706,7 @@ async def _simulate_run(
 async def generate_and_simulate(
     *,
     evaluation_name: str = '',
+    run_name: str | None = None,
     agent_description: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     memory_entity_id: str | None = None,
@@ -654,6 +715,7 @@ async def generate_and_simulate(
     edge_case_percentage: float | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
     max_turns: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
@@ -672,15 +734,22 @@ async def generate_and_simulate(
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
     evaluation_description: str | None = None,
+    experiment_description: str | None = None,
     orq_results_path: str | None = None,
-    exit_on_failure: bool = True,
+    orq_folder_path: str | None = None,
+    exit_on_failure: bool | None = None,
+    raise_on_execution_failure: bool | None = None,
     emit_datapoints: EmitDatapoints | None = None,
     save: bool = False,
     report: str | Path | None = None,
+    report_path: str | Path | None = None,
     executive_summary: bool = True,
     recommendations: bool | SimulationRecommendationConfig = False,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
+
+    ``run_name`` labels the run, its results, and traces. The existing ``evaluation_name`` keyword
+    remains equivalent; if both are supplied, their values must match.
 
     Accepts the same ``target`` shapes as `simulate` — a plain callable,
     an ``AgentTarget`` instance, or a string (``"agent:<key>"`` / bare ``"<key>"``
@@ -698,7 +767,7 @@ async def generate_and_simulate(
     user-simulator, and the judge — the model name and anything beyond it
     (temperature, reasoning effort, timeouts) on those same calls; see
     `simulate` for the full semantics. ``upload_results`` defaults to ``True``; set
-    it to ``False`` to skip uploading the final experiment. ``exit_on_failure``
+    it to ``False`` to skip uploading the final experiment. ``raise_on_execution_failure``
     defaults to ``True``; see `simulate` for the full semantics of the
     CI-gate behaviour and how to opt out. ``hooks`` mirrors `simulate`;
     note the ``on_confirm`` gate fires AFTER persona/scenario/first-message
@@ -729,23 +798,37 @@ async def generate_and_simulate(
     for it. The other dimension still auto-generates; seeded x auto still
     crosses into the full grid. See `generate` for the full semantics.
 
-    ``evaluation_description``: Optional human-readable note passed straight
+    ``generation_instructions``: Free-text steer applied to every generated
+    persona AND scenario (e.g. ``"enterprise B2B buyers, frustrated, replying
+    in German"``). Unlike a seed — which names one archetype and fans out to one
+    object — this stacks on top of the whole batch and composes with seeds and
+    ``edge_case_percentage``. Empty string (the default) leaves the built-in
+    prompts unchanged. To steer personas and scenarios differently, call
+    `generate_personas` / `generate_scenarios` separately.
+
+    ``experiment_description``: Optional human-readable note passed straight
     through to the uploaded experiment (shown as its description in the Orq UI).
     Pure metadata — nothing branches on it, and it only matters when
     ``upload_results`` is ``True``. Leave ``None`` for local-only runs.
+    ``orq_folder_path``: Optional folder path for uploaded results in Orq.
+    ``evaluation_description`` and ``orq_results_path`` remain equivalent aliases.
+    Supplying both names for one option requires matching values.
 
     ``emit_datapoints``: Optional callback invoked with the generated datapoints
     before simulation — used by the CLI's ``--datapoints`` to persist the
     exact inputs.
 
     ``save``: When ``True``, persist the completed run to the local run store
-    (``.evaluatorq/sim-runs/`` unless ``report`` is set). Unlike the CLI (which
+    (``.evaluatorq/sim-runs/`` unless ``report_path`` is set). Unlike the CLI (which
     auto-saves to ``.evaluatorq/sim-runs/`` by default), the SDK defaults to
     ``save=False`` — the caller opts in.
 
-    ``report``: Optional path to write the full SimulationRun report JSON
-    (results + scorer averages + metadata). When omitted and ``save`` is
-    ``True``, the run is auto-saved under ``.evaluatorq/sim-runs/``.
+    ``report_path``: Optional path for the full SimulationRun report JSON
+    (results + scorer averages + metadata), written when ``save=True``.
+    When omitted and ``save`` is ``True``, the run is auto-saved under
+    ``.evaluatorq/sim-runs/``.
+    ``report`` remains an equivalent alias.
+    ``exit_on_failure`` remains an alias for ``raise_on_execution_failure``.
 
     ``executive_summary``: When ``True`` (the default), generate the LLM
     narrative summary and store it on the returned run — and in any saved file.
@@ -771,7 +854,7 @@ async def generate_and_simulate(
 
     async def main() -> None:
         results = await generate_and_simulate(
-            evaluation_name='support-agent-sim',
+            run_name='support-agent-sim',
             target='agent:my-support-agent',  # hosted Orq agent, routed via ORQ_API_KEY
             agent_description=(
                 'Customer support agent for an e-commerce store; handles refunds, orders, and product questions.'
@@ -788,6 +871,33 @@ async def generate_and_simulate(
     asyncio.run(main())
     ```
     """
+    evaluation_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
+    evaluation_description = _resolve_keyword_alias(
+        old_name='evaluation_description',
+        old_value=evaluation_description,
+        new_name='experiment_description',
+        new_value=experiment_description,
+    )
+    orq_results_path = _resolve_keyword_alias(
+        old_name='orq_results_path',
+        old_value=orq_results_path,
+        new_name='orq_folder_path',
+        new_value=orq_folder_path,
+    )
+    exit_on_failure = _resolve_keyword_alias(
+        old_name='exit_on_failure',
+        old_value=exit_on_failure,
+        new_name='raise_on_execution_failure',
+        new_value=raise_on_execution_failure,
+    )
+    if exit_on_failure is None:
+        exit_on_failure = True
+    report = _resolve_keyword_alias(
+        old_name='report',
+        old_value=report,
+        new_name='report_path',
+        new_value=report_path,
+    )
     datapoint_parallelism = resolve_datapoint_parallelism(
         datapoint_parallelism, parallelism, default=10, caller='generate_and_simulate'
     )
@@ -801,6 +911,7 @@ async def generate_and_simulate(
         edge_case_percentage=edge_case_percentage,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
+        generation_instructions=generation_instructions,
         max_turns=max_turns,
         llm_config=llm_config,
         evaluator_names=evaluator_names,
@@ -841,6 +952,7 @@ async def _generate_datapoints_inner(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     edge_case_percentage: float | None = None,
+    generation_instructions: str = '',
 ) -> tuple[list[SimulationDatapoint], AsyncOpenAI, bool, TokenUsage | None]:
     """Shared generation trio: personas/scenarios + first-message datapoints.
 
@@ -879,6 +991,7 @@ async def _generate_datapoints_inner(
             persona_seeds=persona_seeds,
             scenario_seeds=scenario_seeds,
             edge_case_percentage=edge_case_percentage,
+            generation_instructions=generation_instructions,
         )
         await await_maybe(gen_hooks.on_generate_inputs_ready(len(gen_personas), len(gen_scenarios)))
 
@@ -912,6 +1025,7 @@ async def _generate_and_simulate_run(
     edge_case_percentage: float | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
     max_turns: int | None = None,
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
@@ -1019,6 +1133,7 @@ async def _generate_and_simulate_run(
                                 persona_seeds=persona_seeds,
                                 scenario_seeds=scenario_seeds,
                                 edge_case_percentage=edge_case_percentage,
+                                generation_instructions=generation_instructions,
                             )
                             if emit_datapoints is not None:
                                 emit_datapoints(datapoints)
@@ -1095,6 +1210,7 @@ async def generate(
     generation_client: AsyncOpenAI | None = None,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
+    generation_instructions: str = '',
     edge_case_percentage: float | None = None,
     llm_parallelism: int | None = None,
 ) -> list[SimulationDatapoint]:
@@ -1110,6 +1226,11 @@ async def generate(
     object, overriding ``num_personas`` / ``num_scenarios`` for that dimension.
     The other dimension still auto-generates. Seeded x auto still crosses into
     the full persona x scenario grid.
+
+    ``generation_instructions`` is a free-text steer applied to every generated
+    persona and scenario (e.g. ``"enterprise B2B buyers, replying in German"``),
+    stacked on top of the auto/seed prompt. It composes with seeds and
+    ``edge_case_percentage``; empty string (the default) changes nothing.
 
     ``edge_case_percentage`` overrides the fraction of the auto-generated
     portion of each dimension that are edge cases (default 0.2 for personas,
@@ -1180,6 +1301,7 @@ async def generate(
                         persona_seeds=persona_seeds,
                         scenario_seeds=scenario_seeds,
                         edge_case_percentage=edge_case_percentage,
+                        generation_instructions=generation_instructions,
                     )
                 finally:
                     # Thread the in-flight exception into the stage-end meta, as
@@ -1207,6 +1329,7 @@ async def generate_personas(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Persona]:
@@ -1217,6 +1340,9 @@ async def generate_personas(
     each archetype, the LLM fills every trait. Provider resolves via the shared
     factory: an injected ``generation_client`` → ``llm_config.client`` →
     ``ORQ_API_KEY`` → ``OPENAI_API_KEY``.
+
+    ``generation_instructions`` is an optional free-text steer applied to every
+    persona on top of its seed (e.g. ``"all replying in German"``).
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1243,6 +1369,7 @@ async def generate_personas(
                 num_personas=1,
                 edge_case_percentage=0.0,
                 seed=seed,
+                generation_instructions=generation_instructions,
             )
             for seed in seeds
         ])
@@ -1261,12 +1388,14 @@ async def generate_persona(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> Persona:
     """Generate one ``Persona`` from a short archetype seed (e.g. ``"angry customer"``).
 
-    See `generate_personas` for the batch form and provider resolution.
+    See `generate_personas` for the batch form, ``generation_instructions``, and
+    provider resolution.
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1275,6 +1404,7 @@ async def generate_persona(
         [seed],
         agent_description=agent_description,
         context=context,
+        generation_instructions=generation_instructions,
         llm_config=llm_config,
         generation_client=generation_client,
     )
@@ -1286,6 +1416,7 @@ async def generate_scenarios(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> list[Scenario]:
@@ -1293,6 +1424,9 @@ async def generate_scenarios(
 
     The scenario counterpart to `generate_personas`: you name each
     situation, the LLM fills the goal, context, and success/failure criteria.
+
+    ``generation_instructions`` is an optional free-text steer applied to every
+    scenario on top of its seed (e.g. ``"all EU consumer-law framing"``).
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1316,6 +1450,7 @@ async def generate_scenarios(
                 num_scenarios=1,
                 edge_case_percentage=0.0,
                 seed=seed,
+                generation_instructions=generation_instructions,
             )
             for seed in seeds
         ])
@@ -1334,12 +1469,14 @@ async def generate_scenario(
     *,
     agent_description: str = '',
     context: str = '',
+    generation_instructions: str = '',
     llm_config: LLMCallConfig | None = None,
     generation_client: AsyncOpenAI | None = None,
 ) -> Scenario:
     """Generate one ``Scenario`` from a short situation seed.
 
-    See `generate_scenarios` for the batch form and provider resolution.
+    See `generate_scenarios` for the batch form, ``generation_instructions``, and
+    provider resolution.
 
     ``llm_config`` carries the model and everything around it: only the fields you set take effect,
     so an unset ``temperature`` still omits the parameter from the request.
@@ -1348,6 +1485,7 @@ async def generate_scenario(
         [seed],
         agent_description=agent_description,
         context=context,
+        generation_instructions=generation_instructions,
         llm_config=llm_config,
         generation_client=generation_client,
     )
@@ -1411,6 +1549,7 @@ async def _generate_personas_scenarios(
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     edge_case_percentage: float | None = None,
+    generation_instructions: str = '',
 ) -> tuple[list[Persona], list[Scenario], TokenUsage | None]:
     """Generate personas and scenarios concurrently from an agent description.
 
@@ -1447,8 +1586,15 @@ async def _generate_personas_scenarios(
         async def _seeded(gen: Any, seeds: list[str], kind: str, kwarg: str) -> list[Any]:
             # One object per seed (seed=archetype, LLM fills the rest); no
             # edge-case padding so the output maps 1:1 to the seeds given.
+            # generation_instructions still applies on top of each seed.
             batches = await asyncio.gather(*[
-                gen.generate(agent_description=agent_description, edge_case_percentage=0.0, seed=s, **{kwarg: 1})
+                gen.generate(
+                    agent_description=agent_description,
+                    edge_case_percentage=0.0,
+                    seed=s,
+                    generation_instructions=generation_instructions,
+                    **{kwarg: 1},
+                )
                 for s in seeds
             ])
             out: list[Any] = []
@@ -1458,8 +1604,20 @@ async def _generate_personas_scenarios(
                 out.append(batch[0])
             return out
 
-        persona_kwargs: dict[str, Any] = {'agent_description': agent_description, 'num_personas': num_personas}
-        scenario_kwargs: dict[str, Any] = {'agent_description': agent_description, 'num_scenarios': num_scenarios}
+        # generation_instructions is passed unconditionally, like agent_description and the seeded
+        # path above: its default '' is a no-op in the generators, so no truthiness guard is needed.
+        # edge_case_percentage stays conditional because its default (None here) diverges from the
+        # generators' own default and only `is not None` preserves that.
+        persona_kwargs: dict[str, Any] = {
+            'agent_description': agent_description,
+            'num_personas': num_personas,
+            'generation_instructions': generation_instructions,
+        }
+        scenario_kwargs: dict[str, Any] = {
+            'agent_description': agent_description,
+            'num_scenarios': num_scenarios,
+            'generation_instructions': generation_instructions,
+        }
         if edge_case_percentage is not None:
             persona_kwargs['edge_case_percentage'] = edge_case_percentage
             scenario_kwargs['edge_case_percentage'] = edge_case_percentage
@@ -2210,27 +2368,14 @@ async def _resolve_or_generate_datapoints(
 
 
 async def _fetch_simulation_datapoints_from_orq(api_key: str, dataset_id: str) -> list[SimulationDatapoint]:
-    """Stream the named Orq dataset and parse each row into a simulation
-    SimulationDatapoint via the same shape-tolerant extractor used by the inline path.
+    """Load the named Orq dataset as simulation datapoints for ``simulate(dataset_id=...)``.
+
+    Thin wrapper over the canonical loader in ``simulation.datasets`` (the key is already resolved on
+    this path), so dataset fetch/parse lives in one place shared with ``extend_from_dataset``.
     """
-    from pydantic import ValidationError
+    from evaluatorq.simulation.datasets import datapoints_from_dataset
 
-    from evaluatorq.fetch_data import fetch_dataset_batches, setup_orq_client
-    from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
-
-    orq_client = setup_orq_client(api_key)
-    out: list[SimulationDatapoint] = []
-    row = 0
-    async for batch in fetch_dataset_batches(orq_client, dataset_id):
-        for eq_dp in batch.datapoints:
-            try:
-                out.append(_extract_single_datapoint(eq_dp, source='row'))
-            except (ValueError, ValidationError) as e:
-                raise ValueError(f'dataset {dataset_id!r} row {row}: {e}') from e
-            row += 1
-    if not out:
-        raise ValueError(f'Dataset {dataset_id!r} returned zero simulation-compatible datapoints')
-    return out
+    return await datapoints_from_dataset(dataset_id, api_key=api_key)
 
 
 @dataclass(frozen=True)

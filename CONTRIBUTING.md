@@ -55,14 +55,11 @@ uv run basedpyright
 
 ## Project Structure
 
-The package has two main areas:
-
-1. **Core evaluation framework** (`src/evaluatorq/`) — the public `evaluate()` API, dataset fetching, scorers, and integrations
-2. **Red teaming subpackage** (`src/evaluatorq/redteam/`) — adversarial testing pipeline with vulnerability-first data model
-
-See `CLAUDE.md` for a detailed file tree.
+Runtime modules live under `src/evaluatorq/`. See `CLAUDE.md` for the shared machinery map, and inspect the package directories for the current surface list.
 
 ## Code Conventions
+
+Read [CODING_STANDARDS.md](CODING_STANDARDS.md) for the rules used to review code. The conventions below cover Python-specific details.
 
 ### Python Version
 
@@ -101,15 +98,9 @@ See `docs/custom-evaluators-and-frameworks.md` for a step-by-step guide.
 
 ### New Backend (Target)
 
-Implement the `AgentTarget` protocol from `backends/base.py`:
+Implement the `AgentTarget` abstract base class in `evaluatorq.contracts`: `async def respond(messages: list[Message]) -> AgentResponse` and `def new() -> AgentTarget`. `new()` returns an independent target for each concurrent datapoint.
 
-```python
-class AgentTarget(Protocol):
-    async def send_prompt(self, prompt: str) -> str: ...
-    def reset_conversation(self) -> None: ...
-```
-
-Optionally implement `SupportsClone`, `SupportsTokenUsage`, or `SupportsTargetMetadata` for advanced features. Register your backend by creating a `BackendBundle` in `backends/registry.py`.
+For the full red-team target lifecycle, subclass `Backend` in `evaluatorq.redteam.backends.base`, implement `create_target()` and `cleanup_memory()`, and register its factory with `register_backend()` in `evaluatorq.redteam.backends.registry`.
 
 ### New Integration
 

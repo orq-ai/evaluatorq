@@ -232,6 +232,7 @@ class ScenarioGenerator(UsageTracking):
         num_scenarios: int = 10,
         edge_case_percentage: float = 0.3,
         seed: str = '',
+        generation_instructions: str = '',
     ) -> list[Scenario]:
         """Generate scenarios for agent testing.
 
@@ -239,6 +240,20 @@ class ScenarioGenerator(UsageTracking):
         situation (e.g. ``"disputes a refund denial"``); the LLM fills the goal,
         context, and success/failure criteria. The intermediate tier between
         fully-auto generation and hand-built ``Scenario`` objects.
+
+        ``generation_instructions`` is a free-text steer applied to the whole
+        batch (e.g. ``"all post-purchase billing disputes, EU consumer-law
+        framing"``). It is stacked on top of the auto/seed instruction, not a
+        replacement, and composes with ``seed``. Like ``seed`` it is meant to
+        STEER generation, so it is passed through as an instruction rather than
+        ``delimit()``-ed; that is the instruction-vs-data line, not the channel.
+        ``agent_description`` and ``context`` come through the same caller but are
+        data the scenarios describe, so those are delimited. The output shape is
+        not held by where this steer sits in the prompt: ``generate_structured``
+        enforces the ``ScenarioListResponse`` schema via ``response_format`` (the
+        Responses structured-output path), so the JSON contract holds regardless.
+        Only the ``json_object`` fallback would depend on prompt wording, so do
+        not copy this pass-through to a prompt-only, unvalidated call site.
 
         Retry is owned by ``with_retry``; client retries are disabled.
         """
@@ -270,6 +285,12 @@ class ScenarioGenerator(UsageTracking):
                         '- Cover different emotional states and urgency levels\n'
                         '- Include both positive and potentially problematic interactions\n'
                         '- Each scenario should have clear success/failure criteria'
+                    )
+
+                if generation_instructions:
+                    instructions += (
+                        '\n\nAdditional instructions from the caller (apply to every scenario, '
+                        f'but keep each scenario coherent with clear criteria):\n{generation_instructions}'
                     )
 
                 user_prompt = f"""Agent Description: {delimit(agent_description)}

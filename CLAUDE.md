@@ -1,6 +1,8 @@
 # CLAUDE.md — evaluatorq-py
 
-This file provides guidance to Claude Code when working in `packages/evaluatorq-py`.
+This file provides guidance to Claude Code when working in this repository.
+
+Read [CODING_STANDARDS.md](CODING_STANDARDS.md) when writing or reviewing code. It holds the review rules, split into hard rules and judgement calls; this file holds the shared machinery map and workflow procedures.
 
 ## Surfacing something important
 
@@ -95,24 +97,6 @@ Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 
-## Package Map
-
-```
-src/evaluatorq/
-├── evaluatorq.py, evaluators.py, pairwise*.py  # Core evaluation + pairwise entry points
-├── contracts.py, types.py   # Cross-subpackage data models (RunManifest, LLMConfig, …)
-├── cli.py                   # CLI entry point (evaluatorq / eq)
-├── common/                  # SHARED MACHINERY — read the table below before writing anything here or near it
-├── redteam/                 # eq redteam: adaptive/ (pipeline), backends/, frameworks/, reports/
-├── simulation/              # eq simulate: runner/, agents/, generators/, reports/
-├── dashboard/               # FastHTML dashboard (eq dashboard)
-├── openresponses/           # OpenAI Responses API integration
-├── tracing/                 # OTel setup + evaluation/run/job spans
-└── integrations/            # LangChain, LangGraph, CrewAI, pydantic-ai, openai-agents
-```
-
-Read the directory itself for the file list — it is always current, this file is not.
-
 ## Need X? Use Y. Do not reinvent.
 
 `common/` is the shared layer. Every module there exists because two surfaces drifted apart and a review consolidated them. Adding a third copy is the failure mode this table exists to prevent.
@@ -146,35 +130,15 @@ Read the directory itself for the file list — it is always current, this file 
 
 ## House rules
 
-Distilled from review findings that recurred. Each cost a review round.
+The review rules distilled from recurring findings (retry ownership, failure visibility, result semantics, concurrency, prompt caching, tests and docs) live in [CODING_STANDARDS.md](CODING_STANDARDS.md). Read it before writing or reviewing code; a review finding cites a rule there by its bold name.
 
-- **One retry layer.** SDK `max_retries` and `with_retry` compose multiplicatively. Pick one per call path, and say which in the docstring.
-- **No optimistic defaults on unknown shapes.** A result whose schema you cannot read must log and count as unknown — never as passed, resisted, or $0. Silence reads as a clean run.
-- **A degraded path announces itself.** Falling back, skipping, or returning a literal gets a `logger.warning` naming the cause. Two branches next to each other must not differ in whether they log.
-- **Never bypass a wrapper to get at its inner call.** If a helper's signature is in your way, change the helper. Going around it drops its validation — that is how `_RESERVED_COMPLETION_KEYS` got skipped.
-- **Caller-supplied values win merges.** `{**defaults, **caller}`, and the docstring states it.
-- **No drive-by reformatting.** Quote-style and signature re-wrapping in an unrelated file hides the behaviour change and collides with parallel sessions.
-- **Test the failure branch you documented.** If the docstring promises degradation to inconclusive, a test exercises it. All-success fakes prove nothing.
-- **A helper with no caller is a bug.** Either call it or delete it; do not recompute its body inline.
-- **A call site that reads part of an `LLMCallConfig` says which part.** Sizing your own budget or picking your own endpoint is fine; dropping the caller's `max_tokens` without a word makes a config that did nothing look like a config that worked. Call `common.structured_output.warn_unread_config_fields(config, <fields you read>, caller=...)`, or route the call through `generate_structured` with `config=` set, which warns on your behalf for that call only — it warns about nothing when the config never reaches it. A field an explicit keyword beats was dropped, not read: take it back out of the set you warn against, or the warning claims a value applied that never did.
-- **Nothing stateful is shared across concurrent work.** `evaluate()` / `simulate()` / `red_team()` run datapoints concurrently: give each task its own target via `new()` (a shared `ORQAgentTarget` races on `_task_id`), and key per-item assignment on the dataset row, never on an arrival-order cursor. An `asyncio` primitive binds to the loop that first blocks on it — don't reuse one across loops.
-- **A new registry copies `vulnerability_registry.py`.** Assert `set(Enum) == set(registry)` at import time and freeze with `MappingProxyType`; a plain mutable dict drifts silently as the enum grows. The same goes for any hand-maintained mirror of another type's fields (`simulation/agents/base.py`'s `_MIRRORED_FIELDS`): assert it against `model_fields` at import time, or the next field added there is dropped from the request in silence.
-- **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
-- **Never ask a judge for a verdict that inverts between types.** `must_happen` and `must_not_happen` mean opposite things by the same `passed` flag, and models get it backwards — gpt-5.4-mini marked a satisfied `must_happen` as unmet while its own `reason` said the opposite. Ask for the one factual thing (*did it occur?*) and map occurrence to pass/fail in code.
-- **Provider usage/cost shapes are not interchangeable.** Anthropic reports cache reads top-level where Orq/OpenAI nest them. Build the test fixture from the provider SDK's own models so a schema move fails the test instead of confirming the guess.
-- **Only write a cache breakpoint where the next turn will still have that prefix.** A write costs 1.25x and is read back only by a request repeating the marked prefix byte-for-byte, so marking a message the caller rebuilds each turn is a pure loss — the judge's per-turn instruction cost the whole transcript, every turn. `volatile_tail` is a **required** keyword for that reason: say how many trailing messages you rebuild (`0` when the whole list persists). On the Responses path the count is `volatile_items`, **not** messages — one tool-calling `Message` renders to several `input` items — so convert with `responses_volatile_items` and never pass a message count through. Never set `ttl` — the 5m default is right, `1h` costs more and only Anthropic honours it. Both APIs take a **positioned, per-item** marker, so this holds on either; do not use the Responses *top-level* `cache_control` body field, which marks the end of the whole input and so cannot be kept off a rebuilt trailing item (measured: 0 reads).
-- **Stable text goes before varying text.** Text stuck behind a placeholder is uncacheable however stable it is, because a breakpoint is per-message and cannot split one. The OWASP judge rubrics are the standing example: ~1500 stable tokens sit around the transcript placeholders and none of them can be marked.
-- **Mark a render, never a store.** `apply_cache_breakpoints` / `mark_responses_input` return a copy and never mutate; feed them the freshly-rendered `list[dict]` and let the result die with the request. Assigning the marked copy back onto the transcript you keep appending to is the one way to exceed Anthropic's 4-breakpoint limit — the old markers stay, two more are added each turn, and the API rejects the request several billed turns in. There is no runtime guard for this by design: annotate the transcript with its real type (`list[ChatCompletionMessageParam]`) and basedpyright refuses the assignment.
+## Keeping the rules true
 
-Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`. A failure there names the canonical helper — use it, don't extend the allowlist.
+When a review comment, CI failure, or bug traces back to a missing convention, update its owner in the same PR:
 
-## Keeping this file true
-
-This file only works if it absorbs what review teaches. When a review comment, CI failure, or bug traces back to a convention that was not written down:
-
-1. Add it **in the same PR** — one table row or one house rule, not a paragraph.
-2. Add the mechanical check too, if one is possible (`tests/test_reuse_guardrails.py`, a ruff rule).
-3. Delete something stale while you are here. Above ~200 lines this file gets skimmed, and skimmed is the same as absent.
+1. Add a review rule to `CODING_STANDARDS.md`, under **Hard rules** or **Judgement calls**; add an exact shared-helper route to the table above when needed.
+2. Add a mechanical check when possible (`tests/test_reuse_guardrails.py`, a ruff rule), instead of relying on prose alone.
+3. Delete stale or duplicated guidance while you are here. Long instruction files get skimmed, and skimmed is the same as absent.
 
 Do not add a directory tree, a file inventory, or anything else the filesystem already answers.
 

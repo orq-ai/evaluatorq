@@ -10,11 +10,12 @@ from typer.testing import CliRunner
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.api import _resolve_or_generate_datapoints
 from evaluatorq.simulation.cli import app
+from evaluatorq.simulation._seed_extension import seed_context
 from evaluatorq.simulation.experiments import (
-    _seed_context,
     datapoints_from_experiment,
     extend_from_experiment,
 )
+from evaluatorq.simulation.generators import DatapointGenerator
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Persona,
@@ -215,25 +216,74 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'get a refund' in captured['agent_description']
     context = captured['context']
     assert 'Alice' in context and 'Bob' in context
-    assert context.count('Refund:') == 1  # deduped scenario
+    assert context.count('"name":"Refund"') == 1  # deduped identical scenario
     assert 'NEW personas' in context
 
 
+@pytest.mark.asyncio
+async def test_extend_uses_explicit_key_for_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    _patch_fetch(monkeypatch, _experiment_rows())
+
+    async def fake_generate(self: DatapointGenerator, **_: Any) -> list[SimulationDatapoint]:
+        assert self._shared_client.api_key == 'key'
+        assert str(self._shared_client.base_url).rstrip('/').endswith('/v3/router')
+        return [_sim_datapoint()]
+
+    monkeypatch.setattr(DatapointGenerator, 'generate_from_description', fake_generate)
+
+    assert len(await extend_from_experiment('ex_1', api_key='key')) == 1
+
+
 def test_describe_agent_falls_back_when_all_goals_blank() -> None:
-    from evaluatorq.simulation.experiments import _describe_agent
+    from loguru import logger
+
+    from evaluatorq.simulation._seed_extension import describe_agent
 
     dp = _sim_datapoint()
     dp = dp.model_copy(update={'scenario': dp.scenario.model_copy(update={'goal': ''})})
-    description = _describe_agent([dp])
+    warnings: list[str] = []
+    sink_id = logger.add(warnings.append, level='WARNING')
+    try:
+        description = describe_agent([dp])
+    finally:
+        logger.remove(sink_id)
     assert description  # not the bare truncated 'goals such as: ' prefix
     assert not description.rstrip().endswith(':')
+    # the degraded path must announce itself (house rule)
+    assert any('blank goal' in w for w in warnings)
 
 
-def test_seed_context_dedupes() -> None:
+def test_seed_context_dedupes_identical_objects() -> None:
     seeds = [_sim_datapoint('A', 'S1'), _sim_datapoint('A', 'S2')]
-    context = _seed_context(seeds)
-    assert context.count('- A: bg') == 1
+    context = seed_context(seeds)
+    assert context.count('"name":"A"') == 1
     assert 'S1' in context and 'S2' in context
+
+
+def test_seed_context_keeps_distinct_variants_with_same_names() -> None:
+    original = _sim_datapoint('A', 'Refund')
+    changed_content = original.model_copy(
+        update={
+            'persona': original.persona.model_copy(update={'background': 'needs an accessible checkout'}),
+            'scenario': original.scenario.model_copy(
+                update={'goal': 'get a replacement', 'context': 'damaged delivery'}
+            ),
+        }
+    )
+    changed_trait = original.model_copy(
+        update={'persona': original.persona.model_copy(update={'patience': 0.9})}
+    )
+
+    context = seed_context([original, original, changed_content, changed_trait])
+
+    assert context.count('"name":"A"') == 3
+    assert context.count('"name":"Refund"') == 2
+    assert '"background":"needs an accessible checkout"' in context
+    assert '"goal":"get a replacement"' in context
+    assert '"context":"damaged delivery"' in context
+    assert '"patience":0.9' in context
 
 
 # ---------------------------------------------------------------------------

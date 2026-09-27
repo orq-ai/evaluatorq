@@ -34,7 +34,8 @@ class DatapointGenerator:
     """Generates complete datapoints for simulation.
 
     Orchestrates persona, scenario, and first message generation
-    to produce ready-to-use test datapoints.
+    to produce ready-to-use test datapoints. An explicit Orq key routes generation
+    through Orq unless ``config.client`` supplies a client, which takes precedence.
     """
 
     def __init__(
@@ -42,6 +43,7 @@ class DatapointGenerator:
         *,
         model: str = DEFAULT_MODEL,
         config: LLMCallConfig | None = None,
+        orq_api_key: str | None = None,
     ) -> None:
         from evaluatorq.simulation._config import resolve_sim_llm_config
 
@@ -50,7 +52,9 @@ class DatapointGenerator:
 
         from evaluatorq.openresponses.client import build_simulation_client
 
-        self._shared_client, self._client_owned = build_simulation_client(self._config.client, max_retries=0)
+        self._shared_client, self._client_owned = build_simulation_client(
+            self._config.client, extra_api_key=orq_api_key, max_retries=0
+        )
         self._persona_generator = PersonaGenerator(client=self._shared_client, config=self._config)
         self._scenario_generator = ScenarioGenerator(client=self._shared_client, config=self._config)
         self._first_message_generator = FirstMessageGenerator(client=self._shared_client, config=self._config)
@@ -79,7 +83,8 @@ class DatapointGenerator:
         """Generate datapoints from agent description.
 
         Creates personas and scenarios, then combines them into datapoints.
-        Total datapoints = numPersonas x (numScenarios + boundary + security)
+        Returns the cartesian product of the personas and scenarios actually
+        generated; their counts may differ from the requested counts.
         """
         logger.info('Generating %d personas and %d scenarios...', num_personas, num_scenarios)
 

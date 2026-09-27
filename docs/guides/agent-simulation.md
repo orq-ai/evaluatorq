@@ -73,7 +73,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
     async def main():
         results = await generate_and_simulate(
-            evaluation_name="support-agent-sim",
+            run_name="support-agent-sim",
             target="agent:my-support-agent",     # hosted Orq agent, routed via ORQ_API_KEY
             agent_description=(
                 "Customer support agent for an e-commerce store; "
@@ -83,6 +83,11 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
             num_scenarios=4,                     # → 12 persona × scenario simulations
             max_turns=6,
             evaluator_names=["goal_achieved", "criteria_met"],
+            experiment_description="September support regression",
+            orq_folder_path="Support/September",
+            report_path="support-simulation.json",
+            save=True,
+            raise_on_execution_failure=True,
         )
 
         passed = sum(r.goal_achieved for r in results)
@@ -120,7 +125,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
     async def main():
         results = await generate_and_simulate(
-            evaluation_name="support-agent-sim-openai",
+            run_name="support-agent-sim-openai",
             target=openai_agent,
             agent_description=(
                 "Customer support agent for an e-commerce store; "
@@ -142,12 +147,27 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
         asyncio.run(main())
     ```
 
-`agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
+`run_name` is an optional label for this execution in run records, results, and traces. Existing calls with `evaluation_name` still work.
+
+`agent_description` drives generation; `num_personas × num_scenarios` is the requested number of cases. The actual count can differ when generation returns a different number of personas or scenarios or cannot create an opening message for a pair. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
+
+Pass `generation_instructions="..."` to steer the whole generated set. It is a free-text instruction applied to every persona AND scenario (e.g. `"enterprise B2B buyers, frustrated, replying in German"`), stacked on top of the built-in prompts. Unlike a seed, which names one archetype and yields one object, it shapes the entire batch, and it composes with seeds and `edge_case_percentage`. It is accepted by `generate_and_simulate()`, `generate()`, and the seed helpers below; to steer personas and scenarios differently, call `generate_personas()` / `generate_scenarios()` separately. On the CLI it is `--generation-instructions`.
+
+`simulate()` and `generate_and_simulate()` accept the same result options:
+
+| Python keyword | What it controls |
+|---|---|
+| `experiment_description` | Description of the experiment uploaded to Orq; has no effect when `upload_results=False`. |
+| `orq_folder_path` | Folder for uploaded results in Orq. |
+| `report_path` | Local JSON report file, written when `save=True`. Without a path, `save=True` writes to the run store. |
+| `raise_on_execution_failure` | Raises `SimulationDroppedError` for a dropped, errored, or timed-out conversation. Defaults to `True`; goal scores do not trigger it. |
+
+The earlier names `evaluation_description`, `orq_results_path`, `report`, and `exit_on_failure` still work. If you supply both names for one option, their values must match.
 
 !!! note "CI and local runs"
-    A simulation that produced no conversation — dropped, or ended in `error`/`timeout` — raises by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
+    A simulation that produced no conversation — dropped, or ended in `error`/`timeout` — raises by default; ordinary failed goals remain in the returned results. Set `raise_on_execution_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
 
-    `exit_on_failure` gates on datapoints that never produced a conversation, not on scores, so it will not fail a build for an agent that simply answered badly. For a gate on the scores themselves — turning evaluator results into an exit code, with the env vars and workflow step to go with it — see [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
+    `raise_on_execution_failure` gates on datapoints that never produced a conversation, not on scores, so it will not fail a build for an agent that simply answered badly. For a gate on the scores themselves — turning evaluator results into an exit code, with the env vars and workflow step to go with it — see [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
 
 ## Seed by archetype
 
@@ -167,7 +187,7 @@ async def main():
     scenario = await generate_scenario("disputes a refund denial")
 
     results = await simulate(
-        evaluation_name="seeded-simulation",
+        run_name="seeded-simulation",
         target="agent:my-support-agent",
         personas=[persona],
         scenarios=[scenario],
@@ -223,7 +243,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
         )
 
         results = await simulate(
-            evaluation_name="basic-simulation-example",
+            run_name="basic-simulation-example",
             target="agent:my-support-agent",    # hosted Orq agent, routed via ORQ_API_KEY
             personas=[persona],
             scenarios=[scenario],
@@ -287,7 +307,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
         )
 
         results = await simulate(
-            evaluation_name="openai-agent-simulation",
+            run_name="openai-agent-simulation",
             target=openai_agent,                 # your OpenAI agent
             personas=[persona],
             scenarios=[scenario],
@@ -404,7 +424,7 @@ The `criteria_met` evaluator's `raw_output` carries either per-criterion `Criter
 from evaluatorq.simulation import SimulationScoringConfig, simulate
 
 results = await simulate(
-    evaluation_name="onboarding-sim",
+    run_name="onboarding-sim",
     target="agent:my-onboarding-agent",
     evaluator_names=["goal_achieved", "criteria_met", "turn_efficiency", "conversation_quality"],
     # A guided onboarding flow needs ~6 turns before anyone should call it slow.
@@ -481,7 +501,7 @@ async def main():
     datapoints = load_datapoints_from_jsonl("cases.jsonl")
 
     results = await simulate(
-        evaluation_name="replay-v2",
+        run_name="replay-v2",
         target="agent:my-support-agent-v2",   # new version, same cases
         datapoints=datapoints,
         max_turns=6,
@@ -495,18 +515,52 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-If your cases already live in Orq as a dataset, point `simulate()` at it with `dataset_id=` and skip the local file entirely. Each row's `inputs` should carry a `datapoint` object (`persona`, `scenario`, `first_message`), or a `persona` + `scenario` pair, matching the `SimulationDatapoint` shape above:
+An **Orq dataset** is a stored collection of rows. Here, one row is one **simulation datapoint**: a persona (who the simulated user is), a scenario (what they want), and an opening message. `dataset_id` is the dataset's identifier, not its display name. If you create one with `eq sim upload-dataset --input cases.jsonl --name "Support cases"`, the command prints the ID to use below; see the [upload command reference](../cli-reference/simulation.md#eq-sim-upload-dataset). For an existing dataset, use its ID. Each row's `inputs` must contain a `datapoint` object or a `persona` + `scenario` pair, matching the `SimulationDatapoint` shape above.
+
+To **replay** those rows as they are, pass the ID to `simulate()`:
 
 ```python
 results = await simulate(
-    evaluation_name="dataset-replay",
+    run_name="support-dataset-replay",
     target="agent:my-support-agent",
-    dataset_id="my-simulation-cases",       # named Orq dataset, routed via ORQ_API_KEY
+    dataset_id="your-dataset-id",            # ID printed by upload-dataset
     evaluator_names=["goal_achieved", "criteria_met"],
 )
 ```
 
+`run_name` is an optional label you choose for this execution in its run record, results, and traces. It is separate from `dataset_id`, which selects the stored cases, and `evaluator_names`, which selects the scoring checks. `target` names the agent being tested. Existing calls with `evaluation_name` still work; if you supply both names, their values must match.
+
 `simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one per run.
+
+To **extend** the coverage, call `extend_from_dataset()` with that same ID. It reads the stored personas and scenarios as examples, then asks the model for new cases of similar kinds. Exact repeats are included once in the generation prompt, while distinct personas or scenarios with the same name remain separate examples. It returns only new datapoints; it does not change the Orq dataset or include its original rows. The request is guidance to the model, so matching frequencies and avoiding duplicates are not guaranteed.
+
+Extension sends every distinct seed object to the model. A large dataset can make that prompt expensive or too long for the model's context window; use a smaller dataset of representative cases when generating new ones.
+
+This example uses `ORQ_API_KEY` from the setup above and the default simulation model, `openai/gpt-5.6-luna`. Replace the dataset ID and agent key with yours:
+
+```python
+import asyncio
+
+from evaluatorq.simulation import extend_from_dataset, simulate
+
+
+async def main():
+    extra = await extend_from_dataset("your-dataset-id", num_personas=3, num_scenarios=5)
+    results = await simulate(
+        run_name="support-dataset-extended",
+        datapoints=extra,
+        target="agent:my-support-agent",
+    )
+    print(f"Ran {len(results)} new cases")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+`extend_from_dataset()` generates cases; `simulate()` runs them against the target. To run both the original and new cases, combine `await datapoints_from_dataset("your-dataset-id")` with `extra` and pass the combined list as `datapoints`. `extend_from_experiment()` does the same kind of generation from a prior experiment run.
+
+`num_personas` and `num_scenarios` request new user archetypes and situations, respectively. The generator attempts one case for each pair, but it can return a different number of valid personas or scenarios, and a pair is dropped if its opening message cannot be generated. For example, two valid personas and five scenarios yield at most ten cases even when you request three personas. Check `len(extra)` if your run needs a fixed number of cases. An explicit `api_key` authenticates both dataset fetching and generation through Orq; a client in `llm_config` takes precedence for generation.
 
 ### Ground new cases in real traces
 
@@ -649,7 +703,7 @@ async def main():
     scenarios = await generate_scenarios(scenario_seeds, agent_description="e-commerce support agent")
 
     results = await simulate(
-        evaluation_name="trace-grounded-sim",
+        run_name="trace-grounded-sim",
         target="agent:my-support-agent",
         personas=personas,                    # 3 personas × 3 scenarios → 9 simulations
         scenarios=scenarios,

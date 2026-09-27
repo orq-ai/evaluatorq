@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import types
 from typing import Any
 
+import pydantic
 import pytest
 
-from evaluatorq.backends.coding_agent import OrqLaunchOptions, build_argv
+from evaluatorq.backends.coding_agent import AGENTS, CodingAgentTarget, DockerOptions, OrqLaunchOptions, ParsedTurn, build_argv
 
 PROMPT = 'reply to the user'
 
@@ -110,3 +112,45 @@ def test_system_prompt_not_a_flag_for_codex_or_opencode() -> None:
     for agent in ('codex', 'opencode'):
         argv, _ = _argv(agent=agent, system_prompt='be terse')
         assert 'be terse' not in argv
+
+
+def test_orq_launch_options_is_frozen() -> None:
+    opts = OrqLaunchOptions()
+    with pytest.raises(pydantic.ValidationError):
+        opts.mcp = False  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_orq_launch_options_keeps_positional_constructor_and_value_semantics() -> None:
+    positional = OrqLaunchOptions(False, False, 'https://my.orq.ai', False)
+    keyword = OrqLaunchOptions(mcp=False, skills=False, base_url='https://my.orq.ai', fetch_models=False)
+    assert positional == keyword
+    assert hash(positional) == hash(keyword)
+    assert positional.to_flags() == ['--no-mcp', '--no-skills', '--base-url', 'https://my.orq.ai', '--no-fetch-models']
+
+
+def test_container_clone_reapplies_implicit_agent_defaults() -> None:
+    for original in (
+        CodingAgentTarget(agent='claude', container=DockerOptions()),
+        CodingAgentTarget(agent='opencode', container=DockerOptions()),
+    ):
+        clone = original.new()
+        assert clone._permission_mode == original._permission_mode
+        assert clone._extra_args == original._extra_args
+        assert clone._container == original._container
+
+
+def test_agents_registry_is_read_only() -> None:
+    assert isinstance(AGENTS, types.MappingProxyType)
+    with pytest.raises(TypeError):
+        AGENTS['x'] = AGENTS['claude']  # pyright: ignore[reportIndexIssue]
+
+
+def test_agent_spec_is_frozen() -> None:
+    with pytest.raises(pydantic.ValidationError):
+        AGENTS['claude'].binary = 'x'  # pyright: ignore[reportAttributeAccessIssue]
+
+
+def test_parsed_turn_stays_mutable() -> None:
+    turn = ParsedTurn()
+    turn.text = 'hi'
+    assert turn.text == 'hi' and turn.tool_calls == []

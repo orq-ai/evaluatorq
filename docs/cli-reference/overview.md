@@ -46,7 +46,7 @@ Two command groups have their own pages:
 
     **Removed aliases** — these no longer work; calling them raises an error:
 
-    - SDK `simulate(run_output=...)` / `generate_and_simulate(run_output=...)` — removed, use `report=...` (raises `TypeError`)
+    - SDK `simulate(run_output=...)` / `generate_and_simulate(run_output=...)` — removed, use `report_path=...` (raises `TypeError`)
     - SDK `red_team(output_dir=...)` — removed, use `artifacts_dir=...` (raises `TypeError`)
     - CLI `redteam run --output-dir` — removed, use `--artifacts-dir` (no such option)
 
