@@ -301,12 +301,20 @@ def controls(
     carried_facets = (
         facets
         if review
-        else (explorer_facets or (explorer_view.facets if explorer_view is not None else None) or snapshot.explicit_filters)
+        else (
+            explorer_facets
+            or (explorer_view.facets if explorer_view is not None else None)
+            or snapshot.explicit_filters
+        )
     )
     carried_numeric = (
         numeric
         if review
-        else (explorer_numeric or (explorer_view.numeric if explorer_view is not None else None) or snapshot.explicit_numeric)
+        else (
+            explorer_numeric
+            or (explorer_view.numeric if explorer_view is not None else None)
+            or snapshot.explicit_numeric
+        )
     )
     if not review and population is None and (explorer_facets is not None or explorer_view is not None):
         facets = carried_facets
