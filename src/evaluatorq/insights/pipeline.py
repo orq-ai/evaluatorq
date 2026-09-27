@@ -42,6 +42,9 @@ from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.trace_finder.settings import effective_settings
 
+MIN_CLUSTER_SIZE = 5
+LOW_CONFIDENCE = 0.6
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
@@ -95,7 +98,7 @@ def _label_results(traces: list[TraceInsight], specs: list[LabelSpec]) -> dict[s
                 continue
             if answer.confidence is not None:
                 confidences.append(answer.confidence)
-                low += answer.confidence < 0.6
+                low += answer.confidence < LOW_CONFIDENCE
             if spec.kind == 'noul':
                 values['yes' if answer.value is True else 'no'] += 1
             elif spec.kind == 'score':
@@ -201,7 +204,7 @@ async def _build_dimension(  # noqa: C901
             vectors,
             max_clusters=max_clusters,
             max_subclusters=max_subclusters,
-            min_cluster_size=5,
+            min_cluster_size=MIN_CLUSTER_SIZE,
             outlier_zscore=outlier_zscore,
         )
         base_labels = tree.base_labels
@@ -210,6 +213,7 @@ async def _build_dimension(  # noqa: C901
         neighbours = nearest_neighbours(cents)
         members: dict[int, list[str]] = {base_id: [] for base_id in base_ids}
         examples: dict[int, list[str]] = {base_id: [] for base_id in base_ids}
+        example_ids: dict[int, list[str]] = {base_id: [] for base_id in base_ids}
         member_traces: dict[int, list[TraceInsight]] = {base_id: [] for base_id in base_ids}
         for local_i, base_id_value in enumerate(base_labels):
             base_id = int(base_id_value)
@@ -222,11 +226,11 @@ async def _build_dimension(  # noqa: C901
             member_traces[base_id].append(trace)
         # Five examples nearest each centroid, used for descriptions, merges and the UI.
         for base_id in base_ids:
-            local_members = member_traces[base_id]
             member_positions = [i for i, lbl in enumerate(base_labels) if int(lbl) == base_id]
             center = cents[base_id]
             nearest = sorted(member_positions, key=lambda i: float(np.linalg.norm(vectors[i] - center)))[:5]
             examples[base_id] = [usable[indices[i]][1] for i in nearest]
+            example_ids[base_id] = [usable[indices[i]][0].trace_id for i in nearest]
 
         described = await describe_clusters(
             members,
@@ -312,7 +316,7 @@ async def _build_dimension(  # noqa: C901
                     description=base_name.description,
                     size=len(traces_for_base),
                     trace_ids=[t.trace_id for t in traces_for_base],
-                    example_trace_ids=[t.trace_id for t in traces_for_base[:5]],
+                    example_trace_ids=[trace_id for old in merged[rep] for trace_id in example_ids.get(old, [])][:5],
                     group=group,
                 )
             )
@@ -360,7 +364,7 @@ async def insights(  # noqa: C901
     max_subclusters: int = 15,
     outlier_zscore: float | None = None,
     summary_model: str = 'openai/gpt-6-luna',
-    classifier_model: str = 'typesafe/jev-latest',
+    classifier_model: str | None = None,
     compiler_model: str | None = None,
     embedding_model: str = 'openai/text-embedding-3-small',
     priority_dimension: DimensionName = 'intent',
@@ -383,6 +387,7 @@ async def insights(  # noqa: C901
             raise ValueError(f'{limit_name} must be positive')
     settings = effective_settings()
     compiler_model = compiler_model or settings.compiler_model
+    classifier_model = classifier_model or settings.classifier_model
     run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()

@@ -44,6 +44,20 @@ def test_run_round_trips_json(minimal_run: InsightsRun) -> None:
     assert InsightsRun.model_validate_json(minimal_run.model_dump_json()) == minimal_run
 
 
+def test_run_loads_config_fields_from_older_saved_file(minimal_run: InsightsRun) -> None:
+    import json
+
+    payload = json.loads(minimal_run.model_dump_json())
+    payload['config'].update(
+        min_cluster_size=5,
+        merge_threshold=0.5,
+        low_confidence_threshold=0.6,
+        umap_random_state=42,
+    )
+    loaded = InsightsRun.model_validate_json(json.dumps(payload))
+    assert loaded.config.classifier_model == minimal_run.config.classifier_model
+
+
 @pytest.mark.parametrize('sentinel', ['None', 'none.', ' N/A ', 'No errors', 'No errors were made.'])
 def test_real_assistant_errors_drops_sentinels(sentinel: str) -> None:
     summary = TraceSummary(

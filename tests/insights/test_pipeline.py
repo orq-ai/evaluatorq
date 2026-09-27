@@ -95,6 +95,31 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_classifier_model_follows_the_setting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_clients(monkeypatch)
+    monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'acme/classifier-9')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'none.json'))
+    traces = [_trace(0)]
+    seen: list[str] = []
+
+    async def label(*args, model, **kwargs):
+        seen.append(model)
+        return _labels(traces)
+
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+
+    async def dimension(*args, **kwargs):
+        return _dimension_result()
+
+    monkeypatch.setattr(pipeline, '_build_dimension', dimension)
+    run = await pipeline.insights(_population(), runs_dir=tmp_path)
+    assert run.config.classifier_model == 'acme/classifier-9'
+    assert seen == ['acme/classifier-9']
+
+
+@pytest.mark.asyncio
 async def test_summary_failure_is_per_trace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_clients(monkeypatch)
     traces = [_trace(i) for i in range(6)]
@@ -649,6 +674,55 @@ async def test_cluster_merges_cannot_cross_top_level_groups(monkeypatch: pytest.
     bases = [cluster for cluster in result.clusters if cluster.level == 'base']
     assert {top.size for top in tops.values()} == {2, 3}
     assert all(top.size == sum(base.size for base in bases if base.parent_id == top.id) for top in tops.values())
+
+
+@pytest.mark.asyncio
+async def test_base_cluster_examples_are_nearest_to_centroid(monkeypatch: pytest.MonkeyPatch) -> None:
+    import numpy as np
+    from openai import AsyncOpenAI
+
+    from evaluatorq.insights import cluster, reduce
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.models import TraceInsight
+
+    traces = [
+        TraceInsight(
+            trace_id=f't{i}', span_id=f's{i}', timestamp=datetime.now(timezone.utc),
+            summary=_summary().model_copy(update={'request': f'request {i}'}),
+        )
+        for i in range(7)
+    ]
+    monkeypatch.setattr(cluster, 'cluster_two_level', lambda vectors, **kwargs: cluster.ClusterTree(
+        base_labels=np.zeros(len(vectors), dtype=int), top_of_base={0: 0}, n_base=1, n_top=1
+    ))
+    monkeypatch.setattr(cluster, 'nearest_neighbours', lambda _cents: {0: []})
+    vectors = [[-100.0], [-99.0], [0.0], [1.0], [2.0], [3.0], [4.0]]
+
+    async def embeddings(texts, **kwargs):
+        return {text: vectors[i] for i, text in enumerate(texts)}
+
+    async def descriptions(members, **kwargs):
+        return {key: ClusterName(name=f'base {key}', description='details') for key in members}
+
+    async def top_descriptions(children, **kwargs):
+        return {key: ClusterName(name=f'top {key}', description='details') for key in children}
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', top_descriptions)
+    monkeypatch.setattr(reduce, 'reduce_3d', lambda _vectors: None)
+    cache = InsightsCache(enabled=False)
+    try:
+        result = await pipeline._build_dimension(
+            'intent', traces, client=cast('AsyncOpenAI', object()), cache=cache,
+            embedding_model='unused', summary_model='unused', max_clusters=15, max_subclusters=15,
+            outlier_zscore=None, parallelism=10, classifier_model='typesafe/jev-latest',
+        )
+    finally:
+        cache.close()
+    base = next(value for value in result.clusters if value.level == 'base')
+    assert base.example_trace_ids == ['t2', 't3', 't4', 't5', 't6']
 
 
 @pytest.mark.parametrize(('n_failed', 'raises'), [(4, True), (2, False)])

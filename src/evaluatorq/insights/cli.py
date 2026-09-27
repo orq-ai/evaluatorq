@@ -156,9 +156,12 @@ def insights_cmd(
         typer.Option('--summary-model', help='Model used to summarize each trace.'),
     ] = 'openai/gpt-6-luna',
     classifier_model: Annotated[
-        str,
-        typer.Option('--classifier-model', help='Model used to answer label questions.'),
-    ] = 'typesafe/jev-latest',
+        str | None,
+        typer.Option(
+            '--classifier-model',
+            help='Model used to answer label questions. Defaults to EVALUATORQ_CLASSIFIER_MODEL or the dashboard setting.',
+        ),
+    ] = None,
     embedding_model: Annotated[
         str,
         typer.Option('--embedding-model', help='Model used to embed discovered-dimension text.'),

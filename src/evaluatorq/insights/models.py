@@ -208,14 +208,10 @@ class InsightsConfig(BaseModel):
     embedding_model: str = 'openai/text-embedding-3-small'
     max_clusters: int = 15
     max_subclusters: int = 15
-    min_cluster_size: int = 5
     outlier_zscore: float | None = None
     parallelism: int = 100
     priority_dimension: DimensionName = 'intent'
     cache: bool = True
-    merge_threshold: float = 0.5
-    low_confidence_threshold: float = 0.6
-    umap_random_state: int = 42
 
 
 class InsightsRun(BaseModel):

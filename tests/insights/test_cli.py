@@ -40,7 +40,7 @@ def test_help_lists_population_and_clustering_options() -> None:
 
     assert result.exit_code == 0, result.output
     help_text = unstyle(result.output)
-    for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--max-clusters'):
+    for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--max-clusters', '--classifier-model'):
         assert option in help_text
 
 
