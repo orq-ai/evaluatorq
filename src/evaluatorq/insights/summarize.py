@@ -70,7 +70,7 @@ These are examples of CORRECT values for "task"/"request" — they describe what
 1. summary: A 25-word domain-specific summary of the conversation.
 2. task / request: What the end-user was trying to accomplish — their goal asked of the assistant.
 3. topic: The high-level topic of the conversation.
-4. assistant_errors: Any errors, factual, logical, or procedural, that the assistant made.
+4. assistant_errors: Any errors, factual, logical, or procedural, that the assistant made. Return an empty list when the assistant made no errors.
 5. sentiment_explanation: One sentence explaining the user's overall sentiment, grounded in specific conversation events.
 6. languages: The languages used in the conversation.
 7. tools_used: Tools or features the assistant used during the conversation.

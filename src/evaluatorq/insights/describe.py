@@ -90,8 +90,6 @@ Describe the group in 3-4 clear sentences in the past tense. Focus on WHAT went 
 
 After creating the description, generate a short name for the group. The name must describe the specific failure mode (e.g., 'Hallucinated non-existent API endpoints', 'Truncated code completions without warning', or 'Produced syntactically valid but logically incorrect SQL queries'). The name should be at most ten words long.
 
-Special case: if this group consists of conversations with no assistant failures, name it 'No failures detected' and describe what successful interactions in this group looked like.
-
 The name should distinguish this group from the contrastive examples by the specific failure mechanism — not by the topic, user sentiment, or severity. NEVER start the name with 'Summarize' — you are describing a failure pattern, not performing summarization.
 
 Provide your response as structured JSON with these fields:

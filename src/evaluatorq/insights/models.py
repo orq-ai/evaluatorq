@@ -110,6 +110,16 @@ class TraceSummary(BaseModel):
     tools_used: list[str] = []
 
 
+_NO_ERROR_SENTINELS = frozenset({'none', 'n/a', 'no errors', 'no errors were made', 'no error'})
+
+
+def real_assistant_errors(summary: TraceSummary) -> list[str]:
+    """`assistant_errors` without placeholder entries a model writes for a clean trace ('None', 'No errors')."""
+    return [
+        error for error in summary.assistant_errors if error.strip().rstrip('.').casefold() not in _NO_ERROR_SENTINELS
+    ]
+
+
 class ClusterAssignment(BaseModel):
     """Which top- and base-level cluster a trace fell into for one discovered dimension. `'noise'` marks an outlier."""
 

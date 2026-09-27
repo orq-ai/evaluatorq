@@ -395,6 +395,44 @@ async def test_failed_summaries_are_not_counted_as_no_signal(monkeypatch: pytest
     assert result.n_failed == 2
 
 
+@pytest.mark.asyncio
+async def test_failure_dimension_counts_placeholder_errors_as_no_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openai import AsyncOpenAI
+
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.models import TraceInsight
+
+    traces = [
+        TraceInsight(
+            trace_id=f't{i}',
+            span_id='s',
+            timestamp=datetime.now(timezone.utc),
+            summary=_summary().model_copy(update={'assistant_errors': ['None'] if i < 6 else [f'Error {i}']}),
+        )
+        for i in range(9)
+    ]
+    monkeypatch.setattr(pipeline, 'embed_texts', lambda *args, **kwargs: pytest.fail('must not embed'))
+    cache = InsightsCache(enabled=False)
+    try:
+        result = await pipeline._build_dimension(
+            'failure',
+            traces,
+            client=cast('AsyncOpenAI', object()),
+            cache=cache,
+            embedding_model='unused',
+            summary_model='unused',
+            max_clusters=15,
+            max_subclusters=15,
+            outlier_zscore=None,
+            parallelism=10,
+            classifier_model='unused',
+        )
+    finally:
+        cache.close()
+    assert result.n_no_signal == 6
+    assert any('only 3 traces have signal' in warning for warning in result.warnings)
+
+
 def _population():
     from evaluatorq.insights.models import InsightsPopulation
 

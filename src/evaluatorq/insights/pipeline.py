@@ -32,6 +32,7 @@ from evaluatorq.insights.models import (
     LabelSpec,
     StageFailure,
     TraceInsight,
+    real_assistant_errors,
 )
 from evaluatorq.insights.population import PopulationError, resolve_population
 from evaluatorq.insights.presets import DIMENSION_FIELDS, LABEL_PRESETS, SENTIMENT
@@ -77,7 +78,7 @@ def _source(trace: TraceInsight, dimension: DimensionName) -> str | None:
     if dimension == 'intent':
         return summary.request
     if dimension == 'failure':
-        return ' ; '.join(summary.assistant_errors) or None
+        return ' ; '.join(real_assistant_errors(summary)) or None
     return summary.sentiment_explanation
 
 
@@ -144,14 +145,27 @@ async def _build_dimension(  # noqa: C901
     source_field = DIMENSION_FIELDS[dimension]
     usable: list[tuple[TraceInsight, str]] = []
     n_no_signal = 0
+    n_sentinel_only = 0
     for trace in traces:
         if 'summary' in trace.errors:
             continue
+        if (
+            dimension == 'failure'
+            and trace.summary is not None
+            and trace.summary.assistant_errors
+            and not real_assistant_errors(trace.summary)
+        ):
+            n_sentinel_only += 1
         text = _source(trace, dimension)
         if text is None or not text.strip():
             n_no_signal += 1
         else:
             usable.append((trace, text))
+    if n_sentinel_only:
+        logger.info(
+            'dimension failure: {} trace(s) listed only placeholder errors and count as no signal',
+            n_sentinel_only,
+        )
     result = DimensionResult(name=dimension, source_field=source_field, clusters=[], n_no_signal=n_no_signal)
     result.n_failed = sum(bool(trace.errors) for trace in traces)
     if len(usable) < 5:

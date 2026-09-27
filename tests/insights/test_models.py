@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.insights.models import InsightsPopulation, InsightsRun
+from evaluatorq.insights.models import InsightsPopulation, InsightsRun, TraceSummary, real_assistant_errors
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 
@@ -42,3 +42,16 @@ def test_from_finder_export_sets_path_only() -> None:
 
 def test_run_round_trips_json(minimal_run: InsightsRun) -> None:
     assert InsightsRun.model_validate_json(minimal_run.model_dump_json()) == minimal_run
+
+
+@pytest.mark.parametrize('sentinel', ['None', 'none.', ' N/A ', 'No errors', 'No errors were made.'])
+def test_real_assistant_errors_drops_sentinels(sentinel: str) -> None:
+    summary = TraceSummary(
+        summary='s',
+        request=None,
+        task=None,
+        topic=None,
+        sentiment_explanation=None,
+        assistant_errors=[sentinel, 'Quoted the wrong refund window'],
+    )
+    assert real_assistant_errors(summary) == ['Quoted the wrong refund window']
