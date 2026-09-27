@@ -2781,15 +2781,15 @@ _INSIGHTS_CSS = """
 .insights-overview-new { display:inline-flex; align-items:center; justify-content:center; padding:8px 14px; border-radius:6px; background:var(--teal-600); color:white; font-size:12.5px; font-weight:600; text-decoration:none; white-space:nowrap; }
 .insights-overview-new:hover { filter:brightness(.86); }
 .insights-overview-table { border-top:1px solid var(--border-default); }
-.insights-overview-columns,.insights-overview-row { display:grid; grid-template-columns:minmax(200px,2fr) 105px 80px minmax(130px,1fr) 20px; align-items:center; gap:12px; }
+.insights-overview-columns,.insights-overview-row { display:grid; grid-template-columns:minmax(180px,1.6fr) minmax(170px,.9fr) 100px 70px minmax(120px,1fr) 20px; align-items:center; gap:12px; }
 .insights-overview-columns { padding:10px 15px; color:var(--text-muted); font-size:10.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; }
 .insights-overview-row { min-height:68px; padding:10px 15px; border-top:1px solid var(--border-subtle); color:var(--text-body); text-decoration:none; font-size:12.5px; }
 .insights-overview-row:hover { background:var(--teal-50); }
 .insights-overview-name { display:flex; flex-direction:column; min-width:0; gap:4px; }
 .insights-overview-name strong { overflow:hidden; color:var(--text-strong); font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .insights-overview-name small { overflow:hidden; color:var(--text-muted); font-size:11.5px; text-overflow:ellipsis; white-space:nowrap; }
-.insights-overview-stage-wrap { display:flex; align-items:center; gap:7px; max-width:260px; margin-top:3px; color:var(--text-muted); font-size:10.5px; white-space:nowrap; }
-.insights-overview-stage-wrap > span:first-child { font-weight:600; }
+.insights-overview-stage-wrap { display:flex; align-items:center; gap:7px; min-width:0; color:var(--text-muted); font-size:10.5px; white-space:nowrap; }
+.insights-overview-stage-wrap > span:first-child { display:none; font-weight:600; }
 .insights-overview-stages { display:flex; flex:1; min-width:0; max-width:155px; margin:0; padding:0; list-style:none; }
 .insights-overview-stages li { position:relative; flex:1; height:10px; }
 .insights-overview-stages li::before { content:''; position:absolute; top:4px; left:0; right:0; height:2px; background:var(--border-default); }
@@ -2799,7 +2799,7 @@ _INSIGHTS_CSS = """
 .insights-overview-stages li:has(+ li.error)::before { background:var(--red-700); }
 .insights-overview-stages li.running::after { background:var(--teal-600); }
 .insights-overview-stages li.error::before,.insights-overview-stages li.error::after { background:var(--red-700); }
-.insights-overview-no-stages { margin-top:3px; color:var(--text-muted); font-size:10.5px; }
+.insights-overview-no-stages { color:var(--text-muted); font-size:10.5px; }
 .insights-overview-status { display:inline-flex; justify-self:start; align-items:center; gap:6px; color:var(--text-body); text-transform:capitalize; }
 .insights-overview-status::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green-600); }
 .insights-overview-status.running::before { background:var(--orange-600); }
@@ -2989,8 +2989,9 @@ _INSIGHTS_CSS = """
 .finder-analyze-matches label { display:block; margin:12px 0 4px; color:var(--text-muted); font-size:11px; font-weight:700; }
 .finder-analyze-matches pre { overflow:auto; margin:0; padding:10px; border-radius:6px; background:var(--surface-sunken); font-size:12px; }
 @media (max-width:1000px) { .insights-header { flex-wrap:wrap; }.insights-actions { order:2; }.insights-tabs { overflow-x:auto; white-space:nowrap; }.insights-tab { flex:none; } }
-@media (max-width:850px) { .insights-overview-columns,.insights-overview-row { grid-template-columns:minmax(180px,2fr) 95px 62px 20px; }.insights-overview-columns span:nth-child(4),.insights-overview-row .insights-overview-dimensions { display:none; }.insights-dimensions,.insights-map-layout { grid-template-columns:1fr; }.insights-map-chart { height:360px; } }
-@media (max-width:550px) { .insights-overview-columns,.insights-overview-row { grid-template-columns:minmax(120px,1fr) 90px 20px; gap:8px; padding-left:9px; padding-right:9px; }.insights-overview-columns span:nth-child(3),.insights-overview-number { display:none; }.insights-overview-head { align-items:start; }.insights-header h2 { font-size:19px; }.insights-wizard-step { padding:16px; }.insights-form-grid { grid-template-columns:1fr; gap:0; }.insights-group-label { min-width:100%; }.insights-models { margin-left:0; }.insights-source-options,.insights-choice-grid { grid-template-columns:1fr; } }
+@media (max-width:1100px) { .insights-overview-columns,.insights-overview-row { grid-template-columns:minmax(140px,1fr) minmax(140px,.8fr) 95px 20px; }.insights-overview-columns span:nth-child(4),.insights-overview-columns span:nth-child(5),.insights-overview-number,.insights-overview-dimensions { display:none; } }
+@media (max-width:850px) { .insights-dimensions,.insights-map-layout { grid-template-columns:1fr; }.insights-map-chart { height:360px; } }
+@media (max-width:550px) { .insights-overview-columns,.insights-overview-row { grid-template-columns:minmax(120px,1fr) 90px 20px; gap:8px; padding-left:9px; padding-right:9px; }.insights-overview-columns span:nth-child(2) { display:none; }.insights-overview-row { grid-template-areas:'name status arrow' 'stages stages stages'; }.insights-overview-name { grid-area:name; }.insights-overview-stage-wrap,.insights-overview-no-stages { grid-area:stages; margin:3px 0 2px; }.insights-overview-stage-wrap > span:first-child { display:inline; }.insights-overview-status { grid-area:status; }.insights-overview-arrow { grid-area:arrow; }.insights-overview-head { align-items:start; }.insights-header h2 { font-size:19px; }.insights-wizard-step { padding:16px; }.insights-form-grid { grid-template-columns:1fr; gap:0; }.insights-group-label { min-width:100%; }.insights-models { margin-left:0; }.insights-source-options,.insights-choice-grid { grid-template-columns:1fr; } }
 @media (max-width:600px) {
   body.eq-dashboard:has(.insights-layout) .app-shell { flex-direction:column; }
   body.eq-dashboard:has(.insights-layout) .app-sidebar,html.sidebar-collapsed body.eq-dashboard:has(.insights-layout) .app-sidebar { position:static; width:auto; height:auto; padding:8px 12px 0; overflow:visible; }

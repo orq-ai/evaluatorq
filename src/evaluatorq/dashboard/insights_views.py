@@ -103,8 +103,8 @@ def run_overview(
         rows.append(
             f'<a class="insights-overview-row" href="/insights/{quote(run_id, safe="")}">'
             f'<span class="insights-overview-name"><strong>{esc(label)}</strong>'
-            f'<small>{esc(stage or created or "Run file could not be read")}</small>'
-            f'{_overview_stages(manifest)}</span>'
+            f'<small>{esc(stage or created or "Run file could not be read")}</small></span>'
+            f'{_overview_stages(manifest)}'
             f'<span class="insights-overview-status {status_class}">{esc(status)}</span>'
             f'<span class="insights-overview-number">{esc(count_html)}</span>'
             f'<span class="insights-overview-dimensions">{esc(dimensions)}</span>'
@@ -115,7 +115,7 @@ def run_overview(
         '<div><h2>Recent runs</h2><p>Explore clusters, labels, traces, and 3D maps from each run.</p></div>'
         f'<span>{len(entries)} run{"s" if len(entries) != 1 else ""}</span></div>'
         '<div class="insights-overview-table"><div class="insights-overview-columns">'
-        '<span>Run</span><span>Status</span><span>Traces</span><span>Dimensions</span><span></span></div>'
+        '<span>Run</span><span>Stages</span><span>Status</span><span>Traces</span><span>Dimensions</span><span></span></div>'
         f'{"".join(rows)}</div></section>'
     )
 
@@ -226,7 +226,12 @@ def header(run: InsightsRun) -> str:
     if query:
         finder = '<a class="insights-action" href="/find">Open in finder ↗</a>'
     population_chips = ''.join(chips) or '<span class="insights-muted">All traces</span>'
-    label_chip_html = ''.join(label_chips) or '<span class="insights-muted">No labels</span>'
+    label_chip_html = ''.join(label_chips)
+    label_group = (
+        f'<div class="insights-chip-group"><span class="insights-group-label">Labels</span>{label_chip_html}</div>'
+        if label_chip_html
+        else ''
+    )
     run_url = quote(run.run_id, safe='')
     trace_count = run.counts.get('n_traces', len(run.traces))
     trace_text = f'{trace_count} trace' if trace_count == 1 else f'{trace_count} traces'
@@ -236,7 +241,7 @@ def header(run: InsightsRun) -> str:
         f'<span class="insights-header-count">{trace_text}{esc(_cost(run))}</span>'
         f'<span>{esc(run.created_at.strftime("%d %b %Y, %H:%M UTC"))}</span></p>'
         f'<div class="insights-chip-group"><span class="insights-group-label">Population</span>{population_chips}</div>'
-        f'<div class="insights-chip-group"><span class="insights-group-label">Labels</span>{label_chip_html}</div>'
+        f'{label_group}'
         f'<details class="insights-models"><summary>Models used</summary><span>{esc(models)}</span></details></div>'
         '<div class="insights-actions">'
         f'{finder}<a class="insights-action" href="/insights/{run_url}/export.json">Export JSON</a>'

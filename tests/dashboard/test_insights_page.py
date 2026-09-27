@@ -182,6 +182,8 @@ def test_insights_overview_shows_saved_stage_progress(tmp_path, monkeypatch):
     assert 'Load traces: completed' in running.text
     assert 'Summarize traces: running' in running.text
     assert 'Save run: pending' in running.text
+    assert '<span>Run</span><span>Stages</span><span>Status</span>' in running.text
+    assert '</small></span><span class="insights-overview-stage-wrap">' in running.text
     assert 'class="insights-overview-stages"' in running.text
     assert '<span>1/3</span>' in running.text
 
@@ -288,10 +290,14 @@ def test_labels_without_any_labels_show_empty_state(tmp_path, minimal_run, monke
     )
     _write_run(tmp_path, no_labels)
 
-    response = TestClient(build_app()).get('/insights/run-1/tab/labels')
+    client = TestClient(build_app())
+    response = client.get('/insights/run-1/tab/labels')
+    run_page = client.get('/insights/run-1')
 
     assert response.status_code == 200
     assert 'No labels in this run' in response.text
+    assert '<span class="insights-group-label">Labels</span>' not in run_page.text
+    assert '<span class="insights-muted">No labels</span>' not in run_page.text
 
 
 def test_traces_show_active_filter_chips_and_clear_filter_navigation(tmp_path, minimal_run, monkeypatch):
