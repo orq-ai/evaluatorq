@@ -1539,12 +1539,20 @@ class AgentTarget(ABC):
     **A target does not retry itself.** ``common.target_call.call_target_with_retry``
     is the single retry layer for target calls, on every surface — red team static,
     hybrid, pipeline and orchestrator, and simulation. It owns the budget
-    (``max_target_retries``), the per-call timeout and the backend error mapping.
-    A ``respond`` that retries internally multiplies against that budget rather
-    than adding to it: 5 inner attempts under 3 outer ones is 15 calls to a target
-    that is already refusing. Subclasses that wrap an SDK build their client with
-    ``max_retries=0`` (or clone an injected one via
-    ``common.retry.without_client_retries``) for the same reason.
+    (``max_target_retries``), the per-call timeout and the backend error mapping,
+    unless the target sets ``manages_own_timeout``. A ``respond`` that retries
+    internally multiplies against that budget rather than adding to it: 5 inner
+    attempts under 3 outer ones is 15 calls to a target that is already refusing.
+    Subclasses that wrap an SDK build their client with ``max_retries=0`` (or
+    clone an injected one via ``common.retry.without_client_retries``) for the
+    same reason.
+    """
+
+    manages_own_timeout: ClassVar[bool] = False
+    """``True`` when ``respond()`` bounds its own duration and raises a non-retryable error on expiry.
+
+    `call_target_with_retry` then skips its per-call ``wait_for`` and the timeout-ordering warning. A target
+    that sets this and does not bound itself can hang a run forever: nothing else will stop it.
     """
 
     history_mode: ClassVar[ConversationHistoryMode] = ConversationHistoryMode.CALLER

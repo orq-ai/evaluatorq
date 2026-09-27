@@ -208,11 +208,19 @@ async def call_target_with_retry(
     caller-supplied span (0-based index). ``on_attempt_response`` receives the
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. Returns a uniform
-    `TargetCallResult`.
+    `TargetCallResult`. A target with ``manages_own_timeout`` set gets no per-call
+    timeout here; it bounds itself. Such a target raises
+    ``NonRetryableTargetError`` when its own deadline expires. A plain
+    ``TimeoutError`` can come from a downstream call and remains retryable.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
+    manages_own_timeout = getattr(target, 'manages_own_timeout', False) is True
     own_timeout_ms = getattr(target, 'timeout_ms', None)
-    if isinstance(own_timeout_ms, (int, float)) and own_timeout_ms >= target_agent_timeout_ms:
+    if (
+        not manages_own_timeout
+        and isinstance(own_timeout_ms, (int, float))
+        and own_timeout_ms >= target_agent_timeout_ms
+    ):
         logger.warning(
             f'{type(target).__name__}.timeout_ms ({own_timeout_ms:.0f} ms) is not below '
             f'target_agent_timeout_ms ({target_agent_timeout_ms:.0f} ms); the retry helper will time out first '
@@ -228,7 +236,8 @@ async def call_target_with_retry(
         ctx = on_attempt(attempt) if on_attempt is not None else nullcontext()
         try:
             async with ctx as attempt_context:
-                raw = await asyncio.wait_for(target.respond(messages), timeout=timeout_s)
+                call = target.respond(messages)
+                raw = await (call if manages_own_timeout else asyncio.wait_for(call, timeout=timeout_s))
                 resp = _coerce_to_agent_response(raw)
                 if on_attempt_response is not None:
                     on_attempt_response(attempt_context, resp)
@@ -241,34 +250,48 @@ async def call_target_with_retry(
                 'raw_message': resp.error.message,
                 'attempts': attempt + 1,
             }
-        except asyncio.TimeoutError:
-            text = f'[ERROR: Target agent timed out after {timeout_s:.0f}s]'
-            last_response = _synthetic(text, error_type='timeout', code='target.timeout')
-            last_error = last_response.error
-            last_details = {'timeout_ms': target_agent_timeout_ms, 'attempts': attempt + 1}
         except Exception as exc:
-            mapped = map_error(exc)
-            code, msg = mapped if mapped is not None else default_map_error(exc)
-            classified = classify_error_type(msg)
-            text = f'[ERROR: {msg}]'
-            last_response = _synthetic(
-                text,
-                error_type=classified if classified and classified != 'unknown' else 'target_error',
-                code=code,
-            )
-            last_error = last_response.error
-            last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
-            if isinstance(exc, NonRetryableTargetError):
-                logger.warning(f'Target call failed with non-retryable error ({type(exc).__name__}); not retrying')
-                break
-            # 4xx client errors are non-retryable by default — bad request,
-            # auth, permission scope, conflict etc. are deterministic, so a
-            # retry replays the same rejection. The only exceptions are 408
-            # (timeout) and 429 (rate limit), which stay retryable.
-            status = extract_status_code(exc)
-            if status is not None and 400 <= status < 500 and status not in (408, 429):
-                logger.warning(f'Target call failed with non-retryable client error ({status}); not retrying')
-                break
+            if isinstance(exc, asyncio.TimeoutError) and not isinstance(exc, NonRetryableTargetError):
+                if manages_own_timeout:
+                    last_response = _synthetic(
+                        '[ERROR: Target agent raised TimeoutError]',
+                        error_type='timeout',
+                        code='target.timeout',
+                    )
+                    last_error = last_response.error
+                    last_details = {
+                        'exception_type': type(exc).__name__,
+                        'raw_message': str(exc),
+                        'attempts': attempt + 1,
+                    }
+                else:
+                    text = f'[ERROR: Target agent timed out after {timeout_s:.0f}s]'
+                    last_response = _synthetic(text, error_type='timeout', code='target.timeout')
+                    last_error = last_response.error
+                    last_details = {'timeout_ms': target_agent_timeout_ms, 'attempts': attempt + 1}
+            else:
+                mapped = map_error(exc)
+                code, msg = mapped if mapped is not None else default_map_error(exc)
+                classified = classify_error_type(msg)
+                text = f'[ERROR: {msg}]'
+                last_response = _synthetic(
+                    text,
+                    error_type=classified if classified and classified != 'unknown' else 'target_error',
+                    code=code,
+                )
+                last_error = last_response.error
+                last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
+                if isinstance(exc, NonRetryableTargetError):
+                    logger.warning(f'Target call failed with non-retryable error ({type(exc).__name__}); not retrying')
+                    break
+                # 4xx client errors are non-retryable by default — bad request,
+                # auth, permission scope, conflict etc. are deterministic, so a
+                # retry replays the same rejection. The only exceptions are 408
+                # (timeout) and 429 (rate limit), which stay retryable.
+                status = extract_status_code(exc)
+                if status is not None and 400 <= status < 500 and status not in (408, 429):
+                    logger.warning(f'Target call failed with non-retryable client error ({status}); not retrying')
+                    break
 
         if attempt + 1 < max_attempts:
             logger.warning(f'Target call failed (attempt {attempt + 1}/{max_attempts}); retrying same exchange')

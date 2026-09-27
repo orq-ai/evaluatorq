@@ -10,5 +10,6 @@ from evaluatorq.backends.coding_agent import (
     CodingAgentUnavailableError,
     OrqLaunchOptions,
 )
+from evaluatorq.backends.container import DockerOptions
 
-__all__ = ['CodingAgentError', 'CodingAgentTarget', 'CodingAgentUnavailableError', 'OrqLaunchOptions']
+__all__ = ['CodingAgentError', 'CodingAgentTarget', 'CodingAgentUnavailableError', 'DockerOptions', 'OrqLaunchOptions']
