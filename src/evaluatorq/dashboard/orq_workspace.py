@@ -20,19 +20,19 @@ from urllib.parse import urlsplit
 from loguru import logger
 
 DEFAULT_BASE_URL = 'https://my.orq.ai'
-_cli_slug_cache: dict[tuple[str | None, str | None], tuple[float, str | None]] = {}
+_cli_slug_cache: dict[tuple[str | None, str | None, bool], tuple[float, str | None]] = {}
 
 
-def _cli_slug(profile: str | None, fingerprint: str | None) -> str | None:
+def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> str | None:
     """Cache credential-matched CLI discovery so rendering links does not run a CLI command per row."""
-    key = (profile, fingerprint)
+    key = (profile, fingerprint, use_cli_session)
     cached = _cli_slug_cache.get(key)
     if cached is not None and cached[0] > monotonic():
         return cached[1]
 
     from evaluatorq.dashboard.orq_scope import discover_orq_scope
 
-    scope = discover_orq_scope(profile)
+    scope = discover_orq_scope(profile, use_cli_session=use_cli_session)
     slug = scope.workspace_key
     if not slug:
         logger.warning(
@@ -58,7 +58,7 @@ def resolve_slug() -> str | None:
     api_key = os.environ.get('ORQ_API_KEY', '').strip()
     if api_key:
         return _cli_slug(None, credential_fingerprint(api_key, os.environ.get('ORQ_BASE_URL')))
-    return _cli_slug(None, None) if shutil.which('orq') else None
+    return _cli_slug(None, None, use_cli_session=True) if shutil.which('orq') else None
 
 
 def resolve_base_url() -> str:

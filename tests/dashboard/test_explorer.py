@@ -30,6 +30,16 @@ def test_parse_range_applies_browser_offset() -> None:
     assert end == datetime(2026, 9, 27, 10, 0, 0, tzinfo=timezone.utc)
 
 
+def test_parse_range_uses_each_endpoint_offset_across_dst() -> None:
+    # Amsterdam leaves summer time on 25 October 2026: getTimezoneOffset is
+    # -120 before the change and -60 after it.
+    start, end = finder_routes.parse_range(
+        '2026-10-24T22:00', '2026-10-25T04:00', '-120', '-120', '-60'
+    )
+    assert start == datetime(2026, 10, 24, 20, 0, tzinfo=timezone.utc)
+    assert end == datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc)
+
+
 def test_parse_range_accepts_minutes_only() -> None:
     start, _ = finder_routes.parse_range('2026-09-27T10:00', '2026-09-27T11:00', '0')
     assert start == datetime(2026, 9, 27, 10, 0, tzinfo=timezone.utc)
@@ -246,6 +256,17 @@ def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) 
 
     client.get('/traces')
     assert len(source.calls) == 1
+
+
+def test_initial_traces_respect_saved_project(explorer_client) -> None:
+    _, source, client = explorer_client
+    client.app.state.finder_settings = client.app.state.finder_settings.model_copy(
+        update={'orq_project_id': 'project-selected'}
+    )
+
+    assert client.get('/traces').status_code == 200
+    assert len(source.calls) == 1
+    assert source.calls[0]['facets'].project_id == 'project-selected'
 
 
 def test_server_warms_traces_and_facets_before_the_first_find_request(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:

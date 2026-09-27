@@ -680,6 +680,31 @@
     if (mount && mount.querySelector('.rt-drawer-body--loading')) mount.innerHTML = '';
   });
   // Explorer: browser timezone, local From/To, presets.
+  function explorerEndpointOffset(name) {
+    const dateInput = document.getElementById('explorer-' + name);
+    const timeInput = document.getElementById('explorer-' + name + '-time');
+    if (!dateInput || !timeInput || !dateInput.value || !timeInput.value) return null;
+    const local = new Date(dateInput.value + 'T' + timeInput.value);
+    return Number.isNaN(local.getTime()) ? null : String(local.getTimezoneOffset());
+  }
+  function explorerUpdateOffsets() {
+    ['from', 'to'].forEach((name) => {
+      const dateInput = document.getElementById('explorer-' + name);
+      const timeInput = document.getElementById('explorer-' + name + '-time');
+      if (!dateInput || !timeInput) return;
+      const fieldName = name + '_tz_offset';
+      let field = document.querySelector('[name="' + fieldName + '"][form="explorer-load-form"]');
+      if (!field) {
+        field = document.createElement('input');
+        field.type = 'hidden';
+        field.name = fieldName;
+        field.setAttribute('form', 'explorer-load-form');
+        dateInput.parentNode.appendChild(field);
+      }
+      const offset = explorerEndpointOffset(name);
+      field.value = offset === null ? '' : offset;
+    });
+  }
   function explorerLocal(dateInput) {
     const utc = dateInput.getAttribute('data-utc');
     const prefix = dateInput.id === 'explorer-from' ? 'explorer-from' : 'explorer-to';
@@ -695,9 +720,13 @@
   function explorerInit() {
     document.querySelectorAll('[data-explorer-tz]').forEach((el) => { el.value = String(new Date().getTimezoneOffset()); });
     document.querySelectorAll('#explorer-from, #explorer-to').forEach(explorerLocal);
+    explorerUpdateOffsets();
   }
   document.addEventListener('DOMContentLoaded', explorerInit);
   document.body.addEventListener('htmx:afterSettle', explorerInit);
+  document.body.addEventListener('change', function (evt) {
+    if (evt.target && (evt.target.id === 'explorer-from' || evt.target.id === 'explorer-to' || evt.target.id === 'explorer-from-time' || evt.target.id === 'explorer-to-time')) explorerUpdateOffsets();
+  });
   document.addEventListener('click', function (evt) {
     const preset = evt.target.closest('[data-explorer-preset]');
     if (!preset) return;

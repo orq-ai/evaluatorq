@@ -37,28 +37,32 @@ def test_resolve_slug_from_authenticated_cli_and_cache(monkeypatch: pytest.Monke
     from evaluatorq.dashboard.orq_scope import OrqScope
 
     monkeypatch.setenv('ORQ_API_KEY', 'test-project-key')
-    calls: list[str | None] = []
+    calls: list[tuple[str | None, bool]] = []
 
-    def discover(profile: str | None) -> OrqScope:
-        calls.append(profile)
+    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        calls.append((profile, use_cli_session))
         return OrqScope(workspace_key='orq-research', workspace_id='research-id')
 
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
 
     assert ow.resolve_slug() == 'orq-research'
     assert ow.resolve_slug() == 'orq-research'
-    assert calls == [None]
+    assert calls == [(None, False)]
 
 
 def test_resolve_slug_from_cli_session_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard.orq_scope import OrqScope
 
     monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
-    monkeypatch.setattr(
-        'evaluatorq.dashboard.orq_scope.discover_orq_scope',
-        lambda _profile: OrqScope(workspace_key='orq-research', workspace_id='research-id'),
-    )
+    calls: list[tuple[str | None, bool]] = []
+
+    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        calls.append((profile, use_cli_session))
+        return OrqScope(workspace_key='orq-research', workspace_id='research-id')
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
     assert ow.resolve_slug() == 'orq-research'
+    assert calls == [(None, True)]
 
 
 # --- host -------------------------------------------------------------------

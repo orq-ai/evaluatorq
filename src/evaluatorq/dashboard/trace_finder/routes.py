@@ -308,7 +308,7 @@ async def warm_initial_finder(app: Any) -> RunStore | None:
                     end - timedelta(days=7),
                     end,
                     explorer_views.DEFAULT_EXPLORER_ROWS,
-                    facets=FacetSelection(),
+                    facets=FacetSelection(project_id=_settings(app).orq_project_id),
                     numeric=NumericFilters(),
                 )
         explorer_view = await explorer.view()
@@ -342,19 +342,31 @@ def _range_values(form: Any) -> tuple[str, str]:
     return values[0], values[1]
 
 
-def parse_range(from_value: str, to_value: str, tz_offset: str | None) -> tuple[datetime, datetime]:
-    """Turn two local timestamps and the browser's ``getTimezoneOffset()`` into UTC bounds."""
-    try:
-        offset = timedelta(minutes=-int(tz_offset or ''))
-    except ValueError:
-        logger.warning('Explorer time range has no usable browser offset {!r}; reading it as UTC', tz_offset)
-        offset = timedelta(0)
-    zone = timezone(offset)
+def parse_range(
+    from_value: str,
+    to_value: str,
+    tz_offset: str | None,
+    from_tz_offset: str | None = None,
+    to_tz_offset: str | None = None,
+) -> tuple[datetime, datetime]:
+    """Turn local timestamps and their browser offsets (getTimezoneOffset) into UTC bounds."""
+
+    def zone_for(value: str | None) -> timezone:
+        try:
+            return timezone(timedelta(minutes=-int(value or '')))
+        except ValueError:
+            logger.warning('Explorer time range has no usable browser offset {!r}; reading it as UTC', value)
+            return timezone.utc
+
+    # Older clients submit one offset for both endpoints. Keep that fallback for
+    # direct callers and already-open dashboard pages.
+    start_zone = zone_for(from_tz_offset if from_tz_offset is not None else tz_offset)
+    end_zone = zone_for(to_tz_offset if to_tz_offset is not None else tz_offset)
     try:
         if 'T' not in from_value or 'T' not in to_value:
             raise ValueError('A time is required at each end.')
-        start = datetime.fromisoformat(from_value).replace(tzinfo=zone).astimezone(timezone.utc)
-        end = datetime.fromisoformat(to_value).replace(tzinfo=zone).astimezone(timezone.utc)
+        start = datetime.fromisoformat(from_value).replace(tzinfo=start_zone).astimezone(timezone.utc)
+        end = datetime.fromisoformat(to_value).replace(tzinfo=end_zone).astimezone(timezone.utc)
     except ValueError as exc:
         raise ValueError('From and To must be full dates and times.') from exc
     if start >= end:
@@ -692,7 +704,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             return _html(await _explorer_html(req, error=_unavailable_reason(req.app)))
         settings = _settings(req.app)
         try:
-            start, end = parse_range(*_range_values(form), form.get('tz_offset'))
+            start, end = parse_range(
+                *_range_values(form), form.get('tz_offset'), form.get('from_tz_offset'), form.get('to_tz_offset')
+            )
             rows = int(str(form.get('rows') or explorer_views.DEFAULT_EXPLORER_ROWS))
             if not 1 <= rows <= MAX_LIVE_TRACES:
                 raise ValueError(f'Rows must be between 1 and {MAX_LIVE_TRACES}.')

@@ -11,7 +11,7 @@ def test_project_key_discovers_only_its_project_and_matching_workspace(monkeypat
     monkeypatch.setenv('ORQ_API_KEY', 'project-key')
     calls: list[list[str]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         calls.append(args)
         assert profile is None
         if args[:2] == ['projects', 'list']:
@@ -34,7 +34,7 @@ def test_project_key_discovers_only_its_project_and_matching_workspace(monkeypat
 def test_profile_project_list_is_paged_and_workspace_comes_from_profile(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         assert profile == 'research-management'
         calls.append(args)
         if args[:2] == ['workspaces', 'list']:
@@ -54,7 +54,7 @@ def test_profile_project_list_is_paged_and_workspace_comes_from_profile(monkeypa
 def test_scope_does_not_use_a_different_active_workspace(monkeypatch) -> None:
     monkeypatch.setenv('ORQ_API_KEY', 'project-key')
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
         return {'active_workspace_key': 'other', 'workspaces': [{'id': 'workspace-b', 'key': 'other'}]}
@@ -70,7 +70,7 @@ def test_scope_does_not_use_a_different_active_workspace(monkeypatch) -> None:
 def test_scope_finds_project_workspace_even_when_another_is_active(monkeypatch) -> None:
     monkeypatch.setenv('ORQ_API_KEY', 'project-key')
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
         return {
@@ -86,7 +86,7 @@ def test_scope_finds_project_workspace_even_when_another_is_active(monkeypatch) 
 def test_scope_uses_authenticated_cli_session_without_api_key(monkeypatch) -> None:
     monkeypatch.delenv('ORQ_API_KEY', raising=False)
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
         return {'active_workspace_key': 'orq-research', 'workspaces': [{'id': 'workspace-a', 'key': 'orq-research'}]}
@@ -133,10 +133,30 @@ def test_direct_key_uses_evaluatorq_host_and_clears_scope_overrides(monkeypatch)
     assert orq_scope._cli_json(['projects', 'list'], profile=None, timeout=5) == {'data': []}
 
 
+def test_cli_session_uses_selected_profile_without_empty_profile_flag(monkeypatch) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setenv('ORQ_WORKSPACE', 'stale-workspace')
+    monkeypatch.setenv('ORQ_PROJECT', 'stale-project')
+    monkeypatch.setattr(orq_scope.shutil, 'which', lambda _: '/usr/bin/orq')
+
+    def run(command, **kwargs):
+        assert command[:1] == ['/usr/bin/orq']
+        assert command[1:3] != ['--profile', '']
+        environment = kwargs['env']
+        assert all(name not in environment for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'))
+        return subprocess.CompletedProcess(command, 0, '{"data": []}', '')
+
+    monkeypatch.setattr(orq_scope.subprocess, 'run', run)
+
+    assert orq_scope._cli_json(
+        ['projects', 'list'], profile=None, timeout=5, use_cli_session=True
+    ) == {'data': []}
+
+
 def test_profile_workspace_lookup_reads_later_pages(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         calls.append(args)
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-b'}]}
@@ -157,7 +177,7 @@ def test_scope_discovery_has_one_deadline_across_project_and_workspace_pages(mon
     monkeypatch.setattr(orq_scope, 'monotonic', lambda: next(times))
     calls: list[tuple[list[str], float]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         calls.append((args, timeout))
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-target'}]}
