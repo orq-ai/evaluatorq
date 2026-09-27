@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import operator
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -41,7 +42,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 MANIFESTS_DIR_NAME = '.manifests'
 # Stage artifacts (save='detail') sit beside reports but are not runs.
@@ -59,9 +60,11 @@ class ManifestWriter:
     failure is logged, never raised, so manifest bookkeeping can't break a run.
     """
 
-    def __init__(self, manifest: RunManifest, path: Path) -> None:
+    def __init__(self, manifest: RunManifest, path: Path, *, clock: Callable[[], float] = time.monotonic) -> None:
         self.manifest = manifest
         self.path = path
+        self._clock = clock
+        self._last_progress_flush: float | None = None
 
     def flush(self) -> None:
         self.manifest.updated_at = datetime.now(tz=timezone.utc)
@@ -123,6 +126,18 @@ class ManifestWriter:
             return
         self._close(rec, ManifestStatus.ERROR if error else ManifestStatus.COMPLETED)
         self.flush()
+
+    def stage_progress(self, stage: Any, completed: int, total: int) -> None:
+        """Record completed/total on an open stage, throttling writes to once per second."""
+        name = getattr(stage, 'value', stage)
+        rec = self._open_stage(str(name))
+        if rec is None or self.manifest.status != ManifestStatus.RUNNING:
+            return
+        rec.completed, rec.total = completed, total
+        now = self._clock()
+        if completed >= total or self._last_progress_flush is None or now - self._last_progress_flush >= 1.0:
+            self._last_progress_flush = now
+            self.flush()
 
     def complete(self, report_path: str | Path | None = None, summary: RunSummary | None = None) -> None:
         if self.manifest.status != ManifestStatus.RUNNING:

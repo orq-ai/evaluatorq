@@ -500,6 +500,7 @@ async def insights(  # noqa: C901
                 model=classifier_model,
                 parallelism=parallelism,
                 usage=ledger,
+                on_progress=lambda done, total: writer.stage_progress('label', done, total),
             )
             original_by_id = {trace.trace_id: trace for trace in run.traces}
             retained_trace_ids: set[str] = set()
@@ -548,6 +549,7 @@ async def insights(  # noqa: C901
                     cache=cache_store,
                     parallelism=parallelism,
                     usage=ledger,
+                    on_progress=lambda done, total: writer.stage_progress('summary', done, total),
                 )
                 for trace_id, summary in summaries.items():
                     item = original_by_id[trace_id]

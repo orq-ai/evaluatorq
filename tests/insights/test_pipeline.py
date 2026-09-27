@@ -97,6 +97,38 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_pipeline_persists_label_and_summary_progress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import list_manifests
+
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(3)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+
+    async def label(items, *, on_progress, **kwargs):
+        for completed in range(1, len(items) + 1):
+            on_progress(completed, len(items))
+        return _labels(items)
+
+    async def summarize(items, *, on_progress, **kwargs):
+        for completed in range(1, len(items) + 1):
+            on_progress(completed, len(items))
+        return _summaries(items)
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', summarize)
+
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    manifest = list_manifests(tmp_path)[0]
+    progress = {stage.name: (stage.completed, stage.total) for stage in manifest.stages}
+    assert progress['label'] == (3, 3)
+    assert progress['summary'] == (3, 3)
+
+
+@pytest.mark.asyncio
 async def test_pipeline_persists_per_stage_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_clients(monkeypatch)
     traces = [_trace(0)]

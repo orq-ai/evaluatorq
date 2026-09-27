@@ -1771,6 +1771,8 @@ class StageRecord(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     started_at: datetime
     ended_at: datetime | None = None
+    completed: int | None = None
+    total: int | None = None
 
     @property
     def duration_seconds(self) -> float | None:

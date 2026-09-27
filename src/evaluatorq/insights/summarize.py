@@ -27,7 +27,7 @@ from evaluatorq.insights.models import TraceSummary
 from evaluatorq.trace_finder.projection import project_trace
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from openai import AsyncOpenAI
 
@@ -145,6 +145,7 @@ async def summarize_traces(
     cache: InsightsCache,
     parallelism: int = 100,
     usage: UsageLedger | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, TraceSummary | str]:
     """Summarize every trace, keyed by `trace_id`; value is the summary or an error string.
 
@@ -159,9 +160,10 @@ async def summarize_traces(
     semaphore = asyncio.Semaphore(parallelism)
     results: dict[str, TraceSummary | str] = {}
     next_index = 0
+    completed = 0
 
     async def worker() -> None:
-        nonlocal next_index
+        nonlocal completed, next_index
         while next_index < len(traces):
             index = next_index
             next_index += 1
@@ -170,6 +172,12 @@ async def summarize_traces(
                 trace, client=client, model=model, cache=cache, semaphore=semaphore, usage=usage
             )
             results[trace_id] = summary
+            completed += 1
+            if on_progress is not None:
+                try:
+                    on_progress(completed, len(traces))
+                except Exception as exc:  # noqa: BLE001 - progress reporting must not abort result collection
+                    logger.warning('Insights summary progress callback failed: {}', exc)
 
     await asyncio.gather(*(worker() for _ in range(min(parallelism, len(traces)))))
     return results

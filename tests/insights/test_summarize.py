@@ -100,6 +100,50 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
 
 
 @pytest.mark.asyncio
+async def test_summarize_traces_reports_each_completed_trace(
+    monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
+) -> None:
+    traces = [make_trace(f'trace-{i}') for i in range(3)]
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[TraceSummary]:
+        return StructuredResult(parsed=make_summary(), raw='')
+
+    monkeypatch.setattr(summarize_module, 'generate_structured', fake_generate_structured)
+    updates: list[tuple[int, int]] = []
+
+    await summarize_traces(
+        traces,
+        client=fake_client(),
+        model='openai/gpt-6-luna',
+        cache=cache,
+        on_progress=lambda completed, total: updates.append((completed, total)),
+    )
+
+    assert sorted(updates) == [(1, 3), (2, 3), (3, 3)]
+
+
+@pytest.mark.asyncio
+async def test_summarize_progress_callback_failure_does_not_fail_run(
+    monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
+) -> None:
+    trace = make_trace('trace-1')
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[TraceSummary]:
+        return StructuredResult(parsed=make_summary(), raw='')
+
+    monkeypatch.setattr(summarize_module, 'generate_structured', fake_generate_structured)
+
+    def fail_progress(completed: int, total: int) -> None:
+        raise RuntimeError('progress unavailable')
+
+    result = await summarize_traces(
+        [trace], client=fake_client(), model='openai/gpt-6-luna', cache=cache, on_progress=fail_progress
+    )
+
+    assert result == {'trace-1': make_summary()}
+
+
+@pytest.mark.asyncio
 async def test_summarize_traces_cache_hit_skips_the_call(monkeypatch: pytest.MonkeyPatch, cache: InsightsCache) -> None:
     trace = make_trace('trace-1')
     summary = make_summary('Cached summary.')

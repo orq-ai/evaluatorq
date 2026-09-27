@@ -14,9 +14,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from evaluatorq.common.run_manifest import start_manifest
-from evaluatorq.contracts import Usage
+from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, StageRecord, Usage
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.insights_views import header
+from evaluatorq.dashboard.insights_views import header, progress
 from evaluatorq.insights.models import (
     Cluster,
     ClusterAssignment,
@@ -52,6 +52,31 @@ def test_insights_header_marks_unknown_cost(minimal_run) -> None:
     run = minimal_run.model_copy(update={'cost_by_stage': {'summary': None}})
 
     assert 'cost unknown' in header(run)
+
+
+def test_insights_progress_renders_stage_completed_and_total() -> None:
+    now = datetime.now(timezone.utc)
+    manifest = RunManifest(
+        run_id='progress-run',
+        surface=ManifestSurface.INSIGHTS,
+        run_name='Progress run',
+        status=ManifestStatus.RUNNING,
+        stage='label',
+        stages=[
+            StageRecord(
+                name='label',
+                status=ManifestStatus.RUNNING,
+                started_at=now,
+                completed=40,
+                total=100,
+            )
+        ],
+        planned_stages=['label'],
+        started_at=now,
+        updated_at=now,
+    )
+
+    assert '<small>running 40/100</small>' in progress(manifest)
 
 
 @pytest.fixture

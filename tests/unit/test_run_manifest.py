@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.run_manifest import (
+    ManifestWriter,
     list_manifests,
     start_manifest,
 )
@@ -59,6 +60,24 @@ def test_per_stage_status_and_timing(tmp_path: Path) -> None:
     run_duration = m.duration_seconds
     assert run_duration is not None
     assert run_duration >= 0
+
+
+def test_stage_progress_throttles_and_always_writes_the_last_count(tmp_path: Path) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='r', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    flushes: list[int] = []
+    original = writer.flush
+    writer.flush = lambda: (flushes.append(1), original())[1]  # type: ignore[method-assign]
+
+    for done in range(1, 101):
+        writer.stage_progress('label', done, 100)
+
+    assert len(flushes) == 2
+    now[0] = 2.0
+    record = writer.manifest.stages[-1]
+    assert (record.completed, record.total) == (100, 100)
 
 
 def test_stage_is_noop_after_terminal(tmp_path: Path) -> None:

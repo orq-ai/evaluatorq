@@ -135,8 +135,13 @@ def progress(manifest: RunManifest | None) -> str:
             flag = f'<span class="insights-stage-flag">Running{f" · {elapsed}" if elapsed else ""}</span>'
         elif status == 'error':
             flag = '<span class="insights-stage-flag">Failed</span>'
+        stage_count = (
+            f'<small>{esc(status)} {record.completed}/{record.total}</small>'
+            if record is not None and record.completed is not None and record.total is not None
+            else ''
+        )
         items.append(
-            f'<li class="insights-stage {esc(status)}" title="{esc(label)}: {esc(status)}">{flag}'
+            f'<li class="insights-stage {esc(status)}" title="{esc(label)}: {esc(status)}">{flag}{stage_count}'
             f'<span class="insights-stage-mark" aria-hidden="true"></span>'
             f'<span class="insights-stage-label">{esc(label)}</span><span class="sr-only">{esc(status)}</span></li>'
         )
