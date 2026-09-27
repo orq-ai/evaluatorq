@@ -251,7 +251,7 @@ def build_app_from_env():
         from starlette.responses import PlainTextResponse
 
         @app.get('/_dashboard-ready')
-        def dashboard_ready() -> PlainTextResponse:
+        def dashboard_ready():
             return PlainTextResponse(nonce)
 
     return app
