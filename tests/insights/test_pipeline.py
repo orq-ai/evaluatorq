@@ -7,6 +7,7 @@ from typing import cast
 
 import pytest
 
+from evaluatorq.contracts import Usage
 from evaluatorq.insights import pipeline
 from evaluatorq.insights.models import Cluster, DimensionName, DimensionResult, LabelAnswer, TraceSummary
 from evaluatorq.insights.population import ResolvedPopulation
@@ -92,6 +93,36 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
     assert manifest.report_path == str(files[0])
     assert manifest.planned_stages == ['population', 'label', 'summary', 'dimension:intent', 'priority', 'write']
     assert manifest.stage_labels['dimension:intent'] == 'Cluster and map intent'
+    assert run.cost_by_stage == {}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_persists_per_stage_usage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(0)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+
+    async def label(*args, usage, **kwargs):
+        usage.add('label', Usage(input_tokens=5, output_tokens=1, total_tokens=6, total_cost=0.02, calls=1, priced_calls=1))
+        return _labels(traces)
+
+    async def summarize(*args, usage, **kwargs):
+        usage.add('summary', Usage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=0.03, calls=1, priced_calls=1))
+        return _summaries(traces)
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', summarize)
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    label_usage = run.cost_by_stage['label']
+    summary_usage = run.cost_by_stage['summary']
+    assert label_usage is not None and label_usage.total_cost == 0.02
+    assert summary_usage is not None and summary_usage.total_cost == 0.03
+    saved = next(tmp_path.glob('insights_*.json'))
+    from evaluatorq.insights.models import InsightsRun
+
+    restored = InsightsRun.model_validate_json(saved.read_text(encoding='utf-8'))
+    assert restored.cost_by_stage == run.cost_by_stage
 
 
 @pytest.mark.asyncio

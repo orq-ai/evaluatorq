@@ -19,13 +19,14 @@ from loguru import logger
 from pydantic import BaseModel
 
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.common.structured_output import generate_structured
+from evaluatorq.common.structured_output import generate_structured, usage_from_exception
 from evaluatorq.common.template_engine import render_template
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.insights.models import DimensionName
+    from evaluatorq.insights.usage import UsageLedger
 
 
 class ClusterName(BaseModel):
@@ -150,6 +151,7 @@ async def _describe_one(
     client: AsyncOpenAI,
     model: str,
     semaphore: asyncio.Semaphore,
+    usage: UsageLedger | None = None,
 ) -> tuple[int, ClusterName | str]:
     member_texts = members.get(cluster_id, [])[:_MAX_MEMBER_EXAMPLES]
     contrastive_texts = _contrastive_texts(members, neighbours.get(cluster_id, []))
@@ -167,9 +169,14 @@ async def _describe_one(
                 label='insights.describe',
             )
         except Exception as exc:  # noqa: BLE001 - a per-cluster failure must never fail the run
+            if usage is not None:
+                usage.add('describe', usage_from_exception(exc))
             message = str(exc)
             logger.warning('Insights cluster description failed for cluster {}: {}', cluster_id, message)
             return cluster_id, f'describe: {message}'
+
+    if usage is not None:
+        usage.add('describe', result.usage)
 
     if result.parsed is None:
         logger.warning('Insights cluster description for cluster {} produced unparseable model output', cluster_id)
@@ -186,6 +193,7 @@ async def describe_clusters(
     client: AsyncOpenAI,
     model: str,
     parallelism: int = 20,
+    usage: UsageLedger | None = None,
 ) -> dict[int, ClusterName | str]:
     """Name and describe every cluster, contrasted against its nearest neighbours.
 
@@ -208,6 +216,7 @@ async def describe_clusters(
                 client=client,
                 model=model,
                 semaphore=semaphore,
+                usage=usage,
             )
         )
         for cluster_id in members
@@ -227,6 +236,7 @@ async def _describe_top_one(
     client: AsyncOpenAI,
     model: str,
     semaphore: asyncio.Semaphore,
+    usage: UsageLedger | None = None,
 ) -> tuple[int, ClusterName | str]:
     rendered = render_template(_TOP_LEVEL_PROMPT, {'children': delimit(_children_text(children), tag='children')})
     messages = [{'role': 'user', 'content': rendered}]
@@ -242,9 +252,14 @@ async def _describe_top_one(
                 label='insights.describe_top_level',
             )
         except Exception as exc:  # noqa: BLE001 - a per-cluster failure must never fail the run
+            if usage is not None:
+                usage.add('describe', usage_from_exception(exc))
             message = str(exc)
             logger.warning('Insights top-level cluster description failed for group {}: {}', top_id, message)
             return top_id, f'describe: {message}'
+
+    if usage is not None:
+        usage.add('describe', result.usage)
 
     if result.parsed is None:
         logger.warning('Insights top-level cluster description for group {} produced unparseable model output', top_id)
@@ -259,6 +274,7 @@ async def describe_top_level(
     client: AsyncOpenAI,
     model: str,
     parallelism: int = 20,
+    usage: UsageLedger | None = None,
 ) -> dict[int, ClusterName | str]:
     """Name and describe each top-level group from its children's names and descriptions.
 
@@ -270,7 +286,9 @@ async def describe_top_level(
     semaphore = asyncio.Semaphore(parallelism)
     tasks = [
         asyncio.ensure_future(
-            _describe_top_one(top_id, children=group_children, client=client, model=model, semaphore=semaphore)
+            _describe_top_one(
+                top_id, children=group_children, client=client, model=model, semaphore=semaphore, usage=usage
+            )
         )
         for top_id, group_children in children.items()
     ]

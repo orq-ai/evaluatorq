@@ -14,7 +14,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from evaluatorq.common.run_manifest import start_manifest
+from evaluatorq.contracts import Usage
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.insights_views import header
 from evaluatorq.insights.models import (
     Cluster,
     ClusterAssignment,
@@ -28,6 +30,28 @@ from evaluatorq.insights.models import (
     TraceSummary,
 )
 from evaluatorq.insights.presets import SENTIMENT
+
+
+def test_insights_header_renders_partial_cost(minimal_run) -> None:
+    run = minimal_run.model_copy(
+        update={
+            'cost_by_stage': {
+                'summary': Usage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=0.01, calls=2, priced_calls=1)
+            }
+        }
+    )
+
+    assert 'priced for 1 of 2 calls' in header(run)
+
+
+def test_insights_header_hides_untracked_cost(minimal_run) -> None:
+    assert '$' not in header(minimal_run)
+
+
+def test_insights_header_marks_unknown_cost(minimal_run) -> None:
+    run = minimal_run.model_copy(update={'cost_by_stage': {'summary': None}})
+
+    assert 'cost unknown' in header(run)
 
 
 @pytest.fixture

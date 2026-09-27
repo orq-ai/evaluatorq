@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from evaluatorq.common.structured_output import StructuredResult
+from evaluatorq.contracts import Usage
 from evaluatorq.insights import summarize as summarize_module
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
 from evaluatorq.insights.summarize import SUMMARY_PROMPT, summarize_traces
+from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.models import TraceRecord
 
 if TYPE_CHECKING:
@@ -44,6 +46,12 @@ def make_summary(summary_text: str = 'A user asked a question.') -> TraceSummary
         topic='refunds',
         sentiment_explanation='The user is calm.',
     )
+
+
+class _BilledError(RuntimeError):
+    def __init__(self, message: str, *, usage: Usage) -> None:
+        super().__init__(message)
+        self.usage = usage
 
 
 @pytest.fixture
@@ -111,11 +119,13 @@ async def test_summarize_traces_cache_hit_skips_the_call(monkeypatch: pytest.Mon
         raise AssertionError('generate_structured must not be called on a cache hit')
 
     monkeypatch.setattr(summarize_module, 'generate_structured', fake_generate_structured)
+    ledger = UsageLedger()
 
-    result = await summarize_traces([trace], client=fake_client(), model='openai/gpt-6-luna', cache=cache)
+    result = await summarize_traces([trace], client=fake_client(), model='openai/gpt-6-luna', cache=cache, usage=ledger)
 
     assert result == {'trace-1': summary}
     assert calls == 0
+    assert ledger.totals() == {}
 
 
 @pytest.mark.asyncio
@@ -164,6 +174,25 @@ async def test_summarize_traces_exception_yields_error_and_other_traces_still_su
 
     assert result['trace-fail'] == 'summary: boom'
     assert result['trace-ok'] == summary
+
+
+@pytest.mark.asyncio
+async def test_summarize_records_usage_from_billed_exception(monkeypatch: pytest.MonkeyPatch, cache: InsightsCache) -> None:
+    trace = make_trace('trace-fail')
+    billed = Usage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=0.01, calls=1, priced_calls=1)
+
+    async def fail_after_billing(client: Any, **kwargs: Any) -> StructuredResult[TraceSummary]:
+        raise _BilledError('provider failed after billing', usage=billed)
+
+    monkeypatch.setattr(summarize_module, 'generate_structured', fail_after_billing)
+    ledger = UsageLedger()
+
+    result = await summarize_traces(
+        [trace], client=fake_client(), model='openai/gpt-6-luna', cache=cache, usage=ledger
+    )
+
+    assert isinstance(result['trace-fail'], str)
+    assert ledger.totals()['summary'] == billed
 
 
 def test_summary_prompt_has_no_scalar_fields_from_upstream() -> None:

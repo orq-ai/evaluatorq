@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from evaluatorq.common.sanitize import delimit
-from evaluatorq.common.structured_output import generate_structured
+from evaluatorq.common.structured_output import generate_structured, usage_from_exception
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.insights.cache import prompt_hash
 from evaluatorq.insights.models import TraceSummary
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
     from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.usage import UsageLedger
     from evaluatorq.trace_finder.models import TraceRecord
 
 # Ported from `trace_intelligence/core/summarization.py::DEFAULT_SUMMARY_PROMPT`.
@@ -98,6 +99,7 @@ async def _summarize_one(
     model: str,
     cache: InsightsCache,
     semaphore: asyncio.Semaphore,
+    usage: UsageLedger | None = None,
 ) -> tuple[str, TraceSummary | str]:
     prompt = _build_prompt(trace)
     key = prompt_hash(prompt)
@@ -118,9 +120,14 @@ async def _summarize_one(
                 label='insights.summary',
             )
         except Exception as exc:  # noqa: BLE001 - a per-trace failure must never fail the run
+            if usage is not None:
+                usage.add('summary', usage_from_exception(exc))
             message = str(exc)
             logger.warning('Insights summary failed for trace {}: {}', trace.trace_id, message)
             return trace.trace_id, f'summary: {message}'
+
+    if usage is not None:
+        usage.add('summary', result.usage)
 
     if result.parsed is None:
         logger.warning('Insights summary for trace {} produced unparseable model output', trace.trace_id)
@@ -137,6 +144,7 @@ async def summarize_traces(
     model: str,
     cache: InsightsCache,
     parallelism: int = 100,
+    usage: UsageLedger | None = None,
 ) -> dict[str, TraceSummary | str]:
     """Summarize every trace, keyed by `trace_id`; value is the summary or an error string.
 
@@ -159,7 +167,7 @@ async def summarize_traces(
             next_index += 1
             trace = traces[index]
             trace_id, summary = await _summarize_one(
-                trace, client=client, model=model, cache=cache, semaphore=semaphore
+                trace, client=client, model=model, cache=cache, semaphore=semaphore, usage=usage
             )
             results[trace_id] = summary
 

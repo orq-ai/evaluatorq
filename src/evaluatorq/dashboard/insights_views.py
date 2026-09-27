@@ -10,6 +10,7 @@ from urllib.parse import quote, urlencode
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
 from evaluatorq.common.reports.vega import render_embed
+from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_finder.views import FACET_LABELS
@@ -178,6 +179,18 @@ def _window_chip(label: str, value: object) -> str:
     return f'<span class="insights-chip" title="{esc(str(value))}"><b>{esc(label)}</b> {esc(formatted)}</span>'
 
 
+def _cost(run: InsightsRun) -> str:
+    if not run.cost_by_stage:
+        return ''
+    total = sum_structured_usage(list(run.cost_by_stage.values()))
+    if total is None or total.total_cost is None:
+        return ' · cost unknown'
+    text = f' · ${total.total_cost:.4f}'
+    if total.cost_is_partial:
+        text += f' (priced for {total.priced_calls} of {total.calls} calls)'
+    return text
+
+
 def header(run: InsightsRun) -> str:
     population = run.population
     query = population.get('query')
@@ -215,7 +228,7 @@ def header(run: InsightsRun) -> str:
     return (
         '<header class="insights-header">'
         f'<div class="insights-header-copy"><h2>{esc(run.run_name)}</h2><p class="insights-subtitle">'
-        f'<span class="insights-header-count">{trace_text}</span>'
+        f'<span class="insights-header-count">{trace_text}{esc(_cost(run))}</span>'
         f'<span>{esc(run.created_at.strftime("%d %b %Y, %H:%M UTC"))}</span></p>'
         f'<div class="insights-chip-group"><span class="insights-group-label">Population</span>{population_chips}</div>'
         f'<div class="insights-chip-group"><span class="insights-group-label">Labels</span>{label_chip_html}</div>'

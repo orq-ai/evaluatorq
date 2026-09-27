@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 DimensionName = Literal['intent', 'failure', 'sentiment']
@@ -232,3 +233,4 @@ class InsightsRun(BaseModel):
     priority_reason: str | None
     counts: dict[str, int]
     warnings: list[str]
+    cost_by_stage: dict[str, Usage | None] = {}

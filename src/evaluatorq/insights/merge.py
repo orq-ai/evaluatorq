@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.common.judge import ClassifyOutcome
     from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.usage import UsageLedger
 
 _SAME_KEY = 'same'
 _MAX_EXAMPLES = 3
@@ -114,6 +115,7 @@ async def merge_similar(
     model: str,
     threshold: float = 0.5,
     parallelism: int = 20,
+    usage: UsageLedger | None = None,
 ) -> MergeResult:
     """Merge near-duplicate clusters via one classifier `noul` question per candidate pair.
 
@@ -151,6 +153,9 @@ async def merge_similar(
 
         async with semaphore:
             outcome = await _classify_pair_with_retry(client=client, model=model, cfg=cfg, request=request)
+
+        if usage is not None:
+            usage.add('merge', outcome.token_usage)
 
         if outcome.error_kind is not None or outcome.response is None:
             message = outcome.error_message or (

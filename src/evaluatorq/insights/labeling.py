@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.insights.usage import UsageLedger
     from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord
 
 MATCH_KEY = '__match__'
@@ -157,6 +158,7 @@ async def _label_one(
     model: str,
     cfg: LLMCallConfig,
     semaphore: asyncio.Semaphore,
+    usage: UsageLedger | None = None,
 ) -> LabelOutcome:
     state = project_trace(trace).payload
 
@@ -173,6 +175,9 @@ async def _label_one(
 
     async with semaphore:
         outcome = await _classify_with_retry(client=client, model=model, cfg=cfg, request=request)
+
+    if usage is not None:
+        usage.add('label', outcome.token_usage)
 
     if outcome.error_kind is not None or outcome.response is None:
         message = outcome.error_message or (
@@ -235,6 +240,7 @@ async def label_traces(
     parallelism: int = 100,
     cfg: LLMCallConfig | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    usage: UsageLedger | None = None,
 ) -> list[LabelOutcome]:
     """Label every trace with one `/classify` request each, bounded by `parallelism`.
 
@@ -264,6 +270,7 @@ async def label_traces(
                 model=model,
                 cfg=resolved_cfg,
                 semaphore=semaphore,
+                usage=usage,
             )
         except Exception as exc:  # noqa: BLE001 - an unexpected trace shape must not fail the whole pass
             message = str(exc) or type(exc).__name__

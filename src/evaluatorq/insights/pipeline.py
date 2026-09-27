@@ -40,6 +40,7 @@ from evaluatorq.insights.priority import priority_points
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
+from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.settings import effective_settings
 
 MIN_CLUSTER_SIZE = 5
@@ -137,6 +138,7 @@ async def _build_dimension(  # noqa: C901
     outlier_zscore: float | None,
     parallelism: int,
     classifier_model: str,
+    usage: UsageLedger | None = None,
 ) -> DimensionResult:
     """Run one dimension's embed → cluster → describe → merge → reduce pipeline."""
     import numpy as np
@@ -239,6 +241,7 @@ async def _build_dimension(  # noqa: C901
             client=client,
             model=summary_model,
             parallelism=parallelism,
+            usage=usage,
         )
         if described and all(isinstance(value, str) for value in described.values()):
             raise RuntimeError('describe failed for every base cluster')
@@ -252,7 +255,13 @@ async def _build_dimension(  # noqa: C901
             for base_id in base_ids
         }
         merge = await merge_similar(
-            names, examples, same_top_neighbours, client=client, model=classifier_model, parallelism=parallelism
+            names,
+            examples,
+            same_top_neighbours,
+            client=client,
+            model=classifier_model,
+            parallelism=parallelism,
+            usage=usage,
         )
         if merge.n_pairs and merge.n_failed == merge.n_pairs:
             raise RuntimeError(f'merge failed for every one of {merge.n_pairs} cluster pair checks')
@@ -285,7 +294,9 @@ async def _build_dimension(  # noqa: C901
             if rep in merged_names:
                 top_children.setdefault(top_id, []).append(merged_names[rep])
         top_descriptions = (
-            await describe_top_level(top_children, client=client, model=summary_model, parallelism=parallelism)
+            await describe_top_level(
+                top_children, client=client, model=summary_model, parallelism=parallelism, usage=usage
+            )
             if top_children
             else {}
         )
@@ -435,6 +446,7 @@ async def insights(  # noqa: C901
     own_orq = orq_client is None
     resolved_orq = orq_client
     cache_store = InsightsCache(enabled=cache)
+    ledger = UsageLedger()
     try:
         resolved_client = resolve_llm_client(llm_client, max_retries=0)
         resolved_llm = resolved_client.client
@@ -487,6 +499,7 @@ async def insights(  # noqa: C901
                 client=resolved_llm,
                 model=classifier_model,
                 parallelism=parallelism,
+                usage=ledger,
             )
             original_by_id = {trace.trace_id: trace for trace in run.traces}
             retained_trace_ids: set[str] = set()
@@ -534,6 +547,7 @@ async def insights(  # noqa: C901
                     model=summary_model,
                     cache=cache_store,
                     parallelism=parallelism,
+                    usage=ledger,
                 )
                 for trace_id, summary in summaries.items():
                     item = original_by_id[trace_id]
@@ -569,6 +583,7 @@ async def insights(  # noqa: C901
                             outlier_zscore=outlier_zscore,
                             parallelism=parallelism,
                             classifier_model=classifier_model,
+                            usage=ledger,
                         )
                         run.dimensions[dimension] = result
                         for warning in result.warnings:
@@ -605,6 +620,7 @@ async def insights(  # noqa: C901
             )
         _stage_end(writer, 'priority')
         _stage(writer, 'write')
+        run.cost_by_stage = ledger.totals()
         run_path = save_run(run, directory)
         _stage_end(writer, 'write')
         if run.status == 'error':
@@ -628,6 +644,7 @@ async def insights(  # noqa: C901
         if not writer.manifest.ended_at:
             try:
                 run.counts = run.counts or {'n_traces': len(run.traces), 'n_failed_traces': 0, 'per_stage_failed': 0}
+                run.cost_by_stage = ledger.totals()
                 report = save_run(run, directory)
                 if run.status == 'error':
                     writer.fail(run.stage_failures[-1].message, stage=run.stage_failures[-1].stage)
