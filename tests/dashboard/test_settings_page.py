@@ -103,6 +103,14 @@ def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings
     assert saved['limit'] == DashboardSettings.model_fields['limit'].default
 
 
+def test_submitted_settings_keep_saved_explorer_columns() -> None:
+    current = DashboardSettings.model_validate({'explorer_columns': ('model', 'cost')})
+
+    values = app_module._submitted_settings_values({}, current)
+
+    assert values['explorer_columns'] == ('model', 'cost')
+
+
 def test_environment_overrides_are_not_persisted_by_save(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

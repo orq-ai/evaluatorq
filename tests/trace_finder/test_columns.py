@@ -25,6 +25,7 @@ def test_every_column_renders_on_a_sparse_row() -> None:
     for column in COLUMNS.values():
         html = column.render(row)
         assert isinstance(html, str)
+    assert COLUMNS[MATCH].value(row) is None
     assert COLUMNS['tokens_in'].render(row) == '—'
     assert COLUMNS['cache_pct'].render(row) == '—'
     assert COLUMNS['cost'].render(row) == '—'
