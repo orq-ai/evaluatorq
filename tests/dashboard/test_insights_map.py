@@ -6,11 +6,14 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from html import unescape
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from starlette.testclient import TestClient
 
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
@@ -315,11 +318,10 @@ def test_priority_chart_contains_quadrant_labels_and_empty_state():
 
 
 def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatch, tmp_path):
-    monkeypatch.setattr(finder_views, 'export_json', lambda _snapshot: 'exact-export-payload')
-    seen_payloads = []
+    seen_snapshots = []
 
-    def filename(_snapshot, payload):
-        seen_payloads.append(payload)
+    def filename(snapshot):
+        seen_snapshots.append(snapshot)
         return 'trace-finder-17.json'
 
     monkeypatch.setattr(finder_views, 'export_filename', filename)
@@ -329,7 +331,8 @@ def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatc
     monkeypatch.setattr(finder_views, 'table', lambda *_args, **_kwargs: '')
     monkeypatch.setattr(finder_views, 'task_panel', lambda *_args, **_kwargs: '')
     monkeypatch.setattr(finder_views, 'filter_output_panel', lambda *_args, **_kwargs: '')
-    html = finder_views.body(SimpleNamespace(state='completed', compiled=object(), generation=17), object())
+    snapshot = SimpleNamespace(state='completed', compiled=object(), generation=17)
+    html = finder_views.body(snapshot, object())
 
     assert 'Analyze matches' in html
     assert 'Download the completed export to use it with the CLI or Python.' in html
@@ -340,7 +343,7 @@ def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatc
     assert 'InsightsPopulation.from_finder_export' in html
     assert "Path('trace-finder-17.json')" in rendered_examples
     assert 'insights_sync(population)' in rendered_examples
-    assert seen_payloads == ['exact-export-payload']
+    assert seen_snapshots == [snapshot]
     assert '/Users/' not in html
     assert '/tmp/' not in html
 
@@ -361,14 +364,32 @@ def test_htmx_swap_initializes_maps_without_vega_embed():
     assert handler.count('initInsightsMaps(scope);') == 1
 
 
-def test_category_map_legend_tracks_names_without_object_property_collisions():
+def test_category_map_keeps_delimiter_values_distinct():
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
     script = Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js'
     source = script.read_text(encoding='utf-8')
-    category_branch = source.split("if (payload.color_mode === 'category') {", 1)[1].split("} else {", 1)[0]
+    start = source.index('  function mapTraces(payload) {')
+    end = source.index('  function showInsightsMapError', start)
+    payload = {
+        'color_mode': 'category',
+        'points': [
+            {'label_value': 'a|b', 'symbol': 'circle', 'trace_id': 'first', 'color': '#111', 'x': 1},
+            {'label_value': 'a', 'symbol': 'b|circle', 'trace_id': 'second', 'color': '#222', 'x': 2},
+            {'label_value': 'a|b', 'symbol': 'circle', 'trace_id': 'third', 'color': '#111', 'x': 3},
+            {'label_value': 'toString', 'symbol': 'circle', 'trace_id': 'fourth', 'color': '#333', 'x': 4},
+        ],
+    }
+    javascript = source[start:end] + f'\nconsole.log(JSON.stringify(mapTraces({json.dumps(payload)})));'
+    result = subprocess.run(['node', '-e', javascript], capture_output=True, text=True, check=True)
+    traces = json.loads(result.stdout)
 
-    assert 'const categorySeen = new Set();' in category_branch
-    assert 'categorySeen.has(category)' in category_branch
-    assert 'categorySeen.add(category)' in category_branch
+    assert [(trace['name'], trace['x']) for trace in traces] == [
+        ('a|b', [1, 3]),
+        ('a', [2]),
+        ('toString', [4]),
+    ]
+    assert all(trace['showlegend'] for trace in traces)
 
 
 def test_cluster_detail_returns_content_for_existing_detail_panel():

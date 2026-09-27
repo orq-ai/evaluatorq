@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import json
 import os
@@ -193,9 +194,11 @@ def _worker_process_is_alive(pid: object, expected_identity: object = None) -> b
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not hasattr(os, 'kill'):
         return True
     if sys.platform == 'win32':
-        # On Windows os.kill(pid, 0) terminates the process instead of probing it.
-        logger.warning('Cannot safely verify Insights worker PID {} on Windows; leaving its run active', pid)
-        return True
+        status = _windows_worker_status(pid, expected_identity)
+        if status is None:
+            logger.warning('Could not safely verify Insights worker PID {} on Windows; leaving its run active', pid)
+            return True
+        return status
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -220,6 +223,11 @@ def _worker_process_is_alive(pid: object, expected_identity: object = None) -> b
 
 def _read_worker_process_identity(pid: int) -> tuple[str, bool] | None:
     """Read a process start marker and zombie flag where the OS exposes them."""
+    if sys.platform == 'win32':
+        status = _windows_process_details(pid)
+        if status is None or not status[1]:
+            return None
+        return status[0], False
     if sys.platform.startswith('linux'):
         try:
             contents = Path(f'/proc/{pid}/stat').read_text(encoding='ascii')
@@ -253,6 +261,73 @@ def _read_worker_process_identity(pid: int) -> tuple[str, bool] | None:
             return None
         return f'darwin:{" ".join(fields[:5])}', fields[5].startswith('Z')
     return None
+
+
+def _windows_worker_status(pid: int, expected_identity: object) -> bool | None:
+    """Check a Windows process without sending it a signal; None means uncertain."""
+    details = _windows_process_details(pid)
+    if details is None:
+        return None
+    identity, alive = details
+    if not alive:
+        return False
+    if not isinstance(expected_identity, str):
+        return None
+    return identity == expected_identity
+
+
+def _windows_process_details(pid: int) -> tuple[str, bool] | None:
+    """Return Windows process creation time and liveness using read-only APIs."""
+    if not hasattr(ctypes, 'WinDLL'):
+        return None
+    from ctypes import wintypes
+
+    try:
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        open_process = kernel32.OpenProcess
+        wait_for_single_object = kernel32.WaitForSingleObject
+        get_process_times = kernel32.GetProcessTimes
+        close_handle = kernel32.CloseHandle
+        # Querying and waiting are read-only rights, without process-control access.
+        if hasattr(open_process, 'argtypes'):
+            open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            open_process.restype = wintypes.HANDLE
+            wait_for_single_object.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            get_process_times.argtypes = [
+                wintypes.HANDLE,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+            ]
+            close_handle.argtypes = [wintypes.HANDLE]
+        handle = open_process(0x101000, 0, pid)
+        if not handle:
+            # ERROR_INVALID_PARAMETER means that the PID does not exist. Access
+            # denied and all other failures remain uncertain.
+            return ('windows:missing', False) if ctypes.get_last_error() == 87 else None
+        try:
+            wait_status = wait_for_single_object(handle, 0)
+            if wait_status == 0:
+                return 'windows:exited', False
+            if wait_status != 258:  # WAIT_TIMEOUT means the process is still running.
+                return None
+
+            class FILETIME(ctypes.Structure):
+                _fields_ = [('low', wintypes.DWORD), ('high', wintypes.DWORD)]
+
+            created, exited, kernel, user = FILETIME(), FILETIME(), FILETIME(), FILETIME()
+            if not get_process_times(
+                handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)
+            ):
+                return None
+            started = (created.high << 32) | created.low
+            return f'windows:{started}', True
+        finally:
+            close_handle(handle)
+    except Exception as exc:  # noqa: BLE001 - an unavailable Windows API must not crash dashboard recovery
+        logger.warning('Windows worker process query failed for PID {}: {}', pid, exc)
+        return None
 
 
 def _worker_process_identity(pid: int) -> str | None:

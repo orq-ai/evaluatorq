@@ -89,6 +89,8 @@ def test_review_form_preserves_zero_thresholds() -> None:
 
 class FakeStore:
     def __init__(self) -> None:
+        self.created_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        self.finished_at = self.created_at + timedelta(minutes=1)
         self.trace = _trace()
         self.projection = TraceProjection(
             payload={'trace_status': 'ok', 'messages': list(self.trace.messages)},
@@ -125,6 +127,7 @@ class FakeStore:
             total=1,
             active=1 if state == 'classifying' else 0,
             queued=0,
+            created_at=self.created_at,
         )
         return self.snapshot_value
 
@@ -153,6 +156,7 @@ class FakeStore:
             matched=1,
             active=0,
             queued=0,
+            finished_at=self.finished_at,
         )
         return self.snapshot_value
 
@@ -196,6 +200,7 @@ class FakeStore:
             matched=1,
             active=0,
             queued=0,
+            finished_at=self.finished_at,
         )
 
 
@@ -613,6 +618,7 @@ def test_find_export_is_404_until_completed_then_downloads_json(
     assert response.status_code == 200
     filename = response.headers['content-disposition'].split('filename="', 1)[1].rstrip('"')
     assert filename.startswith('trace-finder-1-') and filename.endswith('.json')
+    assert filename in client.get('/find').text
     assert json.loads(response.text)['counts']['matched'] == 1
     assert (tmp_path / 'finder-exports' / filename).read_text() == response.text
     assert save_threads and save_threads[0] is not caller_thread
@@ -880,12 +886,16 @@ def test_finder_export_retention_expires_abandoned_in_flight_reference(
 def test_find_export_filename_survives_generation_restart_without_overwriting() -> None:
     from evaluatorq.trace_finder.export import export_filename
 
-    snapshot = RunSnapshot(generation=1)
-    first = export_filename(snapshot, 'first export')
-    second = export_filename(snapshot, 'different export after restart')
+    snapshot = RunSnapshot(
+        generation=1,
+        created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 9, 1, 0, 1, tzinfo=timezone.utc),
+    )
+    first = export_filename(snapshot)
+    second = export_filename(replace(snapshot, created_at=datetime(2026, 9, 2, tzinfo=timezone.utc)))
 
     assert first != second
-    assert export_filename(snapshot, 'first export') == first
+    assert export_filename(snapshot) == first
 
 
 def test_find_facets_menu_reports_unavailable_catalogue(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:

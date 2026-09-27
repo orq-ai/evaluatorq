@@ -124,28 +124,37 @@
     if (payload.color_mode === 'category') {
       groups = [];
       const categorySeen = new Set();
-      const categorySymbols = {};
+      const groupsByCategory = new Map();
       payload.points.forEach(function (point) {
         const category = String(point.label_value);
-        const key = category + '|' + point.symbol;
-        if (categorySymbols[key]) return;
-        const showLegend = !categorySeen.has(category);
-        categorySeen.add(category);
-        categorySymbols[key] = true;
-        groups.push({ id: key, category: category, name: category, color: point.color,
-          symbol: point.symbol, showLegend: showLegend });
+        let symbolGroups = groupsByCategory.get(category);
+        if (!symbolGroups) {
+          symbolGroups = new Map();
+          groupsByCategory.set(category, symbolGroups);
+        }
+        let group = symbolGroups.get(point.symbol);
+        if (!group) {
+          const showLegend = !categorySeen.has(category);
+          categorySeen.add(category);
+          group = { category: category, name: category, color: point.color, symbol: point.symbol,
+            showLegend: showLegend, points: [] };
+          symbolGroups.set(point.symbol, group);
+          groups.push(group);
+        }
+        group.points.push(point);
       });
     } else {
       groups = payload.legend.map(function (item) {
-        return { id: item.cluster_id, name: item.name, color: item.color, symbol: item.symbol };
+        return { id: item.cluster_id, name: item.name, color: item.color, symbol: item.symbol, points: [] };
+      });
+      const groupsByCluster = new Map(groups.map(function (group) { return [group.id, group]; }));
+      payload.points.forEach(function (point) {
+        const group = groupsByCluster.get(point.cluster_id);
+        if (group) group.points.push(point);
       });
     }
     return groups.map(function (group) {
-      const points = payload.points.filter(function (p) {
-        return (payload.color_mode === 'category'
-          ? String(p.label_value) + '|' + p.symbol
-          : p.cluster_id) === group.id;
-      });
+      const points = group.points;
       return { type: 'scatter3d', mode: 'markers', name: group.name,
         showlegend: group.showLegend !== false,
         x: points.map(function (p) { return p.x; }), y: points.map(function (p) { return p.y; }),

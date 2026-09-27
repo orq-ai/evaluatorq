@@ -723,7 +723,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         if snapshot.state != 'completed' or snapshot.request is None or snapshot.compiled is None:
             return Response('Not found', status_code=404, media_type='text/plain')
         payload = export_json(snapshot)
-        export_name = export_filename(snapshot, payload)
+        export_name = export_filename(snapshot)
         export_dir = get_store_dir('finder-exports')
         try:
             await asyncio.to_thread(_save_finder_export, export_dir, export_name, payload)

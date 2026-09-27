@@ -543,7 +543,9 @@ def test_linux_process_identity_handles_parenthesis_in_command_name(monkeypatch:
     assert insights_launch._read_worker_process_identity(123) == ('linux:987654', False)
 
 
-def test_windows_worker_liveness_check_does_not_call_os_kill(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_windows_worker_liveness_uses_read_only_process_queries(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ctypes
+
     from evaluatorq.dashboard import insights_launch
 
     monkeypatch.setattr(insights_launch.sys, 'platform', 'win32')
@@ -553,7 +555,74 @@ def test_windows_worker_liveness_check_does_not_call_os_kill(monkeypatch: pytest
 
     monkeypatch.setattr(insights_launch.os, 'kill', unexpected_kill)
 
-    assert insights_launch._worker_process_is_alive(12345, 'old-start-marker')
+    class ApiFunction:
+        def __init__(self, call):
+            self.call = call
+
+        def __call__(self, *args):
+            return self.call(*args)
+
+    def process_times(_handle, created, *_rest):
+        words = ctypes.cast(created, ctypes.POINTER(ctypes.c_uint32))
+        words[0] = 1234
+        words[1] = 5
+        return 1
+
+    kernel32 = type('Kernel32', (), {
+        'OpenProcess': ApiFunction(lambda *_args: 1),
+        'WaitForSingleObject': ApiFunction(lambda *_args: 258),
+        'GetProcessTimes': ApiFunction(process_times),
+        'CloseHandle': ApiFunction(lambda _handle: 1),
+    })()
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: kernel32, raising=False)
+
+    identity = insights_launch._worker_process_identity(12345)
+    assert identity == 'windows:21474837714'
+    assert insights_launch._worker_process_is_alive(12345, identity)
+    assert not insights_launch._worker_process_is_alive(12345, 'windows:9')
+
+
+def test_windows_worker_liveness_recovers_exited_and_missing_workers(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ctypes
+
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setattr(insights_launch.sys, 'platform', 'win32')
+    monkeypatch.setattr(insights_launch.os, 'kill', lambda *_args: pytest.fail('must not signal a Windows process'))
+
+    class ApiFunction:
+        def __init__(self, call):
+            self.call = call
+
+        def __call__(self, *args):
+            return self.call(*args)
+
+    kernel32 = type('Kernel32', (), {
+        'OpenProcess': ApiFunction(lambda *_args: 1),
+        'WaitForSingleObject': ApiFunction(lambda *_args: 0),
+        'GetProcessTimes': ApiFunction(lambda *_args: pytest.fail('exited process has no start identity')),
+        'CloseHandle': ApiFunction(lambda _handle: 1),
+    })()
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: kernel32, raising=False)
+    assert not insights_launch._worker_process_is_alive(12345, 'windows:old')
+
+    monkeypatch.setattr(insights_launch.ctypes, 'get_last_error', lambda: 87, raising=False)
+    kernel32.OpenProcess = ApiFunction(lambda *_args: None)
+    assert not insights_launch._worker_process_is_alive(12345, 'windows:old')
+
+
+def test_windows_worker_liveness_keeps_run_when_process_api_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    import ctypes
+
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setattr(insights_launch.sys, 'platform', 'win32')
+
+    def unavailable(*_args, **_kwargs):
+        raise OSError('kernel32 unavailable')
+
+    monkeypatch.setattr(ctypes, 'WinDLL', unavailable, raising=False)
+    assert insights_launch._worker_process_is_alive(12345, 'windows:old')
 
 
 def test_stale_reconciliation_treats_overflowing_worker_pid_as_uncertain(

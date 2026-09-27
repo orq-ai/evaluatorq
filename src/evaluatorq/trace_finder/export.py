@@ -203,10 +203,12 @@ def export_json(run: RunSnapshot, *, matched_only: bool = False) -> str:
     return build_export(run, matched_only=matched_only).model_dump_json(indent=2)
 
 
-def export_filename(run: RunSnapshot, payload: str | None = None) -> str:
-    """Give a completed export a stable content-based filename across dashboard restarts."""
-    content = payload if payload is not None else export_json(run)
-    digest = hashlib.sha256(content.encode('utf-8')).hexdigest()
+def export_filename(run: RunSnapshot) -> str:
+    """Give a completed run a stable filename without serializing its export on each page render."""
+    if run.created_at is None or run.finished_at is None:
+        raise ValueError('completed run timestamps are required for an export filename')
+    identity = f'{run.generation}:{run.created_at.isoformat()}:{run.finished_at.isoformat()}'
+    digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
     return f'trace-finder-{run.generation}-{digest}.json'
 
 
