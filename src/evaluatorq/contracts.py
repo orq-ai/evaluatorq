@@ -1788,6 +1788,8 @@ class RunManifest(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     stage: str | None = None  # name of the current / most-recent stage
     stages: list[StageRecord] = Field(default_factory=list)
+    planned_stages: list[str] = Field(default_factory=list)
+    stage_labels: dict[str, str] = Field(default_factory=dict)
     started_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None  # set when the run reaches a terminal status

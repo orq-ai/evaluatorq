@@ -69,7 +69,7 @@ Marked `N/A` in the matrix, never reported as a gap.
 | pairwise jury × target kind | operates on collected outputs, not a live target |
 | `deployment()` / `invoke()` × `mode` | deployment invocation has no red-team mode |
 | `deployment()` / `invoke()` × evaluator kind | it fetches a response; scoring is a separate step |
-| dashboard × data source | the dashboard reads run artifacts from disk; it does not select a dataset |
+| dashboard surfaces other than Insights × data source | those pages read run artifacts from disk; Insights can start a run from recent traces, a semantic query, or a Finder export |
 | dashboard × evaluator kind | renders scores, does not choose evaluators |
 | Trace Insights × target kind | it reads trace populations and does not call an agent or target under test |
 | Trace Insights × mode | `--mode` belongs to red teaming; Insights has no pipeline mode |

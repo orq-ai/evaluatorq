@@ -36,6 +36,7 @@ from evaluatorq.insights.models import (
 from evaluatorq.insights.population import PopulationError, resolve_population
 from evaluatorq.insights.presets import DIMENSION_FIELDS, LABEL_PRESETS, SENTIMENT
 from evaluatorq.insights.priority import priority_points
+from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.trace_finder.settings import effective_settings
@@ -341,6 +342,7 @@ async def insights(  # noqa: C901
     cache: bool = True,
     run_name: str | None = None,
     runs_dir: Path | None = None,
+    _run_id: str | None = None,
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:
@@ -355,7 +357,7 @@ async def insights(  # noqa: C901
             raise ValueError(f'{limit_name} must be positive')
     settings = effective_settings()
     compiler_model = compiler_model or settings.compiler_model
-    run_id = str(uuid.uuid4())
+    run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()
     now = datetime.now(timezone.utc)
@@ -388,7 +390,15 @@ async def insights(  # noqa: C901
         counts={},
         warnings=[],
     )
-    writer = start_manifest(run_id=run_id, surface='insights', run_name=name, runs_dir=directory)
+    plan = stage_plan(population, specs, dimensions, priority_dimension=priority_dimension)
+    writer = start_manifest(
+        run_id=run_id,
+        surface='insights',
+        run_name=name,
+        runs_dir=directory,
+        planned_stages=[stage for stage, _ in plan],
+        stage_labels=dict(plan),
+    )
     resolved_llm = None
     llm_owned = False
     own_orq = orq_client is None

@@ -90,6 +90,8 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
     manifest = list_manifests(tmp_path)[0]
     assert manifest.status.value == 'completed'
     assert manifest.report_path == str(files[0])
+    assert manifest.planned_stages == ['population', 'label', 'summary', 'dimension:intent', 'priority', 'write']
+    assert manifest.stage_labels['dimension:intent'] == 'Cluster intent'
 
 
 @pytest.mark.asyncio

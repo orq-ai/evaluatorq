@@ -180,7 +180,15 @@ class ManifestWriter:
         self.flush()
 
 
-def start_manifest(*, run_id: str, surface: Surface | str, run_name: str, runs_dir: Path) -> ManifestWriter:
+def start_manifest(
+    *,
+    run_id: str,
+    surface: Surface | str,
+    run_name: str,
+    runs_dir: Path,
+    planned_stages: list[str] | None = None,
+    stage_labels: dict[str, str] | None = None,
+) -> ManifestWriter:
     """Create + persist a ``running`` manifest, returning its writer."""
     now = datetime.now(tz=timezone.utc)
     manifest = RunManifest(
@@ -188,6 +196,8 @@ def start_manifest(*, run_id: str, surface: Surface | str, run_name: str, runs_d
         surface=Surface(surface),
         run_name=run_name,
         status=ManifestStatus.RUNNING,
+        planned_stages=planned_stages or [],
+        stage_labels=stage_labels or {},
         started_at=now,
         updated_at=now,
     )

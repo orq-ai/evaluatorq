@@ -103,7 +103,11 @@ eq insights --query "customers asking about refunds" --label ./resolution-label.
 
 ## Review a run
 
-Start the dashboard with the `dashboard` and `insights` extras, then open **Insights** in the sidebar. The page reads saved runs and does not start new ones. Select a run to inspect discovered dimensions as a cluster tree or 3D map, review label distributions and confidence, compare dimensions or labels in a crosstab, filter the trace table, or open a trace in Orq. The priority matrix is available when the run includes the customer-satisfaction label; otherwise the page explains why it is empty.
+Start the dashboard with the `dashboard` and `insights` extras, then open **Insights** in the sidebar. The run list shows saved runs and their status. Select a run to inspect discovered dimensions as a cluster tree or 3D map, review label distributions and confidence, compare dimensions or labels in a crosstab, filter the trace table, or open a trace in Orq. The priority matrix is available when the run includes the customer-satisfaction label; otherwise the page explains why it is empty.
+
+To start a run from the dashboard, click **+ New Run**. Choose recent traces, a semantic query, or a Finder JSON export stored on the dashboard machine. Then select built-in labels and discovered dimensions, review the expected stages, and click **Start run**. The dashboard opens the new run immediately. The run list and run page show each stage as pending, running, completed, error, or skipped; the page refreshes while the run is active. The stages reflect your source, labels, and dimensions. The worker continues if the dashboard is restarted. For more filters and custom labels, use `eq insights` or the Python API.
+
+Each run has a state file under `.evaluatorq/insights-runs/.manifests/<run-id>.json` and a report in `.evaluatorq/insights-runs/`. The state file records the stage plan, current stage, outcomes, errors, and report path. If a run fails before writing its report, it still appears in the dashboard with the failed stage and error. The worker log is under `.evaluatorq/insights-runs/.logs/<run-id>.log`.
 
 For the finder’s **Analyze matches** handoff, see [Trace Finder](trace-finder.md).
 

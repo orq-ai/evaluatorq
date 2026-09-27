@@ -8,10 +8,12 @@ from urllib.parse import quote, urlencode
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
 from evaluatorq.common.reports.vega import render_embed
+from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import Cluster, InsightsRun, TraceInsight
 
 TABS = ('dimensions', 'labels', 'crosstab', 'traces', 'priority', 'map')
@@ -25,7 +27,13 @@ TAB_LABELS = {
 }
 
 
-def run_rail(entries: list[tuple[str, str, str]], selected: str | None) -> str:
+def _stage_name(manifest: RunManifest) -> str:
+    return manifest.stage_labels.get(manifest.stage or '', (manifest.stage or 'Starting').replace('_', ' ').title())
+
+
+def run_rail(
+    entries: list[tuple[str, str, str]], selected: str | None, manifests: dict[str, RunManifest] | None = None
+) -> str:
     """Render run links and unreadable entries in the left rail."""
     rows = []
     for run_id, label, status in entries:
@@ -36,12 +44,57 @@ def run_rail(entries: list[tuple[str, str, str]], selected: str | None) -> str:
             classes += ' failed'
         icon = {'running': '◌', 'error': '✕', 'unreadable': '!', 'completed': '●'}.get(status, '●')
         href = f'/insights/{quote(run_id, safe="")}'
+        manifest = (manifests or {}).get(run_id)
+        stage = (
+            f'<span class="insights-run-stage">{esc(_stage_name(manifest))}</span>'
+            if manifest is not None and status == 'running'
+            else ''
+        )
         rows.append(
-            f'<a class="{classes}" href="{href}"><span class="insights-run-name">{icon} {esc(label)}</span>'
+            f'<a class="{classes}" href="{href}"><span class="insights-run-copy">'
+            f'<span class="insights-run-name">{icon} {esc(label)}</span>{stage}</span>'
             f'<span class="insights-run-status">{esc(status)}</span></a>'
         )
     body = ''.join(rows) or '<p class="insights-empty">No Insights runs yet.</p>'
-    return f'<aside class="insights-rail"><h2>Runs</h2>{body}</aside>'
+    return (
+        '<aside class="insights-rail"><div class="insights-rail-head"><h2>Runs</h2>'
+        '<a href="/insights/new" class="insights-new-link" aria-label="New Insights run">+ New Run</a></div>'
+        f'{body}</aside>'
+    )
+
+
+def progress(manifest: RunManifest | None) -> str:
+    """Render the persisted stage plan and actual stage outcomes."""
+    if manifest is None:
+        return ''
+    records = {stage.name: stage for stage in manifest.stages}
+    planned = [*manifest.planned_stages, *(name for name in records if name not in manifest.planned_stages)]
+    if manifest.status == 'error' and manifest.stage and manifest.stage not in planned:
+        planned.append(manifest.stage)
+    items = []
+    for name in planned:
+        record = records.get(name)
+        status = (
+            str(record.status)
+            if record is not None
+            else 'error'
+            if manifest.status == 'error' and name == manifest.stage
+            else 'skipped'
+            if manifest.status != 'running'
+            else 'pending'
+        )
+        label = manifest.stage_labels.get(name, name.replace('dimension:', 'Cluster ').replace('_', ' ').title())
+        items.append(
+            f'<li class="insights-stage {esc(status)}"><span class="insights-stage-mark" aria-hidden="true"></span>'
+            f'<span>{esc(label)}</span><small>{esc(status)}</small></li>'
+        )
+    current = _stage_name(manifest) if manifest.status == 'running' else str(manifest.status).title()
+    list_html = ''.join(items) or '<li class="insights-stage pending">Preparing run</li>'
+    return (
+        '<section class="insights-progress" aria-label="Run progress">'
+        f'<div class="insights-progress-head"><h3>Run progress</h3><span>{esc(current)}</span></div>'
+        f'<ol>{list_html}</ol></section>'
+    )
 
 
 def _chip(label: str, value: object) -> str:
@@ -794,44 +847,131 @@ def full_page(
     active_tab: str = 'dimensions',
     *,
     query: dict[str, str] | None = None,
+    manifest: RunManifest | None = None,
+    manifests: dict[str, RunManifest] | None = None,
 ) -> str:
     body = (
         '<div class="insights-layout">'
-        f'{run_rail(entries, run.run_id)}'
+        f'{run_rail(entries, run.run_id, manifests)}'
         '<div class="insights-main">'
-        f'{header(run)}{failures(run)}{tabs(run, active_tab)}'
+        f'{header(run)}{failures(run)}{progress(manifest)}{tabs(run, active_tab)}'
         f'<div id="insights-content">{tab_content(run, active_tab, query=query)}</div>'
         '</div></div>'
     )
     return page('Insights', body + '<script src="/static/plotly-gl3d.min.js" defer></script>', active_nav='insights')
 
 
-def landing(entries: list[tuple[str, str, str]]) -> str:
+def landing(entries: list[tuple[str, str, str]], manifests: dict[str, RunManifest] | None = None) -> str:
     body = (
         '<div class="insights-layout">'
-        f'{run_rail(entries, None)}'
+        f'{run_rail(entries, None, manifests)}'
         '<div class="insights-main"><section class="insights-empty-state"><h2>Insights</h2>'
-        '<p>Run an Insights analysis from the Python API or command line, then return here to review its clusters, labels and traces.</p>'
-        '<p>This page is for reviewing completed runs. It does not start an analysis.</p></section></div></div>'
+        '<p>Discover patterns in recent traces, then review clusters, labels, and individual traces here.</p>'
+        '<p><a class="insights-action" href="/insights/new">+ New Run</a></p></section></div></div>'
     )
-    return page('Insights', body, active_nav='insights')
+    return page('Insights', body + _refresh_if_running(entries), active_nav='insights')
 
 
-def running_page(run_id: str, label: str, entries: list[tuple[str, str, str]]) -> str:
+def _refresh_if_running(entries: list[tuple[str, str, str]]) -> str:
+    return (
+        '<script>setTimeout(function(){location.reload()},3000)</script>'
+        if any(row[2] == 'running' for row in entries)
+        else ''
+    )
+
+
+def running_page(
+    run_id: str,
+    label: str,
+    entries: list[tuple[str, str, str]],
+    manifest: RunManifest,
+    manifests: dict[str, RunManifest] | None = None,
+) -> str:
+    if manifest.status == 'running':
+        notice = (
+            f'<section class="insights-empty-state"><h2>{esc(label)}</h2>'
+            '<p>This run updates every few seconds. Results appear when it finishes.</p></section>'
+        )
+    elif manifest.status == 'error':
+        notice = (
+            f'<section class="insights-error" role="alert"><h2>{esc(label)} failed</h2>'
+            f'<p>{esc(manifest.error or "The run stopped before a report was saved.")}</p></section>'
+        )
+    else:
+        notice = (
+            f'<section class="insights-empty-state"><h2>{esc(label)}</h2>'
+            '<p>This run ended without a report file.</p></section>'
+        )
     body = (
         '<div class="insights-layout">'
-        f'{run_rail(entries, run_id)}'
-        f'<div class="insights-main"><section class="insights-empty-state"><h2>{esc(label)}</h2>'
-        '<p>This Insights run is still running. Its results will appear when the run file is written.</p></section></div></div>'
+        f'{run_rail(entries, run_id, manifests)}'
+        f'<div class="insights-main">{notice}'
+        f'{progress(manifest)}</div></div>'
     )
-    return page('Insights', body, active_nav='insights')
+    return page('Insights', body + _refresh_if_running(entries), active_nav='insights')
 
 
-def unreadable_page(run_id: str, error: str, entries: list[tuple[str, str, str]]) -> str:
+def unreadable_page(
+    run_id: str, error: str, entries: list[tuple[str, str, str]], manifests: dict[str, RunManifest] | None = None
+) -> str:
     body = (
         '<div class="insights-layout">'
-        f'{run_rail(entries, run_id)}'
+        f'{run_rail(entries, run_id, manifests)}'
         '<div class="insights-main"><section class="insights-error"><h2>Run file is unreadable</h2>'
         f'<p>{esc(error)}</p></section></div></div>'
     )
     return page('Insights', body, active_nav='insights')
+
+
+def new_run_page(
+    entries: list[tuple[str, str, str]], manifests: dict[str, RunManifest], *, error: str | None = None
+) -> str:
+    """Render the three-step run form; JavaScript only controls presentation."""
+    error_html = f'<p class="insights-error" role="alert">{esc(error)}</p>' if error else ''
+    body = (
+        '<div class="insights-layout">'
+        f'{run_rail(entries, None, manifests)}'
+        '<div class="insights-main insights-wizard">'
+        '<header class="insights-wizard-head"><a href="/insights">← Insights</a><h2>New Insights run</h2>'
+        '<p>Choose the traces and what to learn from them.</p></header>'
+        f'{error_html}'
+        '<div class="insights-wizard-steps" aria-label="Wizard steps"><span class="active">1 · Traces</span>'
+        '<span>2 · Analysis</span><span>3 · Review</span></div>'
+        '<form id="insights-new-form" method="post" action="/insights/runs">'
+        f'{csrf_field()}'
+        '<section class="insights-wizard-step" data-step="1"><h3>Which traces?</h3>'
+        '<div class="insights-source-options">'
+        '<label><input type="radio" name="source" value="recent" checked><b>Recent traces</b><small>Analyze a recent window.</small></label>'
+        '<label><input type="radio" name="source" value="query"><b>Search by question</b><small>Include only matching traces.</small></label>'
+        '<label><input type="radio" name="source" value="finder"><b>Finder export</b><small>Use a saved set of matches.</small></label>'
+        '</div>'
+        '<label class="insights-form-field" data-source="query">Question<textarea name="query" rows="3" maxlength="500" placeholder="Which conversations are about refunds?"></textarea></label>'
+        '<label class="insights-form-field" data-source="finder">Finder JSON path<input name="finder_export" type="text" placeholder="/path/to/finder-export.json"></label>'
+        '<div class="insights-form-grid" data-source="recent query">'
+        '<label class="insights-form-field">Window (days)<input name="window_days" type="number" min="1" max="90" value="7"></label>'
+        '<label class="insights-form-field">Trace limit<input name="limit" type="number" min="1" max="5000" value="100"></label></div>'
+        '</section>'
+        '<section class="insights-wizard-step" data-step="2"><h3>What should Insights find?</h3>'
+        '<p>Choose labels for fixed questions and dimensions for discovered groups.</p>'
+        '<fieldset><legend>Labels</legend><div class="insights-choice-grid">'
+        '<label><input type="checkbox" name="labels" value="sentiment"> Sentiment</label>'
+        '<label><input type="checkbox" name="labels" value="customer_satisfaction"> Customer satisfaction</label>'
+        '</div></fieldset><fieldset><legend>Dimensions</legend><div class="insights-choice-grid">'
+        '<label><input type="checkbox" name="dimensions" value="intent" checked> Intent</label>'
+        '<label><input type="checkbox" name="dimensions" value="failure"> Failure</label>'
+        '<label><input type="checkbox" name="dimensions" value="sentiment"> Sentiment</label>'
+        '</div></fieldset>'
+        '<label class="insights-form-field">Parallel requests<input name="parallelism" type="number" min="1" max="200" value="20"></label>'
+        '</section>'
+        '<section class="insights-wizard-step" data-step="3"><h3>Review and start</h3>'
+        '<label class="insights-form-field">Run name <span>(optional)</span><input name="name" maxlength="80" placeholder="Weekly support review"></label>'
+        '<div id="insights-run-preview" class="insights-run-preview" aria-live="polite"></div>'
+        '<p class="insights-muted">The run reads live Orq traces and makes model requests. Progress appears in its run page.</p>'
+        '</section>'
+        '<p id="insights-wizard-error" class="insights-error" role="alert" hidden></p>'
+        '<div class="insights-wizard-actions"><button type="button" data-wizard-back>Back</button>'
+        '<button type="button" data-wizard-next>Continue</button>'
+        '<button type="submit" data-wizard-start>Start run</button></div>'
+        '</form></div></div><script src="/static/insights-wizard.js" defer></script>'
+    )
+    return page('New Insights run', body, active_nav='insights')
