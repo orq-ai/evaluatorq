@@ -5,29 +5,60 @@ Deep-links now derive their host + workspace from each run's own
 ``orq_links.parse_experiment_url``), which the web app resolves correctly for
 anyone with access — no API key, no workspace config, no ``orq`` CLI. This module
 is the fallback for runs without an ``experiment_url``: it reads the saved
-dashboard profile and workspace first, then the environment. Links are hidden
-when no workspace slug is available.
+dashboard workspace first, then the environment, then discovers the slug for
+the active credential through the Orq CLI. Links are hidden when no workspace
+slug is available.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+from time import monotonic
 from urllib.parse import urlsplit
 
 from loguru import logger
 
 DEFAULT_BASE_URL = 'https://my.orq.ai'
+_cli_slug_cache: dict[tuple[str | None, str | None], tuple[float, str | None]] = {}
+
+
+def _cli_slug(profile: str | None, fingerprint: str | None) -> str | None:
+    """Cache credential-matched CLI discovery so rendering links does not run a CLI command per row."""
+    key = (profile, fingerprint)
+    cached = _cli_slug_cache.get(key)
+    if cached is not None and cached[0] > monotonic():
+        return cached[1]
+
+    from evaluatorq.dashboard.orq_scope import discover_orq_scope
+
+    scope = discover_orq_scope(profile)
+    slug = scope.workspace_key
+    if not slug:
+        logger.warning(
+            'Could not resolve the Orq workspace slug from the CLI: {}',
+            scope.error or 'the credential has no matching listed workspace',
+        )
+    _cli_slug_cache[key] = (monotonic() + (300 if slug and fingerprint else 30), slug)
+    return slug
 
 
 def resolve_slug() -> str | None:
-    """Workspace slug saved in dashboard settings, or the environment fallback."""
-    from evaluatorq.trace_finder.settings import load_settings
+    """Workspace slug from settings, environment, or the authenticated CLI."""
+    from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
 
-    saved = load_settings().orq_workspace
-    if saved:
-        return saved
+    settings = load_settings()
+    if settings.orq_workspace:
+        return settings.orq_workspace
     env = os.environ.get('ORQ_WORKSPACE') or os.environ.get('ORQ_WORKSPACE_SLUG')
-    return env.strip() or None if env and env.strip() else None
+    if env and env.strip():
+        return env.strip()
+    if settings.orq_profile:
+        return _cli_slug(settings.orq_profile, settings.orq_credential_fingerprint)
+    api_key = os.environ.get('ORQ_API_KEY', '').strip()
+    if api_key:
+        return _cli_slug(None, credential_fingerprint(api_key, os.environ.get('ORQ_BASE_URL')))
+    return _cli_slug(None, None) if shutil.which('orq') else None
 
 
 def resolve_base_url() -> str:

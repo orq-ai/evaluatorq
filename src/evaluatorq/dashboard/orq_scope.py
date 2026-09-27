@@ -49,6 +49,9 @@ def _cli_json(args: list[str], *, profile: str | None, timeout: float) -> dict[s
         for name in ('ORQ_API_KEY', 'ORQ_BASE_URL', 'ORQ_SERVER', 'ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'):
             environment.pop(name, None)
     else:
+        # A persisted CLI profile wins over ORQ_API_KEY unless we explicitly
+        # select the environment credential for this invocation.
+        command.extend(('--profile', ''))
         for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'):
             environment.pop(name, None)
         environment['ORQ_SERVER'] = os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
@@ -106,10 +109,8 @@ def _profile_workspace_rows(
     raise ValueError('The orq CLI returned too many workspace pages to choose safely.')
 
 
-def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> OrqScope:  # noqa: C901
+def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> OrqScope:
     """Find the workspace and all visible projects without exposing a credential."""
-    if profile is None and not os.environ.get('ORQ_API_KEY', '').strip():
-        return OrqScope(error='Set ORQ_API_KEY to discover projects.')
     deadline = monotonic() + 3 * timeout
     projects: list[OrqProject] = []
     cursor: str | None = None
@@ -144,20 +145,13 @@ def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0) -> O
     if len(workspace_ids) > 1:
         return OrqScope(error='This credential returned projects from multiple workspaces.')
     workspace_id = next(iter(workspace_ids), None)
-    if profile:
-        try:
+    try:
+        listing = _cli_json(['workspace', 'list'], profile=profile, timeout=_remaining_timeout(deadline, timeout))
+        rows = listing.get('workspaces') if listing else None
+        if profile and not isinstance(rows, list):
             rows = _profile_workspace_rows(profile, workspace_id, timeout, deadline)
-        except (TypeError, ValueError, TimeoutError) as exc:
-            return OrqScope(error=str(exc))
-    else:
-        try:
-            status = _cli_json(['status'], profile=None, timeout=_remaining_timeout(deadline, timeout))
-        except TimeoutError as exc:
-            return OrqScope(error=str(exc))
-        credential = status.get('credential') if status else None
-        if isinstance(credential, dict) and credential.get('workspace_id') != workspace_id:
-            return OrqScope(error='The CLI session and API key point at different workspaces.')
-        rows = status.get('workspaces') if status else None
+    except (TypeError, ValueError, TimeoutError) as exc:
+        return OrqScope(error=str(exc))
     workspace_key = None
     if isinstance(rows, list):
         workspace_key = next(

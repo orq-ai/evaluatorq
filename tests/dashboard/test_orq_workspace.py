@@ -9,9 +9,11 @@ from evaluatorq.dashboard import orq_workspace as ow
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
-    for var in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL'):
+    for var in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL', 'ORQ_API_KEY'):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: None)
+    ow._cli_slug_cache.clear()  # pyright: ignore[reportPrivateUsage]
 
 
 # --- workspace slug ---------------------------------------------------------
@@ -29,6 +31,34 @@ def test_resolve_slug_alias_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_resolve_slug_none_when_unset() -> None:
     assert ow.resolve_slug() is None
+
+
+def test_resolve_slug_from_authenticated_cli_and_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+
+    monkeypatch.setenv('ORQ_API_KEY', 'test-project-key')
+    calls: list[str | None] = []
+
+    def discover(profile: str | None) -> OrqScope:
+        calls.append(profile)
+        return OrqScope(workspace_key='orq-research', workspace_id='research-id')
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+
+    assert ow.resolve_slug() == 'orq-research'
+    assert ow.resolve_slug() == 'orq-research'
+    assert calls == [None]
+
+
+def test_resolve_slug_from_cli_session_without_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    monkeypatch.setattr(
+        'evaluatorq.dashboard.orq_scope.discover_orq_scope',
+        lambda _profile: OrqScope(workspace_key='orq-research', workspace_id='research-id'),
+    )
+    assert ow.resolve_slug() == 'orq-research'
 
 
 # --- host -------------------------------------------------------------------

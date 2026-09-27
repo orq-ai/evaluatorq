@@ -17,8 +17,9 @@ Source of host + workspace:
 * The run's own ``experiment_url`` (``{host}/{workspace}/experiments/{id}``) when
   passed — the web app resolves that path for anyone with access.
 * Otherwise the dashboard's saved profile host and workspace, with
-  ``ORQ_UI_BASE_URL`` overriding the UI host and environment values used when
-  nothing is saved. When the slug is unresolved, the buttons are hidden.
+  ``ORQ_UI_BASE_URL`` overriding the UI host. Environment values and then
+  credential-matched Orq CLI discovery supply a missing workspace slug. When
+  the slug is unresolved, the buttons are hidden.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ def ui_base_url() -> str:
 
 
 def workspace_slug() -> str | None:
-    """Workspace slug from ``ORQ_WORKSPACE`` / ``ORQ_WORKSPACE_SLUG`` env, or None."""
+    """Workspace slug from settings, environment, or authenticated CLI discovery."""
     from evaluatorq.dashboard.orq_workspace import resolve_slug
 
     slug = (resolve_slug() or '').strip().strip('/')
@@ -50,7 +51,7 @@ def workspace_slug() -> str | None:
 
 
 def _traces_url(query: str, experiment_url: str | None) -> str | None:
-    # Prefer the run's own experiment_url (host + workspace); fall back to env.
+    # Prefer the run's own experiment_url (host + workspace); then resolve dashboard scope.
     host, slug = parse_experiment_url(experiment_url)
     if not (host and slug):
         host, slug = ui_base_url(), workspace_slug()

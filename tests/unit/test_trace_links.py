@@ -12,8 +12,11 @@ from evaluatorq.dashboard import trace_links
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard import orq_workspace
+
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
-    for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE'):
+    monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: None)
+    for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE', 'ORQ_API_KEY'):
         monkeypatch.delenv(var, raising=False)
 
 
