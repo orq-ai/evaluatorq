@@ -1,6 +1,8 @@
 # CLAUDE.md — evaluatorq-py
 
-This file provides guidance to Claude Code when working in `packages/evaluatorq-py`.
+This file provides guidance to Claude Code when working in this repository.
+
+Read [CODING_STANDARDS.md](CODING_STANDARDS.md) when writing or reviewing code. It holds the review rules that require judgment; this file holds the shared machinery map and workflow procedures.
 
 ## Surfacing something important
 
@@ -168,13 +170,13 @@ Distilled from review findings that recurred. Each cost a review round.
 
 Guardrails for the mechanical parts live in `tests/test_reuse_guardrails.py`. A failure there names the canonical helper — use it, don't extend the allowlist.
 
-## Keeping this file true
+## Keeping the rules true
 
-This file only works if it absorbs what review teaches. When a review comment, CI failure, or bug traces back to a convention that was not written down:
+When a review comment, CI failure, or bug traces back to a missing convention, update its owner in the same PR:
 
-1. Add it **in the same PR** — one table row or one house rule, not a paragraph.
-2. Add the mechanical check too, if one is possible (`tests/test_reuse_guardrails.py`, a ruff rule).
-3. Delete something stale while you are here. Above ~200 lines this file gets skimmed, and skimmed is the same as absent.
+1. Add a rule requiring judgment to `CODING_STANDARDS.md`; add an exact shared-helper route to the table above when needed.
+2. Add a mechanical check when possible (`tests/test_reuse_guardrails.py`, a ruff rule), instead of relying on prose alone.
+3. Delete stale or duplicated guidance while you are here. Long instruction files get skimmed, and skimmed is the same as absent.
 
 Do not add a directory tree, a file inventory, or anything else the filesystem already answers.
 
