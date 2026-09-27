@@ -4,9 +4,9 @@ Pure computation over an already-run `InsightsRun`'s traces and one dimension's
 clusters — no LLM or network calls, so there is no retry layer here. Per the
 "no optimistic defaults" house rule, a trace whose `satisfaction_label` or
 `errors_label` answer failed (or is missing) is excluded from that cluster's
-mean/share rather than counted as 0 or a pass; only the *label being absent
-from the whole run* falls back to a documented 0.0 default, and that default
-is always named in the returned reason string.
+mean/share rather than counted as 0 or a pass. When `errors_label` was not
+requested, error share comes from summaries with `assistant_errors`; traces
+without summaries are excluded, and the fallback source is named in the reason.
 """
 
 from __future__ import annotations
@@ -15,10 +15,39 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.insights.models import PriorityPoint
+from evaluatorq.insights.models import PriorityPoint, real_assistant_errors
 
 if TYPE_CHECKING:
     from evaluatorq.insights.models import DimensionResult, LabelSpec, TraceInsight
+
+
+def _summary_error_share(members: list[TraceInsight], cluster_id: str, dimension_name: str) -> float | None:
+    summarized = [member for member in members if member.summary is not None]
+    if not summarized:
+        logger.warning(
+            'Insights priority matrix: cluster {!r} in dimension {!r} has no summaries and was skipped',
+            cluster_id,
+            dimension_name,
+        )
+        return None
+    return sum(bool(real_assistant_errors(member.summary)) for member in summarized if member.summary) / len(summarized)
+
+
+def _label_error_share(
+    members: list[TraceInsight], errors_label: str, cluster_id: str, dimension_name: str
+) -> float | None:
+    answers = [
+        answer for member in members if (answer := member.labels.get(errors_label)) is not None and answer.error is None
+    ]
+    if not answers:
+        logger.warning(
+            'Insights priority matrix: cluster {!r} in dimension {!r} has no valid {!r} answer and was skipped',
+            cluster_id,
+            dimension_name,
+            errors_label,
+        )
+        return None
+    return sum(answer.value is True for answer in answers) / len(answers)
 
 
 def priority_points(
@@ -49,10 +78,12 @@ def priority_points(
     cluster with zero valid `satisfaction_label` answers is skipped (logged),
     and likewise a base cluster is skipped when `errors_label` was requested
     for the run but every member's answer failed or is missing for that one
-    cluster — neither ever falls back to a guessed value. Only when
-    `errors_label` was never requested for the *whole run* does every
-    produced point's `error_share` default to `0.0`, and that default is
-    always named in the returned `reason`.
+    cluster — neither ever falls back to a guessed value. When `errors_label`
+    was never requested for the *whole run*, `error_share` comes from the
+    share of members with summaries whose `assistant_errors` contains a real
+    error. Members without summaries are excluded; a cluster without any
+    summaries is skipped. The fallback source is named in the returned
+    `reason`.
     """
     if satisfaction_spec.kind != 'score':
         reason = f'the {satisfaction_label!r} label must be a score label for the priority matrix'
@@ -69,7 +100,7 @@ def priority_points(
     degraded_reason: str | None = None
     if not errors_requested:
         degraded_reason = (
-            f'the {errors_label!r} label was not requested for this run; error share defaults to 0.0 for every cluster'
+            f'error share taken from summary assistant_errors; the {errors_label!r} label was not requested'
         )
         logger.warning('Insights priority matrix for dimension {!r}: {}', dimension.name, degraded_reason)
 
@@ -98,28 +129,13 @@ def priority_points(
             )
             continue
 
-        error_denominator = 0
-        error_numerator = 0
-        for member in members:
-            answer = member.labels.get(errors_label)
-            if answer is None or answer.error is not None:
-                continue
-            error_denominator += 1
-            if answer.value is True:
-                error_numerator += 1
-
-        if error_denominator == 0:
-            if errors_requested:
-                logger.warning(
-                    'Insights priority matrix: cluster {!r} in dimension {!r} has no valid {!r} answer and was skipped',
-                    cluster.id,
-                    dimension.name,
-                    errors_label,
-                )
-                continue
-            error_share = 0.0
-        else:
-            error_share = error_numerator / error_denominator
+        error_share = (
+            _label_error_share(members, errors_label, cluster.id, dimension.name)
+            if errors_requested
+            else _summary_error_share(members, cluster.id, dimension.name)
+        )
+        if error_share is None:
+            continue
 
         points.append(
             PriorityPoint(

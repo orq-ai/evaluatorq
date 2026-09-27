@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from evaluatorq.insights.models import Cluster, DimensionResult, LabelAnswer, LabelSpec, TraceInsight
+from evaluatorq.insights.models import Cluster, DimensionResult, LabelAnswer, LabelSpec, TraceInsight, TraceSummary
 from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, MADE_ERRORS
 from evaluatorq.insights.priority import priority_points
 
@@ -20,6 +20,7 @@ def _trace(
     made_errors_error: str | None = None,
     include_satisfaction: bool = True,
     include_made_errors: bool = True,
+    summary: TraceSummary | None = None,
 ) -> TraceInsight:
     labels: dict[str, LabelAnswer] = {}
     if include_satisfaction:
@@ -38,6 +39,7 @@ def _trace(
         span_id=f'{trace_id}-span',
         timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
         labels=labels,
+        summary=summary,
     )
 
 
@@ -143,7 +145,7 @@ def test_no_cluster_has_satisfaction_answer_returns_none() -> None:
     assert 'no base cluster' in reason
 
 
-def test_errors_label_absent_defaults_error_share_to_zero_with_reason() -> None:
+def test_errors_label_absent_and_summaries_missing_skips_cluster() -> None:
     traces = [
         _trace('t1', satisfaction=1.0, include_made_errors=False),
         _trace('t2', satisfaction=0.5, include_made_errors=False),
@@ -153,10 +155,37 @@ def test_errors_label_absent_defaults_error_share_to_zero_with_reason() -> None:
 
     points, reason = priority_points(traces, dimension, satisfaction_spec=CUSTOMER_SATISFACTION)
 
-    assert points is not None
-    assert points[0].error_share == 0.0
+    assert points is None
     assert reason is not None
-    assert 'made_errors' in reason
+    assert 'no base cluster' in reason
+
+
+def test_errors_label_absent_uses_summaries_and_excludes_missing_summary() -> None:
+    traces = [
+        _trace(
+            f't{i}',
+            satisfaction=0.8,
+            include_made_errors=False,
+            summary=TraceSummary(
+                summary='summary',
+                request=None,
+                task=None,
+                topic=None,
+                assistant_errors=['Lookup failed'] if i < 3 else [],
+                sentiment_explanation=None,
+            ),
+        )
+        for i in range(4)
+    ]
+    traces.append(_trace('t4', satisfaction=0.2, include_made_errors=False))
+    cluster = _base_cluster('base-1', [f't{i}' for i in range(5)])
+    dimension = _dimension([cluster])
+
+    points, reason = priority_points(traces, dimension, satisfaction_spec=CUSTOMER_SATISFACTION)
+
+    assert points is not None
+    assert points[0].error_share == 0.75
+    assert reason == "error share taken from summary assistant_errors; the 'made_errors' label was not requested"
 
 
 def test_errors_label_requested_but_cluster_all_failed_is_skipped(caplog: pytest.LogCaptureFixture) -> None:
