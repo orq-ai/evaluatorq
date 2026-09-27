@@ -763,3 +763,95 @@ def user_messages(content: str) -> list[dict[str, Any]]:
 
 def conversation_attributes(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return {'gen_ai': {'input': {'messages': messages}}}
+
+
+@pytest.mark.asyncio
+async def test_search_pages_without_hydration_and_keeps_server_order() -> None:
+    first = summary('newer', minute=3)
+    first.usage = namespace(prompt_tokens=100, completion_tokens=5, prompt_cached_tokens=50)
+    traces = FakeTraces({
+        None: ([first, summary('older', minute=1)], True, 'page-2'),
+        'page-2': ([summary('oldest', minute=0)], False, None),
+    })
+    pages: list[int] = []
+
+    rows = await make_source(FakeOrq(traces)).search(
+        START,
+        END,
+        3,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        on_page=lambda so_far: pages.append(len(so_far)),
+    )
+
+    assert [row.trace_id for row in rows] == ['newer', 'older', 'oldest']
+    assert rows[0].tokens_in == 100
+    assert pages == [2, 3]
+    assert traces.list_span_calls == []
+    assert traces.get_span_calls == []
+    assert [call['limit'] for call in traces.query_calls] == [3, 1]
+
+
+@pytest.mark.asyncio
+async def test_search_stops_at_limit() -> None:
+    traces = FakeTraces({None: ([summary('a'), summary('b')], True, 'page-2')})
+
+    rows = await make_source(FakeOrq(traces)).search(
+        START, END, 2, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert len(rows) == 2
+    assert len(traces.query_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_repeated_page_token() -> None:
+    traces = FakeTraces({None: ([summary('a')], True, 'same'), 'same': ([summary('b')], True, 'same')})
+
+    with pytest.raises(OrqSourceError, match='repeated OQL page token'):
+        await make_source(FakeOrq(traces)).search(
+            START, END, 10, facets=FacetSelection(), numeric=NumericFilters()
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_keeps_the_project_guard() -> None:
+    traces = FakeTraces({None: ([summary('wrong', project_id='project-a')], False, None)})
+    projects = FakeProjects([namespace(project_id='project-b', name='Selected')])
+
+    with pytest.raises(OrqSourceError, match='only traces outside the selected project'):
+        await make_source(FakeOrq(traces, projects)).search(
+            START, END, 5, facets=FacetSelection(project_id='project-b'), numeric=NumericFilters()
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_warns_once_for_exclusive_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    trace = summary('claude-code')
+    trace.usage = namespace(prompt_tokens=1150, completion_tokens=10, prompt_cached_tokens=65_600_000)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda msg, *a: warnings.append(msg.format(*a)),
+    )
+
+    rows = await make_source(FakeOrq(FakeTraces({None: ([trace], False, None)}))).search(
+        START, END, 5, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert rows[0].tokens_in == 1150 + 65_600_000
+    assert sum('outside prompt_tokens' in warning for warning in warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_returns_none_for_a_failed_trace() -> None:
+    ok = summary('ok', messages=user_messages('hello'))
+    traces = FakeTraces({None: ([ok, summary('empty', messages=[])], False, None)})
+    source = make_source(FakeOrq(traces))
+    rows = await source.search(START, END, 5, facets=FacetSelection(), numeric=NumericFilters())
+
+    records = await source.hydrate_rows(rows)
+
+    assert records['ok'] is not None
+    assert records['ok'].messages[0]['content'] == 'hello'
+    assert records['empty'] is None
