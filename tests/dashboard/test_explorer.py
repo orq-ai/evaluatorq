@@ -48,6 +48,25 @@ def test_parse_range_treats_bad_offset_as_utc() -> None:
     assert start.tzinfo == timezone.utc
 
 
+def test_calendar_date_and_time_values_keep_seconds_and_timezone() -> None:
+    values = finder_routes._range_values({
+        'from': '2026-09-27',
+        'from_time': '10:00:05',
+        'to': '2026-09-27',
+        'to_time': '11:30:09',
+    })
+    assert values == ('2026-09-27T10:00:05', '2026-09-27T11:30:09')
+    start, end = finder_routes.parse_range(*values, '-120')
+    assert start == datetime(2026, 9, 27, 8, 0, 5, tzinfo=timezone.utc)
+    assert end == datetime(2026, 9, 27, 9, 30, 9, tzinfo=timezone.utc)
+
+
+def test_calendar_range_rejects_missing_time() -> None:
+    values = finder_routes._range_values({'from': '2026-09-27', 'from_time': '', 'to': '2026-09-27', 'to_time': '11:00:00'})
+    with pytest.raises(ValueError, match='full dates and times'):
+        finder_routes.parse_range(*values, '0')
+
+
 def _rows(n: int) -> tuple[TraceRow, ...]:
     return tuple(
         TraceRow(
@@ -67,8 +86,10 @@ def test_range_inputs_include_local_time_fields_and_default_rows() -> None:
     html = explorer_views.range_inputs(
         datetime(2026, 9, 26, tzinfo=timezone.utc), datetime(2026, 9, 27, tzinfo=timezone.utc), 7
     )
-    assert 'name="from" type="datetime-local"' in html
-    assert 'name="to" type="datetime-local"' in html
+    assert 'name="from" type="date"' in html
+    assert 'name="from_time" type="time" step="1"' in html
+    assert 'name="to" type="date"' in html
+    assert 'name="to_time" type="time" step="1"' in html
     assert 'name="tz_offset" form="explorer-load-form"' in html
     assert 'data-explorer-preset="900"' in html
     assert 'name="rows" type="number"' in html
@@ -190,8 +211,10 @@ def _load(client: TestClient, **extra: str) -> Any:
     return client.post(
         '/find/load',
         data=csrf_data({
-            'from': '2026-09-27T10:00:00',
-            'to': '2026-09-27T11:00:00',
+            'from': '2026-09-27',
+            'from_time': '10:00:00',
+            'to': '2026-09-27',
+            'to_time': '11:00:00',
             'tz_offset': '0',
             'rows': '250',
             **extra,
@@ -535,6 +558,37 @@ def test_ask_within_results_keeps_filters_and_uses_loaded_rows(explorer_client) 
     assert population.limit == 250
     assert len(source.calls) == 1
     assert [row.trace_id for row in view.rows] == [row.trace_id for row in source.rows]
+
+
+def test_ask_new_search_uses_calendar_range(explorer_client) -> None:
+    store, _, client = explorer_client
+    captured: dict[str, Any] = {}
+
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None) -> Any:
+        captured['request'] = request
+        return store.snapshot_value
+
+    store.compile = compile
+    response = client.post(
+        '/find/run',
+        data=csrf_data({
+            'query': 'frustrated users',
+            'scope': 'new',
+            'mode': 'review',
+            'from': '2026-09-27',
+            'from_time': '10:00:05',
+            'to': '2026-09-27',
+            'to_time': '11:30:09',
+            'tz_offset': '-120',
+            'window_days': '7',
+            'limit': '200',
+            'parallelism': '10',
+        }),
+    )
+
+    assert response.status_code == 200
+    assert captured['request'].population.start == datetime(2026, 9, 27, 8, 0, 5, tzinfo=timezone.utc)
+    assert captured['request'].population.end == datetime(2026, 9, 27, 9, 30, 9, tzinfo=timezone.utc)
 
 
 def test_ask_within_results_without_rows_explains(explorer_client) -> None:

@@ -2639,6 +2639,9 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .finder-controls .quiet input { height:28px; border:1px solid var(--border-default); border-radius:8px; background:var(--surface-card); color:var(--text-strong); padding:0 8px; font-family:var(--font-mono); font-size:12px; font-variant-numeric:tabular-nums; box-shadow:0 1px 2px rgba(20,18,30,.05); transition:border-color .15s ease-out,box-shadow .15s ease-out; }
 .finder-controls .quiet input:hover { border-color:var(--border-strong); }
 .finder-controls .quiet input:focus { outline:0; border-color:var(--accent); box-shadow:0 0 0 3px rgba(255,143,52,.18); }
+.finder-controls .xr-range { gap:4px; }
+.finder-controls .xr-range .xr-date { width:142px; padding:0 5px; border-radius:6px; }
+.finder-controls .xr-range .xr-time { width:104px; padding:0 5px; border-radius:6px; }
 .finder-controls .quiet b { font-size:10.5px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); }
 .finder-controls .count { color:var(--text-muted); font-variant-numeric:tabular-nums; }
 .finder-facets { display:none; position:absolute; top:34px; left:0; z-index:30; background:transparent; }

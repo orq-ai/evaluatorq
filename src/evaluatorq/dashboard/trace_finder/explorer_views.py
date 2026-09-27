@@ -34,7 +34,7 @@ PRESETS = (
 
 
 def _local_value(value: datetime) -> str:
-    # The server renders UTC; dashboard.js rewrites both inputs to browser-local time on load (data-utc).
+    # The server renders UTC; dashboard.js rewrites the date and time controls to browser-local time.
     return value.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
 
 
@@ -48,8 +48,8 @@ def range_inputs(start: datetime | None, end: datetime | None, window_days: int)
     return (
         f'<form id="explorer-load-form" hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace" hx-include="#finder-controls">{_csrf()}</form>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
-        f'<span class="quiet"><b>From</b><input id="explorer-from" hx-preserve form="explorer-load-form" name="from" type="datetime-local" step="1" required data-utc="{_local_value(start)}" value="{_local_value(start)}"></span>'
-        f'<span class="quiet"><b>To</b><input id="explorer-to" hx-preserve form="explorer-load-form" name="to" type="datetime-local" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)}"></span>'
+        f'<span class="quiet xr-range"><b>From</b><input id="explorer-from" class="xr-date" aria-label="From date" hx-preserve form="explorer-load-form" name="from" type="date" required data-utc="{_local_value(start)}" value="{_local_value(start)[:10]}"><input id="explorer-from-time" class="xr-time" aria-label="From time" hx-preserve form="explorer-load-form" name="from_time" type="time" step="1" required data-utc="{_local_value(start)}" value="{_local_value(start)[11:]}"></span>'
+        f'<span class="quiet xr-range"><b>To</b><input id="explorer-to" class="xr-date" aria-label="To date" hx-preserve form="explorer-load-form" name="to" type="date" required data-utc="{_local_value(end)}" value="{_local_value(end)[:10]}"><input id="explorer-to-time" class="xr-time" aria-label="To time" hx-preserve form="explorer-load-form" name="to_time" type="time" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)[11:]}"></span>'
         f'<span class="xr-presets">{presets}</span>'
         f'<span class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="{MAX_LIVE_TRACES}" value="{DEFAULT_EXPLORER_ROWS}" style="width:72px"></span>'
         '<button class="btn-secondary" type="submit" form="explorer-load-form">Load</button>'

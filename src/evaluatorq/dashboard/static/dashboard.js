@@ -680,13 +680,17 @@
     if (mount && mount.querySelector('.rt-drawer-body--loading')) mount.innerHTML = '';
   });
   // Explorer: browser timezone, local From/To, presets.
-  function explorerLocal(input) {
-    const utc = input.getAttribute('data-utc');
-    if (!utc || input.dataset.localised) return;
+  function explorerLocal(dateInput) {
+    const utc = dateInput.getAttribute('data-utc');
+    const prefix = dateInput.id === 'explorer-from' ? 'explorer-from' : 'explorer-to';
+    const timeInput = document.getElementById(prefix + '-time');
+    if (!utc || dateInput.dataset.localised || !timeInput || timeInput.dataset.localised) return;
     const d = new Date(utc + 'Z');
     const pad = (n) => String(n).padStart(2, '0');
-    input.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-    input.dataset.localised = '1';
+    dateInput.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    timeInput.value = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    dateInput.dataset.localised = '1';
+    timeInput.dataset.localised = '1';
   }
   function explorerInit() {
     document.querySelectorAll('[data-explorer-tz]').forEach((el) => { el.value = String(new Date().getTimezoneOffset()); });
@@ -701,9 +705,14 @@
     const from = new Date(to.getTime() - Number(preset.getAttribute('data-explorer-preset')) * 1000);
     [['#explorer-from', from], ['#explorer-to', to]].forEach(([sel, d]) => {
       const input = document.querySelector(sel);
-      if (!input) return;
-      input.setAttribute('data-utc', d.toISOString().slice(0, 19));
+      const prefix = sel === '#explorer-from' ? 'explorer-from' : 'explorer-to';
+      const timeInput = document.getElementById(prefix + '-time');
+      if (!input || !timeInput) return;
+      const utc = d.toISOString().slice(0, 19);
+      input.setAttribute('data-utc', utc);
+      timeInput.setAttribute('data-utc', utc);
       delete input.dataset.localised;
+      delete timeInput.dataset.localised;
       explorerLocal(input);
     });
   });

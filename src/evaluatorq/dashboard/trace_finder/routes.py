@@ -267,8 +267,18 @@ def _optional_value(form: Any, name: str) -> object | None:
 MAX_RANGE = timedelta(days=30)
 
 
+def _range_values(form: Any) -> tuple[str, str]:
+    """Combine the calendar and time controls, accepting older datetime-local submissions too."""
+    values: list[str] = []
+    for name in ('from', 'to'):
+        date = str(form.get(name) or '')
+        time = form.get(f'{name}_time')
+        values.append(f'{date}T{time}' if time is not None and 'T' not in date else date)
+    return values[0], values[1]
+
+
 def parse_range(from_value: str, to_value: str, tz_offset: str | None) -> tuple[datetime, datetime]:
-    """Turn two ``datetime-local`` values and the browser's ``getTimezoneOffset()`` into UTC bounds."""
+    """Turn two local timestamps and the browser's ``getTimezoneOffset()`` into UTC bounds."""
     try:
         offset = timedelta(minutes=-int(tz_offset or ''))
     except ValueError:
@@ -276,6 +286,8 @@ def parse_range(from_value: str, to_value: str, tz_offset: str | None) -> tuple[
         offset = timedelta(0)
     zone = timezone(offset)
     try:
+        if 'T' not in from_value or 'T' not in to_value:
+            raise ValueError('A time is required at each end.')
         start = datetime.fromisoformat(from_value).replace(tzinfo=zone).astimezone(timezone.utc)
         end = datetime.fromisoformat(to_value).replace(tzinfo=zone).astimezone(timezone.utc)
     except ValueError as exc:
@@ -318,7 +330,7 @@ def _run_request(
         end = anchor.end
         start = anchor.start if anchor.start is not None else end - timedelta(days=parsed.window_days)
     elif form.get('from') and form.get('to'):
-        start, end = parse_range(str(form.get('from')), str(form.get('to')), str(form.get('tz_offset') or '0'))
+        start, end = parse_range(*_range_values(form), str(form.get('tz_offset') or '0'))
     else:
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=parsed.window_days)
@@ -574,7 +586,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             return _html(await _explorer_html(req, error=_unavailable_reason(req.app)))
         settings = _settings(req.app)
         try:
-            start, end = parse_range(str(form.get('from') or ''), str(form.get('to') or ''), form.get('tz_offset'))
+            start, end = parse_range(*_range_values(form), form.get('tz_offset'))
             rows = int(str(form.get('rows') or explorer_views.DEFAULT_EXPLORER_ROWS))
             if not 1 <= rows <= MAX_LIVE_TRACES:
                 raise ValueError(f'Rows must be between 1 and {MAX_LIVE_TRACES}.')
