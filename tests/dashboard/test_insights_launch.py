@@ -80,6 +80,40 @@ def test_spawn_failure_is_visible_in_manifest(tmp_path: Path) -> None:
     assert manifest.error is not None and 'worker unavailable' in manifest.error
 
 
+def test_dashboard_reconciles_worker_killed_before_start_and_releases_finder_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+    import tempfile
+    import time
+
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+    runs_dir = tmp_path / 'insights-runs'
+    writer = start_manifest(run_id='worker-killed', surface='insights', run_name='demo', runs_dir=runs_dir)
+    reference = finder_export_reference_path(runs_dir, 'worker-killed')
+    reference.parent.mkdir(parents=True)
+    reference.write_text(json.dumps({'finder_export': '/private/trace-finder-export.json'}), encoding='utf-8')
+    snapshot_dir = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+    snapshot = snapshot_dir / 'finder-export.json'
+    snapshot.write_text('{}', encoding='utf-8')
+    snapshot.chmod(0o600)
+    state_path = worker_state_path(runs_dir, 'worker-killed')
+    _write_worker_state(state_path, {'pid': 12345, 'heartbeat_at': time.time() - 120, 'snapshot_path': str(snapshot)})
+
+    entries, _, manifests = insights_routes._entries(runs_dir)
+
+    assert ('worker-killed', 'demo', 'error') in entries
+    assert manifests['worker-killed'].status.value == 'error'
+    assert manifests['worker-killed'].error is not None
+    assert 'stopped before completing' in manifests['worker-killed'].error
+    assert not reference.exists()
+    assert not state_path.exists()
+    assert not snapshot_dir.exists()
+    assert writer.manifest.status.value == 'running'
+
+
 def test_non_oserror_setup_failure_marks_manifest_and_cleans_finder_files(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -335,7 +369,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from evaluatorq.dashboard import insights_worker
-    from evaluatorq.dashboard.insights_launch import _REQUEST_ENV, read_launch_payload
+    from evaluatorq.dashboard.insights_launch import _REQUEST_ENV, read_launch_payload, worker_state_path
 
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     exports = tmp_path / 'finder-exports'
@@ -381,6 +415,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert consumed_source == [export_path]
     assert not payload.finder_export_snapshot.exists()
     assert not reference.exists()
+    assert not worker_state_path(tmp_path / 'runs', payload.run_id).exists()
     assert list_manifests(tmp_path / 'runs')[0].status == 'completed'
 
 

@@ -18,7 +18,7 @@ from starlette.responses import RedirectResponse, Response
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
-from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights
+from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
 from evaluatorq.dashboard.insights_views import (
     TABS,
     facet_options,
@@ -47,6 +47,12 @@ if TYPE_CHECKING:
 def _entries(
     directory: Path,
 ) -> tuple[list[tuple[str, str, str]], dict[str, tuple[Path, InsightsRun | str]], dict[str, RunManifest]]:
+    manifests_dir = directory / '.manifests'
+    try:
+        for manifest_path in manifests_dir.glob('*.json'):
+            reconcile_stale_worker(directory, manifest_path.stem)
+    except (OSError, ValueError) as exc:
+        logger.warning('Could not reconcile stale Insights workers in {}: {}', directory, exc)
     entries: list[tuple[str, str, str]] = []
     loaded: dict[str, tuple[Path, InsightsRun | str]] = {}
     aliases: list[tuple[str, tuple[Path, InsightsRun | str]]] = []

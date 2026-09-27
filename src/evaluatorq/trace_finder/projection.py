@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -16,32 +15,16 @@ MAX_TOKEN_BUDGET = 25_000
 MAX_PROJECTED_TOOL_CALLS = 32
 MAX_TOOL_FIELD_BYTES = 128
 OMISSION_MARKER = '[... earlier bytes omitted ...]'
-MAX_TOOL_RESULT_BYTES = 4096
-TRAILING_OMISSION_MARKER = '[... later bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
 SUCCESS_STATUSES = frozenset({'completed', 'success', 'succeeded', 'ok'})
-_SENSITIVE_NAME = (
-    r'(?:[\w.-]*(?:api[_-]?key|private[_-]?key|access[_-]?key|secret|credential|'
-    r'password|passwd|token|authorization|auth|cookie|session|signature)[\w.-]*|aws_access_key_id)'
-)
-_SENSITIVE_ASSIGNMENT_RE = re.compile(
-    rf'(?P<quote>["\']?)(?P<name>{_SENSITIVE_NAME})(?P=quote)'
-    rf'(?P<sep>\s*[:=]\s*)'
-    rf'(?P<value>(?P<value_quote>["\'])(?:\\.|(?!(?P=value_quote))[\s\S])*?(?P=value_quote)|[^\s,;&]+)',
-    re.IGNORECASE,
-)
-_BEARER_RE = re.compile(r'(?i)(\b(?:Bearer|Basic|Token)[ \t]+)[A-Za-z0-9._~+/=-]+')
-# Cookie headers carry opaque session values, so redact the whole header instead of
-# trying to recognize each provider's cookie names. Also accept JSON-escaped newlines.
-_COOKIE_HEADER_RE = re.compile(
-    r'(?im)(?P<prefix>\b(?:set-cookie|cookie)[ \t]*:[ \t]*)'
-    r'[^\r\n]*(?:(?:\r?\n|\\r?\\n)[ \t]+[^\r\n]*)*'
-)
-_URI_CREDENTIALS_RE = re.compile(r'(?i)([a-z][a-z0-9+.-]*://)[^/@\s?#]*:[^/@\s?#]*@')
-_KNOWN_TOKEN_RE = re.compile(
-    r'(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|'
-    r'xox[baprs]-[A-Za-z0-9-]{10,}|ya29\.[A-Za-z0-9_-]{12,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])'
+_TOOL_RESULT_CATEGORIES = (
+    ('not_found', ('not found', 'not_found', 'does not exist', 'no such record')),
+    ('permission_denied', ('permission denied', 'forbidden', 'unauthorized', 'access denied')),
+    ('rate_limited', ('rate limit', 'rate_limit', 'too many requests')),
+    ('timeout', ('timed out', 'timeout', 'deadline exceeded')),
+    ('unavailable', ('unavailable', 'connection refused', 'connection reset')),
+    ('invalid_request', ('invalid request', 'invalid argument', 'bad request')),
 )
 
 
@@ -147,7 +130,7 @@ def _project_assistant(message: dict[str, Any], results: tuple[dict[str, Any], .
             'name': None,
             'arguments': f'{len(source_calls) - MAX_PROJECTED_TOOL_CALLS} tool calls omitted',
             'status': 'omitted',
-            'result_excerpt': None,
+            'result_category': None,
         })
     projected = {
         'role': message.get('role'),
@@ -215,7 +198,7 @@ def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[s
             'name': None,
             'arguments': _strip_reasoning(call),
             'status': 'pending',
-            'result_excerpt': None,
+            'result_category': None,
         }
 
     function = call.get('function')
@@ -227,7 +210,7 @@ def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[s
         'name': _bounded_tool_field(function_data.get('name', call.get('name'))),
         'arguments': arguments,
         'status': _tool_call_status(call_id, results),
-        'result_excerpt': _tool_result_excerpt(call_id, results),
+        'result_category': _tool_result_category(call_id, results),
     }
 
 
@@ -238,72 +221,26 @@ def _matching_tool_result(call_id: Any, results: tuple[dict[str, Any], ...]) -> 
     return next((item for item in results if item.get('tool_call_id') == call_id), None)
 
 
-def _tool_result_excerpt(call_id: Any, results: tuple[dict[str, Any], ...]) -> str | None:
+def _tool_result_category(call_id: Any, results: tuple[dict[str, Any], ...]) -> str | None:
+    """Return only a fixed diagnostic label; provider result bytes are never projected."""
     result = _matching_tool_result(call_id, results)
     if result is None:
         return None
-    text = _redact_tool_result_secrets(tool_result_to_text(result.get('content')))
-    return _head_truncate_text(text, MAX_TOOL_RESULT_BYTES)[0] if text else None
+    if _tool_call_status(call_id, results) != 'error':
+        return None
+    text = tool_result_to_text(result.get('content'))
+    category = _recognized_tool_result_category(text)
+    if category is not None:
+        return category
+    return 'provider_error'
 
 
-def _redact_tool_result_secrets(value: str) -> str:
-    """Mask labeled credentials in JSON or text while preserving diagnostic context."""
-    try:
-        decoded = json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        decoded = None
-    else:
-        return _canonical_json(_redact_json_credentials(decoded))
-    return _redact_unstructured_text(value)
-
-
-def _redact_json_credentials(value: Any) -> Any:
-    """Recursively redact credential-shaped JSON fields without dropping error details."""
-    if isinstance(value, dict):
-        return {
-            key: '[REDACTED]' if _is_sensitive_name(key) else _redact_json_credentials(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_json_credentials(item) for item in value]
-    if isinstance(value, tuple):
-        return [_redact_json_credentials(item) for item in value]
-    if isinstance(value, str):
-        return _redact_unstructured_text(value)
-    return value
-
-
-def _is_sensitive_name(name: Any) -> bool:
-    if not isinstance(name, str):
-        return False
-    return re.search(_SENSITIVE_NAME, name.replace(' ', '_'), re.IGNORECASE) is not None
-
-
-def _redact_unstructured_text(value: str) -> str:
-    value = _COOKIE_HEADER_RE.sub(lambda match: f'{match.group("prefix")}[REDACTED]', value)
-    value = _BEARER_RE.sub(r'\1[REDACTED]', value)
-    value = _URI_CREDENTIALS_RE.sub(r'\1[REDACTED]@', value)
-    value = _KNOWN_TOKEN_RE.sub('[REDACTED]', value)
-
-    def replace(match: re.Match[str]) -> str:
-        quote = match.group('value_quote') or ''
-        return (
-            f'{match.group("quote")}{match.group("name")}{match.group("quote")}'
-            f'{match.group("sep")}{quote}[REDACTED]{quote}'
-        )
-
-    return _SENSITIVE_ASSIGNMENT_RE.sub(replace, value)
-
-
-def _head_truncate_text(value: str, retained_bytes: int) -> tuple[str, int]:
-    encoded = value.encode('utf-8')
-    if len(encoded) <= retained_bytes:
-        return value, 0
-    marker_bytes = len(TRAILING_OMISSION_MARKER.encode('utf-8'))
-    if retained_bytes < marker_bytes:
-        return '', len(encoded)
-    head = encoded[: max(0, retained_bytes - marker_bytes)].decode('utf-8', errors='ignore')
-    return head + TRAILING_OMISSION_MARKER, len(encoded) - len(head.encode('utf-8'))
+def _recognized_tool_result_category(text: str) -> str | None:
+    lowered = text.casefold()
+    return next(
+        (category for category, markers in _TOOL_RESULT_CATEGORIES if any(marker in lowered for marker in markers)),
+        None,
+    )
 
 
 def _bounded_tool_field(value: Any) -> str | None:
@@ -345,6 +282,10 @@ def _tool_call_status(call_id: Any, results: tuple[dict[str, Any], ...]) -> str:
             return 'completed'
 
     content = tool_result_to_text(result.get('content')).lstrip()
+    return _content_tool_call_status(content) or 'completed'
+
+
+def _content_tool_call_status(content: str) -> str | None:
     try:
         decoded = json.loads(content)
     except (TypeError, ValueError):
@@ -362,7 +303,7 @@ def _tool_call_status(call_id: Any, results: tuple[dict[str, Any], ...]) -> str:
     # Some OTel providers encode failure only as a leading plain-text marker.
     if content.casefold().startswith('error:'):
         return 'error'
-    return 'completed'
+    return None
 
 
 def _tail_truncate_unit(
@@ -419,11 +360,6 @@ def _truncatable_text_lengths(messages: tuple[dict[str, Any], ...]) -> tuple[int
                 for call in tool_calls
                 if isinstance(call, dict) and 'arguments' in call and call['arguments'] != ''
             )
-            lengths.extend(
-                len(call['result_excerpt'].encode('utf-8'))
-                for call in tool_calls
-                if isinstance(call, dict) and isinstance(call.get('result_excerpt'), str) and call['result_excerpt']
-            )
     return tuple(lengths)
 
 
@@ -475,10 +411,6 @@ def _truncate_messages(
                     if len(arguments_text.encode('utf-8')) > retained_bytes:
                         truncated_call['arguments'], omitted = _tail_truncate_text(arguments_text, retained_bytes)
                         omitted_bytes += omitted
-                excerpt = truncated_call.get('result_excerpt')
-                if isinstance(excerpt, str) and len(excerpt.encode('utf-8')) > retained_bytes:
-                    truncated_call['result_excerpt'], omitted = _head_truncate_text(excerpt, retained_bytes)
-                    omitted_bytes += omitted
                 truncated_calls.append(truncated_call)
             truncated['tool_calls'] = truncated_calls
         truncated_messages.append(truncated)

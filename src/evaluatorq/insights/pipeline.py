@@ -391,6 +391,7 @@ async def insights(  # noqa: C901
     runs_dir: Path | None = None,
     _run_id: str | None = None,
     _finder_export_source: Path | None = None,
+    _finder_export_sha256: str | None = None,
     _on_saved: Callable[[Path], None] | None = None,
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
@@ -478,6 +479,8 @@ async def insights(  # noqa: C901
             }
             if _finder_export_source is not None and population.finder_export is not None:
                 run.population['finder_export'] = str(_finder_export_source)
+                if _finder_export_sha256 is not None:
+                    run.population['finder_export_sha256'] = _finder_export_sha256
             run.traces = [
                 TraceInsight(
                     trace_id=trace.trace_id,

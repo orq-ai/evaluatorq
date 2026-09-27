@@ -6,9 +6,12 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -19,8 +22,9 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
-from evaluatorq.common.run_manifest import start_manifest
+from evaluatorq.common.run_manifest import ManifestWriter, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.contracts import ManifestStatus, RunManifest
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
 from evaluatorq.insights.presets import LABEL_PRESETS
 from evaluatorq.insights.progress import stage_plan
@@ -34,6 +38,125 @@ _MANIFEST_ENV = 'EVALUATORQ_INSIGHTS_MANIFEST'
 _SNAPSHOT_ENV = 'EVALUATORQ_INSIGHTS_FINDER_SNAPSHOT'
 MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
 FINDER_EXPORT_REFERENCE_DIR = '.finder-export-leases'
+INSIGHTS_WORKER_STATE_DIR = '.insights-workers'
+INSIGHTS_WORKER_STALE_SECONDS = 90
+INSIGHTS_WORKER_HEARTBEAT_SECONDS = 10
+
+
+def worker_state_path(runs_dir: Path, run_id: str) -> Path:
+    if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
+        raise ValueError('Invalid Insights run ID for worker state')
+    return runs_dir / INSIGHTS_WORKER_STATE_DIR / f'{run_id}.json'
+
+
+def _write_worker_state(path: Path, state: dict[str, object]) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory_info = path.parent.lstat()
+    if (
+        path.parent.is_symlink()
+        or not stat.S_ISDIR(directory_info.st_mode)
+        or (hasattr(os, 'getuid') and directory_info.st_uid != os.getuid())
+    ):
+        raise OSError(f'Insights worker state directory is not a private directory: {path.parent}')
+    Path(path.parent).chmod(0o700)
+    descriptor, temporary = tempfile.mkstemp(prefix=f'.{path.stem}.', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            json.dump(state, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        Path(temporary).replace(path)
+    finally:
+        if Path(temporary).exists():
+            Path(temporary).unlink()
+
+
+def start_worker_heartbeat(manifest_path: Path) -> tuple[threading.Event, threading.Thread]:
+    """Refresh the detached worker lease independently of its async workload."""
+    run_id = manifest_path.stem
+    path = worker_state_path(manifest_path.parent.parent, run_id)
+    try:
+        state = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    state.update(pid=os.getpid(), heartbeat_at=time.time())
+    stop = threading.Event()
+
+    def heartbeat() -> None:
+        while not stop.is_set():
+            try:
+                _write_worker_state(path, state)
+            except OSError as exc:
+                logger.warning('Could not refresh Insights worker heartbeat {}: {}', path, exc)
+            if stop.wait(INSIGHTS_WORKER_HEARTBEAT_SECONDS):
+                return
+            state['heartbeat_at'] = time.time()
+
+    _write_worker_state(path, state)
+    thread = threading.Thread(target=heartbeat, name=f'insights-heartbeat-{run_id}', daemon=True)
+    thread.start()
+    return stop, thread
+
+
+def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
+    """Fail a dashboard worker whose startup or heartbeat lease expired."""
+    state_path = worker_state_path(runs_dir, run_id)
+    manifest_path = runs_dir / '.manifests' / f'{run_id}.json'
+    try:
+        directory_info = state_path.parent.lstat()
+        state_info = state_path.lstat()
+        if (
+            state_path.parent.is_symlink()
+            or not stat.S_ISDIR(directory_info.st_mode)
+            or (os.name != 'nt' and stat.S_IMODE(directory_info.st_mode) != 0o700)
+            or (hasattr(os, 'getuid') and directory_info.st_uid != os.getuid())
+            or not stat.S_ISREG(state_info.st_mode)
+            or (os.name != 'nt' and stat.S_IMODE(state_info.st_mode) != 0o600)
+            or (hasattr(os, 'getuid') and state_info.st_uid != os.getuid())
+        ):
+            return False
+        manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
+        state = json.loads(state_path.read_text(encoding='utf-8'))
+        if not isinstance(state, dict):
+            return False
+        heartbeat_at = state.get('heartbeat_at')
+        stale = isinstance(heartbeat_at, (int, float)) and time.time() - heartbeat_at > INSIGHTS_WORKER_STALE_SECONDS
+    except (OSError, ValueError, TypeError):
+        return False
+    if manifest.status != ManifestStatus.RUNNING or not stale:
+        return False
+    ManifestWriter(manifest, manifest_path).fail(
+        'Insights worker stopped before completing the run; start a new run to retry.', stage='worker'
+    )
+    try:
+        persisted = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False
+    if persisted.status == ManifestStatus.RUNNING:
+        return False
+    snapshot = state.get('snapshot_path')
+    if isinstance(snapshot, str):
+        # Reuse the worker's strict private-temp ownership and mode checks.
+        from evaluatorq.dashboard.insights_worker import _cleanup_snapshot
+
+        _cleanup_snapshot(Path(snapshot))
+    try:
+        reference_path = finder_export_reference_path(runs_dir, run_id)
+        if reference_path.parent.is_symlink():
+            logger.warning('Leaving untrusted Finder export reference directory in place: {}', reference_path.parent)
+        else:
+            reference_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning('Could not release Finder export reference for stale run {}: {}', run_id, exc)
+    try:
+        state_path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning('Could not remove stale Insights worker state {}: {}', state_path, exc)
+    return True
+
 
 # The child must record import-time failures too. This tiny stdlib-only wrapper
 # runs before importing the package worker, then edits the already-created
@@ -79,6 +202,21 @@ def cleanup_reference():
         pass
     except OSError as cleanup_error:
         print(f"Could not remove Finder export reference: {cleanup_error}", file=__import__("sys").stderr)
+def cleanup_worker_state():
+    try:
+        directory = os.path.dirname(manifest or "")
+        name = os.path.basename(manifest or "")
+        run_id = name[:-5] if name.endswith(".json") else ""
+        if os.path.basename(directory) != ".manifests" or not run_id or not all(ch.isalnum() or ch in "-_" for ch in run_id):
+            return
+        state_dir = os.path.join(os.path.dirname(directory), ".insights-workers")
+        if os.path.islink(state_dir):
+            return
+        os.unlink(os.path.join(state_dir, run_id + ".json"))
+    except FileNotFoundError:
+        pass
+    except OSError as cleanup_error:
+        print(f"Could not remove Insights worker state: {cleanup_error}", file=__import__("sys").stderr)
 try:
     runpy.run_module("evaluatorq.dashboard.insights_worker", run_name="__main__")
 except BaseException as exc:
@@ -86,6 +224,7 @@ except BaseException as exc:
         raise
     cleanup_snapshot()
     cleanup_reference()
+    cleanup_worker_state()
     if manifest:
         try:
             with open(manifest, encoding="utf-8") as source:
@@ -118,6 +257,17 @@ def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
     if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
         raise ValueError('Invalid Insights run ID for Finder export reference')
     return runs_dir / FINDER_EXPORT_REFERENCE_DIR / f'{run_id}.json'
+
+
+def _initial_worker_state(path: Path, snapshot: Path | None) -> None:
+    _write_worker_state(
+        path,
+        {
+            'pid': None,
+            'heartbeat_at': time.time(),
+            'snapshot_path': str(snapshot) if snapshot is not None else None,
+        },
+    )
 
 
 class InsightsLaunchSpec(BaseModel):
@@ -217,6 +367,7 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
     snapshot_path: Path | None = None
     reference_path: Path | None = None
     reference_temporary: Path | None = None
+    state_path = worker_state_path(runs_dir, run_id)
     try:
         finder_snapshot = spec.validated_finder_export_snapshot()
         if finder_snapshot is not None:
@@ -254,12 +405,13 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             worker_env[_SNAPSHOT_ENV] = str(snapshot_path)
         else:
             worker_env.pop(_SNAPSHOT_ENV, None)
+        _initial_worker_state(state_path, snapshot_path)
         if profile is not None:
             worker_env.update(ORQ_API_KEY=profile.api_key, ORQ_BASE_URL=profile.server or DEFAULT_ORQ_BASE_URL)
         log_dir = runs_dir / '.logs'
         log_dir.mkdir(parents=True, exist_ok=True)
         with (log_dir / f'{run_id}.log').open('a', encoding='utf-8') as log:
-            subprocess.Popen(
+            process = subprocess.Popen(
                 [sys.executable, '-c', _WORKER_BOOTSTRAP],
                 stdin=subprocess.DEVNULL,
                 stdout=log,
@@ -267,6 +419,12 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
                 env=worker_env,
                 start_new_session=True,
             )
+        try:
+            state = json.loads(state_path.read_text(encoding='utf-8'))
+            state['pid'] = process.pid
+            _write_worker_state(state_path, state)
+        except (OSError, ValueError, TypeError) as exc:
+            logger.warning('Could not record Insights worker process {}: {}', run_id, exc)
     except Exception as exc:  # noqa: BLE001 — every ordinary setup failure must terminate this run.
         try:
             writer.fail(f'Could not start Insights worker: {exc}', stage='start')
@@ -277,6 +435,10 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
                         path.unlink(missing_ok=True)
                     except OSError as cleanup_error:
                         logger.warning('Could not remove Finder export reference {}: {}', path, cleanup_error)
+            try:
+                state_path.unlink(missing_ok=True)
+            except OSError as cleanup_error:
+                logger.warning('Could not remove Insights worker state {}: {}', state_path, cleanup_error)
             if snapshot_path is not None:
                 try:
                     shutil.rmtree(snapshot_path.parent)

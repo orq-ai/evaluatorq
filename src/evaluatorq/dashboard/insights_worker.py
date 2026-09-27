@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -20,6 +21,8 @@ from evaluatorq.dashboard.insights_launch import (
     MAX_FINDER_EXPORT_BYTES,
     finder_export_reference_path,
     read_launch_payload,
+    start_worker_heartbeat,
+    worker_state_path,
 )
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
@@ -95,6 +98,8 @@ def _cleanup_finder_reference(runs_dir: Path, run_id: str) -> None:
 
 
 def main() -> int:
+    manifest_env = os.environ.get(_MANIFEST_ENV)
+    heartbeat = start_worker_heartbeat(Path(manifest_env)) if manifest_env else None
     payload = None
     unvalidated_snapshot = _snapshot_candidate_from_request()
     try:
@@ -119,6 +124,7 @@ def main() -> int:
                     runs_dir=payload.runs_dir,
                     _run_id=payload.run_id,
                     _finder_export_source=Path(spec.finder_export),
+                    _finder_export_sha256=hashlib.sha256(raw_snapshot).hexdigest(),
                 )
             )
         else:
@@ -143,12 +149,23 @@ def main() -> int:
                 _fail_running(Path(manifest_path), str(exc))
         return 1
     finally:
+        if heartbeat is not None:
+            heartbeat_stop, heartbeat_thread = heartbeat
+            heartbeat_stop.set()
+            heartbeat_thread.join()
         if payload is not None and payload.finder_export_snapshot is not None:
             _cleanup_snapshot(payload.finder_export_snapshot)
         elif unvalidated_snapshot is not None:
             _cleanup_snapshot(unvalidated_snapshot)
         if payload is not None and payload.spec.source == 'finder':
             _cleanup_finder_reference(payload.runs_dir, payload.run_id)
+        state_run_id = payload.run_id if payload is not None else Path(manifest_env).stem if manifest_env else None
+        if state_run_id is not None:
+            try:
+                state_runs_dir = payload.runs_dir if payload is not None else Path(manifest_env).parent.parent
+                worker_state_path(state_runs_dir, state_run_id).unlink(missing_ok=True)
+            except (OSError, ValueError) as exc:
+                logger.warning('Could not remove Insights worker state for run {}: {}', state_run_id, exc)
     return 0 if run.status == 'completed' else 1
 
 

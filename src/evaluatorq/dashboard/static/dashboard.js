@@ -89,7 +89,24 @@
       else link.removeAttribute('aria-current');
     });
   }
-  window.addEventListener('popstate', syncInsightsTab);
+  window.addEventListener('popstate', function () {
+    syncInsightsTab();
+    // HTMX restores its own history entries, but Insights also has chart links
+    // that call htmx.ajax() after pushing state themselves. Those entries have
+    // no HTMX snapshot, so restore the fragment from the URL on every Insights
+    // history navigation. This also keeps canvas and SVG links in sync with
+    // tab links, which use hx-push-url.
+    const nav = document.querySelector('.insights-tabs');
+    const hasMatchingTab = nav && Array.from(nav.querySelectorAll('a')).some(function (link) {
+      return new URL(link.href).pathname === window.location.pathname;
+    });
+    if (hasMatchingTab && window.htmx) {
+      window.htmx.ajax('GET', window.location.href, {
+        target: '#insights-content',
+        swap: 'innerHTML'
+      });
+    }
+  });
 
   function mapTraces(payload) {
     if (payload.color_mode === 'continuous') {

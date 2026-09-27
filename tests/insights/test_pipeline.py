@@ -139,7 +139,7 @@ async def test_finder_missing_traces_are_visible_in_run_warnings(monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_dashboard_finder_snapshot_records_original_export_path(
+async def test_dashboard_finder_snapshot_records_origin_and_snapshot_identity(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _patch_clients(monkeypatch)
@@ -157,10 +157,12 @@ async def test_dashboard_finder_snapshot_records_original_export_path(
     monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
     monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
     original = tmp_path / 'finder-exports' / 'trace-finder-saved.json'
+    snapshot_sha256 = 'a' * 64
 
     run = await pipeline.insights(
         InsightsPopulation.from_finder_export(tmp_path / 'private-snapshot.json'),
         _finder_export_source=original,
+        _finder_export_sha256=snapshot_sha256,
         dimensions=(),
         labels=(),
         runs_dir=tmp_path,
@@ -168,8 +170,11 @@ async def test_dashboard_finder_snapshot_records_original_export_path(
 
     assert run.status == 'completed'
     assert run.population['finder_export'] == str(original)
+    assert run.population['finder_export_sha256'] == snapshot_sha256
     saved = next(tmp_path.glob('insights_*.json'))
-    assert InsightsRun.model_validate_json(saved.read_text(encoding='utf-8')).population['finder_export'] == str(original)
+    saved_population = InsightsRun.model_validate_json(saved.read_text(encoding='utf-8')).population
+    assert saved_population['finder_export'] == str(original)
+    assert saved_population['finder_export_sha256'] == snapshot_sha256
 
 
 @pytest.mark.asyncio

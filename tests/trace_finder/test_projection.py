@@ -11,8 +11,6 @@ import pytest
 from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.orq_source import _conversation_messages
 from evaluatorq.trace_finder.projection import (
-    MAX_TOOL_RESULT_BYTES,
-    TRAILING_OMISSION_MARKER,
     estimate_tokens,
     project_trace,
 )
@@ -77,7 +75,7 @@ def test_truncates_structured_text_blocks_preserving_shape_and_byte_accounting(
     assert trace.messages[0]['content'][1] == block
 
 
-def test_project_trace_keeps_tool_result_excerpts_but_drops_orphans() -> None:
+def test_project_trace_keeps_tool_result_categories_but_drops_orphans() -> None:
     trace = _trace(
         status='failed',
         messages=(
@@ -134,14 +132,14 @@ def test_project_trace_keeps_tool_result_excerpts_but_drops_orphans() -> None:
                         'name': 'lookup_customer',
                         'arguments': {'customer_id': 'cust_1', 'labels': ['vip']},
                         'status': 'completed',
-                        'result_excerpt': 'secret tool body: account details',
+                        'result_category': None,
                     },
                     {
                         'id': 'call_456',
                         'name': 'charge_card',
                         'arguments': 'not valid json',
                         'status': 'error',
-                        'result_excerpt': 'secret tool body: payment declined',
+                        'result_category': 'provider_error',
                     },
                 ],
             },
@@ -150,8 +148,8 @@ def test_project_trace_keeps_tool_result_excerpts_but_drops_orphans() -> None:
     }
     assert projection.omitted_messages == 0
     assert projection.omitted_bytes == 0
-    assert 'secret tool body: account details' in projection.serialized
-    assert 'secret tool body: payment declined' in projection.serialized
+    assert 'secret tool body' not in projection.serialized
+    assert 'result_excerpt' not in projection.serialized
     assert 'secret orphan tool body' not in projection.serialized
     assert 'lookup_customer' in projection.serialized
     assert 'error' in projection.serialized
@@ -168,7 +166,7 @@ def test_idless_tool_call_does_not_attach_an_idless_result() -> None:
     call = projection.payload['messages'][0]['tool_calls'][0]
 
     assert call['status'] == 'pending'
-    assert call['result_excerpt'] is None
+    assert call['result_category'] is None
     assert 'unrelated private result' not in projection.serialized
 
 
@@ -212,7 +210,7 @@ def test_otel_tool_error_is_projected_with_error_status(failure_signal: dict[str
 
     projected_call = projection.payload['messages'][0]['tool_calls'][0]
     assert projected_call['status'] == 'error'
-    assert projected_call['result_excerpt'] == 'invoice service unavailable'
+    assert projected_call['result_category'] == 'unavailable'
 
 
 def test_otel_explicit_success_status_precedes_error_prefix_heuristic() -> None:
@@ -273,258 +271,82 @@ def test_tool_result_text_mentioning_error_is_not_marked_as_failure() -> None:
     assert projection.payload['messages'][0]['tool_calls'][0]['status'] == 'completed'
 
 
-def test_tool_result_excerpt_keeps_the_start_and_is_capped() -> None:
-    body = 'Error: invoice not found. ' + 'z' * 10_000
-    trace = _trace(
-        messages=(
-            {
-                'role': 'assistant',
-                'tool_calls': [
-                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}
-                ],
-            },
-            {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-        )
-    )
-    call = project_trace(trace).payload['messages'][0]['tool_calls'][0]
-    assert call['result_excerpt'].startswith('Error: invoice not found.')
-    assert len(call['result_excerpt'].encode('utf-8')) <= MAX_TOOL_RESULT_BYTES
-
-
-def test_tool_result_excerpt_redacts_explicit_credentials_and_keeps_error_context() -> None:
-    body = 'Error: request failed for user. Authorization: Bearer abc.def.ghi api_key="sk-live-value"'
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert excerpt.startswith('Error: request failed for user.')
-    assert 'Authorization: [REDACTED]' in excerpt
-    assert 'api_key="[REDACTED]"' in excerpt
-    assert 'abc.def.ghi' not in excerpt
-    assert 'sk-live-value' not in excerpt
-
-
-@pytest.mark.parametrize(('field', 'secret'), [
-    ('token', 'tok-live'),
-    ('x-api-key', 'key-live'),
-    ('credentials', 'credential-live'),
-    ('apiKey', 'provider-key-live'),
+@pytest.mark.parametrize(('body', 'category'), [
+    ('Error: invoice not found. secret=never persist', 'not_found'),
+    ('request failed: permission denied; token=opaque', 'permission_denied'),
+    ('provider rate limit exceeded', 'rate_limited'),
+    ('operation timed out', 'timeout'),
+    ('service unavailable', 'unavailable'),
+    ('invalid request payload', 'invalid_request'),
+    ('Error: opaque provider detail', 'provider_error'),
 ])
-def test_tool_result_excerpt_redacts_provider_secret_fields(field: str, secret: str) -> None:
-    body = f'Error: provider failed; {field}="{secret}"; retry in 2 seconds'
+def test_tool_result_persists_only_allowlisted_error_category(body: str, category: str) -> None:
+    result = {'role': 'tool', 'tool_call_id': 'c1', 'content': body}
+    if not body.startswith('Error:'):
+        result['status'] = 'failed'
     trace = _trace(messages=(
         {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+        result,
     ))
 
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert secret not in excerpt
-    assert '[REDACTED]' in excerpt
-    assert 'Error: provider failed' in excerpt
-    assert 'retry in 2 seconds' in excerpt
-
-
-@pytest.mark.parametrize(('field', 'secret'), [
-    ('Cookie', 'session=cookie-session-value'),
-    ('Set-Cookie', 'session=set-cookie-session-value'),
-    ('client_secret', 'provider-client-secret'),
-    ('signature', 'provider-signature-value'),
-])
-def test_tool_result_excerpt_redacts_cookie_and_provider_credential_fields(field: str, secret: str) -> None:
-    separator = ': ' if field in {'Cookie', 'Set-Cookie'} else '='
-    suffix = '; Path=/; HttpOnly' if field in {'Cookie', 'Set-Cookie'} else ''
-    body = f'Error: provider request failed\n{field}{separator}{secret}{suffix}\nRetry after 2 seconds.'
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert secret not in excerpt
-    assert 'Error: provider request failed' in excerpt
-    assert 'Retry after 2 seconds.' in excerpt
-    assert '[REDACTED]' in excerpt
-
-
-def test_tool_result_excerpt_redacts_multiline_cookie_headers_and_signed_query_values() -> None:
-    body = (
-        'Error: request denied\r\nSet-Cookie: sid=opaque-cookie; Path=/\r\n'
-        '  HttpOnly; SameSite=None\nX-Amz-Signature=provider-signature '
-        'X-Amz-Security-Token=provider-session-token\nRetry after 2 seconds.'
-    )
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert all(secret not in excerpt for secret in ('opaque-cookie', 'provider-signature', 'provider-session-token'))
-    assert excerpt.startswith('Error: request denied')
-    assert 'Retry after 2 seconds.' in excerpt
-
-
-def test_tool_result_excerpt_redacts_escaped_json_cookie_and_signature_fields() -> None:
-    body = json.dumps({
-        'error': 'provider request failed',
-        'headers': 'Set-Cookie: sid=opaque-cookie\\r\\n  HttpOnly',
-        'request': 'X-Amz-Signature=provider-signature X-Amz-Security-Token=provider-session-token',
-    })
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert 'provider request failed' in excerpt
-    assert all(secret not in excerpt for secret in ('opaque-cookie', 'provider-signature', 'provider-session-token'))
-    assert '[REDACTED]' in excerpt
-
-
-def test_tool_result_excerpt_redacts_url_userinfo_and_query_token() -> None:
-    body = 'Error: https://alice:pw123@example.test/api?token=tok_query&retry=1 failed'
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert all(secret not in excerpt for secret in ('alice', 'pw123', 'tok_query'))
-    assert '[REDACTED]@example.test/api?token=[REDACTED]&retry=1 failed' in excerpt
-
-
-@pytest.mark.parametrize(('dsn', 'secret'), [
-    ('postgres://app-user:pg-live-secret@db.example.test:5432/app', 'pg-live-secret'),
-    ('redis://:redis-live-secret@cache.example.test:6379/0', 'redis-live-secret'),
-    ('mongodb+srv://svc:mongo-secret@cluster.example.test/db', 'mongo-secret'),
-])
-def test_tool_result_excerpt_redacts_credentials_for_any_uri_scheme(dsn: str, secret: str) -> None:
-    body = f'Error: connection failed for {dsn}; retry after 2 seconds'
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert secret not in excerpt
-    assert '[REDACTED]@' in excerpt
-    assert excerpt.startswith('Error: connection failed for ')
-    assert excerpt.endswith('; retry after 2 seconds')
-
-
-@pytest.mark.parametrize('text', [
-    'postgres://db.example.test:5432/app has no userinfo',
-    'redis://[2001:db8::1]:6379/0 uses an IPv6 host and port',
-    'contact user:password@example.test for access',
-])
-def test_tool_result_excerpt_keeps_uri_authority_without_credentials(text: str) -> None:
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': text},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert excerpt == text
-
-
-def test_tool_result_excerpt_redacts_recognizable_unlabeled_tokens() -> None:
-    body = 'Error: sk-proj-abcdefghijklmnop and ghp_abcdefghijklmnopqrst were rejected'
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert 'sk-proj-abcdefghijklmnop' not in excerpt
-    assert 'ghp_abcdefghijklmnopqrst' not in excerpt
-    assert excerpt.startswith('Error: ')
-    assert excerpt.endswith(' were rejected')
-
-
-def test_tool_result_excerpt_redacts_escaped_json_and_nested_provider_credentials() -> None:
-    body = json.dumps({
-        'error': 'provider rejected request',
-        'details': {
-            'api_key': 'abc"def',
-            'aws_secret_access_key': 'aws-live-secret',
-            'x-goog-api-key': 'google-live-key',
-        },
-        'retryable': True,
-    })
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-    decoded = json.loads(excerpt)
-
-    assert decoded['error'] == 'provider rejected request'
-    assert decoded['retryable'] is True
-    assert decoded['details'] == {
-        'api_key': '[REDACTED]',
-        'aws_secret_access_key': '[REDACTED]',
-        'x-goog-api-key': '[REDACTED]',
-    }
-    assert 'aws-live-secret' not in excerpt
-    assert 'google-live-key' not in excerpt
-
-
-def test_tool_result_excerpt_redacts_multiline_escaped_text_assignments() -> None:
-    body = 'Error: provider failed\napi_key="line one\\\" still secret\nline two"\nRetry after 2 seconds.'
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert excerpt.startswith('Error: provider failed')
-    assert 'line one' not in excerpt
-    assert 'line two' not in excerpt
-    assert 'Retry after 2 seconds.' in excerpt
-
-
-def test_tool_result_excerpt_exact_byte_cap_includes_marker_with_unicode() -> None:
-    body = 'Error: ' + ('😀' * 3000)
-    trace = _trace(messages=(
-        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
-        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
-    ))
-
-    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
-
-    assert excerpt.startswith('Error: ')
-    assert excerpt.endswith(TRAILING_OMISSION_MARKER)
-    assert len(excerpt.encode('utf-8')) == MAX_TOOL_RESULT_BYTES
-
-
-def test_tool_result_excerpt_shrinks_before_the_unit_is_omitted() -> None:
-    trace = _trace(
-        messages=(
-            {
-                'role': 'assistant',
-                'tool_calls': [
-                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}
-                ],
-            },
-            {'role': 'tool', 'tool_call_id': 'c1', 'content': 'Error: boom ' + 'z' * 400},
-        )
-    )
-    projection = project_trace(trace, token_budget=260)
+    projection = project_trace(trace)
     call = projection.payload['messages'][0]['tool_calls'][0]
-    assert call['name'] == 'lookup'
-    assert call['result_excerpt'] is not None and call['result_excerpt'].startswith('Error')
+
+    assert call['status'] == 'error'
+    assert call['result_category'] == category
+    assert category in _allowed_result_categories()
+    assert body not in projection.serialized
+    assert 'result_excerpt' not in projection.serialized
+
+
+def test_successful_tool_text_mentioning_failure_category_stays_completed() -> None:
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {
+            'role': 'tool',
+            'tool_call_id': 'c1',
+            'content': 'No matching item was not found in cache; the fallback service is available.',
+        },
+    ))
+
+    call = project_trace(trace).payload['messages'][0]['tool_calls'][0]
+
+    assert call['status'] == 'completed'
+    assert call['result_category'] is None
+
+
+def test_nested_unknown_and_base64_secrets_never_enter_projection() -> None:
+    import base64
+
+    secret = 'undocumented-provider-secret-7b91'
+    encoded = base64.b64encode(secret.encode()).decode()
+    body = json.dumps({
+        'error': {
+            'provider_payload': {
+                'opaque': secret,
+                'binary': encoded,
+                'unclassified': {'credential_blob': 'nested-live-value'},
+            }
+        }
+    })
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    projection = project_trace(trace)
+
+    assert projection.payload['messages'][0]['tool_calls'][0]['status'] == 'error'
+    assert projection.payload['messages'][0]['tool_calls'][0]['result_category'] == 'provider_error'
+    for value in (secret, encoded, 'nested-live-value', body):
+        assert value not in projection.serialized
+
+
+def _allowed_result_categories() -> set[str]:
+    return {
+        'not_found', 'permission_denied', 'rate_limited', 'timeout', 'unavailable',
+        'invalid_request', 'provider_error',
+    }
 
 
 def test_project_trace_keeps_a_complete_newest_suffix_and_reports_discarded_units() -> None:
