@@ -640,7 +640,50 @@ def _normalised_messages(
     if message_format == 'chat_completions' or _has_chat_text_parts(value):
         return _message_list(value, default_role=default_role)
     parsed, _ = parse_messages(value, hinted=message_format, default_role=default_role or 'user')
-    return [message.to_chat_completion() for message in parsed]
+    messages = [message.to_chat_completion() for message in parsed]
+    if message_format == 'otel_genai':
+        _attach_otel_tool_result_metadata(messages, value)
+    return messages
+
+
+def _attach_otel_tool_result_metadata(messages: list[dict[str, Any]], value: Any) -> None:
+    """Keep explicit OTel tool outcomes in trace-only metadata for projection."""
+    decoded = _plain(value)
+    if isinstance(decoded, str):
+        try:
+            decoded = json.loads(decoded)
+        except json.JSONDecodeError:
+            return
+    if not isinstance(decoded, (dict, list)):
+        return
+
+    outcomes: dict[str, dict[str, Any]] = {}
+    pending = [decoded]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, list):
+            pending.extend(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        parts = item.get('parts')
+        if isinstance(parts, list):
+            for part in parts:
+                if not isinstance(part, dict) or part.get('type') != 'tool_call_response':
+                    continue
+                call_id = part.get('id') or part.get('call_id')
+                if not isinstance(call_id, str) or not call_id:
+                    continue
+                explicit = {key: part[key] for key in ('status', 'is_error', 'error') if key in part}
+                if explicit:
+                    outcomes[call_id] = explicit
+        pending.extend(child for key, child in item.items() if key != 'parts')
+
+    for message in messages:
+        call_id = message.get('tool_call_id')
+        outcome = outcomes.get(call_id) if isinstance(call_id, str) else None
+        if outcome:
+            message['trace_finder_metadata'] = {'tool_result': outcome}
 
 
 def _has_chat_text_parts(value: Any) -> bool:

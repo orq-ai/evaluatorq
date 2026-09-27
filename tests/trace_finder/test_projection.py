@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 
 from evaluatorq.trace_finder.models import TraceRecord
+from evaluatorq.trace_finder.orq_source import _conversation_messages
 from evaluatorq.trace_finder.projection import estimate_tokens, project_trace
-from evaluatorq.common.trace_input import _otel_parts
 
 
 def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
@@ -131,27 +131,83 @@ def test_project_trace_keeps_tool_result_excerpts_but_drops_orphans() -> None:
     assert json.loads(projection.serialized) == projection.payload
 
 
-def test_otel_tool_error_is_projected_with_error_status() -> None:
-    _, _, tool_responses = _otel_parts(
-        [{'type': 'tool_call_response', 'id': 'c1', 'response': 'Error: invoice service unavailable'}]
+@pytest.mark.parametrize('failure_signal', [{'status': 'failed'}, {'is_error': True}, {'error': 'unavailable'}])
+def test_otel_tool_error_is_projected_with_error_status(failure_signal: dict[str, Any]) -> None:
+    messages = _conversation_messages(
+        {
+            'attributes': {
+                'gen_ai': {
+                    'output': [
+                        {
+                            'role': 'assistant',
+                            'parts': [
+                                {
+                                    'type': 'tool_call',
+                                    'id': 'c1',
+                                    'name': 'lookup_invoice',
+                                    'arguments': {},
+                                }
+                            ],
+                        },
+                        {
+                            'role': 'tool',
+                            'parts': [
+                                {
+                                    'type': 'tool_call_response',
+                                    'id': 'c1',
+                                    'response': 'invoice service unavailable',
+                                    **failure_signal,
+                                }
+                            ],
+                        },
+                    ]
+                }
+            }
+        }
     )
-    trace = _trace(
-        messages=(
-            {
-                'role': 'assistant',
-                'tool_calls': [
-                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup_invoice', 'arguments': '{}'}}
-                ],
-            },
-            tool_responses[0].to_chat_completion(),
-        )
-    )
+    trace = _trace(messages=tuple(messages))
 
     projection = project_trace(trace)
 
     projected_call = projection.payload['messages'][0]['tool_calls'][0]
     assert projected_call['status'] == 'error'
-    assert projected_call['result_excerpt'] == 'Error: invoice service unavailable'
+    assert projected_call['result_excerpt'] == 'invoice service unavailable'
+
+
+def test_otel_explicit_success_status_precedes_error_prefix_heuristic() -> None:
+    messages = _conversation_messages(
+        {
+            'attributes': {
+                'gen_ai': {
+                    'output': [
+                        {
+                            'role': 'assistant',
+                            'parts': [
+                                {'type': 'tool_call', 'id': 'c1', 'name': 'lookup_invoice', 'arguments': {}}
+                            ],
+                        },
+                        {
+                            'role': 'tool',
+                            'parts': [
+                                {
+                                    'type': 'tool_call_response',
+                                    'id': 'c1',
+                                    'response': 'Error: no previous error was found',
+                                    'status': 'completed',
+                                }
+                            ],
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    trace = _trace(messages=tuple(messages))
+
+    projection = project_trace(trace)
+
+    projected_call = projection.payload['messages'][0]['tool_calls'][0]
+    assert projected_call['status'] == 'completed'
 
 
 def test_tool_result_text_mentioning_error_is_not_marked_as_failure() -> None:

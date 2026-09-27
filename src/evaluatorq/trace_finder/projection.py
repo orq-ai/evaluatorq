@@ -19,6 +19,7 @@ MAX_TOOL_RESULT_BYTES = 1024
 TRAILING_OMISSION_MARKER = '[... later bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
+SUCCESS_STATUSES = frozenset({'completed', 'success', 'succeeded', 'ok'})
 
 
 @dataclass(frozen=True)
@@ -244,17 +245,24 @@ def _tool_call_status(call_id: Any, results: tuple[dict[str, Any], ...]) -> str:
     result = next((item for item in results if item.get('tool_call_id') == call_id), None)
     if result is None:
         return 'pending'
-    status = result.get('status')
-    if isinstance(status, str) and status.casefold() in ERROR_STATUSES:
-        return 'error'
-    if result.get('is_error') is True or result.get('error') not in (None, False, ''):
-        return 'error'
-    # OTel tool_call_response parts often carry an error as plain text or as a
-    # JSON object, without a separate status field. Recognize those explicit
-    # shapes so the projected tool status agrees with the retained result.
+    trace_metadata = result.get('trace_finder_metadata')
+    trace_metadata = trace_metadata if isinstance(trace_metadata, dict) else {}
+    otel_result = trace_metadata.get('tool_result')
+    sources = [source for source in (otel_result, result) if isinstance(source, dict)]
+    for source in sources:
+        status = source.get('status')
+        if isinstance(status, str) and status.casefold() in ERROR_STATUSES:
+            return 'error'
+        if source.get('is_error') is True or source.get('error') not in (None, False, ''):
+            return 'error'
+    for source in sources:
+        status = source.get('status')
+        if isinstance(status, str) and status.casefold() in SUCCESS_STATUSES:
+            return 'completed'
+        if source.get('is_error') is False:
+            return 'completed'
+
     content = tool_result_to_text(result.get('content')).lstrip()
-    if content.casefold().startswith('error:'):
-        return 'error'
     try:
         decoded = json.loads(content)
     except (TypeError, ValueError):
@@ -265,6 +273,13 @@ def _tool_call_status(call_id: Any, results: tuple[dict[str, Any], ...]) -> str:
             return 'error'
         if decoded.get('error') not in (None, False, ''):
             return 'error'
+        if isinstance(nested_status, str) and nested_status.casefold() in SUCCESS_STATUSES:
+            return 'completed'
+        if decoded.get('is_error') is False:
+            return 'completed'
+    # Some OTel providers encode failure only as a leading plain-text marker.
+    if content.casefold().startswith('error:'):
+        return 'error'
     return 'completed'
 
 
