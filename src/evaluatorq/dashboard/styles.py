@@ -2830,6 +2830,7 @@ _INSIGHTS_CSS = """
 .insights-stage.running .insights-stage-mark { box-shadow:0 0 0 0 color-mix(in srgb,var(--teal-600) 40%,transparent); animation:insights-stage-pulse 1.6s ease-in-out infinite; }
 .insights-stage.error { color:var(--red-700); font-weight:600; }
 .insights-stage.error .insights-stage-mark { background:var(--red-700); }
+.insights-stage.error::before { background:var(--red-700); }
 .insights-stage.skipped { opacity:.5; }
 .insights-stage-flag { position:absolute; bottom:calc(100% + 1px); left:50%; transform:translateX(-50%); padding:3px 7px; border-radius:4px; background:var(--teal-600); color:#fff; font:600 10px/1.2 system-ui,sans-serif; white-space:nowrap; }
 .insights-stage-flag::after { content:""; position:absolute; top:100%; left:50%; margin-left:-4px; border:4px solid transparent; border-bottom:0; border-top-color:var(--teal-600); }
