@@ -918,6 +918,11 @@ def settings_body(  # noqa: C901
     profile_error_attr = ' aria-describedby="orq_profile_error"' if profile_error else ''
     key_error = errors.get('orq_api_key_entry')
     key_error_html = f'<span class="settings-error" role="alert">{esc(key_error)}</span>' if key_error else ''
+    saved_key_hint = (
+        '<span class="settings-auth-hint">Leave blank to keep the saved API key.</span>'
+        if setting_value('orq_api_key_ciphertext')
+        else ''
+    )
     cards = (
         ('environment', 'Environment', 'Use ORQ_API_KEY from the dashboard process.', ''),
         (
@@ -949,8 +954,8 @@ def settings_body(  # noqa: C901
             (
                 '<label class="settings-auth-detail-label" for="orq_api_key_entry">API key</label>'
                 '<input id="orq_api_key_entry" name="orq_api_key_entry" type="password" autocomplete="new-password" '
-                'placeholder="Paste a new key, or leave blank to keep the saved key">'
-                f'{key_error_html}'
+                'placeholder="Paste API key">'
+                f'{saved_key_hint}{key_error_html}'
                 '<label class="settings-auth-detail-label" for="orq_stored_key_host">Orq server</label>'
                 f'<input id="orq_stored_key_host" name="orq_stored_key_host" type="url" '
                 f'value="{esc(setting_value("orq_profile_host") or "https://my.orq.ai")}">'
@@ -1036,7 +1041,26 @@ def settings_body(  # noqa: C901
         for k, v in config
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
-    return f'<section class="dash-wrap">{form}{config_panel}</section>'
+    auth_fields_script = (
+        '<script>document.addEventListener("DOMContentLoaded",function(){'
+        'const form=document.querySelector(".settings-form");if(!form)return;'
+        'function syncAuthFields(){'
+        'const selected=form.querySelector("input[name=orq_auth_method]:checked");'
+        'if(!selected)return;'
+        'form.querySelectorAll(".settings-auth-detail[data-auth-method]").forEach(function(panel){'
+        'const inactive=panel.dataset.authMethod!==selected.value;'
+        'panel.querySelectorAll("input,select,textarea").forEach(function(field){field.disabled=inactive;});'
+        '});'
+        'const scopeInactive=selected.value==="cli_oauth"||selected.value==="stored_api_key";'
+        'form.querySelectorAll(".settings-auth-scope input,.settings-auth-scope select").forEach(function(field){'
+        'field.disabled=scopeInactive;});'
+        '}'
+        'form.addEventListener("change",function(event){'
+        'if(event.target.name==="orq_auth_method")syncAuthFields();});'
+        'syncAuthFields();'
+        '});</script>'
+    )
+    return f'<section class="dash-wrap">{form}{config_panel}</section>{auth_fields_script}'
 
 
 def report_not_found(rid: str) -> str:

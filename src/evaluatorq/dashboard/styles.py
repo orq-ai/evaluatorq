@@ -500,7 +500,15 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-auth-panel:has(input[value="cli_oauth"]:checked) .settings-auth-detail[data-auth-method="cli_oauth"],
 .settings-auth-panel:has(input[value="stored_api_key"]:checked) .settings-auth-detail[data-auth-method="stored_api_key"] { display: grid; }
 .settings-auth-detail-label { color: var(--text-muted); font-size: 11px; font-weight: 650; }
-.settings-auth-detail input, .settings-auth-detail select { width: 100%; min-width: 0; }
+.settings-auth-detail input, .settings-auth-detail select {
+  width: 100%; min-width: 0; min-height: 36px; box-sizing: border-box;
+  padding: 7px 10px; border: 1px solid var(--border-default); border-radius: 6px;
+  background: var(--surface-card); color: var(--text-strong);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.4;
+}
+.settings-auth-detail input::placeholder { color: var(--text-muted); opacity: 1; }
+.settings-auth-detail :is(input, select):hover { border-color: var(--teal-600); }
+.settings-auth-detail :is(input, select):focus-visible { outline: 2px solid var(--teal-600); outline-offset: 2px; }
 .settings-auth-hint { color: var(--text-muted); font-size: 11px; line-height: 1.4; }
 .eq-auth-toast { position: fixed; z-index: 1000; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 12px; max-width: min(440px, calc(100vw - 32px)); padding: 12px 14px; border: 1px solid var(--border-default); border-left: 3px solid var(--red-700); border-radius: 10px; background: var(--surface-card); box-shadow: 0 10px 30px rgba(30, 28, 35, .16); color: var(--text-body); font-size: 12px; line-height: 1.4; }
 .eq-auth-toast[hidden] { display: none; }
