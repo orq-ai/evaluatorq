@@ -76,7 +76,7 @@ def test_startup_failure_shows_in_run_page(monkeypatch: pytest.MonkeyPatch, tmp_
     response = TestClient(build_app()).get(f'/insights/{run_id}')
     assert response.status_code == 200
     assert 'worker unavailable' in response.text
-    assert '<span>Start</span><small>error</small>' in response.text
+    assert '<span class="insights-stage-label">Start</span><span class="sr-only">error</span>' in response.text
     assert 'Load recent traces' in response.text
 
 
@@ -263,7 +263,7 @@ def test_running_and_completed_pages_show_manifest_stages(monkeypatch: pytest.Mo
         run_name='Sample run',
         runs_dir=directory,
         planned_stages=['population', 'summary', 'dimension:intent', 'write'],
-        stage_labels={'population': 'Load recent traces', 'summary': 'Summarize traces', 'dimension:intent': 'Cluster intent', 'write': 'Save run'},
+        stage_labels={'population': 'Load recent traces', 'summary': 'Summarize traces', 'dimension:intent': 'Cluster and map intent', 'write': 'Save run'},
     )
     writer.start_stage('population')
     writer.end_stage('population')
@@ -284,5 +284,5 @@ def test_running_and_completed_pages_show_manifest_stages(monkeypatch: pytest.Mo
     completed = client.get('/insights/run-1')
     assert completed.status_code == 200
     assert 'Load recent traces' in completed.text
-    assert 'Cluster intent' in completed.text
+    assert 'Cluster and map intent' in completed.text
     assert 'skipped' in completed.text

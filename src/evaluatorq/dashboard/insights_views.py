@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import isfinite
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
@@ -27,7 +28,7 @@ TAB_LABELS = {
     'crosstab': 'Crosstab',
     'traces': 'Traces',
     'priority': 'Priority matrix',
-    'map': 'Map',
+    'map': '3D Map',
 }
 
 
@@ -89,17 +90,33 @@ def progress(manifest: RunManifest | None) -> str:
             else 'pending'
         )
         label = manifest.stage_labels.get(name, name.replace('dimension:', 'Cluster ').replace('_', ' ').title())
+        flag = ''
+        if status == 'running':
+            elapsed = _elapsed(record.started_at, None) if record is not None else ''
+            flag = f'<span class="insights-stage-flag">Running{f" · {elapsed}" if elapsed else ""}</span>'
+        elif status == 'error':
+            flag = '<span class="insights-stage-flag">Failed</span>'
         items.append(
-            f'<li class="insights-stage {esc(status)}"><span class="insights-stage-mark" aria-hidden="true"></span>'
-            f'<span>{esc(label)}</span><small>{esc(status)}</small></li>'
+            f'<li class="insights-stage {esc(status)}" title="{esc(label)}: {esc(status)}">{flag}'
+            f'<span class="insights-stage-mark" aria-hidden="true"></span>'
+            f'<span class="insights-stage-label">{esc(label)}</span><span class="sr-only">{esc(status)}</span></li>'
         )
+    done = sum(1 for name in planned if name in records and records[name].status.value == 'completed')
     current = _stage_name(manifest) if manifest.status == 'running' else manifest.status.value.title()
+    count = f' · {done} of {len(planned)}' if planned else ''
     list_html = ''.join(items) or '<li class="insights-stage pending">Preparing run</li>'
     return (
         '<section class="insights-progress" aria-label="Run progress">'
-        f'<div class="insights-progress-head"><h3>Run progress</h3><span>{esc(current)}</span></div>'
+        f'<div class="insights-progress-head"><h3>Run progress</h3><span>{esc(current)}{count}</span></div>'
         f'<ol>{list_html}</ol></section>'
     )
+
+
+def _elapsed(start: datetime, end: datetime | None) -> str:
+    seconds = int(((end or datetime.now(timezone.utc)) - start).total_seconds())
+    if seconds < 0:
+        return ''
+    return f'{seconds // 60}m {seconds % 60:02d}s' if seconds >= 60 else f'{seconds}s'
 
 
 def _chip(label: str, value: object) -> str:
@@ -688,13 +705,19 @@ def _dimension_map(
         )
         return f'<div data-insights-mode="map"{hidden}>{_map_empty(reason)}</div>'
     color_options = ['<option value="cluster">Clusters</option>']
+    color_options.extend(
+        f'<option value="dimension:{esc(name)}">{esc(name.title())} clusters</option>'
+        for name in run.dimensions
+        if name != dimension_name
+    )
     color_options.extend(f'<option value="label:{esc(name)}">{esc(name)}</option>' for name in run.labels)
+    color_options.extend(('<option value="agent">Agent</option>', '<option value="project">Project</option>'))
     chart = (
         f'<div id="insights-map-{quote(dimension_name, safe="")}" class="insights-map-chart" '
         f'data-run-id="{esc(run.run_id)}" data-map-dimension="{esc(dimension_name)}" data-map-url="/insights/{quote(run.run_id, safe="")}/map.json?dimension={quote(dimension_name, safe="")}&amp;color_by=cluster"></div>'
     )
     detail = (
-        '<section class="insights-detail" data-map-detail><p class="insights-empty">Select a point to see its cluster details and example traces.</p></section>'
+        '<section class="insights-detail" data-map-detail><p class="insights-empty">Select a point to see its trace and cluster details.</p></section>'
         if include_detail
         else ''
     )
@@ -702,121 +725,158 @@ def _dimension_map(
     return (
         f'<div class="insights-map-view" data-insights-mode="map"{hidden}><div class="insights-map-toolbar">'
         f'<label>Colour by <select data-map-color data-dimension="{esc(dimension_name)}">{"".join(color_options)}</select></label>'
-        f'<span>{len(run.traces)} traces · UMAP 3D</span></div>'
+        f'<span>{sum(dimension_name in trace.coords for trace in run.traces)} of {len(run.traces)} traces mapped · UMAP 3D</span></div>'
         f'{layout}</div>'
     )
 
 
+def map_tab(run: InsightsRun, selected: str | None = None) -> str:
+    """Render every dimension's persisted UMAP projection in one expandable viewer."""
+    if not run.dimensions:
+        return _map_empty('This run has no discovered dimensions.')
+    current = selected if selected in run.dimensions else next(iter(run.dimensions))
+    options = ''.join(
+        f'<option value="{esc(name)}"{" selected" if name == current else ""}>{esc(name.title())}</option>'
+        for name in run.dimensions
+    )
+    panels = ''.join(
+        f'<div data-map-projection-panel="{esc(name)}"{" hidden" if name != current else ""}>'
+        f'{_dimension_map(run, name, initially_visible=True, include_detail=True)}</div>'
+        for name in run.dimensions
+    )
+    return (
+        '<section class="insights-map-fullscreen-viewer"><div class="insights-map-head">'
+        '<div><h3>Trace map</h3><p>Each projection uses the embeddings for one discovered dimension. '
+        'Colour by clusters, another dimension, a label, agent, or project.</p></div>'
+        '<button type="button" class="insights-action" data-map-fullscreen>Full screen</button></div>'
+        f'<div class="insights-map-projection"><label>Projection <select data-map-projection>{options}</select></label></div>'
+        f'{panels}</section>'
+    )
+
+
 def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster') -> dict[str, object]:
-    """Build the browser map's coordinates, cluster palette, and optional label colours."""
+    """Keep one dimension's coordinates fixed while colouring by any saved axis."""
     dimension = run.dimensions.get(dimension_name)
     if dimension is None:
         return {
             'points': [],
+            'missing_points': [],
             'legend': [],
             'color_scale': None,
             'color_mode': 'cluster',
             'grid_color': COLORS['sand_400'],
             'background_color': COLORS['sand_100'],
         }
-    base_clusters = [item for item in dimension.clusters if item.level == 'base']
-    cluster_by_id = {item.id: item for item in base_clusters}
+    color_dimension = color_by.removeprefix('dimension:') if color_by.startswith('dimension:') else dimension_name
     label_name = color_by.removeprefix('label:') if color_by.startswith('label:') else None
-    label_spec = next((item.spec for key, item in run.labels.items() if key == label_name), None)
-    if color_by != 'cluster' and (label_spec is None or label_spec.kind not in {'choice', 'score'}):
-        return {
-            'error': f'Unknown or unsupported colour label: {label_name or color_by}',
-            'points': [],
-            'legend': [],
-            'color_scale': None,
-            'color_mode': 'cluster',
-            'grid_color': COLORS['sand_400'],
-            'background_color': COLORS['sand_100'],
-        }
-    is_continuous = label_spec is not None and label_spec.kind == 'score'
-    categories = (
-        sorted({
-            str(trace.labels[label_name].value)
-            for trace in run.traces
-            if label_name in trace.labels
-            and trace.labels[label_name].error is None
-            and trace.labels[label_name].value is not None
-        })
-        if label_name and not is_continuous
-        else []
-    )
-    color_scale: list[list[float | str]] | None = (
-        (ORQ_SCALE_GOOD_BAD if 'satisfaction' in (label_name or '') else ORQ_SCALE_HEAT) if is_continuous else None
-    )
+    label_spec = run.labels[label_name].spec if label_name in run.labels else None
+    if color_by.startswith('label:') and label_spec is None:
+        return {'error': f'Unknown or unsupported colour label: {label_name}', 'points': []}
+    if color_by.startswith('dimension:') and color_dimension not in run.dimensions:
+        return {'error': f'Unknown colour dimension: {color_dimension}', 'points': []}
+    if color_by not in {'cluster', 'agent', 'project'} and not color_by.startswith(('label:', 'dimension:')):
+        return {'error': f'Unknown colour axis: {color_by}', 'points': []}
+    categorical = color_by in {'agent', 'project'} or (label_spec is not None and label_spec.kind != 'score')
+    continuous = label_spec is not None and label_spec.kind == 'score'
+    base_clusters = [item for item in run.dimensions[color_dimension].clusters if item.level == 'base']
+    cluster_by_id = {item.id: item for item in base_clusters}
+    cluster_indexes = {item.id: index for index, item in enumerate(base_clusters)}
+    shape_clusters = [item for item in dimension.clusters if item.level == 'base']
+    shape_indexes = {item.id: index for index, item in enumerate(shape_clusters)}
+    categories: set[str] = set()
+    if categorical:
+        for trace in run.traces:
+            if label_name:
+                answer = trace.labels.get(label_name)
+                categories.add(
+                    str(answer.value) if answer and answer.error is None and answer.value is not None else 'No value'
+                )
+            elif color_by == 'agent':
+                categories.add(trace.agent_name or 'Unknown agent')
+            else:
+                categories.add(trace.project or 'Unknown project')
+    ordered = sorted(category for category in categories if category != 'No value')
+    category_colors = {category: QUALITATIVE[index % len(QUALITATIVE)] for index, category in enumerate(ordered)}
     points: list[dict[str, object]] = []
+    missing_points: list[dict[str, object]] = []
     legend: dict[str, dict[str, str]] = {}
     for trace in run.traces:
         coords = trace.coords.get(dimension_name)
         if coords is None:
             continue
-        assignment = trace.assignments.get(dimension_name)
-        cluster_id = assignment.base if assignment is not None else 'noise'
+        shape_assignment = trace.assignments.get(dimension_name)
+        shape_index = shape_indexes.get(shape_assignment.base if shape_assignment else '', -1)
+        assignment = trace.assignments.get(color_dimension)
+        cluster_id = assignment.base if assignment is not None else 'Unclassified'
+        if color_by.startswith('dimension:'):
+            shape_index = cluster_indexes.get(cluster_id, -1)
+        symbol = 'diamond' if shape_index >= 8 else 'circle'
         cluster = cluster_by_id.get(cluster_id)
-        cluster_index = next((index for index, item in enumerate(base_clusters) if item.id == cluster_id), -1)
-        color = _cluster_color(cluster_index) if cluster_index >= 0 else COLORS['sand_400']
-        symbol = 'diamond' if cluster_index >= 8 else 'circle'
-        color_value: object = cluster.name if cluster else 'noise'
-        marker_color = color
-        label_category: str | None = None
-        if label_name:
-            answer = trace.labels.get(label_name)
-            if answer is None or answer.error is not None or answer.value is None:
-                continue
-            if is_continuous:
-                if not isinstance(answer.value, (int, float)) or isinstance(answer.value, bool):
-                    continue
-                value = min(1.0, max(0.0, float(answer.value)))
-                color_value = 1.0 - value if 'satisfaction' in label_name else value
-                marker_color = ''
-            else:
-                category = str(answer.value)
-                label_category = category
-                category_index = categories.index(category)
-                color_value = category_index
-                marker_color = QUALITATIVE[category_index % len(QUALITATIVE)]
-        point = {
+        cluster_name = cluster.name if cluster else cluster_id
+        point: dict[str, object] = {
             'trace_id': trace.trace_id,
             'x': coords[0],
             'y': coords[1],
             'z': coords[2],
             'cluster_id': cluster_id,
-            'cluster_name': cluster.name if cluster else 'noise',
-            'color_value': color_value,
-            'color': marker_color,
+            'cluster_name': cluster_name,
             'symbol': symbol,
+            'summary': trace.summary.summary if trace.summary else '',
+            'agent': trace.agent_name,
+            'project': trace.project,
         }
-        if label_category is not None:
-            point['label_value'] = label_category
-        points.append(point)
-        if not label_name:
+        if continuous:
+            answer = trace.labels.get(label_name or '')
+            if (
+                answer is None
+                or answer.error is not None
+                or isinstance(answer.value, bool)
+                or not isinstance(answer.value, (int, float))
+                or not isfinite(float(answer.value))
+            ):
+                point['color'] = COLORS['sand_400']
+                missing_points.append(point)
+                continue
+            value = min(1.0, max(0.0, float(answer.value)))
+            point['color_value'] = 1.0 - value if 'satisfaction' in (label_name or '') else value
+            point['color'] = ''
+        elif categorical:
+            if label_name:
+                answer = trace.labels.get(label_name)
+                category = (
+                    str(answer.value) if answer and answer.error is None and answer.value is not None else 'No value'
+                )
+            else:
+                category = (
+                    (trace.agent_name or 'Unknown agent')
+                    if color_by == 'agent'
+                    else (trace.project or 'Unknown project')
+                )
+            color = category_colors.get(category, COLORS['sand_400'])
+            point.update({
+                'color_value': ordered.index(category) if category in ordered else -1,
+                'color': color,
+                'label_value': category,
+            })
+            legend.setdefault(category, {'cluster_id': category, 'name': category, 'color': color, 'symbol': symbol})
+        else:
+            cluster_index = cluster_indexes.get(cluster_id, -1)
+            color = _cluster_color(cluster_index) if cluster_index >= 0 else COLORS['sand_400']
+            point.update({'color_value': cluster_name, 'color': color})
             legend.setdefault(
                 cluster_id,
-                {
-                    'cluster_id': cluster_id,
-                    'name': cluster.name if cluster else 'noise',
-                    'color': color,
-                    'symbol': symbol,
-                },
+                {'cluster_id': cluster_id, 'name': cluster_name, 'color': color, 'symbol': symbol},
             )
-        elif label_category is not None:
-            legend.setdefault(
-                label_category,
-                {'cluster_id': label_category, 'name': label_category, 'color': marker_color, 'symbol': symbol},
-            )
-    if is_continuous:
-        legend_items: list[dict[str, str]] = []
-    else:
-        legend_items = list(legend.values())
+        points.append(point)
+    color_scale: list[list[float | str]] | None = (
+        (ORQ_SCALE_GOOD_BAD if 'satisfaction' in (label_name or '') else ORQ_SCALE_HEAT) if continuous else None
+    )
     return {
         'points': points,
-        'legend': legend_items,
+        'missing_points': missing_points,
+        'legend': [] if continuous else list(legend.values()),
         'color_scale': color_scale,
-        'color_mode': 'cluster' if not label_name else 'continuous' if is_continuous else 'category',
+        'color_mode': 'continuous' if continuous else 'category' if categorical else 'cluster',
         'grid_color': COLORS['sand_400'],
         'background_color': COLORS['sand_100'],
     }
@@ -854,12 +914,7 @@ def tab_content(run: InsightsRun, tab: str, *, query: dict[str, str] | None = No
             column_value=query.get('column_value'),
         )
     if tab == 'map':
-        name = query.get('dimension') or next(iter(run.dimensions), '')
-        return (
-            _dimension_map(run, name, initially_visible=True, include_detail=True)
-            if name
-            else _map_empty('No dimensions are available for mapping.')
-        )
+        return map_tab(run, query.get('dimension'))
     if tab == 'crosstab':
         return crosstab(run, query or {})
     return priority_matrix(run)
