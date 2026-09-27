@@ -144,6 +144,8 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
 `agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
 
+Pass `generation_instructions="..."` to steer the whole generated set. It is a free-text instruction applied to every persona AND scenario (e.g. `"enterprise B2B buyers, frustrated, replying in German"`), stacked on top of the built-in prompts. Unlike a seed, which names one archetype and yields one object, it shapes the entire batch, and it composes with seeds and `edge_case_percentage`. It is accepted by `generate_and_simulate()`, `generate()`, and the seed helpers below; to steer personas and scenarios differently, call `generate_personas()` / `generate_scenarios()` separately. On the CLI it is `--generation-instructions`.
+
 !!! note "CI and local runs"
     A simulation that produced no conversation — dropped, or ended in `error`/`timeout` — raises by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
 
