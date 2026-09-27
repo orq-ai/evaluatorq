@@ -24,7 +24,7 @@ Two async functions, same target shapes and knobs:
 from evaluatorq.simulation import simulate
 
 results = await simulate(
-    evaluation_name="support-agent-sim",
+    run_name="support-agent-sim",
     target=my_async_agent,            # or target="agent:<key>" / target=AgentTarget
     personas=[persona],
     scenarios=[scenario],
@@ -32,6 +32,8 @@ results = await simulate(
     evaluator_names=["goal_achieved", "criteria_met"],
 )
 ```
+
+`run_name` labels this execution in run records, results, and traces. It is optional, and the existing `evaluation_name` keyword remains supported.
 
 A runnable, narrated walkthrough lives in [`examples/agent_simulation_intro.ipynb`](../../../examples/agent_simulation_intro.ipynb).
 
@@ -89,12 +91,14 @@ Extension sends every distinct seed object to the model. Large datasets can incr
 from evaluatorq.simulation import extend_from_dataset, simulate
 
 # direct: replay the dataset's rows
-results = await simulate(evaluation_name="replay", dataset_id="ds_abc", target=...)
+results = await simulate(run_name="support-dataset-replay", dataset_id="ds_abc", target=...)
 
 # extension: generate fresh datapoints seeded by the dataset without changing it
 extra = await extend_from_dataset("ds_abc", num_personas=3, num_scenarios=5)
-results = await simulate(evaluation_name="extended", datapoints=extra, target=...)
+results = await simulate(run_name="support-dataset-extended", datapoints=extra, target=...)
 ```
+
+`run_name` is an optional label for this simulation execution in its run record, results, and traces. It is a name you choose, not the dataset ID or an evaluator. `dataset_id` selects the stored input cases; `target` is the agent being tested. The older `evaluation_name` keyword still works as an alias; if you pass both, their values must match.
 
 ## Experiments
 
@@ -107,11 +111,11 @@ A prior Orq experiment run can seed simulations two ways (requires `ORQ_API_KEY`
 from evaluatorq.simulation import extend_from_experiment, simulate
 
 # direct: replay the experiment's rows
-results = await simulate(evaluation_name="replay", experiment_id="ex_abc", target=...)
+results = await simulate(run_name="replay", experiment_id="ex_abc", target=...)
 
 # extension: generate fresh datapoints seeded by the run
 extra = await extend_from_experiment("ex_abc", num_personas=3, num_scenarios=5)
-results = await simulate(evaluation_name="extended", datapoints=extra, target=...)
+results = await simulate(run_name="extended", datapoints=extra, target=...)
 ```
 
 ## Data sources
@@ -160,7 +164,7 @@ from evaluatorq.simulation import (
 conversations = await fetch_trace_conversations(limit=20)
 datapoints = await datapoints_from_traces(conversations)          # direct
 datapoints += await extend_from_traces(conversations, num_datapoints=10)  # extension
-results = await simulate(evaluation_name="from-traces", datapoints=datapoints, target=...)
+results = await simulate(run_name="from-traces", datapoints=datapoints, target=...)
 ```
 
 On the CLI:

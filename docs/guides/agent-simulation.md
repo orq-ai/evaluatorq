@@ -73,7 +73,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
     async def main():
         results = await generate_and_simulate(
-            evaluation_name="support-agent-sim",
+            run_name="support-agent-sim",
             target="agent:my-support-agent",     # hosted Orq agent, routed via ORQ_API_KEY
             agent_description=(
                 "Customer support agent for an e-commerce store; "
@@ -120,7 +120,7 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
     async def main():
         results = await generate_and_simulate(
-            evaluation_name="support-agent-sim-openai",
+            run_name="support-agent-sim-openai",
             target=openai_agent,
             agent_description=(
                 "Customer support agent for an e-commerce store; "
@@ -142,7 +142,9 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
         asyncio.run(main())
     ```
 
-`agent_description` drives generation; `num_personas × num_scenarios` is how many conversations run. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
+`run_name` is an optional label for this execution in run records, results, and traces. Existing calls with `evaluation_name` still work.
+
+`agent_description` drives generation; `num_personas × num_scenarios` is the requested number of cases. The actual count can differ when generation returns a different number of personas or scenarios or cannot create an opening message for a pair. The simulation-side LLMs resolve their provider by precedence: an explicitly passed `generation_client` wins, then `llm_config.client`, then `ORQ_API_KEY` (the Orq AI Router), then `OPENAI_API_KEY`. See [Configuration](../configuration.md).
 
 Pass `generation_instructions="..."` to steer the whole generated set. It is a free-text instruction applied to every persona AND scenario (e.g. `"enterprise B2B buyers, frustrated, replying in German"`), stacked on top of the built-in prompts. Unlike a seed, which names one archetype and yields one object, it shapes the entire batch, and it composes with seeds and `edge_case_percentage`. It is accepted by `generate_and_simulate()`, `generate()`, and the seed helpers below; to steer personas and scenarios differently, call `generate_personas()` / `generate_scenarios()` separately. On the CLI it is `--generation-instructions`.
 
@@ -169,7 +171,7 @@ async def main():
     scenario = await generate_scenario("disputes a refund denial")
 
     results = await simulate(
-        evaluation_name="seeded-simulation",
+        run_name="seeded-simulation",
         target="agent:my-support-agent",
         personas=[persona],
         scenarios=[scenario],
@@ -225,7 +227,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
         )
 
         results = await simulate(
-            evaluation_name="basic-simulation-example",
+            run_name="basic-simulation-example",
             target="agent:my-support-agent",    # hosted Orq agent, routed via ORQ_API_KEY
             personas=[persona],
             scenarios=[scenario],
@@ -289,7 +291,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
         )
 
         results = await simulate(
-            evaluation_name="openai-agent-simulation",
+            run_name="openai-agent-simulation",
             target=openai_agent,                 # your OpenAI agent
             personas=[persona],
             scenarios=[scenario],
@@ -406,7 +408,7 @@ The `criteria_met` evaluator's `raw_output` carries either per-criterion `Criter
 from evaluatorq.simulation import SimulationScoringConfig, simulate
 
 results = await simulate(
-    evaluation_name="onboarding-sim",
+    run_name="onboarding-sim",
     target="agent:my-onboarding-agent",
     evaluator_names=["goal_achieved", "criteria_met", "turn_efficiency", "conversation_quality"],
     # A guided onboarding flow needs ~6 turns before anyone should call it slow.
@@ -483,7 +485,7 @@ async def main():
     datapoints = load_datapoints_from_jsonl("cases.jsonl")
 
     results = await simulate(
-        evaluation_name="replay-v2",
+        run_name="replay-v2",
         target="agent:my-support-agent-v2",   # new version, same cases
         datapoints=datapoints,
         max_turns=6,
@@ -503,12 +505,14 @@ To **replay** those rows as they are, pass the ID to `simulate()`:
 
 ```python
 results = await simulate(
-    evaluation_name="dataset-replay",
+    run_name="support-dataset-replay",
     target="agent:my-support-agent",
     dataset_id="your-dataset-id",            # ID printed by upload-dataset
     evaluator_names=["goal_achieved", "criteria_met"],
 )
 ```
+
+`run_name` is an optional label you choose for this execution in its run record, results, and traces. It is separate from `dataset_id`, which selects the stored cases, and `evaluator_names`, which selects the scoring checks. `target` names the agent being tested. Existing calls with `evaluation_name` still work; if you supply both names, their values must match.
 
 `simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one per run.
 
@@ -527,7 +531,7 @@ from evaluatorq.simulation import extend_from_dataset, simulate
 async def main():
     extra = await extend_from_dataset("your-dataset-id", num_personas=3, num_scenarios=5)
     results = await simulate(
-        evaluation_name="extended",
+        run_name="support-dataset-extended",
         datapoints=extra,
         target="agent:my-support-agent",
     )
@@ -683,7 +687,7 @@ async def main():
     scenarios = await generate_scenarios(scenario_seeds, agent_description="e-commerce support agent")
 
     results = await simulate(
-        evaluation_name="trace-grounded-sim",
+        run_name="trace-grounded-sim",
         target="agent:my-support-agent",
         personas=personas,                    # 3 personas × 3 scenarios → 9 simulations
         scenarios=scenarios,

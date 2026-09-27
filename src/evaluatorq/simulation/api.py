@@ -68,6 +68,15 @@ logger = logging.getLogger(__name__)
 from evaluatorq.simulation.exceptions import SimulationDroppedError
 
 
+def _resolve_run_name(*, evaluation_name: str, run_name: str | None) -> str:
+    """Accept either public name without allowing conflicting labels for one run."""
+    if run_name is None:
+        return evaluation_name
+    if evaluation_name and evaluation_name != run_name:
+        raise ValueError('run_name and evaluation_name must match when both are supplied')
+    return run_name
+
+
 def _validate_datapoint_sources(
     *,
     datapoints: list[SimulationDatapoint] | None,
@@ -224,6 +233,7 @@ def _compose_sim_hooks(
 async def simulate(
     *,
     evaluation_name: str = '',
+    run_name: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
@@ -267,6 +277,9 @@ async def simulate(
     callers continue to work.
 
     Args:
+        evaluation_name: Existing label for this simulation run; equivalent to ``run_name``.
+        run_name: Optional label for this simulation run, its results, and traces. When both names
+            are supplied, they must match.
         target: The agent under test. Accepts a ``str`` (``"agent:<key>"`` or bare
             ``"<key>"`` → hosted Orq agent via the Responses router;
             ``"deployment:<key>"`` → Orq deployment), an ``AgentTarget``
@@ -445,7 +458,7 @@ async def simulate(
 
     async def main() -> None:
         results = await simulate(
-            evaluation_name='basic-simulation-example',
+            run_name='basic-simulation-example',
             target=support_agent,
             personas=[persona],
             scenarios=[scenario],
@@ -458,6 +471,8 @@ async def simulate(
     asyncio.run(main())
     ```
     """
+    evaluation_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
+
     datapoint_parallelism = resolve_datapoint_parallelism(
         datapoint_parallelism, parallelism, default=10, caller='simulate'
     )
@@ -646,6 +661,7 @@ async def _simulate_run(
 async def generate_and_simulate(
     *,
     evaluation_name: str = '',
+    run_name: str | None = None,
     agent_description: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     memory_entity_id: str | None = None,
@@ -682,6 +698,9 @@ async def generate_and_simulate(
     recommendations: bool | SimulationRecommendationConfig = False,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
+
+    ``run_name`` labels the run, its results, and traces. The existing ``evaluation_name`` keyword
+    remains equivalent; if both are supplied, their values must match.
 
     Accepts the same ``target`` shapes as `simulate` — a plain callable,
     an ``AgentTarget`` instance, or a string (``"agent:<key>"`` / bare ``"<key>"``
@@ -780,7 +799,7 @@ async def generate_and_simulate(
 
     async def main() -> None:
         results = await generate_and_simulate(
-            evaluation_name='support-agent-sim',
+            run_name='support-agent-sim',
             target='agent:my-support-agent',  # hosted Orq agent, routed via ORQ_API_KEY
             agent_description=(
                 'Customer support agent for an e-commerce store; handles refunds, orders, and product questions.'
@@ -797,6 +816,7 @@ async def generate_and_simulate(
     asyncio.run(main())
     ```
     """
+    evaluation_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
     datapoint_parallelism = resolve_datapoint_parallelism(
         datapoint_parallelism, parallelism, default=10, caller='generate_and_simulate'
     )
