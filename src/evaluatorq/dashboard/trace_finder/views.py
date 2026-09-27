@@ -684,7 +684,7 @@ def body(
             '<p>Download the completed export to use it with the CLI or Python. A server-side copy is also saved for '
             'the Insights wizard; enter the filename there. The examples below expect the downloaded file in your '
             'current directory.</p>'
-            f'<p><a class="btn-secondary" href="/find/export.json">Download and save {esc(export_name)}</a></p>'
+            f'<p><a class="btn-secondary" href="/find/export.json?export={quote(export_name, safe="")}">Download and save {esc(export_name)}</a></p>'
             f'<label>CLI</label><pre><code>eq insights --from-finder {esc(local_filename)}</code></pre>'
             f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
         )

@@ -301,7 +301,8 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
         traces=(),
         matched_trace_ids=[],
     )
-    path = tmp_path / 'valid.json'
+    path = tmp_path / 'finder-exports' / 'valid.json'
+    path.parent.mkdir()
     path.write_text(export.model_dump_json(), encoding='utf-8')
     captured: dict[str, Any] = {}
 
@@ -317,4 +318,10 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
     assert result.exit_code == 0, result.output
     assert captured['population'].finder_export == path
     assert captured['population'].finder_export_snapshot() == export
+    assert captured['_finder_export_source'] == path
+
+    monkeypatch.chdir(tmp_path)
+    relative_result = CliRunner().invoke(_app(), ['insights', '--from-finder', 'finder-exports/valid.json'])
+
+    assert relative_result.exit_code == 0, relative_result.output
     assert captured['_finder_export_source'] == path

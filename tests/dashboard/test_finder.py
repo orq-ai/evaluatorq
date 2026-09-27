@@ -625,6 +625,26 @@ def test_find_export_is_404_until_completed_then_downloads_json(
     assert save_threads and save_threads[0] is not caller_thread
 
 
+def test_find_export_link_rejects_a_newer_run_instead_of_downloading_it(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.trace_finder.export import export_filename
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    store.complete()
+    old_name = export_filename(store.snapshot_value)
+    assert f'href="/find/export.json?export={old_name}"' in client.get('/find').text
+
+    store.snapshot_value = replace(store.snapshot_value, generation=store.snapshot_value.generation + 1)
+    response = client.get(f'/find/export.json?export={old_name}')
+
+    assert response.status_code == 409
+    assert 'Refresh the page' in response.text
+    assert not (tmp_path / 'finder-exports' / old_name).exists()
+
+
 def test_find_export_save_failure_is_visible(
     setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

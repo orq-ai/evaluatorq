@@ -97,6 +97,19 @@ def _cleanup_finder_reference(runs_dir: Path, run_id: str) -> None:
         logger.warning('Could not remove Finder export reference for run {}: {}', run_id, exc)
 
 
+def _cleanup_finder_reference_for_manifest(manifest_path: Path) -> None:
+    """Release a Finder lease when a launch payload could not be decoded."""
+    try:
+        if manifest_path.parent.name != '.manifests':
+            return
+        manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
+        if manifest.surface.value != 'insights' or manifest_path.name != f'{manifest.run_id}.json':
+            return
+        _cleanup_finder_reference(manifest_path.parent.parent, manifest.run_id)
+    except (OSError, ValueError) as exc:
+        logger.warning('Could not recover Finder export reference from manifest {}: {}', manifest_path, exc)
+
+
 def main() -> int:
     manifest_env = os.environ.get(_MANIFEST_ENV)
     heartbeat = start_worker_heartbeat(Path(manifest_env)) if manifest_env else None
@@ -159,6 +172,8 @@ def main() -> int:
             _cleanup_snapshot(unvalidated_snapshot)
         if payload is not None and payload.spec.source == 'finder':
             _cleanup_finder_reference(payload.runs_dir, payload.run_id)
+        elif payload is None and manifest_env:
+            _cleanup_finder_reference_for_manifest(Path(manifest_env))
         state_run_id = payload.run_id if payload is not None else Path(manifest_env).stem if manifest_env else None
         if state_run_id is not None:
             try:

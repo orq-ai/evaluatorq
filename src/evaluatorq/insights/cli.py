@@ -315,7 +315,7 @@ def insights_cmd(
                 priority_dimension=priority_dimension,
                 parallelism=settings.parallelism,
                 cache=not no_cache,
-                _finder_export_source=from_finder,
+                _finder_export_source=from_finder.resolve() if from_finder is not None else None,
                 _on_saved=remember_run_path,
             )
         )

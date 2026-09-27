@@ -21,7 +21,7 @@ def test_reduce_3d_shape_and_determinism():
     np.testing.assert_array_equal(coords_1, coords_2)
 
 
-def test_reduce_3d_none_below_five_points(caplog):
+def test_reduce_3d_none_below_five_points():
     rng = np.random.default_rng(0)
     vectors = rng.normal(size=(4, 16))
 

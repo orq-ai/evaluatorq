@@ -745,8 +745,15 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         snapshot = await store.snapshot()
         if snapshot.state != 'completed' or snapshot.request is None or snapshot.compiled is None:
             return Response('Not found', status_code=404, media_type='text/plain')
-        payload = export_json(snapshot)
         export_name = export_filename(snapshot)
+        requested_export = req.query_params.get('export')
+        if requested_export is not None and requested_export != export_name:
+            return Response(
+                'This Finder result changed. Refresh the page to download the current result.',
+                status_code=409,
+                media_type='text/plain',
+            )
+        payload = export_json(snapshot)
         export_dir = get_store_dir('finder-exports')
         try:
             await asyncio.to_thread(_save_finder_export, export_dir, export_name, payload)

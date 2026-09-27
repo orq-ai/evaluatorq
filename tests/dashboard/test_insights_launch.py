@@ -291,6 +291,28 @@ def test_worker_payload_decode_failure_marks_manifest_failed(tmp_path: Path, mon
     assert manifest.error == 'Missing Insights launch request'
 
 
+def test_worker_payload_decode_failure_releases_finder_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+    from evaluatorq.dashboard.insights_launch import _MANIFEST_ENV, _REQUEST_ENV
+
+    runs_dir = tmp_path / 'insights-runs'
+    writer = start_manifest(run_id='decode-finder-failure', surface='insights', run_name='demo', runs_dir=runs_dir)
+    reference = finder_export_reference_path(runs_dir, writer.manifest.run_id)
+    ensure_private_finder_reference_dir(reference.parent)
+    reference.write_text('{"finder_export":"/private/export.json"}', encoding='utf-8')
+    reference.chmod(0o600)
+    monkeypatch.setenv(_REQUEST_ENV, '{truncated request')
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+
+    assert insights_worker.main() == 1
+
+    assert not reference.exists()
+    manifest = list_manifests(runs_dir)[0]
+    assert manifest.status == 'error'
+
+
 def test_worker_cleans_private_snapshot_when_request_json_is_truncated(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -775,6 +797,36 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert not reference.exists()
     assert not worker_state_path(tmp_path / 'runs', payload.run_id).exists()
     assert list_manifests(tmp_path / 'runs')[0].status == 'completed'
+
+
+def test_finder_launch_plan_uses_validated_export_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    approved_path = exports / 'approved.json'
+    approved_path.write_text(_run_export(['approved-trace']).model_dump_json(), encoding='utf-8')
+    replacement_path = exports / 'replacement.json'
+    replacement_path.write_text(_run_export(['replacement-trace']).model_dump_json(), encoding='utf-8')
+    spec = InsightsLaunchSpec(source='finder', finder_export='approved.json', labels=[], dimensions=['intent'])
+    spec.finder_export = str(replacement_path)
+
+    populations: list[InsightsPopulation] = []
+    original_stage_plan = insights_launch.stage_plan
+
+    def capture_plan(population, labels, dimensions):
+        populations.append(population)
+        return original_stage_plan(population, labels, dimensions)
+
+    monkeypatch.setattr(insights_launch, 'stage_plan', capture_plan)
+    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen'):
+        launch_insights(spec, tmp_path / 'runs')
+
+    assert len(populations) == 1
+    snapshot = populations[0].finder_export_snapshot()
+    assert snapshot is not None
+    assert snapshot.matched_trace_ids == ['approved-trace']
 
 
 def test_finder_snapshot_cleanup_without_getuid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

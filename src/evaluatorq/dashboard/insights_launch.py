@@ -609,11 +609,23 @@ class InsightsLaunchPayload(BaseModel):
     finder_export_snapshot: Path | None = None
 
 
+def _population_for_launch_plan(spec: InsightsLaunchSpec) -> tuple[InsightsPopulation, str | None]:
+    """Plan against the validated Finder bytes, even if their source path changes."""
+    finder_snapshot = spec.validated_finder_export_snapshot()
+    if finder_snapshot is None:
+        return spec.population(), None
+    population = InsightsPopulation.from_finder_export(
+        Path(spec.finder_export), export=RunExport.model_validate_json(finder_snapshot)
+    )
+    return population, finder_snapshot
+
+
 def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqProfile | None = None) -> str:
     """Create a visible manifest, then spawn a worker that survives dashboard reloads."""
     run_id = str(uuid.uuid4())
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
-    plan = stage_plan(spec.population(), spec.label_specs(), spec.dimension_names())
+    population, finder_snapshot = _population_for_launch_plan(spec)
+    plan = stage_plan(population, spec.label_specs(), spec.dimension_names())
     writer = start_manifest(
         run_id=run_id,
         surface='insights',
@@ -627,7 +639,6 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
     reference_temporary: Path | None = None
     state_path = worker_state_path(runs_dir, run_id)
     try:
-        finder_snapshot = spec.validated_finder_export_snapshot()
         if finder_snapshot is not None:
             reference_path = finder_export_reference_path(runs_dir, run_id)
             ensure_private_finder_reference_dir(reference_path.parent)
