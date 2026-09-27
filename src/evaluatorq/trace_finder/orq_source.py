@@ -18,6 +18,7 @@ from loguru import logger
 
 from .facets import _project_names, project_labels
 from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
+from .rows import parse_time as _parse_time
 
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
@@ -821,24 +822,6 @@ def _first_time(typed: Any, raw: Any) -> datetime | None:
             if parsed is not None:
                 return parsed
     return None
-
-
-def _parse_time(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        parsed = value
-    elif isinstance(value, str):
-        try:
-            parsed = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    elif isinstance(value, (int, float)) and not isinstance(value, bool):
-        try:
-            parsed = datetime.fromtimestamp(value / 1000 if value > 10_000_000_000 else value, tz=timezone.utc)
-        except (OverflowError, OSError, ValueError):
-            return None
-    else:
-        return None
-    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
 
 
 def _aware_bound(value: datetime, name: str) -> datetime:
