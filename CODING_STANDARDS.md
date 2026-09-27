@@ -31,11 +31,12 @@ Rules under **Hard rules** are violations when broken. Rules under **Judgement c
 - **Only write a cache breakpoint where the next turn will still have that prefix.** A write costs 1.25x and is read back only by a request repeating the marked prefix byte-for-byte, so marking a message the caller rebuilds each turn is a pure loss; the judge's per-turn instruction once cost the whole transcript, every turn. `volatile_tail` is a required keyword for that reason: say how many trailing messages you rebuild (`0` when the whole list persists). On the Responses path the count is `volatile_items`, not messages, because one tool-calling `Message` renders to several `input` items; convert with `responses_volatile_items`. Never set `ttl`: the 5m default is right, and `1h` costs more and only Anthropic honours it. Do not use the Responses top-level `cache_control` body field, which marks the end of the whole input and so cannot be kept off a rebuilt trailing item (measured: 0 reads).
 - **Mark a render, never a store.** `apply_cache_breakpoints` and `mark_responses_input` return a copy and never mutate. Feed them the freshly rendered `list[dict]` and let the result die with the request. Assigning the marked copy back onto a transcript you keep appending to exceeds Anthropic's 4-breakpoint limit several billed turns in. Annotate the transcript with its real type (`list[ChatCompletionMessageParam]`) so basedpyright refuses the assignment.
 
-### Tests, UI, and docs
+### Tests, UI, docs, and style
 
 - **Test the failure branch you documented.** If the docstring promises degradation to inconclusive, a test exercises it. All-success fakes prove nothing.
 - **Every filtered UI section renders an empty state.** A section that disappears on zero matches is indistinguishable from a bug.
 - **Docs ship in the same change.** A change to a public entry point, option, default, env var, or registry member updates the docs in the same PR, because docs deferred to a follow-up are docs that drift.
+- **Pass arguments by keyword.** Call `f(model=model, max_tokens=512)`, not `f(model, 512)`, because a positional call silently binds the wrong value when a signature gains or reorders a parameter. Positional is fine only where the parameter is positional-only (`len(x)`, `str(x)`, `isinstance(x, T)`).
 - **No drive-by reformatting.** Quote-style and signature re-wrapping in an unrelated file hides the behaviour change and collides with parallel sessions.
 
 ## Judgement calls
