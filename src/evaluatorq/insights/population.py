@@ -96,11 +96,22 @@ async def _load_traces(
     limit: int,
     facets: FacetSelection,
     numeric: NumericFilters,
+    target_trace_ids: set[str] | None = None,
 ) -> tuple[TraceRecord, ...]:
     """Load a population's traces through `OrqTraceSource`; any failure becomes a `PopulationError`."""
     source = OrqTraceSource(orq)
     try:
-        snapshot = await source.load_async(start, end, limit, facets=facets, numeric=numeric)
+        if target_trace_ids is None:
+            snapshot = await source.load_async(start, end, limit, facets=facets, numeric=numeric)
+        else:
+            snapshot = await source.load_async(
+                start,
+                end,
+                limit,
+                facets=facets,
+                numeric=numeric,
+                target_trace_ids=target_trace_ids,
+            )
     except Exception as error:
         raise PopulationError(f'loading the trace population failed: {error}') from error
     finally:
@@ -210,6 +221,7 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
             limit=max(export.limit, len(matched_ids)),
             facets=facets,
             numeric=numeric,
+            target_trace_ids=matched_ids,
         )
         if matched_ids
         else ()

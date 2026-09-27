@@ -22,6 +22,12 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 
+# SciPy's condensed distance matrix grows quadratically. At this limit, the
+# linkage input itself is about 96 MiB; larger populations need a scalable
+# clustering backend rather than silently sampling away traces.
+MAX_LINKAGE_OBSERVATIONS = 5_000
+
+
 @dataclass
 class ClusterTree:
     """Two-level cluster assignment for one discovered dimension's vectors.
@@ -134,6 +140,31 @@ def _relabel_contiguous(labels: NDArray[Any]) -> NDArray[Any]:
     return out
 
 
+def _active_tree_metadata(
+    labels: NDArray[Any], top_of_base: dict[int, int]
+) -> tuple[NDArray[Any], dict[int, int], int, int]:
+    """Keep hierarchy metadata aligned with labels after optional outlier removal."""
+    active_base_ids = sorted(int(label) for label in np.unique(labels) if label != -1)
+    remap = {old_id: new_id for new_id, old_id in enumerate(active_base_ids)}
+    labels = _relabel_contiguous(labels)
+    active_top_ids = sorted({top_of_base[old_id] for old_id in active_base_ids})
+    top_remap = {old_id: new_id for new_id, old_id in enumerate(active_top_ids)}
+    active_top_of_base = {remap[old_id]: top_remap[top_of_base[old_id]] for old_id in active_base_ids}
+    return labels, active_top_of_base, len(active_top_of_base), len(set(active_top_of_base.values()))
+
+
+def _build_cluster_tree(
+    vectors: NDArray[Any],
+    labels: NDArray[Any],
+    top_of_base: dict[int, int],
+    outlier_zscore: float | None,
+) -> ClusterTree:
+    if outlier_zscore is not None:
+        labels = _flag_outliers(vectors, labels, zscore=outlier_zscore)
+    labels, top_of_base, n_base, n_top = _active_tree_metadata(labels, top_of_base)
+    return ClusterTree(base_labels=labels, top_of_base=top_of_base, n_base=n_base, n_top=n_top)
+
+
 def _merge_base_into_nearest_sibling(
     base_labels: NDArray[Any],
     vectors: NDArray[Any],
@@ -191,7 +222,13 @@ def cluster_two_level(
 
     if n < 2 * min_cluster_size:
         base_labels = np.zeros(n, dtype=int)
-        return ClusterTree(base_labels=base_labels, top_of_base={0: 0}, n_base=1, n_top=1)
+        return _build_cluster_tree(normed, base_labels, {0: 0}, outlier_zscore)
+
+    if n > MAX_LINKAGE_OBSERVATIONS:
+        raise ValueError(
+            f'clustering supports at most {MAX_LINKAGE_OBSERVATIONS} traces per population; '
+            'reduce the requested trace window or use a scalable clustering backend'
+        )
 
     z_base = linkage(normed, method='ward')
     k_max_base = min(max_clusters * max_subclusters, n // min_cluster_size)
@@ -205,10 +242,7 @@ def cluster_two_level(
     if n_base < 2:
         base_labels = _relabel_contiguous(base_labels)
         top_of_base = {new: 0 for new in range(n_base)}
-        result_labels = base_labels
-        if outlier_zscore is not None:
-            result_labels = _flag_outliers(normed, result_labels, zscore=outlier_zscore)
-        return ClusterTree(base_labels=result_labels, top_of_base=top_of_base, n_base=n_base, n_top=1)
+        return _build_cluster_tree(normed, base_labels, top_of_base, outlier_zscore)
 
     centroid_matrix = np.array([base_cents[b] for b in base_ids])
     z_top = linkage(centroid_matrix, method='ward')
@@ -247,13 +281,4 @@ def cluster_two_level(
     top_remap = {old: new for new, old in enumerate(top_ids_used)}
     top_of_base = {b: top_remap[t] for b, t in top_of_base.items()}
 
-    result_labels = base_labels
-    if outlier_zscore is not None:
-        result_labels = _flag_outliers(normed, result_labels, zscore=outlier_zscore)
-
-    return ClusterTree(
-        base_labels=result_labels,
-        top_of_base=top_of_base,
-        n_base=len(top_of_base),
-        n_top=len(top_ids_used),
-    )
+    return _build_cluster_tree(normed, base_labels, top_of_base, outlier_zscore)

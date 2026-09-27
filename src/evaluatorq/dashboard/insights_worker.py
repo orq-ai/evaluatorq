@@ -72,6 +72,7 @@ def main() -> int:
                     run_name=payload.run_name,
                     runs_dir=payload.runs_dir,
                     _run_id=payload.run_id,
+                    _finder_export_source=Path(spec.finder_export),
                 )
             )
         else:

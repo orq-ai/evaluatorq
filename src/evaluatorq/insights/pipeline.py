@@ -128,7 +128,7 @@ def _stage_end(writer: Any, name: str, error: str | None = None) -> None:
 def _dimension_failed_count(traces: list[TraceInsight], dimension: DimensionName) -> int:
     """Count traces unclassified by this dimension, not unrelated label or match errors."""
     key = f'dimension:{dimension}'
-    return sum('summary' in trace.errors or key in trace.errors for trace in traces)
+    return sum(key in trace.errors for trace in traces)
 
 
 async def _build_dimension(  # noqa: C901
@@ -390,6 +390,7 @@ async def insights(  # noqa: C901
     run_name: str | None = None,
     runs_dir: Path | None = None,
     _run_id: str | None = None,
+    _finder_export_source: Path | None = None,
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:
@@ -474,6 +475,8 @@ async def insights(  # noqa: C901
                 'n_matched': len(resolved.traces) if resolved.compiled is None else 0,
                 'n_failed_match': 0,
             }
+            if _finder_export_source is not None and population.finder_export is not None:
+                run.population['finder_export'] = str(_finder_export_source)
             run.traces = [
                 TraceInsight(
                     trace_id=trace.trace_id,

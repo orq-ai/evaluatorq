@@ -202,11 +202,12 @@ class OrqTraceSource:
         *,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None = None,
     ) -> Snapshot:
-        """Load at most 5000 usable traces in deterministic newest-first order."""
+        """Load at most 5000 traces, optionally scanning for specific IDs, newest first."""
 
         try:
-            return await self._load_with_lifecycle(start, end, limit, facets, numeric)
+            return await self._load_with_lifecycle(start, end, limit, facets, numeric, target_trace_ids)
         except OrqSourceError:
             raise
         except Exception as error:
@@ -219,11 +220,12 @@ class OrqTraceSource:
         limit: int,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None,
     ) -> Snapshot:
         if self._owns_client:
             async with self._client:
-                return await self._validated_load(start, end, limit, facets, numeric)
-        return await self._validated_load(start, end, limit, facets, numeric)
+                return await self._validated_load(start, end, limit, facets, numeric, target_trace_ids)
+        return await self._validated_load(start, end, limit, facets, numeric, target_trace_ids)
 
     async def _validated_load(
         self,
@@ -232,6 +234,7 @@ class OrqTraceSource:
         limit: int,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None,
     ) -> Snapshot:
         if limit < 1:
             raise OrqSourceError('limit must be at least 1')
@@ -239,7 +242,14 @@ class OrqTraceSource:
         resolved_start = _aware_bound(start, 'start') if start is not None else resolved_end - DEFAULT_LOOKBACK
         if resolved_start > resolved_end:
             raise OrqSourceError('start must not be after end')
-        return await self._load(resolved_start, resolved_end, min(limit, MAX_LIVE_TRACES), facets, numeric)
+        return await self._load(
+            resolved_start,
+            resolved_end,
+            min(limit, MAX_LIVE_TRACES),
+            facets,
+            numeric,
+            target_trace_ids,
+        )
 
     async def _load(
         self,
@@ -248,6 +258,7 @@ class OrqTraceSource:
         limit: int,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None = None,
     ) -> Snapshot:
         project_names = await _project_names(self._client)
         oql = build_oql(facets, numeric, project_names)
@@ -259,12 +270,13 @@ class OrqTraceSource:
         wrong_project_count = 0
         fallback_count = 0
         scanned_count = 0
-        max_scanned = max(PAGE_SIZE, limit * 5)
+        targets = set(target_trace_ids) if target_trace_ids is not None else None
+        max_scanned = MAX_LIVE_TRACES if targets is not None else max(PAGE_SIZE, limit * 5)
         pages_scanned = 0
         max_pages = max(20, (max_scanned + PAGE_SIZE - 1) // PAGE_SIZE * 2)
         page_token: str | None = None
 
-        while len(records) < limit:
+        while not _load_target_reached(records, limit, targets):
             if scanned_count >= max_scanned or pages_scanned >= max_pages:
                 logger.warning(
                     'stopped trace search after scanning {} summaries across {} pages for {} usable traces',
@@ -278,7 +290,11 @@ class OrqTraceSource:
                 if page_token in used_tokens:
                     raise OrqSourceError(f'repeated OQL page token {page_token!r}')
                 used_tokens.add(page_token)
-            page_limit = min(PAGE_SIZE, limit - len(records))
+            page_limit = (
+                min(PAGE_SIZE, max_scanned - scanned_count)
+                if targets is not None
+                else min(PAGE_SIZE, limit - len(records))
+            )
             registration = self._registration
             marker = _CAPTURE_REQUEST.set(object()) if registration is not None else None
             try:
@@ -318,11 +334,13 @@ class OrqTraceSource:
             unique_summaries, rejected = _select_summaries(summaries, raw_by_id, seen_trace_ids, facets.project_id)
             wrong_project_count += rejected
 
+            unique_summaries = _matching_targets(unique_summaries, targets)
+
             hydrated = await self._hydrate_page(unique_summaries, project_names, semaphore)
             fallback_count += sum(result[1] for result in hydrated)
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
-            if len(records) >= limit:
+            if targets is None and len(records) >= limit:
                 break
 
             has_more = bool(_field(search, 'has_more'))
@@ -483,6 +501,20 @@ def _select_summaries(
             continue
         selected.append((summary, raw, raw_summary is None))
     return selected, rejected
+
+
+def _load_target_reached(records: list[TraceRecord], limit: int, targets: set[str] | None) -> bool:
+    """Stop at the normal usable-record limit or once every requested ID was hydrated."""
+    if targets is None:
+        return len(records) >= limit
+    return targets.issubset({record.trace_id for record in records})
+
+
+def _matching_targets(summaries: list[tuple[Any, Any, bool]], targets: set[str] | None) -> list[tuple[Any, Any, bool]]:
+    """Keep every summary normally and only requested IDs on targeted reloads."""
+    if targets is None:
+        return summaries
+    return [item for item in summaries if str(_field(item[0], 'trace_id') or _field(item[0], 'id')) in targets]
 
 
 def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Mapping[str, str]) -> str:

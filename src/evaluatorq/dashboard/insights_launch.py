@@ -35,11 +35,35 @@ MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
 # runs before importing the package worker, then edits the already-created
 # manifest if Python cannot import the worker or its dependencies.
 _WORKER_BOOTSTRAP = """
-import datetime, json, os, runpy, tempfile
+import datetime, json, os, runpy, stat, tempfile
 manifest = os.environ.get("EVALUATORQ_INSIGHTS_MANIFEST")
+request = os.environ.get("EVALUATORQ_INSIGHTS_LAUNCH_REQUEST")
+def cleanup_snapshot():
+    try:
+        snapshot = json.loads(request or "{}").get("finder_export_snapshot")
+        if not isinstance(snapshot, str) or os.path.basename(snapshot) != "finder-export.json":
+            return
+        directory = os.path.dirname(snapshot)
+        if not os.path.exists(directory):
+            return
+        info = os.stat(directory, follow_symlinks=False)
+        if (os.path.islink(directory) or not os.path.basename(directory).startswith("evaluatorq-finder-snapshot-")
+                or os.path.dirname(os.path.realpath(directory)) != os.path.realpath(tempfile.gettempdir())
+                or (os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o700)
+                or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+            return
+        if os.path.islink(snapshot) or not os.path.isfile(snapshot):
+            return
+        os.unlink(snapshot)
+        os.rmdir(directory)
+    except (OSError, ValueError, TypeError) as cleanup_error:
+        print(f"Could not remove validated Finder snapshot: {cleanup_error}", file=__import__("sys").stderr)
 try:
     runpy.run_module("evaluatorq.dashboard.insights_worker", run_name="__main__")
 except BaseException as exc:
+    if isinstance(exc, SystemExit) and exc.code in (None, 0):
+        raise
+    cleanup_snapshot()
     if manifest:
         try:
             with open(manifest, encoding="utf-8") as source:

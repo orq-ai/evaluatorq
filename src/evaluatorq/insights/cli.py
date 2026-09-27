@@ -84,6 +84,16 @@ def _validate_finder_export(path: Path) -> None:
         raise ValueError(f'could not read a valid finder export from {path}: {exc}') from exc
 
 
+def _duplicate_dimensions(names: tuple[str, ...]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for name in names:
+        if name in seen:
+            duplicates.add(name)
+        seen.add(name)
+    return sorted(duplicates)
+
+
 def _print_run(run: InsightsRun, run_path: Path | None) -> None:
     console = Console()
     for name, dimension in run.dimensions.items():
@@ -239,6 +249,10 @@ def insights_cmd(
     invalid_dimensions = sorted(set(raw_dimensions) - set(_DIMENSIONS))
     if invalid_dimensions:
         emit_error(f'unknown dimension(s): {", ".join(invalid_dimensions)}')
+        raise typer.Exit(code=2)
+    duplicate_dimensions = _duplicate_dimensions(raw_dimensions)
+    if duplicate_dimensions:
+        emit_error(f'--dimension cannot be repeated: {", ".join(sorted(duplicate_dimensions))}')
         raise typer.Exit(code=2)
     dimensions = cast('tuple[DimensionName, ...]', raw_dimensions)
     if priority_dimension not in _DIMENSIONS:

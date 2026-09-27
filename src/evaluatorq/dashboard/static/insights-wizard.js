@@ -89,7 +89,10 @@
       return name === 'sentiment' && !selected('labels').includes(name) ? 'sentiment (added automatically)' : name;
     });
     const summary = document.createElement('p');
-    summary.textContent = 'Source: ' + (source === 'query' ? 'Search by question' : source === 'finder' ? 'Finder export' : 'Recent traces') +
+    let sourceLabel = 'Recent traces';
+    if (source === 'query') sourceLabel = 'Search by question';
+    else if (source === 'finder') sourceLabel = 'Finder export';
+    summary.textContent = 'Source: ' + sourceLabel +
       ' · Labels: ' + (displayedLabels.join(', ') || 'none') + ' · Dimensions: ' + (dimensions.join(', ') || 'none');
     const facets = document.createElement('p');
     const selectedFacets = Array.from(facetOptions.querySelectorAll('input[name^="facet_"]:checked')).map(function (input) {

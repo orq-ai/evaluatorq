@@ -68,9 +68,23 @@ class FakeSource:
         del orq
 
     async def load_async(
-        self, start: Any, end: Any, limit: Any, *, facets: FacetSelection, numeric: NumericFilters
+        self,
+        start: Any,
+        end: Any,
+        limit: Any,
+        *,
+        facets: FacetSelection,
+        numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None = None,
     ) -> Snapshot:
-        FakeSource.calls.append({'start': start, 'end': end, 'limit': limit, 'facets': facets, 'numeric': numeric})
+        FakeSource.calls.append({
+            'start': start,
+            'end': end,
+            'limit': limit,
+            'facets': facets,
+            'numeric': numeric,
+            'target_trace_ids': target_trace_ids,
+        })
         return FakeSource.snapshot
 
     def close(self) -> None:
@@ -301,6 +315,7 @@ async def test_export_path_reloads_merged_filters_and_pinned_time_range(
     assert call['numeric'].tokens_max == 300
     assert call['start'] < export.traces[0].timestamp < call['end']
     assert call['limit'] == export.limit
+    assert call['target_trace_ids'] == {'t1'}
     assert [trace.trace_id for trace in resolved.traces] == ['t1']
 
 

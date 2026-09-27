@@ -1,6 +1,6 @@
 """Local sqlite cache for trace summaries and embedding vectors.
 
-One connection per `InsightsCache` instance. Summary operations may run in worker
+One connection per `InsightsCache` instance. Database operations may run in worker
 threads and are serialized by a lock; each `put_*` call is a single batched
 transaction. No retry layer here — a cache miss is always safe (the caller
 recomputes), so `sqlite3.Error` degrades to a miss with a `logger.warning`.
@@ -86,7 +86,7 @@ class InsightsCache:
     """
 
     def __init__(self, path: Path | None = None, *, enabled: bool = True) -> None:
-        self._summary_lock = RLock()
+        self._lock = RLock()
         self._conn: sqlite3.Connection | None = None
         if not enabled:
             return
@@ -106,7 +106,7 @@ class InsightsCache:
 
     def get_summary(self, trace_id: str, span_id: str, model: str, prompt_hash_value: str) -> TraceSummary | None:
         """Look up a cached summary; a miss on any of trace/span/model/prompt-hash returns None."""
-        with self._summary_lock:
+        with self._lock:
             if self._conn is None:
                 return None
             try:
@@ -129,7 +129,7 @@ class InsightsCache:
         self, trace_id: str, span_id: str, model: str, prompt_hash_value: str, summary: TraceSummary
     ) -> None:
         """Cache a summary keyed on (trace_id, span_id, model, prompt_hash); no-op if disabled."""
-        with self._summary_lock:
+        with self._lock:
             if self._conn is None:
                 return
             try:
@@ -144,28 +144,29 @@ class InsightsCache:
 
     def get_vectors(self, model: str, texts: Iterable[str]) -> dict[str, list[float]]:
         """Return the subset of `texts` found in the cache for `model`, keyed by the original text."""
-        if self._conn is None:
-            return {}
         texts = list(texts)
         if not texts:
             return {}
         hash_to_text = {_text_hash(text): text for text in texts}
-        try:
-            rows = []
-            hashes = list(hash_to_text)
-            for start in range(0, len(hashes), _VECTOR_QUERY_CHUNK_SIZE):
-                chunk = hashes[start : start + _VECTOR_QUERY_CHUNK_SIZE]
-                placeholders = ','.join('?' for _ in chunk)
-                # Only '?' placeholders are interpolated here; caller text stays bound.
-                rows.extend(
-                    self._conn.execute(
-                        f'SELECT text_hash, vector FROM vectors WHERE model = ? AND text_hash IN ({placeholders})',  # noqa: S608
-                        (model, *chunk),
-                    ).fetchall()
-                )
-        except sqlite3.Error as exc:
-            logger.warning(f'InsightsCache.get_vectors: {exc}; treating as a miss')
-            return {}
+        with self._lock:
+            if self._conn is None:
+                return {}
+            try:
+                rows = []
+                hashes = list(hash_to_text)
+                for start in range(0, len(hashes), _VECTOR_QUERY_CHUNK_SIZE):
+                    chunk = hashes[start : start + _VECTOR_QUERY_CHUNK_SIZE]
+                    placeholders = ','.join('?' for _ in chunk)
+                    # Only '?' placeholders are interpolated here; caller text stays bound.
+                    rows.extend(
+                        self._conn.execute(
+                            f'SELECT text_hash, vector FROM vectors WHERE model = ? AND text_hash IN ({placeholders})',  # noqa: S608
+                            (model, *chunk),
+                        ).fetchall()
+                    )
+            except sqlite3.Error as exc:
+                logger.warning(f'InsightsCache.get_vectors: {exc}; treating as a miss')
+                return {}
         result: dict[str, list[float]] = {}
         invalid_count = 0
         first_error: str | None = None
@@ -189,8 +190,6 @@ class InsightsCache:
 
     def put_vectors(self, model: str, vectors: dict[str, list[float]]) -> None:
         """Cache embedding vectors keyed on (model, sha256(text)); no-op if disabled."""
-        if self._conn is None:
-            return
         if not vectors:
             return
         rows = []
@@ -210,18 +209,21 @@ class InsightsCache:
             )
         if not rows:
             return
-        try:
-            with self._conn:
-                self._conn.executemany(
-                    'INSERT OR REPLACE INTO vectors (model, text_hash, vector) VALUES (?, ?, ?)',
-                    rows,
-                )
-        except sqlite3.Error as exc:
-            logger.warning(f'InsightsCache.put_vectors: {exc}; {len(rows)} vector(s) not cached')
+        with self._lock:
+            if self._conn is None:
+                return
+            try:
+                with self._conn:
+                    self._conn.executemany(
+                        'INSERT OR REPLACE INTO vectors (model, text_hash, vector) VALUES (?, ?, ?)',
+                        rows,
+                    )
+            except sqlite3.Error as exc:
+                logger.warning(f'InsightsCache.put_vectors: {exc}; {len(rows)} vector(s) not cached')
 
     def close(self) -> None:
         """Close the underlying connection; safe to call on a disabled or already-closed cache."""
-        with self._summary_lock:
+        with self._lock:
             if self._conn is not None:
                 self._conn.close()
                 self._conn = None

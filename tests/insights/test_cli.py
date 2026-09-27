@@ -143,6 +143,23 @@ def test_repeated_labels_resolve_preset_and_json_spec(
     assert [spec.name for spec in captured['labels']] == ['sentiment', 'tier']
 
 
+def test_repeated_dimensions_are_rejected_before_pipeline_runs(monkeypatch: Any) -> None:
+    invoked: list[bool] = []
+
+    async def fake_insights(population: Any, **kwargs: Any) -> Any:
+        invoked.append(True)
+        raise AssertionError('pipeline must not run for duplicate dimensions')
+
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    result = CliRunner().invoke(
+        _app(), ['insights', '--dimension', 'intent', '--dimension', 'intent']
+    )
+
+    assert result.exit_code == 2, result.output
+    assert '--dimension cannot be repeated: intent' in unstyle(result.output)
+    assert invoked == []
+
+
 def test_error_run_exits_one(monkeypatch: Any, minimal_run: Any) -> None:
     async def fake_insights(population: Any, **kwargs: Any) -> Any:
         return minimal_run.model_copy(update={'status': 'error'})

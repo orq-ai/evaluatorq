@@ -78,12 +78,18 @@ def test_spawn_failure_is_visible_in_manifest(tmp_path: Path) -> None:
 
 
 def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
     import runpy
+    import tempfile
 
-    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV
+    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV
 
     writer = start_manifest(run_id='import-failure', surface='insights', run_name='demo', runs_dir=tmp_path)
     monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+    snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+    snapshot_path = snapshot_directory / 'finder-export.json'
+    snapshot_path.write_text('{}', encoding='utf-8')
+    monkeypatch.setenv(_REQUEST_ENV, json.dumps({'finder_export_snapshot': str(snapshot_path)}))
 
     def fail_import(*args, **kwargs):
         raise ImportError('missing optional dependency')
@@ -95,6 +101,28 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
     assert manifest.status == 'error'
     assert manifest.stage == 'setup'
     assert manifest.error is not None and 'missing optional dependency' in manifest.error
+    assert not snapshot_directory.exists()
+
+
+def test_successful_worker_exit_does_not_recover_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+
+    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV
+
+    writer = start_manifest(run_id='worker-success', surface='insights', run_name='demo', runs_dir=tmp_path)
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+    monkeypatch.setenv(_REQUEST_ENV, '{invalid request')
+
+    def exit_cleanly(*args, **kwargs):
+        raise SystemExit(0)
+
+    monkeypatch.setattr(runpy, 'run_module', exit_cleanly)
+
+    with pytest.raises(SystemExit) as exit_info:
+        exec(_WORKER_BOOTSTRAP, {})
+
+    assert exit_info.value.code == 0
+    assert list_manifests(tmp_path)[0].status == 'running'
 
 
 def test_worker_payload_decode_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,12 +221,14 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert payload.finder_export_snapshot.read_text(encoding='utf-8') == approved_export
 
     consumed: list[str] = []
+    consumed_source: list[Path | None] = []
 
     async def capture_population(population, **kwargs):
         from evaluatorq.common.run_manifest import ManifestWriter
         from evaluatorq.contracts import RunManifest
 
         assert population.finder_export is not None
+        consumed_source.append(kwargs.get('_finder_export_source'))
         consumed.append(population.finder_export.read_text(encoding='utf-8'))
         manifest_path = tmp_path / 'runs' / '.manifests' / f'{payload.run_id}.json'
         manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
@@ -209,6 +239,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     monkeypatch.setenv(_REQUEST_ENV, payload_json)
     assert insights_worker.main() == 0
     assert consumed == [approved_export]
+    assert consumed_source == [export_path]
     assert not payload.finder_export_snapshot.exists()
     assert list_manifests(tmp_path / 'runs')[0].status == 'completed'
 

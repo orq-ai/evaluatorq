@@ -234,6 +234,29 @@ async def test_loads_pages_newest_first_and_uses_bounded_requests() -> None:
 
 
 @pytest.mark.asyncio
+async def test_targeted_load_scans_past_unrelated_summaries_without_hydrating_them() -> None:
+    traces = FakeTraces({
+        None: ([summary('newer-a', messages=[]), summary('newer-b', messages=[])], True, 'page-2'),
+        'page-2': ([summary('pinned', minute=1)], False, None),
+    })
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'pinned'},
+    )
+
+    assert [trace.trace_id for trace in snapshot.traces] == ['pinned']
+    assert [call['page_token'] for call in traces.query_calls] == [None, 'page-2']
+    assert all(call['limit'] == 200 for call in traces.query_calls)
+    assert not traces.list_span_calls
+    assert not traces.get_span_calls
+
+
+@pytest.mark.asyncio
 async def test_populates_summary_metadata_without_listing_spans() -> None:
     trace = summary('complete', messages=user_messages('from summary'))
     trace.agent_name = 'support-agent'

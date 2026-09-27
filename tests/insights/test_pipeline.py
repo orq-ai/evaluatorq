@@ -9,7 +9,16 @@ import pytest
 
 from evaluatorq.contracts import Usage
 from evaluatorq.insights import pipeline
-from evaluatorq.insights.models import Cluster, DimensionName, DimensionResult, LabelAnswer, TraceSummary
+from evaluatorq.insights.models import (
+    Cluster,
+    DimensionName,
+    DimensionResult,
+    InsightsPopulation,
+    InsightsRun,
+    LabelAnswer,
+    TraceInsight,
+    TraceSummary,
+)
 from evaluatorq.insights.population import ResolvedPopulation
 from evaluatorq.trace_finder.models import TraceRecord
 
@@ -28,6 +37,16 @@ def _trace(i: int) -> TraceRecord:
         product='p',
         trace_type='chat',
     )
+
+
+def test_dimension_failure_count_excludes_run_wide_summary_errors() -> None:
+    source = _trace(1)
+    summary_failed = TraceInsight(trace_id=source.trace_id, span_id=source.span_id, timestamp=source.timestamp)
+    summary_failed.errors['summary'] = 'summary model unavailable'
+    dimension_failed = TraceInsight(trace_id='trace-2', span_id='span-2', timestamp=source.timestamp)
+    dimension_failed.errors['dimension:intent'] = 'embedding unavailable'
+
+    assert pipeline._dimension_failed_count([summary_failed, dimension_failed], 'intent') == 1
 
 
 def _patch_clients(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -117,6 +136,40 @@ async def test_finder_missing_traces_are_visible_in_run_warnings(monkeypatch: py
 
     assert run.status == 'completed'
     assert '3 of 4 matched Finder traces could not be reloaded from Orq; 1 trace will be analyzed.' in run.warnings
+
+
+@pytest.mark.asyncio
+async def test_dashboard_finder_snapshot_records_original_export_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(1)]
+
+    async def resolve(*args, **kwargs):
+        return ResolvedPopulation(
+            traces=traces,
+            compiled=None,
+            echo={'mode': 'export', 'finder_export': str(tmp_path / 'private-snapshot.json')},
+            n_scanned=1,
+        )
+
+    monkeypatch.setattr(pipeline, 'resolve_population', resolve)
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+    original = tmp_path / 'finder-exports' / 'trace-finder-saved.json'
+
+    run = await pipeline.insights(
+        InsightsPopulation.from_finder_export(tmp_path / 'private-snapshot.json'),
+        _finder_export_source=original,
+        dimensions=(),
+        labels=(),
+        runs_dir=tmp_path,
+    )
+
+    assert run.status == 'completed'
+    assert run.population['finder_export'] == str(original)
+    saved = next(tmp_path.glob('insights_*.json'))
+    assert InsightsRun.model_validate_json(saved.read_text(encoding='utf-8')).population['finder_export'] == str(original)
 
 
 @pytest.mark.asyncio
@@ -557,7 +610,9 @@ async def test_every_summary_failing_fails_the_run(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.asyncio
-async def test_failed_summaries_are_not_counted_as_no_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_failed_summaries_are_not_counted_as_dimension_failures_or_no_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from openai import AsyncOpenAI
 
     from evaluatorq.insights.cache import InsightsCache
@@ -596,7 +651,7 @@ async def test_failed_summaries_are_not_counted_as_no_signal(monkeypatch: pytest
     finally:
         cache.close()
     assert result.n_no_signal == 4
-    assert result.n_failed == 2
+    assert result.n_failed == 0
 
 
 @pytest.mark.asyncio

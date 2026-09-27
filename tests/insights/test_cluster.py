@@ -8,16 +8,21 @@ import numpy as np
 import pytest
 from numpy.typing import NDArray
 
-from evaluatorq.insights.cluster import ClusterTree, cluster_two_level, nearest_neighbours
+from evaluatorq.insights.cluster import (
+    MAX_LINKAGE_OBSERVATIONS,
+    ClusterTree,
+    cluster_two_level,
+    nearest_neighbours,
+)
 
 
-def _blobs(n_blobs: int, n_per_blob: int, dim: int = 32, spread: float = 0.3, seed: int = 0) -> tuple[NDArray[Any], NDArray[Any]]:
+def _blobs(
+    n_blobs: int, n_per_blob: int, dim: int = 32, spread: float = 0.3, seed: int = 0
+) -> tuple[NDArray[Any], NDArray[Any]]:
     """`n_blobs` well-separated gaussian blobs in `dim`-d space, plus their true labels."""
     rng = np.random.default_rng(seed)
     centers = rng.normal(scale=8.0, size=(n_blobs, dim))
-    vectors = np.concatenate(
-        [centers[i] + rng.normal(scale=spread, size=(n_per_blob, dim)) for i in range(n_blobs)]
-    )
+    vectors = np.concatenate([centers[i] + rng.normal(scale=spread, size=(n_per_blob, dim)) for i in range(n_blobs)])
     true_labels = np.repeat(np.arange(n_blobs), n_per_blob)
     return vectors, true_labels
 
@@ -63,6 +68,9 @@ def test_far_point_flagged_as_outlier_with_zscore():
     vectors = _blobs_with_within_cluster_outlier()
     tree = cluster_two_level(vectors, min_cluster_size=5, outlier_zscore=2.0)
     assert tree.base_labels[0] == -1
+    assert {label for label in tree.base_labels if label != -1} == set(tree.top_of_base)
+    assert tree.n_base == len(tree.top_of_base)
+    assert tree.n_top == len(set(tree.top_of_base.values()))
 
 
 def test_no_outlier_zscore_never_flags_noise():
@@ -99,6 +107,71 @@ def test_below_two_times_min_cluster_size_is_one_cluster():
     assert tree.n_base == 1
     assert tree.n_top == 1
     assert tree.top_of_base == {0: 0}
+
+
+@pytest.mark.parametrize('path', ['single_base', 'multi_base'])
+def test_all_outliers_leave_empty_hierarchy_metadata(monkeypatch, path):
+    if path == 'single_base':
+        vectors = np.ones((12, 8))
+    else:
+        vectors, _ = _blobs(n_blobs=3, n_per_blob=10)
+
+    def flag_everything(_vectors, labels, *, zscore):
+        del zscore
+        return np.full_like(labels, -1)
+
+    monkeypatch.setattr('evaluatorq.insights.cluster._flag_outliers', flag_everything)
+    tree = cluster_two_level(vectors, min_cluster_size=5, outlier_zscore=2.0)
+
+    assert set(tree.base_labels.tolist()) == {-1}
+    assert tree.top_of_base == {}
+    assert tree.n_base == 0
+    assert tree.n_top == 0
+
+
+def test_low_sample_fallback_applies_outlier_metadata_consistently(monkeypatch):
+    def flag_everything(_vectors, labels, *, zscore):
+        del zscore
+        return np.full_like(labels, -1)
+
+    monkeypatch.setattr('evaluatorq.insights.cluster._flag_outliers', flag_everything)
+    tree = cluster_two_level(np.ones((9, 8)), min_cluster_size=5, outlier_zscore=2.0)
+
+    assert set(tree.base_labels.tolist()) == {-1}
+    assert tree.top_of_base == {}
+    assert tree.n_base == 0
+    assert tree.n_top == 0
+
+
+def test_removed_base_clusters_keep_their_original_top_assignments(monkeypatch):
+    vectors, _ = _blobs(n_blobs=4, n_per_blob=20)
+    baseline = cluster_two_level(vectors, min_cluster_size=5)
+    removed_id = min(baseline.top_of_base)
+    surviving_old_ids = sorted(set(baseline.top_of_base) - {removed_id})
+    old_to_new = {old_id: new_id for new_id, old_id in enumerate(surviving_old_ids)}
+    surviving_top_ids = sorted({baseline.top_of_base[old_id] for old_id in surviving_old_ids})
+    top_to_new = {old_id: new_id for new_id, old_id in enumerate(surviving_top_ids)}
+
+    def remove_first_base(_vectors, labels, *, zscore):
+        del zscore
+        out = labels.copy()
+        out[labels == removed_id] = -1
+        return out
+
+    monkeypatch.setattr('evaluatorq.insights.cluster._flag_outliers', remove_first_base)
+    tree = cluster_two_level(vectors, min_cluster_size=5, outlier_zscore=2.0)
+
+    assert tree.top_of_base == {
+        old_to_new[old_id]: top_to_new[baseline.top_of_base[old_id]] for old_id in surviving_old_ids
+    }
+    assert {label for label in tree.base_labels if label != -1} == set(tree.top_of_base)
+
+
+def test_linkage_population_bound_rejects_without_dropping_traces():
+    vectors = np.ones((MAX_LINKAGE_OBSERVATIONS + 1, 2))
+
+    with pytest.raises(ValueError, match=f'at most {MAX_LINKAGE_OBSERVATIONS} traces'):
+        cluster_two_level(vectors, min_cluster_size=1)
 
 
 @pytest.mark.parametrize('n_blobs,n_per_blob', [(3, 8), (5, 6)])
