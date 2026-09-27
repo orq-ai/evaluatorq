@@ -78,7 +78,7 @@ def progress(manifest: RunManifest | None) -> str:
     for name in planned:
         record = records.get(name)
         status = (
-            str(record.status)
+            record.status.value
             if record is not None
             else 'error'
             if manifest.status == 'error' and name == manifest.stage
@@ -91,7 +91,7 @@ def progress(manifest: RunManifest | None) -> str:
             f'<li class="insights-stage {esc(status)}"><span class="insights-stage-mark" aria-hidden="true"></span>'
             f'<span>{esc(label)}</span><small>{esc(status)}</small></li>'
         )
-    current = _stage_name(manifest) if manifest.status == 'running' else str(manifest.status).title()
+    current = _stage_name(manifest) if manifest.status == 'running' else manifest.status.value.title()
     list_html = ''.join(items) or '<li class="insights-stage pending">Preparing run</li>'
     return (
         '<section class="insights-progress" aria-label="Run progress">'

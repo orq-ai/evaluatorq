@@ -63,13 +63,13 @@ def _entries(
             loaded[path.stem] = (path, run)
         loaded[path.stem] = (path, run)
     manifests = list_manifests(directory)
-    manifest_by_id = {manifest.run_id: manifest for manifest in manifests if str(manifest.surface) == 'insights'}
+    manifest_by_id = {manifest.run_id: manifest for manifest in manifests if manifest.surface.value == 'insights'}
     known = {item[0] for item in entries}
     manifest_entries = []
     for manifest in manifests:
-        if str(manifest.surface) != 'insights' or manifest.run_id in known:
+        if manifest.surface.value != 'insights' or manifest.run_id in known:
             continue
-        status = str(manifest.status)
+        status = manifest.status.value
         manifest_entries.append((manifest.run_id, manifest.run_name, status))
         loaded[manifest.run_id] = (directory / f'{manifest.run_id}.json', status)
     return manifest_entries + entries, loaded, manifest_by_id
