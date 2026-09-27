@@ -14,7 +14,12 @@ from starlette.testclient import TestClient
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.insights_launch import InsightsLaunchPayload, InsightsLaunchSpec, launch_insights
+from evaluatorq.dashboard.insights_launch import (
+    MAX_FINDER_EXPORT_BYTES,
+    InsightsLaunchPayload,
+    InsightsLaunchSpec,
+    launch_insights,
+)
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, SENTIMENT
 from evaluatorq.insights.progress import stage_plan
@@ -109,6 +114,17 @@ def test_dashboard_finder_export_must_be_in_approved_directory(
     for path in (str(outside), '../outside.json', 'link.json'):
         with pytest.raises(ValidationError, match='Finder exports must be in'):
             InsightsLaunchSpec(source='finder', finder_export=path)
+
+
+def test_dashboard_finder_export_is_size_limited(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    oversized = exports / 'large.json'
+    oversized.write_bytes(b' ' * (MAX_FINDER_EXPORT_BYTES + 1))
+
+    with pytest.raises(ValidationError, match='exceeds the 10 MiB size limit'):
+        InsightsLaunchSpec(source='finder', finder_export='large.json')
 
 
 def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> None:
@@ -207,6 +223,28 @@ def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_pat
     assert resolve.call_count == 2
     assert resolve.call_args_list[0].args[0] == 'first-key'
     assert resolve.call_args_list[1].args[0] == 'second-key'
+
+
+def test_facet_cache_key_tracks_same_profile_credentials_and_endpoint(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'same'})
+    getattr(client.app, 'state').finder_profile = OrqProfile('same', 'first-secret', 'https://first.example', False)
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        client.get('/insights/facets?window_days=7')
+        getattr(client.app, 'state').finder_profile = OrqProfile('same', 'second-secret', 'https://second.example', False)
+        client.get('/insights/facets?window_days=7')
+
+    assert resolve.call_count == 2
+    cache = getattr(client.app, 'state').insights_facet_catalogues
+    assert 'first-secret' not in repr(cache)
+    assert 'second-secret' not in repr(cache)
 
 
 def test_facet_options_use_selected_window_and_keep_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

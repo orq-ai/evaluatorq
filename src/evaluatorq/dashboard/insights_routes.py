@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -98,8 +101,15 @@ async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
     except ValueError as exc:
         logger.warning('Insights facet values are unavailable: {}', exc)
         return None
-    cache_key = (profile.name if profile else None, window_days)
-    cache: dict[tuple[str | None, int], tuple[datetime, FacetCatalogue | None]] = getattr(
+    server = (
+        (profile.server or DEFAULT_ORQ_BASE_URL)
+        if profile
+        else (os.environ.get('ORQ_BASE_URL') or DEFAULT_ORQ_BASE_URL)
+    )
+    api_key = profile.api_key if profile else os.environ.get('ORQ_API_KEY', '')
+    credential_fingerprint = hashlib.sha256(f'{server}\0{api_key}'.encode()).hexdigest()
+    cache_key = (profile.name if profile else None, credential_fingerprint, window_days)
+    cache: dict[tuple[str | None, str, int], tuple[datetime, FacetCatalogue | None]] = getattr(
         app.state, 'insights_facet_catalogues', {}
     )
     cached = cache.get(cache_key)
@@ -107,10 +117,7 @@ async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
         return cached[1]
     orq = None
     try:
-        orq = resolve_orq_client(
-            profile.api_key if profile else None,
-            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-        )
+        orq = resolve_orq_client(profile.api_key if profile else None, base_url=server)
         catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
     except Exception as exc:  # noqa: BLE001 — provider errors render a visible unavailable state
         logger.warning('Insights facet values are unavailable for the {}-day window: {}', window_days, exc)
@@ -161,18 +168,21 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if rejected:
             return _html(new_run_page(error=rejected), 403)
         try:
-            spec = InsightsLaunchSpec.model_validate({
-                'name': form.get('name', ''),
-                'source': form.get('source', 'recent'),
-                'query': form.get('query', ''),
-                'finder_export': form.get('finder_export', ''),
-                'window_days': form.get('window_days', 7),
-                'limit': form.get('limit', 100),
-                'facets': {name: form.getlist(f'facet_{name}') for name in FACET_NAMES},
-                'parallelism': form.get('parallelism', 20),
-                'labels': form.getlist('labels'),
-                'dimensions': form.getlist('dimensions'),
-            })
+            spec = await asyncio.to_thread(
+                InsightsLaunchSpec.model_validate,
+                {
+                    'name': form.get('name', ''),
+                    'source': form.get('source', 'recent'),
+                    'query': form.get('query', ''),
+                    'finder_export': form.get('finder_export', ''),
+                    'window_days': form.get('window_days', 7),
+                    'limit': form.get('limit', 100),
+                    'facets': {name: form.getlist(f'facet_{name}') for name in FACET_NAMES},
+                    'parallelism': form.get('parallelism', 20),
+                    'labels': form.getlist('labels'),
+                    'dimensions': form.getlist('dimensions'),
+                },
+            )
         except ValidationError as exc:
             message = '; '.join(error['msg'] for error in exc.errors())
             return _html(new_run_page(error=message), 422)

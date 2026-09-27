@@ -346,3 +346,14 @@ async def test_embed_texts_empty_input_returns_empty_dict(cache: InsightsCache) 
 
     assert result == {}
     assert client.embeddings.calls == []
+
+
+@pytest.mark.parametrize('batch_size', [0, -1])
+@pytest.mark.asyncio
+async def test_embed_texts_rejects_non_positive_batch_size(batch_size: int, cache: InsightsCache) -> None:
+    client = fake_client()
+
+    with pytest.raises(ValueError, match='batch_size must be positive'):
+        await embed_texts(['hello'], client=client, model=MODEL, cache=cache, batch_size=batch_size)
+
+    assert client.embeddings.calls == []

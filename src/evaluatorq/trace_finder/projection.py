@@ -21,9 +21,13 @@ TRAILING_OMISSION_MARKER = '[... later bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
 SUCCESS_STATUSES = frozenset({'completed', 'success', 'succeeded', 'ok'})
-_SENSITIVE_VALUE = r'(?P<quote>[\"\']?)(?P<name>(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth(?:orization)?|password|passwd|secret|credential))(?P=quote)(?P<sep>\s*[:=]\s*)(?P<value>\"[^\"]*\"|\'[^\']*\'|[^\s,;]+)'
+_SENSITIVE_VALUE = r'(?P<quote>[\"\']?)(?P<name>(?:x-)?(?:api[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|session[_-]?token|id[_-]?token|token|auth(?:orization)?|password|passwd|secret|credentials?))(?P=quote)(?P<sep>\s*[:=]\s*)(?P<value>\"[^\"]*\"|\'[^\']*\'|[^\s,;&]+)'
 _SENSITIVE_ASSIGNMENT_RE = re.compile(_SENSITIVE_VALUE, re.IGNORECASE)
 _BEARER_RE = re.compile(r'(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+')
+_URL_CREDENTIALS_RE = re.compile(r'(?i)(https?://)[^/@\s:]+:[^/@\s]+@')
+_KNOWN_TOKEN_RE = re.compile(
+    r'(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16})(?![A-Za-z0-9])'
+)
 
 
 @dataclass(frozen=True)
@@ -221,8 +225,10 @@ def _tool_result_excerpt(call_id: Any, results: tuple[dict[str, Any], ...]) -> s
 
 
 def _redact_tool_result_secrets(value: str) -> str:
-    """Mask explicitly named credential fields while preserving surrounding error text."""
+    """Mask common credential fields and token shapes while preserving error text."""
     value = _BEARER_RE.sub(r'\1[REDACTED]', value)
+    value = _URL_CREDENTIALS_RE.sub(r'\1[REDACTED]@', value)
+    value = _KNOWN_TOKEN_RE.sub('[REDACTED]', value)
 
     def replace(match: re.Match[str]) -> str:
         secret_value = match.group('value')
@@ -239,7 +245,10 @@ def _head_truncate_text(value: str, retained_bytes: int) -> tuple[str, int]:
     encoded = value.encode('utf-8')
     if len(encoded) <= retained_bytes:
         return value, 0
-    head = encoded[:retained_bytes].decode('utf-8', errors='ignore')
+    marker_bytes = len(TRAILING_OMISSION_MARKER.encode('utf-8'))
+    if retained_bytes < marker_bytes:
+        return '', len(encoded)
+    head = encoded[: max(0, retained_bytes - marker_bytes)].decode('utf-8', errors='ignore')
     return head + TRAILING_OMISSION_MARKER, len(encoded) - len(head.encode('utf-8'))
 
 

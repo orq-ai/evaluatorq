@@ -25,6 +25,7 @@ from evaluatorq.trace_finder.models import FacetSelection
 Source = Literal['recent', 'query', 'finder']
 Preset = Literal['sentiment', 'customer_satisfaction']
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'
+MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
 
 
 def get_finder_exports_dir() -> Path:
@@ -66,7 +67,13 @@ class InsightsLaunchSpec(BaseModel):
             try:
                 if not path.is_file():
                     raise ValueError('Finder export must be a regular file.')
-                RunExport.model_validate_json(path.read_text(encoding='utf-8'))
+                with path.open('rb') as export_file:
+                    raw = export_file.read(MAX_FINDER_EXPORT_BYTES + 1)
+                if len(raw) > MAX_FINDER_EXPORT_BYTES:
+                    raise ValueError(
+                        f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
+                    )
+                RunExport.model_validate_json(raw)
             except (OSError, ValueError) as exc:
                 raise ValueError(f'Could not read a valid Finder export: {exc}') from exc
             self.finder_export = str(path)

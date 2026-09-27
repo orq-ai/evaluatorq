@@ -10,7 +10,12 @@ import pytest
 
 from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.orq_source import _conversation_messages
-from evaluatorq.trace_finder.projection import estimate_tokens, project_trace
+from evaluatorq.trace_finder.projection import (
+    MAX_TOOL_RESULT_BYTES,
+    TRAILING_OMISSION_MARKER,
+    estimate_tokens,
+    project_trace,
+)
 
 
 def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
@@ -260,7 +265,7 @@ def test_tool_result_excerpt_keeps_the_start_and_is_capped() -> None:
     )
     call = project_trace(trace).payload['messages'][0]['tool_calls'][0]
     assert call['result_excerpt'].startswith('Error: invoice not found.')
-    assert len(call['result_excerpt'].encode('utf-8')) <= 4096 + len('[... later bytes omitted ...]')
+    assert len(call['result_excerpt'].encode('utf-8')) <= MAX_TOOL_RESULT_BYTES
 
 
 def test_tool_result_excerpt_redacts_explicit_credentials_and_keeps_error_context() -> None:
@@ -277,6 +282,69 @@ def test_tool_result_excerpt_redacts_explicit_credentials_and_keeps_error_contex
     assert 'api_key="[REDACTED]"' in excerpt
     assert 'abc.def.ghi' not in excerpt
     assert 'sk-live-value' not in excerpt
+
+
+@pytest.mark.parametrize(('field', 'secret'), [
+    ('token', 'tok-live'),
+    ('x-api-key', 'key-live'),
+    ('credentials', 'credential-live'),
+    ('apiKey', 'provider-key-live'),
+])
+def test_tool_result_excerpt_redacts_provider_secret_fields(field: str, secret: str) -> None:
+    body = f'Error: provider failed; {field}="{secret}"; retry in 2 seconds'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert secret not in excerpt
+    assert '[REDACTED]' in excerpt
+    assert 'Error: provider failed' in excerpt
+    assert 'retry in 2 seconds' in excerpt
+
+
+def test_tool_result_excerpt_redacts_url_userinfo_and_query_token() -> None:
+    body = 'Error: https://alice:pw123@example.test/api?token=tok_query&retry=1 failed'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert all(secret not in excerpt for secret in ('alice', 'pw123', 'tok_query'))
+    assert '[REDACTED]@example.test/api?token=[REDACTED]&retry=1 failed' in excerpt
+
+
+def test_tool_result_excerpt_redacts_recognizable_unlabeled_tokens() -> None:
+    body = 'Error: sk-proj-abcdefghijklmnop and ghp_abcdefghijklmnopqrst were rejected'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert 'sk-proj-abcdefghijklmnop' not in excerpt
+    assert 'ghp_abcdefghijklmnopqrst' not in excerpt
+    assert excerpt.startswith('Error: ')
+    assert excerpt.endswith(' were rejected')
+
+
+def test_tool_result_excerpt_exact_byte_cap_includes_marker_with_unicode() -> None:
+    body = 'Error: ' + ('😀' * 3000)
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert excerpt.startswith('Error: ')
+    assert excerpt.endswith(TRAILING_OMISSION_MARKER)
+    assert len(excerpt.encode('utf-8')) == MAX_TOOL_RESULT_BYTES
 
 
 def test_tool_result_excerpt_shrinks_before_the_unit_is_omitted() -> None:

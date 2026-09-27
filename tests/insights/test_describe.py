@@ -22,6 +22,36 @@ def fake_client() -> AsyncOpenAI:
     return cast('AsyncOpenAI', cast(object, _FakeClient()))
 
 
+def test_describe_prompt_bounds_excerpts_and_preserves_their_ends() -> None:
+    long_member = 'M' * 2000 + ' member-tail'
+    long_contrastive = 'C' * 2000 + ' contrastive-tail'
+
+    prompt = describe_module._build_describe_prompt('intent', [long_member], [long_contrastive])
+
+    assert len(describe_module._bound_excerpts([long_member])[0]) == describe_module._MAX_EXCERPT_CHARS
+    assert 'M' * 100 in prompt
+    assert 'member-tail' in prompt
+    assert 'excerpt truncated' in prompt
+    assert 'C' * 100 in prompt
+    assert 'contrastive-tail' in prompt
+
+
+def test_describe_prompt_context_budget_keeps_all_selected_examples() -> None:
+    members = [f'member-{index}-' + ('x' * 2000) for index in range(10)]
+    contrastive = [f'contrastive-{index}-' + ('y' * 2000) for index in range(9)]
+
+    bounded_members = describe_module._bound_excerpts(members)
+    bounded_contrastive = describe_module._bound_excerpts(contrastive)
+
+    assert len('\n'.join(bounded_members)) <= describe_module._MAX_CONTEXT_CHARS
+    assert len('\n'.join(bounded_contrastive)) <= describe_module._MAX_CONTEXT_CHARS
+    assert len(bounded_members) == len(members)
+    assert len(bounded_contrastive) == len(contrastive)
+    assert all(len(text) <= describe_module._MAX_EXCERPT_CHARS for text in bounded_members + bounded_contrastive)
+    assert all(f'member-{index}-' in text for index, text in enumerate(bounded_members))
+    assert all(f'contrastive-{index}-' in text for index, text in enumerate(bounded_contrastive))
+
+
 @pytest.mark.asyncio
 async def test_describe_clusters_calls_generate_structured_per_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []

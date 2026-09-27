@@ -84,6 +84,8 @@ async def embed_texts(
     fails after retries — a whole-dimension failure is a stage failure, never
     silently dropped or treated as an empty vector.
     """
+    if batch_size < 1:
+        raise ValueError('batch_size must be positive')
     unique_texts = list(dict.fromkeys(texts))
     if not unique_texts:
         return {}

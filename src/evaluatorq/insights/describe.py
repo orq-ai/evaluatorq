@@ -127,11 +127,36 @@ Analyze the children carefully and focus on what unifies them."""
 _MAX_MEMBER_EXAMPLES = 10
 _MAX_NEIGHBOUR_CLUSTERS = 3
 _MAX_NEIGHBOUR_EXAMPLES = 3
+_MAX_EXCERPT_CHARS = 1000
+_MAX_CONTEXT_CHARS = 6000
+
+
+def _bound_excerpts(texts: list[str]) -> list[str]:
+    """Keep each excerpt and the combined prompt context within fixed limits."""
+    bounded: list[str] = []
+    remaining = _MAX_CONTEXT_CHARS
+    for index, text in enumerate(texts):
+        separator_chars = 1 if bounded else 0
+        available = remaining - separator_chars
+        if available <= 0:
+            break
+        excerpts_left = len(texts) - index
+        excerpt_limit = min(_MAX_EXCERPT_CHARS, available // excerpts_left)
+        if len(text) > excerpt_limit:
+            marker = ' … [excerpt truncated] … '
+            head = (excerpt_limit - len(marker)) * 3 // 4
+            tail = excerpt_limit - len(marker) - head
+            text = f'{text[:head]}{marker}{text[-tail:] if tail else ""}'
+        bounded.append(text)
+        remaining -= len(text) + separator_chars
+    return bounded
 
 
 def _build_describe_prompt(dimension: DimensionName, member_texts: list[str], contrastive_texts: list[str]) -> str:
-    examples = delimit('\n'.join(member_texts) if member_texts else '(none)', tag='examples')
-    contrastive = delimit('\n'.join(contrastive_texts) if contrastive_texts else '(none)', tag='contrastive')
+    bounded_members = _bound_excerpts(member_texts)
+    bounded_contrastive = _bound_excerpts(contrastive_texts)
+    examples = delimit('\n'.join(bounded_members) if bounded_members else '(none)', tag='examples')
+    contrastive = delimit('\n'.join(bounded_contrastive) if bounded_contrastive else '(none)', tag='contrastive')
     return render_template(_DIMENSION_PROMPTS[dimension], {'examples': examples, 'contrastive': contrastive})
 
 

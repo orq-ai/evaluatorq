@@ -61,8 +61,19 @@
     const source = selected('source')[0];
     const dimensions = selected('dimensions');
     const labels = effectiveLabels(dimensions);
-    const stages = [source === 'finder' ? 'Load Finder matches' : source === 'query' ? 'Find matching traces' : 'Load recent traces'];
-    stages.push(source === 'query' && labels.length ? 'Match and classify traces' : source === 'query' ? 'Match traces' : labels.length ? 'Classify traces' : 'Prepare traces');
+    const populationStage = {
+      finder: 'Load Finder matches',
+      query: 'Find matching traces',
+      recent: 'Load recent traces'
+    }[source];
+    const stages = [populationStage];
+    let classifyStage = 'Prepare traces';
+    if (source === 'query') {
+      classifyStage = labels.length ? 'Match and classify traces' : 'Match traces';
+    } else if (labels.length) {
+      classifyStage = 'Classify traces';
+    }
+    stages.push(classifyStage);
     stages.push('Summarize traces');
     dimensions.forEach(function (name) { stages.push('Cluster and map ' + name); });
     stages.push(dimensions.includes('intent') && labels.includes('customer_satisfaction') ? 'Build priority matrix' : 'Check priority matrix');
