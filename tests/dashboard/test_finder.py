@@ -340,7 +340,7 @@ def test_find_idle_page_and_nav(setup_finder) -> None:
     _store, client = setup_finder
     response = client.get('/find')
     assert response.status_code == 200
-    assert 'Find the signal.' in response.text
+    assert 'Traces' in response.text
     assert 'Load traces to start' in response.text
     assert 'id="explorer-results-slot"' in response.text
     assert 'Traces' in response.text

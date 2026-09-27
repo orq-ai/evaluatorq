@@ -2593,6 +2593,8 @@ _FINDER_CSS = """
 .finder-seg span { display:inline-flex; align-items:center; height:24px; padding:0 12px; border-radius:999px; font-size:12px; color:var(--text-muted); transition:background .15s ease-out,color .15s ease-out; }
 .finder-seg input:checked + span { background:var(--text-strong); color:#fff; }
 .finder-seg input:focus-visible + span { outline:2px solid var(--accent); outline-offset:1px; }
+.finder-hint-line { flex-basis:100%; margin:0; color:var(--text-muted); font-size:11px; }
+body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { display:none; }
 .finder-examples { display:none; opacity:0; transform:translateY(-4px); transition:opacity .15s cubic-bezier(.22,1,.36,1),transform .15s cubic-bezier(.22,1,.36,1),display .15s allow-discrete; position:absolute; top:24px; left:-8px; z-index:30; min-width:460px; padding:6px; background:var(--surface-card); border:1px solid var(--border-default); border-radius:12px; box-shadow:var(--shadow-lg); }
 .finder-below .ex:hover .finder-examples,.finder-below .ex:focus-within .finder-examples { display:block; opacity:1; transform:none; }
 @starting-style { .finder-below .ex:hover .finder-examples,.finder-below .ex:focus-within .finder-examples { opacity:0; transform:translateY(-4px); } }
@@ -2607,6 +2609,8 @@ _FINDER_CSS = """
 .finder-controls .chip { display:inline-flex; align-items:stretch; height:28px; border-radius:999px; background:var(--surface-card); border:1px solid var(--border-default); color:var(--text-strong); box-shadow:0 1px 2px rgba(20,18,30,.05); overflow:hidden; transition:border-color .15s cubic-bezier(.22,1,.36,1),box-shadow .15s cubic-bezier(.22,1,.36,1),transform .15s cubic-bezier(.22,1,.36,1); }
 .finder-controls .chip b { display:inline-flex; align-items:center; padding:0 8px 0 10px; font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); background:var(--surface-sunken); border-right:1px solid var(--border-subtle); }
 .finder-controls .chip .v { display:inline-flex; align-items:center; padding:0 10px; font-size:12px; font-weight:500; }
+.finder-controls .chip.ai { background:var(--orange-50); border-color:var(--orange-100); }
+.finder-controls .ai-badge { font-size:9px; color:var(--orange-700); margin-right:4px; }
 .finder-controls .chip .chip-open { display:inline-flex; align-items:stretch; border:0; padding:0; background:transparent; font:inherit; color:inherit; cursor:pointer; }
 .finder-controls .chip.is-editable .v { padding-right:4px; }
 .finder-controls .chip.is-editable:hover { border-color:var(--border-strong); box-shadow:0 2px 6px -2px rgba(20,18,30,.2); transform:translateY(-1px); }

@@ -68,23 +68,27 @@ def examples() -> str:
     return f'<div class="finder-examples"><div class="hd">Examples</div>{items}</div>'
 
 
-def hero(query: str, mode: str, *, api_available: bool, error: str | None = None) -> str:
+def hero(query: str, mode: str, *, api_available: bool, error: str | None = None, has_rows: bool = False) -> str:
     disabled = '' if api_available else ' disabled'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     checked_immediate = ' checked' if mode != 'review' else ''
     checked_review = ' checked' if mode == 'review' else ''
     return (
         '<section class="finder-hero"><div class="finder-hero-bg"></div>'
-        '<h2 class="finder-title">Find the signal.</h2>'
-        '<p class="finder-sub">Ask a question of your traces. Inspect every judgment.</p>'
+        '<h2 class="finder-title">Traces</h2>'
+        '<p class="finder-sub">Ask AI about your traces. Inspect every judgment.</p>'
         '<form id="finder-query-form" class="finder-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls" hx-disabled-elt="find button">'
-        f'{csrf_field()}{icon_search()}<div class="col"><textarea name="query" rows="1" placeholder="Describe the conversations you want to find…" '
+        f'{csrf_field()}{icon_search()}<div class="col"><textarea name="query" rows="1" placeholder="Ask AI about these traces…" '
         f'required{disabled}>{esc(query)}</textarea></div>'
-        f'<button class="finder-go" type="submit"{disabled}><span class="finder-go-idle">Find traces <span aria-hidden="true">↗</span></span>'
+        f'<button class="finder-go" type="submit"{disabled}><span class="finder-go-idle">Ask AI <span aria-hidden="true">↗</span></span>'
         '<span class="finder-go-working" role="status">Starting search…</span></button>'
         '</form>'
-        '<div class="finder-below"><div class="finder-seg" role="radiogroup" aria-label="Mode">'
+        '<div class="finder-below"><div class="finder-seg" role="radiogroup" aria-label="Ask AI scope">'
+        f'<label><input type="radio" name="scope" value="within" form="finder-query-form"{" checked" if has_rows else ""}{"" if has_rows else " disabled"}><span>Within results</span></label>'
+        f'<label><input type="radio" name="scope" value="new" form="finder-query-form"{"" if has_rows else " checked"}><span>New search</span></label></div>'
+        '<p class="finder-hint-line">Within results classifies all loaded traces.</p>'
+        '<div class="finder-seg" role="radiogroup" aria-label="Mode">'
         f'<label><input type="radio" name="mode" value="immediate" form="finder-query-form"{checked_immediate} '
         'hx-post="/find/reset" hx-trigger="change[document.getElementById(\'finder-start-form\')]" '
         'hx-include="#finder-query-form" hx-target="#finder-body" hx-swap="innerHTML" hx-indicator="#finder-mode-working"><span>Immediate</span></label>'
@@ -176,17 +180,34 @@ def facet_menu(
     )
 
 
-def _facet_chips(selection: FacetSelection, numeric: object | None = None, *, removable: bool = False) -> str:
+def _facet_chips(
+    selection: FacetSelection,
+    numeric: object | None = None,
+    *,
+    removable: bool = False,
+    generated: FacetSelection | None = None,
+) -> str:
     """Render one chip per active filter value. Editable chips open the already-rendered menu at their category."""
 
-    def chip(facet: str, label: str, value_html: str, remove_name: str, remove_value: str | None, aria: str) -> str:
+    def chip(
+        facet: str,
+        label: str,
+        value_html: str,
+        remove_name: str,
+        remove_value: str | None,
+        aria: str,
+        *,
+        ai: bool = False,
+    ) -> str:
+        ai_class = ' ai' if ai else ''
+        badge = '<b class="ai-badge">AI</b>' if ai else ''
         if not removable:
-            return f'<span class="chip"><b>{esc(label)}</b><span class="v">{value_html}</span></span>'
+            return f'<span class="chip{ai_class}"><b>{esc(label)}</b>{badge}<span class="v">{value_html}</span></span>'
         value_attr = f' data-finder-value="{esc(remove_value)}"' if remove_value is not None else ''
         return (
-            f'<span class="chip is-editable" data-chip-name="{esc(remove_name)}"{value_attr}>'
+            f'<span class="chip is-editable{ai_class}" data-chip-name="{esc(remove_name)}"{value_attr}>'
             f'<button type="button" class="chip-open" data-chip-open="{esc(facet)}" aria-label="Edit {aria}">'
-            f'<b>{esc(label)}</b><span class="v">{value_html}</span></button>'
+            f'<b>{esc(label)}</b>{badge}<span class="v">{value_html}</span></button>'
             f'<button type="button" class="finder-chip-remove" data-finder-remove="{esc(remove_name)}"{value_attr} '
             f'aria-label="Remove {aria}">✕</button></span>'
         )
@@ -196,7 +217,15 @@ def _facet_chips(selection: FacetSelection, numeric: object | None = None, *, re
         if name in NUMERIC_FACET_NAMES:
             continue
         chips.extend(
-            chip(name, label, esc(value), f'facet_{name}', value, f'{esc(label)} {esc(value)}')
+            chip(
+                name,
+                label,
+                esc(value),
+                f'facet_{name}',
+                value,
+                f'{esc(label)} {esc(value)}',
+                ai=bool(generated and value in getattr(generated, name) and value not in getattr(selection, name)),
+            )
             for value in sorted(getattr(selection, name, frozenset()))
         )
     for name, label, operator in (
@@ -242,6 +271,14 @@ def controls(
     # the filters the user set themselves; the classifier's picks for the last question are not sticky.
     carried_facets = facets if review else snapshot.explicit_filters
     carried_numeric = numeric if review else snapshot.explicit_numeric
+    generated_only = None
+    if review:
+        generated_only = snapshot.generated_filters.model_copy(
+            update={
+                name: getattr(snapshot.generated_filters, name) - getattr(snapshot.explicit_filters, name)
+                for name in FACET_NAMES
+            }
+        )
     count_html = f'<span class="count">{esc(str(snapshot.total))} traces selected</span>' if snapshot.total else ''
     scope_html = (
         f'<span class="quiet"><b>Project</b><a href="/settings">{esc(settings.orq_project_name or settings.orq_project_id)}</a></span>'
@@ -255,13 +292,13 @@ def controls(
     )
     return (
         '<div class="finder-controls" id="finder-controls">'
-        f'{hidden_facets}{scope_html}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"})}'
+        f'{hidden_facets}{scope_html}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"}, generated=generated_only)}'
         f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
         f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
         f'{explorer_views.range_inputs(population.start if population else None, population.end if population else None, settings.window_days)}'
-        f'<span class="quiet"><b>Limit</b><input {keep["limit"]} form="{form_id}" name="limit" type="number" min="1" max="5000" value="{values["limit"]}" style="width:72px"></span>'
+        f'<span class="finder-limit-field"><span class="quiet"><b>Limit</b><input {keep["limit"]} form="{form_id}" name="limit" type="number" min="1" max="5000" value="{values["limit"]}" style="width:72px"></span></span>'
         f'<span class="quiet"><b>Parallel</b><input {keep["parallelism"]} form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:64px"></span>'
         f'{count_html}</div>'
     )
@@ -544,6 +581,7 @@ def task_panel(
     editable: bool,
     open_: bool = False,
     request: RunRequest | None = None,
+    total: int = 0,
 ) -> str:
     task = compiled.task
     criterion_html, criterion_count = _criterion_html(compiled, editable=editable)
@@ -576,7 +614,7 @@ def task_panel(
                 f'<input type="hidden" name="mode" value="review">'
             )
         form_open += hidden_request + csrf_field()
-        form_close = '<button class="rt-apply-btn" type="submit">Start classification</button><span class="finder-start-working" role="status">Starting classification…</span></form>'
+        form_close = f'<button class="rt-apply-btn" type="submit">Apply + classify {total}</button><span class="finder-start-working" role="status">Starting classification…</span></form>'
     else:
         form_open = ''
         form_close = ''
@@ -666,8 +704,11 @@ def body(
         return (
             f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}<div class="finder-review"><span>⏸</span><span><b>Review the plan before running per-trace classification.</b> '
             'Edit the task, criteria or filters, then start.</span></div>'
-            f'{task_panel(snapshot.compiled, editable=True, open_=True, request=snapshot.request)}'
+            f'{task_panel(snapshot.compiled, editable=True, open_=True, request=snapshot.request, total=snapshot.total)}'
             f'{filter_output_panel(snapshot)}'
+            '<div class="finder-review-actions"><button class="btn-secondary" type="submit" form="explorer-load-form" '
+            'hx-post="/find/load" hx-include="#finder-start-form, #finder-controls" hx-target="#explorer-results" hx-swap="outerHTML">'
+            'Apply filters only</button></div>'
         )
     if snapshot.state == 'idle':
         unavailable = field(snapshot, api_available=False) if not api_available else ''
@@ -684,6 +725,7 @@ def page_html(
     catalogue: FacetCatalogue | None = None,
     pending: bool = False,
     explorer_html: str = '',
+    has_rows: bool = False,
 ) -> str:
     request = snapshot.request
     query = request.query if request is not None else ''
@@ -694,7 +736,7 @@ def page_html(
         from evaluatorq.trace_finder.explorer import ExplorerView
 
         explorer_html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
-    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
+    html = f'<div class="finder">{hero(query, mode, api_available=api_available, error=error, has_rows=has_rows)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
     return page('Traces', html, active_nav='find')
 
 

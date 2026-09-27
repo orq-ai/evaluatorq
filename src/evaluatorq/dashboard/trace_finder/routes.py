@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from evaluatorq.trace_finder import FacetCatalogue
 from evaluatorq.trace_finder.columns import COLUMNS, resolve_columns
 from evaluatorq.trace_finder.explorer import ExplorerView
-from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
+from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES, TraceRecord
 from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
 from evaluatorq.trace_finder.settings import (
     MAX_LIMIT,
@@ -57,6 +57,7 @@ from evaluatorq.trace_finder.settings import (
 )
 
 _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
+CONFIRM_ROWS = 500
 
 
 class FinderRunForm(BaseModel):
@@ -307,12 +308,19 @@ def _run_request(
         duration_ms_min=parsed.duration_ms_min,
         duration_ms_max=parsed.duration_ms_max,
     )
-    end = anchor.end if anchor is not None and anchor.end is not None else datetime.now(timezone.utc)
+    if anchor is not None and anchor.end is not None:
+        end = anchor.end
+        start = end - timedelta(days=parsed.window_days)
+    elif form.get('from') and form.get('to'):
+        start, end = parse_range(str(form.get('from')), str(form.get('to')), str(form.get('tz_offset') or '0'))
+    else:
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=parsed.window_days)
     return RunRequest(
         query=parsed.query,
         mode=parsed.mode,
         population=PopulationRequest(
-            start=end - timedelta(days=parsed.window_days),
+            start=start,
             end=end,
             facets=FacetSelection(project_id=settings.orq_project_id, **facet_values),
             numeric=numeric,
@@ -443,6 +451,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 api_available=api_available,
                 error=_unavailable_reason(req.app) if not api_available else None,
                 explorer_html=await _explorer_html(req) if store is not None else '',
+                has_rows=bool(store and store.explorer and (await store.explorer.view()).rows),
                 **_catalogue_kwargs(req.app, snapshot),
             )
         )
@@ -476,8 +485,43 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 )
             )
         try:
-            request = _run_request(form, settings)
-            snapshot = await store.compile(request, wait=False)
+            if str(form.get('scope') or 'new') == 'within':
+                explorer = store.explorer
+                explorer_view = await explorer.view() if explorer is not None else None
+                if explorer is None or explorer_view is None or not explorer_view.rows:
+                    return _html(
+                        fragment(
+                            await store.snapshot(), settings, error='Load traces first, then ask within the results.'
+                        )
+                    )
+                base = _run_request(form, settings)
+                request = base.model_copy(
+                    update={
+                        'mode': 'review' if len(explorer_view.rows) > CONFIRM_ROWS else base.mode,
+                        'population': PopulationRequest(
+                            start=explorer_view.start,
+                            end=explorer_view.end,
+                            facets=explorer_view.facets,
+                            numeric=explorer_view.numeric,
+                            limit=len(explorer_view.rows),
+                        ),
+                    }
+                )
+                ids = [row.trace_id for row in explorer_view.rows]
+
+                async def loaded_traces() -> tuple[TraceRecord, ...]:
+                    records = await explorer.records(ids)
+                    missing = sum(record is None for record in records.values())
+                    if missing:
+                        logger.warning(
+                            'Skipping {} loaded trace(s) without usable messages in the classification', missing
+                        )
+                    return tuple(record for record in records.values() if record is not None)
+
+                snapshot = await store.compile(request, wait=False, traces=loaded_traces)
+            else:
+                request = _run_request(form, settings)
+                snapshot = await store.compile(request, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(
                 fragment(RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=str(exc)), status_code=422

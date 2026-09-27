@@ -273,3 +273,78 @@ def test_trace_route_explains_missing_messages(explorer_client) -> None:
 
 async def _none() -> None:
     return None
+
+
+def test_ask_within_results_keeps_filters_and_uses_loaded_rows(explorer_client) -> None:
+    store, source, client = explorer_client
+    _load(client, facet_model='gpt-5.6-luna')
+    captured: dict[str, Any] = {}
+
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None) -> Any:
+        captured['request'] = request
+        captured['traces'] = traces
+        return store.snapshot_value
+
+    store.compile = compile
+    response = client.post('/find/run', data=csrf_data({'query': 'frustrated users', 'scope': 'within', 'mode': 'review', 'window_days': '7', 'limit': '200', 'parallelism': '10'}))
+
+    assert response.status_code == 200
+    assert captured['traces'] is not None
+    view = asyncio.run(store.explorer.view())
+    population = captured['request'].population
+    assert (population.start, population.end) == (view.start, view.end)
+    assert population.facets == view.facets
+    assert population.facets.model == frozenset({'gpt-5.6-luna'})
+    assert population.numeric == view.numeric
+    assert population.limit == 250
+    assert len(source.calls) == 1
+    assert [row.trace_id for row in view.rows] == [row.trace_id for row in source.rows]
+
+
+def test_ask_within_results_without_rows_explains(explorer_client) -> None:
+    _, _, client = explorer_client
+    response = client.post('/find/run', data=csrf_data({'query': 'x', 'scope': 'within', 'mode': 'review', 'window_days': '7', 'limit': '200', 'parallelism': '10'}))
+    assert 'Load traces first' in response.text
+
+
+def test_hero_has_the_scope_toggle_and_defaults_to_review() -> None:
+    from evaluatorq.dashboard.trace_finder.views import hero
+
+    html = hero('', 'review', api_available=True, has_rows=True)
+    assert 'name="scope" value="within" form="finder-query-form" checked' in html
+    assert 'value="review" form="finder-query-form" checked' in html
+
+
+def test_large_within_run_is_forced_through_review(explorer_client) -> None:
+    store, source, client = explorer_client
+    source.rows = _rows(600)
+    _load(client, rows='600')
+    captured: dict[str, Any] = {}
+
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None) -> Any:
+        captured['request'] = request
+        return store.snapshot_value
+
+    store.compile = compile
+    client.post('/find/run', data=csrf_data({'query': 'x', 'scope': 'within', 'mode': 'immediate', 'window_days': '7', 'limit': '200', 'parallelism': '10'}))
+    assert captured['request'].mode == 'review'
+    assert captured['request'].population.limit == 600
+
+
+def test_match_column_appears_only_with_results_and_can_be_hidden(explorer_client) -> None:
+    import dataclasses
+
+    from evaluatorq.dashboard.trace_finder.explorer_views import table
+    from evaluatorq.trace_finder.columns import resolve_columns
+    from evaluatorq.trace_finder.models import TraceClassification
+
+    store, _, client = explorer_client
+    _load(client)
+    view = asyncio.run(store.explorer.view())
+    assert '>Match<' not in table(view, resolve_columns(None), None)
+    first = view.rows[0].trace_id
+    snapshot = dataclasses.replace(
+        store.snapshot_value, results={first: TraceClassification(trace_id=first, span_id='s', matched=True, raw_result={})}
+    )
+    assert '>Match<' in table(view, resolve_columns(None), snapshot)
+    assert '>Match<' not in table(view, resolve_columns(['status', 'model']), snapshot)
