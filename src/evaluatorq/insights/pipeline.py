@@ -638,16 +638,26 @@ async def insights(  # noqa: C901
         return run
     except Exception as exc:  # noqa: BLE001 - setup/runtime failures must leave a persisted terminal run
         message = str(exc)
+        stage = writer.manifest.stage or 'setup'
         run.status = 'error'
-        run.stage_failures.append(StageFailure(stage='setup', message=message))
-        logger.warning('Insights run setup failed: {}', message)
+        run.stage_failures.append(StageFailure(stage=stage, message=message))
+        logger.warning('Insights {} stage failed: {}', stage, message)
         return run
     finally:
-        cache_store.close()
+        try:
+            cache_store.close()
+        except Exception as exc:  # noqa: BLE001 - cleanup must not skip terminal persistence
+            logger.warning('Could not close Insights cache for run {}: {}', run_id, exc)
         if own_orq and resolved_orq is not None:
-            await close_orq_client(resolved_orq)
+            try:
+                await close_orq_client(resolved_orq)
+            except Exception as exc:  # noqa: BLE001 - cleanup must not skip terminal persistence
+                logger.warning('Could not close Insights Orq client for run {}: {}', run_id, exc)
         if llm_owned and resolved_llm is not None:
-            await resolved_llm.close()
+            try:
+                await resolved_llm.close()
+            except Exception as exc:  # noqa: BLE001 - cleanup must not skip terminal persistence
+                logger.warning('Could not close Insights LLM client for run {}: {}', run_id, exc)
         # Ensure even a population-stage return/failure has a persisted run file and terminal manifest.
         if not writer.manifest.ended_at:
             try:
@@ -659,8 +669,11 @@ async def insights(  # noqa: C901
                 else:
                     writer.complete(report_path=report)
             except Exception as exc:  # noqa: BLE001 - persistence failure should still terminate manifest
-                logger.warning('Could not persist Insights run or manifest {}: {}', run_id, exc)
-                writer.fail(str(exc), stage='write')
+                message = str(exc)
+                run.status = 'error'
+                run.stage_failures.append(StageFailure(stage='write', message=message))
+                logger.warning('Could not persist Insights run or manifest {}: {}', run_id, message)
+                writer.fail(message, stage='write')
 
 
 def insights_sync(*args: Any, **kwargs: Any) -> InsightsRun:

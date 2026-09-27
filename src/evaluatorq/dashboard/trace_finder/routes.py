@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
@@ -20,6 +23,7 @@ from evaluatorq.common.orq_client import (
     list_orq_profiles,
     resolve_orq_client,
 )
+from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder.views import drawer, facet_menu, fragment, missing_trace_drawer, page_html
 from evaluatorq.trace_finder import (
@@ -35,6 +39,7 @@ from evaluatorq.trace_finder import (
     export_json,
     load_facet_catalogue,
 )
+from evaluatorq.trace_finder.export import export_filename
 
 if TYPE_CHECKING:
     from evaluatorq.trace_finder import FacetCatalogue
@@ -545,10 +550,31 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         snapshot = await store.snapshot()
         if snapshot.state != 'completed' or snapshot.request is None or snapshot.compiled is None:
             return Response('Not found', status_code=404, media_type='text/plain')
+        payload = export_json(snapshot)
+        export_name = export_filename(snapshot, payload)
+        export_dir = get_store_dir('finder-exports')
+        temporary: Path | None = None
+        try:
+            export_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(export_dir / export_name)
+        except OSError as exc:
+            logger.warning('Could not save Finder export for Insights: {}', exc)
+            return Response('Could not save Finder export for Insights.', status_code=500, media_type='text/plain')
+        finally:
+            if temporary is not None:
+                with contextlib.suppress(OSError):
+                    temporary.unlink(missing_ok=True)
         return Response(
-            export_json(snapshot),
+            payload,
             media_type='application/json',
-            headers={'Content-Disposition': f'attachment; filename="trace-finder-{snapshot.generation}.json"'},
+            headers={'Content-Disposition': f'attachment; filename="{export_name}"'},
         )
 
     @app.get('/find/facets')

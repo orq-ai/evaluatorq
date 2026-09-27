@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 
     from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
 
+from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+
 
 def stage_plan(
     population: InsightsPopulation,
@@ -19,11 +21,20 @@ def stage_plan(
 ) -> list[tuple[str, str]]:
     """Describe actual pipeline stages using the selected source and analysis."""
     has_labels = bool(labels) or 'sentiment' in dimensions
+    has_filters = (
+        population.facets != FacetSelection()
+        or population.numeric != NumericFilters()
+        or population.start is not None
+        or population.end is not None
+        or population.window_days != 7
+    )
     source = (
         'Load Finder matches'
         if population.finder_export is not None
         else 'Find matching traces'
         if population.query
+        else 'Filter recent traces'
+        if has_filters
         else 'Load recent traces'
     )
     classify = (
@@ -33,6 +44,8 @@ def stage_plan(
         if population.query
         else 'Classify traces'
         if has_labels
+        else 'Keep selected traces'
+        if has_filters
         else 'Prepare traces'
     )
     plan = [('population', source), ('label', classify), ('summary', 'Summarize traces')]

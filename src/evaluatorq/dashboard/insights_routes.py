@@ -46,6 +46,8 @@ def _entries(
 ) -> tuple[list[tuple[str, str, str]], dict[str, tuple[Path, InsightsRun | str]], dict[str, RunManifest]]:
     entries: list[tuple[str, str, str]] = []
     loaded: dict[str, tuple[Path, InsightsRun | str]] = {}
+    aliases: list[tuple[str, tuple[Path, InsightsRun | str]]] = []
+    seen_run_ids: set[str] = set()
     for path in list_run_paths(directory):
         try:
             run: InsightsRun | str = library.load_model_cached(path, InsightsRun.model_validate)
@@ -54,14 +56,19 @@ def _entries(
             logger.warning('Unreadable Insights run {}: {}', path, run)
         if isinstance(run, InsightsRun):
             key = run.run_id
-            entries.append((key, run.run_name, run.status))
-            loaded[key] = (path, run)
+            if key not in seen_run_ids:
+                entries.append((key, run.run_name, run.status))
+                loaded[key] = (path, run)
+                seen_run_ids.add(key)
+            aliases.append((path.stem, (path, run)))
         else:
             key = path.stem
             entries.append((key, path.stem, 'unreadable'))
-            loaded[key] = (path, run)
-            loaded[path.stem] = (path, run)
-        loaded[path.stem] = (path, run)
+            loaded.setdefault(key, (path, run))
+    # Path stems are compatibility aliases. Install them only after every
+    # persisted run ID is known so an alias can never shadow a canonical ID.
+    for alias, target in aliases:
+        loaded.setdefault(alias, target)
     manifests = list_manifests(directory)
     manifest_by_id = {manifest.run_id: manifest for manifest in manifests if manifest.surface.value == 'insights'}
     known = {item[0] for item in entries}

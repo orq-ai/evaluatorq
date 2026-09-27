@@ -209,6 +209,35 @@ def test_map_tab_switches_projections_and_colours_by_other_dimensions(tmp_path, 
     assert {point['trace_id']: point for point in agents['points']}['trace-1']['x'] == 20.0
 
 
+def test_insights_map_uses_server_cluster_url_template(tmp_path, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, _map_run())
+    client = TestClient(build_app())
+
+    page = client.get('/insights/map-run/tab/map')
+    assert 'data-cluster-detail-url-template="/insights/map-run/cluster/{cluster_id}"' in page.text
+
+
+def test_insights_run_path_stem_alias_cannot_shadow_another_run_id(tmp_path, monkeypatch):
+    from evaluatorq.dashboard import insights_routes
+
+    canonical = _map_run()
+    canonical.run_id = 'collision'
+    alias_target = _map_run()
+    alias_target.run_id = 'other'
+    canonical_path = tmp_path / 'canonical.json'
+    alias_path = tmp_path / 'collision.json'
+    runs = {canonical_path: canonical, alias_path: alias_target}
+    monkeypatch.setattr(insights_routes, 'list_run_paths', lambda _directory: [canonical_path, alias_path])
+    monkeypatch.setattr(insights_routes.library, 'load_model_cached', lambda path, _validator: runs[path])
+    monkeypatch.setattr(insights_routes, 'list_manifests', lambda _directory: [])
+
+    entries, loaded, _ = insights_routes._entries(tmp_path)
+
+    assert [entry[0] for entry in entries] == ['collision', 'other']
+    assert loaded['collision'] == (canonical_path, canonical)
+
+
 def test_numeric_map_colouring_keeps_unlabelled_points(tmp_path, monkeypatch):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     run = _map_run()
@@ -284,6 +313,7 @@ def test_priority_chart_contains_quadrant_labels_and_empty_state():
 
 
 def test_completed_finder_run_shows_analyze_matches_command_and_python(monkeypatch):
+    monkeypatch.setattr(finder_views, 'export_filename', lambda _snapshot: 'trace-finder-17.json')
     monkeypatch.setattr(finder_views, 'status_indicator', lambda _snapshot: '')
     monkeypatch.setattr(finder_views, 'controls', lambda *_args, **_kwargs: '')
     monkeypatch.setattr(finder_views, 'field', lambda *_args, **_kwargs: '')

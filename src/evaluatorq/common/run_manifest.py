@@ -64,7 +64,7 @@ class ManifestWriter:
         self.manifest = manifest
         self.path = path
         self._clock = clock
-        self._last_progress_flush: float | None = None
+        self._last_progress_flush: dict[int, float] = {}
 
     def flush(self) -> None:
         self.manifest.updated_at = datetime.now(tz=timezone.utc)
@@ -148,8 +148,10 @@ class ManifestWriter:
             return
         rec.completed, rec.total = completed, total
         now = self._clock()
-        if completed >= total or self._last_progress_flush is None or now - self._last_progress_flush >= 1.0:
-            self._last_progress_flush = now
+        record_key = id(rec)
+        last_flush = self._last_progress_flush.get(record_key)
+        if completed >= total or last_flush is None or now - last_flush >= 1.0:
+            self._last_progress_flush[record_key] = now
             self.flush()
 
     def complete(self, report_path: str | Path | None = None, summary: RunSummary | None = None) -> None:

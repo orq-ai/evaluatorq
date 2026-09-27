@@ -22,6 +22,7 @@ from evaluatorq.insights.store import save_run
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
 from evaluatorq.trace_finder.settings import DashboardSettings
 from tests.dashboard.test_insights_page import minimal_run
+from tests.insights.test_population import _run_export
 
 
 def test_stage_plan_follows_source_labels_and_dimensions() -> None:
@@ -87,6 +88,27 @@ def test_wizard_validates_source_before_launch() -> None:
         InsightsLaunchSpec(labels=[], dimensions=[])
     with pytest.raises(ValidationError, match='Finder export already fixes'):
         InsightsLaunchSpec(source='finder', facets=FacetSelection(status=frozenset({'error'})))
+
+
+def test_dashboard_finder_export_must_be_in_approved_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    allowed_dir = tmp_path / 'finder-exports'
+    allowed_dir.mkdir()
+    allowed = allowed_dir / 'finder.json'
+    outside = tmp_path / 'outside.json'
+    payload = _run_export(['trace-1']).model_dump_json()
+    allowed.write_text(payload)
+    outside.write_text(payload)
+    (allowed_dir / 'link.json').symlink_to(outside)
+
+    spec = InsightsLaunchSpec(source='finder', finder_export='finder.json')
+    assert spec.population().finder_export == allowed.resolve()
+    assert InsightsLaunchSpec(source='finder', finder_export=str(allowed)).population().finder_export == allowed.resolve()
+    for path in (str(outside), '../outside.json', 'link.json'):
+        with pytest.raises(ValidationError, match='Finder exports must be in'):
+            InsightsLaunchSpec(source='finder', finder_export=path)
 
 
 def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> None:

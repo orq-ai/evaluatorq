@@ -775,7 +775,9 @@ def _dimension_map(
     color_options.extend(('<option value="agent">Agent</option>', '<option value="project">Project</option>'))
     chart = (
         f'<div id="insights-map-{quote(dimension_name, safe="")}" class="insights-map-chart" '
-        f'data-run-id="{esc(run.run_id)}" data-map-dimension="{esc(dimension_name)}" data-map-url="/insights/{quote(run.run_id, safe="")}/map.json?dimension={quote(dimension_name, safe="")}&amp;color_by=cluster"></div>'
+        f'data-run-id="{esc(run.run_id)}" data-map-dimension="{esc(dimension_name)}" '
+        f'data-cluster-detail-url-template="/insights/{quote(run.run_id, safe="")}/cluster/{{cluster_id}}" '
+        f'data-map-url="/insights/{quote(run.run_id, safe="")}/map.json?dimension={quote(dimension_name, safe="")}&amp;color_by=cluster"></div>'
     )
     detail = (
         '<section class="insights-detail" data-map-detail><p class="insights-empty">Select a point to see its trace and cluster details.</p></section>'
@@ -1108,7 +1110,7 @@ def new_run_page(*, error: str | None = None) -> str:
         '<label><input type="radio" name="source" value="finder"><b>Finder export</b><small>Use a saved set of matches.</small></label>'
         '</div>'
         '<label class="insights-form-field" data-source="query">Question<textarea name="query" rows="3" maxlength="500" placeholder="Which conversations are about refunds?"></textarea></label>'
-        '<label class="insights-form-field" data-source="finder">Finder JSON path<input name="finder_export" type="text" placeholder="/path/to/finder-export.json"></label>'
+        '<label class="insights-form-field" data-source="finder">Finder JSON filename<input name="finder_export" type="text" placeholder="Filename from Finder download"><small>Download a completed Finder run first, or place a valid export in the dashboard finder-exports directory.</small></label>'
         '<div class="insights-form-grid" data-source="recent query">'
         '<label class="insights-form-field">Window (days)<input name="window_days" type="number" min="1" max="90" value="7"></label>'
         '<label class="insights-form-field">Trace limit<input name="limit" type="number" min="1" max="5000" value="100"></label></div>'

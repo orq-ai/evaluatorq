@@ -15,6 +15,7 @@ from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
 from evaluatorq.common.run_manifest import start_manifest
+from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
 from evaluatorq.insights.presets import LABEL_PRESETS
 from evaluatorq.insights.progress import stage_plan
@@ -24,6 +25,11 @@ from evaluatorq.trace_finder.models import FacetSelection
 Source = Literal['recent', 'query', 'finder']
 Preset = Literal['sentiment', 'customer_satisfaction']
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'
+
+
+def get_finder_exports_dir() -> Path:
+    """Return the only directory from which dashboard runs may read Finder exports."""
+    return get_store_dir('finder-exports')
 
 
 class InsightsLaunchSpec(BaseModel):
@@ -49,11 +55,21 @@ class InsightsLaunchSpec(BaseModel):
                 raise ValueError('A Finder export already fixes the trace population; remove the facet filters.')
             if not self.finder_export.strip():
                 raise ValueError('Enter the path to a Finder JSON export.')
-            path = Path(self.finder_export).expanduser()
             try:
+                root = get_finder_exports_dir().resolve()
+                requested = Path(self.finder_export).expanduser()
+                path = (requested if requested.is_absolute() else root / requested).resolve()
+            except (OSError, RuntimeError) as exc:
+                raise ValueError(f'Could not resolve Finder export path: {exc}') from exc
+            if path.parent != root:
+                raise ValueError(f'Finder exports must be in {root}.')
+            try:
+                if not path.is_file():
+                    raise ValueError('Finder export must be a regular file.')
                 RunExport.model_validate_json(path.read_text(encoding='utf-8'))
             except (OSError, ValueError) as exc:
                 raise ValueError(f'Could not read a valid Finder export: {exc}') from exc
+            self.finder_export = str(path)
         if not self.labels and not self.dimensions:
             raise ValueError('Select at least one label or dimension.')
         if len(set(self.labels)) != len(self.labels) or len(set(self.dimensions)) != len(self.dimensions):

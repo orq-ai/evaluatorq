@@ -9,6 +9,7 @@ miss with a `logger.warning` rather than being retried or raised into the run.
 from __future__ import annotations
 
 import hashlib
+import math
 import sqlite3
 import struct
 from array import array
@@ -55,7 +56,12 @@ def _text_hash(text: str) -> str:
 
 
 def _pack_vector(vector: list[float]) -> bytes:
-    payload = array('f', vector).tobytes()
+    if not vector:
+        raise ValueError('vector cannot be empty')
+    values = array('f', vector)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError('vector values must be finite')
+    payload = values.tobytes()
     return _VECTOR_MAGIC + struct.pack('!I', len(vector)) + hashlib.sha256(payload).digest() + payload
 
 
@@ -187,14 +193,31 @@ class InsightsCache:
             return
         if not vectors:
             return
+        rows = []
+        invalid_count = 0
+        first_error: str | None = None
+        for text, vector in vectors.items():
+            try:
+                rows.append((model, _text_hash(text), _pack_vector(vector)))
+            except (OverflowError, TypeError, ValueError, struct.error) as exc:  # noqa: PERF203 - isolate bad rows
+                invalid_count += 1
+                first_error = first_error or str(exc)
+        if invalid_count:
+            logger.warning(
+                'InsightsCache.put_vectors: skipping {} invalid vector(s) (first error: {})',
+                invalid_count,
+                first_error,
+            )
+        if not rows:
+            return
         try:
             with self._conn:
                 self._conn.executemany(
                     'INSERT OR REPLACE INTO vectors (model, text_hash, vector) VALUES (?, ?, ?)',
-                    [(model, _text_hash(text), _pack_vector(vector)) for text, vector in vectors.items()],
+                    rows,
                 )
         except sqlite3.Error as exc:
-            logger.warning(f'InsightsCache.put_vectors: {exc}; {len(vectors)} vector(s) not cached')
+            logger.warning(f'InsightsCache.put_vectors: {exc}; {len(rows)} vector(s) not cached')
 
     def close(self) -> None:
         """Close the underlying connection; safe to call on a disabled or already-closed cache."""

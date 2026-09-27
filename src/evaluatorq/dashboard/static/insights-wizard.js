@@ -74,9 +74,12 @@
     const source = selected('source')[0];
     const dimensions = selected('dimensions');
     const labels = effectiveLabels(dimensions);
+    const displayedLabels = labels.map(function (name) {
+      return name === 'sentiment' && !selected('labels').includes(name) ? 'sentiment (added automatically)' : name;
+    });
     const summary = document.createElement('p');
     summary.textContent = 'Source: ' + (source === 'query' ? 'Search by question' : source === 'finder' ? 'Finder export' : 'Recent traces') +
-      ' · Labels: ' + (labels.join(', ') || 'none') + ' · Dimensions: ' + (dimensions.join(', ') || 'none');
+      ' · Labels: ' + (displayedLabels.join(', ') || 'none') + ' · Dimensions: ' + (dimensions.join(', ') || 'none');
     const facets = document.createElement('p');
     const selectedFacets = Array.from(facetOptions.querySelectorAll('input[name^="facet_"]:checked')).map(function (input) {
       return input.name.slice(6).replaceAll('_', ' ') + ' = ' + input.value;
@@ -95,7 +98,7 @@
 
   function effectiveLabels(dimensions) {
     const labels = selected('labels');
-    if (dimensions.includes('sentiment') && !labels.includes('sentiment')) labels.push('sentiment (added for sentiment dimension)');
+    if (dimensions.includes('sentiment') && !labels.includes('sentiment')) labels.push('sentiment');
     return labels;
   }
 

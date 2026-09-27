@@ -80,6 +80,28 @@ def test_stage_progress_throttles_and_always_writes_the_last_count(tmp_path: Pat
     assert (record.completed, record.total) == (100, 100)
 
 
+def test_first_progress_for_each_stage_is_flushed(tmp_path: Path) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='r', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    writer.stage_progress('label', 1, 3)
+    writer.end_stage('label')
+
+    flushes: list[int] = []
+    original = writer.flush
+    writer.flush = lambda: (flushes.append(1), original())[1]  # type: ignore[method-assign]
+    writer.start_stage('summary')
+    flushes.clear()  # Ignore the stage transition flush; check its first progress update.
+
+    writer.stage_progress('summary', 1, 3)
+
+    assert len(flushes) == 1
+    [manifest] = list_manifests(tmp_path)
+    record = manifest.stages[-1]
+    assert (record.completed, record.total) == (1, 3)
+
+
 def test_stage_progress_ignores_invalid_counts_without_persisting_them(tmp_path: Path) -> None:
     started = start_manifest(run_id='invalid-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
     writer = ManifestWriter(started.manifest, started.path)

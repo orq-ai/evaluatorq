@@ -244,6 +244,85 @@ async def test_empty_population_warns_and_skips_dimensions(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+async def test_unexpected_population_failure_records_the_active_stage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import list_manifests
+
+    _patch_clients(monkeypatch)
+
+    async def fail_population(*args, **kwargs):
+        raise RuntimeError('unexpected population failure')
+
+    monkeypatch.setattr(pipeline, 'resolve_population', fail_population)
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert run.status == 'error'
+    assert [(failure.stage, failure.message) for failure in run.stage_failures] == [
+        ('population', 'unexpected population failure')
+    ]
+    manifest = list_manifests(tmp_path)[0]
+    assert manifest.status.value == 'error'
+    assert manifest.stage == 'population'
+
+
+@pytest.mark.asyncio
+async def test_unexpected_run_write_failure_is_attributed_to_write(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import list_manifests
+
+    _patch_clients(monkeypatch)
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve([]))
+    save_run = pipeline.save_run
+    calls = 0
+
+    def fail_first_write(run, directory):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError('disk full')
+        return save_run(run, directory)
+
+    monkeypatch.setattr(pipeline, 'save_run', fail_first_write)
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert calls == 2
+    assert run.status == 'error'
+    assert [(failure.stage, failure.message) for failure in run.stage_failures] == [('write', 'disk full')]
+    manifest = list_manifests(tmp_path)[0]
+    assert manifest.status.value == 'error'
+    assert manifest.stage == 'write'
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_prevent_terminal_persistence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import list_manifests
+    from evaluatorq.insights.population import PopulationError
+
+    _patch_clients(monkeypatch)
+
+    async def fail_population(*args, **kwargs):
+        raise PopulationError('invalid population')
+
+    async def fail_close(*args, **kwargs):
+        raise RuntimeError('close failed')
+
+    monkeypatch.setattr(pipeline, 'resolve_population', fail_population)
+    monkeypatch.setattr(pipeline, 'close_orq_client', fail_close)
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert run.status == 'error'
+    assert list(tmp_path.glob('insights_*.json'))
+    manifests = list_manifests(tmp_path)
+    assert len(manifests) == 1
+    assert manifests[0].status.value == 'error'
+    assert manifests[0].stage == 'population'
+
+
+@pytest.mark.asyncio
 async def test_unknown_label_fails_before_any_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def forbidden(*args, **kwargs):
         pytest.fail('a fake or client was called before validating labels')

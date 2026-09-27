@@ -108,3 +108,18 @@ def test_aligned_truncation_and_same_length_corruption_are_cache_misses(tmp_path
             conn.execute('UPDATE vectors SET vector = ? WHERE text_hash = ?', (damaged, key))
 
     assert cache.get_vectors('e', ['good', 'short', 'tampered']) == {'good': [0.5, 1.0]}
+
+
+def test_invalid_vectors_are_skipped_without_aborting_valid_writes(tmp_path):
+    cache = InsightsCache(tmp_path / 'cache.sqlite')
+    vectors = {
+        'good': [0.5, 1.0],
+        'not-numeric': cast('list[float]', ['bad']),
+        'overflow': [1e100],
+        'empty': [],
+        'non-finite': [float('nan')],
+    }
+
+    cache.put_vectors('e', vectors)
+
+    assert cache.get_vectors('e', list(vectors)) == {'good': [0.5, 1.0]}

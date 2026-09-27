@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime  # noqa: TC003
 from typing import Annotated, Any, Literal
 
@@ -200,6 +201,13 @@ def export_json(run: RunSnapshot, *, matched_only: bool = False) -> str:
     """Return one pretty-printed run, optionally with only matched trace rows."""
 
     return build_export(run, matched_only=matched_only).model_dump_json(indent=2)
+
+
+def export_filename(run: RunSnapshot, payload: str | None = None) -> str:
+    """Give a completed export a stable content-based filename across dashboard restarts."""
+    content = payload if payload is not None else export_json(run)
+    digest = hashlib.sha256(content.encode('utf-8')).hexdigest()
+    return f'trace-finder-{run.generation}-{digest}.json'
 
 
 def _export_task(compiled: CompiledQuery) -> ExportTask:

@@ -590,15 +590,48 @@ def test_find_trace_drawer_renders_thread_and_classifier_input(setup_finder, mon
     assert 'navigator.clipboard.writeText' in drawer.text
 
 
-def test_find_export_is_404_until_completed_then_downloads_json(setup_finder) -> None:
+def test_find_export_is_404_until_completed_then_downloads_json(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     store, client = setup_finder
     assert client.get('/find/export.json').status_code == 404
     client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
     store.complete()
     response = client.get('/find/export.json')
     assert response.status_code == 200
-    assert response.headers['content-disposition'] == 'attachment; filename="trace-finder-1.json"'
+    filename = response.headers['content-disposition'].split('filename="', 1)[1].rstrip('"')
+    assert filename.startswith('trace-finder-1-') and filename.endswith('.json')
     assert json.loads(response.text)['counts']['matched'] == 1
+    assert (tmp_path / 'finder-exports' / filename).read_text() == response.text
+
+
+def test_find_export_save_failure_is_visible(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    store.complete()
+
+    def fail_save(*args, **kwargs):
+        raise OSError('read-only store')
+
+    monkeypatch.setattr(finder_routes.tempfile, 'NamedTemporaryFile', fail_save)
+    response = client.get('/find/export.json')
+    assert response.status_code == 500
+    assert 'Could not save Finder export for Insights.' in response.text
+
+
+def test_find_export_filename_survives_generation_restart_without_overwriting() -> None:
+    from evaluatorq.trace_finder.export import export_filename
+
+    snapshot = RunSnapshot(generation=1)
+    first = export_filename(snapshot, 'first export')
+    second = export_filename(snapshot, 'different export after restart')
+
+    assert first != second
+    assert export_filename(snapshot, 'first export') == first
 
 
 def test_find_facets_menu_reports_unavailable_catalogue(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:

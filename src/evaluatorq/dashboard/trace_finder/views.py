@@ -12,6 +12,7 @@ from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
+from evaluatorq.trace_finder.export import export_filename
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 
 if TYPE_CHECKING:
@@ -669,7 +670,7 @@ def body(
         return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}'
     analyze = ''
     if snapshot.state == 'completed' and snapshot.compiled is not None:
-        export_name = f'trace-finder-{snapshot.generation}.json'
+        export_name = export_filename(snapshot)
         python = (
             'from evaluatorq.insights import InsightsPopulation, insights_sync\n\n'
             f'population = InsightsPopulation.from_finder_export("{export_name}")\n'
@@ -677,7 +678,8 @@ def body(
         )
         analyze = (
             '<section class="finder-analyze-matches"><h3>Analyze matches</h3>'
-            '<p>Download this completed finder export, then use it as the Insights population.</p>'
+            '<p>Download this completed Finder export. The dashboard also saves a copy for Insights; '
+            f'enter {esc(export_name)} in the Insights wizard to analyze these matches.</p>'
             f'<p><a class="btn-secondary" href="/find/export.json">Download {esc(export_name)}</a></p>'
             f'<label>CLI</label><pre><code>eq insights --from-finder {esc(export_name)}</code></pre>'
             f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
