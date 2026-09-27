@@ -722,6 +722,9 @@
     document.querySelectorAll('#explorer-from, #explorer-to').forEach(explorerLocal);
     const exact = document.querySelector('[data-explorer-range-mode]')?.value === 'exact';
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = exact; });
+    const filterButton = document.querySelector('[data-explorer-filters]');
+    const finder = filterButton && filterButton.closest('.finder');
+    if (filterButton && finder) filterButton.setAttribute('aria-expanded', String(finder.classList.contains('filter-panel-open')));
     explorerUpdateOffsets();
   }
   document.addEventListener('submit', function (evt) {
@@ -751,10 +754,10 @@
   document.addEventListener('click', function (evt) {
     const filters = evt.target.closest('[data-explorer-filters]');
     if (filters) {
-      const controls = document.getElementById('finder-controls');
-      if (controls) {
-        controls.hidden = !controls.hidden;
-        filters.setAttribute('aria-expanded', String(!controls.hidden));
+      const finder = filters.closest('.finder');
+      if (finder) {
+        const isOpen = finder.classList.toggle('filter-panel-open');
+        filters.setAttribute('aria-expanded', String(isOpen));
       }
     }
     if (evt.target.closest('.xr-exact > summary')) {

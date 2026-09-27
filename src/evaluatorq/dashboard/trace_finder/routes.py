@@ -684,18 +684,21 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             snapshot = await store.snapshot_for_render()
         else:
             snapshot = await store.snapshot() if store is not None else RunSnapshot()
+        explorer = getattr(store, 'explorer', None) if not is_search(req) else None
+        explorer_view = await explorer.view() if explorer is not None else None
+        fragment_kwargs = _catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view)
+        if explorer_view is not None:
+            fragment_kwargs['explorer_view'] = explorer_view
         body = render_fragment(
             req,
             snapshot,
             settings,
             api_available=store is not None,
             error=_unavailable_reason(req.app) if store is None else None,
-            **_catalogue_kwargs(req.app, snapshot),
+            **fragment_kwargs,
         )
-        explorer = store.explorer if store is not None else None
-        if explorer is not None and not is_search(req):
-            view = await explorer.view()
-            if view.rows and (snapshot.state == 'classifying' or snapshot.results):
+        if explorer is not None and explorer_view is not None:
+            if explorer_view.rows and (snapshot.state == 'classifying' or snapshot.results):
                 body += await _explorer_html(req, oob=True)
         return _html(body)
 

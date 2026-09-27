@@ -463,11 +463,27 @@ def test_new_search_results_do_not_change_trajectory_hydration_page(explorer_cli
 
 def test_poll_appends_explorer_results_during_classification(explorer_client) -> None:
     store, _, client = explorer_client
-    _load(client)
+    _load(client, facet_model='poll-model')
     store.snapshot_value = replace(store.snapshot_value, state='classifying')
     html = client.get('/find/poll').text
     assert 'id="explorer-results"' in html
     assert 'hx-swap-oob="true"' in html
+    assert html.count('id="finder-controls"') == 1
+    assert 'name="facet_model" value="poll-model"' in html
+
+
+def test_traces_starts_with_one_collapsed_filter_panel(explorer_client) -> None:
+    from evaluatorq.dashboard import styles
+
+    _, _, client = explorer_client
+    html = client.get('/traces').text
+    css = styles._FINDER_CSS  # pyright: ignore[reportPrivateUsage]
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert html.count('id="finder-controls"') == 1
+    assert 'data-explorer-filters aria-controls="finder-controls" aria-expanded="false"' in html
+    assert '.finder-command ~ #finder-body .finder-controls { display:none; }' in css
+    assert '.finder.filter-panel-open #finder-body .finder-controls { display:flex; }' in css
+    assert "finder.classList.toggle('filter-panel-open')" in js
 
 
 def test_load_keeps_filter_values_and_enables_within_scope(explorer_client) -> None:
@@ -580,6 +596,7 @@ def test_shared_toolbar_keeps_load_and_view_switch_visible_in_all_states(state: 
     assert 'aria-label="View"' in html
     assert html.count('class="xr-toolbar"') == 1
     assert html.count('id="explorer-load-form"') == 1
+    assert html.index('class="xr-status"') < html.index('class="xr-toolbar"') < html.index('>Filters</button>')
 
 
 def test_quick_views_filter_only_loaded_population_and_render_empty_state() -> None:

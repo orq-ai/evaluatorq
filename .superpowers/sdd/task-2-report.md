@@ -19,3 +19,13 @@ Relative ranges update their local date and time fields immediately before Load 
 ## Self-review
 
 The toolbar is rendered once inside `#explorer-results`, so `/find/rows` refreshes the contextual Columns/Sort slot and quick-view state without moving Load or the view switch. The date parser already has focused browser-offset and daylight-saving tests. The relative-load timestamp refresh is JavaScript behavior; it was syntax-checked but not exercised in a browser automation test. Existing dirty trajectory edits in `styles.py`, `explorer_views.py`, and `test_explorer.py`, and unrelated dirty files, are intentionally excluded from the Task 2 commit.
+
+## Review follow-up
+
+`/find/poll` now passes the current `ExplorerView` to the fragment renderer, which keeps its active facet chips and filters aligned with the loaded population. The `/traces` filter controls now use a command-strip-scoped CSS rule to stay collapsed despite the base `.finder-controls { display:flex }` rule. The Filters button toggles a class on the stable `.finder` wrapper, so body polls and OOB result swaps preserve the open state. The trace count lives in a compact status row before the toolbar, leaving Filters as the toolbar's first control.
+
+Regression coverage checks that a poll response has one `#finder-controls` row and retains the loaded model filter, that the initial `/traces` response has one filter panel with collapsed/open CSS and delegated toggle wiring, and that the status row precedes the toolbar.
+
+A real Dia browser session loaded the current `dashboard.js` with the toolbar visibility CSS and native form controls. Initially, the filter contents were absent from the accessibility tree; clicking Filters showed them, and clicking it again hid them. Relative Load submitted a fresh one-hour range (`15:52:13` to `16:52:13` local time) with the browser's current `-120` minute offset. Exact Load preserved the selected `2026-10-24 22:00:00` to `2026-10-25 04:00:00` range and sent endpoint offsets `-120` and `-60` across the Amsterdam daylight-saving transition.
+
+Follow-up checks: `uv run pytest tests/dashboard/test_explorer.py -q` passed (58 tests), Ruff passed, and `node --check src/evaluatorq/dashboard/static/dashboard.js` passed. The browser interaction was performed manually because this repo has no installed Playwright, Puppeteer, or jsdom test harness.

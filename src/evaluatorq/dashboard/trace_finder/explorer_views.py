@@ -231,11 +231,6 @@ def _toolbar(view: ExplorerView, columns: Sequence[Column], *, has_results: bool
     date_and_rows = range_inputs(view.start, view.end, window_days, include_load=False)
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary" type="submit" form="explorer-load-form">Load</button>'
-    progress = (
-        f'<span class="xr-progress">{len(view.rows)} / {view.limit}</span>'
-        if view.state == 'loading'
-        else f'<span class="xr-progress">{len(view.rows)} traces</span>'
-    )
     chips = ''.join(
         f'<span class="xr-chip"><b>{esc(name)}</b> {esc(value)}</span>'
         for name in ('project', 'agent_name', 'model', 'provider', 'status', 'product', 'trace_type', 'tool_name')
@@ -253,7 +248,7 @@ def _toolbar(view: ExplorerView, columns: Sequence[Column], *, has_results: bool
             if (value := getattr(view.numeric, key)) is not None
         )
     return (
-        f'<div class="xr-toolbar">{progress}<button type="button" class="xr-filter" data-explorer-filters aria-controls="finder-controls" aria-expanded="false">Filters</button>{chips}'
+        f'<div class="xr-toolbar"><button type="button" class="xr-filter" data-explorer-filters aria-controls="finder-controls" aria-expanded="false">Filters</button>{chips}'
         f'<span class="xr-quickviews" role="group" aria-label="Quick views">{quick_views}</span>'
         f'<span class="spacer"></span><span class="xr-toolbar-right">{date_and_rows}{context_menu}{load}'
         f'<span class="finder-seg xr-switch" role="group" aria-label="View">{switch}</span></span></div>'
@@ -300,6 +295,11 @@ def results(
     toolbar = _toolbar(
         view, columns, has_results=bool(snapshot is not None and snapshot.results), window_days=window_days
     )
+    status = (
+        f'<div class="xr-status" role="status">Loading traces · {len(view.rows)} / {view.limit}</div>'
+        if view.state == 'loading'
+        else f'<div class="xr-status" role="status">{len(view.rows)} traces loaded</div>'
+    )
     if view.state == 'idle':
         inner = _empty('Load traces to start.', 'Pick a time range and filters, then press Load. Loading uses no AI.')
     elif not view.rows and view.state == 'loaded':
@@ -330,6 +330,6 @@ def results(
                 'No matches yet.', 'None of the loaded traces match so far. Turn off Matches only to see every row.'
             )
         inner = f'{banner}{body}{_pager(view, results)}'
-    inner = f'{toolbar}{inner}'
+    inner = f'{status}{toolbar}{inner}'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     return f'<section id="explorer-results" class="xr" hx-sync="this:replace"{oob_attr}{poll}>{error_html}{inner}</section>'

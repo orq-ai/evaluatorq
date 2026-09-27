@@ -298,11 +298,19 @@ def controls(
     keep = {name: f'id="finder-{name}-{form_id}" hx-preserve' for name in values}
     # A reviewed start reuses the whole population, classifier picks included. A fresh query only carries
     # the filters the user set themselves; the classifier's picks for the last question are not sticky.
-    carried_facets = facets if review else (explorer_facets or snapshot.explicit_filters)
-    carried_numeric = numeric if review else (explorer_numeric or snapshot.explicit_numeric)
-    if not review and population is None and explorer_facets is not None:
-        facets = explorer_facets
-        numeric = explorer_numeric
+    carried_facets = (
+        facets
+        if review
+        else (explorer_facets or (explorer_view.facets if explorer_view is not None else None) or snapshot.explicit_filters)
+    )
+    carried_numeric = (
+        numeric
+        if review
+        else (explorer_numeric or (explorer_view.numeric if explorer_view is not None else None) or snapshot.explicit_numeric)
+    )
+    if not review and population is None and (explorer_facets is not None or explorer_view is not None):
+        facets = carried_facets
+        numeric = carried_numeric
     generated_only = None
     if review:
         generated_only = snapshot.generated_filters.model_copy(
@@ -323,7 +331,7 @@ def controls(
         for value in sorted(getattr(carried_facets, name))
     )
     return (
-        f'<div class="finder-controls" id="finder-controls"{" hidden" if explorer_view is not None else ""}>'
+        '<div class="finder-controls" id="finder-controls">'
         f'{hidden_facets}{scope_html}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"}, generated=generated_only)}'
         f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
         f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}'
