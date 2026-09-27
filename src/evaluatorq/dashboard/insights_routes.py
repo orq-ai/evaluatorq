@@ -47,10 +47,13 @@ if TYPE_CHECKING:
 def _entries(
     directory: Path,
 ) -> tuple[list[tuple[str, str, str]], dict[str, tuple[Path, InsightsRun | str]], dict[str, RunManifest]]:
-    manifests_dir = directory / '.manifests'
+    manifests = list_manifests(directory)
     try:
-        for manifest_path in manifests_dir.glob('*.json'):
-            reconcile_stale_worker(directory, manifest_path.stem)
+        for manifest in manifests:
+            # This route owns only Insights worker leases. Other dashboard
+            # surfaces share the manifest directory and must keep their state.
+            if manifest.surface.value == 'insights':
+                reconcile_stale_worker(directory, manifest.run_id)
     except (OSError, ValueError) as exc:
         logger.warning('Could not reconcile stale Insights workers in {}: {}', directory, exc)
     entries: list[tuple[str, str, str]] = []

@@ -695,6 +695,29 @@ def test_finder_pruning_skips_when_a_lease_is_malformed(monkeypatch: pytest.Monk
     assert marker.exists()
 
 
+def test_finder_pruning_recovers_after_malformed_lease_expires(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard.insights_launch import ensure_private_finder_reference_dir, finder_export_reference_path
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, ns=(index + 1, index + 1))
+    marker = finder_export_reference_path(tmp_path / 'insights-runs', 'malformed-lease')
+    ensure_private_finder_reference_dir(marker.parent)
+    marker.write_text('{invalid JSON', encoding='utf-8')
+    marker.chmod(0o600)
+    os.utime(marker, (1, 1))
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert not marker.exists()
+    assert not exports[0].exists()
+    assert all(path.exists() for path in exports[1:])
+
+
 def test_finder_pruning_skips_when_lease_directory_is_unsafe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from evaluatorq.dashboard.insights_launch import ensure_private_finder_reference_dir
 

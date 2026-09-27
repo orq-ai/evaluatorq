@@ -14,6 +14,7 @@ marks the run `status='error'` with a `StageFailure`, the caller's job).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -34,6 +35,19 @@ if TYPE_CHECKING:
 
 class EmbeddingError(RuntimeError):
     """A whole embedding batch failed after retries — a stage failure, not a per-trace one."""
+
+
+def _vector_cache_model(client: AsyncOpenAI, model: str) -> str:
+    """Namespace vectors by requested model and API endpoint without storing endpoint credentials.
+
+    A provider can change an alias behind the same endpoint without informing a
+    fully cached call. Callers that need fresh alias results can disable caching.
+    """
+    endpoint = getattr(client, 'base_url', None)
+    if endpoint is None:
+        return model
+    endpoint_hash = hashlib.sha256(str(endpoint).rstrip('/').encode('utf-8')).hexdigest()
+    return f'{model}@{endpoint_hash}'
 
 
 async def _embed_batch(
@@ -91,6 +105,7 @@ async def embed_texts(
     if not unique_texts:
         return {}
     client = without_client_retries(client)
+    cache_model = _vector_cache_model(client, model)
     call_cfg = cfg if cfg is not None else LLMCallConfig(model=model)
     if cfg is not None:
         warn_config_redirect(cfg, resolved_model=model, caller='insights.embed_texts')
@@ -98,7 +113,7 @@ async def embed_texts(
 
     # SQLite is synchronous; keep cache I/O off the event loop, just like the
     # other blocking local-store operations in the insights pipeline.
-    vectors: dict[str, list[float]] = dict(await asyncio.to_thread(cache.get_vectors, model, unique_texts))
+    vectors: dict[str, list[float]] = dict(await asyncio.to_thread(cache.get_vectors, cache_model, unique_texts))
     missing = [text for text in unique_texts if text not in vectors]
 
     new_vectors: dict[str, list[float]] = {}
@@ -127,8 +142,20 @@ async def embed_texts(
             'Insights embedding model {} is not priced in the Orq catalogue; embed cost stays unknown', model
         )
 
-    if new_vectors:
-        await asyncio.to_thread(cache.put_vectors, model, new_vectors)
     vectors.update(new_vectors)
+
+    dimensions = {len(vector) for vector in vectors.values()}
+    if len(dimensions) > 1 or (dimensions and not next(iter(dimensions))):
+        # Mixing dimensions reaches the clustering algorithm as an opaque matrix
+        # error. Clear this namespace and fail the stage so a retry recomputes a
+        # coherent set instead of reusing the incompatible rows again.
+        await asyncio.to_thread(cache.delete_vectors, cache_model)
+        raise EmbeddingError(
+            f'embedding vectors have inconsistent dimensions ({sorted(dimensions)}); '
+            'the affected cache entries were cleared'
+        )
+
+    if new_vectors:
+        await asyncio.to_thread(cache.put_vectors, cache_model, new_vectors)
 
     return {text: vectors[text] for text in unique_texts}

@@ -149,6 +149,16 @@ def _inflight_finder_export(
 ) -> tuple[Path | None, bool]:
     """Read one lease and say whether its export reference was trustworthy."""
     try:
+        # An unreadable marker can block pruning while it might still belong to
+        # a live run, but the lease itself expires after the maximum run age.
+        if now - marker.lstat().st_mtime > _FINDER_EXPORT_REFERENCE_MAX_AGE.total_seconds():
+            try:
+                marker.unlink(missing_ok=True)
+            except IsADirectoryError:
+                logger.warning('Ignoring expired non-file Finder export lease {}', marker)
+            else:
+                logger.warning('Removed expired Finder export lease {} before pruning', marker)
+            return None, True
         if not marker.stem.replace('-', '').replace('_', '').isalnum():
             logger.warning('Could not inspect in-flight Finder export reference with invalid run ID: {}', marker)
             return None, False

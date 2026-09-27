@@ -225,6 +225,17 @@ class InsightsCache:
             except sqlite3.Error as exc:
                 logger.warning(f'InsightsCache.put_vectors: {exc}; {len(rows)} vector(s) not cached')
 
+    def delete_vectors(self, model: str) -> None:
+        """Invalidate every vector for a model cache namespace; no-op if disabled."""
+        with self._lock:
+            if self._conn is None:
+                return
+            try:
+                with self._conn:
+                    self._conn.execute('DELETE FROM vectors WHERE model = ?', (model,))
+            except sqlite3.Error as exc:
+                logger.warning(f'InsightsCache.delete_vectors: {exc}; vectors for {model} remain cached')
+
     def close(self) -> None:
         """Close the underlying connection; safe to call on a disabled or already-closed cache."""
         with self._lock:

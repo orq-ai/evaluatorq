@@ -117,6 +117,28 @@ def test_dashboard_reconciles_worker_killed_before_start_and_releases_finder_fil
     assert writer.manifest.status.value == 'running'
 
 
+def test_insights_listing_does_not_reconcile_another_surface_worker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import time
+
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    writer = start_manifest(run_id='redteam-worker', surface='redteam', run_name='other surface', runs_dir=runs_dir)
+    state_path = worker_state_path(runs_dir, 'redteam-worker')
+    _write_worker_state(state_path, {'pid': 12345, 'heartbeat_at': time.time() - 120})
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_is_alive', lambda *_: False)
+
+    entries, _, manifests = insights_routes._entries(runs_dir)
+
+    assert ('redteam-worker', 'other surface', 'running') not in entries
+    assert manifests == {}
+    assert writer.manifest.status.value == 'running'
+    assert list_manifests(runs_dir)[0].status.value == 'running'
+    assert state_path.exists()
+
+
 def test_non_oserror_setup_failure_marks_manifest_and_cleans_finder_files(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

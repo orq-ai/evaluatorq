@@ -88,7 +88,10 @@ class _FakeClient:
         wrong_count_batches: set[int] | None = None,
         prompt_tokens: int = 1,
         response_model: str | None = MODEL,
+        base_url: str | None = None,
     ) -> None:
+        if base_url is not None:
+            self.base_url = base_url
         self.embeddings = _FakeEmbeddingsResource(
             fail_batches=fail_batches,
             wrong_count_batches=wrong_count_batches,
@@ -103,12 +106,14 @@ def fake_client(
     wrong_count_batches: set[int] | None = None,
     prompt_tokens: int = 1,
     response_model: str | None = MODEL,
+    base_url: str | None = None,
 ) -> Any:
     return _FakeClient(
         fail_batches=fail_batches,
         wrong_count_batches=wrong_count_batches,
         prompt_tokens=prompt_tokens,
         response_model=response_model,
+        base_url=base_url,
     )
 
 
@@ -293,6 +298,37 @@ async def test_embed_texts_cache_hit_avoids_the_call(cache: InsightsCache) -> No
 
     assert result == {'hello world': [1.0, 2.0]}
     assert client.embeddings.calls == []
+
+
+@pytest.mark.asyncio
+async def test_embedding_cache_is_scoped_to_endpoint(cache: InsightsCache) -> None:
+    first_client = fake_client(base_url='https://provider-a.example/v1')
+    second_client = fake_client(base_url='https://provider-b.example/v1')
+
+    await embed_texts(['same text'], client=first_client, model=MODEL, cache=cache)
+    result = await embed_texts(['same text'], client=second_client, model=MODEL, cache=cache)
+
+    assert first_client.embeddings.calls == [['same text']]
+    assert second_client.embeddings.calls == [['same text']]
+    assert result == {'same text': _vector_for('same text')}
+
+
+@pytest.mark.asyncio
+async def test_mixed_cached_and_fresh_dimensions_clear_cache_and_fail(cache: InsightsCache) -> None:
+    cache.put_vectors(MODEL, {'cached': [1.0, 2.0]})
+
+    class ThreeDimensionalEmbeddings:
+        async def create(self, *, model: str, input: list[str]) -> _Response:  # noqa: A002
+            assert input == ['fresh']
+            return _Response([_Embedding([1.0, 2.0, 3.0])], model=model)
+
+    client = fake_client()
+    client.embeddings = ThreeDimensionalEmbeddings()
+
+    with pytest.raises(EmbeddingError, match='inconsistent dimensions'):
+        await embed_texts(['cached', 'fresh'], client=client, model=MODEL, cache=cache)
+
+    assert cache.get_vectors(MODEL, ['cached', 'fresh']) == {}
 
 
 @pytest.mark.parametrize('blocked_method', ['get_vectors', 'put_vectors'])

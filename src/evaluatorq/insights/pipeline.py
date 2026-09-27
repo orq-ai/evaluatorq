@@ -450,16 +450,37 @@ async def insights(  # noqa: C901
         planned_stages=[stage for stage, _ in plan],
         stage_labels=dict(plan),
     )
-    resolved_llm = None
+    resolved_llm: AsyncOpenAI | None = None
     llm_owned = False
+    callback_attempted = False
     own_orq = orq_client is None
     resolved_orq = orq_client
     cache_store = InsightsCache(enabled=cache)
     ledger = UsageLedger()
+
+    def notify_saved(path: Path) -> None:
+        nonlocal callback_attempted
+        if _on_saved is None or callback_attempted:
+            return
+        # A callback may perform external side effects before raising. Attempt it
+        # at most once, even when finalization has to persist the run again.
+        callback_attempted = True
+        _on_saved(path)
+
+    def ensure_llm_client() -> AsyncOpenAI:
+        nonlocal resolved_llm, llm_owned
+        if resolved_llm is None:
+            resolved_client = resolve_llm_client(llm_client, max_retries=0)
+            resolved_llm = resolved_client.client
+            llm_owned = resolved_client.owned
+        return resolved_llm
+
     try:
-        resolved_client = resolve_llm_client(llm_client, max_retries=0)
-        resolved_llm = resolved_client.client
-        llm_owned = resolved_client.owned
+        # Query populations need an LLM to compile and match the query. Filter
+        # and Finder populations can be loaded without LLM credentials, so wait
+        # until after population resolution to construct a client for analysis.
+        if population.query is not None:
+            ensure_llm_client()
         if resolved_orq is None:
             resolved_orq = resolve_orq_client()
         _stage(writer, 'population')
@@ -513,12 +534,13 @@ async def insights(  # noqa: C901
             run.warnings.append('population is empty')
             logger.warning('Insights population is empty')
         else:
+            client = ensure_llm_client()
             _stage(writer, 'label')
             outcomes = await label_traces(
                 resolved.traces,
                 labels=specs,
                 compiled=resolved.compiled,
-                client=resolved_llm,
+                client=client,
                 model=classifier_model,
                 parallelism=parallelism,
                 usage=ledger,
@@ -583,7 +605,7 @@ async def insights(  # noqa: C901
                 _stage(writer, 'summary')
                 summaries = await summarize_traces(
                     [outcome.trace for outcome in outcomes if outcome.trace.trace_id in retained_trace_ids],
-                    client=resolved_llm,
+                    client=client,
                     model=summary_model,
                     cache=cache_store,
                     parallelism=parallelism,
@@ -615,7 +637,7 @@ async def insights(  # noqa: C901
                         result = await _build_dimension(
                             dimension,
                             run.traces,
-                            client=resolved_llm,
+                            client=client,
                             cache=cache_store,
                             embedding_model=embedding_model,
                             summary_model=summary_model,
@@ -663,8 +685,7 @@ async def insights(  # noqa: C901
         _stage(writer, 'write')
         run.cost_by_stage = ledger.totals()
         run_path = save_run(run, directory)
-        if _on_saved is not None:
-            _on_saved(run_path)
+        notify_saved(run_path)
         _stage_end(writer, 'write')
         if run.status == 'error':
             writer.fail(run.stage_failures[-1].message, stage=run.stage_failures[-1].stage)
@@ -699,8 +720,7 @@ async def insights(  # noqa: C901
                 run.counts = run.counts or {'n_traces': len(run.traces), 'n_failed_traces': 0, 'per_stage_failed': 0}
                 run.cost_by_stage = ledger.totals()
                 report = save_run(run, directory)
-                if _on_saved is not None:
-                    _on_saved(report)
+                notify_saved(report)
                 if run.status == 'error':
                     writer.fail(run.stage_failures[-1].message, stage=run.stage_failures[-1].stage)
                 else:

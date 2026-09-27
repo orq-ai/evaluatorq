@@ -325,6 +325,53 @@ async def test_empty_population_warns_and_skips_dimensions(monkeypatch: pytest.M
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('source', ['filter', 'finder'])
+async def test_empty_non_query_population_does_not_require_llm_credentials(
+    source: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_clients(monkeypatch)
+    population = _population()
+    if source == 'finder':
+        population = InsightsPopulation.from_finder_export(tmp_path / 'finder.json')
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve([]))
+
+    def unavailable(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError('LLM credentials are unavailable')
+
+    monkeypatch.setattr(pipeline, 'resolve_llm_client', unavailable)
+
+    run = await pipeline.insights(population, dimensions=('intent',), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    assert run.counts['n_traces'] == 0
+    assert 'population is empty' in run.warnings
+
+
+@pytest.mark.asyncio
+async def test_saved_callback_that_raises_is_attempted_only_once(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import list_manifests
+
+    _patch_clients(monkeypatch)
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve([]))
+    callback_paths: list[Path] = []
+
+    def fail_callback(path: Path) -> None:
+        callback_paths.append(path)
+        raise RuntimeError('notification failed')
+
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path, _on_saved=fail_callback)
+
+    assert len(callback_paths) == 1
+    assert run.status == 'error'
+    assert run.stage_failures[-1].stage == 'write'
+    manifests = list_manifests(tmp_path)
+    assert len(manifests) == 1
+    assert manifests[0].status.value == 'error'
+
+
+@pytest.mark.asyncio
 async def test_unexpected_population_failure_records_the_active_stage(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

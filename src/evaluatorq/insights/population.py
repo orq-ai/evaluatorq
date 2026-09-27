@@ -281,19 +281,21 @@ async def resolve_population(
     pop: InsightsPopulation,
     *,
     orq: Orq,
-    client: AsyncOpenAI,
+    client: AsyncOpenAI | None,
     compiler_model: str,
     classifier_model: str,
 ) -> ResolvedPopulation:
     """Resolve `pop` into traces via the query, finder-export, or filter-only path — see module docstring.
 
-    `compiler_model`/`classifier_model` are only used on the query path
+    `client` and the models are only used on the query path
     (`compile_query` and `select_filters_with_response`, respectively); the
     other two paths never call the LLM.
     """
     if pop.finder_export is not None:
         return await _resolve_from_export(pop, orq=orq)
     if pop.query is not None:
+        if client is None:
+            raise PopulationError('a query population requires an LLM client')
         return await _resolve_from_query(
             pop, orq=orq, client=client, compiler_model=compiler_model, classifier_model=classifier_model
         )
