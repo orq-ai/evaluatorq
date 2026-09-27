@@ -41,7 +41,15 @@
     var scope = evt.detail.target;
     if (!scope || !window.vegaEmbed) return;
 
-    scope.querySelectorAll('[data-vega-for]').forEach(function (tag) {
+    var tags = scope.querySelectorAll('[data-vega-for]');
+    // htmx removes script tags when allowScriptTags is false, including the
+    // application/json islands that hold chart specs. Read those inert tags
+    // from the response so the swapped chart can still be embedded.
+    if (!tags.length && scope.querySelector('.vega-chart') && evt.detail.xhr) {
+      var response = new DOMParser().parseFromString(evt.detail.xhr.responseText, 'text/html');
+      tags = response.querySelectorAll('[data-vega-for]');
+    }
+    tags.forEach(function (tag) {
       var id = tag.getAttribute('data-vega-for');
       if (!id) return;
 
