@@ -11,6 +11,7 @@ from loguru import logger
 from evaluatorq.common.reports import esc
 from evaluatorq.trace_finder.columns import COLUMNS, MATCH, Column, fmt_cost, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.explorer import PAGE_ROWS
+from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, segments
 
 if TYPE_CHECKING:
@@ -45,18 +46,18 @@ def range_inputs(start: datetime | None, end: datetime | None, window_days: int)
         for label, span in PRESETS
     )
     return (
-        '<form id="explorer-load-form" hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-include="#finder-controls"></form>'
+        f'<form id="explorer-load-form" hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-include="#finder-controls">{_csrf()}</form>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
         f'<span class="quiet"><b>From</b><input id="explorer-from" hx-preserve form="explorer-load-form" name="from" type="datetime-local" step="1" required data-utc="{_local_value(start)}" value="{_local_value(start)}"></span>'
         f'<span class="quiet"><b>To</b><input id="explorer-to" hx-preserve form="explorer-load-form" name="to" type="datetime-local" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)}"></span>'
         f'<span class="xr-presets">{presets}</span>'
-        f'<span class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="5000" value="{DEFAULT_EXPLORER_ROWS}" style="width:72px"></span>'
+        f'<span class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="{MAX_LIVE_TRACES}" value="{DEFAULT_EXPLORER_ROWS}" style="width:72px"></span>'
         '<button class="btn-primary" type="submit" form="explorer-load-form">Load</button>'
     )
 
 
 def _empty(title: str, body: str) -> str:
-    return f'<div class="finder-hint xr-empty"><div class="inner"><h4>{esc(title)}</h4><p>{esc(body)}</p></div></div>'
+    return f'<div class="xr-empty"><h4>{esc(title)}</h4><p>{esc(body)}</p></div>'
 
 
 def _match_cell(row: TraceRow, snapshot: RunSnapshot | None) -> str:

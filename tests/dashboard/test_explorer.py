@@ -50,6 +50,8 @@ def test_range_inputs_include_local_time_fields_and_default_rows() -> None:
     assert 'name="tz_offset" form="explorer-load-form"' in html
     assert 'data-explorer-preset="900"' in html
     assert 'name="rows" type="number"' in html
+    assert 'max="5000"' in html
+    assert 'name="csrf"' in html
     assert 'value="200"' in html
     assert 'form="explorer-load-form">Load</button>' in html
 
@@ -58,6 +60,8 @@ def test_idle_results_render_an_empty_state() -> None:
     html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
     assert 'id="explorer-results"' in html
     assert 'Load traces' in html
+    assert 'class="xr-empty"' in html
+    assert 'finder-hint' not in html
 
 
 def test_zero_rows_render_an_empty_state() -> None:

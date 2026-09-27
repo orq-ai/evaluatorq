@@ -357,7 +357,7 @@ def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatc
     assert response.status_code == 200
     assert 'Set ORQ_API_KEY to load traces' in response.text
     assert '<textarea name="query"' in response.text and 'disabled' in response.text.split('<textarea name="query"', 1)[1].split('>', 1)[0]
-    assert 'class="finder-hint"' in response.text
+    assert 'class="xr-empty"' in response.text
     assert '<span class="finder-key-hint"' not in response.text
 
 
