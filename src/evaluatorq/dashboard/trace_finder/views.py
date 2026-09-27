@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         TraceDetail,
         TraceRow,
     )
+    from evaluatorq.trace_finder.explorer import ExplorerView
 
 
 SAMPLES = (
@@ -251,6 +252,7 @@ def controls(
     pending: bool = False,
     explorer_facets: FacetSelection | None = None,
     explorer_numeric: object | None = None,
+    explorer_view: ExplorerView | None = None,
 ) -> str:
     request = snapshot.request
     population = request.population if request is not None else None
@@ -291,6 +293,8 @@ def controls(
         if settings.orq_project_id
         else ''
     )
+    range_start = population.start if population else explorer_view.start if explorer_view else None
+    range_end = population.end if population else explorer_view.end if explorer_view else None
     hidden_facets = ''.join(
         f'<input type="hidden" form="{form_id}" name="facet_{name}" value="{esc(value)}">'
         for name in FACET_NAMES
@@ -303,7 +307,7 @@ def controls(
         f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
-        f'{explorer_views.range_inputs(population.start if population else None, population.end if population else None, settings.window_days)}'
+        f'{explorer_views.range_inputs(range_start, range_end, settings.window_days)}'
         f'<span class="finder-limit-field"><span class="quiet"><b>Limit</b><input {keep["limit"]} form="{form_id}" name="limit" type="number" min="1" max="5000" value="{values["limit"]}" style="width:72px"></span></span>'
         f'<span class="quiet"><b>Parallel</b><input {keep["parallelism"]} form="{form_id}" name="parallelism" type="number" min="1" max="200" value="{values["parallelism"]}" style="width:64px"></span>'
         f'{count_html}</div>'
@@ -706,6 +710,7 @@ def body(
     api_available: bool = True,
     explorer_facets: FacetSelection | None = None,
     explorer_numeric: object | None = None,
+    explorer_view: ExplorerView | None = None,
 ) -> str:
     indicator = status_indicator(snapshot)
     if snapshot.state == 'awaiting_review' and snapshot.compiled is not None:
@@ -720,8 +725,8 @@ def body(
         )
     if snapshot.state == 'idle':
         unavailable = field(snapshot, api_available=False) if not api_available else ''
-        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric)}{unavailable}'
-    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
+        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}{unavailable}'
+    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
 
 
 def page_html(
@@ -733,12 +738,20 @@ def page_html(
     catalogue: FacetCatalogue | None = None,
     pending: bool = False,
     explorer_html: str = '',
+    explorer_view: ExplorerView | None = None,
     has_rows: bool = False,
 ) -> str:
     request = snapshot.request
     query = request.query if request is not None else ''
     mode = request.mode if request is not None else 'review'
-    body_html = fragment(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)
+    body_html = fragment(
+        snapshot,
+        settings,
+        catalogue=catalogue,
+        pending=pending,
+        api_available=api_available,
+        explorer_view=explorer_view,
+    )
     if not explorer_html:
         from evaluatorq.trace_finder.columns import resolve_columns
         from evaluatorq.trace_finder.explorer import ExplorerView
@@ -758,12 +771,13 @@ def fragment(
     pending: bool = False,
     explorer_facets: FacetSelection | None = None,
     explorer_numeric: object | None = None,
+    explorer_view: ExplorerView | None = None,
 ) -> str:
     attrs = ''
     if snapshot.state in {'compiling', 'classifying'}:
         attrs = ' hx-get="/find/poll" hx-trigger="every 1s" hx-target="#finder-body" hx-swap="innerHTML"'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
-    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric)}</div>'
+    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}</div>'
 
 
 def scope_toggle(*, has_rows: bool) -> str:

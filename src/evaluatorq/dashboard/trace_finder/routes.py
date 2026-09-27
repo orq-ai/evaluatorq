@@ -464,6 +464,19 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         settings = _settings(req.app)
         store = await _store(req.app) if api_available else None
         api_available = store is not None
+        explorer = store.explorer if store is not None else None
+        if explorer is not None:
+            async with req.app.state.finder_store_lock:
+                if (await explorer.view()).state == 'idle':
+                    end = datetime.now(timezone.utc)
+                    await explorer.load(
+                        end - timedelta(days=7),
+                        end,
+                        explorer_views.DEFAULT_EXPLORER_ROWS,
+                        facets=FacetSelection(),
+                        numeric=NumericFilters(),
+                    )
+        explorer_view = await explorer.view() if explorer is not None else None
         snapshot = await store.snapshot() if store is not None else RunSnapshot()
         return _html(
             page_html(
@@ -472,7 +485,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 api_available=api_available,
                 error=_unavailable_reason(req.app) if not api_available else None,
                 explorer_html=await _explorer_html(req) if store is not None else '',
-                has_rows=bool(store and store.explorer and (await store.explorer.view()).rows),
+                explorer_view=explorer_view,
+                has_rows=bool(explorer_view and explorer_view.rows),
                 **_catalogue_kwargs(req.app, snapshot),
             )
         )

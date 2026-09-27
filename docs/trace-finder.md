@@ -18,7 +18,7 @@ Open [http://127.0.0.1:8080/find](http://127.0.0.1:8080/find). The **Traces** it
 
 ## Loading traces
 
-The controls row above the table sets **From**, **To** (both shown and edited in your browser's local time), and **Rows** — up to 5000, defaulting to 200. Preset buttons (`15m`, `1h`, `24h`, `7d`, `30d`) fill the range from now. Press **Load** to fetch the newest traces in that window; loading does not call a model. The toolbar shows `loading N / limit` while a load is in flight and the trace count once it finishes.
+When you open the page, it loads up to 200 traces from the last seven days with no facet or numeric filters and no AI calls. The controls row above the table sets **From**, **To** (both shown and edited in your browser's local time), and **Rows** — up to 5000, defaulting to 200. Preset buttons (`15m`, `1h`, `24h`, `7d`, `30d`) fill the range from now. Press **Load** to fetch the newest traces using the selected time range, row limit, and filters; loading does not call a model. The toolbar shows `loading N / limit` while a load is in flight and the trace count once it finishes.
 
 Loading does not hydrate message content up front — the table renders from the trace-search summary alone (status, timing, tokens, cost, models). Message content is fetched lazily, only for the row you open in the drawer or the page of rows shown in the Trajectories view.
 

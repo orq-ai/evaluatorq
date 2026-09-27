@@ -175,7 +175,7 @@ class FakeRowSource:
     async def search(
         self, start: Any, end: Any, limit: int, *, facets: Any, numeric: Any, on_page: Any = None
     ) -> tuple[TraceRow, ...]:
-        self.calls.append({'start': start, 'end': end, 'limit': limit, 'facets': facets})
+        self.calls.append({'start': start, 'end': end, 'limit': limit, 'facets': facets, 'numeric': numeric})
         if on_page is not None:
             on_page(self.rows[:limit])
         return self.rows[:limit]
@@ -220,6 +220,39 @@ def _load(client: TestClient, **extra: str) -> Any:
             **extra,
         }),
     )
+
+
+def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) -> None:
+    store, source, client = explorer_client
+    before = datetime.now(timezone.utc)
+    response = client.get('/find')
+    after = datetime.now(timezone.utc)
+
+    assert response.status_code == 200
+    assert len(source.calls) == 1
+    call = source.calls[0]
+    assert before <= call['end'] <= after
+    assert call['end'] - call['start'] == timedelta(days=7)
+    assert call['limit'] == explorer_views.DEFAULT_EXPLORER_ROWS
+    assert call['facets'].model_dump(exclude_none=True, exclude_defaults=True) == {}
+    assert call['numeric'].model_dump(exclude_none=True) == {}
+    assert store.reset_calls == 0
+    assert store.compile_request is None
+    assert not store.started
+    assert f'data-utc="{call["start"].strftime("%Y-%m-%dT%H:%M:%S")}"' in response.text
+    assert f'data-utc="{call["end"].strftime("%Y-%m-%dT%H:%M:%S")}"' in response.text
+
+    client.get('/find')
+    assert len(source.calls) == 1
+
+
+def test_find_page_keeps_manually_loaded_range(explorer_client) -> None:
+    _, source, client = explorer_client
+    _load(client)
+    response = client.get('/find')
+    assert len(source.calls) == 1
+    assert 'data-utc="2026-09-27T10:00:00"' in response.text
+    assert 'data-utc="2026-09-27T11:00:00"' in response.text
 
 
 def test_load_then_rows_then_sort_then_page(explorer_client) -> None:
