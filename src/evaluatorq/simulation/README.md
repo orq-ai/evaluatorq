@@ -76,10 +76,10 @@ Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`, `ter
 
 ## Datasets
 
-A named Orq dataset can seed simulations two ways. Direct replay reads `ORQ_API_KEY`; extension also accepts an explicit `api_key`.
+An Orq dataset is a stored collection of simulation datapoints. Use its ID, not its display name: `eq sim upload-dataset --input cases.jsonl --name "Support cases"` prints the ID when it creates one. Direct replay reads `ORQ_API_KEY`; extension also accepts an explicit `api_key`.
 
 - **Direct** — set `dataset_id="..."` to pull the dataset's rows as datapoints. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`). CLI: `eq sim simulate --dataset-id`.
-- **Extension** — `extend_from_dataset()` feeds the dataset's personas and scenarios to the standard generators as seeds and returns *new* similar-but-not-duplicate datapoints matching its distribution.
+- **Extension** — `extend_from_dataset()` uses the dataset's personas and scenarios as examples and returns only newly generated datapoints. It does not change the stored dataset. Similarity and uniqueness are prompt guidance, not guarantees.
 
 `num_personas` and `num_scenarios` request counts; the result uses the counts actually generated. An explicit `api_key` authenticates both dataset fetching and generation through Orq, unless `llm_config.client` supplies the generation client.
 
@@ -89,7 +89,7 @@ from evaluatorq.simulation import extend_from_dataset, simulate
 # direct: replay the dataset's rows
 results = await simulate(evaluation_name="replay", dataset_id="ds_abc", target=...)
 
-# extension: generate fresh datapoints seeded by the dataset
+# extension: generate fresh datapoints seeded by the dataset without changing it
 extra = await extend_from_dataset("ds_abc", num_personas=3, num_scenarios=5)
 results = await simulate(evaluation_name="extended", datapoints=extra, target=...)
 ```

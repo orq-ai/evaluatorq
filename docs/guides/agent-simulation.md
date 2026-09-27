@@ -497,38 +497,48 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-If your cases already live in Orq as a dataset, point `simulate()` at it with `dataset_id=` and skip the local file entirely. Each row's `inputs` should carry a `datapoint` object (`persona`, `scenario`, `first_message`), or a `persona` + `scenario` pair, matching the `SimulationDatapoint` shape above:
+An **Orq dataset** is a stored collection of rows. Here, one row is one **simulation datapoint**: a persona (who the simulated user is), a scenario (what they want), and an opening message. `dataset_id` is the dataset's identifier, not its display name. If you create one with `eq sim upload-dataset --input cases.jsonl --name "Support cases"`, the command prints the ID to use below; see the [upload command reference](../cli-reference/simulation.md#eq-sim-upload-dataset). For an existing dataset, use its ID. Each row's `inputs` must contain a `datapoint` object or a `persona` + `scenario` pair, matching the `SimulationDatapoint` shape above.
+
+To **replay** those rows as they are, pass the ID to `simulate()`:
 
 ```python
 results = await simulate(
     evaluation_name="dataset-replay",
     target="agent:my-support-agent",
-    dataset_id="my-simulation-cases",       # named Orq dataset, routed via ORQ_API_KEY
+    dataset_id="your-dataset-id",            # ID printed by upload-dataset
     evaluator_names=["goal_achieved", "criteria_met"],
 )
 ```
 
 `simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one per run.
 
-To generate *more* cases in the same distribution as a dataset rather than replaying it, use `extend_from_dataset()`. It feeds the dataset's personas and scenarios to the generators as seeds and returns new, similar-but-not-duplicate datapoints:
+To **extend** the coverage, call `extend_from_dataset()` with that same ID. It reads the stored personas and scenarios as examples, then asks the model for new cases of similar kinds. It returns only new datapoints; it does not change the Orq dataset or include its original rows. The request is guidance to the model, so matching frequencies and avoiding duplicates are not guaranteed.
+
+This example uses `ORQ_API_KEY` from the setup above and the default simulation model, `openai/gpt-5.6-luna`. Replace the dataset ID and agent key with yours:
 
 ```python
-from evaluatorq.contracts import LLMCallConfig
+import asyncio
+
 from evaluatorq.simulation import extend_from_dataset, simulate
 
-config = LLMCallConfig(model="gpt-6-luna")
-extra = await extend_from_dataset("my-simulation-cases", num_personas=3, num_scenarios=5, llm_config=config)
-results = await simulate(
-    evaluation_name="extended",
-    datapoints=extra,
-    target="agent:my-support-agent",
-    llm_config=config,
-)
+
+async def main():
+    extra = await extend_from_dataset("your-dataset-id", num_personas=3, num_scenarios=5)
+    results = await simulate(
+        evaluation_name="extended",
+        datapoints=extra,
+        target="agent:my-support-agent",
+    )
+    print(f"Ran {len(results)} new cases")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
-This mirrors `extend_from_experiment()`; the dataset's direct loader is `datapoints_from_dataset()`.
+`extend_from_dataset()` generates cases; `simulate()` runs them against the target. To run both the original and new cases, combine `await datapoints_from_dataset("your-dataset-id")` with `extra` and pass the combined list as `datapoints`. `extend_from_experiment()` does the same kind of generation from a prior experiment run.
 
-`num_personas` and `num_scenarios` are requested counts. The generators can return a different number of valid items, so `extra` contains the cartesian product of the personas and scenarios they actually returned. Check `len(extra)` if your run needs a fixed number of cases. An explicit `api_key` authenticates both dataset fetching and generation through Orq; a client in `llm_config` takes precedence for generation.
+`num_personas` and `num_scenarios` request new user archetypes and situations, respectively. The generator attempts one case for each pair, but it can return a different number of valid personas or scenarios, and a pair is dropped if its opening message cannot be generated. For example, two valid personas and five scenarios yield at most ten cases even when you request three personas. Check `len(extra)` if your run needs a fixed number of cases. An explicit `api_key` authenticates both dataset fetching and generation through Orq; a client in `llm_config` takes precedence for generation.
 
 ### Ground new cases in real traces
 

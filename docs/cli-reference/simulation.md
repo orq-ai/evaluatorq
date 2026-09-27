@@ -104,7 +104,7 @@ eq sim upload-dataset -i cases.jsonl -n "Support simulation set"
 eq sim upload-dataset -i more.jsonl --dataset-id <id>
 ```
 
-Persona and scenario objects are JSON-stringified because the Orq dataset API accepts scalar `inputs` values. The simulation reader restores them when the dataset is used with `eq sim simulate --dataset-id`.
+The first command prints the new dataset ID. Use that ID, not the display name, with `eq sim simulate --dataset-id` or the Python `extend_from_dataset()` function. Here, `upload-dataset --dataset-id` **adds rows to the stored dataset**; `extend_from_dataset()` **generates new cases without changing the stored dataset**. Persona and scenario objects are JSON-stringified because the Orq dataset API accepts scalar `inputs` values. The simulation reader restores them when the dataset is used with `eq sim simulate --dataset-id`.
 
 | Flag | Type / Default | Description |
 |---|---|---|
