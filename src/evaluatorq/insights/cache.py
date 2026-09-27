@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import struct
 from array import array
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
 
 DEFAULT_CACHE_PATH = Path('.evaluatorq/cache/insights.sqlite')
 _VECTOR_QUERY_CHUNK_SIZE = 500
+_VECTOR_MAGIC = b'EQV1'
+_VECTOR_HEADER_SIZE = 4 + 4 + hashlib.sha256().digest_size
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS summaries (
@@ -52,12 +55,21 @@ def _text_hash(text: str) -> str:
 
 
 def _pack_vector(vector: list[float]) -> bytes:
-    return array('f', vector).tobytes()
+    payload = array('f', vector).tobytes()
+    return _VECTOR_MAGIC + struct.pack('!I', len(vector)) + hashlib.sha256(payload).digest() + payload
 
 
 def _unpack_vector(blob: bytes) -> list[float]:
+    if len(blob) < _VECTOR_HEADER_SIZE or blob[:4] != _VECTOR_MAGIC:
+        raise ValueError('missing vector integrity header')
+    expected_length = struct.unpack('!I', blob[4:8])[0]
+    payload = blob[_VECTOR_HEADER_SIZE:]
+    if not expected_length or len(payload) != expected_length * array('f').itemsize:
+        raise ValueError('vector length does not match header')
+    if hashlib.sha256(payload).digest() != blob[8:_VECTOR_HEADER_SIZE]:
+        raise ValueError('vector checksum does not match header')
     values = array('f')
-    values.frombytes(blob)
+    values.frombytes(payload)
     return list(values)
 
 
@@ -149,6 +161,8 @@ class InsightsCache:
             logger.warning(f'InsightsCache.get_vectors: {exc}; treating as a miss')
             return {}
         result: dict[str, list[float]] = {}
+        invalid_count = 0
+        first_error: str | None = None
         for text_hash, blob in rows:
             text = hash_to_text.get(text_hash)
             if text is None:
@@ -156,9 +170,15 @@ class InsightsCache:
             try:
                 result[text] = _unpack_vector(blob)
             except (TypeError, ValueError, OverflowError) as exc:
-                logger.warning(
-                    f'InsightsCache.get_vectors: corrupt cached vector for {text_hash}: {exc}; treating as a miss'
-                )
+                invalid_count += 1
+                first_error = first_error or str(exc)
+        if invalid_count:
+            logger.warning(
+                'InsightsCache.get_vectors: {} incompatible or corrupt cached vector(s) (first error: {}); '
+                'treating as misses',
+                invalid_count,
+                first_error,
+            )
         return result
 
     def put_vectors(self, model: str, vectors: dict[str, list[float]]) -> None:

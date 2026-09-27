@@ -91,3 +91,20 @@ def test_corrupt_vector_row_is_miss_but_valid_rows_survive(tmp_path):
         conn.execute('UPDATE vectors SET text_hash = ? WHERE text_hash = ?', (_text_hash('bad'), 'bad-hash'))
 
     assert cache.get_vectors('e', ['good', 'bad']) == {'good': [0.5, 1.0]}
+
+
+def test_aligned_truncation_and_same_length_corruption_are_cache_misses(tmp_path):
+    path = tmp_path / 'cache.sqlite'
+    cache = InsightsCache(path)
+    cache.put_vectors('e', {'good': [0.5, 1.0], 'short': [0.25, 0.75], 'tampered': [1.0, 2.0]})
+
+    from evaluatorq.insights.cache import _text_hash
+
+    with sqlite3.connect(path) as conn:
+        for text in ('short', 'tampered'):
+            key = _text_hash(text)
+            blob = conn.execute('SELECT vector FROM vectors WHERE text_hash = ?', (key,)).fetchone()[0]
+            damaged = blob[:-4] if text == 'short' else blob[:-1] + bytes([blob[-1] ^ 1])
+            conn.execute('UPDATE vectors SET vector = ? WHERE text_hash = ?', (damaged, key))
+
+    assert cache.get_vectors('e', ['good', 'short', 'tampered']) == {'good': [0.5, 1.0]}
