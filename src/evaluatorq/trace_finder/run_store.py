@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from .explorer import ExplorerStore
 
 TReviewFilters = TypeVar('TReviewFilters', FacetSelection, NumericFilters)
+T = TypeVar('T')
 
 
 class PopulationLoader(Protocol):
@@ -224,7 +225,7 @@ class RunStore:
                     self._task = plan_task
                 plan, filter_result = await plan_task
                 generated_filters = filter_result.selection
-                generated_numeric = plan.numeric.model_copy(deep=True)
+                generated_numeric = plan.numeric.model_copy(deep=True) if traces is None else NumericFilters()
                 compiled = CompiledQuery.model_validate(plan.compiled.model_dump())
                 if traces is None:
                     population = request.population.model_copy(
@@ -260,7 +261,8 @@ class RunStore:
 
             if not staged_traces:
                 if traces is not None:
-                    staged_traces = await traces()
+                    loaded_traces = await self._load_owned(generation, traces)
+                    staged_traces = loaded_traces or ()
                 else:
                     loaded = await self._load_population(generation, request.population)
                     staged_traces = tuple(loaded.traces[: request.population.limit])
@@ -269,7 +271,7 @@ class RunStore:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
                 if not staged_traces:
-                    raise ValueError('No traces match the classifier-selected filters.')
+                    raise _empty_traces_error(loaded_rows=traces is not None)
                 trace_ids = tuple(trace.trace_id for trace in staged_traces)
                 if len(set(trace_ids)) != len(trace_ids):
                     raise ValueError('The selected population contains duplicate trace IDs.')
@@ -321,8 +323,14 @@ class RunStore:
     async def _load_population(self, generation: int, request: PopulationRequest) -> Snapshot:
         """Load one population and let replacement generations make it stale."""
 
-        async def load() -> Snapshot:
-            return await self._population_loader(request)
+        loaded = await self._load_owned(generation, lambda: self._population_loader(request))
+        return loaded if loaded is not None else Snapshot(traces=())
+
+    async def _load_owned(self, generation: int, factory: Callable[[], Awaitable[T]]) -> T | None:
+        """Run one load as cancellable generation-owned work."""
+
+        async def load() -> T:
+            return await factory()
 
         task = asyncio.create_task(load())
         stale = False
@@ -333,12 +341,17 @@ class RunStore:
         if stale:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
-            return Snapshot(traces=())
+            return None
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+            raise
+        except Exception:
+            async with self._lock:
+                if generation != self._generation or self._stopped_generation == generation:
+                    return None
             raise
 
     async def _plan(
@@ -579,6 +592,14 @@ def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSel
         project_id=caller.project_id,
         **{name: getattr(caller, name) or getattr(generated, name) for name in FACET_NAMES},
     )
+
+
+def _empty_traces_error(*, loaded_rows: bool) -> ValueError:
+    """Describe an empty selection using the path that supplied its rows."""
+
+    if loaded_rows:
+        return ValueError('None of the loaded traces have usable messages to classify.')
+    return ValueError('No traces match the classifier-selected filters.')
 
 
 def _review_explicit(

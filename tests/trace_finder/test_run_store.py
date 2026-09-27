@@ -684,6 +684,88 @@ async def test_compile_with_traces_skips_filter_selection_and_population_load() 
 
 
 @pytest.mark.asyncio
+async def test_compile_with_traces_does_not_report_unapplied_numeric_filters() -> None:
+    store, _, _, _, _ = make_store()
+
+    snapshot = await store.compile(request(mode='review'), traces=lambda: _loaded_traces())
+
+    assert snapshot.generated_numeric == NumericFilters()
+
+
+async def _loaded_traces() -> tuple[TraceRecord, ...]:
+    return (trace(1),)
+
+
+@pytest.mark.asyncio
+async def test_empty_loaded_traces_explain_that_no_rows_are_usable() -> None:
+    store, _, _, _, _ = make_store()
+
+    snapshot = await store.compile(request(), traces=lambda: _empty_traces())
+
+    assert snapshot.state == 'failed'
+    assert snapshot.error == 'None of the loaded traces have usable messages to classify.'
+
+
+async def _empty_traces() -> tuple[TraceRecord, ...]:
+    return ()
+
+
+@pytest.mark.asyncio
+async def test_reset_cancels_owned_traces_hydration() -> None:
+    entered = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def traces() -> tuple[TraceRecord, ...]:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return ()
+
+    store, _, _, _, _ = make_store()
+    compiling = asyncio.create_task(store.compile(request(), traces=traces))
+    await entered.wait()
+
+    reset = await store.reset()
+
+    assert cancelled.is_set()
+    assert reset.state == 'idle'
+    assert (await store.snapshot()).state == 'idle'
+    await compiling
+
+
+@pytest.mark.asyncio
+async def test_traces_error_after_cancel_preserves_cancelled_state(caplog: pytest.LogCaptureFixture) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def traces() -> tuple[TraceRecord, ...]:
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            await release.wait()
+            raise RuntimeError('hydration failed after cancellation')
+        return ()
+
+    store, _, _, _, _ = make_store()
+    compiling = asyncio.create_task(store.compile(request(), traces=traces))
+    await entered.wait()
+    cancelling = asyncio.create_task(store.cancel())
+    await asyncio.sleep(0)
+    release.set()
+
+    cancelled = await cancelling
+    await compiling
+
+    assert cancelled.state == 'cancelled'
+    assert (await store.snapshot()).state == 'cancelled'
+    assert 'hydration failed after cancellation' not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_load_resets_running_classification() -> None:
     store, _, _, _, _ = make_store()
     await store.compile(request(), wait=True)
