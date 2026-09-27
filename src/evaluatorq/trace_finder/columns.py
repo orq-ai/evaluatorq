@@ -58,7 +58,7 @@ def _dash(_row: TraceRow) -> str:
 def _status(row: TraceRow) -> str:
     if row.status is None:
         return DASH
-    kind = 'err' if row.status.lower() in {'error', 'failed'} else 'ok'
+    kind = 'err' if row.is_error else 'ok'
     return f'<span class="dot {kind}" title="{esc(row.status)}"></span>'
 
 

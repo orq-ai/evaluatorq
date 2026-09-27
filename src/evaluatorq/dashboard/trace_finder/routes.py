@@ -20,10 +20,16 @@ from evaluatorq.common.orq_client import (
     list_orq_profiles,
     resolve_orq_client,
 )
-from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder import explorer_views
-from evaluatorq.dashboard.trace_finder.views import drawer, facet_menu, fragment, missing_trace_drawer, page_html
+from evaluatorq.dashboard.trace_finder.views import (
+    drawer,
+    facet_menu,
+    fragment,
+    missing_trace_drawer,
+    page_html,
+    scope_toggle,
+)
 from evaluatorq.trace_finder import (
     CompiledQuery,
     FacetSelection,
@@ -310,7 +316,7 @@ def _run_request(
     )
     if anchor is not None and anchor.end is not None:
         end = anchor.end
-        start = end - timedelta(days=parsed.window_days)
+        start = anchor.start if anchor.start is not None else end - timedelta(days=parsed.window_days)
     elif form.get('from') and form.get('to'):
         start, end = parse_range(str(form.get('from')), str(form.get('to')), str(form.get('tz_offset') or '0'))
     else:
@@ -416,14 +422,16 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
     """Register the Find page and its HTMX fragments on *app*."""
     initialize_finder_settings(app)
 
-    async def _explorer_html(req: Request, *, oob: bool = False) -> str:
+    async def _explorer_html(req: Request, *, oob: bool = False, error: str | None = None) -> str:
         store = await _store(req.app)
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
-            return explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None, oob=oob)
+            return explorer_views.results(
+                ExplorerView(), resolve_columns(None), records=None, snapshot=None, oob=oob, error=error
+            )
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
-        results = snapshot.results or None
+        results = snapshot.results if snapshot.within_results else None
         records = (
             await explorer.records([row.trace_id for row in view.page_rows(results)])
             if view.view == 'trajectories' and view.rows
@@ -435,6 +443,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             records=records,
             snapshot=snapshot,
             oob=oob,
+            error=error,
         )
 
     @app.get('/find')
@@ -491,7 +500,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 if explorer is None or explorer_view is None or not explorer_view.rows:
                     return _html(
                         fragment(
-                            await store.snapshot(), settings, error='Load traces first, then ask within the results.'
+                            await store.snapshot(),
+                            settings,
+                            error='Load traces first, then ask within the results.',
+                            **_catalogue_kwargs(req.app),
                         )
                     )
                 base = _run_request(form, settings)
@@ -544,9 +556,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             **_catalogue_kwargs(req.app, snapshot),
         )
         explorer = store.explorer if store is not None else None
-        if snapshot.state == 'classifying' and explorer is not None:
+        if explorer is not None:
             view = await explorer.view()
-            if view.rows:
+            if view.rows and (snapshot.state == 'classifying' or snapshot.results):
                 body += await _explorer_html(req, oob=True)
         return _html(body)
 
@@ -555,18 +567,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         form = await req.form()
         rejected = request_rejected(req, form)
         if rejected:
-            error = (
-                '<section id="explorer-results" class="xr"><div class="finder-review finder-form-error" '
-                f'role="alert">{esc(rejected)}</div></section>'
-            )
-            return _html(error, status_code=403)
+            return _html(await _explorer_html(req, error=rejected))
         store = await _store(req.app)
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
-            return _html(
-                explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None),
-                status_code=503,
-            )
+            return _html(await _explorer_html(req, error=_unavailable_reason(req.app)))
         settings = _settings(req.app)
         try:
             start, end = parse_range(str(form.get('from') or ''), str(form.get('to') or ''), form.get('tz_offset'))
@@ -578,11 +583,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             })
         except (ValueError, ValidationError) as exc:
             logger.warning('Explorer load rejected: {}', exc)
-            error = (
-                '<section id="explorer-results" class="xr"><div class="finder-review finder-form-error" '
-                f'role="alert">{esc(str(exc))}</div></section>'
-            )
-            return _html(error, status_code=422)
+            return _html(await _explorer_html(req, error=str(exc)))
         facets = FacetSelection(
             project_id=settings.orq_project_id,
             **{name: frozenset(_form_values(form, f'facet_{name}')) for name in FACET_NAMES},
@@ -590,9 +591,12 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         await store.reset()
         await explorer.load(start, end, rows, facets=facets, numeric=numeric)
         snapshot = await store.snapshot_for_render()
+        load_kwargs = _catalogue_kwargs(req.app, snapshot)
+        load_kwargs.update(explorer_facets=facets, explorer_numeric=numeric)
         body_oob = (
             f'<div id="finder-body" hx-swap-oob="innerHTML">'
-            f'{fragment(snapshot, settings, **_catalogue_kwargs(req.app, snapshot))}</div>'
+            f'{fragment(snapshot, settings, **load_kwargs)}</div>'
+            f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows))}</div>'
         )
         return _html(await _explorer_html(req) + body_oob)
 
@@ -611,18 +615,17 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 view=params.get('view') if params.get('view') in {'table', 'trajectories'} else None,
                 matched_only={'1': True, '0': False}.get(params.get('matched_only') or ''),
             )
-        return _html(await _explorer_html(req))
+        body = await _explorer_html(req)
+        if explorer is not None:
+            body += f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows))}</div>'
+        return _html(body)
 
     @app.post('/find/columns')
     async def find_columns(req: Request) -> Response:
         form = await req.form()
         rejected = request_rejected(req, form)
         if rejected:
-            error = (
-                '<section id="explorer-results" class="xr"><div class="finder-review finder-form-error" '
-                f'role="alert">{esc(rejected)}</div></section>'
-            )
-            return _html(error, status_code=403)
+            return _html(await _explorer_html(req, error=rejected))
         keys = tuple(key for key in _form_values(form, 'columns') if key in COLUMNS)
         saved = load_settings()
         await asyncio.to_thread(save_settings, saved.model_copy(update={'explorer_columns': keys}))
@@ -713,7 +716,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         raw_msg = req.query_params.get('msg', '')
         msg = int(raw_msg) if raw_msg.isdigit() else None
         row = await store.explorer.row(trace_id) if store.explorer is not None else None
-        detail = await store.trace_detail(trace_id)
+        snapshot = await store.snapshot()
+        detail = await store.trace_detail(trace_id) if row is None or snapshot.within_results else None
         if detail is None and row is not None and store.explorer is not None:
             record = (await store.explorer.records([trace_id])).get(trace_id)
             if record is None:

@@ -121,6 +121,11 @@ class TraceRow(BaseModel):
             return None
         return self.cached_tokens / self.tokens_in
 
+    @property
+    def is_error(self) -> bool:
+        """Whether the source marked this trace as failed."""
+        return (self.status or '').lower() in {'error', 'failed'}
+
 
 def row_from_summary(summary: Any, raw: Mapping[str, Any] | None) -> TraceRow | None:
     """Build a row from the raw search payload, falling back to the typed SDK summary per field."""

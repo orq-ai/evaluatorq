@@ -844,6 +844,21 @@ async def test_search_warns_once_for_exclusive_usage(monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.asyncio
+async def test_search_warns_when_raw_summary_capture_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    source = make_source(FakeOrq(FakeTraces({None: ([summary('fallback')], False, None)})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+
+    assert rows[0].trace_id == 'fallback'
+    assert any('SDK-model fallback' in warning and 'optional explorer fields' in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
 async def test_hydrate_rows_returns_none_for_a_failed_trace() -> None:
     ok = summary('ok', messages=user_messages('hello'))
     traces = FakeTraces({None: ([ok, summary('empty', messages=[])], False, None)})

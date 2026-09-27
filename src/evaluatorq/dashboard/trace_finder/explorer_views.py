@@ -46,7 +46,7 @@ def range_inputs(start: datetime | None, end: datetime | None, window_days: int)
         for label, span in PRESETS
     )
     return (
-        f'<form id="explorer-load-form" hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-include="#finder-controls">{_csrf()}</form>'
+        f'<form id="explorer-load-form" hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace" hx-include="#finder-controls">{_csrf()}</form>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
         f'<span class="quiet"><b>From</b><input id="explorer-from" hx-preserve form="explorer-load-form" name="from" type="datetime-local" step="1" required data-utc="{_local_value(start)}" value="{_local_value(start)}"></span>'
         f'<span class="quiet"><b>To</b><input id="explorer-to" hx-preserve form="explorer-load-form" name="to" type="datetime-local" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)}"></span>'
@@ -70,12 +70,17 @@ def _match_cell(row: TraceRow, snapshot: RunSnapshot | None) -> str:
     return f'<td><span class="verdict"><span class="sw" style="background:{esc(_result_color(result, snapshot.compiled if snapshot else None))}"></span>{esc(label)}</span></td>'
 
 
+def _within_snapshot(snapshot: RunSnapshot | None) -> RunSnapshot | None:
+    return snapshot if snapshot is not None and snapshot.within_results else None
+
+
 def _drawer_attrs(trace_id: str, msg: int | None = None) -> str:
     query = f'?msg={msg}' if msg is not None else ''
     return f'hx-get="/find/trace/{quote(trace_id, safe="")}{query}" hx-target="#finder-drawer" hx-swap="innerHTML" hx-indicator="#finder-drawer-loading"'
 
 
 def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None) -> str:
+    snapshot = _within_snapshot(snapshot)
     results = snapshot.results if snapshot is not None and snapshot.results else None
     columns = [c for c in columns if results or not c.needs_results]
     heads = ''
@@ -84,8 +89,10 @@ def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot |
         direction = 'asc' if view.sort == column.key and view.descending else 'desc'
         heads += (
             f'<th class="{"num" if column.numeric else ""}"><button type="button" class="link" '
-            f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML">{esc(column.label)}{arrow}</button></th>'
+            f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{esc(column.label)}{arrow}</button></th>'
         )
+    if not columns:
+        return _empty('No columns selected.', 'Choose at least one column from Columns to show trace details.')
     body = ''.join(
         f'<tr data-tv-row="{esc(row.trace_id)}" {_drawer_attrs(row.trace_id)}>'
         + ''.join(
@@ -109,7 +116,7 @@ def _tip_attrs(segment: Segment, position: int, count: int) -> str:
 
 
 def _identity(row: TraceRow, snapshot: RunSnapshot | None) -> str:
-    status = 'err' if (row.status or '').lower() in {'error', 'failed'} else 'ok'
+    status = 'err' if row.is_error else 'ok'
     model = f'<span class="pill">{esc(row.models[0])}</span>' if row.models else ''
     tick = ''
     result = snapshot.results.get(row.trace_id) if snapshot is not None else None
@@ -138,6 +145,7 @@ def _metrics(row: TraceRow) -> str:
 
 
 def trajectories(view: ExplorerView, records: Mapping[str, TraceRecord | None], snapshot: RunSnapshot | None) -> str:
+    snapshot = _within_snapshot(snapshot)
     page = view.page_rows(snapshot.results if snapshot is not None and snapshot.results else None)
     bars = {row.trace_id: segments(record.messages) if (record := records.get(row.trace_id)) else None for row in page}
     other = sum(1 for segs in bars.values() if segs for s in segs if s.kind == 'other')
@@ -160,7 +168,7 @@ def trajectories(view: ExplorerView, records: Mapping[str, TraceRecord | None], 
     for row in page:
         segs = bars[row.trace_id]
         result = snapshot.results.get(row.trace_id) if matched and snapshot is not None else None
-        dim = ' nomatch' if matched and (result is None or not result.matched) else ''
+        dim = ' nomatch' if result is not None and not result.matched else ''
         if segs:
             width = sum(s.tokens for s in segs) / widest * 100
             inner = ''.join(
@@ -186,7 +194,7 @@ def _toolbar(view: ExplorerView, columns: Sequence[Column], *, has_results: bool
     chosen = {c.key for c in columns}
     matched_only = (
         f'<button type="button" class="link{" on" if view.matched_only else ""}" hx-get="/find/rows?matched_only={0 if view.matched_only else 1}" '
-        f'hx-target="#explorer-results" hx-swap="outerHTML">Matches only</button>'
+        f'hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">Matches only</button>'
         if has_results
         else ''
     )
@@ -195,14 +203,14 @@ def _toolbar(view: ExplorerView, columns: Sequence[Column], *, has_results: bool
         for c in COLUMNS.values()
     )
     switch = ''.join(
-        f'<button type="button" class="{"on" if view.view == mode else ""}" hx-get="/find/rows?view={mode}" hx-target="#explorer-results" hx-swap="outerHTML">{label}</button>'
+        f'<button type="button" class="{"on" if view.view == mode else ""}" hx-get="/find/rows?view={mode}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{label}</button>'
         for mode, label in (('table', 'Table'), ('trajectories', 'Trajectories'))
     )
     sort = (
-        '<span class="xr-sort">Sort <button type="button" class="link" hx-get="/find/rows?sort=started&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML">time</button>'
-        ' · <button type="button" class="link" hx-get="/find/rows?sort=tokens_in&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML">tokens in</button>'
+        '<span class="xr-sort">Sort <button type="button" class="link" hx-get="/find/rows?sort=started&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">time</button>'
+        ' · <button type="button" class="link" hx-get="/find/rows?sort=tokens_in&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">tokens in</button>'
         + (
-            ' · <button type="button" class="link" hx-get="/find/rows?sort=match&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML">match</button>'
+            ' · <button type="button" class="link" hx-get="/find/rows?sort=match&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">match</button>'
             if has_results
             else ''
         )
@@ -212,7 +220,7 @@ def _toolbar(view: ExplorerView, columns: Sequence[Column], *, has_results: bool
     )
     columns_menu = (
         '<details class="xr-cols"><summary>Columns ▾</summary>'
-        f'<form hx-post="/find/columns" hx-trigger="change" hx-target="#explorer-results" hx-swap="outerHTML">{_csrf()}{boxes}</form></details>'
+        f'<form hx-post="/find/columns" hx-trigger="change" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{_csrf()}{boxes}</form></details>'
         if view.view == 'table'
         else ''
     )
@@ -236,12 +244,12 @@ def _pager(view: ExplorerView, results: Mapping[str, TraceClassification] | None
         return ''
     page = min(view.page, pages - 1)
     prev = (
-        f'<button type="button" class="link" hx-get="/find/rows?page={page - 1}" hx-target="#explorer-results" hx-swap="outerHTML">← Prev</button>'
+        f'<button type="button" class="link" hx-get="/find/rows?page={page - 1}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">← Prev</button>'
         if page
         else ''
     )
     nxt = (
-        f'<button type="button" class="link" hx-get="/find/rows?page={page + 1}" hx-target="#explorer-results" hx-swap="outerHTML">Next →</button>'
+        f'<button type="button" class="link" hx-get="/find/rows?page={page + 1}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">Next →</button>'
         if page < pages - 1
         else ''
     )
@@ -255,7 +263,9 @@ def results(
     records: Mapping[str, TraceRecord | None] | None,
     snapshot: RunSnapshot | None,
     oob: bool = False,
+    error: str | None = None,
 ) -> str:
+    snapshot = _within_snapshot(snapshot)
     oob_attr = ' hx-swap-oob="true"' if oob else ''
     poll = ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="outerHTML"' if view.state == 'loading' else ''
     if view.state == 'idle':
@@ -283,4 +293,5 @@ def results(
                 'No matches yet.', 'None of the loaded traces match so far. Turn off Matches only to see every row.'
             )
         inner = f'{banner}{_toolbar(view, columns, has_results=bool(results))}{body}{_pager(view, results)}'
-    return f'<section id="explorer-results" class="xr"{oob_attr}{poll}>{inner}</section>'
+    error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
+    return f'<section id="explorer-results" class="xr" hx-sync="this:replace"{oob_attr}{poll}>{error_html}{inner}</section>'

@@ -116,7 +116,7 @@ async def test_records_caches_successes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_records_does_not_cache_failures() -> None:
+async def test_records_caches_failures_until_next_load() -> None:
     source = FakeSource((TraceRow(trace_id='a'),))
     source.missing = {'a'}
     store = store_for(source)
@@ -125,7 +125,62 @@ async def test_records_does_not_cache_failures() -> None:
     assert (await store.records(['a'])) == {'a': None}
     await store.records(['a'])
 
-    assert source.hydrate_calls == [('a',), ('a',)]
+    assert source.hydrate_calls == [('a',)]
+
+
+@pytest.mark.asyncio
+async def test_stale_hydration_does_not_fill_the_next_load_cache() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    old_calls = 0
+
+    async def slow_hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        nonlocal old_calls
+        old_calls += 1
+        entered.set()
+        await release.wait()
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    new_source = FakeSource((TraceRow(trace_id='same'),))
+    store = ExplorerStore(search=FakeSource((TraceRow(trace_id='same'),)).search, hydrate=slow_hydrate)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    stale_request = asyncio.create_task(store.records(['same']))
+    await entered.wait()
+
+    store._search = new_source.search  # pyright: ignore[reportPrivateUsage]
+    store._hydrate = new_source.hydrate_rows  # pyright: ignore[reportPrivateUsage]
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    release.set()
+    await stale_request
+
+    await store.records(['same'])
+    assert old_calls == 1
+    assert new_source.hydrate_calls == [('same',)]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_records_requests_share_hydration() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    source = FakeSource((TraceRow(trace_id='same'),))
+
+    async def slow_hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        source.hydrate_calls.append(tuple(row.trace_id for row in rows))
+        entered.set()
+        await release.wait()
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    store = ExplorerStore(search=source.search, hydrate=slow_hydrate)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+
+    first = asyncio.create_task(store.records(['same']))
+    await entered.wait()
+    second = asyncio.create_task(store.records(['same']))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(first, second)
+
+    assert source.hydrate_calls == [('same',)]
 
 
 @pytest.mark.asyncio

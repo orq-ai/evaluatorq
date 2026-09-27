@@ -262,6 +262,7 @@ class RunSnapshot:
     state: RunState = 'idle'
     phase: RunPhase | None = None
     request: RunRequest | None = None
+    within_results: bool = False
     compiled: CompiledQuery | None = None
     explicit_filters: FacetSelection = field(default_factory=FacetSelection)
     explicit_numeric: NumericFilters = field(default_factory=NumericFilters)

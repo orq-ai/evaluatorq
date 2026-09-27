@@ -391,7 +391,9 @@ class OrqTraceSource:
         oql = build_oql(facets, numeric, project_names)
         rows: list[TraceRow] = []
         scan = _Scan()
+        fallback_count = 0
         async for selected in self._pages(start, end, oql, facets.project_id, limit, lambda: limit - len(rows), scan):
+            fallback_count += sum(1 for _, _, fallback in selected if fallback)
             rows.extend(row for summary, raw, _ in selected if (row := row_from_summary(summary, raw)) is not None)
             if on_page is not None:
                 on_page(tuple(rows[:limit]))
@@ -403,6 +405,12 @@ class OrqTraceSource:
             )
             if not rows:
                 raise OrqSourceError('Orq returned only traces outside the selected project. No traces were loaded.')
+        if fallback_count:
+            logger.warning(
+                'used SDK-model fallback for {} trace summary response(s) because raw-response capture was unavailable; '
+                'some optional explorer fields may render as —',
+                fallback_count,
+            )
         exclusive = sum(row.usage_exclusive for row in rows)
         if exclusive:
             logger.warning(
@@ -417,18 +425,23 @@ class OrqTraceSource:
         project_names = await _project_names(self._client)
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
         errors: list[str] = []
+        fallbacks: list[str] = []
 
         async def one(row: TraceRow) -> TraceRecord | None:
             try:
-                record, _ = await self._hydrate_trace(
+                record, fallback_count = await self._hydrate_trace(
                     row.raw, row.raw, project_names, semaphore, raw_capture_fallback=False
                 )
+                if fallback_count:
+                    fallbacks.append(row.trace_id)
             except Exception as error:  # noqa: BLE001 — one trace's failure must not blank the page
                 errors.append(f'{type(error).__name__}: {error}')
                 return None
             return record
 
         records = await asyncio.gather(*(one(row) for row in rows))
+        if fallbacks:
+            logger.warning('used SDK-model fallback for span details of {} trace(s)', len(fallbacks))
         empty = sum(record is None for record in records) - len(errors)
         if errors:
             logger.warning(

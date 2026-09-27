@@ -133,7 +133,9 @@ class RunStore:
         wait: bool = True,
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
-        generation, staged_traces = await self._begin(request, compile_query=compile_query)
+        generation, staged_traces = await self._begin(
+            request, compile_query=compile_query, within_results=traces is not None
+        )
         work = self._plan_and_start(
             generation, staged_traces, request, compiled, compile_query=compile_query, traces=traces
         )
@@ -148,7 +150,9 @@ class RunStore:
         await asyncio.gather(task, return_exceptions=True)
         return await self.snapshot()
 
-    async def _begin(self, request: RunRequest, *, compile_query: bool) -> tuple[int, tuple[TraceRecord, ...]]:
+    async def _begin(
+        self, request: RunRequest, *, compile_query: bool, within_results: bool
+    ) -> tuple[int, tuple[TraceRecord, ...]]:
         """Replace the current generation with a fresh ``compiling`` one."""
 
         staged_traces: tuple[TraceRecord, ...] = ()
@@ -184,6 +188,7 @@ class RunStore:
                 self._generation += 1
                 generation = self._generation
                 generated_filters = FacetSelection() if compile_query else self._snapshot.generated_filters
+                within_results = within_results if compile_query else self._snapshot.within_results
                 generated_numeric = NumericFilters() if compile_query else self._snapshot.generated_numeric
                 filter_response = None if compile_query else self._snapshot.filter_response
                 filter_selection_error = None if compile_query else self._snapshot.filter_selection_error
@@ -192,6 +197,7 @@ class RunStore:
                     state='compiling',
                     phase='planning' if compile_query else 'starting_classification',
                     request=request.model_copy(deep=True),
+                    within_results=within_results,
                     explicit_filters=explicit_filters.model_copy(deep=True),
                     explicit_numeric=explicit_numeric.model_copy(deep=True),
                     generated_filters=generated_filters.model_copy(deep=True),

@@ -744,6 +744,8 @@
       row.classList.add('sel');
     }
     if (!seg || !row) return;
+    const tip = seg.closest('.tv').querySelector('.tv-tip');
+    if (tip) tip.hidden = true;
     evt.stopPropagation();
     htmx.ajax('GET', '/find/trace/' + encodeURIComponent(row.getAttribute('data-tv-row')) + '?msg=' + seg.getAttribute('data-tv-msg'), { target: '#finder-drawer', swap: 'innerHTML' });
   }, true);

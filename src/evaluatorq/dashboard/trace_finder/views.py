@@ -84,9 +84,10 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
         f'<button class="finder-go" type="submit"{disabled}><span class="finder-go-idle">Ask AI <span aria-hidden="true">↗</span></span>'
         '<span class="finder-go-working" role="status">Starting search…</span></button>'
         '</form>'
-        '<div class="finder-below"><div class="finder-seg" role="radiogroup" aria-label="Ask AI scope">'
+        f'<div id="finder-scope" class="finder-seg" role="radiogroup" aria-label="Ask AI scope">'
         f'<label><input type="radio" name="scope" value="within" form="finder-query-form"{" checked" if has_rows else ""}{"" if has_rows else " disabled"}><span>Within results</span></label>'
         f'<label><input type="radio" name="scope" value="new" form="finder-query-form"{"" if has_rows else " checked"}><span>New search</span></label></div>'
+        '<div class="finder-below">'
         '<p class="finder-hint-line">Within results classifies all loaded traces.</p>'
         '<div class="finder-seg" role="radiogroup" aria-label="Mode">'
         f'<label><input type="radio" name="mode" value="immediate" form="finder-query-form"{checked_immediate} '
@@ -248,6 +249,8 @@ def controls(
     catalogue: FacetCatalogue | None = None,
     *,
     pending: bool = False,
+    explorer_facets: FacetSelection | None = None,
+    explorer_numeric: object | None = None,
 ) -> str:
     request = snapshot.request
     population = request.population if request is not None else None
@@ -269,8 +272,11 @@ def controls(
     keep = {name: f'id="finder-{name}-{form_id}" hx-preserve' for name in values}
     # A reviewed start reuses the whole population, classifier picks included. A fresh query only carries
     # the filters the user set themselves; the classifier's picks for the last question are not sticky.
-    carried_facets = facets if review else snapshot.explicit_filters
-    carried_numeric = numeric if review else snapshot.explicit_numeric
+    carried_facets = facets if review else (explorer_facets or snapshot.explicit_filters)
+    carried_numeric = numeric if review else (explorer_numeric or snapshot.explicit_numeric)
+    if not review and population is None and explorer_facets is not None:
+        facets = explorer_facets
+        numeric = explorer_numeric
     generated_only = None
     if review:
         generated_only = snapshot.generated_filters.model_copy(
@@ -698,6 +704,8 @@ def body(
     catalogue: FacetCatalogue | None = None,
     pending: bool = False,
     api_available: bool = True,
+    explorer_facets: FacetSelection | None = None,
+    explorer_numeric: object | None = None,
 ) -> str:
     indicator = status_indicator(snapshot)
     if snapshot.state == 'awaiting_review' and snapshot.compiled is not None:
@@ -712,8 +720,8 @@ def body(
         )
     if snapshot.state == 'idle':
         unavailable = field(snapshot, api_available=False) if not api_available else ''
-        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{unavailable}'
-    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
+        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric)}{unavailable}'
+    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
 
 
 def page_html(
@@ -748,12 +756,27 @@ def fragment(
     api_available: bool = True,
     catalogue: FacetCatalogue | None = None,
     pending: bool = False,
+    explorer_facets: FacetSelection | None = None,
+    explorer_numeric: object | None = None,
 ) -> str:
     attrs = ''
     if snapshot.state in {'compiling', 'classifying'}:
         attrs = ' hx-get="/find/poll" hx-trigger="every 1s" hx-target="#finder-body" hx-swap="innerHTML"'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
-    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available)}</div>'
+    return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric)}</div>'
+
+
+def scope_toggle(*, has_rows: bool) -> str:
+    within = '' if has_rows else ' disabled'
+    return (
+        '<label><input type="radio" name="scope" value="within" form="finder-query-form"'
+        + (' checked' if has_rows else '')
+        + within
+        + '><span>Within results</span></label>'
+        + '<label><input type="radio" name="scope" value="new" form="finder-query-form"'
+        + ('' if has_rows else ' checked')
+        + '><span>New search</span></label>'
+    )
 
 
 def drawer(
@@ -798,11 +821,11 @@ def drawer(
     if row is not None:
         models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
         row_header = (
-            f'<div class="fd-row-head"><span class="tv dot {"err" if row.status == "error" else "ok"}"></span>'
+            f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
             f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
             f'<div class="fd-row-meta">Started {esc(fmt_time(row.started_at))} · {esc(fmt_tokens(row.tokens_in))} in → '
             f'{esc(fmt_tokens(row.tokens_out))} out · {esc(fmt_tokens(row.cached_tokens))} cache · '
-            f'{esc(fmt_cost(row.cost_total, row.currency))}</div>'
+            f'{fmt_cost(row.cost_total, row.currency)}</div>'
         )
     body_html = (
         f'{row_header}{mini_html}'
@@ -828,9 +851,13 @@ def drawer(
 
 
 def missing_trace_drawer(trace_id: str, *, reason: str | None = None) -> str:
-    body = reason or (
-        '<p class="finder-empty">This trace is not part of the current run. Results live in memory only, so a '
-        'dashboard restart or a new search clears them. Run the search again to reopen it.</p>'
+    body = (
+        f'<p class="finder-empty">{esc(reason)}</p>'
+        if reason
+        else (
+            '<p class="finder-empty">This trace is not part of the current run. Results live in memory only, so a '
+            'dashboard restart or a new search clears them. Run the search again to reopen it.</p>'
+        )
     )
     return drawer_shell(f'Trace {esc(trace_id)}', body, '', dismiss_route='/find/dismiss', drawer_id='finder-drawer')
 
@@ -854,7 +881,7 @@ def _thread_message(
     tool = f' · <span class="mono">{esc(label)}</span>' if label else ''
     return (
         f'<details class="fd-msg k-{esc(kind)}{" on" if selected else ""}" id="msg-{index}" data-msg="{index}"{" open" if selected else ""}>'
-        f'<summary><span class="role"><b>{esc(name)}</b>{tool}</span><em>#{index} · ~{tokens:,} tok</em>'
+        f'<summary><span class="role"><b>{esc(name)}</b>{tool}</span><em class="fd-msg-meta">#{index} · ~{tokens:,} tok</em>'
         f'<span class="fd-msg-preview">{esc(preview)}</span></summary>'
         f'<div class="fd-msg-content">{esc(content)}</div></details>'
     )

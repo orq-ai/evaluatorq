@@ -82,7 +82,8 @@ class ExplorerStore:
         self._hydrate = hydrate
         self._view = ExplorerView()
         self._task: asyncio.Task[None] | None = None
-        self._records: dict[str, TraceRecord] = {}
+        self._records: dict[str, TraceRecord | None] = {}
+        self._records_lock = asyncio.Lock()
 
     async def load(
         self,
@@ -155,14 +156,20 @@ class ExplorerStore:
         return self._view
 
     async def records(self, trace_ids: Sequence[str]) -> dict[str, TraceRecord | None]:
-        """Hydrate requested rows; successes are cached until the next load, failures are retried."""
-        requested = set(trace_ids)
-        wanted = [row for row in self._view.rows if row.trace_id in requested and row.trace_id not in self._records]
-        if wanted:
-            for trace_id, record in (await self._hydrate(wanted)).items():
-                if record is not None:
-                    self._records[trace_id] = record
-        return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
+        """Hydrate requested rows; successes and failures are cached until the next load."""
+        async with self._records_lock:
+            generation = self._view.generation
+            requested = set(trace_ids)
+            wanted = [row for row in self._view.rows if row.trace_id in requested and row.trace_id not in self._records]
+            if wanted:
+                hydrated = await self._hydrate(wanted)
+                # A load may replace rows while hydration is in progress. Its cache belongs
+                # to that load only, so late results from the previous generation are discarded.
+                if self._view.generation == generation:
+                    self._records.update(hydrated)
+                    return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
+                return {trace_id: hydrated.get(trace_id) for trace_id in trace_ids}
+            return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
 
     async def row(self, trace_id: str) -> TraceRow | None:
         return next((row for row in self._view.rows if row.trace_id == trace_id), None)
