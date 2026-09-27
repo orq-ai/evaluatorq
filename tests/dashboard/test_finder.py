@@ -97,6 +97,7 @@ class FakeStore:
         )
         self.compiled = _compiled()
         self.snapshot_value = RunSnapshot()
+        self.explorer: Any | None = None
         self.started = False
         self.compile_request: Any | None = None
         self.compile_wait: bool | None = None

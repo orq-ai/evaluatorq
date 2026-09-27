@@ -186,6 +186,14 @@ def test_load_requires_csrf(explorer_client) -> None:
     _, _, client = explorer_client
     response = client.post('/find/load', data={'from': '2026-09-27T10:00:00', 'to': '2026-09-27T11:00:00', 'rows': '5'})
     assert response.status_code == 403
+    assert 'id="explorer-results"' in response.text
+
+
+def test_columns_post_requires_csrf(explorer_client) -> None:
+    _, _, client = explorer_client
+    response = client.post('/find/columns', data={'columns': ['model', 'cost']})
+    assert response.status_code == 403
+    assert 'id="explorer-results"' in response.text
 
 
 def test_columns_post_saves_choice(explorer_client, tmp_path: Path) -> None:

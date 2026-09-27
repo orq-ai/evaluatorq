@@ -179,6 +179,8 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
     models: list[str] = []
 
     class Store:
+        explorer = None
+
         async def snapshot(self) -> RunSnapshot:
             return RunSnapshot()
 
@@ -212,6 +214,8 @@ def test_dashboard_shutdown_closes_finder_store(tmp_path: Path, monkeypatch: pyt
     closed: list[bool] = []
 
     class Store:
+        explorer = None
+
         async def snapshot(self) -> RunSnapshot:
             return RunSnapshot()
 

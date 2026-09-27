@@ -43,6 +43,7 @@ if TYPE_CHECKING:
 from evaluatorq.trace_finder.columns import COLUMNS, resolve_columns
 from evaluatorq.trace_finder.explorer import ExplorerView
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
+from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
 from evaluatorq.trace_finder.settings import (
     MAX_LIMIT,
     MAX_PARALLELISM,
@@ -408,12 +409,12 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
 
     async def _explorer_html(req: Request, *, oob: bool = False) -> str:
         store = await _store(req.app)
-        explorer = getattr(store, 'explorer', None) if store is not None else None
+        explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
             return explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None, oob=oob)
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
-        results = snapshot.results if snapshot.results else None
+        results = snapshot.results or None
         records = (
             await explorer.records([row.trace_id for row in view.page_rows(results)])
             if view.view == 'trajectories' and view.rows
@@ -497,7 +498,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             error=_unavailable_reason(req.app) if store is None else None,
             **_catalogue_kwargs(req.app, snapshot),
         )
-        explorer = getattr(store, 'explorer', None) if store is not None else None
+        explorer = store.explorer if store is not None else None
         if snapshot.state == 'classifying' and explorer is not None:
             view = await explorer.view()
             if view.rows:
@@ -509,9 +510,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         form = await req.form()
         rejected = request_rejected(req, form)
         if rejected:
-            return _html(rejected, status_code=403)
+            error = (
+                '<section id="explorer-results" class="xr"><div class="finder-review finder-form-error" '
+                f'role="alert">{esc(rejected)}</div></section>'
+            )
+            return _html(error, status_code=403)
         store = await _store(req.app)
-        explorer = getattr(store, 'explorer', None) if store is not None else None
+        explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
             return _html(
                 explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None),
@@ -521,8 +526,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         try:
             start, end = parse_range(str(form.get('from') or ''), str(form.get('to') or ''), form.get('tz_offset'))
             rows = int(str(form.get('rows') or explorer_views.DEFAULT_EXPLORER_ROWS))
-            if not 1 <= rows <= MAX_LIMIT:
-                raise ValueError(f'Rows must be between 1 and {MAX_LIMIT}.')
+            if not 1 <= rows <= MAX_LIVE_TRACES:
+                raise ValueError(f'Rows must be between 1 and {MAX_LIVE_TRACES}.')
             numeric = NumericFilters(**{
                 name: int(str(raw)) for name in _NUMERIC_FIELDS if (raw := _optional_value(form, name)) is not None
             })
@@ -549,7 +554,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
     @app.get('/find/rows')
     async def find_rows(req: Request) -> Response:
         store = await _store(req.app)
-        explorer = getattr(store, 'explorer', None) if store is not None else None
+        explorer = store.explorer if store is not None else None
         if explorer is not None:
             params = req.query_params
             direction = params.get('dir')
@@ -568,7 +573,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         form = await req.form()
         rejected = request_rejected(req, form)
         if rejected:
-            return _html(rejected, status_code=403)
+            error = (
+                '<section id="explorer-results" class="xr"><div class="finder-review finder-form-error" '
+                f'role="alert">{esc(rejected)}</div></section>'
+            )
+            return _html(error, status_code=403)
         keys = tuple(key for key in _form_values(form, 'columns') if key in COLUMNS)
         saved = load_settings()
         await asyncio.to_thread(save_settings, saved.model_copy(update={'explorer_columns': keys}))
