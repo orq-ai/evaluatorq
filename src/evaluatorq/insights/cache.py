@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 _VECTOR_QUERY_CHUNK_SIZE = 500
 _VECTOR_MAGIC = b'EQV2'
 _VECTOR_HEADER_SIZE = 4 + 4 + hashlib.sha256().digest_size
+_SQLITE_BUSY_TIMEOUT_SECONDS = 30
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS summaries (
@@ -73,7 +74,10 @@ def _unpack_vector(blob: bytes) -> list[float]:
         raise ValueError('vector length does not match header')
     if hashlib.sha256(payload).digest() != blob[8:_VECTOR_HEADER_SIZE]:
         raise ValueError('vector checksum does not match header')
-    return list(struct.unpack(f'!{expected_length}f', payload))
+    vector = list(struct.unpack(f'!{expected_length}f', payload))
+    if not all(math.isfinite(value) for value in vector):
+        raise ValueError('vector values must be finite')
+    return vector
 
 
 class InsightsCache:
@@ -95,7 +99,7 @@ class InsightsCache:
         conn: sqlite3.Connection | None = None
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(resolved, check_same_thread=False)
+            conn = sqlite3.connect(resolved, timeout=_SQLITE_BUSY_TIMEOUT_SECONDS, check_same_thread=False)
             conn.executescript(_SCHEMA)
             self._conn = conn
         except (OSError, sqlite3.Error) as exc:

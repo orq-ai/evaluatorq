@@ -576,6 +576,50 @@ async def test_partial_label_answer_failures_do_not_fail_label_stage(
     assert run.labels['second'].counts == {'valid': len(traces)}
 
 
+@pytest.mark.asyncio
+async def test_all_label_requests_failing_skips_summary_and_dimensions_without_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.insights.models import LabelSpec
+
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(6)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    label_spec = LabelSpec(name='intent_label', kind='choice', instructions='classify intent')
+
+    async def label(*args, **kwargs):
+        return [
+            SimpleNamespace(trace=trace, answers={}, matched=None, error='classifier unavailable')
+            for trace in traces
+        ]
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail('summary and dimensions must not run after every label request failed')
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', forbidden)
+    monkeypatch.setattr(pipeline, '_build_dimension', forbidden)
+    run = await pipeline.insights(
+        _population(), labels=(label_spec,), dimensions=('intent',), runs_dir=tmp_path
+    )
+
+    assert run.status == 'error'
+    assert [failure.stage for failure in run.stage_failures] == ['label']
+    assert len(run.traces) == len(traces)
+    assert all(trace.errors['label'] == 'classifier unavailable' for trace in run.traces)
+    assert run.warnings == [
+        'Summarize traces stage skipped because every label request failed',
+        'dimension:intent stage skipped because every label request failed',
+    ]
+    from evaluatorq.common.run_manifest import list_manifests
+
+    manifest = list_manifests(tmp_path)[0]
+    statuses = {stage.name: stage.status.value for stage in manifest.stages}
+    assert statuses['label'] == 'error'
+    assert statuses['summary'] == 'error'
+    assert statuses['dimension:intent'] == 'error'
+
+
 
 @pytest.mark.asyncio
 async def test_all_false_query_matches_finish_as_empty_without_summary_or_dimensions(

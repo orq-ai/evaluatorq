@@ -564,7 +564,18 @@ async def insights(  # noqa: C901
                 logger.warning('Insights label stage failed: {}', label_error)
             _stage_end(writer, 'label', label_error)
 
-            if run.traces:
+            if label_error and resolved.compiled is None:
+                skipped_message = 'skipped because every label request failed'
+                _stage(writer, 'summary')
+                _stage_end(writer, 'summary', skipped_message)
+                run.warnings.append(f'Summarize traces stage {skipped_message}')
+                for dimension in dimensions:
+                    stage_name = f'dimension:{dimension}'
+                    _stage(writer, stage_name)
+                    _stage_end(writer, stage_name, skipped_message)
+                    run.warnings.append(f'{stage_name} stage {skipped_message}')
+
+            if run.traces and not (label_error and resolved.compiled is None):
                 _stage(writer, 'summary')
                 summaries = await summarize_traces(
                     [outcome.trace for outcome in outcomes if outcome.trace.trace_id in retained_trace_ids],
@@ -622,7 +633,7 @@ async def insights(  # noqa: C901
                         logger.warning('Insights {} stage failed: {}', dimension, message)
                         _stage_end(writer, stage_name, message)
 
-            else:
+            elif not run.traces:
                 run.warnings.append('population is empty')
                 logger.warning('Insights population is empty after match filtering')
         run.labels = _label_results(run.traces, specs)

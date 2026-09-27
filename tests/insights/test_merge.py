@@ -292,3 +292,25 @@ async def test_request_carries_both_clusters_name_description_and_examples(monke
 async def test_non_positive_parallelism_is_rejected() -> None:
     with pytest.raises(ValueError, match='parallelism must be positive'):
         await merge_similar({}, examples={}, neighbours={}, client=fake_client(), model='m', parallelism=0)
+
+
+@pytest.mark.parametrize('threshold', [float('nan'), float('inf'), float('-inf'), -0.01, 1.01])
+@pytest.mark.asyncio
+async def test_invalid_threshold_is_rejected_before_classification(
+    monkeypatch: pytest.MonkeyPatch, threshold: float
+) -> None:
+    calls = 0
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        nonlocal calls
+        calls += 1
+        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}))
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+
+    with pytest.raises(ValueError, match='threshold must be finite and between 0 and 1'):
+        await merge_similar(
+            _names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m', threshold=threshold
+        )
+
+    assert calls == 0

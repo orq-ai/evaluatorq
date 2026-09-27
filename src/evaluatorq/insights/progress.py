@@ -27,6 +27,7 @@ def stage_plan(
         or population.start is not None
         or population.end is not None
         or population.window_days != 7
+        or population.limit != 500
     )
     source = (
         'Load Finder matches'

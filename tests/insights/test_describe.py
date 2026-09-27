@@ -229,6 +229,21 @@ async def test_describe_top_level_names_group_from_children(monkeypatch: pytest.
     assert 'Invoice questions' in captured[0]
 
 
+def test_top_level_child_context_has_per_child_and_shared_bounds() -> None:
+    children = [
+        ClusterName(name=f'child-{index}', description=f'description-{index}-' + ('x' * 2000) + f'-tail-{index}')
+        for index in range(51)
+    ]
+
+    bounded = describe_module._children_text(children)
+
+    assert len(bounded) <= describe_module._MAX_CONTEXT_CHARS
+    assert 'child-0' in bounded and 'description-0-' in bounded and '-tail-0' in bounded
+    assert 'child-49' in bounded
+    assert 'child-50' not in bounded
+    assert 'excerpt truncated' in bounded
+
+
 @pytest.mark.asyncio
 async def test_describe_top_level_failure_yields_error_string(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:

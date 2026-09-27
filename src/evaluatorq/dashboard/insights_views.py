@@ -914,8 +914,6 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
         shape_index = shape_indexes.get(shape_assignment.base if shape_assignment else '', -1)
         assignment = trace.assignments.get(color_dimension)
         cluster_id = assignment.base if assignment is not None else 'Unclassified'
-        if color_by.startswith('dimension:'):
-            shape_index = cluster_indexes.get(cluster_id, -1)
         symbol = 'diamond' if shape_index >= 8 else 'circle'
         cluster = cluster_by_id.get(cluster_id)
         cluster_name = cluster.name if cluster else cluster_id

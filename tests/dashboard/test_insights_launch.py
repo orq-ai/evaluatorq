@@ -231,7 +231,7 @@ def test_startup_failure_shows_in_run_page(monkeypatch: pytest.MonkeyPatch, tmp_
     assert response.status_code == 200
     assert 'worker unavailable' in response.text
     assert '<span class="insights-stage-label">Start</span><span class="sr-only">error</span>' in response.text
-    assert 'Load recent traces' in response.text
+    assert 'Filter recent traces' in response.text
 
 
 def test_wizard_validates_source_before_launch() -> None:

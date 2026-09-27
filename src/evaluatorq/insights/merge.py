@@ -15,6 +15,7 @@ announces itself" house rule.
 from __future__ import annotations
 
 import asyncio
+import math
 from itertools import starmap
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -143,6 +144,8 @@ async def merge_similar(
     """
     if parallelism < 1:
         raise ValueError('parallelism must be positive')
+    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError('threshold must be finite and between 0 and 1')
     parent = {cluster_id: cluster_id for cluster_id in names}
     pairs = _candidate_pairs(names, neighbours)
     semaphore = asyncio.Semaphore(parallelism)

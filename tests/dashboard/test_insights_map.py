@@ -203,6 +203,7 @@ def test_map_tab_switches_projections_and_colours_by_other_dimensions(tmp_path, 
     assert points['trace-1']['x'] == 0.0
     assert points['trace-1']['cluster_id'] == 'failure-b0'
     assert points['trace-1']['cluster_name'] == 'Tool failures'
+    assert points['trace-9']['symbol'] == 'diamond'
     assert recoloured['color_mode'] == 'cluster'
     agents = client.get('/insights/map-run/map.json?dimension=failure&color_by=agent').json()
     assert agents['color_mode'] == 'category'

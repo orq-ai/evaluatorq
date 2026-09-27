@@ -71,6 +71,15 @@ def test_vectors_per_text_hit_and_miss(tmp_path, cache_factory):
     assert c.get_vectors('e', ['a', 'b']) == {'a': [0.5, 1.0]}
 
 
+def test_cache_connection_waits_for_overlapping_run_writes(tmp_path, cache_factory):
+    cache = cache_factory(tmp_path / 'c.sqlite')
+    assert cache._conn is not None
+
+    busy_timeout_ms = cache._conn.execute('PRAGMA busy_timeout').fetchone()[0]
+
+    assert busy_timeout_ms >= 30_000
+
+
 def test_vector_lookup_serializes_connection_close(tmp_path, cache_factory):
     cache = cache_factory(tmp_path / 'c.sqlite')
     cache.put_vectors('e', {'a': [0.5]})
@@ -199,6 +208,23 @@ def test_aligned_truncation_and_same_length_corruption_are_cache_misses(tmp_path
             conn.execute('UPDATE vectors SET vector = ? WHERE text_hash = ?', (damaged, key))
 
     assert cache.get_vectors('e', ['good', 'short', 'tampered']) == {'good': [0.5, 1.0]}
+
+
+@pytest.mark.parametrize('non_finite', [float('nan'), float('inf'), float('-inf')])
+def test_non_finite_vector_payload_is_a_cache_miss_but_valid_rows_survive(tmp_path, cache_factory, non_finite):
+    path = tmp_path / 'cache.sqlite'
+    cache = cache_factory(path)
+    cache.put_vectors('e', {'good': [0.5, 1.0]})
+    from evaluatorq.insights.cache import _text_hash
+
+    payload = struct.pack('!2f', non_finite, 1.0)
+    blob = b'EQV2' + struct.pack('!I', 2) + hashlib.sha256(payload).digest() + payload
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            'INSERT INTO vectors (model, text_hash, vector) VALUES (?, ?, ?)', ('e', _text_hash('invalid'), blob)
+        )
+
+    assert cache.get_vectors('e', ['good', 'invalid']) == {'good': [0.5, 1.0]}
 
 
 def test_invalid_vectors_are_skipped_without_aborting_valid_writes(tmp_path, cache_factory):

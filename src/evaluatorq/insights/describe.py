@@ -129,6 +129,7 @@ _MAX_NEIGHBOUR_CLUSTERS = 3
 _MAX_NEIGHBOUR_EXAMPLES = 3
 _MAX_EXCERPT_CHARS = 1000
 _MAX_CONTEXT_CHARS = 6000
+_MAX_TOP_LEVEL_CHILDREN = 50
 
 
 def _bound_excerpts(texts: list[str]) -> list[str]:
@@ -263,7 +264,19 @@ async def describe_clusters(
 
 
 def _children_text(children: list[ClusterName]) -> str:
-    return '\n'.join(f'- {child.name}: {child.description}' for child in children)
+    child_texts = [f'- {child.name}: {child.description}' for child in children]
+    bounded = _bound_excerpts(child_texts[:_MAX_TOP_LEVEL_CHILDREN])
+    if (
+        len(children) > _MAX_TOP_LEVEL_CHILDREN
+        or len(bounded) != len(child_texts)
+        or any(original != excerpt for original, excerpt in zip(child_texts, bounded, strict=False))
+    ):
+        logger.warning(
+            'Insights top-level description children were truncated to {} children and the shared {}-character context budget',
+            _MAX_TOP_LEVEL_CHILDREN,
+            _MAX_CONTEXT_CHARS,
+        )
+    return '\n'.join(bounded)
 
 
 async def _describe_top_one(
