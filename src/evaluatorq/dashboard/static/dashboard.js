@@ -157,6 +157,9 @@
 
   function showInsightsMapError(el, error) {
     const parent = el.parentElement;
+    if (window.Plotly && window.Plotly.purge) window.Plotly.purge(el);
+    el.replaceChildren();
+    el.style.visibility = 'hidden';
     let empty = parent.querySelector('[data-map-empty]');
     if (!empty) {
       empty = document.createElement('div');
@@ -212,9 +215,12 @@
           empty.textContent = 'Map unavailable: no traces have coordinates and a readable value for this colour.';
           empty.hidden = false;
           if (window.Plotly.purge) window.Plotly.purge(el);
+          el.replaceChildren();
+          el.style.visibility = 'hidden';
           return;
         }
         if (empty) empty.hidden = true;
+        el.style.visibility = '';
         return Promise.resolve(window.Plotly.react(el, mapTraces(payload), layout, { displaylogo: false, responsive: true })).then(function () {
           if (el.__insightsMapRequestId !== requestId) return;
           el.removeAllListeners && el.removeAllListeners('plotly_click');

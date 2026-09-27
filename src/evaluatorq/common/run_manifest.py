@@ -66,7 +66,7 @@ class ManifestWriter:
         self._clock = clock
         self._last_progress_flush: dict[int, float] = {}
 
-    def flush(self) -> None:
+    def flush(self) -> bool:
         self.manifest.updated_at = datetime.now(tz=timezone.utc)
         # Write to a temp file in the same dir then atomically rename over the
         # target, so a SIGKILL mid-write can never leave truncated JSON that the
@@ -77,10 +77,12 @@ class ManifestWriter:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(self.manifest.model_dump_json(indent=2), encoding='utf-8')
             os.replace(tmp, self.path)  # noqa: PTH105 — atomic rename is the whole point
+            return True
         except OSError as exc:
             logger.debug(f'Failed to write run manifest {self.path}: {exc}')
             with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
+            return False
 
     def _open_stage(self, name: str | None = None, target: str | None = None) -> StageRecord | None:
         """Most-recent still-open stage record matching *name* and *target*.
@@ -151,8 +153,8 @@ class ManifestWriter:
         record_key = id(rec)
         last_flush = self._last_progress_flush.get(record_key)
         if completed >= total or last_flush is None or now - last_flush >= 1.0:
-            self._last_progress_flush[record_key] = now
-            self.flush()
+            if self.flush():
+                self._last_progress_flush[record_key] = now
 
     def complete(self, report_path: str | Path | None = None, summary: RunSummary | None = None) -> None:
         if self.manifest.status != ManifestStatus.RUNNING:

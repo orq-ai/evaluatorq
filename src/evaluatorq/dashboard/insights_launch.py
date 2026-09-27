@@ -28,7 +28,38 @@ from evaluatorq.trace_finder.models import FacetSelection
 Source = Literal['recent', 'query', 'finder']
 Preset = Literal['sentiment', 'customer_satisfaction']
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'
+_MANIFEST_ENV = 'EVALUATORQ_INSIGHTS_MANIFEST'
 MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
+
+# The child must record import-time failures too. This tiny stdlib-only wrapper
+# runs before importing the package worker, then edits the already-created
+# manifest if Python cannot import the worker or its dependencies.
+_WORKER_BOOTSTRAP = """
+import datetime, json, os, runpy, tempfile
+manifest = os.environ.get("EVALUATORQ_INSIGHTS_MANIFEST")
+try:
+    runpy.run_module("evaluatorq.dashboard.insights_worker", run_name="__main__")
+except BaseException as exc:
+    if manifest:
+        try:
+            with open(manifest, encoding="utf-8") as source:
+                data = json.load(source)
+            if data.get("status") == "running":
+                now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                data.update(status="error", stage="setup", error=f"Could not start Insights worker: {exc}", ended_at=now, updated_at=now)
+                directory = os.path.dirname(manifest)
+                fd, temporary = tempfile.mkstemp(prefix=".insights-failure-", dir=directory)
+                try:
+                    with os.fdopen(fd, "w", encoding="utf-8") as target:
+                        json.dump(data, target)
+                    os.replace(temporary, manifest)
+                finally:
+                    if os.path.exists(temporary):
+                        os.unlink(temporary)
+        except BaseException as recovery_error:
+            print(f"Could not mark Insights manifest failed: {recovery_error}", file=__import__("sys").stderr)
+    raise
+"""
 
 
 def get_finder_exports_dir() -> Path:
@@ -148,14 +179,18 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             'spec': spec.model_dump(mode='json'),
             'finder_export_snapshot': str(snapshot_path) if snapshot_path is not None else None,
         })
-        worker_env = {**os.environ, _REQUEST_ENV: worker_request}
+        worker_env = {
+            **os.environ,
+            _REQUEST_ENV: worker_request,
+            _MANIFEST_ENV: str(writer.path),
+        }
         if profile is not None:
             worker_env.update(ORQ_API_KEY=profile.api_key, ORQ_BASE_URL=profile.server or DEFAULT_ORQ_BASE_URL)
         log_dir = runs_dir / '.logs'
         log_dir.mkdir(parents=True, exist_ok=True)
         with (log_dir / f'{run_id}.log').open('a', encoding='utf-8') as log:
             subprocess.Popen(
-                [sys.executable, '-m', 'evaluatorq.dashboard.insights_worker'],
+                [sys.executable, '-c', _WORKER_BOOTSTRAP],
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=subprocess.STDOUT,

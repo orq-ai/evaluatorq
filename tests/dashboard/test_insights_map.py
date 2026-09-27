@@ -315,7 +315,6 @@ def test_priority_chart_contains_quadrant_labels_and_empty_state():
 
 def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatch, tmp_path):
     monkeypatch.setattr(finder_views, 'export_filename', lambda _snapshot: 'trace-finder-17.json')
-    monkeypatch.setattr(finder_views, 'get_store_dir', lambda subdir: tmp_path / 'custom store' / subdir)
     monkeypatch.setattr(finder_views, 'status_indicator', lambda _snapshot: '')
     monkeypatch.setattr(finder_views, 'controls', lambda *_args, **_kwargs: '')
     monkeypatch.setattr(finder_views, 'field', lambda *_args, **_kwargs: '')
@@ -325,15 +324,16 @@ def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatc
     html = finder_views.body(SimpleNamespace(state='completed', compiled=object(), generation=17), object())
 
     assert 'Analyze matches' in html
-    assert 'Download the completed export first' in html
+    assert 'Download the completed export to use it with the CLI or Python.' in html
     assert 'Download and save trace-finder-17.json' in html
-    export_path = tmp_path / 'custom store' / 'finder-exports' / 'trace-finder-17.json'
-    assert f'<code>{export_path}</code>' in html
     rendered_examples = unescape(html)
-    assert f"eq insights --from-finder '{export_path}'" in rendered_examples
+    assert 'server-side copy is also saved' in html
+    assert 'eq insights --from-finder trace-finder-17.json' in rendered_examples
     assert 'InsightsPopulation.from_finder_export' in html
-    assert repr(str(export_path)) in rendered_examples
-    assert 'insights_sync(population)' in html
+    assert "Path('trace-finder-17.json')" in rendered_examples
+    assert 'insights_sync(population)' in rendered_examples
+    assert '/Users/' not in html
+    assert '/tmp/' not in html
 
 
 def test_plotly_asset_exists_in_source_tree():

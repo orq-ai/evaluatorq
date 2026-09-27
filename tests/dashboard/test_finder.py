@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -594,6 +596,15 @@ def test_find_export_is_404_until_completed_then_downloads_json(
     setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    caller_thread = threading.current_thread()
+    save_threads: list[threading.Thread] = []
+    save_export = finder_routes._save_finder_export
+
+    def track_save_thread(*args: Any) -> None:
+        save_threads.append(threading.current_thread())
+        save_export(*args)
+
+    monkeypatch.setattr(finder_routes, '_save_finder_export', track_save_thread)
     store, client = setup_finder
     assert client.get('/find/export.json').status_code == 404
     client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
@@ -604,6 +615,7 @@ def test_find_export_is_404_until_completed_then_downloads_json(
     assert filename.startswith('trace-finder-1-') and filename.endswith('.json')
     assert json.loads(response.text)['counts']['matched'] == 1
     assert (tmp_path / 'finder-exports' / filename).read_text() == response.text
+    assert save_threads and save_threads[0] is not caller_thread
 
 
 def test_find_export_save_failure_is_visible(
@@ -621,6 +633,32 @@ def test_find_export_save_failure_is_visible(
     response = client.get('/find/export.json')
     assert response.status_code == 500
     assert 'Could not save Finder export for Insights.' in response.text
+
+
+def test_finder_export_retention_keeps_recent_and_saved_insights_references(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(52)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        path.touch()
+        os.utime(path, ns=(index + 1, index + 1))
+    old_referenced = exports[0]
+    runs_dir = tmp_path / 'insights-runs'
+    runs_dir.mkdir()
+    (runs_dir / 'insights_saved.json').write_text(
+        json.dumps({'population': {'finder_export': str(old_referenced)}}), encoding='utf-8'
+    )
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    remaining = {path.name for path in export_dir.glob('trace-finder-*.json')}
+    assert len(remaining) == 51
+    assert old_referenced.name in remaining
+    assert {path.name for path in exports[-50:]} <= remaining
 
 
 def test_find_export_filename_survives_generation_restart_without_overwriting() -> None:

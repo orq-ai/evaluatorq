@@ -493,6 +493,15 @@ async def insights(  # noqa: C901
             _stage_end(writer, 'population', message)
             return run
 
+        missing_export_ids = run.population.get('n_missing_export_ids', 0)
+        if isinstance(missing_export_ids, int) and missing_export_ids > 0:
+            matched_ids = run.population.get('n_matched_ids', 0)
+            trace_word = 'trace' if len(run.traces) == 1 else 'traces'
+            run.warnings.append(
+                f'{missing_export_ids} of {matched_ids} matched Finder traces could not be reloaded from Orq; '
+                f'{len(run.traces)} {trace_word} will be analyzed.'
+            )
+
         if not run.traces:
             run.warnings.append('population is empty')
             logger.warning('Insights population is empty')

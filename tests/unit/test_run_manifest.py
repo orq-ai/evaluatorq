@@ -143,6 +143,25 @@ def test_first_progress_for_each_stage_is_flushed(tmp_path: Path) -> None:
     assert (record.completed, record.total) == (1, 3)
 
 
+def test_failed_progress_flush_does_not_advance_throttle_clock(tmp_path: Path) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='failed-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    attempts = [0]
+
+    def fail_once() -> bool:
+        attempts[0] += 1
+        return attempts[0] > 1
+
+    writer.flush = fail_once  # type: ignore[method-assign]
+    writer.stage_progress('label', 1, 3)
+    now[0] = 0.1
+    writer.stage_progress('label', 2, 3)
+
+    assert attempts[0] == 2
+
+
 def test_stage_progress_ignores_invalid_counts_without_persisting_them(tmp_path: Path) -> None:
     started = start_manifest(run_id='invalid-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
     writer = ManifestWriter(started.manifest, started.path)

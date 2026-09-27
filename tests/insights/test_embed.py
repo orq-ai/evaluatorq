@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from threading import Event
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -292,6 +293,43 @@ async def test_embed_texts_cache_hit_avoids_the_call(cache: InsightsCache) -> No
 
     assert result == {'hello world': [1.0, 2.0]}
     assert client.embeddings.calls == []
+
+
+@pytest.mark.parametrize('blocked_method', ['get_vectors', 'put_vectors'])
+@pytest.mark.asyncio
+async def test_vector_cache_io_does_not_block_event_loop(blocked_method: str) -> None:
+    started = Event()
+    release = Event()
+
+    class BlockingCache:
+        def get_vectors(self, _model: str, _texts: list[str]) -> dict[str, list[float]]:
+            if blocked_method == 'get_vectors':
+                started.set()
+                assert release.wait(timeout=3)
+            return {}
+
+        def put_vectors(self, _model: str, _vectors: dict[str, list[float]]) -> None:
+            if blocked_method == 'put_vectors':
+                started.set()
+                assert release.wait(timeout=3)
+
+    async def embed() -> dict[str, list[float]]:
+        return await embed_texts(
+            ['hello'], client=fake_client(), model=MODEL, cache=cast(InsightsCache, cast(object, BlockingCache()))
+        )
+
+    task = asyncio.create_task(embed())
+    try:
+        assert await asyncio.to_thread(started.wait, 2), f'{blocked_method} was not called'
+        # The cache operation is paused in a worker thread. The event loop can
+        # still run this callback and the embedding task can resume afterwards.
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+
+    result = await task
+    assert result == {'hello': _vector_for('hello')}
 
 
 @pytest.mark.asyncio

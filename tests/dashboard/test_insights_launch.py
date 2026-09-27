@@ -56,7 +56,11 @@ def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
     assert manifest.planned_stages == ['population', 'label', 'summary', 'dimension:intent', 'dimension:failure', 'priority', 'write']
     assert manifest.stage_labels['label'] == 'Match and classify traces'
     command = spawn.call_args.args[0]
-    assert command[1:] == ['-m', 'evaluatorq.dashboard.insights_worker']
+    assert command[1] == '-c'
+    assert 'runpy.run_module' in command[2]
+    assert spawn.call_args.kwargs['env']['EVALUATORQ_INSIGHTS_MANIFEST'] == str(
+        tmp_path / '.manifests' / f'{run_id}.json'
+    )
     payload = InsightsLaunchPayload.model_validate_json(spawn.call_args.kwargs['env']['EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'])
     assert payload.run_id == run_id
     assert payload.spec.query == 'refunds'
@@ -71,6 +75,41 @@ def test_spawn_failure_is_visible_in_manifest(tmp_path: Path) -> None:
     assert manifest.run_id == run_id
     assert manifest.status == 'error'
     assert manifest.error is not None and 'worker unavailable' in manifest.error
+
+
+def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import runpy
+
+    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV
+
+    writer = start_manifest(run_id='import-failure', surface='insights', run_name='demo', runs_dir=tmp_path)
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+
+    def fail_import(*args, **kwargs):
+        raise ImportError('missing optional dependency')
+
+    with patch.object(runpy, 'run_module', side_effect=fail_import), pytest.raises(ImportError):
+        exec(_WORKER_BOOTSTRAP, {})
+
+    manifest = list_manifests(tmp_path)[0]
+    assert manifest.status == 'error'
+    assert manifest.stage == 'setup'
+    assert manifest.error is not None and 'missing optional dependency' in manifest.error
+
+
+def test_worker_payload_decode_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard import insights_worker
+    from evaluatorq.dashboard.insights_launch import _MANIFEST_ENV, _REQUEST_ENV
+
+    writer = start_manifest(run_id='decode-failure', surface='insights', run_name='demo', runs_dir=tmp_path)
+    monkeypatch.delenv(_REQUEST_ENV, raising=False)
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+
+    assert insights_worker.main() == 1
+    manifest = list_manifests(tmp_path)[0]
+    assert manifest.status == 'error'
+    assert manifest.stage == 'setup'
+    assert manifest.error == 'Missing Insights launch request'
 
 
 def test_startup_failure_shows_in_run_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -170,7 +209,25 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     monkeypatch.setenv(_REQUEST_ENV, payload_json)
     assert insights_worker.main() == 0
     assert consumed == [approved_export]
+    assert not payload.finder_export_snapshot.exists()
     assert list_manifests(tmp_path / 'runs')[0].status == 'completed'
+
+
+def test_finder_snapshot_cleanup_without_getuid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard import insights_worker
+
+    directory = tmp_path / 'evaluatorq-finder-snapshot-test'
+    directory.mkdir(mode=0o700)
+    snapshot = directory / 'finder-export.json'
+    snapshot.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(insights_worker.tempfile, 'gettempdir', lambda: str(tmp_path))
+    monkeypatch.setattr(insights_worker, 'os', SimpleNamespace(name='nt'))
+
+    insights_worker._cleanup_snapshot(snapshot)
+
+    assert not directory.exists()
 
 
 def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> None:

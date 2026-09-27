@@ -13,6 +13,7 @@ marks the run `status='error'` with a `StageFailure`, the caller's job).
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -95,7 +96,9 @@ async def embed_texts(
         warn_config_redirect(cfg, resolved_model=model, caller='insights.embed_texts')
         warn_unread_config_fields(cfg, frozenset({'retry_count'}), caller='insights.embed_texts')
 
-    vectors: dict[str, list[float]] = dict(cache.get_vectors(model, unique_texts))
+    # SQLite is synchronous; keep cache I/O off the event loop, just like the
+    # other blocking local-store operations in the insights pipeline.
+    vectors: dict[str, list[float]] = dict(await asyncio.to_thread(cache.get_vectors, model, unique_texts))
     missing = [text for text in unique_texts if text not in vectors]
 
     new_vectors: dict[str, list[float]] = {}
@@ -125,7 +128,7 @@ async def embed_texts(
         )
 
     if new_vectors:
-        cache.put_vectors(model, new_vectors)
+        await asyncio.to_thread(cache.put_vectors, model, new_vectors)
     vectors.update(new_vectors)
 
     return {text: vectors[text] for text in unique_texts}

@@ -37,7 +37,9 @@ def _label_error_share(
     members: list[TraceInsight], errors_label: str, cluster_id: str, dimension_name: str
 ) -> float | None:
     answers = [
-        answer for member in members if (answer := member.labels.get(errors_label)) is not None and answer.error is None
+        answer
+        for member in members
+        if (answer := member.labels.get(errors_label)) is not None and answer.error is None and answer.value is not None
     ]
     if not answers:
         logger.warning(
@@ -69,8 +71,9 @@ def priority_points(
     already has it at hand) but is not otherwise read here. Members with a
     failed or missing answer are excluded from the mean, never counted as 0.
     error_share = the share of members with a non-failed `errors_label`
-    answer whose `value is True` (already the threshold-derived boolean —
-    never re-derive it from `probabilities`).
+    answer whose value is non-null, counting `value is True` as an error
+    (already the threshold-derived boolean — never re-derive it from
+    `probabilities`). Answers with null values and failed answers are excluded.
 
     Returns `(None, reason)` when `satisfaction_label` was never requested
     for this run (no trace carries that key in `labels`) or when every base

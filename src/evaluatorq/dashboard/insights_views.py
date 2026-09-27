@@ -1167,7 +1167,7 @@ def new_run_page(*, error: str | None = None) -> str:
         '<section class="insights-wizard-step" data-step="3"><h3>Review and start</h3>'
         '<label class="insights-form-field">Run name <span>(optional)</span><input name="name" maxlength="80" placeholder="Weekly support review"></label>'
         '<div id="insights-run-preview" class="insights-run-preview" aria-live="polite"></div>'
-        '<p class="insights-muted">The run reads live Orq traces and makes model requests. Progress appears in its run page.</p>'
+        '<p class="insights-muted">The run reads the selected traces and makes model requests. Progress appears in its run page.</p>'
         '</section>'
         '<p id="insights-wizard-error" class="insights-error" role="alert" hidden></p>'
         '<div class="insights-wizard-actions"><button type="button" data-wizard-back>Back</button>'

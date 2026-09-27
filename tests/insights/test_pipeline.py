@@ -97,6 +97,29 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_finder_missing_traces_are_visible_in_run_warnings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(1)]
+
+    async def resolve(*args, **kwargs):
+        return ResolvedPopulation(
+            traces=traces,
+            compiled=None,
+            echo={'mode': 'export', 'n_matched_ids': 4, 'n_missing_export_ids': 3},
+            n_scanned=1,
+        )
+
+    monkeypatch.setattr(pipeline, 'resolve_population', resolve)
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    assert '3 of 4 matched Finder traces could not be reloaded from Orq; 1 trace will be analyzed.' in run.warnings
+
+
+@pytest.mark.asyncio
 async def test_pipeline_persists_label_and_summary_progress(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

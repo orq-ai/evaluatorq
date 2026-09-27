@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -54,6 +55,73 @@ from evaluatorq.trace_finder.settings import (
 )
 
 _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
+_FINDER_EXPORT_RETENTION = 50
+
+
+def _referenced_finder_exports(export_dir: Path) -> set[Path]:
+    """Find exports named by saved Insights runs so retention cannot break reuse."""
+    referenced: set[Path] = set()
+    try:
+        run_paths = list(get_store_dir('insights-runs').glob('insights_*.json'))
+    except OSError as exc:
+        logger.warning('Could not inspect Insights runs for Finder export references: {}', exc)
+        return referenced
+    export_root = export_dir.resolve()
+    for run_path in run_paths:
+        try:
+            data = json.loads(run_path.read_text(encoding='utf-8'))
+            population = data.get('population') if isinstance(data, dict) else None
+            value = population.get('finder_export') if isinstance(population, dict) else None
+            if not isinstance(value, str) or not value:
+                continue
+            candidate = Path(value).expanduser()
+            resolved = (candidate if candidate.is_absolute() else export_root / candidate).resolve()
+            if (
+                resolved.parent == export_root
+                and resolved.name.startswith('trace-finder-')
+                and resolved.suffix == '.json'
+            ):
+                referenced.add(resolved)
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
+            # An unreadable saved run must not make export cleanup fail.
+            logger.warning('Could not inspect Insights run {} for Finder export references: {}', run_path, exc)
+    return referenced
+
+
+def _prune_finder_exports(export_dir: Path) -> None:
+    """Keep the newest Finder exports plus any files a saved Insights run references."""
+    try:
+        files = [path for path in export_dir.glob('trace-finder-*.json') if path.is_file() and not path.is_symlink()]
+        files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        retained = _referenced_finder_exports(export_dir)
+        unreferenced = [path for path in files if path.resolve() not in retained]
+        for path in unreferenced[_FINDER_EXPORT_RETENTION:]:
+            try:
+                path.unlink()
+            except OSError as exc:  # noqa: PERF203 - one failed deletion must not stop retention cleanup
+                logger.warning('Could not remove expired Finder export {}: {}', path.name, exc)
+    except (OSError, RuntimeError) as exc:
+        logger.warning('Could not prune saved Finder exports in {}: {}', export_dir, exc)
+
+
+def _save_finder_export(export_dir: Path, export_name: str, payload: str) -> None:
+    """Persist one completed export and prune older unreferenced files off-loop."""
+    temporary: Path | None = None
+    try:
+        export_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(export_dir / export_name)
+    finally:
+        if temporary is not None:
+            with contextlib.suppress(OSError):
+                temporary.unlink(missing_ok=True)
+    _prune_finder_exports(export_dir)
 
 
 class FinderRunForm(BaseModel):
@@ -553,24 +621,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         payload = export_json(snapshot)
         export_name = export_filename(snapshot, payload)
         export_dir = get_store_dir('finder-exports')
-        temporary: Path | None = None
         try:
-            export_dir.mkdir(parents=True, exist_ok=True)
-            with tempfile.NamedTemporaryFile(
-                mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
-            ) as handle:
-                temporary = Path(handle.name)
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            temporary.replace(export_dir / export_name)
+            await asyncio.to_thread(_save_finder_export, export_dir, export_name, payload)
         except OSError as exc:
             logger.warning('Could not save Finder export for Insights: {}', exc)
             return Response('Could not save Finder export for Insights.', status_code=500, media_type='text/plain')
-        finally:
-            if temporary is not None:
-                with contextlib.suppress(OSError):
-                    temporary.unlink(missing_ok=True)
         return Response(
             payload,
             media_type='application/json',

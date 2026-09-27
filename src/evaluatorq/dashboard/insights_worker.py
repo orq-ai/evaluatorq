@@ -13,7 +13,7 @@ from loguru import logger
 
 from evaluatorq.common.run_manifest import ManifestWriter
 from evaluatorq.contracts import ManifestStatus, RunManifest
-from evaluatorq.dashboard.insights_launch import MAX_FINDER_EXPORT_BYTES, read_launch_payload
+from evaluatorq.dashboard.insights_launch import _MANIFEST_ENV, MAX_FINDER_EXPORT_BYTES, read_launch_payload
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
 from evaluatorq.trace_finder.export import RunExport
@@ -39,8 +39,8 @@ def _cleanup_snapshot(path: Path) -> None:
             or directory.is_symlink()
             or not directory.name.startswith('evaluatorq-finder-snapshot-')
             or directory.resolve().parent != expected_root
-            or stat.S_IMODE(info.st_mode) != 0o700
-            or info.st_uid != os.getuid()
+            or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o700)
+            or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
         ):
             logger.warning('Leaving untrusted Finder snapshot path in place: {}', path)
             return
@@ -90,6 +90,10 @@ def main() -> int:
         logger.exception('Dashboard Insights worker failed')
         if payload is not None:
             _fail_running(payload.runs_dir / '.manifests' / f'{payload.run_id}.json', str(exc))
+        else:
+            manifest_path = os.environ.get(_MANIFEST_ENV)
+            if manifest_path:
+                _fail_running(Path(manifest_path), str(exc))
         return 1
     finally:
         if payload is not None and payload.finder_export_snapshot is not None:

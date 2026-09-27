@@ -249,6 +249,21 @@ def test_made_errors_value_is_true_not_truthy() -> None:
     assert MADE_ERRORS.kind == 'noul'
 
 
+def test_null_and_failed_answers_are_excluded_from_error_share_denominator() -> None:
+    """Only successful, non-null answers contribute to the error-share denominator."""
+    traces = [
+        _trace('t1', satisfaction=1.0, made_errors=True),
+        _trace('t2', satisfaction=1.0, made_errors=None),
+        _trace('t3', satisfaction=1.0, made_errors=True, made_errors_error='classifier timed out'),
+    ]
+    cluster = _base_cluster('base-1', ['t1', 't2', 't3'])
+
+    points, _reason = priority_points(traces, _dimension([cluster]), satisfaction_spec=CUSTOMER_SATISFACTION)
+
+    assert points is not None
+    assert points[0].error_share == 1.0
+
+
 def test_non_score_satisfaction_label_skips_priority_without_cast_failure() -> None:
     choice = LabelSpec(name='customer_satisfaction', kind='choice', instructions='choose')
     traces = [_trace('t1')]
