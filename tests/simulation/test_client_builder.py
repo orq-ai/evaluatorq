@@ -47,10 +47,8 @@ def _build(monkeypatch, *, orq_key=None, openai_key=None, base_url=None, **kwarg
     return build_simulation_client(**kwargs)
 
 
-def _retry_calls(relative_path: str) -> list[ast.Call]:
-    root = Path(__file__).parents[2] / 'src' / 'evaluatorq'
-    path = root / relative_path
-    tree = ast.parse(path.read_text(encoding='utf-8'))
+def _retry_calls(source: str) -> list[ast.Call]:
+    tree = ast.parse(source)
     imported_aliases = {
         alias.asname or alias.name
         for node in ast.walk(tree)
@@ -101,7 +99,9 @@ def _assert_sdk_retries_disabled(calls: list[ast.Call], relative_path: str) -> N
 )
 def test_primary_simulation_client_build_sites_disable_sdk_retries(relative_path: str) -> None:
     """API, CLI, runner, and trace entry points each keep ``with_retry`` single-owner."""
-    _assert_sdk_retries_disabled(_retry_calls(relative_path), relative_path)
+    root = Path(__file__).parents[2] / 'src' / 'evaluatorq'
+    source = (root / relative_path).read_text(encoding='utf-8')
+    _assert_sdk_retries_disabled(_retry_calls(source), relative_path)
 
 
 def test_every_simulation_client_build_site_disables_sdk_retries() -> None:
@@ -117,7 +117,7 @@ def test_every_simulation_client_build_site_disables_sdk_retries() -> None:
         relative_path = path.relative_to(root).as_posix()
         if relative_path in excluded_wrappers:
             continue
-        calls = _retry_calls(relative_path)
+        calls = _retry_calls(path.read_text(encoding='utf-8'))
         if calls:
             _assert_sdk_retries_disabled(calls, relative_path)
 
@@ -131,29 +131,9 @@ def test_every_simulation_client_build_site_disables_sdk_retries() -> None:
 )
 def test_client_build_guard_detects_aliased_and_attribute_style_calls(source: str) -> None:
     """The guard must cover import aliases and module-qualified call sites."""
-    tree = ast.parse(source)
-    assert any(_retry_calls_from_tree(tree))
-
-
-def _retry_calls_from_tree(tree: ast.AST) -> list[ast.Call]:
-    """Find retry-sensitive calls in a parsed source snippet."""
-    imported_aliases = {
-        alias.asname or alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-        if alias.name in {'build_simulation_client', 'resolve_llm_client'}
-    }
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, (ast.Name, ast.Attribute))
-        and (
-            (isinstance(node.func, ast.Name) and node.func.id in imported_aliases)
-            or (isinstance(node.func, ast.Attribute) and node.func.attr in {'build_simulation_client', 'resolve_llm_client'})
-        )
-    ]
+    calls = _retry_calls(source)
+    assert len(calls) == 1
+    _assert_sdk_retries_disabled(calls, 'sample.py')
 
 
 # ---------------------------------------------------------------------------
