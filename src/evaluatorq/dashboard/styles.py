@@ -2867,6 +2867,7 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .tv-nomsg i { background:repeating-linear-gradient(45deg,#ddd 0 3px,#eee 3px 6px); }
 i.k-system { background:var(--traj-system); }i.k-user { background:var(--traj-user); }i.k-assistant { background:var(--traj-assistant); }i.k-reasoning { background:var(--traj-reasoning); }i.k-call { background:var(--traj-call); }i.k-result { background:var(--traj-result); }i.k-other { background:repeating-linear-gradient(45deg,#ddd 0 3px,#eee 3px 6px); }
 @media (max-width:800px) { .tv-hd,.tv-r { grid-template-columns:180px 1fr; }.tv-hd .m,.tv-m { display:none; } }
+@media (max-width:480px) { .tv-lg { flex-wrap:wrap; gap:8px 12px; padding:10px 12px; }.tv-lg > span { white-space:nowrap; }.tv-hd,.tv-r { grid-template-columns:minmax(128px,160px) minmax(0,1fr); column-gap:10px; padding:0 12px; }.tv-hd .ax,.tv-bar { grid-template-columns:minmax(0,1fr) 64px; gap:6px; }.tv-scale b:nth-child(2),.tv-scale b:nth-child(3),.tv-scale b:nth-child(4) { display:none; }.tv-scale b:first-child { left:0!important; transform:none; }.tv-scale b:last-child { left:auto!important; right:0; transform:none; } }
 """
 
 
