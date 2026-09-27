@@ -96,23 +96,14 @@ def describe_agent(seeds: list[SimulationDatapoint]) -> str:
 def seed_context(seeds: list[SimulationDatapoint]) -> str:
     """Render the seed personas/scenarios as generator context.
 
-    Deduplicates by name so a cartesian-product source doesn't repeat the same persona once per
-    scenario.
+    Deduplicates identical objects from cartesian-product rows while retaining distinct variants
+    that share a name. The serialized objects expose the traits and criteria that distinguish them.
     """
-    personas = {dp.persona.name: dp.persona for dp in seeds}
-    scenarios = {dp.scenario.name: dp.scenario for dp in seeds}
+    personas = dict.fromkeys(dp.persona.model_dump_json(exclude_none=True) for dp in seeds)
+    scenarios = dict.fromkeys(dp.scenario.model_dump_json(exclude_none=True) for dp in seeds)
 
-    persona_lines = [
-        render_template('- {{name}}: {{background}}', {'name': p.name, 'background': p.background})
-        for p in personas.values()
-    ]
-    scenario_lines = [
-        render_template(
-            '- {{name}}: {{goal}} ({{context}})' if s.context else '- {{name}}: {{goal}}',
-            {'name': s.name, 'goal': s.goal, 'context': s.context},
-        )
-        for s in scenarios.values()
-    ]
+    persona_lines = [render_template('- {{persona}}', {'persona': payload}) for payload in personas]
+    scenario_lines = [render_template('- {{scenario}}', {'scenario': payload}) for payload in scenarios]
 
     lines = [
         (

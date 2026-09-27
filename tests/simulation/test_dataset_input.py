@@ -174,7 +174,7 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'get a refund' in captured['agent_description']
     context = captured['context']
     assert 'Alice' in context and 'Bob' in context
-    assert context.count('Refund:') == 1  # deduped scenario
+    assert context.count('"name":"Refund"') == 1  # deduped identical scenario
     assert 'NEW personas' in context
 
 

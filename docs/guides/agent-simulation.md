@@ -512,7 +512,7 @@ results = await simulate(
 
 `simulate()` takes five mutually exclusive sources — `datapoints`, `dataset_id`, `experiment_id`, `previous_run`, and `personas` + `scenarios`. Pass exactly one per run.
 
-To **extend** the coverage, call `extend_from_dataset()` with that same ID. It reads the stored personas and scenarios as examples, then asks the model for new cases of similar kinds. It returns only new datapoints; it does not change the Orq dataset or include its original rows. The request is guidance to the model, so matching frequencies and avoiding duplicates are not guaranteed.
+To **extend** the coverage, call `extend_from_dataset()` with that same ID. It reads the stored personas and scenarios as examples, then asks the model for new cases of similar kinds. Exact repeats are included once in the generation prompt, while distinct personas or scenarios with the same name remain separate examples. It returns only new datapoints; it does not change the Orq dataset or include its original rows. The request is guidance to the model, so matching frequencies and avoiding duplicates are not guaranteed.
 
 This example uses `ORQ_API_KEY` from the setup above and the default simulation model, `openai/gpt-5.6-luna`. Replace the dataset ID and agent key with yours:
 

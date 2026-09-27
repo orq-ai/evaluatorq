@@ -79,7 +79,7 @@ Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`, `ter
 An Orq dataset is a stored collection of simulation datapoints. Use its ID, not its display name: `eq sim upload-dataset --input cases.jsonl --name "Support cases"` prints the ID when it creates one. Direct replay reads `ORQ_API_KEY`; extension also accepts an explicit `api_key`.
 
 - **Direct** — set `dataset_id="..."` to pull the dataset's rows as datapoints. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`). CLI: `eq sim simulate --dataset-id`.
-- **Extension** — `extend_from_dataset()` uses the dataset's personas and scenarios as examples and returns only newly generated datapoints. It does not change the stored dataset. Similarity and uniqueness are prompt guidance, not guarantees.
+- **Extension** — `extend_from_dataset()` uses the dataset's personas and scenarios as examples and returns only newly generated datapoints. Identical seed objects appear once in the prompt; same-named objects with different content remain separate examples. It does not change the stored dataset. Similarity and uniqueness are prompt guidance, not guarantees.
 
 `num_personas` and `num_scenarios` request counts; the result uses the counts actually generated. An explicit `api_key` authenticates both dataset fetching and generation through Orq, unless `llm_config.client` supplies the generation client.
 

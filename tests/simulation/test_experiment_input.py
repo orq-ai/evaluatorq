@@ -216,7 +216,7 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'get a refund' in captured['agent_description']
     context = captured['context']
     assert 'Alice' in context and 'Bob' in context
-    assert context.count('Refund:') == 1  # deduped scenario
+    assert context.count('"name":"Refund"') == 1  # deduped identical scenario
     assert 'NEW personas' in context
 
 
@@ -255,11 +255,35 @@ def test_describe_agent_falls_back_when_all_goals_blank() -> None:
     assert any('blank goal' in w for w in warnings)
 
 
-def test_seed_context_dedupes() -> None:
+def test_seed_context_dedupes_identical_objects() -> None:
     seeds = [_sim_datapoint('A', 'S1'), _sim_datapoint('A', 'S2')]
     context = seed_context(seeds)
-    assert context.count('- A: bg') == 1
+    assert context.count('"name":"A"') == 1
     assert 'S1' in context and 'S2' in context
+
+
+def test_seed_context_keeps_distinct_variants_with_same_names() -> None:
+    original = _sim_datapoint('A', 'Refund')
+    changed_content = original.model_copy(
+        update={
+            'persona': original.persona.model_copy(update={'background': 'needs an accessible checkout'}),
+            'scenario': original.scenario.model_copy(
+                update={'goal': 'get a replacement', 'context': 'damaged delivery'}
+            ),
+        }
+    )
+    changed_trait = original.model_copy(
+        update={'persona': original.persona.model_copy(update={'patience': 0.9})}
+    )
+
+    context = seed_context([original, original, changed_content, changed_trait])
+
+    assert context.count('"name":"A"') == 3
+    assert context.count('"name":"Refund"') == 2
+    assert '"background":"needs an accessible checkout"' in context
+    assert '"goal":"get a replacement"' in context
+    assert '"context":"damaged delivery"' in context
+    assert '"patience":0.9' in context
 
 
 # ---------------------------------------------------------------------------
