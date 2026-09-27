@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
@@ -45,7 +46,8 @@ def run_rail(
             classes += ' selected'
         if status == 'error' or status == 'unreadable':
             classes += ' failed'
-        icon = {'running': '◌', 'error': '✕', 'unreadable': '!', 'completed': '●'}.get(status, '●')
+        if status == 'running':
+            classes += ' running'
         href = f'/insights/{quote(run_id, safe="")}'
         manifest = (manifests or {}).get(run_id)
         stage = (
@@ -55,8 +57,8 @@ def run_rail(
         )
         rows.append(
             f'<a class="{classes}" href="{href}"><span class="insights-run-copy">'
-            f'<span class="insights-run-name">{icon} {esc(label)}</span>{stage}</span>'
-            f'<span class="insights-run-status">{esc(status)}</span></a>'
+            f'<span class="insights-run-name">{esc(label)}</span>{stage}</span>'
+            f'<span class="insights-run-status"><span class="insights-run-dot" aria-hidden="true"></span>{esc(status)}</span></a>'
         )
     body = ''.join(rows) or '<p class="insights-empty">No Insights runs yet.</p>'
     return (
@@ -106,6 +108,21 @@ def _chip(label: str, value: object) -> str:
     return f'<span class="insights-chip"><b>{esc(label)}</b> {esc(str(value))}</span>'
 
 
+def _window_chip(label: str, value: object) -> str:
+    if not value:
+        return ''
+    try:
+        date = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except ValueError:
+        return _chip(label, value)
+    if date.tzinfo is not None:
+        date = date.astimezone(timezone.utc)
+        formatted = date.strftime('%d %b %Y, %H:%M UTC')
+    else:
+        formatted = date.strftime('%d %b %Y, %H:%M')
+    return f'<span class="insights-chip" title="{esc(str(value))}"><b>{esc(label)}</b> {esc(formatted)}</span>'
+
+
 def header(run: InsightsRun) -> str:
     population = run.population
     query = population.get('query')
@@ -128,7 +145,7 @@ def header(run: InsightsRun) -> str:
     for name, value in numeric.items():
         label = numeric_labels.get(name, name.replace('_', ' '))
         chips.append(_chip(label, value))
-    chips.extend((_chip('start', population.get('start')), _chip('end', population.get('end'))))
+    chips.extend((_window_chip('from', population.get('start')), _window_chip('to', population.get('end'))))
     chips.append(_chip('limit', population.get('limit')))
     label_chips = [_chip('label', label.name) for label in run.config.labels]
     models = f'{run.config.summary_model} · {run.config.classifier_model} · {run.config.embedding_model}'
@@ -138,12 +155,16 @@ def header(run: InsightsRun) -> str:
     population_chips = ''.join(chips) or '<span class="insights-muted">All traces</span>'
     label_chip_html = ''.join(label_chips) or '<span class="insights-muted">No labels</span>'
     run_url = quote(run.run_id, safe='')
+    trace_count = run.counts.get('n_traces', len(run.traces))
+    trace_text = f'{trace_count} trace' if trace_count == 1 else f'{trace_count} traces'
     return (
         '<header class="insights-header">'
-        f'<div><h2>{esc(run.run_name)}</h2><p class="insights-subtitle">{run.counts.get("n_traces", len(run.traces))} traces · '
-        f'{esc(run.created_at.strftime("%Y-%m-%d %H:%M UTC"))} · {esc(models)}</p>'
+        f'<div class="insights-header-copy"><h2>{esc(run.run_name)}</h2><p class="insights-subtitle">'
+        f'<span class="insights-header-count">{trace_text}</span>'
+        f'<span>{esc(run.created_at.strftime("%d %b %Y, %H:%M UTC"))}</span></p>'
         f'<div class="insights-chip-group"><span class="insights-group-label">Population</span>{population_chips}</div>'
-        f'<div class="insights-chip-group"><span class="insights-group-label">Labels</span>{label_chip_html}</div></div>'
+        f'<div class="insights-chip-group"><span class="insights-group-label">Labels</span>{label_chip_html}</div>'
+        f'<details class="insights-models"><summary>Models used</summary><span>{esc(models)}</span></details></div>'
         '<div class="insights-actions">'
         f'{finder}<a class="insights-action" href="/insights/{run_url}/export.json">Export JSON</a>'
         '</div></header>'

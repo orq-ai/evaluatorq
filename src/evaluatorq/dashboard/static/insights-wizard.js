@@ -103,7 +103,12 @@
     step = value;
     form.classList.add('wizard-ready');
     sections.forEach(function (section) { section.hidden = Number(section.dataset.step) !== step; });
-    stepLabels.forEach(function (label, index) { label.classList.toggle('active', index + 1 === step); });
+    stepLabels.forEach(function (label, index) {
+      label.classList.toggle('active', index + 1 === step);
+      label.classList.toggle('completed', index + 1 < step);
+      if (index + 1 === step) label.setAttribute('aria-current', 'step');
+      else label.removeAttribute('aria-current');
+    });
     back.hidden = step === 1;
     next.hidden = step === 3;
     start.hidden = step !== 3;

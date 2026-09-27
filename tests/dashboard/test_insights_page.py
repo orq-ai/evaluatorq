@@ -117,6 +117,8 @@ def test_insights_page_renders_list_and_population_and_label_chips(tmp_path, min
     assert 'tokens ≥' in response.text
     assert '2026-08-25T00:00:00+00:00' in response.text
     assert '2026-09-01T00:00:00+00:00' in response.text
+    assert '25 Aug 2026, 00:00 UTC' in response.text
+    assert 'Models used' in response.text
     assert '500' in response.text
     assert 'sentiment' in response.text
     assert 'General requests' in response.text
