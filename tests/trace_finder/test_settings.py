@@ -178,6 +178,20 @@ def test_old_profile_config_migrates_to_cli_profile_but_explicit_auth_wins() -> 
     assert explicit.orq_auth_method == 'environment'
 
 
+def test_legacy_profile_scope_is_ignored_by_effective_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_profile', 'orq_profile': 'research-bauke',
+        'orq_workspace': 'old-workspace', 'orq_project_id': 'old-project',
+        'orq_project_name': 'Old project',
+    }), path)
+
+    settings = effective_settings()
+    assert (settings.orq_workspace, settings.orq_project_id, settings.orq_project_name) == (None, None, None)
+    assert effective_settings({'orq_project_id': 'per-run-project'}).orq_project_id == 'per-run-project'
+
+
 def test_user_api_key_is_encrypted_in_settings_and_can_be_read_back(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

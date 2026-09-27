@@ -517,6 +517,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .eq-auth-toast button { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 18px; line-height: 1; }
 .settings-auth-note { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 .settings-scope-note { margin: 8px 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.settings-auth-panel:has(input[name="orq_auth_method"][value="cli_profile"]:checked) .settings-auth-scope,
 .settings-auth-panel:has(input[name="orq_auth_method"][value="stored_api_key"]:checked) .settings-auth-scope,
 .settings-auth-panel:has(input[name="orq_auth_method"][value="cli_oauth"]:checked) .settings-auth-scope { display: none; }
 .settings-save { align-self: flex-start; }

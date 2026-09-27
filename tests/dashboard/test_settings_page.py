@@ -19,7 +19,7 @@ from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.trace_finder import FacetCatalogue, RunSnapshot
-from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+from evaluatorq.trace_finder.settings import DashboardSettings, load_settings, save_settings
 
 
 _MODELS = {'compiler_model': 'compiler/custom', 'classifier_model': 'classifier/custom', 'apply_model': 'apply/custom'}
@@ -450,46 +450,49 @@ def test_missing_cli_oauth_sign_in_returns_action_for_startup_toast(
     assert 'CLI OAuth was rejected' in response.json()['message']
 
 
-def test_selecting_another_profile_refreshes_its_projects_before_save(
+def test_selecting_another_profile_does_not_show_its_scope_before_save(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     save_settings(DashboardSettings.model_validate({'orq_workspace': 'orq-research', 'orq_project_id': 'project-bauke'}), settings_file)
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
-    monkeypatch.setattr(
-        app_module,
-        'discover_orq_scope',
-        lambda profile: OrqScope(
-            'staging-workspace', 'staging-id', (OrqProject('project-staging', 'Staging', 'staging-id'),)
-        ) if profile == 'staging' else OrqScope(),
-    )
+    def no_profile_discovery(profile: str | None) -> OrqScope:
+        assert profile is None
+        return OrqScope()
+
+    monkeypatch.setattr(app_module, 'discover_orq_scope', no_profile_discovery)
 
     html = client.get('/settings?profile=staging').text
 
-    assert 'Profile preview. Choose a project, then Save to apply.' in html
+    assert 'Profile preview. Save settings to use it.' in html
     assert '<option value="staging" selected>staging' in html
     assert 'https://staging.orq.ai' in html
     assert 'Selected profile API key' in html
-    assert 'name="orq_workspace"' in html
-    assert '<option value="project-staging" selected>Staging' in html
+    assert 'onchange="location.assign' not in html
+    assert 'const scopeInactive=selected.value!=="environment"' in html
+    assert 'project-staging' not in html
     assert 'project-bauke' not in html
     assert json.loads(settings_file.read_text())['orq_project_id'] == 'project-bauke'
 
 
-def test_profile_without_a_resolved_slug_does_not_inherit_environment_workspace(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_saving_profile_clears_legacy_workspace_and_project(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
-    monkeypatch.setattr(
-        app_module,
-        'discover_orq_scope',
-        lambda _profile: OrqScope(None, 'staging-id', (OrqProject('project-staging', 'Staging', 'staging-id'),)),
-    )
-    monkeypatch.setenv('ORQ_WORKSPACE', 'orq-research')
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_profile', 'orq_profile': 'prod',
+        'orq_workspace': 'old-workspace', 'orq_project_id': 'old-project',
+        'orq_project_name': 'Old project',
+    }), settings_file)
 
-    html = client.get('/settings?profile=staging').text
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS, 'orq_auth_method': 'cli_profile', 'orq_profile': 'staging',
+        'orq_workspace': 'other-workspace', 'orq_project_id': 'other-project',
+    }))
 
-    assert 'name="orq_workspace" type="text" value=""' in html
-    assert 'could not verify this workspace slug' in html
+    assert response.status_code == 303
+    saved = load_settings(settings_file)
+    assert saved.orq_profile == 'staging'
+    assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (None, None, None)
 
 
 def test_saving_a_profile_persists_it_without_changing_environment(
@@ -521,6 +524,7 @@ def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient
 
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
     monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.orq.ai')
+    monkeypatch.setenv('ORQ_WORKSPACE', 'staging-workspace')
 
     assert client.post('/settings', data=csrf_data({
         **_MODELS, 'orq_profile': 'staging', 'orq_workspace': 'staging-workspace',
@@ -528,6 +532,7 @@ def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient
     assert getattr(client.app, 'state').finder_profile == _profiles()[0]
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.orq.ai'
     assert load_settings().orq_profile_host == 'https://staging.orq.ai'
+    assert load_settings().orq_workspace is None
     assert load_settings().orq_credential_fingerprint == credential_fingerprint('key-staging', 'https://staging.orq.ai')
     assert (trace_span_url('trace-1', 'span-1') or '').startswith('https://staging.orq.ai/')
 

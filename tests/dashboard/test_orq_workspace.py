@@ -31,6 +31,18 @@ def test_resolve_slug_none_when_unset() -> None:
     assert ow.resolve_slug() is None
 
 
+def test_legacy_profile_workspace_does_not_create_trace_links(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_profile', 'orq_profile': 'staging', 'orq_workspace': 'old-workspace',
+    }), path)
+
+    assert ow.resolve_slug() is None
+
+
 # --- host -------------------------------------------------------------------
 
 

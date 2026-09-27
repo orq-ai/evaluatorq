@@ -891,9 +891,7 @@ def settings_body(  # noqa: C901
         )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     if preview:
-        saved_html += (
-            '<p class="settings-saved" role="status">Profile preview. Choose a project, then Save to apply.</p>'
-        )
+        saved_html += '<p class="settings-saved" role="status">Profile preview. Save settings to use it.</p>'
     form_error = f'<p class="settings-error" role="alert">{esc(errors["form"])}</p>' if 'form' in errors else ''
     auth_rows: list[str] = []
     chosen = setting_value('orq_profile')
@@ -931,8 +929,7 @@ def settings_body(  # noqa: C901
             'Reuse an API-key profile saved by the Orq CLI.',
             (
                 '<label class="settings-auth-detail-label" for="orq_profile">CLI profile</label>'
-                f'<select id="orq_profile" name="orq_profile"{profile_error_attr} '
-                'onchange="location.assign(\'/settings?profile=\'+encodeURIComponent(this.value))">'
+                f'<select id="orq_profile" name="orq_profile"{profile_error_attr}>'
                 f'<option value="">Choose a profile</option>{"".join(options)}</select>{profile_error_html}'
             ),
         ),
@@ -999,7 +996,7 @@ def settings_body(  # noqa: C901
     auth_rows.append('</div>')
     if scope is not None:
         workspace = setting_value('orq_workspace')
-        if not chosen:
+        if method == 'environment':
             workspace = (
                 workspace
                 or os.environ.get('ORQ_WORKSPACE', '').strip()
@@ -1051,7 +1048,7 @@ def settings_body(  # noqa: C901
         'const inactive=panel.dataset.authMethod!==selected.value;'
         'panel.querySelectorAll("input,select,textarea").forEach(function(field){field.disabled=inactive;});'
         '});'
-        'const scopeInactive=selected.value==="cli_oauth"||selected.value==="stored_api_key";'
+        'const scopeInactive=selected.value!=="environment";'
         'form.querySelectorAll(".settings-auth-scope input,.settings-auth-scope select").forEach(function(field){'
         'field.disabled=scopeInactive;});'
         '}'

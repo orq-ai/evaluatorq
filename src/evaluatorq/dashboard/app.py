@@ -325,10 +325,10 @@ async def _settings(req: Request) -> NotStr:
                     'orq_project_name': None,
                 }
             )
-    if settings.orq_auth_method in ('environment', 'cli_profile'):
-        scope = await asyncio.to_thread(
-            discover_orq_scope, settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
-        )
+    if settings.orq_auth_method == 'environment':
+        scope = await asyncio.to_thread(discover_orq_scope, None)
+    elif settings.orq_auth_method == 'cli_profile':
+        scope = OrqScope()
     else:
         scope = OrqScope(error='Save this authentication method to refresh the workspace and project choices.')
     body = settings_body(
@@ -448,14 +448,12 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
         errors.setdefault('orq_profile', 'Choose an Orq CLI API-key profile.')
     if selected_profile is not None and '*' in selected_profile.api_key:
         errors['orq_profile'] = 'The installed orq CLI masks this profile key; use Environment credentials.'
-    if settings is not None and settings.orq_auth_method in ('environment', 'cli_profile'):
-        scope = await asyncio.to_thread(
-            discover_orq_scope, settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
-        )
+    if settings is not None and settings.orq_auth_method == 'environment':
+        scope = await asyncio.to_thread(discover_orq_scope, None)
     else:
         scope = OrqScope()
     if settings is not None:
-        if settings.orq_auth_method in ('stored_api_key', 'cli_oauth'):
+        if settings.orq_auth_method != 'environment':
             settings = settings.model_copy(
                 update={'orq_workspace': None, 'orq_project_id': None, 'orq_project_name': None}
             )
