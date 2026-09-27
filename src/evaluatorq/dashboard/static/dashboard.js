@@ -82,10 +82,8 @@
   function syncInsightsTab() {
     const nav = document.querySelector('.insights-tabs');
     if (!nav) return;
-    const current = window.location.pathname.match(/\/tab\/([^/]+)$/);
-    if (!current) return;
     nav.querySelectorAll('a').forEach(function (link) {
-      const active = new URL(link.href).pathname.endsWith('/tab/' + current[1]);
+      const active = new URL(link.href).pathname === window.location.pathname;
       link.classList.toggle('active', active);
       if (active) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
@@ -298,7 +296,7 @@
       }, 100);
       return;
     }
-    const crosstabLink = evt.target.closest('#insights-crosstab a[href*="/tab/traces?row="]');
+    const crosstabLink = evt.target.closest('#insights-crosstab a[href]');
     if (crosstabLink && window.htmx) {
       evt.preventDefault();
       history.pushState(null, '', crosstabLink.href);

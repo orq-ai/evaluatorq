@@ -96,6 +96,9 @@ def _referenced_finder_exports(export_dir: Path) -> set[Path]:
             run_id = marker.stem
             manifest_path = manifests_dir / f'{run_id}.json'
             manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            if not isinstance(manifest, dict):
+                marker.unlink(missing_ok=True)
+                continue
             age = now - manifest_path.stat().st_mtime
             if manifest.get('status') != 'running' or age > _FINDER_EXPORT_REFERENCE_MAX_AGE.total_seconds():
                 marker.unlink(missing_ok=True)

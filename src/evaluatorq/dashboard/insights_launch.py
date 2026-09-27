@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
+from loguru import logger
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
@@ -266,14 +267,23 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
                 env=worker_env,
                 start_new_session=True,
             )
-    except OSError as exc:
-        writer.fail(f'Could not start Insights worker: {exc}', stage='start')
-        if reference_path is not None:
-            reference_path.unlink(missing_ok=True)
-        if reference_temporary is not None:
-            reference_temporary.unlink(missing_ok=True)
-        if snapshot_path is not None:
-            shutil.rmtree(snapshot_path.parent, ignore_errors=True)
+    except Exception as exc:  # noqa: BLE001 — every ordinary setup failure must terminate this run.
+        try:
+            writer.fail(f'Could not start Insights worker: {exc}', stage='start')
+        finally:
+            for path in (reference_path, reference_temporary):
+                if path is not None:
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError as cleanup_error:
+                        logger.warning('Could not remove Finder export reference {}: {}', path, cleanup_error)
+            if snapshot_path is not None:
+                try:
+                    shutil.rmtree(snapshot_path.parent)
+                except OSError as cleanup_error:
+                    logger.warning(
+                        'Could not remove Finder snapshot directory {}: {}', snapshot_path.parent, cleanup_error
+                    )
     return run_id
 
 

@@ -292,6 +292,7 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
 
     async def fake_insights(population: Any, **kwargs: Any) -> Any:
         captured['population'] = population
+        captured.update(kwargs)
         return minimal_run
 
     monkeypatch.setattr(cli_module, 'insights', fake_insights)
@@ -300,3 +301,4 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
 
     assert result.exit_code == 0, result.output
     assert captured['population'].finder_export == path
+    assert captured['_finder_export_source'] == path

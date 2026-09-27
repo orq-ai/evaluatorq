@@ -635,6 +635,31 @@ def test_find_export_save_failure_is_visible(
     assert 'Could not save Finder export for Insights.' in response.text
 
 
+def test_find_export_survives_non_object_manifest_during_retention(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard.insights_launch import finder_export_reference_path
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    store.complete()
+
+    runs_dir = tmp_path / 'insights-runs'
+    manifest_dir = runs_dir / '.manifests'
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / 'malformed-run.json').write_text('[]', encoding='utf-8')
+    marker = finder_export_reference_path(runs_dir, 'malformed-run')
+    marker.parent.mkdir(parents=True)
+    marker.write_text(json.dumps({'finder_export': 'trace-finder-old.json'}), encoding='utf-8')
+
+    response = client.get('/find/export.json')
+
+    assert response.status_code == 200
+    assert json.loads(response.text)['counts']['matched'] == 1
+    assert not marker.exists()
+
+
 def test_finder_export_retention_keeps_recent_and_saved_insights_references(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

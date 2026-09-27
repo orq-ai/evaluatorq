@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -52,6 +53,20 @@ def test_from_finder_export_sets_path_only() -> None:
 
 def test_run_round_trips_json(minimal_run: InsightsRun) -> None:
     assert InsightsRun.model_validate_json(minimal_run.model_dump_json()) == minimal_run
+
+
+@pytest.mark.parametrize(('kind', 'value'), [('noul', 'yes'), ('choice', True), ('score', '0.8')])
+def test_saved_run_rejects_label_values_incompatible_with_spec(
+    minimal_run: InsightsRun, kind: str, value: str | bool
+) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['config']['labels'][0]['kind'] = kind
+    payload['traces'][0]['labels']['sentiment']['value'] = value
+
+    with pytest.raises(ValidationError, match='incompatible'):
+        InsightsRun.model_validate(payload)
+    with pytest.raises(ValidationError, match='incompatible'):
+        InsightsRun.model_validate_json(json.dumps(payload))
 
 
 @pytest.mark.parametrize('probability', [0.0, 1.0, 0, 1])

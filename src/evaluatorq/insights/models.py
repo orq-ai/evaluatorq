@@ -245,3 +245,21 @@ class InsightsRun(BaseModel):
     counts: dict[str, int]
     warnings: list[str]
     cost_by_stage: dict[str, Usage | None] = {}
+
+    @model_validator(mode='after')
+    def _label_values_match_specs(self) -> Self:
+        kinds = {spec.name: spec.kind for spec in self.config.labels}
+        for trace in self.traces:
+            for name, answer in trace.labels.items():
+                value = answer.value
+                if value is None or name not in kinds:
+                    continue
+                kind = kinds[name]
+                valid = (
+                    (kind == 'noul' and isinstance(value, bool))
+                    or (kind == 'choice' and isinstance(value, str))
+                    or (kind == 'score' and isinstance(value, float))
+                )
+                if not valid:
+                    raise ValueError(f'trace {trace.trace_id!r} label {name!r} has a value incompatible with {kind!r}')
+        return self

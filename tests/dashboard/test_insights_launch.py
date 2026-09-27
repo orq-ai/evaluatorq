@@ -80,6 +80,43 @@ def test_spawn_failure_is_visible_in_manifest(tmp_path: Path) -> None:
     assert manifest.error is not None and 'worker unavailable' in manifest.error
 
 
+def test_non_oserror_setup_failure_marks_manifest_and_cleans_finder_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+    import tempfile
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    export_path = exports / 'trace-finder-source.json'
+    export_path.write_text(_run_export(['trace-1']).model_dump_json(), encoding='utf-8')
+    spec = InsightsLaunchSpec(source='finder', finder_export=export_path.name)
+
+    real_dumps = json.dumps
+
+    def fail_worker_request(value: object, *args: object, **kwargs: object) -> str:
+        if isinstance(value, dict) and 'run_id' in value:
+            raise TypeError('worker request is not serializable')
+        return real_dumps(value, *args, **kwargs)
+
+    with (
+        patch('evaluatorq.dashboard.insights_launch.json.dumps', side_effect=fail_worker_request),
+        patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn,
+    ):
+        run_id = launch_insights(spec, tmp_path / 'insights-runs')
+
+    manifest = list_manifests(tmp_path / 'insights-runs')[0]
+    assert manifest.run_id == run_id
+    assert manifest.status == 'error'
+    assert manifest.error is not None and 'worker request is not serializable' in manifest.error
+    assert not finder_export_reference_path(tmp_path / 'insights-runs', run_id).exists()
+    assert list(tmp_path.glob('evaluatorq-finder-snapshot-*')) == []
+    assert list(tmp_path.glob(f'.{run_id}.*.tmp')) == []
+    spawn.assert_not_called()
+
+
 def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import runpy
     import tempfile
