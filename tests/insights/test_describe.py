@@ -244,6 +244,14 @@ def test_top_level_child_context_has_per_child_and_shared_bounds() -> None:
     assert 'excerpt truncated' in bounded
 
 
+def test_excerpt_shorter_than_truncation_marker_stays_within_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(describe_module, '_MAX_CONTEXT_CHARS', 8)
+
+    bounded = describe_module._bound_excerpts(['a' * 100])
+
+    assert bounded == ['a' * 8]
+
+
 @pytest.mark.asyncio
 async def test_describe_top_level_failure_yields_error_string(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:

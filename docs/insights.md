@@ -62,7 +62,7 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-`InsightsPopulation` also accepts just facets and numeric bounds, or `InsightsPopulation.from_finder_export(path)` to use the matches from an `eq find --json` export. The export path already fixes the population, so do not combine it with a query, facets, numeric bounds, time window, or limit.
+`InsightsPopulation` also accepts just facets and numeric bounds, or `InsightsPopulation.from_finder_export(path)` to use the matches from an `eq find --json` export. Explicit `start` and `end` bounds must include a timezone offset, and `start` cannot be later than `end`; invalid bounds fail before traces are loaded. The export path already fixes the population, so do not combine it with a query, facets, numeric bounds, time window, or limit.
 
 ## Run from the CLI
 

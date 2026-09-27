@@ -83,7 +83,7 @@ def start_worker_heartbeat(manifest_path: Path) -> tuple[threading.Event, thread
         state = {}
     if not isinstance(state, dict):
         state = {}
-    state.update(pid=os.getpid(), heartbeat_at=time.time())
+    state.update(pid=os.getpid(), process_identity=_worker_process_identity(os.getpid()), heartbeat_at=time.time())
     stop = threading.Event()
 
     def heartbeat() -> None:
@@ -126,6 +126,7 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
         heartbeat_at = state.get('heartbeat_at')
         stale = isinstance(heartbeat_at, (int, float)) and time.time() - heartbeat_at > INSIGHTS_WORKER_STALE_SECONDS
         pid = state.get('pid')
+        process_identity = state.get('process_identity')
     except (OSError, ValueError, TypeError):
         return False
     if manifest.status != ManifestStatus.RUNNING or not stale:
@@ -133,7 +134,7 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
     # A worker can be paused by the OS or debugger long enough for its lease
     # to age. A live PID is stronger evidence than an old heartbeat, so leave
     # its manifest and private Finder artifacts alone until it exits.
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or _worker_process_is_alive(pid):
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or _worker_process_is_alive(pid, process_identity):
         return False
     # Re-read the lease immediately before failing. The worker may have
     # resumed and refreshed it while the manifest was being parsed.
@@ -146,9 +147,10 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
         latest_manifest.status != ManifestStatus.RUNNING
         or not isinstance(latest_state, dict)
         or latest_state.get('pid') != pid
+        or latest_state.get('process_identity') != process_identity
         or not isinstance(latest_state.get('heartbeat_at'), (int, float))
         or time.time() - latest_state['heartbeat_at'] <= INSIGHTS_WORKER_STALE_SECONDS
-        or _worker_process_is_alive(pid)
+        or _worker_process_is_alive(pid, process_identity)
     ):
         return False
     state = latest_state
@@ -186,8 +188,8 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
     return True
 
 
-def _worker_process_is_alive(pid: object) -> bool:
-    """Return whether a recorded worker PID still exists on this host."""
+def _worker_process_is_alive(pid: object, expected_identity: object = None) -> bool:
+    """Return whether the recorded worker still exists with its original identity."""
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not hasattr(os, 'kill'):
         return True
     try:
@@ -201,7 +203,60 @@ def _worker_process_is_alive(pid: object) -> bool:
         return exc.errno != errno.ESRCH
     except OverflowError:
         return True
+    if isinstance(expected_identity, str):
+        observed = _read_worker_process_identity(pid)
+        if observed is None:
+            logger.warning('Could not verify Insights worker process identity for PID {}; leaving its run active', pid)
+            return True
+        identity, zombie = observed
+        return identity == expected_identity and not zombie
+    logger.warning('Insights worker PID {} has no recorded process identity; leaving its run active', pid)
     return True
+
+
+def _read_worker_process_identity(pid: int) -> tuple[str, bool] | None:
+    """Read a process start marker and zombie flag where the OS exposes them."""
+    if sys.platform.startswith('linux'):
+        try:
+            contents = Path(f'/proc/{pid}/stat').read_text(encoding='ascii')
+        except OSError:
+            return None
+        # The command name is parenthesized and can itself contain spaces or ')'.
+        closing = contents.rfind(')')
+        if closing < 0:
+            return None
+        fields = contents[closing + 1 :].split()
+        if len(fields) <= 19:
+            return None
+        try:
+            start_ticks = int(fields[19])
+        except ValueError:
+            return None
+        return f'linux:{start_ticks}', fields[0] == 'Z'
+    if sys.platform == 'darwin':
+        try:
+            result = subprocess.run(
+                ['/bin/ps', '-o', 'lstart=', '-o', 'stat=', '-p', str(pid)],
+                capture_output=True,
+                check=True,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        fields = result.stdout.split()
+        if len(fields) < 6:
+            return None
+        return f'darwin:{" ".join(fields[:5])}', fields[5].startswith('Z')
+    return None
+
+
+def _worker_process_identity(pid: int) -> str | None:
+    """Capture the worker's start marker, if this OS exposes one."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return None
+    details = _read_worker_process_identity(pid)
+    return details[0] if details is not None else None
 
 
 # The child must record import-time failures too. This tiny stdlib-only wrapper
@@ -545,6 +600,7 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
         try:
             state = json.loads(state_path.read_text(encoding='utf-8'))
             state['pid'] = process.pid
+            state['process_identity'] = _worker_process_identity(process.pid)
             _write_worker_state(state_path, state)
         except (OSError, ValueError, TypeError) as exc:
             logger.warning('Could not record Insights worker process {}: {}', run_id, exc)

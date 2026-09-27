@@ -1,15 +1,14 @@
 """Classifier-based merge of near-duplicate clusters.
 
 One retry layer: mirrors `labeling.py`'s `_classify_with_retry` for a different
-call path — `run_classify` never raises, so a retryable outcome
+call path — `run_classify` normally returns an outcome, so a retryable outcome
 (`JudgeError.TIMEOUT`/`API_CONNECTION`) re-raises its own `error_exc` for
 `with_retry` to retry; the final attempt's outcome is returned as-is. Do not
 add a second retry layer around this call path.
 
-Per-pair failure never raises and never merges: a classify call that comes
-back with an error, a missing answer, or an unreadable probability skips the
-merge for that pair only and logs a warning, per the "a degraded path
-announces itself" house rule.
+Per-pair ordinary failure never raises and never merges: an error, missing
+answer, unreadable probability, or unexpected setup exception skips that pair
+and logs a warning. Cancellation still propagates.
 """
 
 from __future__ import annotations
@@ -136,7 +135,7 @@ async def merge_similar(
     and up to 3 example texts each; a probability >= `threshold` merges the
     pair (union-find), so a chain of pairwise merges (a~b, b~c) collapses
     transitively onto one representative. A failed or unreadable pair is
-    logged and left unmerged (`merge_similar` never raises).
+    logged and left unmerged. Cancellation and invalid arguments still raise.
 
     Returns the representative mapping, the number of candidate pairs checked,
     and the number of failed checks. Every cluster id in `names` maps to its
@@ -152,37 +151,43 @@ async def merge_similar(
     cfg = LLMCallConfig(model=model, timeout_ms=90_000)
 
     async def _check_pair(a: int, b: int) -> bool:
-        state = {
-            'cluster_a': _cluster_state(names[a], examples.get(a, [])),
-            'cluster_b': _cluster_state(names[b], examples.get(b, [])),
-        }
-        question = ClassifyQuestion(
-            kind='noul',
-            instructions='Do these two clusters describe the same category of user conversation?',
-            state=state,
-        )
-        request = ClassifyRequest(state=state, questions={_SAME_KEY: question})
-
-        async with semaphore:
-            outcome = await _classify_pair_with_retry(client=client, model=model, cfg=cfg, request=request, usage=usage)
-
-        if outcome.error_kind is not None or outcome.response is None:
-            message = outcome.error_message or (
-                outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+        try:
+            state = {
+                'cluster_a': _cluster_state(names[a], examples.get(a, [])),
+                'cluster_b': _cluster_state(names[b], examples.get(b, [])),
+            }
+            question = ClassifyQuestion(
+                kind='noul',
+                instructions='Do these two clusters describe the same category of user conversation?',
+                state=state,
             )
-            logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, message)
-            return False
+            request = ClassifyRequest(state=state, questions={_SAME_KEY: question})
 
-        answer = outcome.response.answers.get(_SAME_KEY)
-        if answer is None or answer.noul is None:
-            logger.warning(
-                'Insights merge classify reply for clusters {} vs {} is missing the {!r} probability', a, b, _SAME_KEY
-            )
-            return False
+            async with semaphore:
+                outcome = await _classify_pair_with_retry(
+                    client=client, model=model, cfg=cfg, request=request, usage=usage
+                )
 
-        if answer.noul >= threshold:
-            _union(parent, a, b)
-        return True
+            if outcome.error_kind is not None or outcome.response is None:
+                message = outcome.error_message or (
+                    outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+                )
+                logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, message)
+                return False
+
+            answer = outcome.response.answers.get(_SAME_KEY)
+            if answer is None or answer.type != 'noul' or answer.noul is None:
+                logger.warning(
+                    'Insights merge classify reply for clusters {} vs {} has no {!r} probability', a, b, _SAME_KEY
+                )
+                return False
+
+            if answer.noul >= threshold:
+                _union(parent, a, b)
+            return True
+        except Exception as exc:  # noqa: BLE001 — isolate an unexpected pair failure; CancelledError is not caught.
+            logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, exc)
+            return False
 
     outcomes = await asyncio.gather(*starmap(_check_pair, pairs))
 

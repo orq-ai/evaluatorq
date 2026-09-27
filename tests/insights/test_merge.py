@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
@@ -225,6 +226,50 @@ async def test_missing_answer_keeps_both_unmerged(monkeypatch: pytest.MonkeyPatc
 
     assert result.representatives[0] == 0
     assert result.representatives[1] == 1
+
+
+@pytest.mark.asyncio
+async def test_answer_with_non_noul_type_is_a_failed_pair(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        answer = ClassifyAnswer(type='choice', noul=0.9)
+        return ClassifyOutcome(response=ClassifyResponse(answers={'same': answer}))
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    result = await merge_similar(
+        _names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m', threshold=0.5
+    )
+
+    assert result.n_failed == 1
+    assert result.representatives == {0: 0, 1: 1}
+
+
+@pytest.mark.asyncio
+async def test_unexpected_pair_error_is_failed_without_aborting_other_pairs(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        state = cast(dict[str, Any], request.state)
+        if state['cluster_a']['name'] == 'cluster-0':
+            raise RuntimeError('unexpected router failure')
+        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}))
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    result = await merge_similar(
+        _names(0, 1, 2), examples={}, neighbours={0: [1], 1: [2]}, client=fake_client(), model='m', threshold=0.5
+    )
+
+    assert result.n_failed == 1
+    assert result.representatives[0] == 0
+    assert result.representatives[1] == result.representatives[2]
+
+
+@pytest.mark.asyncio
+async def test_pair_cancellation_is_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+
+    with pytest.raises(asyncio.CancelledError):
+        await merge_similar(_names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m')
 
 
 @pytest.mark.asyncio

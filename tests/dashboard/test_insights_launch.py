@@ -417,7 +417,7 @@ def test_stale_reconciliation_leaves_a_live_worker_and_its_finder_artifacts(
             'snapshot_path': str(snapshot),
         },
     )
-    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid: True)
+    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid, _identity=None: True)
 
     assert not insights_launch.reconcile_stale_worker(runs_dir, 'paused-worker')
     assert list_manifests(runs_dir)[0].status.value == 'running'
@@ -446,11 +446,101 @@ def test_stale_reconciliation_rechecks_worker_liveness_before_failing(
         },
     )
     checks = iter((False, True))
-    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid: next(checks))
+    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid, _identity=None: next(checks))
 
     assert not insights_launch.reconcile_stale_worker(runs_dir, 'resumed-worker')
     assert list_manifests(runs_dir)[0].status.value == 'running'
     assert writer.manifest.status.value == 'running'
+
+
+def test_stale_reconciliation_detects_reused_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    start_manifest(run_id='reused-worker-pid', surface='insights', run_name='demo', runs_dir=runs_dir)
+    _write_worker_state(
+        worker_state_path(runs_dir, 'reused-worker-pid'),
+        {
+            'pid': 12345,
+            'process_identity': 'linux:100',
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': None,
+        },
+    )
+    monkeypatch.setattr(insights_launch.os, 'kill', lambda _pid, _signal: None)
+    monkeypatch.setattr(insights_launch, '_read_worker_process_identity', lambda _pid: ('linux:200', False))
+
+    assert insights_launch.reconcile_stale_worker(runs_dir, 'reused-worker-pid')
+    assert list_manifests(runs_dir)[0].status.value == 'error'
+
+
+def test_stale_reconciliation_recovers_zombie_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    start_manifest(run_id='zombie-worker', surface='insights', run_name='demo', runs_dir=runs_dir)
+    _write_worker_state(
+        worker_state_path(runs_dir, 'zombie-worker'),
+        {
+            'pid': 12345,
+            'process_identity': 'linux:100',
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': None,
+        },
+    )
+    monkeypatch.setattr(insights_launch.os, 'kill', lambda _pid, _signal: None)
+    monkeypatch.setattr(insights_launch, '_read_worker_process_identity', lambda _pid: ('linux:100', True))
+
+    assert insights_launch.reconcile_stale_worker(runs_dir, 'zombie-worker')
+    assert list_manifests(runs_dir)[0].status.value == 'error'
+
+
+def test_macos_process_identity_parses_start_time_and_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setattr(insights_launch.sys, 'platform', 'darwin')
+    monkeypatch.setattr(
+        insights_launch.subprocess,
+        'run',
+        lambda *_args, **_kwargs: SimpleNamespace(stdout='Sun Sep 27 23:04:52 2026 Z+'),
+    )
+
+    assert insights_launch._read_worker_process_identity(12345) == ('darwin:Sun Sep 27 23:04:52 2026', True)
+
+
+def test_macos_process_identity_failure_is_conservative(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setattr(insights_launch.sys, 'platform', 'darwin')
+
+    def unavailable(*_args: object, **_kwargs: object) -> None:
+        raise OSError('ps unavailable')
+
+    monkeypatch.setattr(insights_launch.subprocess, 'run', unavailable)
+    monkeypatch.setattr(insights_launch.os, 'kill', lambda _pid, _signal: None)
+
+    assert insights_launch._read_worker_process_identity(12345) is None
+    assert insights_launch._worker_process_is_alive(12345, 'darwin:original-start')
+
+
+def test_linux_process_identity_handles_parenthesis_in_command_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pathlib import Path
+
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setattr(insights_launch.sys, 'platform', 'linux')
+    tail = ['S', *(['0'] * 18), '987654']
+    monkeypatch.setattr(Path, 'read_text', lambda _path, **_kwargs: f'123 (worker ) name) {" ".join(tail)}')
+
+    assert insights_launch._read_worker_process_identity(123) == ('linux:987654', False)
 
 
 def test_stale_reconciliation_treats_overflowing_worker_pid_as_uncertain(

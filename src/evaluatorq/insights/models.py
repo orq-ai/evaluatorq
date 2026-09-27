@@ -70,6 +70,13 @@ class InsightsPopulation(BaseModel):
 
     @model_validator(mode='after')
     def _finder_export_excludes_live_selection(self) -> Self:
+        for name in ('start', 'end'):
+            value = getattr(self, name)
+            if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+                raise ValueError(f'{name} must be timezone-aware')
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ValueError('start must not be later than end')
+
         if self.finder_export is None:
             return self
         live_fields = {

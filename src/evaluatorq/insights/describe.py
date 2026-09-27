@@ -145,9 +145,12 @@ def _bound_excerpts(texts: list[str]) -> list[str]:
         excerpt_limit = min(_MAX_EXCERPT_CHARS, available // excerpts_left)
         if len(text) > excerpt_limit:
             marker = ' … [excerpt truncated] … '
-            head = (excerpt_limit - len(marker)) * 3 // 4
-            tail = excerpt_limit - len(marker) - head
-            text = f'{text[:head]}{marker}{text[-tail:] if tail else ""}'
+            if excerpt_limit <= len(marker):
+                text = text[:excerpt_limit]
+            else:
+                head = (excerpt_limit - len(marker)) * 3 // 4
+                tail = excerpt_limit - len(marker) - head
+                text = f'{text[:head]}{marker}{text[-tail:] if tail else ""}'
         bounded.append(text)
         remaining -= len(text) + separator_chars
     return bounded

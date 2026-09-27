@@ -28,6 +28,28 @@ def test_finder_export_and_query_are_exclusive() -> None:
         InsightsPopulation(query='x', finder_export=Path('a.json'))
 
 
+@pytest.mark.parametrize('field', ['start', 'end'])
+def test_population_rejects_naive_window_datetime(field: str) -> None:
+    with pytest.raises(ValueError, match=f'{field} must be timezone-aware'):
+        InsightsPopulation.model_validate({field: datetime(2026, 9, 1)})
+
+
+@pytest.mark.parametrize(
+    ('start', 'end'),
+    [
+        (datetime(2026, 9, 2, tzinfo=timezone.utc), datetime(2026, 9, 1, tzinfo=timezone.utc)),
+    ],
+)
+def test_population_rejects_inverted_window(start: datetime, end: datetime) -> None:
+    with pytest.raises(ValueError, match='start must not be later than end'):
+        InsightsPopulation(start=start, end=end)
+
+
+def test_population_allows_equal_window_bounds() -> None:
+    bound = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert InsightsPopulation(start=bound, end=bound).start == bound
+
+
 @pytest.mark.parametrize(
     ('field', 'value'),
     [
