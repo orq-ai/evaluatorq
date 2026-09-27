@@ -320,7 +320,11 @@ def test_traces_can_be_filtered_by_cluster(tmp_path, minimal_run, monkeypatch):
 def test_labels_without_any_labels_show_empty_state(tmp_path, minimal_run, monkeypatch):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     no_labels = minimal_run.model_copy(
-        update={'labels': {}, 'config': minimal_run.config.model_copy(update={'labels': []})}
+        update={
+            'labels': {},
+            'config': minimal_run.config.model_copy(update={'labels': []}),
+            'traces': [trace.model_copy(update={'labels': {}}) for trace in minimal_run.traces],
+        }
     )
     _write_run(tmp_path, no_labels)
 

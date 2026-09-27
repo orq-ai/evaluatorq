@@ -89,13 +89,11 @@
       else link.removeAttribute('aria-current');
     });
   }
-  window.addEventListener('popstate', function () {
+  window.addEventListener('popstate', function (evt) {
     syncInsightsTab();
-    // HTMX restores its own history entries, but Insights also has chart links
-    // that call htmx.ajax() after pushing state themselves. Those entries have
-    // no HTMX snapshot, so restore the fragment from the URL on every Insights
-    // history navigation. This also keeps canvas and SVG links in sync with
-    // tab links, which use hx-push-url.
+    // Re-fetch only entries created by Insights chart links. HTMX, the report
+    // tabs, and other dashboard features own their own history entries.
+    if (!evt.state || !evt.state.insightsCustom) return;
     const nav = document.querySelector('.insights-tabs');
     const hasMatchingTab = nav && Array.from(nav.querySelectorAll('a')).some(function (link) {
       return new URL(link.href).pathname === window.location.pathname;
@@ -316,7 +314,7 @@
     const crosstabLink = evt.target.closest('#insights-crosstab a[href]');
     if (crosstabLink && window.htmx) {
       evt.preventDefault();
-      history.pushState(null, '', crosstabLink.href);
+      history.pushState({ insightsCustom: true }, '', crosstabLink.href);
       window.htmx.ajax('GET', crosstabLink.href, { target: '#insights-content', swap: 'innerHTML' });
       return;
     }

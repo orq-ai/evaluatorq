@@ -686,6 +686,21 @@ def test_finder_export_retention_keeps_recent_and_saved_insights_references(
     assert {path.name for path in exports[-50:]} <= remaining
 
 
+def test_finder_export_retention_keeps_recent_handoff_exports_over_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for path in exports:
+        path.write_text('{}', encoding='utf-8')
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert {path.name for path in export_dir.glob('trace-finder-*.json')} == {path.name for path in exports}
+
+
 def test_finder_export_retention_pins_in_flight_insights_source(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

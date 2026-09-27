@@ -57,6 +57,7 @@ from evaluatorq.trace_finder.settings import (
 
 _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
 _FINDER_EXPORT_RETENTION = 50
+_FINDER_EXPORT_HANDOFF_GRACE = timedelta(hours=1)
 _FINDER_EXPORT_REFERENCE_MAX_AGE = timedelta(days=30)
 
 
@@ -121,11 +122,13 @@ def _referenced_finder_exports(export_dir: Path) -> set[Path]:
 
 
 def _prune_finder_exports(export_dir: Path) -> None:
-    """Keep the newest Finder exports plus any files a saved Insights run references."""
+    """Keep recent handoff exports, the newest older exports, and saved Insights sources."""
     try:
         files = [path for path in export_dir.glob('trace-finder-*.json') if path.is_file() and not path.is_symlink()]
         files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
         retained = _referenced_finder_exports(export_dir)
+        handoff_cutoff = datetime.now(timezone.utc).timestamp() - _FINDER_EXPORT_HANDOFF_GRACE.total_seconds()
+        retained.update(path.resolve() for path in files if path.stat().st_mtime >= handoff_cutoff)
         unreferenced = [path for path in files if path.resolve() not in retained]
         for path in unreferenced[_FINDER_EXPORT_RETENTION:]:
             try:

@@ -69,6 +69,22 @@ def test_saved_run_rejects_label_values_incompatible_with_spec(
         InsightsRun.model_validate_json(json.dumps(payload))
 
 
+@pytest.mark.parametrize('value', [None, 'positive'])
+def test_saved_run_rejects_unconfigured_trace_labels(minimal_run: InsightsRun, value: str | None) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['traces'][0]['labels']['unrequested'] = {
+        'value': value,
+        'confidence': None,
+        'probabilities': None,
+        'error': None,
+    }
+
+    with pytest.raises(ValidationError, match="unconfigured label 'unrequested'"):
+        InsightsRun.model_validate(payload)
+    with pytest.raises(ValidationError, match="unconfigured label 'unrequested'"):
+        InsightsRun.model_validate_json(json.dumps(payload))
+
+
 @pytest.mark.parametrize('probability', [0.0, 1.0, 0, 1])
 def test_label_answer_accepts_probability_edges(probability: float | int) -> None:
     answer = LabelAnswer(value='positive', confidence=None, probabilities={'positive': probability}, error=None)

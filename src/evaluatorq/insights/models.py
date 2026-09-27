@@ -261,8 +261,10 @@ class InsightsRun(BaseModel):
         kinds = {spec.name: spec.kind for spec in self.config.labels}
         for trace in self.traces:
             for name, answer in trace.labels.items():
+                if name not in kinds:
+                    raise ValueError(f'trace {trace.trace_id!r} has unconfigured label {name!r}')
                 value = answer.value
-                if value is None or name not in kinds:
+                if value is None:
                     continue
                 kind = kinds[name]
                 valid = (
