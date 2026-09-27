@@ -644,3 +644,52 @@ async def test_reset_returns_a_new_empty_generation() -> None:
     assert reset.request is None
     assert reset.trace_ids == ()
     assert not reset.results
+
+
+@pytest.mark.asyncio
+async def test_compile_with_traces_skips_filter_selection_and_population_load() -> None:
+    selector_calls: list[str] = []
+    loader_calls: list[object] = []
+    staged = (trace(1), trace(2))
+
+    async def select_filters(query: str, population: PopulationRequest) -> FacetSelection:
+        del population
+        selector_calls.append(query)
+        return FacetSelection(provider=frozenset({'openai'}))
+
+    async def population_loader(request: PopulationRequest) -> Snapshot:
+        loader_calls.append(request)
+        return Snapshot(traces=())
+
+    async def traces() -> tuple[TraceRecord, ...]:
+        return staged
+
+    planner = Planner()
+    runner = Runner()
+    store = RunStore(
+        compiler=planner,
+        population_loader=population_loader,
+        run_classifier=runner,
+        filter_selector=select_filters,
+    )
+    snapshot = await store.compile(request(mode='review'), traces=traces)
+
+    assert snapshot.state == 'awaiting_review'
+    assert snapshot.trace_ids == ('trace-1', 'trace-2')
+    assert selector_calls == []
+    assert loader_calls == []
+    assert snapshot.generated_filters == FacetSelection()
+    assert snapshot.request is not None
+    assert snapshot.request.population == PopulationRequest()
+
+
+@pytest.mark.asyncio
+async def test_load_resets_running_classification() -> None:
+    store, _, _, _, _ = make_store()
+    await store.compile(request(), wait=True)
+    assert (await store.snapshot()).state == 'classifying'
+
+    snapshot = await store.reset()
+
+    assert snapshot.state == 'idle'
+    assert snapshot.results == {}

@@ -50,6 +50,14 @@ async def test_population_loader_uses_the_configured_window_when_bounds_are_miss
             seen['end'] = end
             return Snapshot(traces=())
 
+        async def search(self, *args: Any, **kwargs: Any) -> tuple[Any, ...]:
+            del args, kwargs
+            return ()
+
+        async def hydrate_rows(self, rows: Any) -> dict[str, Any]:
+            del rows
+            return {}
+
         def close(self) -> None:
             pass
 

@@ -33,6 +33,8 @@ from .projection import project_trace as default_project_trace
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from .explorer import ExplorerStore
+
 TReviewFilters = TypeVar('TReviewFilters', FacetSelection, NumericFilters)
 
 
@@ -78,9 +80,11 @@ class RunStore:
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         close: Callable[[], Awaitable[None] | None] | None = None,
+        explorer: ExplorerStore | None = None,
     ) -> None:
         self._compiler = compiler
         self._close = close
+        self.explorer = explorer
         self._closed = False
         self._population_loader = population_loader
         self._run_classifier = run_classifier
@@ -96,15 +100,23 @@ class RunStore:
         self._generation = 0
         self._started_monotonic: float | None = None
 
-    async def compile(self, request: RunRequest, *, wait: bool = True) -> RunSnapshot:
+    async def compile(
+        self,
+        request: RunRequest,
+        *,
+        wait: bool = True,
+        traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+    ) -> RunSnapshot:
         """Compile, select the population, and stage or start the requested run.
 
         With ``wait=False`` the planning runs as an owned background task and the
         ``compiling`` snapshot is returned at once, so a caller that polls can show
-        progress while the compiler and facet selector are still working.
+        progress while the compiler and facet selector are still working. With
+        ``traces`` the run classifies those already-loaded traces: filter selection
+        and the population load are skipped, so the caller's filters and rows stay exactly as they are.
         """
 
-        return await self._prepare(request, None, compile_query=True, wait=wait)
+        return await self._prepare(request, None, compile_query=True, wait=wait, traces=traces)
 
     async def start(self, request: RunRequest, compiled: CompiledQuery, *, wait: bool = True) -> RunSnapshot:
         """Start a reviewed task; return its working snapshot immediately when ``wait=False``."""
@@ -118,9 +130,12 @@ class RunStore:
         *,
         compile_query: bool,
         wait: bool = True,
+        traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
         generation, staged_traces = await self._begin(request, compile_query=compile_query)
-        work = self._plan_and_start(generation, staged_traces, request, compiled, compile_query=compile_query)
+        work = self._plan_and_start(
+            generation, staged_traces, request, compiled, compile_query=compile_query, traces=traces
+        )
         if wait:
             return await work
         task = asyncio.create_task(work)
@@ -196,10 +211,11 @@ class RunStore:
         compiled: CompiledQuery | None,
         *,
         compile_query: bool,
+        traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
         try:
             if compile_query:
-                plan_task = asyncio.create_task(self._plan(request.query, request.population))
+                plan_task = asyncio.create_task(self._plan(request.query, request.population, select=traces is None))
                 async with self._lock:
                     if generation != self._generation or self._snapshot.state != 'compiling':
                         plan_task.cancel()
@@ -210,13 +226,14 @@ class RunStore:
                 generated_filters = filter_result.selection
                 generated_numeric = plan.numeric.model_copy(deep=True)
                 compiled = CompiledQuery.model_validate(plan.compiled.model_dump())
-                population = request.population.model_copy(
-                    update={
-                        'facets': _merge_facets(request.population.facets, generated_filters),
-                        'numeric': _merge_numeric(request.population.numeric, plan.numeric),
-                    }
-                )
-                request = request.model_copy(update={'population': population})
+                if traces is None:
+                    population = request.population.model_copy(
+                        update={
+                            'facets': _merge_facets(request.population.facets, generated_filters),
+                            'numeric': _merge_numeric(request.population.numeric, plan.numeric),
+                        }
+                    )
+                    request = request.model_copy(update={'population': population})
             else:
                 if compiled is None:
                     raise ValueError('a compiled task is required to start a run')
@@ -242,8 +259,11 @@ class RunStore:
                 )
 
             if not staged_traces:
-                loaded = await self._load_population(generation, request.population)
-                staged_traces = tuple(loaded.traces[: request.population.limit])
+                if traces is not None:
+                    staged_traces = await traces()
+                else:
+                    loaded = await self._load_population(generation, request.population)
+                    staged_traces = tuple(loaded.traces[: request.population.limit])
 
             async with self._lock:
                 if generation != self._generation or self._snapshot.state != 'compiling':
@@ -321,13 +341,17 @@ class RunStore:
             await asyncio.gather(task, return_exceptions=True)
             raise
 
-    async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FilterSelectionResult]:
-        """Run semantic and facet planning concurrently and clean up both."""
+    async def _plan(
+        self, query: str, population: PopulationRequest, *, select: bool = True
+    ) -> tuple[CompiledPlan, FilterSelectionResult]:
+        """Run semantic and facet planning concurrently and clean up both; ``select=False`` skips facet planning."""
 
         async def compile_plan() -> object:
             return await self._compiler(query)
 
         async def select_filters() -> object:
+            if not select:
+                return FilterSelectionResult(FacetSelection())
             return await self._filter_selector(query, population)
 
         compiler = asyncio.create_task(compile_plan())
@@ -441,11 +465,15 @@ class RunStore:
                         self._finish('cancelled')
                     self._task = None
             finally:
-                if self._close is not None:
-                    close, self._close = self._close, None
-                    result = close()
-                    if inspect.isawaitable(result):
-                        await result
+                try:
+                    if self.explorer is not None:
+                        await self.explorer.close()
+                finally:
+                    if self._close is not None:
+                        close, self._close = self._close, None
+                        result = close()
+                        if inspect.isawaitable(result):
+                            await result
 
     async def reset(self) -> RunSnapshot:
         """Cancel owned work and return a new empty idle generation."""

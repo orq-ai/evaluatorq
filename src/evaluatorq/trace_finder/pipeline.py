@@ -10,6 +10,7 @@ from loguru import logger
 
 from .classifier import run_classifier
 from .compiler import compile_query
+from .explorer import ExplorerStore
 from .facets import load_facet_catalogue
 from .filter_selector import FilterSelectionResult, select_filters_with_response
 from .models import FacetSelection
@@ -35,6 +36,7 @@ def build_run_store(
 ) -> RunStore:
     """Build the shared trace-finder pipeline for one application runtime."""
     source = OrqTraceSource(orq)
+    explorer = ExplorerStore(search=source.search, hydrate=source.hydrate_rows)
 
     async def close() -> None:
         try:
@@ -70,4 +72,5 @@ def build_run_store(
         population_loader=population_loader,
         run_classifier=partial(run_classifier, model=settings.classifier_model, client=client),
         close=close,
+        explorer=explorer,
     )
