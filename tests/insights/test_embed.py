@@ -123,12 +123,32 @@ async def test_embed_texts_warns_once_when_model_is_unpriced(
     client = fake_client()
     try:
         await embed_texts(['one', 'two', 'three'], client=client, model=MODEL, cache=cache, usage=ledger, batch_size=1)
+        await embed_texts(['four', 'five'], client=client, model=MODEL, cache=cache, usage=ledger, batch_size=1)
     finally:
         logger.remove(sink_id)
 
     recorded = ledger.totals()['embed']
     assert recorded is not None
     assert recorded.total_cost is None
+    warnings = [message for message in messages if 'not priced in the Orq catalogue' in message]
+    assert warnings == [f'Insights embedding model {MODEL} is not priced in the Orq catalogue; embed cost stays unknown']
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_without_ledger_warns_once_per_call(
+    cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def catalogue_miss(usage: Usage | None, model: str, client: Any) -> Usage | None:
+        return usage
+
+    monkeypatch.setattr('evaluatorq.insights.embed.price_usage', catalogue_miss)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        await embed_texts(['one', 'two'], client=fake_client(), model=MODEL, cache=cache, batch_size=1)
+    finally:
+        logger.remove(sink_id)
+
     warnings = [message for message in messages if 'not priced in the Orq catalogue' in message]
     assert warnings == [f'Insights embedding model {MODEL} is not priced in the Orq catalogue; embed cost stays unknown']
 

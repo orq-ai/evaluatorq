@@ -19,3 +19,11 @@ def test_ledger_sums_per_stage_and_keeps_unpriced_visible() -> None:
     assert totals['summary'] is not None and totals['summary'].calls == 2 and totals['summary'].cost_is_partial
     assert totals['merge'] is None
     assert 'label' not in totals
+
+
+def test_ledger_claims_each_warning_key_once_per_run() -> None:
+    ledger = UsageLedger()
+
+    assert ledger.claim_warning('unpriced_embedding_cost') is True
+    assert ledger.claim_warning('unpriced_embedding_cost') is False
+    assert ledger.claim_warning('other_warning') is True

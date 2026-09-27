@@ -98,7 +98,7 @@ async def embed_texts(
             logger.warning('Insights embedding batch of {} text(s) failed: {}', len(batch), message)
             raise EmbeddingError(f'embedding batch failed: {message}') from exc
 
-    if unpriced:
+    if unpriced and (usage is None or usage.claim_warning('unpriced_embedding_cost')):
         logger.warning(
             'Insights embedding model {} is not priced in the Orq catalogue; embed cost stays unknown', model
         )
