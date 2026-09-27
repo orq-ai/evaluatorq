@@ -11,7 +11,25 @@
   const preview = document.getElementById('insights-run-preview');
   const facetOptions = document.getElementById('insights-facet-options');
   let facetRequest = null;
+  let facetLoadedWindow = null;
   let step = 1;
+
+  function setFacetLoading(loading) {
+    facetOptions.setAttribute('aria-busy', String(loading));
+    facetOptions.querySelectorAll('input[name^="facet_"]').forEach(function (input) {
+      input.disabled = loading || selected('source')[0] === 'finder';
+    });
+    let status = facetOptions.querySelector('.insights-facet-loading');
+    if (loading && !status) {
+      status = document.createElement('p');
+      status.className = 'insights-facet-loading';
+      status.setAttribute('role', 'status');
+      status.textContent = 'Refreshing facet values…';
+      facetOptions.prepend(status);
+    } else if (!loading && status) {
+      status.remove();
+    }
+  }
 
   function selected(name) {
     return Array.from(form.querySelectorAll('input[name="' + name + '"]:checked')).map(function (input) { return input.value; });
@@ -27,33 +45,53 @@
     form.querySelectorAll('[data-source]').forEach(function (field) {
       field.hidden = !field.dataset.source.split(' ').includes(source);
     });
-    facetOptions.querySelectorAll('input').forEach(function (input) { input.disabled = source === 'finder'; });
-    if (source === 'finder' && facetRequest) facetRequest.abort();
+    facetOptions.querySelectorAll('input').forEach(function (input) { input.disabled = source === 'finder' || facetOptions.getAttribute('aria-busy') === 'true'; });
+    if (source === 'finder' && facetRequest) {
+      facetRequest.abort();
+      facetRequest = null;
+      setFacetLoading(false);
+    }
   }
 
   async function refreshFacets() {
-    if (selected('source')[0] === 'finder' || !form.elements.window_days.checkValidity()) return;
-    if (facetRequest) facetRequest.abort();
+    if (selected('source')[0] === 'finder') return;
+    const windowDays = form.elements.window_days.value;
+    if (facetRequest && facetRequest.windowDays === windowDays) return;
+    if (facetRequest) {
+      facetRequest.abort();
+      facetRequest = null;
+    }
+    if (!form.elements.window_days.checkValidity() || facetLoadedWindow === windowDays) {
+      setFacetLoading(false);
+      return;
+    }
     const request = new AbortController();
+    request.windowDays = windowDays;
     facetRequest = request;
-    const params = new URLSearchParams({ window_days: form.elements.window_days.value });
+    const params = new URLSearchParams({ window_days: windowDays });
     facetOptions.querySelectorAll('input[name^="facet_"]:checked').forEach(function (input) {
       params.append(input.name, input.value);
     });
-    facetOptions.setAttribute('aria-busy', 'true');
+    setFacetLoading(true);
     try {
       const response = await fetch('/insights/facets?' + params.toString(), { signal: request.signal });
       if (!response.ok) throw new Error('Facet values could not be loaded for this window.');
-      facetOptions.innerHTML = await response.text();
+      const markup = await response.text();
+      if (facetRequest !== request) return;
+      facetOptions.innerHTML = markup;
+      facetLoadedWindow = windowDays;
       updateSource();
     } catch (failure) {
-      if (failure.name !== 'AbortError') {
+      if (facetRequest === request && failure.name !== 'AbortError') {
         const message = '<p class="insights-facet-unavailable" role="status">Facet values could not be loaded. Existing selections are kept; check the Orq connection or change the window to retry.</p>';
         if (facetOptions.querySelector('input[name^="facet_"]')) facetOptions.insertAdjacentHTML('afterbegin', message);
         else facetOptions.innerHTML = message;
       }
     } finally {
-      if (facetRequest === request) facetOptions.removeAttribute('aria-busy');
+      if (facetRequest === request) {
+        facetRequest = null;
+        setFacetLoading(false);
+      }
     }
   }
 
@@ -155,6 +193,9 @@
     updateSource();
     if (event.target.name === 'window_days' || event.target.name === 'source') refreshFacets();
     if (step === 3) updatePreview();
+  });
+  form.addEventListener('input', function (event) {
+    if (event.target.name === 'window_days') refreshFacets();
   });
   form.addEventListener('submit', function (event) {
     for (const value of [1, 2]) {

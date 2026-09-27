@@ -2888,6 +2888,8 @@ _INSIGHTS_CSS = """
 .insights-facet-head { display:flex; align-items:baseline; flex-wrap:wrap; gap:7px; margin-bottom:8px; font-size:12.5px; }
 .insights-facet-head span { color:var(--text-muted); font-size:11.5px; }
 #insights-facet-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:7px; }
+#insights-facet-options[aria-busy="true"] { opacity:.58; }
+#insights-facet-options .insights-facet-loading { grid-column:1/-1; margin:0; padding:8px 10px; border:1px solid var(--border-subtle); border-radius:7px; background:var(--surface-card); color:var(--text-muted); font-size:11.5px; }
 .insights-facet-group { min-width:0; border:1px solid var(--border-default); border-radius:7px; background:var(--surface-card); }
 .insights-facet-group summary { padding:9px 10px; cursor:pointer; font-size:12px; font-weight:600; text-transform:capitalize; }
 .insights-facet-group summary small { color:var(--teal-600); font-weight:500; text-transform:none; }

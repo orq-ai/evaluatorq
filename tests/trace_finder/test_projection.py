@@ -328,6 +328,65 @@ def test_tool_result_excerpt_redacts_provider_secret_fields(field: str, secret: 
     assert 'retry in 2 seconds' in excerpt
 
 
+@pytest.mark.parametrize(('field', 'secret'), [
+    ('Cookie', 'session=cookie-session-value'),
+    ('Set-Cookie', 'session=set-cookie-session-value'),
+    ('client_secret', 'provider-client-secret'),
+    ('signature', 'provider-signature-value'),
+])
+def test_tool_result_excerpt_redacts_cookie_and_provider_credential_fields(field: str, secret: str) -> None:
+    separator = ': ' if field in {'Cookie', 'Set-Cookie'} else '='
+    suffix = '; Path=/; HttpOnly' if field in {'Cookie', 'Set-Cookie'} else ''
+    body = f'Error: provider request failed\n{field}{separator}{secret}{suffix}\nRetry after 2 seconds.'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert secret not in excerpt
+    assert 'Error: provider request failed' in excerpt
+    assert 'Retry after 2 seconds.' in excerpt
+    assert '[REDACTED]' in excerpt
+
+
+def test_tool_result_excerpt_redacts_multiline_cookie_headers_and_signed_query_values() -> None:
+    body = (
+        'Error: request denied\r\nSet-Cookie: sid=opaque-cookie; Path=/\r\n'
+        '  HttpOnly; SameSite=None\nX-Amz-Signature=provider-signature '
+        'X-Amz-Security-Token=provider-session-token\nRetry after 2 seconds.'
+    )
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert all(secret not in excerpt for secret in ('opaque-cookie', 'provider-signature', 'provider-session-token'))
+    assert excerpt.startswith('Error: request denied')
+    assert 'Retry after 2 seconds.' in excerpt
+
+
+def test_tool_result_excerpt_redacts_escaped_json_cookie_and_signature_fields() -> None:
+    body = json.dumps({
+        'error': 'provider request failed',
+        'headers': 'Set-Cookie: sid=opaque-cookie\\r\\n  HttpOnly',
+        'request': 'X-Amz-Signature=provider-signature X-Amz-Security-Token=provider-session-token',
+    })
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert 'provider request failed' in excerpt
+    assert all(secret not in excerpt for secret in ('opaque-cookie', 'provider-signature', 'provider-session-token'))
+    assert '[REDACTED]' in excerpt
+
+
 def test_tool_result_excerpt_redacts_url_userinfo_and_query_token() -> None:
     body = 'Error: https://alice:pw123@example.test/api?token=tok_query&retry=1 failed'
     trace = _trace(messages=(

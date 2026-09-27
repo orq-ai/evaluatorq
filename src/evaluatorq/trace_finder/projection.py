@@ -23,7 +23,7 @@ ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled
 SUCCESS_STATUSES = frozenset({'completed', 'success', 'succeeded', 'ok'})
 _SENSITIVE_NAME = (
     r'(?:[\w.-]*(?:api[_-]?key|private[_-]?key|access[_-]?key|secret|credential|'
-    r'password|passwd|token|authorization|auth)[\w.-]*|aws_access_key_id)'
+    r'password|passwd|token|authorization|auth|cookie|session|signature)[\w.-]*|aws_access_key_id)'
 )
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
     rf'(?P<quote>["\']?)(?P<name>{_SENSITIVE_NAME})(?P=quote)'
@@ -31,7 +31,13 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
     rf'(?P<value>(?P<value_quote>["\'])(?:\\.|(?!(?P=value_quote))[\s\S])*?(?P=value_quote)|[^\s,;&]+)',
     re.IGNORECASE,
 )
-_BEARER_RE = re.compile(r'(?i)(\b(?:Bearer|Basic|Token)\s+)[A-Za-z0-9._~+/=-]+')
+_BEARER_RE = re.compile(r'(?i)(\b(?:Bearer|Basic|Token)[ \t]+)[A-Za-z0-9._~+/=-]+')
+# Cookie headers carry opaque session values, so redact the whole header instead of
+# trying to recognize each provider's cookie names. Also accept JSON-escaped newlines.
+_COOKIE_HEADER_RE = re.compile(
+    r'(?im)(?P<prefix>\b(?:set-cookie|cookie)[ \t]*:[ \t]*)'
+    r'[^\r\n]*(?:(?:\r?\n|\\r?\\n)[ \t]+[^\r\n]*)*'
+)
 _URI_CREDENTIALS_RE = re.compile(r'(?i)([a-z][a-z0-9+.-]*://)[^/@\s?#]*:[^/@\s?#]*@')
 _KNOWN_TOKEN_RE = re.compile(
     r'(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|'
@@ -274,6 +280,7 @@ def _is_sensitive_name(name: Any) -> bool:
 
 
 def _redact_unstructured_text(value: str) -> str:
+    value = _COOKIE_HEADER_RE.sub(lambda match: f'{match.group("prefix")}[REDACTED]', value)
     value = _BEARER_RE.sub(r'\1[REDACTED]', value)
     value = _URI_CREDENTIALS_RE.sub(r'\1[REDACTED]@', value)
     value = _KNOWN_TOKEN_RE.sub('[REDACTED]', value)
