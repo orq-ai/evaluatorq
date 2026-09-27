@@ -17,22 +17,27 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.tracing import record_token_usage, with_llm_span
+from evaluatorq.contracts import Usage
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types import CreateEmbeddingResponse
 
     from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.usage import UsageLedger
 
 
 class EmbeddingError(RuntimeError):
     """A whole embedding batch failed after retries — a stage failure, not a per-trace one."""
 
 
-async def _embed_batch(client: AsyncOpenAI, *, model: str, batch: list[str]) -> CreateEmbeddingResponse:
-    async def attempt() -> CreateEmbeddingResponse:
+async def _embed_batch(
+    client: AsyncOpenAI, *, model: str, batch: list[str]
+) -> tuple[CreateEmbeddingResponse, Usage | None]:
+    async def attempt() -> tuple[CreateEmbeddingResponse, Usage | None]:
         async with with_llm_span(
             model=model,
             operation='embeddings',
@@ -45,7 +50,8 @@ async def _embed_batch(client: AsyncOpenAI, *, model: str, batch: list[str]) -> 
                 total_tokens=response.usage.total_tokens,
                 calls=1,
             )
-            return response
+            usage = await price_usage(Usage.extract(response.usage), model, client)
+            return response, usage
 
     return await with_retry(attempt, label='insights embed')
 
@@ -56,6 +62,7 @@ async def embed_texts(
     client: AsyncOpenAI,
     model: str,
     cache: InsightsCache,
+    usage: UsageLedger | None = None,
     batch_size: int = 256,
 ) -> dict[str, list[float]]:
     """Embed every unique text in `texts`, keyed by the original text.
@@ -75,16 +82,26 @@ async def embed_texts(
     missing = [text for text in unique_texts if text not in vectors]
 
     new_vectors: dict[str, list[float]] = {}
+    unpriced = False
     for start in range(0, len(missing), batch_size):
         batch = missing[start : start + batch_size]
         try:
-            response = await _embed_batch(client, model=model, batch=batch)
+            response, batch_usage = await _embed_batch(client, model=model, batch=batch)
+            if usage is not None:
+                usage.add('embed', batch_usage)
+            if batch_usage is not None and batch_usage.total_cost is None:
+                unpriced = True
             for text, item in zip(batch, response.data, strict=True):
                 new_vectors[text] = item.embedding
         except Exception as exc:
             message = str(exc)
             logger.warning('Insights embedding batch of {} text(s) failed: {}', len(batch), message)
             raise EmbeddingError(f'embedding batch failed: {message}') from exc
+
+    if unpriced:
+        logger.warning(
+            'Insights embedding model {} is not priced in the Orq catalogue; embed cost stays unknown', model
+        )
 
     if new_vectors:
         cache.put_vectors(model, new_vectors)

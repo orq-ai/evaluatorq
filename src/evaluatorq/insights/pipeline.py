@@ -199,7 +199,7 @@ async def _build_dimension(  # noqa: C901
             trace.errors[f'dimension:{dimension}'] = warning
             continue
         texts = [usable[i][1] for i in indices]
-        embedded = await embed_texts(texts, client=client, model=embedding_model, cache=cache)
+        embedded = await embed_texts(texts, client=client, model=embedding_model, cache=cache, usage=usage)
         vectors = np.asarray([embedded[text] for text in texts], dtype=float)
         tree = await asyncio.to_thread(
             cluster_two_level,

@@ -6,9 +6,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from loguru import logger
 
+from evaluatorq.contracts import Usage
 from evaluatorq.insights.cache import InsightsCache
 from evaluatorq.insights.embed import EmbeddingError, embed_texts
+from evaluatorq.insights.usage import UsageLedger
 
 MODEL = 'openai/text-embedding-3-small'
 
@@ -30,9 +33,9 @@ class _Usage:
 
 
 class _Response:
-    def __init__(self, data: list[_Embedding]) -> None:
+    def __init__(self, data: list[_Embedding], *, prompt_tokens: int = 1) -> None:
         self.data = data
-        self.usage = _Usage()
+        self.usage = _Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
 
 def _vector_for(text: str) -> list[float]:
@@ -40,10 +43,17 @@ def _vector_for(text: str) -> list[float]:
 
 
 class _FakeEmbeddingsResource:
-    def __init__(self, *, fail_batches: set[int] | None = None, wrong_count_batches: set[int] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_batches: set[int] | None = None,
+        wrong_count_batches: set[int] | None = None,
+        prompt_tokens: int = 1,
+    ) -> None:
         self.calls: list[list[str]] = []
         self._fail_batches = fail_batches or set()
         self._wrong_count_batches = wrong_count_batches or set()
+        self._prompt_tokens = prompt_tokens
 
     async def create(self, *, model: str, input: list[str]) -> _Response:  # noqa: A002
         self.calls.append(list(input))
@@ -52,18 +62,75 @@ class _FakeEmbeddingsResource:
         data = [_Embedding(_vector_for(text)) for text in input]
         if len(self.calls) - 1 in self._wrong_count_batches:
             data = data[:-1]
-        return _Response(data)
+        return _Response(data, prompt_tokens=self._prompt_tokens)
 
 
 class _FakeClient:
     def __init__(
-        self, *, fail_batches: set[int] | None = None, wrong_count_batches: set[int] | None = None
+        self,
+        *,
+        fail_batches: set[int] | None = None,
+        wrong_count_batches: set[int] | None = None,
+        prompt_tokens: int = 1,
     ) -> None:
-        self.embeddings = _FakeEmbeddingsResource(fail_batches=fail_batches, wrong_count_batches=wrong_count_batches)
+        self.embeddings = _FakeEmbeddingsResource(
+            fail_batches=fail_batches, wrong_count_batches=wrong_count_batches, prompt_tokens=prompt_tokens
+        )
 
 
-def fake_client(*, fail_batches: set[int] | None = None, wrong_count_batches: set[int] | None = None) -> Any:
-    return _FakeClient(fail_batches=fail_batches, wrong_count_batches=wrong_count_batches)
+def fake_client(
+    *,
+    fail_batches: set[int] | None = None,
+    wrong_count_batches: set[int] | None = None,
+    prompt_tokens: int = 1,
+) -> Any:
+    return _FakeClient(
+        fail_batches=fail_batches, wrong_count_batches=wrong_count_batches, prompt_tokens=prompt_tokens
+    )
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_records_priced_usage(
+    cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def price(usage: Usage | None, model: str, client: Any) -> Usage | None:
+        assert usage is not None
+        return usage.model_copy(update={'total_cost': 0.000012, 'input_cost': 0.000012, 'priced_calls': 1})
+
+    monkeypatch.setattr('evaluatorq.insights.embed.price_usage', price)
+    ledger = UsageLedger()
+    client = fake_client(prompt_tokens=12)
+
+    await embed_texts(['hello'], client=client, model=MODEL, cache=cache, usage=ledger)
+
+    recorded = ledger.totals()['embed']
+    assert recorded is not None
+    assert recorded.input_tokens == 12
+    assert recorded.total_cost == 0.000012
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_warns_once_when_model_is_unpriced(
+    cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def catalogue_miss(usage: Usage | None, model: str, client: Any) -> Usage | None:
+        return usage
+
+    monkeypatch.setattr('evaluatorq.insights.embed.price_usage', catalogue_miss)
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    ledger = UsageLedger()
+    client = fake_client()
+    try:
+        await embed_texts(['one', 'two', 'three'], client=client, model=MODEL, cache=cache, usage=ledger, batch_size=1)
+    finally:
+        logger.remove(sink_id)
+
+    recorded = ledger.totals()['embed']
+    assert recorded is not None
+    assert recorded.total_cost is None
+    warnings = [message for message in messages if 'not priced in the Orq catalogue' in message]
+    assert warnings == [f'Insights embedding model {MODEL} is not priced in the Orq catalogue; embed cost stays unknown']
 
 
 @pytest.mark.asyncio
