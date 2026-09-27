@@ -183,24 +183,26 @@
 | src/evaluatorq/redteam/utils.py                                          |        9 |        1 |     89% |        27 |
 | src/evaluatorq/redteam/vulnerability\_registry.py                        |       73 |        4 |     95% |186, 300, 313, 327 |
 | src/evaluatorq/send\_results.py                                          |       59 |        0 |    100% |           |
-| src/evaluatorq/simulation/\_\_init\_\_.py                                |       23 |        1 |     96% |       325 |
+| src/evaluatorq/simulation/\_\_init\_\_.py                                |       23 |        1 |     96% |       331 |
 | src/evaluatorq/simulation/\_config.py                                    |       88 |        0 |    100% |           |
 | src/evaluatorq/simulation/\_datapoint\_io.py                             |       51 |        2 |     96% |    68, 92 |
+| src/evaluatorq/simulation/\_seed\_extension.py                           |       31 |        0 |    100% |           |
 | src/evaluatorq/simulation/\_usage.py                                     |       11 |        0 |    100% |           |
 | src/evaluatorq/simulation/adapters.py                                    |       30 |        7 |     77% | 25, 75-81 |
 | src/evaluatorq/simulation/agents/\_\_init\_\_.py                         |        4 |        0 |    100% |           |
 | src/evaluatorq/simulation/agents/base.py                                 |      198 |       12 |     94% |171, 176, 295-297, 301-302, 520, 541, 613, 626, 704 |
 | src/evaluatorq/simulation/agents/judge.py                                |      297 |       14 |     95% |208, 229-235, 247, 260, 266, 274, 441-446, 465-471, 856-861 |
 | src/evaluatorq/simulation/agents/user\_simulator.py                      |       36 |       10 |     72% |83, 93-100, 108-114 |
-| src/evaluatorq/simulation/api.py                                         |      761 |       55 |     93% |636, 911, 1215, 1280, 1361, 1428, 1502, 1542, 1618-1620, 1764, 1787, 1803-1804, 1963, 2030, 2033, 2121, 2147, 2193-2194, 2204, 2208, 2213, 2257, 2266, 2273-2290, 2413, 2490-2496, 2499-2502, 2770-2773, 2780-2783, 2959 |
+| src/evaluatorq/simulation/api.py                                         |      772 |       37 |     95% |696, 1012, 1316, 1381, 1462, 1529, 1603, 1643, 1719-1721, 1865, 1888, 1904-1905, 2064, 2131, 2134, 2222, 2248, 2305, 2309, 2314, 2358, 2367, 2501, 2578-2584, 2587-2590, 2858-2861, 2868-2871, 3047 |
 | src/evaluatorq/simulation/cli.py                                         |      653 |      103 |     84% |98-105, 114-115, 144, 148, 150, 159, 163, 168, 171-173, 177, 187, 214, 224, 240-241, 252-272, 277, 531, 568, 570, 828-829, 831-832, 853, 891, 894, 1147, 1199-1200, 1202-1203, 1215, 1446-1447, 1449-1450, 1452, 1610, 1630-1632, 1639, 1665-1676, 1679-1680, 1792-1793, 1809, 1840-1841, 1885, 1933, 1944-1945, 1947, 2001, 2050-2051, 2064-2068, 2137-2142, 2176-2177, 2255 |
 | src/evaluatorq/simulation/convert.py                                     |       52 |        0 |    100% |           |
+| src/evaluatorq/simulation/datasets.py                                    |       25 |        0 |    100% |           |
 | src/evaluatorq/simulation/evaluators/\_\_init\_\_.py                     |        3 |        0 |    100% |           |
 | src/evaluatorq/simulation/evaluators/scorers.py                          |      143 |        3 |     98% |149, 155, 193 |
 | src/evaluatorq/simulation/exceptions.py                                  |        8 |        0 |    100% |           |
-| src/evaluatorq/simulation/experiments.py                                 |       45 |        0 |    100% |           |
+| src/evaluatorq/simulation/experiments.py                                 |       21 |        0 |    100% |           |
 | src/evaluatorq/simulation/generators/\_\_init\_\_.py                     |        5 |        0 |    100% |           |
-| src/evaluatorq/simulation/generators/datapoint\_generator.py             |       96 |       44 |     54% |60-61, 84-152, 217-237 |
+| src/evaluatorq/simulation/generators/datapoint\_generator.py             |       96 |       42 |     56% |89-157, 222-242 |
 | src/evaluatorq/simulation/generators/first\_message\_generator.py        |       54 |        2 |     96% |   140-141 |
 | src/evaluatorq/simulation/generators/persona\_generator.py               |      130 |       52 |     60% |124, 128-152, 379, 395-398, 410-440 |
 | src/evaluatorq/simulation/generators/scenario\_generator.py              |      196 |       60 |     69% |171-179, 183-189, 225, 325-326, 336-337, 405-406, 413, 422-424, 483-486, 495-497, 552-555, 564-566, 579-580, 584-585, 634-637, 646-648, 660-663, 675-684 |
@@ -251,7 +253,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      140 |       12 |     91% |97, 184-187, 253, 255-258, 323-324, 345 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |      161 |        3 |     98% |34, 285, 363 |
-| **TOTAL**                                                                | **32382** | **2804** | **91%** |           |
+| **TOTAL**                                                                | **32425** | **2784** | **91%** |           |
 
 
 ## Setup coverage badge
