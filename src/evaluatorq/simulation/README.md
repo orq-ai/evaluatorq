@@ -76,10 +76,12 @@ Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`, `ter
 
 ## Datasets
 
-A named Orq dataset can seed simulations two ways (requires `ORQ_API_KEY`):
+A named Orq dataset can seed simulations two ways. Direct replay reads `ORQ_API_KEY`; extension also accepts an explicit `api_key`.
 
 - **Direct** — set `dataset_id="..."` to pull the dataset's rows as datapoints. Each row's `inputs` must already match a simulation input shape (`datapoint`, or `persona` + `scenario`). CLI: `eq sim simulate --dataset-id`.
 - **Extension** — `extend_from_dataset()` feeds the dataset's personas and scenarios to the standard generators as seeds and returns *new* similar-but-not-duplicate datapoints matching its distribution.
+
+`num_personas` and `num_scenarios` request counts; the result uses the counts actually generated. An explicit `api_key` authenticates both dataset fetching and generation through Orq, unless `llm_config.client` supplies the generation client.
 
 ```python
 from evaluatorq.simulation import extend_from_dataset, simulate

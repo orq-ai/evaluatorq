@@ -75,3 +75,20 @@ def test_datapoint_generator_no_keys_raises(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="Missing LLM credentials"):
         DatapointGenerator()
+
+
+def test_datapoint_generator_configured_client_wins_explicit_orq_key(monkeypatch):
+    from openai import AsyncOpenAI
+
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.simulation.generators.datapoint_generator import DatapointGenerator
+
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    configured_client = AsyncOpenAI(api_key='configured-key', base_url='https://example.test/v1')
+
+    gen = DatapointGenerator(config=LLMCallConfig(client=configured_client), orq_api_key='orq-key')
+
+    assert gen._shared_client.api_key == 'configured-key'
+    assert str(gen._shared_client.base_url).rstrip('/') == 'https://example.test/v1'
+    assert gen._client_owned is False

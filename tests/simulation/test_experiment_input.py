@@ -15,6 +15,7 @@ from evaluatorq.simulation.experiments import (
     datapoints_from_experiment,
     extend_from_experiment,
 )
+from evaluatorq.simulation.generators import DatapointGenerator
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Persona,
@@ -217,6 +218,22 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'Alice' in context and 'Bob' in context
     assert context.count('Refund:') == 1  # deduped scenario
     assert 'NEW personas' in context
+
+
+@pytest.mark.asyncio
+async def test_extend_uses_explicit_key_for_generation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    _patch_fetch(monkeypatch, _experiment_rows())
+
+    async def fake_generate(self: DatapointGenerator, **_: Any) -> list[SimulationDatapoint]:
+        assert self._shared_client.api_key == 'key'
+        assert str(self._shared_client.base_url).rstrip('/').endswith('/v3/router')
+        return [_sim_datapoint()]
+
+    monkeypatch.setattr(DatapointGenerator, 'generate_from_description', fake_generate)
+
+    assert len(await extend_from_experiment('ex_1', api_key='key')) == 1
 
 
 def test_describe_agent_falls_back_when_all_goals_blank() -> None:

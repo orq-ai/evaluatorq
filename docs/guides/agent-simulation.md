@@ -528,6 +528,8 @@ results = await simulate(
 
 This mirrors `extend_from_experiment()`; the dataset's direct loader is `datapoints_from_dataset()`.
 
+`num_personas` and `num_scenarios` are requested counts. The generators can return a different number of valid items, so `extra` contains the cartesian product of the personas and scenarios they actually returned. Check `len(extra)` if your run needs a fixed number of cases. An explicit `api_key` authenticates both dataset fetching and generation through Orq; a client in `llm_config` takes precedence for generation.
+
 ### Ground new cases in real traces
 
 Replay reruns what you already have. The other move is to generate *new* cases that are shaped by what really happened. Production traces show you the user archetypes and situations your agent actually meets.

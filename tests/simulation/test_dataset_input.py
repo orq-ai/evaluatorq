@@ -14,6 +14,7 @@ import pytest
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.api import _resolve_or_generate_datapoints
 from evaluatorq.simulation.datasets import datapoints_from_dataset, extend_from_dataset
+from evaluatorq.simulation.generators import DatapointGenerator
 from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario, SimulationDatapoint
 from evaluatorq.types import DataPoint
 
@@ -175,3 +176,23 @@ async def test_extend_seeds_generators(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'Alice' in context and 'Bob' in context
     assert context.count('Refund:') == 1  # deduped scenario
     assert 'NEW personas' in context
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('openai_key', [None, 'other-key'])
+async def test_extend_uses_explicit_key_for_generation(monkeypatch: pytest.MonkeyPatch, openai_key: str | None) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    if openai_key is None:
+        monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    else:
+        monkeypatch.setenv('OPENAI_API_KEY', openai_key)
+    _patch_fetch(monkeypatch, _dataset_rows())
+
+    async def fake_generate(self: DatapointGenerator, **_: Any) -> list[SimulationDatapoint]:
+        assert self._shared_client.api_key == 'key'
+        assert str(self._shared_client.base_url).rstrip('/').endswith('/v3/router')
+        return [_sim_datapoint()]
+
+    monkeypatch.setattr(DatapointGenerator, 'generate_from_description', fake_generate)
+
+    assert len(await extend_from_dataset('ds_1', api_key='key')) == 1

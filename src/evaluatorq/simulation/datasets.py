@@ -74,18 +74,20 @@ async def extend_from_dataset(
 
     Fetches the dataset's rows (direct mode), then feeds their personas and scenarios to the standard
     ``DatapointGenerator`` as context, instructing it to extend — not duplicate — the seed coverage.
-    Returns only the newly generated datapoints (``num_personas x num_scenarios``); combine with
+    Returns only the newly generated datapoints: the cartesian product of the personas and scenarios
+    actually generated, whose counts may differ from the requested counts. Combine with
     `datapoints_from_dataset` to also replay the originals.
 
     Args:
         dataset_id: The Orq dataset ID to seed from.
-        num_personas: New personas to generate.
-        num_scenarios: New scenarios to generate.
+        num_personas: New personas to request from the generator.
+        num_scenarios: New scenarios to request from the generator.
         llm_config: Model and sampling settings for the generators. Defaults to the simulation
             default model with every other field unset.
         agent_description: Description of the agent under test for the generators. Derived from the
             seed scenarios' goals when omitted.
-        api_key: Orq API key; falls back to ``ORQ_API_KEY``.
+        api_key: Orq API key for dataset fetching and generation; falls back to ``ORQ_API_KEY``.
+            An injected ``llm_config.client`` takes precedence for generation.
     """
     from evaluatorq.simulation._seed_extension import extend_from_seeds
 
@@ -96,4 +98,5 @@ async def extend_from_dataset(
         num_scenarios=num_scenarios,
         llm_config=llm_config,
         agent_description=agent_description,
+        api_key=api_key,
     )

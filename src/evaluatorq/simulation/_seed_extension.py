@@ -42,22 +42,25 @@ async def extend_from_seeds(
     num_scenarios: int = 5,
     llm_config: LLMCallConfig | None = None,
     agent_description: str | None = None,
+    api_key: str | None = None,
 ) -> list[SimulationDatapoint]:
     """Generate *new* datapoints seeded by existing ones (extension mode).
 
     Feeds the seeds' personas and scenarios to ``DatapointGenerator`` as context, instructing it to
-    extend — not duplicate — the seed coverage. Returns only the newly generated datapoints
-    (``num_personas x num_scenarios``); combine with the source's direct loader to also replay the
-    originals.
+    extend — not duplicate — the seed coverage. Returns only the newly generated datapoints: the
+    cartesian product of the personas and scenarios actually generated, whose counts may differ from
+    the requested ``num_personas`` and ``num_scenarios``. Combine with the source's direct loader to
+    also replay the originals.
 
     ``agent_description`` is derived from the seed scenarios' goals when omitted. ``llm_config``
-    defaults to the simulation default model with every other field unset.
+    defaults to the simulation default model with every other field unset. ``api_key`` authenticates
+    generation through Orq unless ``llm_config.client`` supplies a client.
     """
     from evaluatorq.simulation._config import sim_llm_config
     from evaluatorq.simulation.generators import DatapointGenerator
 
     resolved = sim_llm_config(llm_config)
-    generator = DatapointGenerator(config=resolved)
+    generator = DatapointGenerator(config=resolved, orq_api_key=api_key)
     try:
         return await generator.generate_from_description(
             agent_description=agent_description or describe_agent(seeds),
