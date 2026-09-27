@@ -52,7 +52,7 @@ def range_inputs(start: datetime | None, end: datetime | None, window_days: int)
         f'<span class="quiet"><b>To</b><input id="explorer-to" hx-preserve form="explorer-load-form" name="to" type="datetime-local" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)}"></span>'
         f'<span class="xr-presets">{presets}</span>'
         f'<span class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="{MAX_LIVE_TRACES}" value="{DEFAULT_EXPLORER_ROWS}" style="width:72px"></span>'
-        '<button class="btn-primary" type="submit" form="explorer-load-form">Load</button>'
+        '<button class="btn-secondary" type="submit" form="explorer-load-form">Load</button>'
     )
 
 
