@@ -59,7 +59,20 @@ def _status(row: TraceRow) -> str:
     if row.status is None:
         return DASH
     kind = 'err' if row.is_error else 'ok'
-    return f'<span class="dot {kind}" title="{esc(row.status)}"></span>'
+    label = 'Error' if row.is_error else 'Success' if row.status.lower() in {'ok', 'success'} else row.status
+    return f'<span class="status-label {kind}"><span class="dot {kind}" aria-hidden="true"></span>{esc(label)}</span>'
+
+
+def _time(row: TraceRow) -> str:
+    if row.started_at is None:
+        return DASH
+    return f'{row.started_at:%H:%M:%S}<small>{row.started_at:%d %b %Y}</small>'
+
+
+def _trace(row: TraceRow) -> str:
+    name = row.name or row.trace_id
+    agent = row.agent_name or '—'
+    return f'<span class="trace-name">{esc(name)}</span><small>{esc(agent)} · {esc(row.trace_id[:8])}</small>'
 
 
 def _cache(row: TraceRow) -> str:
@@ -83,10 +96,11 @@ class Column:
 MATCH = 'match'
 
 _ENTRIES = (
+    Column('started', 'Time', lambda r: r.started_at, _time, default=True),
+    Column('trace', 'Trace / agent', lambda r: r.name or r.trace_id, _trace, default=True),
     Column('status', 'Status', lambda r: r.status, _status, default=True),
-    Column('started', 'Started', lambda r: r.started_at, lambda r: fmt_time(r.started_at), default=True),
     Column('name', 'Name', lambda r: r.name, lambda r: _text(r.name)),
-    Column('agent', 'Agent', lambda r: r.agent_name, lambda r: _text(r.agent_name), default=True),
+    Column('agent', 'Agent', lambda r: r.agent_name, lambda r: _text(r.agent_name)),
     Column('model', 'Model', lambda r: ', '.join(r.models) or None, lambda r: _text(', '.join(r.models)), default=True),
     Column(
         'tokens_in', 'Tokens in', lambda r: r.tokens_in, lambda r: fmt_tokens(r.tokens_in), numeric=True, default=True

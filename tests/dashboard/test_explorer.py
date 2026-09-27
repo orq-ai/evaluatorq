@@ -137,7 +137,29 @@ def test_table_renders_one_row_per_page_row_with_drawer_links() -> None:
     assert html.count('hx-get="/find/trace/') == 100
     assert 'Page 1 of 2' in html
     assert '<th' in html and 'Tokens in' in html
+    assert 'Trace / agent' in html
+    assert 'Time' in html
+    assert '<small>support · trace-00</small>' in html
+    assert 'Success' in html
     assert 'hx-sync="#explorer-results:replace"' in html
+
+
+def test_table_shows_escaped_ai_match_text_and_aligns_numeric_columns() -> None:
+    from evaluatorq.trace_finder import RunSnapshot, TraceClassification
+
+    row = TraceRow(trace_id='trace<&', name='refund<&', agent_name='support<&', status='ok', tokens_in=1000)
+    result = TraceClassification(
+        trace_id=row.trace_id, span_id='s', value='Refund <&>', matched=True, raw_result={}
+    )
+    html = explorer_views.results(
+        ExplorerView(state='loaded', rows=(row,)), resolve_columns(None), records=None,
+        snapshot=RunSnapshot(results={row.trace_id: result}, within_results=True),
+    )
+    assert 'refund&lt;&amp;' in html
+    assert 'support&lt;&amp; · trace&lt;&amp;' in html
+    assert 'Refund &lt;&amp;&gt;' in html
+    assert '<th class="num">' in html
+    assert '<td class="num">1.0k</td>' in html
 
 
 def test_failed_load_shows_banner_and_rows() -> None:

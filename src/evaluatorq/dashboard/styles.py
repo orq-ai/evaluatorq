@@ -2781,6 +2781,7 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .xr-sort[open] { display:grid; gap:5px; }.xr-toolbar-right .xr-switch { justify-self:end; }
 .xr-cols { position:relative; }.xr-cols form { position:absolute; right:0; z-index:6; background:#fff; border:1px solid var(--border-subtle); border-radius:10px; padding:8px 12px; display:grid; gap:4px; min-width:200px; box-shadow:0 8px 24px #0000001a; }
 .xr-table td.num,.xr-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
+.xr-table td small { display:block; margin-top:2px; color:var(--text-muted); font-size:10.5px; }.xr-table .trace-name { font-weight:600; }.xr-table .status-label { display:inline-flex; align-items:center; gap:6px; }.xr-table .status-label.ok { color:var(--green-600); font-weight:600; }.xr-table .status-label.err { color:var(--red-600); font-weight:600; }.xr-table .xr-match { color:#a66124; }
 .xr-table tr.sel,.tv-r.sel { box-shadow:inset 3px 0 0 var(--traj-assistant); background:#f3f8f7; }
 .cachebar { display:inline-block; width:34px; height:4px; background:#ece9e4; border-radius:2px; margin-right:6px; vertical-align:middle; }
 .cachebar i { display:block; height:4px; border-radius:2px; background:var(--traj-assistant); }

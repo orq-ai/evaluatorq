@@ -70,8 +70,8 @@ def _match_cell(row: TraceRow, snapshot: RunSnapshot | None) -> str:
     result = snapshot.results.get(row.trace_id) if snapshot is not None else None
     if result is None:
         return '<td class="muted">—</td>'
-    label = 'failed' if result.error else _value_text(result.value)
-    return f'<td><span class="verdict"><span class="sw" style="background:{esc(_result_color(result, snapshot.compiled if snapshot else None))}"></span>{esc(label)}</span></td>'
+    label = 'Judgment failed' if result.error else _value_text(result.value)
+    return f'<td><span class="verdict xr-match"><span class="sw" style="background:{esc(_result_color(result, snapshot.compiled if snapshot else None))}"></span>{esc(label)}</span></td>'
 
 
 def _within_snapshot(snapshot: RunSnapshot | None) -> RunSnapshot | None:

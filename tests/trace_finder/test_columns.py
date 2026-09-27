@@ -10,7 +10,7 @@ from evaluatorq.trace_finder.rows import TraceRow
 
 
 def test_defaults_are_the_agreed_set() -> None:
-    assert DEFAULT_COLUMNS == ('status', 'started', 'agent', 'model', 'tokens_in', 'tokens_out', 'cache_pct', 'cost', 'duration', 'match')
+    assert DEFAULT_COLUMNS == ('started', 'trace', 'status', 'model', 'tokens_in', 'tokens_out', 'cache_pct', 'cost', 'duration', 'match')
     assert 'name' not in DEFAULT_COLUMNS
     assert 'provider' not in DEFAULT_COLUMNS
 
@@ -18,6 +18,15 @@ def test_defaults_are_the_agreed_set() -> None:
 def test_registry_is_frozen() -> None:
     with pytest.raises(TypeError):
         COLUMNS['x'] = COLUMNS['status']  # pyright: ignore[reportIndexIssue]
+
+
+def test_trace_column_combines_name_and_agent_and_escapes_text() -> None:
+    row = TraceRow(trace_id='trace<&', name='refund<&', agent_name='support<&')
+    rendered = COLUMNS['trace'].render(row)
+    assert 'refund&lt;&amp;' in rendered
+    assert 'support&lt;&amp;' in rendered
+    assert 'trace&lt;&amp;' in rendered
+    assert '<small>support<&</small>' not in rendered
 
 
 def test_every_column_renders_on_a_sparse_row() -> None:
