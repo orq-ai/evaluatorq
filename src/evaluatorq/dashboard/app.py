@@ -279,8 +279,7 @@ async def _save_settings(req: Request) -> Response | NotStr:
         body = settings_body(_settings_config(roots), effective_settings(), errors={'form': rejected})
         return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
     roots = _roots(req)
-    # Window, limit and parallelism are tuned per run on the Traces page; the form only carries models.
-    # Carry them over from the saved file, not the effective view, so env overrides never get persisted.
+    # Use saved values as the baseline so unchanged environment overrides are not persisted.
     current = load_settings()
     values = _submitted_settings_values(form_data, current)
     profiles = await asyncio.to_thread(list_orq_profiles)
