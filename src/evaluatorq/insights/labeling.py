@@ -42,7 +42,7 @@ MATCH_KEY = '__match__'
 
 # Only these two kinds carry a live `error_exc` we can safely re-raise for `with_retry`
 # to classify; PARSE/UNKNOWN failures are not transient and must not be retried.
-_RETRYABLE_ERROR_KINDS = frozenset({JudgeError.TIMEOUT, JudgeError.API_CONNECTION})
+_RETRYABLE_ERROR_KINDS = frozenset({JudgeError.TIMEOUT, JudgeError.API_CONNECTION, JudgeError.API_STATUS})
 
 
 @dataclass
@@ -125,6 +125,7 @@ async def _classify_with_retry(
     model: str,
     cfg: LLMCallConfig,
     request: ClassifyRequest,
+    usage: UsageLedger | None = None,
 ) -> ClassifyOutcome:
     """Call `run_classify`, retrying only a transient failure.
 
@@ -137,15 +138,24 @@ async def _classify_with_retry(
     holder: list[ClassifyOutcome] = []
 
     async def attempt() -> ClassifyOutcome:
-        outcome = await run_classify(client=client, model=model, cfg=cfg, request=request)
+        try:
+            outcome = await run_classify(client=client, model=model, cfg=cfg, request=request)
+        except Exception:
+            if usage is not None:
+                usage.add('label', None)
+            raise
         holder.append(outcome)
+        if usage is not None:
+            usage.add('label', outcome.token_usage)
         if outcome.error_kind in _RETRYABLE_ERROR_KINDS and outcome.error_exc is not None:
             raise outcome.error_exc
         return outcome
 
     try:
-        return await with_retry(attempt, label='insights label classify')
-    except Exception:  # noqa: BLE001 - the retryable branch above always leaves a recorded outcome behind
+        return await with_retry(attempt, max_attempts=cfg.retry_count + 1, label='insights label classify')
+    except Exception:
+        if not holder:
+            raise
         return holder[-1]
 
 
@@ -174,10 +184,7 @@ async def _label_one(
     request = ClassifyRequest(state=state, questions=questions)
 
     async with semaphore:
-        outcome = await _classify_with_retry(client=client, model=model, cfg=cfg, request=request)
-
-    if usage is not None:
-        usage.add('label', outcome.token_usage)
+        outcome = await _classify_with_retry(client=client, model=model, cfg=cfg, request=request, usage=usage)
 
     if outcome.error_kind is not None or outcome.response is None:
         message = outcome.error_message or (

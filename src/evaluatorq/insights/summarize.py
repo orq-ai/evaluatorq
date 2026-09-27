@@ -116,7 +116,7 @@ async def _summarize_one(
                 model=model,
                 messages=messages,
                 response_format=TraceSummary,
-                max_tokens=1200,
+                max_tokens=3000,
                 label='insights.summary',
             )
         except Exception as exc:  # noqa: BLE001 - a per-trace failure must never fail the run

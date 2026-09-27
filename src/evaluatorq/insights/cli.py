@@ -103,11 +103,17 @@ def _print_run(run: InsightsRun, run_path: Path | None) -> None:
             console.print(f'{name.title()}: no top-level clusters.')
 
     for name, label in run.labels.items():
-        table = Table(title=f'Label: {name}')
+        title = f'Label: {name}'
+        table = Table(title=title, min_width=len(title) + 4)
         table.add_column('Value')
         table.add_column('Traces', justify='right')
         for value, count in sorted(label.counts.items(), key=lambda item: (-item[1], item[0])):
-            table.add_row(value, f'{count:,}')
+            display_value = value
+            if label.spec.kind == 'score' and isinstance(label.spec.criteria, list) and value.isdigit():
+                index = int(value)
+                if index < len(label.spec.criteria):
+                    display_value = f'{value} · {label.spec.criteria[index].split(":", 1)[0]}'
+            table.add_row(display_value, f'{count:,}')
         if label.n_failed:
             table.add_row('Failed / unclassified', f'{label.n_failed:,}')
         console.print(table)

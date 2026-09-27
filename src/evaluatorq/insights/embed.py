@@ -19,8 +19,9 @@ from loguru import logger
 
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.retry import with_retry, without_client_retries
+from evaluatorq.common.structured_output import warn_config_redirect, warn_unread_config_fields
 from evaluatorq.common.tracing import record_token_usage, with_llm_span
-from evaluatorq.contracts import Usage
+from evaluatorq.contracts import LLMCallConfig, Usage
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -35,27 +36,34 @@ class EmbeddingError(RuntimeError):
 
 
 async def _embed_batch(
-    client: AsyncOpenAI, *, model: str, batch: list[str]
+    client: AsyncOpenAI, *, model: str, batch: list[str], cfg: LLMCallConfig, usage_ledger: UsageLedger | None = None
 ) -> tuple[CreateEmbeddingResponse, Usage | None]:
     async def attempt() -> tuple[CreateEmbeddingResponse, Usage | None]:
-        async with with_llm_span(
-            model=model,
-            operation='embeddings',
-            attributes={'orq.llm.purpose': 'insights.embed'},
-        ) as span:
-            response = await client.embeddings.create(model=model, input=batch)
-            record_token_usage(
-                span,
-                prompt_tokens=response.usage.prompt_tokens,
-                total_tokens=response.usage.total_tokens,
-                calls=1,
-            )
-            usage = await price_usage(
-                Usage.extract(response.usage), model, client, served_model=getattr(response, 'model', None)
-            )
-            return response, usage
+        try:
+            async with with_llm_span(
+                model=model,
+                operation='embeddings',
+                attributes={'orq.llm.purpose': 'insights.embed'},
+            ) as span:
+                response = await client.embeddings.create(model=model, input=batch)
+                record_token_usage(
+                    span,
+                    prompt_tokens=response.usage.prompt_tokens,
+                    total_tokens=response.usage.total_tokens,
+                    calls=1,
+                )
+                priced_usage = await price_usage(
+                    Usage.extract(response.usage), model, client, served_model=getattr(response, 'model', None)
+                )
+                if usage_ledger is not None:
+                    usage_ledger.add('embed', priced_usage)
+                return response, priced_usage
+        except Exception:
+            if usage_ledger is not None:
+                usage_ledger.add('embed', None)
+            raise
 
-    return await with_retry(attempt, label='insights embed')
+    return await with_retry(attempt, max_attempts=cfg.retry_count + 1, label='insights embed')
 
 
 async def embed_texts(
@@ -66,6 +74,7 @@ async def embed_texts(
     cache: InsightsCache,
     usage: UsageLedger | None = None,
     batch_size: int = 256,
+    cfg: LLMCallConfig | None = None,
 ) -> dict[str, list[float]]:
     """Embed every unique text in `texts`, keyed by the original text.
 
@@ -79,6 +88,10 @@ async def embed_texts(
     if not unique_texts:
         return {}
     client = without_client_retries(client)
+    call_cfg = cfg if cfg is not None else LLMCallConfig(model=model)
+    if cfg is not None:
+        warn_config_redirect(cfg, resolved_model=model, caller='insights.embed_texts')
+        warn_unread_config_fields(cfg, frozenset({'retry_count'}), caller='insights.embed_texts')
 
     vectors: dict[str, list[float]] = dict(cache.get_vectors(model, unique_texts))
     missing = [text for text in unique_texts if text not in vectors]
@@ -88,9 +101,13 @@ async def embed_texts(
     for start in range(0, len(missing), batch_size):
         batch = missing[start : start + batch_size]
         try:
-            response, batch_usage = await _embed_batch(client, model=model, batch=batch)
-            if usage is not None:
-                usage.add('embed', batch_usage)
+            response, batch_usage = await _embed_batch(
+                client,
+                model=model,
+                batch=batch,
+                cfg=call_cfg,
+                usage_ledger=usage,
+            )
             if batch_usage is not None and batch_usage.total_cost is None:
                 unpriced = True
             for text, item in zip(batch, response.data, strict=True):

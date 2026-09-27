@@ -12,20 +12,19 @@ import hashlib
 import math
 import sqlite3
 import struct
-from array import array
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.insights.models import TraceSummary
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+    from pathlib import Path
 
-DEFAULT_CACHE_PATH = Path('.evaluatorq/cache/insights.sqlite')
 _VECTOR_QUERY_CHUNK_SIZE = 500
-_VECTOR_MAGIC = b'EQV1'
+_VECTOR_MAGIC = b'EQV2'
 _VECTOR_HEADER_SIZE = 4 + 4 + hashlib.sha256().digest_size
 
 _SCHEMA = """
@@ -58,10 +57,9 @@ def _text_hash(text: str) -> str:
 def _pack_vector(vector: list[float]) -> bytes:
     if not vector:
         raise ValueError('vector cannot be empty')
-    values = array('f', vector)
-    if not all(math.isfinite(value) for value in values):
+    if not all(math.isfinite(value) for value in vector):
         raise ValueError('vector values must be finite')
-    payload = values.tobytes()
+    payload = struct.pack(f'!{len(vector)}f', *vector)
     return _VECTOR_MAGIC + struct.pack('!I', len(vector)) + hashlib.sha256(payload).digest() + payload
 
 
@@ -70,13 +68,11 @@ def _unpack_vector(blob: bytes) -> list[float]:
         raise ValueError('missing vector integrity header')
     expected_length = struct.unpack('!I', blob[4:8])[0]
     payload = blob[_VECTOR_HEADER_SIZE:]
-    if not expected_length or len(payload) != expected_length * array('f').itemsize:
+    if not expected_length or len(payload) != expected_length * struct.calcsize('f'):
         raise ValueError('vector length does not match header')
     if hashlib.sha256(payload).digest() != blob[8:_VECTOR_HEADER_SIZE]:
         raise ValueError('vector checksum does not match header')
-    values = array('f')
-    values.frombytes(payload)
-    return list(values)
+    return list(struct.unpack(f'!{expected_length}f', payload))
 
 
 class InsightsCache:
@@ -93,7 +89,7 @@ class InsightsCache:
         if not enabled:
             return
 
-        resolved = path if path is not None else DEFAULT_CACHE_PATH
+        resolved = path if path is not None else get_store_dir('cache') / 'insights.sqlite'
         conn: sqlite3.Connection | None = None
         try:
             resolved.parent.mkdir(parents=True, exist_ok=True)

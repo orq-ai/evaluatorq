@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import struct
 from typing import cast
 
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
@@ -14,6 +15,26 @@ def test_prompt_hash_is_full_sha256_digest():
     text = 'summary prompt'
     assert prompt_hash(text) == hashlib.sha256(text.encode('utf-8')).hexdigest()
     assert len(prompt_hash(text)) == 64
+
+
+def test_default_cache_follows_run_store_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    cache = InsightsCache()
+    try:
+        cache.put_vectors('e', {'a': [0.5]})
+        assert (tmp_path / 'cache' / 'insights.sqlite').is_file()
+        assert cache.get_vectors('e', ['a']) == {'a': [0.5]}
+    finally:
+        cache.close()
+
+
+def test_vector_payload_uses_portable_float_byte_order():
+    from evaluatorq.insights.cache import _pack_vector, _unpack_vector
+
+    blob = _pack_vector([0.5, 1.0])
+    assert blob.startswith(b'EQV2')
+    assert blob[-8:] == struct.pack('!2f', 0.5, 1.0)
+    assert _unpack_vector(blob) == [0.5, 1.0]
 
 
 def test_summary_hit_requires_same_model_and_prompt(tmp_path):

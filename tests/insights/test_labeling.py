@@ -6,8 +6,10 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 import pytest
 from loguru import logger
+from openai import APIStatusError
 
 from evaluatorq.common.judge import (
     ClassifyAnswer,
@@ -17,8 +19,10 @@ from evaluatorq.common.judge import (
     ClassifyResponse,
     JudgeError,
 )
+from evaluatorq.contracts import LLMCallConfig, Usage
 from evaluatorq.insights.labeling import MATCH_KEY, label_traces
 from evaluatorq.insights.models import LabelSpec
+from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord, ValueSelection
 
 
@@ -65,6 +69,87 @@ INTENT_MATCH = CompiledQuery(
 
 def _client() -> Any:
     return object()
+
+
+def _api_status_error(status: int) -> APIStatusError:
+    request = httpx.Request('POST', 'https://example.com')
+    response = httpx.Response(status, request=request)
+    return APIStatusError(message=f'HTTP {status}', response=response, body=None)
+
+
+@pytest.mark.asyncio
+async def test_label_retries_http_520_but_records_each_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def no_wait(*_: Any) -> None:
+        return None
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ClassifyOutcome(
+                error_kind=JudgeError.API_STATUS,
+                error_exc=_api_status_error(520),
+                token_usage=Usage(input_tokens=3, calls=1),
+            )
+        return ClassifyOutcome(
+            response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')}),
+            token_usage=Usage(input_tokens=5, calls=1),
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_wait)
+    ledger = UsageLedger()
+    results = await label_traces(
+        [make_trace('520')],
+        labels=[SENTIMENT],
+        compiled=None,
+        client=_client(),
+        model='m',
+        cfg=LLMCallConfig(model='m', retry_count=1),
+        usage=ledger,
+    )
+
+    recorded = ledger.totals()['label']
+    assert calls == 2
+    assert results[0].error is None
+    assert recorded is not None
+    assert recorded.calls == 2
+    assert recorded.input_tokens == 8
+
+
+@pytest.mark.asyncio
+async def test_label_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        nonlocal calls
+        calls += 1
+        return ClassifyOutcome(
+            error_kind=JudgeError.API_STATUS,
+            error_exc=_api_status_error(400),
+            token_usage=Usage(input_tokens=3, calls=1),
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    ledger = UsageLedger()
+    results = await label_traces(
+        [make_trace('400')],
+        labels=[SENTIMENT],
+        compiled=None,
+        client=_client(),
+        model='m',
+        cfg=LLMCallConfig(model='m', retry_count=2),
+        usage=ledger,
+    )
+
+    recorded = ledger.totals()['label']
+    assert calls == 1
+    assert results[0].error is not None
+    assert recorded is not None
+    assert recorded.calls == 1
+    assert recorded.input_tokens == 3
 
 
 @pytest.mark.asyncio

@@ -39,6 +39,7 @@
 
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     var scope = evt.detail.target;
+    if (scope && scope.id === 'insights-content') syncInsightsTab();
     if (!scope || !window.vegaEmbed) return;
 
     let tags = scope.querySelectorAll('[data-vega-for]');
@@ -76,6 +77,20 @@
     });
     initInsightsMaps(scope);
   });
+
+  function syncInsightsTab() {
+    const nav = document.querySelector('.insights-tabs');
+    if (!nav) return;
+    const current = window.location.pathname.match(/\/tab\/([^/]+)$/);
+    if (!current) return;
+    nav.querySelectorAll('a').forEach(function (link) {
+      const active = new URL(link.href).pathname.endsWith('/tab/' + current[1]);
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+  }
+  window.addEventListener('popstate', syncInsightsTab);
 
   function mapTraces(payload) {
     if (payload.color_mode === 'continuous') {

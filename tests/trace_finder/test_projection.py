@@ -24,6 +24,19 @@ def test_parts_text_block_with_content_key_is_kept() -> None:
     assert text in project_trace(trace).serialized
 
 
+def test_dict_content_text_slot_is_truncated_to_fit_the_projection_budget() -> None:
+    text = 'prefix-' + 'x' * 2000 + '-tail'
+    trace = _trace(messages=({'role': 'user', 'content': {'type': 'text', 'content': text}},))
+
+    projection = project_trace(trace, token_budget=300)
+
+    block = projection.payload['messages'][0]['content'][0]
+    assert block['text'].startswith('[... earlier bytes omitted ...]')
+    assert block['text'].endswith('-tail')
+    assert projection.estimated_tokens <= 300
+    assert projection.omitted_bytes > 0
+
+
 @pytest.mark.parametrize('block_type', ['text', 'input_text', 'output_text'])
 @pytest.mark.parametrize('nested_text', [False, True])
 def test_truncates_structured_text_blocks_preserving_shape_and_byte_accounting(
@@ -247,7 +260,23 @@ def test_tool_result_excerpt_keeps_the_start_and_is_capped() -> None:
     )
     call = project_trace(trace).payload['messages'][0]['tool_calls'][0]
     assert call['result_excerpt'].startswith('Error: invoice not found.')
-    assert len(call['result_excerpt'].encode('utf-8')) <= 1024 + len('[... later bytes omitted ...]')
+    assert len(call['result_excerpt'].encode('utf-8')) <= 4096 + len('[... later bytes omitted ...]')
+
+
+def test_tool_result_excerpt_redacts_explicit_credentials_and_keeps_error_context() -> None:
+    body = 'Error: request failed for user. Authorization: Bearer abc.def.ghi api_key="sk-live-value"'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    excerpt = project_trace(trace).payload['messages'][0]['tool_calls'][0]['result_excerpt']
+
+    assert excerpt.startswith('Error: request failed for user.')
+    assert 'Authorization: [REDACTED]' in excerpt
+    assert 'api_key="[REDACTED]"' in excerpt
+    assert 'abc.def.ghi' not in excerpt
+    assert 'sk-live-value' not in excerpt
 
 
 def test_tool_result_excerpt_shrinks_before_the_unit_is_omitted() -> None:

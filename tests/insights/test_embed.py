@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from loguru import logger
+from openai import APITimeoutError
 
 from evaluatorq.common import model_catalogue
 from evaluatorq.common.model_catalogue import ModelInfo
-from evaluatorq.contracts import Usage
+from evaluatorq.contracts import LLMCallConfig, Usage
 from evaluatorq.insights.cache import InsightsCache
 from evaluatorq.insights.embed import EmbeddingError, embed_texts
 from evaluatorq.insights.usage import UsageLedger
@@ -128,6 +131,82 @@ async def test_embed_texts_records_priced_usage(
     assert recorded is not None
     assert recorded.input_tokens == 12
     assert recorded.total_cost == 0.000012
+
+
+@pytest.mark.asyncio
+async def test_embed_texts_records_failed_retry_as_unknown_then_success(
+    cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class RetryOnce:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def create(self, *, model: str, input: list[str]) -> _Response:  # noqa: A002
+            self.calls += 1
+            if self.calls == 1:
+                raise APITimeoutError(request=httpx.Request('POST', 'https://example.com'))
+            return _Response([_Embedding(_vector_for(text)) for text in input], prompt_tokens=7)
+
+    client: Any = _FakeClient()
+    client.embeddings = RetryOnce()
+
+    async def price(usage: Usage | None, model: str, client: Any, *, served_model: str | None = None) -> Usage | None:
+        assert usage is not None
+        return usage.model_copy(update={'total_cost': 0.00001, 'input_cost': 0.00001, 'priced_calls': 1})
+
+    monkeypatch.setattr('evaluatorq.insights.embed.price_usage', price)
+
+    async def no_wait(*_: Any) -> None:
+        return None
+
+    monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_wait)
+    ledger = UsageLedger()
+
+    await embed_texts(['hello'], client=client, model=MODEL, cache=cache, usage=ledger)
+
+    recorded = ledger.totals()['embed']
+    assert recorded is not None
+    assert recorded.calls == 2
+    assert recorded.priced_calls == 1
+    assert recorded.prompt_tokens == 7
+    assert recorded.total_cost == 0.00001
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('retry_count', 'expected_calls'), [(0, 1), (1, 2)])
+async def test_embed_retry_count_bounds_attempts_and_records_unknown_usage(
+    cache: InsightsCache, retry_count: int, expected_calls: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class AlwaysTimeout:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def create(self, *, model: str, input: list[str]) -> _Response:  # noqa: A002
+            self.calls += 1
+            raise APITimeoutError(request=httpx.Request('POST', 'https://example.com'))
+
+    client: Any = _FakeClient()
+    client.embeddings = AlwaysTimeout()
+
+    async def no_wait(*_: Any) -> None:
+        return None
+
+    monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_wait)
+    ledger = UsageLedger()
+    with pytest.raises(EmbeddingError):
+        await embed_texts(
+            ['hello'],
+            client=client,
+            model=MODEL,
+            cache=cache,
+            usage=ledger,
+            cfg=LLMCallConfig(model=MODEL, retry_count=retry_count),
+        )
+
+    assert client.embeddings.calls == expected_calls
+    recorded = ledger.totals()['embed']
+    assert recorded is not None
+    assert recorded.calls == expected_calls
 
 
 @pytest.mark.asyncio

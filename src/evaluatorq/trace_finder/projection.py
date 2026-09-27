@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -15,11 +16,14 @@ MAX_TOKEN_BUDGET = 25_000
 MAX_PROJECTED_TOOL_CALLS = 32
 MAX_TOOL_FIELD_BYTES = 128
 OMISSION_MARKER = '[... earlier bytes omitted ...]'
-MAX_TOOL_RESULT_BYTES = 1024
+MAX_TOOL_RESULT_BYTES = 4096
 TRAILING_OMISSION_MARKER = '[... later bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
 SUCCESS_STATUSES = frozenset({'completed', 'success', 'succeeded', 'ok'})
+_SENSITIVE_VALUE = r'(?P<quote>[\"\']?)(?P<name>(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth(?:orization)?|password|passwd|secret|credential))(?P=quote)(?P<sep>\s*[:=]\s*)(?P<value>\"[^\"]*\"|\'[^\']*\'|[^\s,;]+)'
+_SENSITIVE_ASSIGNMENT_RE = re.compile(_SENSITIVE_VALUE, re.IGNORECASE)
+_BEARER_RE = re.compile(r'(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+')
 
 
 @dataclass(frozen=True)
@@ -212,8 +216,23 @@ def _tool_result_excerpt(call_id: Any, results: tuple[dict[str, Any], ...]) -> s
     result = next((item for item in results if item.get('tool_call_id') == call_id), None)
     if result is None:
         return None
-    text = tool_result_to_text(result.get('content'))
+    text = _redact_tool_result_secrets(tool_result_to_text(result.get('content')))
     return _head_truncate_text(text, MAX_TOOL_RESULT_BYTES)[0] if text else None
+
+
+def _redact_tool_result_secrets(value: str) -> str:
+    """Mask explicitly named credential fields while preserving surrounding error text."""
+    value = _BEARER_RE.sub(r'\1[REDACTED]', value)
+
+    def replace(match: re.Match[str]) -> str:
+        secret_value = match.group('value')
+        quote = secret_value[0] if secret_value.startswith(('"', "'")) else ''
+        return (
+            f'{match.group("quote")}{match.group("name")}{match.group("quote")}'
+            f'{match.group("sep")}{quote}[REDACTED]{quote}'
+        )
+
+    return _SENSITIVE_ASSIGNMENT_RE.sub(replace, value)
 
 
 def _head_truncate_text(value: str, retained_bytes: int) -> tuple[str, int]:
@@ -348,6 +367,8 @@ def _truncatable_text_lengths(messages: tuple[dict[str, Any], ...]) -> tuple[int
 def _content_text_slots(content: Any) -> list[tuple[dict[str, Any], str]]:
     """Locate text in supported content blocks without treating metadata as prose."""
     slots = []
+    if isinstance(content, dict):
+        content = [content]
     if isinstance(content, list):
         for block in content:
             if not isinstance(block, dict):
@@ -372,7 +393,7 @@ def _truncate_messages(
             if isinstance(content, str):
                 truncated[name], omitted = _tail_truncate_text(content, retained_bytes)
                 omitted_bytes += omitted
-            elif isinstance(content, list):
+            elif isinstance(content, (list, dict)):
                 truncated[name] = deepcopy(content)
                 for container, key in _content_text_slots(truncated[name]):
                     container[key], omitted = _tail_truncate_text(container[key], retained_bytes)

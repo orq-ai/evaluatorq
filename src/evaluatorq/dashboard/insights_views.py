@@ -274,9 +274,11 @@ def tabs(run: InsightsRun, active: str) -> str:
     links = []
     for name in TABS:
         cls = 'insights-tab active' if name == active else 'insights-tab'
+        current_attr = ' aria-current="page"' if name == active else ''
         href = f'/insights/{quote(run.run_id, safe="")}/tab/{name}'
         links.append(
-            f'<a class="{cls}" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true">{TAB_LABELS[name]}</a>'
+            f'<a class="{cls}" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true"'
+            f'{current_attr}>{TAB_LABELS[name]}</a>'
         )
     return f'<nav class="insights-tabs" aria-label="Insights views">{"".join(links)}</nav>'
 
@@ -361,10 +363,13 @@ def cluster_detail(run: InsightsRun, cluster_id: str) -> str:
         for trace in members:
             answer = trace.labels.get(label_name)
             if answer is not None and answer.error is None and answer.value is not None:
-                key = str(answer.value)
+                key = _label_value_key(run, label_name, answer.value)
                 values[key] = values.get(key, 0) + 1
         if values:
-            summary = ', '.join(f'{esc(value)} {count}/{len(members)}' for value, count in sorted(values.items()))
+            summary = ', '.join(
+                f'{esc(_label_value_name(run, label_name, value))} {count}/{len(members)}'
+                for value, count in sorted(values.items())
+            )
             label_rows.append(
                 f'<div class="insights-label-summary"><b>{esc(label_name)}</b><span>{summary}</span></div>'
             )
@@ -400,11 +405,14 @@ def labels(run: InsightsRun) -> str:
     for name, result in run.labels.items():
         total = max(1, sum(result.counts.values()))
         rows = []
-        for value, count in result.counts.items():
+        counts = list(result.counts.items())
+        if result.spec.kind == 'score':
+            counts.sort(key=lambda item: int(item[0]) if item[0].isdigit() else float('inf'))
+        for value, count in counts:
             pct = round(count / total * 100)
             href = f'/insights/{quote(run.run_id, safe="")}/tab/traces?label={quote(name)}&value={quote(value)}'
             rows.append(
-                f'<a class="insights-label-row" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true"><span>{esc(value)}</span><b>{pct}%</b>{_bar(count, total)}</a>'
+                f'<a class="insights-label-row" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true"><span>{esc(_label_value_name(run, name, value))}</span><b>{pct}%</b>{_bar(count, total)}</a>'
             )
         row_html = ''.join(rows) or '<p class="insights-empty">No label values were recorded.</p>'
         confidence = f'{result.mean_confidence:.2f}' if result.mean_confidence is not None else 'unavailable'
@@ -418,6 +426,29 @@ def labels(run: InsightsRun) -> str:
             + f'<p class="insights-muted">{result.n_low_confidence} below confidence 0.6 · {result.n_failed} failed</p></article>'
         )
     return f'<div class="insights-label-grid">{"".join(cards)}</div>'
+
+
+def _label_value_key(run: InsightsRun, label_name: str, value: bool | float | str) -> str:  # noqa: FBT001
+    result = run.labels.get(label_name)
+    if result is None or result.spec.kind != 'score' or not isinstance(result.spec.criteria, list):
+        return str(value)
+    levels = len(result.spec.criteria)
+    if levels < 2:
+        return str(value)
+    return str(round(float(value) * (levels - 1)))
+
+
+def _label_value_name(run: InsightsRun, label_name: str, value: str) -> str:
+    result = run.labels.get(label_name)
+    if result is None or result.spec.kind != 'score' or not isinstance(result.spec.criteria, list):
+        return value
+    try:
+        index = int(value)
+    except ValueError:
+        return value
+    if 0 <= index < len(result.spec.criteria):
+        return result.spec.criteria[index]
+    return value
 
 
 def _trace_row(run: InsightsRun, trace: TraceInsight) -> str:
@@ -518,7 +549,10 @@ def traces(
         filtered = [
             trace
             for trace in filtered
-            if (answer := trace.labels.get(label)) is not None and (value is None or str(answer.value) == value)
+            if (answer := trace.labels.get(label)) is not None
+            and answer.error is None
+            and answer.value is not None
+            and (value is None or _label_value_key(run, label, answer.value) == value)
         ]
     if row and row_value is not None:
         filtered = [trace for trace in filtered if _cross_value(run, trace, row) == row_value]

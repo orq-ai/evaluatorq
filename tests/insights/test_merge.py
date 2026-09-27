@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
+import httpx
 import pytest
 from loguru import logger
+from openai import APIStatusError
 
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyRequest, ClassifyResponse, JudgeError
+from evaluatorq.contracts import Usage
 from evaluatorq.insights import merge as merge_module
 from evaluatorq.insights.describe import ClusterName
 from evaluatorq.insights.merge import merge_similar
+from evaluatorq.insights.usage import UsageLedger
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -26,6 +30,75 @@ def fake_client() -> AsyncOpenAI:
 
 def _names(*ids: int) -> dict[int, ClusterName]:
     return {i: ClusterName(name=f'cluster-{i}', description=f'description-{i}') for i in ids}
+
+
+def _api_status_error(status: int) -> APIStatusError:
+    request = httpx.Request('POST', 'https://example.com')
+    response = httpx.Response(status, request=request)
+    return APIStatusError(message=f'HTTP {status}', response=response, body=None)
+
+
+@pytest.mark.asyncio
+async def test_merge_retries_http_520_but_records_each_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def no_wait(*_: Any) -> None:
+        return None
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ClassifyOutcome(
+                error_kind=JudgeError.API_STATUS,
+                error_exc=_api_status_error(520),
+                token_usage=Usage(input_tokens=3, calls=1),
+            )
+        return ClassifyOutcome(
+            response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.9)}),
+            token_usage=Usage(input_tokens=5, calls=1),
+        )
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_wait)
+    ledger = UsageLedger()
+    result = await merge_similar(
+        _names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m', usage=ledger
+    )
+
+    recorded = ledger.totals()['merge']
+    assert calls == 2
+    assert result.n_failed == 0
+    assert recorded is not None
+    assert recorded.calls == 2
+    assert recorded.input_tokens == 8
+
+
+@pytest.mark.asyncio
+async def test_merge_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        nonlocal calls
+        calls += 1
+        return ClassifyOutcome(
+            error_kind=JudgeError.API_STATUS,
+            error_exc=_api_status_error(400),
+            token_usage=Usage(input_tokens=3, calls=1),
+        )
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+    ledger = UsageLedger()
+    result = await merge_similar(
+        _names(0, 1), examples={}, neighbours={0: [1]}, client=fake_client(), model='m', usage=ledger
+    )
+
+    recorded = ledger.totals()['merge']
+    assert calls == 1
+    assert result.n_failed == 1
+    assert recorded is not None
+    assert recorded.calls == 1
+    assert recorded.input_tokens == 3
 
 
 @pytest.mark.asyncio

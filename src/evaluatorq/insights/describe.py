@@ -165,7 +165,7 @@ async def _describe_one(
                 model=model,
                 messages=messages,
                 response_format=ClusterName,
-                max_tokens=400,
+                max_tokens=1200,
                 label='insights.describe',
             )
         except Exception as exc:  # noqa: BLE001 - a per-cluster failure must never fail the run
@@ -248,7 +248,7 @@ async def _describe_top_one(
                 model=model,
                 messages=messages,
                 response_format=ClusterName,
-                max_tokens=400,
+                max_tokens=1200,
                 label='insights.describe_top_level',
             )
         except Exception as exc:  # noqa: BLE001 - a per-cluster failure must never fail the run

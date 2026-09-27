@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, StageRecord, Usage
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.insights_views import header, progress
+from evaluatorq.dashboard.insights_views import cluster_detail, header, labels, progress, traces
 from evaluatorq.insights.models import (
     Cluster,
     ClusterAssignment,
@@ -25,6 +25,7 @@ from evaluatorq.insights.models import (
     InsightsRun,
     LabelAnswer,
     LabelResult,
+    LabelSpec,
     StageFailure,
     TraceInsight,
     TraceSummary,
@@ -62,6 +63,29 @@ def test_insights_header_marks_unknown_cost(minimal_run) -> None:
     run = minimal_run.model_copy(update={'cost_by_stage': {'summary': None}})
 
     assert 'cost unknown' in header(run)
+
+
+def test_score_labels_use_criterion_names_and_ignore_failed_answers(minimal_run) -> None:
+    score = LabelSpec(name='customer_satisfaction', kind='score', instructions='Rate satisfaction.', criteria=['low', 'mid', 'high'])
+    run = minimal_run.model_copy(deep=True)
+    run.config.labels.append(score)
+    run.labels['customer_satisfaction'] = LabelResult(
+        spec=score, counts={'2': 1, '1': 1}, mean_confidence=0.9, n_low_confidence=0, n_failed=1
+    )
+    run.traces[0].labels['customer_satisfaction'] = LabelAnswer(
+        value=0.5, confidence=0.9, probabilities=None, error=None
+    )
+    run.traces[1].labels['customer_satisfaction'] = LabelAnswer(
+        value=0.75, confidence=None, probabilities=None, error='invalid score'
+    )
+
+    assert '>mid</span>' in labels(run)
+    assert labels(run).index('>mid</span>') < labels(run).index('>high</span>')
+    assert 'mid 1/2' in cluster_detail(run, 'base-1')
+    filtered = traces(run, label='customer_satisfaction', value='1')
+    assert 'trace-1' in filtered
+    assert 'trace-2' not in filtered
+    assert 'No traces match these filters' in traces(run, label='customer_satisfaction', value='2')
 
 
 def test_insights_progress_renders_stage_completed_and_total() -> None:

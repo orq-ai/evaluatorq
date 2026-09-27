@@ -2960,6 +2960,7 @@ _INSIGHTS_CSS = """
 .insights-map-toolbar,.insights-chart-controls { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin:0 0 12px; color:var(--text-muted); font-size:12px; }
 .insights-map-toolbar label,.insights-chart-controls label { display:flex; align-items:center; gap:6px; }
 .insights-map-toolbar select,.insights-chart-controls select { padding:6px 8px; border:1px solid var(--border-default); border-radius:6px; background:var(--surface-card); color:var(--text-strong); font:inherit; }
+.insights-layout .vega-embed { width:100%; }
 .insights-map-layout { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(260px,1fr); gap:12px; }
 .insights-map-chart { min-width:0; height:470px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-card); }
 .insights-map-empty { padding:18px; border:1px dashed var(--border-default); border-radius:8px; background:var(--surface-card); color:var(--text-muted); }
