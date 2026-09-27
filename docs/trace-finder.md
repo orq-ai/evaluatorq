@@ -53,14 +53,14 @@ Above the table, **Ask AI** plans a natural-language question before it spends a
 1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
 2. The compiler creates one semantic classifier task and extracts numeric constraints for total tokens or duration. At the same time, one classify request selects categorical metadata filters from the live facet catalogue.
 3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched.
-4. The classifier classifies each projected trace through evaluatorq. Results stream into the matrix and the table's **Match** column as each trace finishes, including the final poll after the run ends.
+4. The classifier classifies each projected trace through evaluatorq. Results stream into the table's **AI match** column as each trace finishes, including the final poll after the run ends.
 
 Each trace is projected into a bounded classifier state before judgment: the projection keeps the newest conversation suffix, preserves tool-call arguments and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary. Ask AI does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable that tracing.
 
 On **Traces**, the Ask AI strip offers two scopes:
 
 - **Within results** classifies every trace already loaded in the table, keeping the loaded population as-is — it reuses the rows you already fetched rather than searching again, and it carries over the same time range, facets and numeric filters the table is currently showing. After traces load, it becomes enabled and selected by default; it is disabled when the table is empty (asking without loaded rows explains that you must load traces first). It classifies every loaded row. Runs above 500 traces require review before classification.
-- **New search** searches independently of the rows already loaded, using the selected time range and the saved AI trace limit and parallelism defaults. AI proposes metadata filters but does not suggest or change the selected time range. The separate **Trace search** page (`/find`) has per-run window, limit, and parallelism controls.
+- **New search** searches independently of the rows already loaded. It uses a relative lookback window based on the loaded table’s time span, or the configured default if no table range is available, and anchors that window at submission time. Exact **From** and **To** dates apply to table loads, not new searches. The search uses the saved AI trace limit and parallelism defaults. The separate **Trace search** page (`/find`) has per-run window, limit, and parallelism controls.
 
 On **Trace search**, the review panel (shown in **Review first**) gains an **Apply filters only** button below the plan, so you can load the reviewed population into the table without spending a classifier call — the classify button itself is labelled with the trace count it is about to judge.
 
