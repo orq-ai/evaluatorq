@@ -249,6 +249,22 @@ def _tool_call_status(call_id: Any, results: tuple[dict[str, Any], ...]) -> str:
         return 'error'
     if result.get('is_error') is True or result.get('error') not in (None, False, ''):
         return 'error'
+    # OTel tool_call_response parts often carry an error as plain text or as a
+    # JSON object, without a separate status field. Recognize those explicit
+    # shapes so the projected tool status agrees with the retained result.
+    content = tool_result_to_text(result.get('content')).lstrip()
+    if content.casefold().startswith('error:'):
+        return 'error'
+    try:
+        decoded = json.loads(content)
+    except (TypeError, ValueError):
+        decoded = None
+    if isinstance(decoded, dict):
+        nested_status = decoded.get('status')
+        if isinstance(nested_status, str) and nested_status.casefold() in ERROR_STATUSES:
+            return 'error'
+        if decoded.get('error') not in (None, False, ''):
+            return 'error'
     return 'completed'
 
 

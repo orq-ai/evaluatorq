@@ -10,6 +10,7 @@ import pytest
 
 from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.projection import estimate_tokens, project_trace
+from evaluatorq.common.trace_input import _otel_parts
 
 
 def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
@@ -128,6 +129,51 @@ def test_project_trace_keeps_tool_result_excerpts_but_drops_orphans() -> None:
     assert 'lookup_customer' in projection.serialized
     assert 'error' in projection.serialized
     assert json.loads(projection.serialized) == projection.payload
+
+
+def test_otel_tool_error_is_projected_with_error_status() -> None:
+    _, _, tool_responses = _otel_parts(
+        [{'type': 'tool_call_response', 'id': 'c1', 'response': 'Error: invoice service unavailable'}]
+    )
+    trace = _trace(
+        messages=(
+            {
+                'role': 'assistant',
+                'tool_calls': [
+                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup_invoice', 'arguments': '{}'}}
+                ],
+            },
+            tool_responses[0].to_chat_completion(),
+        )
+    )
+
+    projection = project_trace(trace)
+
+    projected_call = projection.payload['messages'][0]['tool_calls'][0]
+    assert projected_call['status'] == 'error'
+    assert projected_call['result_excerpt'] == 'Error: invoice service unavailable'
+
+
+def test_tool_result_text_mentioning_error_is_not_marked_as_failure() -> None:
+    trace = _trace(
+        messages=(
+            {
+                'role': 'assistant',
+                'tool_calls': [
+                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup_invoice', 'arguments': '{}'}}
+                ],
+            },
+            {
+                'role': 'tool',
+                'tool_call_id': 'c1',
+                'content': 'The error shown above was resolved successfully.',
+            },
+        )
+    )
+
+    projection = project_trace(trace)
+
+    assert projection.payload['messages'][0]['tool_calls'][0]['status'] == 'completed'
 
 
 def test_tool_result_excerpt_keeps_the_start_and_is_capped() -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.structured_output import sum_structured_usage
+from evaluatorq.contracts import Usage as UsageModel
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import Usage
@@ -28,4 +29,15 @@ class UsageLedger:
         return True
 
     def totals(self) -> dict[str, Usage | None]:
-        return {stage: sum_structured_usage(items) for stage, items in self._calls.items()}
+        totals: dict[str, Usage | None] = {}
+        for stage, items in self._calls.items():
+            # A recorded None is an attempted provider call with no usage block.
+            # Cache hits are never added to the ledger, so retain this call count
+            # for partial-cost reporting instead of letting the shared reducer
+            # drop it as though no call had happened.
+            unknown = sum(usage is None for usage in items)
+            recorded = [usage for usage in items if usage is not None]
+            if unknown:
+                recorded.append(UsageModel(calls=unknown))
+            totals[stage] = sum_structured_usage(recorded)
+        return totals

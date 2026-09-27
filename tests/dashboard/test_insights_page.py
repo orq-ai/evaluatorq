@@ -30,6 +30,7 @@ from evaluatorq.insights.models import (
     TraceSummary,
 )
 from evaluatorq.insights.presets import SENTIMENT
+from evaluatorq.insights.usage import UsageLedger
 
 
 def test_insights_header_renders_partial_cost(minimal_run) -> None:
@@ -40,6 +41,15 @@ def test_insights_header_renders_partial_cost(minimal_run) -> None:
             }
         }
     )
+
+    assert 'priced for 1 of 2 calls' in header(run)
+
+
+def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_run) -> None:
+    ledger = UsageLedger()
+    ledger.add('label', Usage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=0.01, calls=1, priced_calls=1))
+    ledger.add('label', None)
+    run = minimal_run.model_copy(update={'cost_by_stage': ledger.totals()})
 
     assert 'priced for 1 of 2 calls' in header(run)
 
