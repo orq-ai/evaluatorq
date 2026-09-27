@@ -18,6 +18,7 @@ from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelS
 from evaluatorq.insights.presets import LABEL_PRESETS
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.trace_finder.export import RunExport
+from evaluatorq.trace_finder.models import FacetSelection
 
 Source = Literal['recent', 'query', 'finder']
 Preset = Literal['sentiment', 'customer_satisfaction']
@@ -33,6 +34,7 @@ class InsightsLaunchSpec(BaseModel):
     finder_export: str = Field(default='', max_length=4096)
     window_days: int = Field(default=7, ge=1, le=90)
     limit: int = Field(default=100, ge=1, le=5000)
+    facets: FacetSelection = FacetSelection()
     parallelism: int = Field(default=20, ge=1, le=200)
     labels: list[Preset] = Field(default_factory=list)
     dimensions: list[DimensionName] = Field(default_factory=lambda: ['intent'])
@@ -42,6 +44,8 @@ class InsightsLaunchSpec(BaseModel):
         if self.source == 'query' and not self.query.strip():
             raise ValueError('Enter a question to find matching traces.')
         if self.source == 'finder':
+            if self.facets != FacetSelection():
+                raise ValueError('A Finder export already fixes the trace population; remove the facet filters.')
             if not self.finder_export.strip():
                 raise ValueError('Enter the path to a Finder JSON export.')
             path = Path(self.finder_export).expanduser()
@@ -60,6 +64,7 @@ class InsightsLaunchSpec(BaseModel):
             return InsightsPopulation.from_finder_export(Path(self.finder_export).expanduser())
         return InsightsPopulation(
             query=self.query.strip() if self.source == 'query' else None,
+            facets=self.facets,
             window_days=self.window_days,
             limit=self.limit,
         )

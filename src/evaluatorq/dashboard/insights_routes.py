@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -11,11 +12,13 @@ from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import RedirectResponse, Response
 
+from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights
 from evaluatorq.dashboard.insights_views import (
     TABS,
+    facet_options,
     full_page,
     landing,
     map_payload,
@@ -27,11 +30,14 @@ from evaluatorq.dashboard.insights_views import (
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.insights.models import InsightsRun
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
+from evaluatorq.trace_finder.facets import load_facet_catalogue
+from evaluatorq.trace_finder.models import FACET_NAMES, FacetSelection
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from evaluatorq.contracts import RunManifest
+    from evaluatorq.trace_finder.models import FacetCatalogue
 
 
 def _entries(
@@ -76,6 +82,31 @@ def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> 
     return loaded.get(run_id)
 
 
+async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
+    """Cache Orq facet values for the selected window; failures remain visible in the wizard."""
+    now = datetime.now(timezone.utc)
+    cache: dict[int, tuple[datetime, FacetCatalogue | None]] = getattr(app.state, 'insights_facet_catalogues', {})
+    cached = cache.get(window_days)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+    orq = None
+    try:
+        orq = resolve_orq_client()
+        catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
+    except Exception as exc:  # noqa: BLE001 — provider errors render a visible unavailable state
+        logger.warning('Insights facet values are unavailable for the {}-day window: {}', window_days, exc)
+        catalogue = None
+    finally:
+        if orq is not None:
+            try:
+                await close_orq_client(orq)
+            except Exception as exc:  # noqa: BLE001 — cleanup must not hide the catalogue response
+                logger.warning('Could not close the Insights facet catalogue client: {}', exc)
+    cache[window_days] = (now + timedelta(minutes=5 if catalogue is not None else 1), catalogue)
+    app.state.insights_facet_catalogues = cache
+    return catalogue
+
+
 def register_insights_routes(app: Any) -> None:  # noqa: C901
     """Attach Insights page, fragment, and export routes to *app*."""
 
@@ -105,6 +136,19 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         entries, _, manifests = _entries(get_insights_runs_dir())
         return _html(new_run_page(entries, manifests))
 
+    @app.get('/insights/facets')
+    async def insights_facets(req: Request) -> Response:
+        try:
+            window_days = int(req.query_params.get('window_days', '7'))
+        except ValueError:
+            return _html('<p class="insights-error">Enter a valid window to load facets.</p>', 422)
+        if not 1 <= window_days <= 90:
+            return _html('<p class="insights-error">Choose a window from 1 to 90 days.</p>', 422)
+        selection = FacetSelection.model_validate({
+            name: req.query_params.getlist(f'facet_{name}') for name in FACET_NAMES
+        })
+        return _html(facet_options(await _catalogue(req.app, window_days), selection))
+
     @app.post('/insights/runs')
     async def insights_start(req: Request) -> Response:
         form = await req.form()
@@ -121,6 +165,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 'finder_export': form.get('finder_export', ''),
                 'window_days': form.get('window_days', 7),
                 'limit': form.get('limit', 100),
+                'facets': {name: form.getlist(f'facet_{name}') for name in FACET_NAMES},
                 'parallelism': form.get('parallelism', 20),
                 'labels': form.getlist('labels'),
                 'dimensions': form.getlist('dimensions'),

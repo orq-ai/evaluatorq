@@ -10,11 +10,14 @@ from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SC
 from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.trace_finder.views import FACET_LABELS
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
+from evaluatorq.trace_finder.models import FACET_NAMES
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import Cluster, InsightsRun, TraceInsight
+    from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
 
 TABS = ('dimensions', 'labels', 'crosstab', 'traces', 'priority', 'map')
 TAB_LABELS = {
@@ -923,6 +926,45 @@ def unreadable_page(
     return page('Insights', body, active_nav='insights')
 
 
+def facet_options(catalogue: FacetCatalogue | None, selection: FacetSelection) -> str:
+    """Render the Finder facet choices for an Insights window, retaining selected values."""
+    unavailable = (
+        '<p class="insights-facet-unavailable" role="status">Facet values are unavailable. '
+        'Existing selections are kept; check the Orq connection, then change the window to retry.</p>'
+        if catalogue is None
+        else ''
+    )
+    if catalogue is None and not any(getattr(selection, name) for name in FACET_NAMES):
+        return unavailable
+    groups = []
+    for name, label in FACET_LABELS:
+        if name not in FACET_NAMES:
+            continue
+        selected = getattr(selection, name)
+        values = tuple(dict.fromkeys((*(getattr(catalogue, name) if catalogue is not None else ()), *sorted(selected))))
+        if not values and catalogue is None:
+            continue
+        options = (
+            ''.join(
+                f'<label><input type="checkbox" name="facet_{name}" value="{esc(value)}"'
+                f'{" checked" if value in selected else ""}><span>{esc(value)}</span></label>'
+                for value in values
+            )
+            or '<p class="insights-muted">No values in this window.</p>'
+        )
+        overflow = (
+            '<p class="insights-muted">More values exist in Orq; the most frequent are shown.</p>'
+            if catalogue is not None and name in catalogue.truncated_facets
+            else ''
+        )
+        count = f' <small>{len(selected)} selected</small>' if selected else ''
+        groups.append(
+            f'<details class="insights-facet-group"><summary>{esc(label.title())}{count}</summary>'
+            f'<div class="insights-facet-values">{options}{overflow}</div></details>'
+        )
+    return unavailable + ''.join(groups)
+
+
 def new_run_page(
     entries: list[tuple[str, str, str]], manifests: dict[str, RunManifest], *, error: str | None = None
 ) -> str:
@@ -950,6 +992,9 @@ def new_run_page(
         '<div class="insights-form-grid" data-source="recent query">'
         '<label class="insights-form-field">Window (days)<input name="window_days" type="number" min="1" max="90" value="7"></label>'
         '<label class="insights-form-field">Trace limit<input name="limit" type="number" min="1" max="5000" value="100"></label></div>'
+        '<div class="insights-facet-control" data-source="recent query"><div class="insights-facet-head">'
+        '<b>Filter by facets</b><span>Only traces with these values in the selected window are included.</span></div>'
+        '<div id="insights-facet-options" aria-live="polite"><p class="insights-muted">Loading facet values…</p></div></div>'
         '</section>'
         '<section class="insights-wizard-step" data-step="2"><h3>What should Insights find?</h3>'
         '<p>Choose labels for fixed questions and dimensions for discovered groups.</p>'

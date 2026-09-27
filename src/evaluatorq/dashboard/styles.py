@@ -2833,6 +2833,19 @@ _INSIGHTS_CSS = """
 .insights-form-field { display:block; margin-top:15px; color:var(--text-body); font-size:12.5px; font-weight:600; }
 .insights-form-field span { color:var(--text-muted); font-weight:400; }
 .insights-form-field input,.insights-form-field textarea { display:block; box-sizing:border-box; width:100%; margin-top:5px; padding:9px 10px; border:1px solid var(--border-default); border-radius:7px; background:var(--surface-card); color:var(--text-strong); font:inherit; font-weight:400; }
+.insights-facet-control { margin-top:18px; }
+.insights-facet-control[hidden] { display:none; }
+.insights-facet-head { display:flex; align-items:baseline; flex-wrap:wrap; gap:7px; margin-bottom:8px; font-size:12.5px; }
+.insights-facet-head span { color:var(--text-muted); font-size:11.5px; }
+#insights-facet-options { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:7px; }
+.insights-facet-group { min-width:0; border:1px solid var(--border-default); border-radius:7px; background:var(--surface-card); }
+.insights-facet-group summary { padding:9px 10px; cursor:pointer; font-size:12px; font-weight:600; text-transform:capitalize; }
+.insights-facet-group summary small { color:var(--accent); font-weight:500; text-transform:none; }
+.insights-facet-values { max-height:180px; overflow:auto; padding:3px 9px 9px; border-top:1px solid var(--border-subtle); }
+.insights-facet-values label { display:flex; align-items:center; gap:6px; padding:5px 0; font-size:11.5px; }
+.insights-facet-values input { accent-color:var(--accent); }
+.insights-facet-values .insights-muted { font-size:11px; }
+.insights-facet-unavailable { grid-column:1/-1; margin:0; padding:10px; border:1px solid var(--border-default); border-radius:7px; color:var(--text-muted); font-size:12px; }
 .insights-wizard-step fieldset { margin:14px 0; padding:0; border:0; }
 .insights-wizard-step legend { margin-bottom:8px; color:var(--text-strong); font-size:12.5px; font-weight:600; }
 .insights-wizard-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }

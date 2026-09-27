@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -17,6 +18,7 @@ from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, SENTIMENT
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import save_run
+from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
 from tests.dashboard.test_insights_page import minimal_run
 
 
@@ -81,6 +83,59 @@ def test_wizard_validates_source_before_launch() -> None:
         InsightsLaunchSpec(source='query', query='  ')
     with pytest.raises(ValidationError, match='Select at least one'):
         InsightsLaunchSpec(labels=[], dimensions=[])
+    with pytest.raises(ValidationError, match='Finder export already fixes'):
+        InsightsLaunchSpec(source='finder', facets=FacetSelection(status=frozenset({'error'})))
+
+
+def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> None:
+    facets = FacetSelection(status=frozenset({'error'}), provider=frozenset({'openai', 'anthropic'}))
+    spec = InsightsLaunchSpec(source='query', query='refunds', window_days=3, facets=facets)
+    assert spec.population().facets == facets
+    assert spec.population().window_days == 3
+    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+        launch_insights(spec, tmp_path)
+    payload = InsightsLaunchPayload.model_validate_json(spawn.call_args.kwargs['env']['EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'])
+    assert payload.spec.population().facets == facets
+
+
+def test_facet_options_use_selected_window_and_keep_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    catalogue = FacetCatalogue(status=('ok',), provider=('openai',))
+    load = AsyncMock(return_value=catalogue)
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        response = client.get('/insights/facets?window_days=3&facet_status=error')
+        cached = client.get('/insights/facets?window_days=3')
+        changed = client.get('/insights/facets?window_days=4')
+
+    assert response.status_code == cached.status_code == changed.status_code == 200
+    assert 'name="facet_status" value="error" checked' in response.text
+    assert 'name="facet_status" value="ok"' in response.text
+    assert load.await_count == 2
+    first = load.await_args_list[0].kwargs
+    assert first['limit'] == 50
+    assert isinstance(first['start'], datetime)
+    assert isinstance(first['end'], datetime)
+    assert abs(first['end'] - first['start'] - timedelta(days=3)) < timedelta(seconds=1)
+    assert client.get('/insights/facets?window_days=91').status_code == 422
+
+
+def test_facet_catalogue_failure_is_visible(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, side_effect=RuntimeError('Orq unavailable')),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        response = client.get('/insights/facets?window_days=7&facet_status=error')
+    assert response.status_code == 200
+    assert 'Facet values are unavailable' in response.text
+    assert 'name="facet_status" value="error" checked' in response.text
 
 
 def test_new_run_form_rejects_bad_input_and_launches_valid_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -100,13 +155,14 @@ def test_new_run_form_rejects_bad_input_and_launches_valid_request(monkeypatch: 
         assert forbidden.status_code == 403
         valid = client.post(
             '/insights/runs',
-            data={'csrf': token.group(1), 'source': 'recent', 'dimensions': 'intent', 'limit': '5'},
+            data={'csrf': token.group(1), 'source': 'recent', 'dimensions': 'intent', 'limit': '5', 'facet_status': 'error'},
             follow_redirects=False,
         )
 
     assert valid.status_code == 303
     assert valid.headers['location'] == '/insights/launched-id'
     assert launch.call_args.args[0].limit == 5
+    assert launch.call_args.args[0].population().facets.status == frozenset({'error'})
 
 
 def test_running_and_completed_pages_show_manifest_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

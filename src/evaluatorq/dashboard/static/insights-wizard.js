@@ -9,6 +9,8 @@
   const start = form.querySelector('[data-wizard-start]');
   const error = document.getElementById('insights-wizard-error');
   const preview = document.getElementById('insights-run-preview');
+  const facetOptions = document.getElementById('insights-facet-options');
+  let facetRequest = null;
   let step = 1;
 
   function selected(name) {
@@ -25,6 +27,34 @@
     form.querySelectorAll('[data-source]').forEach(function (field) {
       field.hidden = !field.dataset.source.split(' ').includes(source);
     });
+    facetOptions.querySelectorAll('input').forEach(function (input) { input.disabled = source === 'finder'; });
+    if (source === 'finder' && facetRequest) facetRequest.abort();
+  }
+
+  async function refreshFacets() {
+    if (selected('source')[0] === 'finder' || !form.elements.window_days.checkValidity()) return;
+    if (facetRequest) facetRequest.abort();
+    const request = new AbortController();
+    facetRequest = request;
+    const params = new URLSearchParams({ window_days: form.elements.window_days.value });
+    facetOptions.querySelectorAll('input[name^="facet_"]:checked').forEach(function (input) {
+      params.append(input.name, input.value);
+    });
+    facetOptions.setAttribute('aria-busy', 'true');
+    try {
+      const response = await fetch('/insights/facets?' + params.toString(), { signal: request.signal });
+      if (!response.ok) throw new Error('Facet values could not be loaded for this window.');
+      facetOptions.innerHTML = await response.text();
+      updateSource();
+    } catch (failure) {
+      if (failure.name !== 'AbortError') {
+        const message = '<p class="insights-facet-unavailable" role="status">Facet values could not be loaded. Existing selections are kept; check the Orq connection or change the window to retry.</p>';
+        if (facetOptions.querySelector('input[name^="facet_"]')) facetOptions.insertAdjacentHTML('afterbegin', message);
+        else facetOptions.innerHTML = message;
+      }
+    } finally {
+      if (facetRequest === request) facetOptions.removeAttribute('aria-busy');
+    }
   }
 
   function plan() {
@@ -47,6 +77,11 @@
     const summary = document.createElement('p');
     summary.textContent = 'Source: ' + (source === 'query' ? 'Search by question' : source === 'finder' ? 'Finder export' : 'Recent traces') +
       ' · Labels: ' + (labels.join(', ') || 'none') + ' · Dimensions: ' + (dimensions.join(', ') || 'none');
+    const facets = document.createElement('p');
+    const selectedFacets = Array.from(facetOptions.querySelectorAll('input[name^="facet_"]:checked')).map(function (input) {
+      return input.name.slice(6).replaceAll('_', ' ') + ' = ' + input.value;
+    });
+    facets.textContent = source === 'finder' ? 'Facets: fixed by Finder export' : 'Facets: ' + (selectedFacets.join(', ') || 'all values');
     const heading = document.createElement('h4');
     heading.textContent = 'Expected stages';
     const list = document.createElement('ol');
@@ -55,7 +90,7 @@
       item.textContent = name;
       list.appendChild(item);
     });
-    preview.replaceChildren(summary, heading, list);
+    preview.replaceChildren(summary, facets, heading, list);
   }
 
   function effectiveLabels(dimensions) {
@@ -82,6 +117,7 @@
     if (step === 1 && source === 'query' && !form.elements.query.value.trim()) return 'Enter a question to find matching traces.';
     if (step === 1 && source === 'finder' && !form.elements.finder_export.value.trim()) return 'Enter a Finder JSON path.';
     if (step === 1 && source !== 'finder' && (!form.elements.window_days.checkValidity() || !form.elements.limit.checkValidity())) return 'Enter a valid window and trace limit.';
+    if (step === 1 && source !== 'finder' && facetOptions.getAttribute('aria-busy') === 'true') return 'Wait for the facet values to load.';
     if (step === 2 && !selected('labels').length && !selected('dimensions').length) return 'Select at least one label or dimension.';
     if (step === 2 && !form.elements.parallelism.checkValidity()) return 'Enter a valid parallel request count.';
     return '';
@@ -93,7 +129,11 @@
     if (message) { showError(message); return; }
     showStep(Math.min(3, step + 1));
   });
-  form.addEventListener('change', function () { updateSource(); if (step === 3) updatePreview(); });
+  form.addEventListener('change', function (event) {
+    updateSource();
+    if (event.target.name === 'window_days' || event.target.name === 'source') refreshFacets();
+    if (step === 3) updatePreview();
+  });
   form.addEventListener('submit', function (event) {
     for (const value of [1, 2]) {
       step = value;
@@ -105,4 +145,5 @@
     start.textContent = 'Starting…';
   });
   showStep(1);
+  refreshFacets();
 })();
