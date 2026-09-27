@@ -22,6 +22,7 @@ from evaluatorq.dashboard.insights_launch import (
     finder_export_reference_path,
     read_launch_payload,
     start_worker_heartbeat,
+    validate_private_finder_reference,
     worker_state_path,
 )
 from evaluatorq.insights.models import InsightsPopulation
@@ -89,10 +90,9 @@ def _cleanup_finder_reference(runs_dir: Path, run_id: str) -> None:
     """Release a Finder export after its Insights worker reaches a terminal state."""
     try:
         reference = finder_export_reference_path(runs_dir, run_id)
-        if reference.parent.is_symlink():
-            logger.warning('Leaving untrusted Finder export reference directory in place: {}', reference.parent)
-            return
-        reference.unlink(missing_ok=True)
+        if reference.exists():
+            validate_private_finder_reference(reference)
+            reference.unlink(missing_ok=True)
     except (OSError, ValueError) as exc:
         logger.warning('Could not remove Finder export reference for run {}: {}', run_id, exc)
 

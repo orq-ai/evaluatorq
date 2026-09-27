@@ -20,8 +20,10 @@ from evaluatorq.dashboard.insights_launch import (
     MAX_FINDER_EXPORT_BYTES,
     InsightsLaunchPayload,
     InsightsLaunchSpec,
+    ensure_private_finder_reference_dir,
     finder_export_reference_path,
     launch_insights,
+    read_private_finder_reference,
 )
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, SENTIMENT
@@ -93,8 +95,9 @@ def test_dashboard_reconciles_worker_killed_before_start_and_releases_finder_fil
     runs_dir = tmp_path / 'insights-runs'
     writer = start_manifest(run_id='worker-killed', surface='insights', run_name='demo', runs_dir=runs_dir)
     reference = finder_export_reference_path(runs_dir, 'worker-killed')
-    reference.parent.mkdir(parents=True)
+    ensure_private_finder_reference_dir(reference.parent)
     reference.write_text(json.dumps({'finder_export': '/private/trace-finder-export.json'}), encoding='utf-8')
+    reference.chmod(0o600)
     snapshot_dir = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
     snapshot = snapshot_dir / 'finder-export.json'
     snapshot.write_text('{}', encoding='utf-8')
@@ -159,8 +162,9 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
 
     writer = start_manifest(run_id='import-failure', surface='insights', run_name='demo', runs_dir=tmp_path)
     reference = finder_export_reference_path(tmp_path, 'import-failure')
-    reference.parent.mkdir(parents=True)
+    ensure_private_finder_reference_dir(reference.parent)
     reference.write_text('{}', encoding='utf-8')
+    reference.chmod(0o600)
     monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
     snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
     snapshot_path = snapshot_directory / 'finder-export.json'
@@ -362,7 +366,120 @@ def test_finder_insights_launch_records_source_until_run_finishes(
 
     reference = finder_export_reference_path(tmp_path / 'insights-runs', run_id)
     assert json.loads(reference.read_text(encoding='utf-8')) == {'finder_export': str(export_path)}
+    assert reference.stat().st_mode & 0o777 == 0o600
+    assert reference.parent.stat().st_mode & 0o777 == 0o700
+    assert read_private_finder_reference(reference) == {'finder_export': str(export_path)}
     assert len(list_manifests(tmp_path / 'insights-runs')) == 1
+
+
+def test_finder_reference_rejects_shared_directory_and_file_modes(tmp_path: Path) -> None:
+    reference = finder_export_reference_path(tmp_path / 'runs', 'private-run')
+    ensure_private_finder_reference_dir(reference.parent)
+    reference.write_text('{"finder_export":"/tmp/export.json"}', encoding='utf-8')
+    reference.chmod(0o644)
+
+    with pytest.raises(OSError, match='not private'):
+        read_private_finder_reference(reference)
+
+    reference.chmod(0o600)
+    reference.parent.chmod(0o755)
+    with pytest.raises(OSError, match='not private'):
+        read_private_finder_reference(reference)
+
+
+def test_stale_reconciliation_leaves_a_live_worker_and_its_finder_artifacts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+    import tempfile
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+    runs_dir = tmp_path / 'runs'
+    writer = start_manifest(run_id='paused-worker', surface='insights', run_name='demo', runs_dir=runs_dir)
+    reference = finder_export_reference_path(runs_dir, 'paused-worker')
+    ensure_private_finder_reference_dir(reference.parent)
+    reference.write_text(json.dumps({'finder_export': '/private/export.json'}), encoding='utf-8')
+    reference.chmod(0o600)
+    snapshot_dir = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+    snapshot = snapshot_dir / 'finder-export.json'
+    snapshot.write_text('{}', encoding='utf-8')
+    snapshot.chmod(0o600)
+    state_path = worker_state_path(runs_dir, 'paused-worker')
+    _write_worker_state(
+        state_path,
+        {
+            'pid': 12345,
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': str(snapshot),
+        },
+    )
+    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid: True)
+
+    assert not insights_launch.reconcile_stale_worker(runs_dir, 'paused-worker')
+    assert list_manifests(runs_dir)[0].status.value == 'running'
+    assert reference.exists()
+    assert state_path.exists()
+    assert snapshot_dir.exists()
+    assert writer.manifest.status.value == 'running'
+
+
+def test_stale_reconciliation_rechecks_worker_liveness_before_failing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    writer = start_manifest(run_id='resumed-worker', surface='insights', run_name='demo', runs_dir=runs_dir)
+    _write_worker_state(
+        worker_state_path(runs_dir, 'resumed-worker'),
+        {
+            'pid': 12345,
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': None,
+        },
+    )
+    checks = iter((False, True))
+    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid: next(checks))
+
+    assert not insights_launch.reconcile_stale_worker(runs_dir, 'resumed-worker')
+    assert list_manifests(runs_dir)[0].status.value == 'running'
+    assert writer.manifest.status.value == 'running'
+
+
+def test_stale_reconciliation_treats_overflowing_worker_pid_as_uncertain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    writer = start_manifest(run_id='corrupt-pid', surface='insights', run_name='demo', runs_dir=runs_dir)
+    _write_worker_state(
+        worker_state_path(runs_dir, 'corrupt-pid'),
+        {
+            'pid': 10**100,
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': None,
+        },
+    )
+
+    def overflow(_pid: int, _signal: int) -> None:
+        raise OverflowError('pid does not fit in a platform pid_t')
+
+    monkeypatch.setattr(insights_launch.os, 'kill', overflow)
+
+    assert not insights_launch.reconcile_stale_worker(runs_dir, 'corrupt-pid')
+    assert list_manifests(runs_dir)[0].status.value == 'running'
+    assert writer.manifest.status.value == 'running'
 
 
 def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(

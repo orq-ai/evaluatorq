@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -124,10 +125,34 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
             return False
         heartbeat_at = state.get('heartbeat_at')
         stale = isinstance(heartbeat_at, (int, float)) and time.time() - heartbeat_at > INSIGHTS_WORKER_STALE_SECONDS
+        pid = state.get('pid')
     except (OSError, ValueError, TypeError):
         return False
     if manifest.status != ManifestStatus.RUNNING or not stale:
         return False
+    # A worker can be paused by the OS or debugger long enough for its lease
+    # to age. A live PID is stronger evidence than an old heartbeat, so leave
+    # its manifest and private Finder artifacts alone until it exits.
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or _worker_process_is_alive(pid):
+        return False
+    # Re-read the lease immediately before failing. The worker may have
+    # resumed and refreshed it while the manifest was being parsed.
+    try:
+        latest_state = json.loads(state_path.read_text(encoding='utf-8'))
+        latest_manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError, TypeError):
+        return False
+    if (
+        latest_manifest.status != ManifestStatus.RUNNING
+        or not isinstance(latest_state, dict)
+        or latest_state.get('pid') != pid
+        or not isinstance(latest_state.get('heartbeat_at'), (int, float))
+        or time.time() - latest_state['heartbeat_at'] <= INSIGHTS_WORKER_STALE_SECONDS
+        or _worker_process_is_alive(pid)
+    ):
+        return False
+    state = latest_state
+    manifest = latest_manifest
     ManifestWriter(manifest, manifest_path).fail(
         'Insights worker stopped before completing the run; start a new run to retry.', stage='worker'
     )
@@ -145,9 +170,12 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
         _cleanup_snapshot(Path(snapshot))
     try:
         reference_path = finder_export_reference_path(runs_dir, run_id)
-        if reference_path.parent.is_symlink():
+        if not reference_path.exists():
+            pass
+        elif reference_path.parent.is_symlink():
             logger.warning('Leaving untrusted Finder export reference directory in place: {}', reference_path.parent)
         else:
+            validate_private_finder_reference(reference_path)
             reference_path.unlink(missing_ok=True)
     except OSError as exc:
         logger.warning('Could not release Finder export reference for stale run {}: {}', run_id, exc)
@@ -155,6 +183,24 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
         state_path.unlink(missing_ok=True)
     except OSError as exc:
         logger.warning('Could not remove stale Insights worker state {}: {}', state_path, exc)
+    return True
+
+
+def _worker_process_is_alive(pid: object) -> bool:
+    """Return whether a recorded worker PID still exists on this host."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0 or not hasattr(os, 'kill'):
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as exc:
+        # Only ESRCH proves death; permission or platform errors are uncertain.
+        return exc.errno != errno.ESRCH
+    except OverflowError:
+        return True
     return True
 
 
@@ -195,9 +241,22 @@ def cleanup_reference():
         if os.path.basename(directory) != ".manifests" or not run_id or not all(ch.isalnum() or ch in "-_" for ch in run_id):
             return
         lease_dir = os.path.join(os.path.dirname(directory), ".finder-export-leases")
-        if os.path.islink(lease_dir):
+        lease_parent = os.path.dirname(lease_dir)
+        parent_info = os.stat(lease_parent, follow_symlinks=False)
+        directory_info = os.stat(lease_dir, follow_symlinks=False)
+        reference = os.path.join(lease_dir, run_id + ".json")
+        reference_info = os.stat(reference, follow_symlinks=False)
+        if (os.path.islink(lease_parent) or not stat.S_ISDIR(parent_info.st_mode)
+                or (hasattr(os, "getuid") and parent_info.st_uid != os.getuid())
+                or (os.name != "nt" and stat.S_IMODE(parent_info.st_mode) & 0o022)
+                or os.path.islink(lease_dir) or not stat.S_ISDIR(directory_info.st_mode)
+                or (os.name != "nt" and stat.S_IMODE(directory_info.st_mode) != 0o700)
+                or (hasattr(os, "getuid") and directory_info.st_uid != os.getuid())
+                or not stat.S_ISREG(reference_info.st_mode)
+                or (os.name != "nt" and stat.S_IMODE(reference_info.st_mode) != 0o600)
+                or (hasattr(os, "getuid") and reference_info.st_uid != os.getuid())):
             return
-        os.unlink(os.path.join(lease_dir, run_id + ".json"))
+        os.unlink(reference)
     except FileNotFoundError:
         pass
     except OSError as cleanup_error:
@@ -257,6 +316,68 @@ def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
     if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
         raise ValueError('Invalid Insights run ID for Finder export reference')
     return runs_dir / FINDER_EXPORT_REFERENCE_DIR / f'{run_id}.json'
+
+
+def ensure_private_finder_reference_dir(path: Path) -> None:
+    """Create or validate the private Finder lease directory."""
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    validate_private_finder_reference_dir(path)
+
+
+def validate_private_finder_reference_dir(path: Path) -> None:
+    """Check an existing Finder lease directory without creating it."""
+    parent_info = path.parent.lstat()
+    if (
+        path.parent.is_symlink()
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or (hasattr(os, 'getuid') and parent_info.st_uid != os.getuid())
+        or (os.name != 'nt' and stat.S_IMODE(parent_info.st_mode) & 0o022)
+    ):
+        raise OSError(f'Finder export lease parent is not private from other users: {path.parent}')
+    info = path.lstat()
+    if (
+        path.is_symlink()
+        or not stat.S_ISDIR(info.st_mode)
+        or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o700)
+        or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
+    ):
+        raise OSError(f'Finder export lease directory is not private: {path}')
+
+
+def validate_private_finder_reference(path: Path) -> None:
+    """Reject a Finder lease unless its directory and file are private and owned here."""
+    validate_private_finder_reference_dir(path.parent)
+    info = path.lstat()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o600)
+        or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
+    ):
+        raise OSError(f'Finder export lease file is not private: {path}')
+
+
+def read_private_finder_reference(path: Path) -> dict[str, object]:
+    """Read a lease only after checking owner, mode, and regular-file type."""
+    validate_private_finder_reference(path)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    descriptor = os.open(path, flags)
+    try:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o600)
+            or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
+        ):
+            raise OSError(f'Finder export lease file changed while opening: {path}')
+        with os.fdopen(descriptor, 'r', encoding='utf-8') as reference_file:
+            descriptor = -1
+            data = json.load(reference_file)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if not isinstance(data, dict):
+        raise TypeError(f'Finder export lease is not an object: {path}')
+    return data
 
 
 def _initial_worker_state(path: Path, snapshot: Path | None) -> None:
@@ -372,16 +493,18 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
         finder_snapshot = spec.validated_finder_export_snapshot()
         if finder_snapshot is not None:
             reference_path = finder_export_reference_path(runs_dir, run_id)
-            reference_path.parent.mkdir(parents=True, exist_ok=True)
+            ensure_private_finder_reference_dir(reference_path.parent)
             with tempfile.NamedTemporaryFile(
                 mode='w', encoding='utf-8', dir=reference_path.parent, prefix=f'.{run_id}.', suffix='.tmp', delete=False
             ) as reference_file:
                 reference_temporary = Path(reference_file.name)
+                os.fchmod(reference_file.fileno(), 0o600)
                 reference_file.write(json.dumps({'finder_export': spec.finder_export}))
                 reference_file.flush()
                 os.fsync(reference_file.fileno())
             reference_temporary.replace(reference_path)
             reference_temporary = None
+            validate_private_finder_reference(reference_path)
             snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
             snapshot_path = snapshot_directory / 'finder-export.json'
             descriptor = os.open(snapshot_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

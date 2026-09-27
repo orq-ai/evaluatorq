@@ -25,7 +25,11 @@ from evaluatorq.common.orq_client import (
     resolve_orq_client,
 )
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.dashboard.insights_launch import FINDER_EXPORT_REFERENCE_DIR
+from evaluatorq.dashboard.insights_launch import (
+    FINDER_EXPORT_REFERENCE_DIR,
+    read_private_finder_reference,
+    validate_private_finder_reference_dir,
+)
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder.views import drawer, facet_menu, fragment, missing_trace_drawer, page_html
 from evaluatorq.trace_finder import (
@@ -61,14 +65,14 @@ _FINDER_EXPORT_HANDOFF_GRACE = timedelta(hours=1)
 _FINDER_EXPORT_REFERENCE_MAX_AGE = timedelta(days=30)
 
 
-def _referenced_finder_exports(export_dir: Path) -> set[Path]:
-    """Find exports named by saved or currently running Insights populations."""
+def _referenced_finder_exports(export_dir: Path) -> set[Path] | None:
+    """Find exports in saved and active runs, returning None if references are uncertain."""
     referenced: set[Path] = set()
     try:
         run_paths = list(get_store_dir('insights-runs').glob('insights_*.json'))
     except OSError as exc:
         logger.warning('Could not inspect Insights runs for Finder export references: {}', exc)
-        return referenced
+        return None
     export_root = export_dir.resolve()
     for run_path in run_paths:
         try:
@@ -86,39 +90,59 @@ def _referenced_finder_exports(export_dir: Path) -> set[Path]:
             ):
                 referenced.add(resolved)
         except (OSError, ValueError, TypeError, RuntimeError) as exc:
-            # An unreadable saved run must not make export cleanup fail.
             logger.warning('Could not inspect Insights run {} for Finder export references: {}', run_path, exc)
+            return None
     runs_dir = get_store_dir('insights-runs')
     manifests_dir = runs_dir / '.manifests'
     references_dir = runs_dir / FINDER_EXPORT_REFERENCE_DIR
     now = datetime.now(timezone.utc).timestamp()
+    try:
+        validate_private_finder_reference_dir(references_dir)
+    except FileNotFoundError:
+        return referenced
+    except OSError as exc:
+        logger.warning('Could not inspect Finder export lease directory {}: {}', references_dir, exc)
+        return None
     for marker in references_dir.glob('*.json'):
-        try:
-            run_id = marker.stem
-            manifest_path = manifests_dir / f'{run_id}.json'
-            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
-            if not isinstance(manifest, dict):
-                marker.unlink(missing_ok=True)
-                continue
-            age = now - manifest_path.stat().st_mtime
-            if manifest.get('status') != 'running' or age > _FINDER_EXPORT_REFERENCE_MAX_AGE.total_seconds():
-                marker.unlink(missing_ok=True)
-                continue
-            data = json.loads(marker.read_text(encoding='utf-8'))
-            value = data.get('finder_export') if isinstance(data, dict) else None
-            if isinstance(value, str) and value:
-                candidate = Path(value).expanduser().resolve()
-                if (
-                    candidate.parent == export_root
-                    and candidate.name.startswith('trace-finder-')
-                    and candidate.suffix == '.json'
-                ):
-                    referenced.add(candidate)
-        except (OSError, ValueError, TypeError, RuntimeError) as exc:
-            logger.warning('Could not inspect in-flight Finder export reference {}: {}', marker, exc)
-            with contextlib.suppress(OSError):
-                marker.unlink(missing_ok=True)
+        candidate, trusted = _inflight_finder_export(marker, manifests_dir, export_root, now)
+        if not trusted:
+            return None
+        if candidate is not None:
+            referenced.add(candidate)
     return referenced
+
+
+def _inflight_finder_export(
+    marker: Path, manifests_dir: Path, export_root: Path, now: float
+) -> tuple[Path | None, bool]:
+    """Read one lease and say whether its export reference was trustworthy."""
+    try:
+        if not marker.stem.replace('-', '').replace('_', '').isalnum():
+            logger.warning('Could not inspect in-flight Finder export reference with invalid run ID: {}', marker)
+            return None, False
+        data = read_private_finder_reference(marker)
+        manifest_path = manifests_dir / f'{marker.stem}.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        if not isinstance(manifest, dict):
+            return None, False
+        age = now - manifest_path.stat().st_mtime
+        if manifest.get('status') != 'running' or age > _FINDER_EXPORT_REFERENCE_MAX_AGE.total_seconds():
+            marker.unlink(missing_ok=True)
+            return None, True
+        value = data.get('finder_export')
+        if not isinstance(value, str) or not value:
+            return None, False
+        candidate = Path(value).expanduser().resolve()
+        if (
+            candidate.parent == export_root
+            and candidate.name.startswith('trace-finder-')
+            and candidate.suffix == '.json'
+        ):
+            return candidate, True
+        return None, True
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        logger.warning('Could not inspect in-flight Finder export reference {}: {}', marker, exc)
+        return None, False
 
 
 def _prune_finder_exports(export_dir: Path) -> None:
@@ -127,6 +151,9 @@ def _prune_finder_exports(export_dir: Path) -> None:
         files = [path for path in export_dir.glob('trace-finder-*.json') if path.is_file() and not path.is_symlink()]
         files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
         retained = _referenced_finder_exports(export_dir)
+        if retained is None:
+            logger.warning('Skipping Finder export pruning because Insights references could not be verified')
+            return
         handoff_cutoff = datetime.now(timezone.utc).timestamp() - _FINDER_EXPORT_HANDOFF_GRACE.total_seconds()
         retained.update(path.resolve() for path in files if path.stat().st_mtime >= handoff_cutoff)
         unreferenced = [path for path in files if path.resolve() not in retained]
