@@ -430,6 +430,58 @@ def test_dashboard_finder_export_must_be_in_approved_directory(
             InsightsLaunchSpec(source='finder', finder_export=path)
 
 
+def test_finder_export_replacement_with_symlink_during_open_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    approved = exports / 'approved.json'
+    approved.write_text(_run_export(['approved-trace']).model_dump_json(), encoding='utf-8')
+    outside = tmp_path / 'outside.json'
+    outside.write_text(_run_export(['outside-trace']).model_dump_json(), encoding='utf-8')
+    original_open = insights_launch.os.open
+
+    def replace_before_open(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+        if Path(path) == approved or (Path(path) == Path('approved.json') and 'dir_fd' in kwargs):
+            approved.unlink()
+            approved.symlink_to(outside)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(insights_launch.os, 'open', replace_before_open)
+
+    with pytest.raises(ValidationError, match='Could not read a valid Finder export'):
+        InsightsLaunchSpec(source='finder', finder_export='approved.json')
+
+
+def test_finder_export_directory_replacement_during_open_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    (exports / 'approved.json').write_text(_run_export(['approved-trace']).model_dump_json(), encoding='utf-8')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'approved.json').write_text(_run_export(['outside-trace']).model_dump_json(), encoding='utf-8')
+    original_open = insights_launch.os.open
+
+    def replace_directory_before_open(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+        if Path(path) == exports:
+            exports.rename(tmp_path / 'old-exports')
+            exports.symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(insights_launch.os, 'open', replace_directory_before_open)
+
+    with pytest.raises(ValidationError, match='Could not read a valid Finder export'):
+        InsightsLaunchSpec(source='finder', finder_export='approved.json')
+
+
 def test_dashboard_finder_export_is_size_limited(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     exports = tmp_path / 'finder-exports'

@@ -448,6 +448,55 @@ def get_finder_exports_dir() -> Path:
     return get_store_dir('finder-exports')
 
 
+def _read_approved_finder_export(root: Path, path: Path) -> bytes:
+    """Read a bounded export from the opened approved directory and file descriptors."""
+    directory_fd: int | None = None
+    directory_before: os.stat_result | None = None
+    try:
+        if os.name != 'nt':
+            if not hasattr(os, 'O_DIRECTORY') or not hasattr(os, 'O_NOFOLLOW'):
+                raise ValueError('Safe Finder export file opening is unavailable on this platform.')
+            directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            directory = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.getuid()
+                or stat.S_IMODE(directory.st_mode) & 0o022
+            ):
+                raise ValueError('Finder export directory has unsafe ownership or permissions.')
+            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        else:
+            # Windows has no openat-style dir_fd here; verify the opened file
+            # against the current directory entry before reading its bytes.
+            directory_before = root.lstat()
+            if not stat.S_ISDIR(directory_before.st_mode):
+                raise ValueError('Finder export directory must be a regular directory.')
+            descriptor = os.open(path, os.O_RDONLY)
+        with os.fdopen(descriptor, 'rb') as export_file:
+            opened = os.fstat(export_file.fileno())
+            current = path.lstat()
+            if os.name == 'nt':
+                if directory_before is None:
+                    raise ValueError('Finder export directory was not validated before opening the file.')
+                directory_after = root.lstat()
+                if not stat.S_ISDIR(directory_after.st_mode) or (directory_before.st_dev, directory_before.st_ino) != (
+                    directory_after.st_dev,
+                    directory_after.st_ino,
+                ):
+                    raise ValueError('Finder export directory changed while opening the file.')
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or not stat.S_ISREG(current.st_mode)
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                or (os.name != 'nt' and (opened.st_uid != os.getuid() or stat.S_IMODE(opened.st_mode) & 0o022))
+            ):
+                raise ValueError('Finder export must be a safe regular file in the approved directory.')
+            return export_file.read(MAX_FINDER_EXPORT_BYTES + 1)
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
 def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
     """Return the private lease path for a running Finder-sourced Insights run."""
     if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
@@ -565,10 +614,7 @@ class InsightsLaunchSpec(BaseModel):
             if path.parent != root:
                 raise ValueError(f'Finder exports must be in {root}.')
             try:
-                if not path.is_file():
-                    raise ValueError('Finder export must be a regular file.')
-                with path.open('rb') as export_file:
-                    raw = export_file.read(MAX_FINDER_EXPORT_BYTES + 1)
+                raw = _read_approved_finder_export(root, path)
                 if len(raw) > MAX_FINDER_EXPORT_BYTES:
                     raise ValueError(
                         f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
