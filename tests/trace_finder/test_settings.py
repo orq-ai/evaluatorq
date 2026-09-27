@@ -163,3 +163,12 @@ def test_default_settings_match_shared_pipeline_default() -> None:
     settings = DashboardSettings.model_validate({})
     assert settings.compiler_model == DEFAULT_PIPELINE_MODEL
     assert settings.apply_model == DEFAULT_PIPELINE_MODEL
+
+
+def test_explorer_columns_round_trip_and_unknown_keys_drop(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    save_settings(DashboardSettings.model_validate({'explorer_columns': ('model', 'cost')}), path)
+    assert load_settings(path).explorer_columns == ('model', 'cost')
+
+    path.write_text('{"explorer_columns": ["model", "gone"]}', encoding='utf-8')
+    assert load_settings(path).explorer_columns == ('model',)

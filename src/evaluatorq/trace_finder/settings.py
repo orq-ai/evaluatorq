@@ -41,6 +41,20 @@ class DashboardSettings(BaseModel):
     orq_workspace: str | None = None
     orq_project_id: str | None = None
     orq_project_name: str | None = None
+    explorer_columns: tuple[str, ...] | None = None
+
+    @field_validator('explorer_columns', mode='after')
+    @classmethod
+    def drop_unknown_columns(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Drop unknown saved columns with a warning instead of rejecting all settings."""
+        if value is None:
+            return None
+        from .columns import COLUMNS
+
+        unknown = [key for key in value if key not in COLUMNS]
+        if unknown:
+            logger.warning('Dropping unknown explorer column(s) {} from dashboard settings', ', '.join(unknown))
+        return tuple(key for key in value if key in COLUMNS)
 
     @field_validator(
         'orq_profile',

@@ -366,6 +366,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
     values['orq_project_name'] = current.orq_project_name
     values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
+    values['explorer_columns'] = current.explorer_columns
     return values
 
 
