@@ -209,7 +209,9 @@ async def call_target_with_retry(
     caller-supplied context value and each returned response while that context
     is still open, so callers can annotate per-attempt spans. Returns a uniform
     `TargetCallResult`. A target with ``manages_own_timeout`` set gets no per-call
-    timeout here; it bounds itself.
+    timeout here; it bounds itself. Such a target raises
+    ``NonRetryableTargetError`` when its own deadline expires. A plain
+    ``TimeoutError`` can come from a downstream call and remains retryable.
     """
     timeout_s = target_agent_timeout_ms / 1000.0
     manages_own_timeout = getattr(target, 'manages_own_timeout', False) is True
@@ -251,20 +253,17 @@ async def call_target_with_retry(
         except asyncio.TimeoutError as exc:
             if manages_own_timeout:
                 last_response = _synthetic(
-                    '[ERROR: Target agent timed out under its own limit]',
+                    '[ERROR: Target agent raised TimeoutError]',
                     error_type='timeout',
                     code='target.timeout',
                 )
                 last_error = last_response.error
                 last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
-                if isinstance(own_timeout_ms, (int, float)):
-                    last_details['timeout_ms'] = own_timeout_ms
-                logger.warning('Target with manages_own_timeout raised TimeoutError; not retrying')
-                break
-            text = f'[ERROR: Target agent timed out after {timeout_s:.0f}s]'
-            last_response = _synthetic(text, error_type='timeout', code='target.timeout')
-            last_error = last_response.error
-            last_details = {'timeout_ms': target_agent_timeout_ms, 'attempts': attempt + 1}
+            else:
+                text = f'[ERROR: Target agent timed out after {timeout_s:.0f}s]'
+                last_response = _synthetic(text, error_type='timeout', code='target.timeout')
+                last_error = last_response.error
+                last_details = {'timeout_ms': target_agent_timeout_ms, 'attempts': attempt + 1}
         except Exception as exc:
             mapped = map_error(exc)
             code, msg = mapped if mapped is not None else default_map_error(exc)

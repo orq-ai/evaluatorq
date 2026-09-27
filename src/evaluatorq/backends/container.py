@@ -383,8 +383,9 @@ async def remove_containers_async(binary: str, context: str | None, names: Seque
     return await asyncio.to_thread(remove_containers, binary, context, names)
 
 
-def remove_all(reason: str) -> None:
-    """Remove all registered containers, grouped by engine and context."""
+def remove_all(reason: str, *, max_cleanup_s: float | None = None) -> None:
+    """Remove registered containers; bound signal cleanup so termination can proceed."""
+    deadline = time.monotonic() + max_cleanup_s if max_cleanup_s is not None else None
     with CONTAINER_LOCK:
         snapshot = list(LIVE_CONTAINERS.items())
     if not snapshot:
@@ -394,8 +395,15 @@ def remove_all(reason: str) -> None:
         unregister(name)
         groups.setdefault((live.binary, live.context), []).append(name)
     for (binary, context), names in groups.items():
+        remaining = deadline - time.monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            logger.warning('host_exit cleanup deadline reached; remaining containers will expire with their leases')
+            break
         logger.warning(f'host_exit ({reason}): removing container(s) {", ".join(names)}')
-        remove_containers(binary, context, names)
+        if remaining is None:
+            remove_containers(binary, context, names)
+        else:
+            remove_containers(binary, context, names, timeout_s=remaining / 2)
 
 
 def release_containers(owned: list[str]) -> None:
@@ -450,7 +458,7 @@ def make_signal_handler(previous: Any) -> Callable[[int, FrameType | None], None
     """Build a signal handler that cleans up then chains or restores default behavior."""
 
     def handler(signum: int, frame: FrameType | None) -> None:
-        remove_all(signal.Signals(signum).name)
+        remove_all(signal.Signals(signum).name, max_cleanup_s=5)
         if callable(previous):
             previous(signum, frame)
         elif previous != signal.SIG_IGN:

@@ -414,6 +414,24 @@ def test_signal_handler_cleans_up_and_chains(fake_docker, tmp_path, monkeypatch)
     assert log.read_text().splitlines() == ['rm -f a']
 
 
+def test_signal_cleanup_deadline_limits_docker_attempts(tmp_path, monkeypatch) -> None:
+    c.LIVE_CONTAINERS['a'] = c.LiveContainer(binary='docker', context='first', beat=tmp_path / 'a')
+    c.LIVE_CONTAINERS['b'] = c.LiveContainer(binary='docker', context='second', beat=tmp_path / 'b')
+    ticks = iter((0.0, 0.0, 6.0))
+    monkeypatch.setattr(c.time, 'monotonic', lambda: next(ticks, 6.0))
+    calls: list[tuple[str | None, list[str], float]] = []
+
+    def remove(binary: str, context: str | None, names: list[str], *, timeout_s: float = 10) -> list[str]:
+        calls.append((context, names, timeout_s))
+        return []
+
+    monkeypatch.setattr(c, 'remove_containers', remove)
+    c.remove_all('SIGTERM', max_cleanup_s=5)
+
+    assert calls == [('first', ['a'], 2.5)]
+    assert c.LIVE_CONTAINERS == {}
+
+
 def test_release_containers_for_finalizer(fake_docker, tmp_path) -> None:
     binary, log = fake_docker
     c.LIVE_CONTAINERS['a'] = c.LiveContainer(binary=binary, context=None, beat=tmp_path / 'a')

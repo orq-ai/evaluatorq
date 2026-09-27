@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 
 from evaluatorq.common.target_call import (
+    NonRetryableTargetError,
     call_target_with_retry,
     classify_error_type,
     close_target,
@@ -373,11 +374,53 @@ async def test_self_timed_target_still_retried() -> None:
 
 
 @pytest.mark.asyncio
-async def test_self_timed_target_timeout_is_not_retried_or_reported_as_runner_timeout() -> None:
+async def test_self_timed_target_downstream_timeout_is_retried() -> None:
     class SelfTimed(_Slow):
         async def respond(self, messages: list[Message]) -> AgentResponse:
             self.calls += 1
-            raise asyncio.TimeoutError('own limit')
+            if self.calls == 1:
+                raise asyncio.TimeoutError('downstream request')
+            return _ok('recovered')
+
+    target = SelfTimed(0)
+    result = await call_target_with_retry(
+        target, [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=2
+    )
+
+    assert target.calls == result.attempts == 2
+    assert result.succeeded
+
+
+@pytest.mark.asyncio
+async def test_self_timed_target_downstream_timeout_does_not_claim_own_or_runner_limit() -> None:
+    class SelfTimed(_Slow):
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.calls += 1
+            raise asyncio.TimeoutError('downstream request')
+
+    target = SelfTimed(0)
+    result = await call_target_with_retry(
+        target, [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=0
+    )
+
+    assert target.calls == result.attempts == 1
+    assert result.error is not None and result.error.code == 'target.timeout'
+    assert result.error_details == {
+        'exception_type': 'TimeoutError',
+        'raw_message': 'downstream request',
+        'attempts': 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_self_timed_target_own_limit_uses_nonretryable_error() -> None:
+    class OwnLimit(NonRetryableTargetError):
+        pass
+
+    class SelfTimed(_Slow):
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.calls += 1
+            raise OwnLimit('own limit')
 
     target = SelfTimed(0)
     result = await call_target_with_retry(
@@ -385,12 +428,10 @@ async def test_self_timed_target_timeout_is_not_retried_or_reported_as_runner_ti
     )
 
     assert target.calls == result.attempts == 1
-    assert result.error is not None and result.error.code == 'target.timeout'
     assert result.error_details == {
-        'exception_type': 'TimeoutError',
+        'exception_type': 'OwnLimit',
         'raw_message': 'own limit',
         'attempts': 1,
-        'timeout_ms': 10_000,
     }
 
 

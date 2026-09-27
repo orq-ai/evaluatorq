@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(os.name != 'posix', reason='requires Unix shell 
 def test_build_image_argv(tmp_path: Path) -> None:
     log = tmp_path / 'log'
     fake = tmp_path / 'docker'
-    fake.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" > {log}\nexit 3\n')
+    fake.write_text(f'#!/bin/sh\nfor arg do printf "[%s]\\n" "$arg"; done > {log}\nexit 3\n')
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     result = CliRunner().invoke(
         app,
@@ -37,13 +37,15 @@ def test_build_image_argv(tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 3
-    assert log.read_text().strip() == (
-        f'--context orbstack build -t custom:tag --build-arg CODEX_VERSION=1.2.3 '
-        f'--build-arg CLAUDE_CODE_VERSION=2.1.282 {BUILD_DIR}'
-    )
+    assert log.read_text().splitlines() == [
+        '[--context]', '[orbstack]', '[build]', '[-t]', '[custom:tag]', '[--build-arg]',
+        '[CODEX_VERSION=1.2.3]', '[--build-arg]', '[CLAUDE_CODE_VERSION=2.1.282]', f'[{BUILD_DIR}]',
+    ]
     default_result = CliRunner().invoke(app, ['build-image', '--binary', str(fake)])
     assert default_result.exit_code == 3
-    assert log.read_text().strip() == f'build -t {DEFAULT_CODING_AGENT_IMAGE} {BUILD_DIR}'
+    assert log.read_text().splitlines() == [
+        '[build]', '[-t]', f'[{DEFAULT_CODING_AGENT_IMAGE}]', f'[{BUILD_DIR}]',
+    ]
 
 
 def test_build_image_missing_binary(tmp_path: Path) -> None:
