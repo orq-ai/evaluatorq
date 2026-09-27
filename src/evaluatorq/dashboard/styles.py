@@ -2788,6 +2788,18 @@ _INSIGHTS_CSS = """
 .insights-overview-name { display:flex; flex-direction:column; min-width:0; gap:4px; }
 .insights-overview-name strong { overflow:hidden; color:var(--text-strong); font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .insights-overview-name small { overflow:hidden; color:var(--text-muted); font-size:11.5px; text-overflow:ellipsis; white-space:nowrap; }
+.insights-overview-stage-wrap { display:flex; align-items:center; gap:7px; max-width:260px; margin-top:3px; color:var(--text-muted); font-size:10.5px; white-space:nowrap; }
+.insights-overview-stage-wrap > span:first-child { font-weight:600; }
+.insights-overview-stages { display:flex; flex:1; min-width:0; max-width:155px; margin:0; padding:0; list-style:none; }
+.insights-overview-stages li { position:relative; flex:1; height:10px; }
+.insights-overview-stages li::before { content:''; position:absolute; top:4px; left:0; right:0; height:2px; background:var(--border-default); }
+.insights-overview-stages li:last-child::before { display:none; }
+.insights-overview-stages li::after { content:''; position:absolute; top:1px; left:0; width:8px; height:8px; border-radius:50%; background:var(--border-default); }
+.insights-overview-stages li.completed::before,.insights-overview-stages li.completed::after { background:var(--green-600); }
+.insights-overview-stages li:has(+ li.error)::before { background:var(--red-700); }
+.insights-overview-stages li.running::after { background:var(--teal-600); }
+.insights-overview-stages li.error::before,.insights-overview-stages li.error::after { background:var(--red-700); }
+.insights-overview-no-stages { margin-top:3px; color:var(--text-muted); font-size:10.5px; }
 .insights-overview-status { display:inline-flex; justify-self:start; align-items:center; gap:6px; color:var(--text-body); text-transform:capitalize; }
 .insights-overview-status::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green-600); }
 .insights-overview-status.running::before { background:var(--orange-600); }

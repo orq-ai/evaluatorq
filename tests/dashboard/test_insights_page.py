@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 from starlette.testclient import TestClient
 
+from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.insights.models import (
     Cluster,
@@ -110,6 +111,35 @@ def test_empty_insights_overview_points_to_new_run(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert 'No Insights runs yet' in response.text
     assert 'href="/insights/new"' in response.text
+
+
+def test_insights_overview_shows_saved_stage_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    writer = start_manifest(
+        run_id='stage-run',
+        surface='insights',
+        run_name='Stage run',
+        runs_dir=tmp_path / 'insights-runs',
+        planned_stages=['population', 'summary', 'write'],
+        stage_labels={'population': 'Load traces', 'summary': 'Summarize traces', 'write': 'Save run'},
+    )
+    writer.start_stage('population')
+    writer.end_stage('population')
+    writer.start_stage('summary')
+    client = TestClient(build_app())
+
+    running = client.get('/insights')
+    assert running.status_code == 200
+    assert 'Load traces: completed' in running.text
+    assert 'Summarize traces: running' in running.text
+    assert 'Save run: pending' in running.text
+    assert 'class="insights-overview-stages"' in running.text
+    assert '<span>1/3</span>' in running.text
+
+    writer.fail('Summary failed', stage='summary')
+    failed = client.get('/insights')
+    assert 'Summarize traces: error' in failed.text
+    assert 'Save run: skipped' in failed.text
 
 
 def test_insights_overview_opens_a_dedicated_run_page(tmp_path, minimal_run, monkeypatch):

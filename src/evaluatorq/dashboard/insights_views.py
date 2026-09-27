@@ -36,6 +36,46 @@ def _stage_name(manifest: RunManifest) -> str:
     return manifest.stage_labels.get(manifest.stage or '', (manifest.stage or 'Starting').replace('_', ' ').title())
 
 
+def _stage_rows(manifest: RunManifest) -> list[tuple[str, str, str]]:
+    records = {stage.name: stage for stage in manifest.stages}
+    planned = [*manifest.planned_stages, *(name for name in records if name not in manifest.planned_stages)]
+    if manifest.status == 'error' and manifest.stage and manifest.stage not in planned:
+        planned.append(manifest.stage)
+    rows = []
+    for name in planned:
+        record = records.get(name)
+        status = (
+            record.status.value
+            if record is not None
+            else 'error'
+            if manifest.status == 'error' and name == manifest.stage
+            else 'skipped'
+            if manifest.status != 'running'
+            else 'pending'
+        )
+        label = manifest.stage_labels.get(name, name.replace('dimension:', 'Cluster ').replace('_', ' ').title())
+        rows.append((name, label, status))
+    return rows
+
+
+def _overview_stages(manifest: RunManifest | None) -> str:
+    if manifest is None:
+        return '<span class="insights-overview-no-stages">Stage history unavailable</span>'
+    rows = _stage_rows(manifest)
+    if not rows:
+        return '<span class="insights-overview-no-stages">No stages recorded</span>'
+    marks = ''.join(
+        f'<li class="{esc(status)}" title="{esc(label)}: {esc(status)}" aria-label="{esc(label)}: {esc(status)}"></li>'
+        for _, label, status in rows
+    )
+    done = sum(status == 'completed' for _, _, status in rows)
+    return (
+        '<span class="insights-overview-stage-wrap"><span>Stages</span>'
+        f'<ol class="insights-overview-stages" aria-label="Run stages">{marks}</ol>'
+        f'<span>{done}/{len(rows)}</span></span>'
+    )
+
+
 def run_overview(
     entries: list[tuple[str, str, str]], runs: dict[str, InsightsRun], manifests: dict[str, RunManifest]
 ) -> str:
@@ -62,7 +102,8 @@ def run_overview(
         rows.append(
             f'<a class="insights-overview-row" href="/insights/{quote(run_id, safe="")}">'
             f'<span class="insights-overview-name"><strong>{esc(label)}</strong>'
-            f'<small>{esc(stage or created or "Run file could not be read")}</small></span>'
+            f'<small>{esc(stage or created or "Run file could not be read")}</small>'
+            f'{_overview_stages(manifest)}</span>'
             f'<span class="insights-overview-status {status_class}">{esc(status)}</span>'
             f'<span class="insights-overview-number">{esc(count_html)}</span>'
             f'<span class="insights-overview-dimensions">{esc(dimensions)}</span>'
@@ -83,22 +124,10 @@ def progress(manifest: RunManifest | None) -> str:
     if manifest is None:
         return ''
     records = {stage.name: stage for stage in manifest.stages}
-    planned = [*manifest.planned_stages, *(name for name in records if name not in manifest.planned_stages)]
-    if manifest.status == 'error' and manifest.stage and manifest.stage not in planned:
-        planned.append(manifest.stage)
+    rows = _stage_rows(manifest)
     items = []
-    for name in planned:
+    for name, label, status in rows:
         record = records.get(name)
-        status = (
-            record.status.value
-            if record is not None
-            else 'error'
-            if manifest.status == 'error' and name == manifest.stage
-            else 'skipped'
-            if manifest.status != 'running'
-            else 'pending'
-        )
-        label = manifest.stage_labels.get(name, name.replace('dimension:', 'Cluster ').replace('_', ' ').title())
         flag = ''
         if status == 'running':
             elapsed = _elapsed(record.started_at, None) if record is not None else ''
@@ -110,9 +139,9 @@ def progress(manifest: RunManifest | None) -> str:
             f'<span class="insights-stage-mark" aria-hidden="true"></span>'
             f'<span class="insights-stage-label">{esc(label)}</span><span class="sr-only">{esc(status)}</span></li>'
         )
-    done = sum(1 for name in planned if name in records and records[name].status.value == 'completed')
+    done = sum(status == 'completed' for _, _, status in rows)
     current = _stage_name(manifest) if manifest.status == 'running' else manifest.status.value.title()
-    count = f' · {done} of {len(planned)}' if planned else ''
+    count = f' · {done} of {len(rows)}' if rows else ''
     list_html = ''.join(items) or '<li class="insights-stage pending">Preparing run</li>'
     return (
         '<section class="insights-progress" aria-label="Run progress">'
