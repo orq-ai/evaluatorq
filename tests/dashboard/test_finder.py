@@ -229,13 +229,13 @@ def test_async_controls_and_trace_drawer_have_request_feedback(setup_finder) -> 
     assert 'id="finder-mode-working" role="status">Resetting review…' in page
     assert 'id="finder-drawer-loading" role="status">Loading trace…' in page
 
-    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
-    running = client.get('/find/poll').text
+    client.post('/find/run', data=csrf_data({'surface': 'search', 'query': 'frustrated customers', 'mode': 'immediate'}))
+    running = client.get('/find/poll?surface=search').text
     assert 'role="status">Cancelling…' in running
     assert 'hx-indicator="#finder-drawer-loading"' in running
 
     store.complete()
-    completed = client.get('/find/poll').text
+    completed = client.get('/find/poll?surface=search').text
     assert 'role="status">Resetting…' in completed
 
 
@@ -410,13 +410,13 @@ def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatc
 
 def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) -> None:
     store, client = setup_finder
-    response = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    response = client.post('/find/run', data=csrf_data({'surface': 'search', 'query': 'frustrated customers', 'mode': 'immediate'}))
     assert response.status_code == 200
     assert 'hx-trigger="every 1s"' in response.text
     assert store.compile_wait is False
 
     store.complete()
-    poll = client.get('/find/poll')
+    poll = client.get('/find/poll?surface=search')
     assert poll.status_code == 200
     assert 'frustrated' in poll.text
     assert 'included' in poll.text

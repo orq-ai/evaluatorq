@@ -14,7 +14,7 @@ RED: added the `/traces` and `/find` behavior tests, then ran `uv run pytest tes
 
 GREEN: after implementation, ran `uv run pytest tests/dashboard/test_finder.py::test_traces_page_uses_compact_ai_strip_and_one_classification_surface tests/dashboard/test_finder.py::test_find_keeps_legacy_search_hero_separate_from_traces tests/dashboard/test_finder.py::test_find_idle_page_is_standalone_legacy_search_and_reuses_facets -q`; result: `3 passed`.
 
-The required focused suites ran with `uv run pytest tests/dashboard/test_finder.py tests/dashboard/test_explorer.py -q`; result: `100 passed, 2 failed`. Both failures are existing `/find` tests that POST `/find/run` without `surface=search`: `test_async_controls_and_trace_drawer_have_request_feedback` expects a legacy trace drawer link in the default `/traces` fragment, and `test_find_run_starts_polling_and_completed_poll_shows_matches` expects included rows there. The route selects the search surface from the submitted `surface` field; the production `/find` HTMX page supplies it through its enclosing `hx-vals`. The Task 1 changes do not modify the routes or legacy search builder.
+The initial required focused-suite run found two `/find` tests whose direct requests did not mirror the production HTMX contract. The `/find` page supplies `surface=search` to both `/find/run` and `/find/poll`; adding that marker to those test requests resolves the failures without changing application behavior.
 
 Lint ran with `uv run ruff check src/evaluatorq/dashboard/trace_finder/views.py src/evaluatorq/dashboard/trace_finder/routes.py`; result: `All checks passed!`. `git diff --check` passed for the two changed source/test files.
 
@@ -24,4 +24,16 @@ The gear link is named `AI configuration`, has a minimum 42px target, and follow
 
 ## Risks and limits
 
-The two full-suite failures described above remain outside this task's code changes and prevent a completely green focused suite. The new command strip uses class hooks for its final styling; Task 3 is expected to provide the shared stylesheet treatment. No route change was needed for the shared explorer-results target.
+The focused dashboard suites now pass. The new command strip uses class hooks for its final styling; Task 3 is expected to provide the shared stylesheet treatment. No route change was needed for the shared explorer-results target.
+
+## Follow-up verification
+
+Updated only the two affected legacy `/find` tests so their POST and polling GET requests include `surface=search`, matching the `hx-vals` behavior on the production `/find` page.
+
+Command: `uv run pytest tests/dashboard/test_finder.py tests/dashboard/test_explorer.py -q`
+
+Output: `102 passed in 1.85s`.
+
+Command: `uv run ruff check src/evaluatorq/dashboard/trace_finder/views.py src/evaluatorq/dashboard/trace_finder/routes.py`
+
+Output: `All checks passed!`.
