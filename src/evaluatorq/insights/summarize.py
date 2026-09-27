@@ -7,9 +7,9 @@ add a second `with_retry` around this call path.
 Per-trace failure never raises: an exception from `generate_structured` or a
 reply that fails to parse (`result.parsed is None`) is logged and reported back
 as an error string for that trace only, per the "per-trace failures never fail
-a run" house rule. Caching is keyed on `(trace_id, span_id, model, SUMMARY_HASH)`
-so a prompt edit (which changes `SUMMARY_HASH`) never reuses a stale summary —
-review focus 4.
+a run" house rule. Caching is keyed on (trace_id, span_id, model, hash of the
+rendered prompt), so a prompt edit or a changed projection never reuses a stale
+summary.
 """
 
 from __future__ import annotations
@@ -84,10 +84,6 @@ Be specific and domain-aware. Avoid generic phrasing like "the user asked a ques
 
 Now produce the structured analysis. Remember: the "task" and "request" fields describe what the END-USER above wanted from the assistant — not what this prompt asked you to do."""
 
-# Computed once so a prompt edit (this string changing) changes the cache key
-# too — a summary cached under the old prompt is never served for the new one.
-SUMMARY_HASH = prompt_hash(SUMMARY_PROMPT)
-
 
 def _build_prompt(trace: TraceRecord) -> str:
     projection = project_trace(trace)
@@ -103,11 +99,13 @@ async def _summarize_one(
     cache: InsightsCache,
     semaphore: asyncio.Semaphore,
 ) -> tuple[str, TraceSummary | str]:
-    cached = cache.get_summary(trace.trace_id, trace.span_id, model, SUMMARY_HASH)
+    prompt = _build_prompt(trace)
+    key = prompt_hash(prompt)
+    cached = cache.get_summary(trace.trace_id, trace.span_id, model, key)
     if cached is not None:
         return trace.trace_id, cached
 
-    messages = [{'role': 'user', 'content': _build_prompt(trace)}]
+    messages = [{'role': 'user', 'content': prompt}]
 
     async with semaphore:
         try:
@@ -128,7 +126,7 @@ async def _summarize_one(
         logger.warning('Insights summary for trace {} produced unparseable model output', trace.trace_id)
         return trace.trace_id, 'summary: unparseable model output'
 
-    cache.put_summary(trace.trace_id, trace.span_id, model, SUMMARY_HASH, result.parsed)
+    cache.put_summary(trace.trace_id, trace.span_id, model, key, result.parsed)
     return trace.trace_id, result.parsed
 
 

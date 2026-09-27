@@ -11,9 +11,9 @@ import pytest
 
 from evaluatorq.common.structured_output import StructuredResult
 from evaluatorq.insights import summarize as summarize_module
-from evaluatorq.insights.cache import InsightsCache
+from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
-from evaluatorq.insights.summarize import SUMMARY_HASH, SUMMARY_PROMPT, summarize_traces
+from evaluatorq.insights.summarize import SUMMARY_PROMPT, summarize_traces
 from evaluatorq.trace_finder.models import TraceRecord
 
 if TYPE_CHECKING:
@@ -85,8 +85,9 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
     assert '<conversation>' in content
     assert '</conversation>' in content
 
-    # Cached under (trace_id, span_id, model, SUMMARY_HASH).
-    cached = cache.get_summary('trace-1', 'span-trace-1', 'openai/gpt-6-luna', SUMMARY_HASH)
+    cached = cache.get_summary(
+        'trace-1', 'span-trace-1', 'openai/gpt-6-luna', prompt_hash(captured_messages[0][0]['content'])
+    )
     assert cached == summary
 
 
@@ -94,7 +95,13 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
 async def test_summarize_traces_cache_hit_skips_the_call(monkeypatch: pytest.MonkeyPatch, cache: InsightsCache) -> None:
     trace = make_trace('trace-1')
     summary = make_summary('Cached summary.')
-    cache.put_summary('trace-1', 'span-trace-1', 'openai/gpt-6-luna', SUMMARY_HASH, summary)
+    cache.put_summary(
+        'trace-1',
+        'span-trace-1',
+        'openai/gpt-6-luna',
+        prompt_hash(summarize_module._build_prompt(trace)),
+        summary,
+    )
 
     calls = 0
 
@@ -126,7 +133,12 @@ async def test_summarize_traces_unparseable_output_yields_error_string(
 
     assert result == {'trace-1': 'summary: unparseable model output'}
     # An unparseable reply must not be cached.
-    assert cache.get_summary('trace-1', 'span-trace-1', 'openai/gpt-6-luna', SUMMARY_HASH) is None
+    assert (
+        cache.get_summary(
+            'trace-1', 'span-trace-1', 'openai/gpt-6-luna', prompt_hash(summarize_module._build_prompt(trace))
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
@@ -159,6 +171,24 @@ def test_summary_prompt_has_no_scalar_fields_from_upstream() -> None:
     # summary schema or its prompt.
     for dropped in ('user_frustration', 'customer_satisfaction', 'made_errors', 'concerning_score'):
         assert dropped not in SUMMARY_PROMPT
+
+
+@pytest.mark.asyncio
+async def test_changed_conversation_misses_the_cache(monkeypatch: pytest.MonkeyPatch, cache: InsightsCache) -> None:
+    calls: list[str] = []
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[TraceSummary]:
+        calls.append(kwargs['messages'][0]['content'])
+        return StructuredResult(parsed=make_summary(), raw='')
+
+    monkeypatch.setattr(summarize_module, 'generate_structured', fake_generate_structured)
+    first = make_trace('trace-cache', content='hi')
+    second = first.model_copy(update={'messages': (*first.messages, {'role': 'assistant', 'content': 'done'})})
+
+    await summarize_traces([first], client=fake_client(), model='m', cache=cache)
+    await summarize_traces([second], client=fake_client(), model='m', cache=cache)
+
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
