@@ -185,6 +185,14 @@ def test_noise_outlier_is_not_a_priority_member() -> None:
         )
         for i in range(2)
     ]
+    items[0].summary = TraceSummary(
+        summary='The assistant answered the request without errors.',
+        request='request',
+        task=None,
+        topic=None,
+        assistant_errors=[],
+        sentiment_explanation=None,
+    )
     items[1].assignments['intent'] = ClusterAssignment(top='noise', base='noise')
     dimension = DimensionResult(
         name='intent',
