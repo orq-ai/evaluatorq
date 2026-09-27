@@ -12,7 +12,7 @@ An Insights run keeps three different things separate. A **classifier** is the m
 | Labels | Fixed classifier questions | One answer per trace for each yes/no (`noul`), choice, or score question, with confidence and probabilities. |
 | Discovered dimensions | Text fields from a per-trace summary | Two-level clusters and saved 3D UMAP coordinates for traces in groups large enough to project. |
 
-The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary model writes these text fields. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
+The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary model writes these text fields from the trace's conversation, including assistant tool calls and an excerpt from the start of each tool result. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
 
 The run writes its JSON result to `.evaluatorq/insights-runs/` and its manifest under `.evaluatorq/insights-runs/.manifests/`; `EVALUATORQ_DIR` changes the base directory. It does not store message bodies or embedding vectors in the run JSON.
 
@@ -72,7 +72,7 @@ The `eq insights` command accepts trace population filters, label presets or JSO
 eq insights --query "customers asking about refunds" --agent support-bot --label sentiment --label customer_satisfaction --dimension intent --dimension failure --limit 500 --json refunds-insights.json
 ```
 
-The command prints cluster and label summaries, failed-trace counts, and the stored run path. Use `--from-finder PATH` to use matched trace IDs from a finder export instead of `--query`; the command rejects other population filters, `--window-days`, and `--limit` alongside it. `--no-cache` disables the local summary and embedding cache. The classifier and summary model options default to `typesafe/jev-latest` and `openai/gpt-6-luna` respectively.
+The command prints cluster and label summaries, failed-trace counts, and the stored run path. Use `--from-finder PATH` to use matched trace IDs from a finder export instead of `--query`; the command rejects other population filters, `--window-days`, and `--limit` alongside it. `--no-cache` disables the local summary and embedding cache. The summary model defaults to `openai/gpt-6-luna`. If you omit `--classifier-model`, Insights uses `EVALUATORQ_CLASSIFIER_MODEL`, then the classifier model saved in dashboard Settings, then `typesafe/jev-latest`; an explicit option overrides those defaults.
 
 After a finder run completes, its **Analyze matches** section lets you download the finder export. Pass the downloaded filename to `--from-finder`; Insights selects only the matched trace IDs from that export. For a file named `trace-finder-42.json`, this command reviews those matches:
 
@@ -105,6 +105,10 @@ eq insights --query "customers asking about refunds" --label ./resolution-label.
 
 Start the dashboard with the `dashboard` and `insights` extras, then open **Insights** in the dashboard navigation. Its overview lists saved runs, their status, trace counts, dimensions, and the current stage of each active run. Select a run to open a dedicated results page without a second run list; **All Insights runs** returns to the overview. In a run, inspect discovered dimensions as a cluster tree or 3D map, review label distributions and confidence, compare dimensions or labels in a crosstab, filter the trace table, or open a trace in Orq. The priority matrix is available when the run includes the customer-satisfaction label; otherwise the page explains why it is empty.
 
+The priority matrix uses error share from summaries when you did not request the `made_errors` label. It divides traces whose `assistant_errors` summary field contains a non-placeholder entry by traces in that cluster that have a summary; traces without a summary are excluded, and a cluster without summaries is skipped.
+
+When you request `made_errors`, its successful answers determine error share instead. The share divides true answers by answers that did not fail; missing or failed answers are excluded, and a cluster without any successful answers is skipped.
+
 The **3D Map** tab shows each discovered dimension in its own UMAP projection. Choose **Projection** to change the coordinates, then **Colour by** to compare that shape with another cluster dimension, a fixed label, agent, or project. The colour selection does not move points. Click **Full screen** to explore the map across the window, and select a point to inspect its trace summary and cluster. UMAP needs at least five traces in a clustering group; smaller groups have no coordinates, and a dimension with no coordinates shows an empty state with the reason.
 
 To start a run from the dashboard, click **+ New Run**. Choose recent traces, a semantic query, or a Finder JSON export stored on the dashboard machine. Then select built-in labels and discovered dimensions, review the expected stages, and click **Start run**. The dashboard opens the new run immediately. The overview shows an active run's current stage; its page shows every stage as pending, running, completed, error, or skipped and refreshes while the run is active. The stages reflect your source, labels, and dimensions; each dimension stage embeds, clusters, and maps its traces. The worker continues if the dashboard is restarted. For more filters and custom labels, use `eq insights` or the Python API.
@@ -120,6 +124,10 @@ For the finder’s **Analyze matches** handoff, see [Trace Finder](trace-finder.
 ## Failures and cache
 
 A per-trace label, summary, or dimension failure is recorded on that trace and counted as failed; it does not discard the rest of the run. When a dimension has at least five signal traces overall, a sentiment group with one trace is marked unclassified for that dimension. Sentiment groups with two to four traces form one cluster, and Insights records a warning because UMAP coordinates are unavailable below five traces. A dimension with fewer than five signal traces is skipped with a warning. An embedding batch failure marks that discovered-dimension stage as failed. Any whole-stage failure marks the run `error` and preserves partial results. The CLI exits with status 1 for an `error` run and status 0 for a completed run, including one with failed traces. Check the failed count and stage message before treating a result as complete. An empty population completes with a warning and empty results.
+
+If every summary request fails, Insights marks the summary stage failed and sets the run status to `error`.
+
+Placeholder answers such as “no errors” mean there is no failure text to cluster, so the trace has no signal for the failure dimension.
 
 By default, summaries and embeddings are cached per item in `.evaluatorq/cache/insights.sqlite`. Summary cache keys include the trace, span, summary model, and prompt hash; embedding keys include the model and text hash. This cache is local to the working directory. Pass `cache=False` to Python `insights()` or `--no-cache` to the CLI to bypass it.
 
