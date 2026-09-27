@@ -79,18 +79,29 @@
 
   function mapTraces(payload) {
     if (payload.color_mode === 'continuous') {
-      return [{
+      const traces = [{
         type: 'scatter3d', mode: 'markers', name: 'traces',
         x: payload.points.map(function (p) { return p.x; }),
         y: payload.points.map(function (p) { return p.y; }),
         z: payload.points.map(function (p) { return p.z; }),
         text: payload.points.map(function (p) { return p.trace_id + ' · ' + p.cluster_name; }),
-        customdata: payload.points.map(function (p) { return [p.cluster_id, p.trace_id]; }),
+        customdata: payload.points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project]; }),
         hovertemplate: '%{text}<extra></extra>',
         marker: { size: 4, color: payload.points.map(function (p) { return p.color_value; }),
           colorscale: payload.color_scale, cmin: 0, cmax: 1, showscale: true,
           colorbar: { title: 'Label value', thickness: 10 }, opacity: .85 }
       }];
+      if (payload.missing_points && payload.missing_points.length) {
+        traces.push({ type: 'scatter3d', mode: 'markers', name: 'No value',
+          x: payload.missing_points.map(function (p) { return p.x; }),
+          y: payload.missing_points.map(function (p) { return p.y; }),
+          z: payload.missing_points.map(function (p) { return p.z; }),
+          text: payload.missing_points.map(function (p) { return p.trace_id; }),
+          customdata: payload.missing_points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project]; }),
+          hovertemplate: '%{text}<extra>No value</extra>',
+          marker: { size: 4, color: '#e4e2df', symbol: 'circle', opacity: .85 } });
+      }
+      return traces;
     }
     let groups;
     if (payload.color_mode === 'category') {
@@ -122,7 +133,7 @@
         showlegend: group.showLegend !== false,
         x: points.map(function (p) { return p.x; }), y: points.map(function (p) { return p.y; }),
         z: points.map(function (p) { return p.z; }), text: points.map(function (p) { return p.trace_id; }),
-        customdata: points.map(function (p) { return [p.cluster_id, p.trace_id]; }),
+        customdata: points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project]; }),
         hovertemplate: '%{text}<extra>' + group.name + '</extra>',
         marker: { size: 4, color: group.color, symbol: group.symbol || 'circle', opacity: .85 } };
     });
@@ -160,7 +171,7 @@
       if (payload.error) throw new Error(payload.error);
       const parent = el.parentElement;
       let empty = parent.querySelector('[data-map-empty]');
-      if (!payload.points.length) {
+      if (!payload.points.length && !(payload.missing_points && payload.missing_points.length)) {
         if (!empty) {
           empty = document.createElement('div');
           empty.className = 'insights-map-empty';
@@ -177,10 +188,10 @@
       const bg = payload.background_color;
       const axis = function (title) { return { title: { text: title }, showgrid: true, gridcolor: sand,
         zeroline: false, showbackground: true, backgroundcolor: bg, showticklabels: true }; };
-      const layout = { margin: { l: 0, r: 0, t: 5, b: 0 }, showlegend: true,
+      const layout = { margin: { l: 0, r: 0, t: 5, b: 0 }, showlegend: true, uirevision: 'insights-map',
         legend: { bgcolor: 'rgba(255,255,255,.8)', font: { size: 11 } },
         scene: { xaxis: axis('UMAP 1'), yaxis: axis('UMAP 2'), zaxis: axis('UMAP 3'),
-          bgcolor: '#fff', aspectmode: 'cube' }, paper_bgcolor: '#fff' };
+          bgcolor: '#fff', aspectmode: 'cube', dragmode: 'orbit' }, paper_bgcolor: '#fff' };
       return Promise.resolve(window.Plotly.react(el, mapTraces(payload), layout, { displaylogo: false, responsive: true })).then(function () {
         el.removeAllListeners && el.removeAllListeners('plotly_click');
         el.on('plotly_click', function (event) {
@@ -188,13 +199,28 @@
           const cluster = point && point.customdata && point.customdata[0];
           const mapLayout = el.closest('.insights-map-layout');
           const panel = mapLayout ? mapLayout.querySelector('[data-map-detail]') : document.getElementById('insights-cluster-detail');
-          if (!panel) return;
-          if (!cluster || cluster === 'noise') {
-            panel.innerHTML = '<p class="insights-empty">This point is noise and has no cluster details.</p>';
-            return;
+          if (!panel || !point || !point.customdata) return;
+          const data = point.customdata;
+          panel.replaceChildren();
+          const heading = document.createElement('h3');
+          heading.textContent = data[1];
+          panel.appendChild(heading);
+          if (data[3] || data[4]) {
+            const meta = document.createElement('p');
+            meta.className = 'insights-muted';
+            meta.textContent = [data[3], data[4]].filter(Boolean).join(' · ');
+            panel.appendChild(meta);
           }
-          if (window.htmx) window.htmx.ajax('GET', '/insights/' + encodeURIComponent(el.getAttribute('data-run-id')) + '/cluster/' + encodeURIComponent(cluster), { target: panel, swap: 'innerHTML' });
-          else panel.textContent = cluster;
+          if (data[2]) {
+            const summary = document.createElement('p');
+            summary.textContent = data[2];
+            panel.appendChild(summary);
+          }
+          if (!cluster || cluster === 'noise' || cluster === 'Unclassified') return;
+          const clusterPanel = document.createElement('div');
+          panel.appendChild(clusterPanel);
+          if (window.htmx) window.htmx.ajax('GET', '/insights/' + encodeURIComponent(el.getAttribute('data-run-id')) + '/cluster/' + encodeURIComponent(cluster), { target: clusterPanel, swap: 'innerHTML' });
+          else clusterPanel.textContent = cluster;
         });
       });
     }).catch(function (error) {
@@ -210,8 +236,34 @@
   document.addEventListener('DOMContentLoaded', function () { initInsightsMaps(document); });
   document.body.addEventListener('change', function (evt) {
     if (evt.target.matches('[data-map-color]')) drawInsightsMap(evt.target.closest('.insights-map-view').querySelector('.insights-map-chart'));
+    if (evt.target.matches('[data-map-projection]')) {
+      const viewer = evt.target.closest('.insights-map-fullscreen-viewer');
+      const name = evt.target.value;
+      viewer.querySelectorAll('[data-map-projection-panel]').forEach(function (panel) {
+        panel.hidden = panel.getAttribute('data-map-projection-panel') !== name;
+      });
+      const panel = Array.from(viewer.querySelectorAll('[data-map-projection-panel]')).find(function (item) { return !item.hidden; });
+      if (panel) drawInsightsMap(panel.querySelector('.insights-map-chart'));
+    }
   });
   document.body.addEventListener('click', function (evt) {
+    const fullscreenButton = evt.target.closest('[data-map-fullscreen]');
+    if (fullscreenButton) {
+      const viewer = fullscreenButton.closest('.insights-map-fullscreen-viewer');
+      if (document.fullscreenElement === viewer) document.exitFullscreen();
+      else if (viewer.classList.contains('is-expanded')) viewer.classList.remove('is-expanded');
+      else if (viewer.requestFullscreen) viewer.requestFullscreen().catch(function () {
+        viewer.classList.add('is-expanded');
+        fullscreenButton.textContent = 'Exit full screen';
+      });
+      else viewer.classList.add('is-expanded');
+      fullscreenButton.textContent = document.fullscreenElement === viewer || viewer.classList.contains('is-expanded') ? 'Exit full screen' : 'Full screen';
+      setTimeout(function () {
+        const visible = viewer.querySelector('[data-map-projection-panel]:not([hidden]) .insights-map-chart');
+        if (visible && window.Plotly && window.Plotly.Plots) window.Plotly.Plots.resize(visible);
+      }, 100);
+      return;
+    }
     const crosstabLink = evt.target.closest('#insights-crosstab a[href*="/tab/traces?row="]');
     if (crosstabLink && window.htmx) {
       evt.preventDefault();
@@ -227,6 +279,19 @@
       section.querySelectorAll('[data-insights-view]').forEach(function (button) { button.classList.toggle('active', button === toggle); });
       if (mode === 'map') drawInsightsMap(section.querySelector('.insights-map-chart'));
     }
+  });
+  document.addEventListener('fullscreenchange', function () {
+    const viewer = document.querySelector('.insights-map-fullscreen-viewer');
+    if (!viewer) return;
+    viewer.querySelector('[data-map-fullscreen]').textContent = document.fullscreenElement === viewer ? 'Exit full screen' : 'Full screen';
+    const visible = viewer.querySelector('[data-map-projection-panel]:not([hidden]) .insights-map-chart');
+    if (visible && window.Plotly && window.Plotly.Plots) window.Plotly.Plots.resize(visible);
+  });
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Escape') document.querySelectorAll('.insights-map-fullscreen-viewer.is-expanded').forEach(function (viewer) {
+      viewer.classList.remove('is-expanded');
+      viewer.querySelector('[data-map-fullscreen]').textContent = 'Full screen';
+    });
   });
 
   // ⌘K / Ctrl+K focuses the global report search; Escape clears + blurs it.

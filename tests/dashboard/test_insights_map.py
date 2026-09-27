@@ -162,6 +162,67 @@ def test_map_json_shape_palette_noise_diamond_and_numeric_label(tmp_path, monkey
     assert {point['trace_id']: point for point in choice['points']}['trace-9']['symbol'] == 'diamond'
 
 
+def test_map_tab_switches_projections_and_colours_by_other_dimensions(tmp_path, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    run = _map_run()
+    run.dimensions['failure'] = DimensionResult(
+        name='failure',
+        source_field='assistant_errors',
+        clusters=[
+            Cluster(
+                id='failure-b0', parent_id=None, level='base', name='Tool failures', description='',
+                size=5, trace_ids=[f'trace-{index}' for index in range(1, 6)], example_trace_ids=['trace-1'],
+            ),
+            Cluster(
+                id='failure-b1', parent_id=None, level='base', name='Other failures', description='',
+                size=5, trace_ids=[f'trace-{index}' for index in range(6, 11)], example_trace_ids=['trace-6'],
+            ),
+        ],
+    )
+    for index, trace in enumerate(run.traces):
+        trace.assignments['failure'] = ClusterAssignment(
+            top='failure-t0', base='failure-b0' if index < 5 else 'failure-b1'
+        )
+        trace.coords['failure'] = (float(index + 20), float(index + 21), float(index + 22))
+        trace.agent_name = 'support-bot' if index < 5 else 'billing-bot'
+    _write_run(tmp_path, run)
+    client = TestClient(build_app())
+
+    page = client.get('/insights/map-run/tab/map')
+    assert page.status_code == 200
+    assert 'data-map-fullscreen' in page.text
+    assert 'data-map-projection' in page.text
+    assert 'dimension:failure' in page.text
+    assert 'label:sentiment' in page.text
+    assert 'value="agent"' in page.text
+
+    recoloured = client.get('/insights/map-run/map.json?dimension=intent&color_by=dimension%3Afailure').json()
+    points = {point['trace_id']: point for point in recoloured['points']}
+    assert len(points) == 10
+    assert points['trace-1']['x'] == 0.0
+    assert points['trace-1']['cluster_id'] == 'failure-b0'
+    assert points['trace-1']['cluster_name'] == 'Tool failures'
+    assert recoloured['color_mode'] == 'cluster'
+    agents = client.get('/insights/map-run/map.json?dimension=failure&color_by=agent').json()
+    assert agents['color_mode'] == 'category'
+    assert {point['label_value'] for point in agents['points']} == {'support-bot', 'billing-bot'}
+    assert {point['trace_id']: point for point in agents['points']}['trace-1']['x'] == 20.0
+
+
+def test_numeric_map_colouring_keeps_unlabelled_points(tmp_path, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    run = _map_run()
+    run.traces[0].labels.pop('customer_satisfaction')
+    _write_run(tmp_path, run)
+
+    payload = TestClient(build_app()).get(
+        '/insights/map-run/map.json?dimension=intent&color_by=label%3Acustomer_satisfaction'
+    ).json()
+
+    assert len(payload['points']) == 9
+    assert [point['trace_id'] for point in payload['missing_points']] == ['trace-1']
+
+
 def test_map_json_reports_unknown_or_unsupported_colour_label(tmp_path, monkeypatch):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     run = _map_run()
@@ -182,7 +243,8 @@ def test_map_json_reports_unknown_or_unsupported_colour_label(tmp_path, monkeypa
 
     assert response.status_code == 200
     assert response.json()['error'] == 'Unknown or unsupported colour label: missing'
-    assert unsupported_response.json()['error'] == 'Unknown or unsupported colour label: intent_text'
+    assert unsupported_response.json()['color_mode'] == 'category'
+    assert {point['label_value'] for point in unsupported_response.json()['points']} == {'No value'}
 
 
 def test_crosstab_spec_has_both_axes_and_links_cells_to_filtered_traces():

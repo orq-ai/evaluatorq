@@ -36,7 +36,7 @@ def stage_plan(
         else 'Prepare traces'
     )
     plan = [('population', source), ('label', classify), ('summary', 'Summarize traces')]
-    plan.extend((f'dimension:{name}', f'Cluster {name}') for name in dimensions)
+    plan.extend((f'dimension:{name}', f'Cluster and map {name}') for name in dimensions)
     priority_ready = priority_dimension in dimensions and any(spec.name == 'customer_satisfaction' for spec in labels)
     plan.extend((
         ('priority', 'Build priority matrix' if priority_ready else 'Check priority matrix'),

@@ -64,7 +64,7 @@
     const stages = [source === 'finder' ? 'Load Finder matches' : source === 'query' ? 'Find matching traces' : 'Load recent traces'];
     stages.push(source === 'query' && labels.length ? 'Match and classify traces' : source === 'query' ? 'Match traces' : labels.length ? 'Classify traces' : 'Prepare traces');
     stages.push('Summarize traces');
-    dimensions.forEach(function (name) { stages.push('Cluster ' + name); });
+    dimensions.forEach(function (name) { stages.push('Cluster and map ' + name); });
     stages.push(dimensions.includes('intent') && labels.includes('customer_satisfaction') ? 'Build priority matrix' : 'Check priority matrix');
     stages.push('Save run');
     return stages;
