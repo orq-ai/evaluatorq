@@ -7,8 +7,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
-from evaluatorq.insights.models import InsightsPopulation, InsightsRun, TraceSummary, real_assistant_errors
+from evaluatorq.insights.models import (
+    InsightsConfig,
+    InsightsPopulation,
+    InsightsRun,
+    TraceSummary,
+    real_assistant_errors,
+)
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 
@@ -69,3 +76,36 @@ def test_real_assistant_errors_drops_sentinels(sentinel: str) -> None:
         assistant_errors=[sentinel, 'Quoted the wrong refund window'],
     )
     assert real_assistant_errors(summary) == ['Quoted the wrong refund window']
+
+
+@pytest.mark.parametrize(
+    ('field', 'value'),
+    [
+        ('max_clusters', 0),
+        ('max_clusters', -1),
+        ('max_subclusters', 0),
+        ('max_subclusters', -1),
+        ('parallelism', 0),
+        ('parallelism', -1),
+        ('outlier_zscore', -0.01),
+    ],
+)
+def test_insights_config_rejects_invalid_numeric_limits(field: str, value: int | float) -> None:
+    with pytest.raises(ValidationError):
+        InsightsConfig.model_validate({'labels': [], 'dimensions': ['intent'], field: value})
+
+
+def test_insights_config_accepts_minimum_numeric_limits() -> None:
+    config = InsightsConfig(
+        labels=[],
+        dimensions=['intent'],
+        max_clusters=1,
+        max_subclusters=1,
+        parallelism=1,
+        outlier_zscore=0,
+    )
+
+    assert config.max_clusters == 1
+    assert config.max_subclusters == 1
+    assert config.parallelism == 1
+    assert config.outlier_zscore == 0

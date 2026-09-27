@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from evaluatorq.common.run_manifest import (
     ManifestWriter,
@@ -78,6 +78,20 @@ def test_stage_progress_throttles_and_always_writes_the_last_count(tmp_path: Pat
     now[0] = 2.0
     record = writer.manifest.stages[-1]
     assert (record.completed, record.total) == (100, 100)
+
+
+def test_stage_progress_ignores_invalid_counts_without_persisting_them(tmp_path: Path) -> None:
+    started = start_manifest(run_id='invalid-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path)
+    writer.start_stage('label')
+    writer.stage_progress('label', 1, 3)
+
+    for completed, total in ((-1, 3), (4, 3), (1, -1), (1.5, 3), (True, 3)):
+        writer.stage_progress('label', cast('int', completed), total)
+
+    [manifest] = list_manifests(tmp_path)
+    record = manifest.stages[-1]
+    assert (record.completed, record.total) == (1, 3)
 
 
 def test_stage_is_noop_after_terminal(tmp_path: Path) -> None:

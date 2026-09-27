@@ -125,6 +125,12 @@ def _stage_end(writer: Any, name: str, error: str | None = None) -> None:
     writer.end_stage(name, error=error)
 
 
+def _dimension_failed_count(traces: list[TraceInsight], dimension: DimensionName) -> int:
+    """Count traces unclassified by this dimension, not unrelated label or match errors."""
+    key = f'dimension:{dimension}'
+    return sum('summary' in trace.errors or key in trace.errors for trace in traces)
+
+
 async def _build_dimension(  # noqa: C901
     dimension: DimensionName,
     traces: list[TraceInsight],
@@ -172,7 +178,7 @@ async def _build_dimension(  # noqa: C901
             n_sentinel_only,
         )
     result = DimensionResult(name=dimension, source_field=source_field, clusters=[], n_no_signal=n_no_signal)
-    result.n_failed = sum(bool(trace.errors) for trace in traces)
+    result.n_failed = _dimension_failed_count(traces, dimension)
     if len(usable) < 5:
         warning = f'dimension {dimension} skipped: only {len(usable)} traces have signal (need at least 5)'
         result.warnings.append(warning)
@@ -362,7 +368,7 @@ async def _build_dimension(  # noqa: C901
             warning = f'dimension {dimension} group {group!r}: UMAP unavailable for {len(indices)} traces'
             result.warnings.append(warning)
             logger.warning(warning)
-    result.n_failed = sum(bool(trace.errors) for trace in traces)
+    result.n_failed = _dimension_failed_count(traces, dimension)
     return result
 
 
@@ -605,7 +611,7 @@ async def insights(  # noqa: C901
         run.counts = {
             'n_traces': len(run.traces),
             'n_failed_traces': sum(bool(trace.errors) for trace in run.traces),
-            'per_stage_failed': sum(bool(trace.errors) for trace in run.traces),
+            'per_stage_failed': sum(len(trace.errors) for trace in run.traces),
         }
         _stage(writer, 'priority')
         priority_dimension_result = run.dimensions.get(priority_dimension)

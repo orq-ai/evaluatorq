@@ -129,6 +129,19 @@ class ManifestWriter:
 
     def stage_progress(self, stage: Any, completed: int, total: int) -> None:
         """Record completed/total on an open stage, throttling writes to once per second."""
+        if (
+            isinstance(completed, bool)
+            or not isinstance(completed, int)
+            or isinstance(total, bool)
+            or not isinstance(total, int)
+            or completed < 0
+            or total < 0
+            or completed > total
+        ):
+            logger.warning(
+                'Ignoring invalid progress for stage {}: completed={!r}, total={!r}', stage, completed, total
+            )
+            return
         name = getattr(stage, 'value', stage)
         rec = self._open_stage(str(name))
         if rec is None or self.manifest.status != ManifestStatus.RUNNING:

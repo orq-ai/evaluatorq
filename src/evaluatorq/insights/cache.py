@@ -43,8 +43,8 @@ CREATE TABLE IF NOT EXISTS vectors (
 
 
 def prompt_hash(text: str) -> str:
-    """Sha256 hex digest of `text`, truncated to 16 hex chars — used to key summary cache rows."""
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
+    """Full SHA-256 hex digest of `text`, used to key summary cache rows."""
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 
 def _text_hash(text: str) -> str:

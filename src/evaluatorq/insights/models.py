@@ -207,10 +207,10 @@ class InsightsConfig(BaseModel):
     summary_model: str = 'openai/gpt-6-luna'
     classifier_model: str = 'typesafe/jev-latest'
     embedding_model: str = 'openai/text-embedding-3-small'
-    max_clusters: int = 15
-    max_subclusters: int = 15
-    outlier_zscore: float | None = None
-    parallelism: int = 100
+    max_clusters: int = Field(default=15, ge=1)
+    max_subclusters: int = Field(default=15, ge=1)
+    outlier_zscore: float | None = Field(default=None, ge=0)
+    parallelism: int = Field(default=100, ge=1)
     priority_dimension: DimensionName = 'intent'
     cache: bool = True
 

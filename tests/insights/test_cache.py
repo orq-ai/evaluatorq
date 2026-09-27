@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from typing import cast
 
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
+
+
+def test_prompt_hash_is_full_sha256_digest():
+    text = 'summary prompt'
+    assert prompt_hash(text) == hashlib.sha256(text.encode('utf-8')).hexdigest()
+    assert len(prompt_hash(text)) == 64
 
 
 def test_summary_hit_requires_same_model_and_prompt(tmp_path):

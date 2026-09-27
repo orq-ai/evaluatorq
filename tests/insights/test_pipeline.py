@@ -187,7 +187,12 @@ async def test_summary_failure_is_per_trace(monkeypatch: pytest.MonkeyPatch, tmp
     _patch_clients(monkeypatch)
     traces = [_trace(i) for i in range(6)]
     monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
-    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    async def labels(*args, **kwargs):
+        outcomes = _labels(traces)
+        outcomes[0].error = 'label failed'
+        return outcomes
+
+    monkeypatch.setattr(pipeline, 'label_traces', labels)
 
     async def summaries(*args, **kwargs):
         return {t.trace_id: ('summary failed' if t.trace_id == 'trace-0' else _summary()) for t in traces}
@@ -199,6 +204,7 @@ async def test_summary_failure_is_per_trace(monkeypatch: pytest.MonkeyPatch, tmp
     run = await pipeline.insights(_population(), dimensions=('intent',), labels=(), runs_dir=tmp_path)
     assert run.status == 'completed'
     assert run.counts['n_failed_traces'] == 1
+    assert run.counts['per_stage_failed'] == 2
     assert run.traces[0].errors['summary'] == 'summary failed'
 
 
@@ -637,6 +643,7 @@ async def test_small_sentiment_groups_cluster_and_warn_when_umap_skipped(monkeyp
         )
         for i in range(6)
     ]
+    traces[0].errors['label'] = 'unrelated label failed'
     messages = StringIO()
     sink_id = logger.add(messages, level='WARNING')
 
