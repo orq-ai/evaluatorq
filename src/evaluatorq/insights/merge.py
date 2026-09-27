@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 from itertools import starmap
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from loguru import logger
 
@@ -36,6 +36,12 @@ _MAX_EXAMPLES = 3
 # Only these two kinds carry a live `error_exc` we can safely re-raise for `with_retry`
 # to classify; PARSE/UNKNOWN failures are not transient and must not be retried.
 _RETRYABLE_ERROR_KINDS = frozenset({JudgeError.TIMEOUT, JudgeError.API_CONNECTION})
+
+
+class MergeResult(NamedTuple):
+    representatives: dict[int, int]
+    n_pairs: int
+    n_failed: int
 
 
 def _candidate_pairs(names: dict[int, ClusterName], neighbours: dict[int, list[int]]) -> list[tuple[int, int]]:
@@ -108,7 +114,7 @@ async def merge_similar(
     model: str,
     threshold: float = 0.5,
     parallelism: int = 20,
-) -> dict[int, int]:
+) -> MergeResult:
     """Merge near-duplicate clusters via one classifier `noul` question per candidate pair.
 
     Candidate pairs are every cluster and each of its `neighbours`
@@ -120,8 +126,9 @@ async def merge_similar(
     transitively onto one representative. A failed or unreadable pair is
     logged and left unmerged (`merge_similar` never raises).
 
-    Returns every cluster id in `names` mapped to its representative id (a
-    cluster that merged into nothing maps to itself).
+    Returns the representative mapping, the number of candidate pairs checked,
+    and the number of failed checks. Every cluster id in `names` maps to its
+    representative id (a cluster that merged into nothing maps to itself).
     """
     if parallelism < 1:
         raise ValueError('parallelism must be positive')
@@ -130,7 +137,7 @@ async def merge_similar(
     semaphore = asyncio.Semaphore(parallelism)
     cfg = LLMCallConfig(model=model, timeout_ms=90_000)
 
-    async def _check_pair(a: int, b: int) -> None:
+    async def _check_pair(a: int, b: int) -> bool:
         state = {
             'cluster_a': _cluster_state(names[a], examples.get(a, [])),
             'cluster_b': _cluster_state(names[b], examples.get(b, [])),
@@ -150,18 +157,20 @@ async def merge_similar(
                 outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
             )
             logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, message)
-            return
+            return False
 
         answer = outcome.response.answers.get(_SAME_KEY)
         if answer is None or answer.noul is None:
             logger.warning(
                 'Insights merge classify reply for clusters {} vs {} is missing the {!r} probability', a, b, _SAME_KEY
             )
-            return
+            return False
 
         if answer.noul >= threshold:
             _union(parent, a, b)
+        return True
 
-    await asyncio.gather(*starmap(_check_pair, pairs))
+    outcomes = await asyncio.gather(*starmap(_check_pair, pairs))
 
-    return {cluster_id: _find(parent, cluster_id) for cluster_id in names}
+    representatives = {cluster_id: _find(parent, cluster_id) for cluster_id in names}
+    return MergeResult(representatives, len(pairs), sum(not ok for ok in outcomes))

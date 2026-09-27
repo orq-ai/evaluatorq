@@ -38,7 +38,7 @@ async def test_merges_pair_above_threshold(monkeypatch: pytest.MonkeyPatch) -> N
     names = _names(0, 1)
     result = await merge_similar(names, examples={0: ['a'], 1: ['b']}, neighbours={0: [1], 1: [0]}, client=fake_client(), model='m', threshold=0.5)
 
-    assert result[0] == result[1]
+    assert result.representatives[0] == result.representatives[1]
 
 
 @pytest.mark.asyncio
@@ -51,8 +51,8 @@ async def test_does_not_merge_pair_below_threshold(monkeypatch: pytest.MonkeyPat
     names = _names(0, 1)
     result = await merge_similar(names, examples={0: ['a'], 1: ['b']}, neighbours={0: [1], 1: [0]}, client=fake_client(), model='m', threshold=0.5)
 
-    assert result[0] == 0
-    assert result[1] == 1
+    assert result.representatives[0] == 0
+    assert result.representatives[1] == 1
 
 
 @pytest.mark.asyncio
@@ -68,7 +68,7 @@ async def test_transitive_merge_collapses_chain_to_one_representative(monkeypatc
     neighbours = {0: [1], 1: [0, 2], 2: [1]}
     result = await merge_similar(names, examples={}, neighbours=neighbours, client=fake_client(), model='m', threshold=0.5)
 
-    assert len({result[0], result[1], result[2]}) == 1
+    assert len({result.representatives[0], result.representatives[1], result.representatives[2]}) == 1
 
 
 @pytest.mark.asyncio
@@ -88,9 +88,54 @@ async def test_failed_pair_keeps_both_clusters_unmerged_and_logs(monkeypatch: py
     finally:
         logger.remove(sink_id)
 
-    assert result[0] == 0
-    assert result[1] == 1
+    assert result.representatives[0] == 0
+    assert result.representatives[1] == 1
     assert any('0' in message and '1' in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_merge_result_counts_all_failed_pairs(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        return ClassifyOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+
+    names = _names(0, 1, 2)
+    result = await merge_similar(
+        names,
+        examples={},
+        neighbours={0: [1, 2], 1: [0], 2: [0]},
+        client=fake_client(),
+        model='m',
+    )
+
+    assert result.n_failed == result.n_pairs > 0
+    assert result.representatives == {0: 0, 1: 1, 2: 2}
+
+
+@pytest.mark.asyncio
+async def test_merge_result_counts_partial_pair_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return ClassifyOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
+        return ClassifyOutcome(response=ClassifyResponse(answers={'same': ClassifyAnswer(type='noul', noul=0.1)}))
+
+    monkeypatch.setattr(merge_module, 'run_classify', fake_run_classify)
+
+    names = _names(0, 1, 2)
+    result = await merge_similar(
+        names,
+        examples={},
+        neighbours={0: [1, 2], 1: [0], 2: [0]},
+        client=fake_client(),
+        model='m',
+    )
+
+    assert 0 < result.n_failed < result.n_pairs
 
 
 @pytest.mark.asyncio
@@ -105,8 +150,8 @@ async def test_missing_answer_keeps_both_unmerged(monkeypatch: pytest.MonkeyPatc
         names, examples={0: ['a'], 1: ['b']}, neighbours={0: [1], 1: [0]}, client=fake_client(), model='m', threshold=0.5
     )
 
-    assert result[0] == 0
-    assert result[1] == 1
+    assert result.representatives[0] == 0
+    assert result.representatives[1] == 1
 
 
 @pytest.mark.asyncio

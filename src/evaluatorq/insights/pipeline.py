@@ -247,9 +247,19 @@ async def _build_dimension(  # noqa: C901
             ]
             for base_id in base_ids
         }
-        representatives = await merge_similar(
+        merge = await merge_similar(
             names, examples, same_top_neighbours, client=client, model=classifier_model, parallelism=parallelism
         )
+        if merge.n_pairs and merge.n_failed == merge.n_pairs:
+            raise RuntimeError(f'merge failed for every one of {merge.n_pairs} cluster pair checks')
+        if merge.n_failed:
+            warning = (
+                f'dimension {dimension}: merge: {merge.n_failed}/{merge.n_pairs} pair checks failed; '
+                'those clusters were left unmerged'
+            )
+            result.warnings.append(warning)
+            logger.warning(warning)
+        representatives = merge.representatives
         merged: dict[int, list[int]] = {}
         for base_id in base_ids:
             merged.setdefault(representatives.get(base_id, base_id), []).append(base_id)

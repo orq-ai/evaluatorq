@@ -619,7 +619,7 @@ async def test_cluster_merges_cannot_cross_top_level_groups(monkeypatch: pytest.
 
     async def no_merge(names, examples, neighbours, **kwargs):
         captured_neighbours.append(neighbours)
-        return {key: key for key in names}
+        return SimpleNamespace(representatives={key: key for key in names}, n_pairs=0, n_failed=0)
 
     monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
     monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
@@ -641,3 +641,71 @@ async def test_cluster_merges_cannot_cross_top_level_groups(monkeypatch: pytest.
     bases = [cluster for cluster in result.clusters if cluster.level == 'base']
     assert {top.size for top in tops.values()} == {2, 3}
     assert all(top.size == sum(base.size for base in bases if base.parent_id == top.id) for top in tops.values())
+
+
+@pytest.mark.parametrize(('n_failed', 'raises'), [(4, True), (2, False)])
+@pytest.mark.asyncio
+async def test_merge_failures_are_reported_in_dimension(
+    monkeypatch: pytest.MonkeyPatch, n_failed: int, raises: bool
+) -> None:
+    import numpy as np
+    from openai import AsyncOpenAI
+
+    from evaluatorq.insights import cluster, merge, reduce
+    from evaluatorq.insights.cache import InsightsCache
+    from evaluatorq.insights.describe import ClusterName
+    from evaluatorq.insights.models import TraceInsight
+
+    traces = [
+        TraceInsight(
+            trace_id=f't{i}', span_id=f's{i}', timestamp=datetime.now(timezone.utc), summary=_summary()
+        )
+        for i in range(5)
+    ]
+    tree = cluster.ClusterTree(
+        base_labels=np.asarray([0, 0, 1, 1, 1]), top_of_base={0: 0, 1: 0}, n_base=2, n_top=1
+    )
+    monkeypatch.setattr(cluster, 'cluster_two_level', lambda *args, **kwargs: tree)
+    monkeypatch.setattr(cluster, 'nearest_neighbours', lambda _cents: {0: [1], 1: [0]})
+
+    async def embeddings(texts, **kwargs):
+        return {text: [float(index + 1), 1.0] for index, text in enumerate(texts)}
+
+    async def descriptions(members, **kwargs):
+        return {key: ClusterName(name=f'base {key}', description='details') for key in members}
+
+    async def top_descriptions(children, **kwargs):
+        return {key: ClusterName(name=f'top {key}', description='details') for key in children}
+
+    async def failed_merge(names, examples, neighbours, **kwargs):
+        return SimpleNamespace(
+            representatives={key: key for key in names}, n_pairs=4, n_failed=n_failed
+        )
+
+    monkeypatch.setattr(pipeline, 'embed_texts', embeddings)
+    monkeypatch.setattr(pipeline, 'describe_clusters', descriptions)
+    monkeypatch.setattr(pipeline, 'describe_top_level', top_descriptions)
+    monkeypatch.setattr(merge, 'merge_similar', failed_merge)
+    monkeypatch.setattr(reduce, 'reduce_3d', lambda _vectors: None)
+    cache = InsightsCache(enabled=False)
+    result: DimensionResult | None = None
+    try:
+        if raises:
+            with pytest.raises(RuntimeError, match='merge'):
+                await pipeline._build_dimension(
+                    'intent', traces, client=cast('AsyncOpenAI', object()), cache=cache,
+                    embedding_model='unused', summary_model='unused', max_clusters=15, max_subclusters=15,
+                    outlier_zscore=None, parallelism=10, classifier_model='typesafe/jev-latest',
+                )
+        else:
+            result = await pipeline._build_dimension(
+                'intent', traces, client=cast('AsyncOpenAI', object()), cache=cache,
+                embedding_model='unused', summary_model='unused', max_clusters=15, max_subclusters=15,
+                outlier_zscore=None, parallelism=10, classifier_model='typesafe/jev-latest',
+            )
+    finally:
+        cache.close()
+
+    if not raises:
+        assert result is not None
+        assert any('2/4 pair checks failed' in warning for warning in result.warnings)
