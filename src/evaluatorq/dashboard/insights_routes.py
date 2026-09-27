@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
@@ -15,9 +14,10 @@ from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import RedirectResponse, Response
 
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, close_orq_client, resolve_orq_client
+from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
+from evaluatorq.dashboard.auth import auth_identity
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
 from evaluatorq.dashboard.insights_views import (
     TABS,
@@ -34,18 +34,18 @@ from evaluatorq.dashboard.insights_views import (
     unreadable_page,
 )
 from evaluatorq.dashboard.security import request_rejected
-from evaluatorq.dashboard.trace_finder.routes import selected_orq_profile
+from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 from evaluatorq.insights.models import InsightsRun
 from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.trace_finder.facets import load_facet_catalogue
-from evaluatorq.trace_finder.models import FACET_NAMES, FacetSelection
+from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from evaluatorq.contracts import RunManifest
-    from evaluatorq.trace_finder.models import FacetCatalogue
+    from evaluatorq.dashboard.auth import DashboardAuth
 
 
 def _entries(
@@ -106,72 +106,84 @@ def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> 
     return loaded.get(run_id)
 
 
-async def _catalogue(app: Any, window_days: int) -> FacetCatalogue | None:
-    """Cache Orq facet values for the selected window; failures remain visible in the wizard."""
+_CatalogueResult = tuple[FacetCatalogue | None, str | None, bool]
+_CatalogueKey = tuple[str | None, str, int]
+
+
+async def _catalogue(app: Any, window_days: int, *, retry: bool = False) -> _CatalogueResult:
+    """Cache Orq facet values for the selected window; failures remain visible in the wizard.
+
+    Returns ``(catalogue, source_name, credential_rejected)``. ``retry`` skips a cached answer
+    so a user who fixed their credentials is not held to the one-minute failure cache.
+    """
     now = datetime.now(timezone.utc)
     try:
-        profile = selected_orq_profile(app)
+        auth = selected_dashboard_auth(app)
     except ValueError as exc:
         logger.warning('Insights facet values are unavailable: {}', exc)
-        return None
-    server = (
-        (profile.server or DEFAULT_ORQ_BASE_URL)
-        if profile
-        else (os.environ.get('ORQ_BASE_URL') or DEFAULT_ORQ_BASE_URL)
-    )
-    api_key = profile.api_key if profile else os.environ.get('ORQ_API_KEY', '')
-    credential_fingerprint = hashlib.sha256(f'{server}\0{api_key}'.encode()).hexdigest()
-    cache_key = (profile.name if profile else None, credential_fingerprint, window_days)
+        return None, None, False
+    source_name = auth.profile.name if auth.profile else auth.label
+    credential_fingerprint = hashlib.sha256(
+        f'{auth.method}\0{auth.base_url}\0{auth.api_key or ""}'.encode()
+    ).hexdigest()
+    cache_key = (source_name, credential_fingerprint, window_days)
     generation = getattr(app.state, 'finder_generation', 0)
-    cache: dict[tuple[str | None, str, int], tuple[datetime, FacetCatalogue | None]] | None = getattr(
+    cache: dict[_CatalogueKey, tuple[datetime, FacetCatalogue | None, bool]] | None = getattr(
         app.state, 'insights_facet_catalogues', None
     )
     if cache is None:
         cache = {}
         app.state.insights_facet_catalogues = cache
     cached = cache.get(cache_key)
-    if cached is not None and cached[0] > now:
-        return cached[1]
+    if not retry and cached is not None and cached[0] > now:
+        return cached[1], source_name, cached[2]
 
-    in_flight: dict[tuple[int, tuple[str | None, str, int]], asyncio.Task[FacetCatalogue | None]] = getattr(
+    in_flight: dict[tuple[int, _CatalogueKey], asyncio.Task[tuple[FacetCatalogue | None, bool]]] = getattr(
         app.state, 'insights_facet_catalogue_tasks', {}
     )
     app.state.insights_facet_catalogue_tasks = in_flight
     task_key = (generation, cache_key)
     task = in_flight.get(task_key)
     if task is None:
-        task = asyncio.create_task(
-            _load_catalogue(app, cache, generation, cache_key, window_days, now, profile, server)
-        )
+        task = asyncio.create_task(_load_catalogue(app, cache, generation, cache_key, window_days, now, auth))
         in_flight[task_key] = task
 
-        def discard_finished(done: asyncio.Task[FacetCatalogue | None]) -> None:
+        def discard_finished(done: asyncio.Task[tuple[FacetCatalogue | None, bool]]) -> None:
             if in_flight.get(task_key) is done:
                 del in_flight[task_key]
 
         task.add_done_callback(discard_finished)
-    catalogue = await asyncio.shield(task)
+    catalogue, credential_rejected = await asyncio.shield(task)
     if generation != getattr(app.state, 'finder_generation', 0):
-        return None
-    return catalogue
+        return None, source_name, False
+    return catalogue, source_name, credential_rejected
 
 
 async def _load_catalogue(
     app: Any,
-    cache: dict[tuple[str | None, str, int], tuple[datetime, FacetCatalogue | None]],
+    cache: dict[_CatalogueKey, tuple[datetime, FacetCatalogue | None, bool]],
     generation: int,
-    cache_key: tuple[str | None, str, int],
+    cache_key: _CatalogueKey,
     window_days: int,
     now: datetime,
-    profile: Any,
-    server: str,
-) -> FacetCatalogue | None:
+    auth: DashboardAuth,
+) -> tuple[FacetCatalogue | None, bool]:
     """Fetch one window catalogue and cache it only while its settings are current."""
     orq = None
+    credential_rejected = False
     try:
-        orq = resolve_orq_client(profile.api_key if profile else None, base_url=server)
+        if auth.method == 'cli_oauth':
+            from evaluatorq.common.cli_oauth import build_cli_oauth_clients
+
+            settings = app.state.finder_settings
+            orq, _ = build_cli_oauth_clients(
+                server_url=auth.base_url, workspace=settings.orq_workspace, project=settings.orq_project_id
+            )
+        else:
+            orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
         catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
     except Exception as exc:  # noqa: BLE001 — provider errors render a visible unavailable state
+        credential_rejected = _is_unauthorized(exc)
         logger.warning('Insights facet values are unavailable for the {}-day window: {}', window_days, exc)
         catalogue = None
     finally:
@@ -184,8 +196,21 @@ async def _load_catalogue(
         generation == getattr(app.state, 'finder_generation', 0)
         and getattr(app.state, 'insights_facet_catalogues', None) is cache
     ):
-        cache[cache_key] = (now + timedelta(minutes=5 if catalogue is not None else 1), catalogue)
-    return catalogue
+        cache[cache_key] = (
+            now + timedelta(minutes=5 if catalogue is not None else 1),
+            catalogue,
+            credential_rejected,
+        )
+    return catalogue, credential_rejected
+
+
+def _is_unauthorized(error: Exception) -> bool:
+    """Recognize an Orq 401 without exposing provider error text in the UI."""
+    status = getattr(error, 'status_code', None)
+    if status is None:
+        response = getattr(error, 'response', None)
+        status = getattr(response, 'status_code', None)
+    return status == 401
 
 
 def register_insights_routes(app: Any) -> None:  # noqa: C901
@@ -213,7 +238,17 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         selection = FacetSelection.model_validate({
             name: req.query_params.getlist(f'facet_{name}') for name in FACET_NAMES
         })
-        return _html(facet_options(await _catalogue(req.app, window_days), selection))
+        catalogue, profile_name, credential_rejected = await _catalogue(
+            req.app, window_days, retry=req.query_params.get('retry') == '1'
+        )
+        return _html(
+            facet_options(
+                catalogue,
+                selection,
+                profile_name=profile_name,
+                credential_rejected=credential_rejected,
+            )
+        )
 
     @app.post('/insights/snapshot-preview')
     async def insights_snapshot_preview(req: Request) -> Response:
@@ -261,10 +296,13 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             message = '; '.join(error['msg'] for error in exc.errors())
             return _html(new_run_page(error=message), 422)
         try:
-            profile = selected_orq_profile(req.app)
-        except ValueError as exc:
+            auth = selected_dashboard_auth(req.app)
+            identity = await asyncio.to_thread(auth_identity, auth, req.app.state.finder_settings)
+        except (RuntimeError, ValueError) as exc:
             return _html(new_run_page(error=str(exc)), 422)
-        run_id = await asyncio.to_thread(launch_insights, spec, directory, profile=profile)
+        run_id = await asyncio.to_thread(
+            launch_insights, spec, directory, auth_method=auth.method, auth_identity=identity
+        )
         return RedirectResponse(f'/insights/{quote(run_id, safe="")}', status_code=303)
 
     @app.get('/insights/{run_id}')

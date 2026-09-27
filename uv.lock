@@ -1066,6 +1066,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "crewai", marker = "python_full_version >= '3.11'" },
+    { name = "cryptography" },
     { name = "huggingface-hub" },
     { name = "langchain" },
     { name = "langgraph" },
@@ -1095,6 +1096,7 @@ crewai = [
     { name = "crewai", marker = "python_full_version >= '3.11'" },
 ]
 dashboard = [
+    { name = "cryptography" },
     { name = "python-dotenv" },
     { name = "python-fasthtml" },
     { name = "uvicorn" },
@@ -1186,6 +1188,8 @@ docs = [
 requires-dist = [
     { name = "crewai", marker = "python_full_version >= '3.11' and extra == 'all'", specifier = ">=0.70.0" },
     { name = "crewai", marker = "python_full_version >= '3.11' and extra == 'crewai'", specifier = ">=0.70.0" },
+    { name = "cryptography", marker = "extra == 'all'", specifier = ">=42.0.0" },
+    { name = "cryptography", marker = "extra == 'dashboard'", specifier = ">=42.0.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "huggingface-hub", marker = "extra == 'all'", specifier = ">=0.20.0" },
     { name = "huggingface-hub", marker = "extra == 'redteam'", specifier = ">=0.20.0" },

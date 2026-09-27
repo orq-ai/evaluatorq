@@ -32,6 +32,7 @@ import io
 import json
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,7 +40,7 @@ from fasthtml.core import FastHTML, NotStr
 from loguru import logger
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 
 # Starlette 1.3.x / FastHTML 0.12.x compat shim. Must be imported, not deferred to
 # serve(): the patch has to be live when build_app() constructs the FastHTML app, and
@@ -48,13 +49,14 @@ from starlette.responses import RedirectResponse, Response
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.model_catalogue import models_by_provider
-from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, list_orq_profiles
+from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
+from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
-from evaluatorq.dashboard.orq_scope import discover_orq_scope
+from evaluatorq.dashboard.orq_scope import OrqScope, discover_orq_scope
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import page
@@ -87,6 +89,7 @@ from evaluatorq.trace_finder.settings import (
     effective_settings,
     load_settings,
     save_settings,
+    store_api_key,
 )
 
 _STATIC_DIR = Path(__file__).parent / 'static'
@@ -180,9 +183,9 @@ def _settings_config(
     )
     config.extend((
         ('Apply-recommendations model', f'{model} ({source})'),
-        ('Orq profile', settings.orq_profile or 'environment'),
+        ('Authentication method', settings.orq_auth_method.replace('_', ' ')),
     ))
-    if settings.orq_profile is not None and profile is None:
+    if settings.orq_auth_method == 'cli_profile' and settings.orq_profile is not None and profile is None:
         config.append(('Orq profile status', 'unavailable — choose Environment or another profile'))
     if profile is not None:
         config.extend((
@@ -243,6 +246,68 @@ def _index(req: Request) -> NotStr:
     return NotStr(page(label, body, active_surface=surface))
 
 
+async def _auth_status(req: Request) -> JSONResponse:
+    """Verify the selected dashboard credential for the startup toast."""
+
+    settings = effective_settings()
+    try:
+        auth = await asyncio.to_thread(resolve_dashboard_auth, settings)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return JSONResponse({'status': 'action', 'method': settings.orq_auth_method, 'message': str(exc)})
+    if auth.method == 'environment' and not auth.api_key:
+        return JSONResponse({
+            'status': 'action',
+            'method': auth.method,
+            'message': 'ORQ_API_KEY is not set. Choose an authentication method in Settings.',
+        })
+    orq = None
+    llm = None
+    try:
+        orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+        now = datetime.now(timezone.utc)
+        await asyncio.wait_for(
+            orq.traces.list_facet_values_async(field='agent_name', from_=now - timedelta(days=1), to=now, limit=1),
+            timeout=12,
+        )
+    except Exception as exc:
+        status_code = getattr(exc, 'status_code', None)
+        response = getattr(exc, 'response', None)
+        status_code = status_code or getattr(response, 'status_code', None)
+        message = str(exc).lower()
+        if status_code in (401, 403) or any(
+            marker in message
+            for marker in (
+                'unauthorized',
+                'not authenticated',
+                'login required',
+                'http 401',
+                'http 403',
+                'session expired',
+                'cli is not installed',
+                'sign-in needs attention',
+                'orq auth login',
+            )
+        ):
+            return JSONResponse({
+                'status': 'action',
+                'method': auth.method,
+                'message': f'{auth.label} was rejected. Open Settings to choose or renew a credential.',
+            })
+        return JSONResponse({
+            'status': 'unavailable',
+            'method': auth.method,
+            'message': f'Could not check {auth.label} right now. Try again shortly.',
+        })
+    finally:
+        if orq is not None:
+            await close_orq_client(orq)
+        if llm is not None:
+            close = getattr(llm, 'close', None)
+            if close is not None:
+                await close()
+    return JSONResponse({'status': 'valid', 'method': auth.method})
+
+
 async def _settings(req: Request) -> NotStr:
     roots = _roots(req)
     settings = effective_settings()
@@ -252,6 +317,7 @@ async def _settings(req: Request) -> NotStr:
         if not requested or any(profile.name == requested and '*' not in profile.api_key for profile in profiles):
             settings = settings.model_copy(
                 update={
+                    'orq_auth_method': 'cli_profile' if requested else 'environment',
                     'orq_profile': requested or None,
                     'orq_profile_host': None,
                     'orq_workspace': None,
@@ -259,10 +325,21 @@ async def _settings(req: Request) -> NotStr:
                     'orq_project_name': None,
                 }
             )
-    scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
-    profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+    if settings.orq_auth_method in ('environment', 'cli_profile'):
+        scope = await asyncio.to_thread(
+            discover_orq_scope, settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
+        )
+    else:
+        scope = OrqScope(error='Save this authentication method to refresh the workspace and project choices.')
     body = settings_body(
-        _settings_config(roots, profile, settings=settings),
+        _settings_config(
+            roots,
+            next(
+                (p for p in profiles if settings.orq_auth_method == 'cli_profile' and p.name == settings.orq_profile),
+                None,
+            ),
+            settings=settings,
+        ),
         settings,
         saved=req.query_params.get('saved') == '1',
         preview='profile' in req.query_params,
@@ -303,7 +380,7 @@ async def _settings_models(req: Request) -> NotStr:
     return NotStr(model_control(field, value, groups))
 
 
-async def _save_settings(req: Request) -> Response | NotStr:
+async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     """Validate and persist the settings form, or render field errors."""
     form_data = await req.form()
     rejected = request_rejected(req, form_data)
@@ -326,26 +403,76 @@ async def _save_settings(req: Request) -> Response | NotStr:
             location = detail.get('loc', ())
             field = str(location[0]) if location else 'form'
             errors[field] = str(detail.get('msg', 'Invalid value'))
+    if settings is not None and settings.orq_auth_method != current.orq_auth_method:
+        settings = settings.model_copy(
+            update={
+                'orq_workspace': None if settings.orq_workspace == current.orq_workspace else settings.orq_workspace,
+                'orq_project_id': None
+                if settings.orq_project_id == current.orq_project_id
+                else settings.orq_project_id,
+                'orq_project_name': None,
+            }
+        )
+    if settings is not None and settings.orq_auth_method == 'stored_api_key':
+        entered_key = str(form_data.get('orq_api_key_entry', '')).strip()
+        if entered_key:
+            try:
+                settings = await asyncio.to_thread(store_api_key, settings, entered_key)
+            except (OSError, ValueError, RuntimeError) as exc:
+                logger.warning('Could not save dashboard API key securely: {}', type(exc).__name__)
+                errors['orq_api_key_entry'] = 'Could not encrypt this key. Check the local Keychain and try again.'
+        elif not settings.orq_api_key_ciphertext:
+            errors['orq_api_key_entry'] = 'Enter an API key to use this method.'
     if (
         settings is not None
-        and 'orq_profile' in form_data
+        and settings.orq_auth_method == 'cli_profile'
+        and ('orq_auth_method' in form_data or 'orq_profile' in form_data)
         and settings.orq_profile is not None
         and settings.orq_profile not in {p.name for p in profiles}
     ):
         errors['orq_profile'] = 'The orq CLI does not know this profile'
-    selected_profile = next((p for p in profiles if settings is not None and p.name == settings.orq_profile), None)
+    selected_profile = next(
+        (
+            p
+            for p in profiles
+            if settings is not None and settings.orq_auth_method == 'cli_profile' and p.name == settings.orq_profile
+        ),
+        None,
+    )
+    if (
+        settings is not None
+        and settings.orq_auth_method == 'cli_profile'
+        and selected_profile is None
+        and ('orq_auth_method' in form_data or 'orq_profile' in form_data)
+    ):
+        errors.setdefault('orq_profile', 'Choose an Orq CLI API-key profile.')
     if selected_profile is not None and '*' in selected_profile.api_key:
         errors['orq_profile'] = 'The installed orq CLI masks this profile key; use Environment credentials.'
-    scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile if settings else None)
+    if settings is not None and settings.orq_auth_method in ('environment', 'cli_profile'):
+        scope = await asyncio.to_thread(
+            discover_orq_scope, settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
+        )
+    else:
+        scope = OrqScope()
     if settings is not None:
+        if settings.orq_auth_method in ('stored_api_key', 'cli_oauth'):
+            settings = settings.model_copy(
+                update={'orq_workspace': None, 'orq_project_id': None, 'orq_project_name': None}
+            )
+        try:
+            auth = resolve_dashboard_auth(settings, profiles=profiles)
+        except ValueError:
+            auth = None
         settings = settings.model_copy(
             update={
-                'orq_profile_host': (selected_profile.server or DEFAULT_ORQ_BASE_URL) if selected_profile else None,
+                'orq_profile_host': (selected_profile.server or DEFAULT_ORQ_BASE_URL)
+                if selected_profile
+                else settings.orq_profile_host
+                if settings.orq_auth_method == 'stored_api_key'
+                else None,
                 'orq_credential_fingerprint': credential_fingerprint(
-                    selected_profile.api_key if selected_profile else os.environ.get('ORQ_API_KEY'),
-                    (selected_profile.server or DEFAULT_ORQ_BASE_URL)
-                    if selected_profile
-                    else os.environ.get('ORQ_BASE_URL'),
+                    auth.api_key if auth else None,
+                    auth.base_url if auth else None,
                 ),
             }
         )
@@ -371,8 +498,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
 
     await asyncio.to_thread(save_settings, settings)
     async with req.app.state.finder_store_lock:
-        req.app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
-        if settings.orq_profile is not None and req.app.state.finder_profile is None:
+        req.app.state.finder_profile = selected_profile
+        if settings.orq_auth_method == 'cli_profile' and req.app.state.finder_profile is None:
             logger.warning(
                 'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
             )
@@ -403,7 +530,13 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
         if override and values[name] == override:
             values[name] = getattr(current, name)
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
-    values['orq_profile_host'] = current.orq_profile_host
+    method = form_data.get('orq_auth_method')
+    if method is None and 'orq_profile' in form_data:
+        method = 'cli_profile' if form_data.get('orq_profile') else 'environment'
+    values['orq_auth_method'] = method or current.orq_auth_method
+    values['orq_profile_host'] = form_data.get('orq_stored_key_host', current.orq_profile_host)
+    values['orq_api_key_ciphertext'] = current.orq_api_key_ciphertext
+    values['orq_oauth_server'] = form_data.get('orq_oauth_server', current.orq_oauth_server)
     values['orq_credential_fingerprint'] = current.orq_credential_fingerprint
     values['orq_workspace'] = form_data.get('orq_workspace', current.orq_workspace)
     values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
@@ -800,6 +933,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     )
     app.state.roots = roots
     initialize_finder_settings(app)
+    app.get('/auth/status')(_auth_status)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for
     # /r/{rid}/export.html, export.md, export.csv, export.json etc.

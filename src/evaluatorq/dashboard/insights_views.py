@@ -1240,14 +1240,45 @@ def unreadable_page(error: str) -> str:
     return page('Insights', body, active_nav='insights', back_html=_back_to_runs())
 
 
-def facet_options(catalogue: FacetCatalogue | None, selection: FacetSelection) -> str:
+def facet_options(
+    catalogue: FacetCatalogue | None,
+    selection: FacetSelection,
+    *,
+    profile_name: str | None = None,
+    credential_rejected: bool = False,
+) -> str:
     """Render the Finder facet choices for an Insights window, retaining selected values."""
-    unavailable = (
-        '<p class="insights-facet-unavailable" role="status">Facet values are unavailable. '
-        'Existing selections are kept; check the Orq connection, then change the window to retry.</p>'
-        if catalogue is None
-        else ''
-    )
+    if catalogue is None and credential_rejected:
+        if profile_name == 'CLI OAuth':
+            credential = 'Orq rejected the CLI OAuth sign-in. Run <code>orq auth login</code> and try again.'
+        elif profile_name == 'Saved API key':
+            credential = 'Orq rejected the API key entered in Settings. Enter a key with trace access and Save.'
+        elif profile_name == 'ORQ_API_KEY' or not profile_name:
+            credential = (
+                'Orq rejected the dashboard Environment credentials for this workspace. Check '
+                '<code>ORQ_API_KEY</code> and <code>ORQ_BASE_URL</code>.'
+            )
+        else:
+            credential = (
+                f'Orq rejected the key for profile <code>{esc(profile_name)}</code>. Check that this profile '
+                'has trace access to the workspace selected in Settings.'
+            )
+        unavailable = (
+            f'<p class="insights-facet-unavailable" role="status">{credential} In '
+            '<a href="/settings" target="_blank" rel="noopener">Settings → Authentication</a>, choose a '
+            'matching profile or workspace, Save, then click '
+            '<button type="button" data-retry-facets>Retry</button>. Your selected filters are kept.</p>'
+        )
+    elif catalogue is None:
+        unavailable = (
+            '<p class="insights-facet-unavailable" role="status">Could not load filter choices from Orq. '
+            'In <a href="/settings" target="_blank" rel="noopener">Settings → Authentication</a>, select an Orq '
+            'profile with trace access and Save. If you use the environment API key, set <code>ORQ_API_KEY</code> for the '
+            'dashboard and restart it. Then click <button type="button" data-retry-facets>Retry</button>. '
+            'Your selected filters are kept.</p>'
+        )
+    else:
+        unavailable = ''
     if catalogue is None and not any(getattr(selection, name) for name in FACET_NAMES):
         return unavailable
     menu = facet_menu(catalogue, form_id='insights-new-form', selection=selection, include_numeric=False)

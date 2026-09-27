@@ -337,7 +337,8 @@ def insights_cmd(
             duration_ms_max=duration_ms_max,
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
-        selected_profile = resolve_cli_profile(profile if profile is not None else settings.orq_profile)
+        saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
+        selected_profile = resolve_cli_profile(profile if profile is not None else saved_profile)
         if from_finder is not None:
             _validate_finder_export(from_finder)
         population = (

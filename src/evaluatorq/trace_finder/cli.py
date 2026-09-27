@@ -308,7 +308,8 @@ def find(
     })
     orq = None
     try:
-        profile_name = profile if profile is not None else settings.orq_profile
+        saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
+        profile_name = profile if profile is not None else saved_profile
         selected = resolve_cli_profile(profile_name)
         if selected is None:
             fingerprint = credential_fingerprint(os.environ.get('ORQ_API_KEY'), os.environ.get('ORQ_BASE_URL'))
@@ -327,7 +328,7 @@ def find(
         emit_error(exc)
         raise typer.Exit(code=2) from None
 
-    if profile_name != settings.orq_profile or fingerprint != settings.orq_credential_fingerprint:
+    if profile_name != saved_profile or fingerprint != settings.orq_credential_fingerprint:
         settings = settings.model_copy(update={'orq_project_id': None, 'orq_project_name': None})
 
     client = resolved.client

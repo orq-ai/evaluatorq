@@ -914,6 +914,8 @@ class InsightsLaunchPayload(BaseModel):
     spec: InsightsLaunchSpec
     finder_export_snapshot: Path | None = None
     finder_export_snapshot_sha256: str | None = None
+    auth_method: str | None = None
+    auth_identity: str | None = None
 
 
 def _population_for_launch_plan(spec: InsightsLaunchSpec) -> tuple[InsightsPopulation, str | None]:
@@ -927,7 +929,14 @@ def _population_for_launch_plan(spec: InsightsLaunchSpec) -> tuple[InsightsPopul
     return population, finder_snapshot
 
 
-def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqProfile | None = None) -> str:
+def launch_insights(
+    spec: InsightsLaunchSpec,
+    runs_dir: Path,
+    *,
+    profile: OrqProfile | None = None,
+    auth_method: str | None = None,
+    auth_identity: str | None = None,
+) -> str:
     """Create a visible manifest, then spawn a worker that survives dashboard reloads."""
     run_id = str(uuid.uuid4())
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
@@ -972,6 +981,8 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             'run_name': run_name,
             'runs_dir': str(runs_dir),
             'spec': spec.model_dump(mode='json'),
+            'auth_method': auth_method,
+            'auth_identity': auth_identity,
             'finder_export_snapshot': str(snapshot_path) if snapshot_path is not None else None,
             'finder_export_snapshot_sha256': hashlib.sha256(finder_snapshot.encode('utf-8')).hexdigest()
             if finder_snapshot is not None

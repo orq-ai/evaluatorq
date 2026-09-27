@@ -19,13 +19,13 @@ from starlette.responses import Response
 
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import (
-    DEFAULT_ORQ_BASE_URL,
     OrqProfile,
     close_orq_client,
     list_orq_profiles,
     resolve_orq_client,
 )
 from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.insights_launch import (
     FINDER_EXPORT_REFERENCE_DIR,
     read_private_finder_reference,
@@ -272,9 +272,9 @@ def initialize_finder_settings(app: Any) -> None:
     if getattr(app.state, 'finder_settings', None) is not None:
         return
     settings = effective_settings()
-    profiles = list_orq_profiles() if settings.orq_profile is not None else ()
+    profiles = list_orq_profiles() if settings.orq_auth_method == 'cli_profile' else ()
     app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
-    if settings.orq_profile is not None and app.state.finder_profile is None:
+    if settings.orq_auth_method == 'cli_profile' and app.state.finder_profile is None:
         logger.warning(
             'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
         )
@@ -292,6 +292,8 @@ def _settings(app: Any) -> Any:
 
 def selected_orq_profile(app: Any) -> OrqProfile | None:
     settings = _settings(app)
+    if settings.orq_auth_method != 'cli_profile':
+        return None
     profile: OrqProfile | None = getattr(app.state, 'finder_profile', None)
     if settings.orq_profile is not None and profile is None:
         raise ValueError(
@@ -302,22 +304,33 @@ def selected_orq_profile(app: Any) -> OrqProfile | None:
     return profile
 
 
+def selected_dashboard_auth(app: Any) -> DashboardAuth:
+    """Resolve the dashboard's saved method, including API keys outside CLI profiles."""
+
+    settings = _settings(app)
+    profile = selected_orq_profile(app)
+    return resolve_dashboard_auth(settings, profiles=(profile,) if profile is not None else ())
+
+
 def _api_available(app: Any) -> bool:
     try:
-        return selected_orq_profile(app) is not None or bool(os.environ.get('ORQ_API_KEY', '').strip())
+        auth = selected_dashboard_auth(app)
+        return auth.method == 'cli_oauth' or bool(auth.api_key)
     except ValueError:
         return False
 
 
 def _unavailable_reason(app: Any) -> str:
     try:
-        selected_orq_profile(app)
+        auth = selected_dashboard_auth(app)
     except ValueError as exc:
         return str(exc)
     failure = getattr(app.state, 'finder_unavailable_reason', None)
     if failure:
         return str(failure)
-    return 'Set ORQ_API_KEY to load traces'
+    if auth.method == 'environment' and not auth.api_key:
+        return 'ORQ_API_KEY is not set. Choose an authentication method in Settings.'
+    return 'Choose a working authentication method in Settings to load traces'
 
 
 async def _build_store(app: Any) -> RunStore | None:
@@ -325,17 +338,18 @@ async def _build_store(app: Any) -> RunStore | None:
     settings = _settings(app)
     resolved = None
     try:
-        profile = selected_orq_profile(app)
-        resolved = resolve_llm_client(
-            extra_api_key=profile.api_key if profile else None,
-            orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-            require_orq=True,
-            max_retries=0,
-        )
-        orq = resolve_orq_client(
-            profile.api_key if profile else None,
-            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-        )
+        auth = selected_dashboard_auth(app)
+        if auth.method == 'cli_oauth':
+            orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+        else:
+            resolved = resolve_llm_client(
+                extra_api_key=auth.api_key,
+                orq_host=auth.base_url,
+                require_orq=True,
+                max_retries=0,
+            )
+            llm = resolved.client
+            orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
     except (ImportError, ValueError) as exc:
         if resolved is not None and resolved.owned:
             await resolved.client.close()
@@ -348,10 +362,10 @@ async def _build_store(app: Any) -> RunStore | None:
         try:
             await close_orq_client(orq)
         finally:
-            if resolved.owned:
+            if resolved is not None and resolved.owned:
                 await resolved.client.close()
 
-    return build_run_store(settings, client=resolved.client, orq=orq, cleanup=cleanup)
+    return build_run_store(settings, client=llm, orq=orq, cleanup=cleanup)
 
 
 async def _store(app: Any) -> RunStore | None:
@@ -388,11 +402,11 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
             return catalogue
     orq = None
     try:
-        profile = selected_orq_profile(app)
-        orq = resolve_orq_client(
-            profile.api_key if profile else None,
-            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-        )
+        auth = selected_dashboard_auth(app)
+        if auth.method == 'cli_oauth':
+            orq, _ = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+        else:
+            orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
         catalogue = await load_facet_catalogue(
             orq,
             start=now - timedelta(days=window),

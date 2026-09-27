@@ -17,6 +17,7 @@ from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.dashboard import insights_routes
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.auth import DashboardAuth, auth_identity
 from evaluatorq.dashboard.insights_launch import (
     MAX_FINDER_EXPORT_BYTES,
     InsightsLaunchPayload,
@@ -51,6 +52,48 @@ def test_stage_plan_follows_source_labels_and_dimensions() -> None:
     assert finder_plan['label'] == 'Classify traces'
     assert snapshot_plan['population'] == 'Load local traces'
     assert priority_plan['priority'] == 'Build priority matrix'
+
+
+def test_worker_rejects_changed_credential_before_building_clients(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    settings = DashboardSettings.model_validate({'orq_auth_method': 'environment'})
+    expected = auth_identity(DashboardAuth('environment', 'key-at-launch', 'https://my.orq.ai'), settings)
+    payload = InsightsLaunchPayload(
+        run_id='run-1',
+        run_name='Auth change test',
+        runs_dir=tmp_path,
+        spec=InsightsLaunchSpec(),
+        auth_method='environment',
+        auth_identity=expected,
+    )
+    monkeypatch.setenv('ORQ_API_KEY', 'different-key')
+    monkeypatch.setattr(insights_worker, 'read_launch_payload', lambda: payload)
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: settings)
+    monkeypatch.setattr(insights_worker, '_fail_running', lambda *_args: None)
+
+    def must_not_build(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError('worker must not build clients after a credential change')
+
+    monkeypatch.setattr(insights_worker, 'build_auth_clients', must_not_build)
+    assert insights_worker.main() == 1
+
+
+def test_oauth_identity_changes_with_signed_in_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common import cli_oauth
+
+    settings = DashboardSettings.model_validate({'orq_auth_method': 'cli_oauth'})
+    auth = DashboardAuth('cli_oauth', None, 'https://my.orq.ai')
+    monkeypatch.setattr(cli_oauth, 'oauth_subject', lambda _server: {'user_id': 'user-one'})
+    first = auth_identity(auth, settings)
+    monkeypatch.setattr(cli_oauth, 'oauth_subject', lambda _server: {'user_id': 'user-two'})
+    second = auth_identity(auth, settings)
+
+    assert first != second
+    assert 'user-one' not in first
+    assert 'user-two' not in second
 
 
 def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
@@ -599,7 +642,7 @@ def test_dashboard_starts_local_snapshot_run_without_trace_lookup(tmp_path: Path
     assert token is not None
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.selected_orq_profile', return_value=OrqProfile('environment', 'key', 'https://my.orq.ai', True)),
+        patch('evaluatorq.dashboard.insights_routes.selected_dashboard_auth', return_value=DashboardAuth('environment', 'key', 'https://my.orq.ai')),
         patch('evaluatorq.dashboard.insights_routes.launch_insights', return_value='run-1') as launch,
     ):
         response = client.post(
@@ -1752,8 +1795,10 @@ def test_selected_profile_controls_facets_and_worker_credentials(
     assert response.status_code == 303
     resolve.assert_called_once_with('profile-key', base_url=expected_host)
     worker_env = spawn.call_args.kwargs['env']
-    assert worker_env['ORQ_API_KEY'] == 'profile-key'
-    assert worker_env['ORQ_BASE_URL'] == expected_host
+    assert worker_env['ORQ_API_KEY'] == 'environment-key'
+    assert worker_env['ORQ_BASE_URL'] == 'https://environment.example'
+    assert 'profile-key' not in worker_env['EVALUATORQ_INSIGHTS_LAUNCH_REQUEST']
+    assert InsightsLaunchPayload.model_validate_json(worker_env['EVALUATORQ_INSIGHTS_LAUNCH_REQUEST']).auth_method == 'cli_profile'
     assert 'profile-key' not in list_manifests(tmp_path / 'insights-runs')[0].model_dump_json()
 
 
@@ -1778,11 +1823,59 @@ def test_missing_selected_profile_never_uses_environment(monkeypatch: pytest.Mon
             follow_redirects=False,
         )
 
-    assert 'Facet values are unavailable' in facets.text
+    assert 'Could not load filter choices from Orq' in facets.text
+    assert '<a href="/settings" target="_blank" rel="noopener">Settings → Authentication</a>' in facets.text
+    assert 'data-retry-facets' in facets.text
     assert start.status_code == 422
     assert 'Orq profile deleted is unavailable' in start.text
     resolve.assert_not_called()
     launch.assert_not_called()
+
+
+def test_reloaded_selected_profile_is_used_and_named_when_orq_rejects_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    settings_path = tmp_path / 'dashboard-settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(settings_path))
+    from evaluatorq.dashboard.trace_finder import routes as finder_routes
+    from evaluatorq.trace_finder.settings import save_settings
+
+    profile = OrqProfile('research', 'profile-secret-for-test', 'https://profile.example', False)
+    save_settings(DashboardSettings.model_validate({'orq_profile': profile.name}), settings_path)
+    monkeypatch.setattr(finder_routes, 'list_orq_profiles', lambda: (profile,))
+
+    class Unauthorized(Exception):
+        status_code = 401
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch(
+            'evaluatorq.dashboard.insights_routes.load_facet_catalogue',
+            new_callable=AsyncMock,
+            side_effect=Unauthorized('private provider response'),
+        ),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        response = TestClient(build_app()).get('/insights/facets?window_days=7')
+
+    assert resolve.call_args.args == ('profile-secret-for-test',)
+    assert resolve.call_args.kwargs == {'base_url': 'https://profile.example'}
+    assert 'profile <code>research</code>' in response.text
+    assert 'Orq rejected the key' in response.text
+    assert 'workspace selected in Settings' in response.text
+    assert 'profile-secret-for-test' not in response.text
+    assert 'private provider response' not in response.text
+
+
+def test_facet_auth_error_names_oauth_credential() -> None:
+    from evaluatorq.dashboard.insights_views import facet_options
+
+    html = facet_options(None, FacetSelection(), profile_name='CLI OAuth', credential_rejected=True)
+
+    assert 'CLI OAuth sign-in' in html
+    assert 'orq auth login' in html
+    assert 'key for profile' not in html
 
 
 def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1833,7 +1926,8 @@ async def test_concurrent_insights_facet_misses_share_one_provider_call(
         second = asyncio.create_task(insights_routes._catalogue(app, 7))
         await asyncio.sleep(0)
         release.set()
-        assert await asyncio.gather(first, second) == [catalogue, catalogue]
+        results = await asyncio.gather(first, second)
+        assert [result[0] for result in results] == [catalogue, catalogue]
 
     assert calls == 1
     assert len(app.state.insights_facet_catalogues) == 1
@@ -1864,7 +1958,7 @@ async def test_settings_generation_change_discards_stale_insights_facet_fetch(
         app.state.finder_generation += 1
         del app.state.insights_facet_catalogues
         release.set()
-        assert await stale is None
+        assert (await stale)[0] is None
 
     assert not hasattr(app.state, 'insights_facet_catalogues')
 
@@ -1932,8 +2026,32 @@ def test_facet_catalogue_failure_is_visible(monkeypatch: pytest.MonkeyPatch, tmp
     ):
         response = client.get('/insights/facets?window_days=7&facet_status=error')
     assert response.status_code == 200
-    assert 'Facet values are unavailable' in response.text
+    assert 'Could not load filter choices from Orq' in response.text
+    assert 'data-retry-facets' in response.text
     assert 'name="facet_status" value="error" checked' in response.text
+
+
+def test_facet_retry_bypasses_failed_cache_and_preserves_selection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    load = AsyncMock(side_effect=[RuntimeError('Orq unavailable'), FacetCatalogue(status=('ok',))])
+    with (
+        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
+        patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
+    ):
+        failed = client.get('/insights/facets?window_days=7&facet_status=error')
+        cached = client.get('/insights/facets?window_days=7&facet_status=error')
+        retried = client.get('/insights/facets?window_days=7&facet_status=error&retry=1')
+
+    assert 'data-retry-facets' in failed.text
+    assert 'data-retry-facets' in cached.text
+    assert load.await_count == 2
+    assert 'data-retry-facets' not in retried.text
+    assert 'name="facet_status" value="error" checked' in retried.text
+    assert 'name="facet_status" value="ok"' in retried.text
 
 
 def test_new_run_form_rejects_bad_input_and_launches_valid_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

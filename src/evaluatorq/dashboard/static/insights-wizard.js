@@ -54,15 +54,16 @@
     }
   }
 
-  async function refreshFacets() {
+  async function refreshFacets(retry) {
     if (selected('source')[0] === 'finder') return;
     const windowDays = form.elements.window_days.value;
-    if (facetRequest && facetRequest.windowDays === windowDays) return;
+    const forced = retry === true;
+    if (!forced && facetRequest && facetRequest.windowDays === windowDays) return;
     if (facetRequest) {
       facetRequest.abort();
       facetRequest = null;
     }
-    if (!form.elements.window_days.checkValidity() || facetLoadedWindow === windowDays) {
+    if (!form.elements.window_days.checkValidity() || (!forced && facetLoadedWindow === windowDays)) {
       setFacetLoading(false);
       return;
     }
@@ -70,6 +71,7 @@
     request.windowDays = windowDays;
     facetRequest = request;
     const params = new URLSearchParams({ window_days: windowDays });
+    if (forced) params.set('retry', '1');
     facetOptions.querySelectorAll('input[name^="facet_"]:checked').forEach(function (input) {
       params.append(input.name, input.value);
     });
@@ -84,7 +86,8 @@
       updateSource();
     } catch (failure) {
       if (facetRequest === request && failure.name !== 'AbortError') {
-        const message = '<p class="insights-facet-unavailable" role="status">Facet values could not be loaded. Existing selections are kept; check the Orq connection or change the window to retry.</p>';
+        const message = '<p class="insights-facet-unavailable" role="status">Could not load filter choices from Orq. In <a href="/settings" target="_blank" rel="noopener">Settings → Authentication</a>, select an Orq profile with trace access and Save. If you use the environment API key, set <code>ORQ_API_KEY</code> for the dashboard and restart it. Then click <button type="button" data-retry-facets>Retry</button>. Your selected filters are kept.</p>';
+        facetOptions.querySelector('.insights-facet-unavailable')?.remove();
         if (facetOptions.querySelector('input[name^="facet_"]')) facetOptions.insertAdjacentHTML('afterbegin', message);
         else facetOptions.innerHTML = message;
       }
@@ -251,6 +254,9 @@
   });
   form.addEventListener('input', function (event) {
     if (event.target.name === 'window_days') refreshFacets();
+  });
+  facetOptions.addEventListener('click', function (event) {
+    if (event.target.closest('[data-retry-facets]')) refreshFacets(true);
   });
   form.addEventListener('submit', function (event) {
     for (const value of [1, 2]) {

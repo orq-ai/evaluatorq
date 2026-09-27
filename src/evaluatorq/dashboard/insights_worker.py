@@ -9,15 +9,19 @@ import os
 import stat
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
 
+from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.run_manifest import ManifestWriter
 from evaluatorq.contracts import ManifestStatus, RunManifest
+from evaluatorq.dashboard.auth import auth_identity, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.insights_launch import (
     _MANIFEST_ENV,
     _SNAPSHOT_ENV,
     MAX_FINDER_EXPORT_BYTES,
+    InsightsLaunchPayload,
     _open_windows_approved_regular_file,
     _windows_directory_identity,
     finder_export_reference_path,
@@ -29,6 +33,7 @@ from evaluatorq.dashboard.insights_launch import (
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
 from evaluatorq.trace_finder.export import RunExport
+from evaluatorq.trace_finder.settings import effective_settings
 
 
 def _fail_running(path: Path, error: str) -> None:
@@ -371,6 +376,40 @@ def _cleanup_finder_reference_for_manifest(manifest_path: Path) -> None:
         logger.warning('Could not recover Finder export reference from manifest {}: {}', manifest_path, exc)
 
 
+async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: InsightsPopulation, **extra: Any) -> bool:
+    """Run Insights with the clients of the auth the dashboard had selected at launch."""
+    spec = payload.spec
+    settings = effective_settings()
+    if payload.auth_method is not None and settings.orq_auth_method != payload.auth_method:
+        raise ValueError('Dashboard authentication changed after this run started. Start the run again.')
+    auth = resolve_dashboard_auth(settings)
+    if (
+        payload.auth_identity is not None
+        and await asyncio.to_thread(auth_identity, auth, settings) != payload.auth_identity
+    ):
+        raise ValueError('Dashboard authentication or scope changed after this run started. Start the run again.')
+    orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+    try:
+        run = await insights(
+            population,
+            labels=spec.label_specs(),
+            dimensions=spec.dimension_names(),
+            parallelism=spec.parallelism,
+            run_name=payload.run_name,
+            runs_dir=payload.runs_dir,
+            _run_id=payload.run_id,
+            llm_client=llm,
+            orq_client=orq,
+            **extra,
+        )
+        return run.status == 'completed'
+    finally:
+        await close_orq_client(orq)
+        close = getattr(llm, 'close', None)
+        if close is not None:
+            await close()
+
+
 def main() -> int:
     manifest_env = os.environ.get(_MANIFEST_ENV)
     heartbeat = start_worker_heartbeat(Path(manifest_env)) if manifest_env else None
@@ -390,31 +429,17 @@ def main() -> int:
             ):
                 raise ValueError('Finder export snapshot changed after launch')
             validated_export = RunExport.model_validate_json(raw_snapshot)
-            run = asyncio.run(
-                insights(
+            completed = asyncio.run(
+                _run_with_selected_auth(
+                    payload,
                     InsightsPopulation.from_finder_export(snapshot, export=validated_export),
-                    labels=spec.label_specs(),
-                    dimensions=spec.dimension_names(),
-                    parallelism=spec.parallelism,
-                    run_name=payload.run_name,
-                    runs_dir=payload.runs_dir,
-                    _run_id=payload.run_id,
                     _finder_export_source=Path(spec.finder_export),
                     _finder_export_sha256=hashlib.sha256(raw_snapshot).hexdigest(),
                 )
             )
         else:
-            run = asyncio.run(
-                insights(
-                    spec.population(),
-                    labels=spec.label_specs(),
-                    dimensions=spec.dimension_names(),
-                    parallelism=spec.parallelism,
-                    coding_analysis=spec.coding_analysis,
-                    run_name=payload.run_name,
-                    runs_dir=payload.runs_dir,
-                    _run_id=payload.run_id,
-                )
+            completed = asyncio.run(
+                _run_with_selected_auth(payload, spec.population(), coding_analysis=spec.coding_analysis)
             )
     except Exception as exc:  # noqa: BLE001 — record any failure before the pipeline owns its manifest
         logger.exception('Dashboard Insights worker failed')
@@ -445,7 +470,7 @@ def main() -> int:
                 worker_state_path(state_runs_dir, state_run_id).unlink(missing_ok=True)
             except (OSError, ValueError) as exc:
                 logger.warning('Could not remove Insights worker state for run {}: {}', state_run_id, exc)
-    return 0 if run.status == 'completed' else 1
+    return 0 if completed else 1
 
 
 if __name__ == '__main__':
