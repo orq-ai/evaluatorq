@@ -366,6 +366,43 @@ async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_targeted_hydration_deadline_keeps_completed_traces(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.05)
+    traces = FakeTraces({None: ([summary('fast', messages=[]), summary('slow', messages=[])], False, None)})
+    slow_started = asyncio.Event()
+    slow_cancelled = asyncio.Event()
+    warnings: list[tuple[Any, ...]] = []
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.logger.warning', lambda *args: warnings.append(args))
+
+    async def list_spans(*, trace_id: str, **kwargs: Any) -> Any:
+        traces.list_span_calls.append({'trace_id': trace_id, **kwargs})
+        if trace_id == 'slow':
+            slow_started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                slow_cancelled.set()
+                raise
+        return namespace(data=[span(f'{trace_id}-span', minute=1)], has_more=False, next_page_token=None)
+
+    traces.list_spans_async = list_spans
+    traces.details['fast', 'fast-span'] = detail('fast-span', 'fast conversation', minute=1)
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        2,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'fast', 'slow'},
+    )
+
+    assert slow_started.is_set()
+    assert slow_cancelled.is_set()
+    assert [record.trace_id for record in snapshot.traces] == ['fast']
+    assert any('during trace hydration' in str(args[0]) for args in warnings)
+
+
+@pytest.mark.asyncio
 async def test_populates_summary_metadata_without_listing_spans() -> None:
     trace = summary('complete', messages=user_messages('from summary'))
     trace.agent_name = 'support-agent'
@@ -645,7 +682,8 @@ async def test_rejects_repeated_page_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hydration_failure_cancels_other_span_requests() -> None:
+@pytest.mark.parametrize('targeted', [False, True])
+async def test_hydration_failure_cancels_other_span_requests(targeted: bool) -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
@@ -667,7 +705,12 @@ async def test_hydration_failure_cancels_other_span_requests() -> None:
 
     with pytest.raises(OrqSourceError, match='span service unavailable'):
         await make_source(FakeOrq(traces)).load_async(
-            START, END, 2, facets=FacetSelection(), numeric=NumericFilters()
+            START,
+            END,
+            2,
+            facets=FacetSelection(),
+            numeric=NumericFilters(),
+            target_trace_ids={'first', 'second'} if targeted else None,
         )
 
     assert len(traces.list_span_calls) == 2

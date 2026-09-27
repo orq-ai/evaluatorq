@@ -401,19 +401,19 @@ class OrqTraceSource:
 
             unique_summaries = _matching_targets(unique_summaries, targets)
 
-            try:
-                hydrated = await _await_target_deadline(
-                    self._hydrate_page(unique_summaries, project_names, semaphore, target_deadline), target_deadline
-                )
-            except asyncio.TimeoutError:
+            hydrated, hydration_timed_out = await self._hydrate_page(
+                unique_summaries, project_names, semaphore, target_deadline
+            )
+            if hydration_timed_out:
                 logger.warning(
                     'targeted trace reload reached its {} second deadline during trace hydration',
                     TARGET_RELOAD_PAGE_BUDGET_SECONDS,
                 )
-                break
             fallback_count += sum(result[1] for result in hydrated)
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
+            if hydration_timed_out:
+                break
             if targets is None and len(records) >= limit:
                 break
 
@@ -460,7 +460,7 @@ class OrqTraceSource:
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
         deadline: float | None = None,
-    ) -> list[tuple[TraceRecord | None, int]]:
+    ) -> tuple[list[tuple[TraceRecord | None, int]], bool]:
         tasks = [
             asyncio.create_task(
                 self._hydrate_trace(
@@ -474,8 +474,32 @@ class OrqTraceSource:
             )
             for summary, raw_summary, raw_capture_fallback in summaries
         ]
+        if not tasks:
+            return [], False
         try:
-            return await asyncio.gather(*tasks)
+            if deadline is None:
+                return await asyncio.gather(*tasks), False
+            remaining = max(0.0, deadline - time.monotonic())
+            done, pending = await asyncio.wait(tasks, timeout=remaining, return_when=asyncio.FIRST_EXCEPTION)
+            # Calling result() preserves ordinary hydration failures rather than
+            # converting them into partial success at the deadline.
+            completed: list[tuple[TraceRecord | None, int]] = []
+            hydration_timed_out = bool(pending)
+            for task in tasks:
+                if task not in done:
+                    continue
+                try:
+                    completed.append(task.result())
+                except TimeoutError:
+                    if time.monotonic() < deadline:
+                        raise
+                    hydration_timed_out = True
+            if not pending:
+                return completed, hydration_timed_out
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            return completed, True
         finally:
             for task in tasks:
                 if not task.done():

@@ -263,6 +263,39 @@ def test_non_oserror_setup_failure_marks_manifest_and_cleans_finder_files(
     spawn.assert_not_called()
 
 
+def test_snapshot_descriptor_closes_when_fdopen_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import os
+    import tempfile
+
+    from evaluatorq.dashboard import insights_launch
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    (exports / 'approved.json').write_text(_run_export(['trace-1']).model_dump_json(), encoding='utf-8')
+    spec = InsightsLaunchSpec(source='finder', finder_export='approved.json')
+    opened_descriptors: list[int] = []
+
+    def fail_fdopen(descriptor: int, _mode: str, **_kwargs: object):
+        opened_descriptors.append(descriptor)
+        raise OSError('snapshot fdopen failed')
+
+    monkeypatch.setattr(insights_launch.os, 'fdopen', fail_fdopen)
+
+    run_id = launch_insights(spec, tmp_path / 'runs')
+
+    manifest = list_manifests(tmp_path / 'runs')[0]
+    assert manifest.run_id == run_id
+    assert manifest.status.value == 'error'
+    assert manifest.error is not None and 'snapshot fdopen failed' in manifest.error
+    assert len(opened_descriptors) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened_descriptors[0])
+    assert not finder_export_reference_path(tmp_path / 'runs', run_id).exists()
+    assert list(tmp_path.glob('evaluatorq-finder-snapshot-*')) == []
+
+
 def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import io
     import runpy

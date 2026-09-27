@@ -516,6 +516,18 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
             os.close(directory_fd)
 
 
+def _write_private_finder_snapshot(path: Path, contents: str) -> None:
+    """Write a new private snapshot and close the raw descriptor if wrapping fails."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        snapshot_file = os.fdopen(descriptor, 'w', encoding='utf-8')
+    except OSError:
+        os.close(descriptor)
+        raise
+    with snapshot_file:
+        snapshot_file.write(contents)
+
+
 def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
     """Return the private lease path for a running Finder-sourced Insights run."""
     if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
@@ -722,9 +734,7 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             validate_private_finder_reference(reference_path)
             snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
             snapshot_path = snapshot_directory / 'finder-export.json'
-            descriptor = os.open(snapshot_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, 'w', encoding='utf-8') as snapshot_file:
-                snapshot_file.write(finder_snapshot)
+            _write_private_finder_snapshot(snapshot_path, finder_snapshot)
         # Serialize the already validated spec without asking Pydantic to validate
         # the mutable Finder path a second time.
         worker_request = json.dumps({
