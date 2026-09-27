@@ -7,6 +7,7 @@ should consume the sections produced here.
 
 Section kinds:
     - ``summary``                 — aggregate statistics
+    - ``pipeline_warnings``       — run-level degradations (e.g. failed strategy generation)
     - ``severity_definitions``    — severity level reference table
     - ``focus_areas``             — top-5 highest-risk categories
     - ``vulnerability_breakdown`` — per-vulnerability table rows (primary)
@@ -898,6 +899,15 @@ def _build_severity_definitions_section() -> ReportSection:
     )
 
 
+def _build_pipeline_warnings_section(report: RedTeamReport) -> ReportSection | None:
+    """Surface run-level degradations the results alone do not show."""
+    if not report.pipeline_warnings:
+        return None
+    return ReportSection(
+        kind='pipeline_warnings', title='Run Warnings', data={'warnings': list(report.pipeline_warnings)}
+    )
+
+
 def _build_methodology_section(report: RedTeamReport) -> ReportSection | None:
     """Build methodology disclosure section from report metadata."""
     data: dict[str, Any] = {
@@ -933,6 +943,7 @@ def build_report_sections(report: RedTeamReport) -> list[ReportSection]:
 
     Returns sections in document order optimised for executive readability:
         1.  summary
+            pipeline_warnings        (only when the run recorded any)
         2.  methodology
         3.  agent_context            (when agent info is available)
         4.  focus_areas
@@ -955,6 +966,12 @@ def build_report_sections(report: RedTeamReport) -> list[ReportSection]:
     sections: list[ReportSection] = [
         _build_summary_section(report),
     ]
+
+    # Straight after the summary: a degraded run should be read as one before
+    # anyone reads its numbers.
+    warnings_section = _build_pipeline_warnings_section(report)
+    if warnings_section is not None:
+        sections.append(warnings_section)
 
     # Methodology — how the assessment was conducted
     methodology_section = _build_methodology_section(report)

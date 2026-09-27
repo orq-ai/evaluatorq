@@ -85,6 +85,120 @@
     }
   });
 
+  // Delegated so the finder handlers survive HTMX fragment swaps.
+  document.body.addEventListener('click', function (evt) {
+    const example = evt.target.closest('[data-finder-example]');
+    if (example) {
+      const query = document.querySelector('#finder-query-form textarea[name="query"]');
+      if (query) {
+        query.value = example.getAttribute('data-finder-example') || '';
+        query.focus();
+        query.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      return;
+    }
+
+    const item = evt.target.closest('.facet-item');
+    if (item) { showFacet(item); return; }
+    const addFilter = evt.target.closest('.finder-controls .add');
+    if (addFilter) {
+      const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
+      if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
+      return;
+    }
+    const chipOpen = evt.target.closest('[data-chip-open]');
+    if (chipOpen) {
+      const menu = document.querySelector('.finder-controls .finder-facets');
+      const target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
+      if (target) {
+        // Anchor the menu under the clicked chip instead of under + Filter.
+        const chip = chipOpen.closest('.chip').getBoundingClientRect();
+        const wrap = menu.parentElement.getBoundingClientRect();
+        menu.style.left = (chip.left - wrap.left) + 'px';
+        menu.style.top = (chip.bottom - wrap.top + 6) + 'px';
+        menu.classList.add('open');
+        showFacet(target);
+      }
+      return;
+    }
+    if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
+      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
+    }
+
+    const remove = evt.target.closest('[data-finder-remove]');
+    if (!remove) return;
+    const name = remove.getAttribute('data-finder-remove');
+    if (!name) return;
+    const value = remove.getAttribute('data-finder-value');
+    document.querySelectorAll('input[name="' + name + '"]').forEach(function (input) {
+      if (value === null || input.value === value) {
+        if (input.type === 'checkbox') input.checked = false;
+        else if (input.type === 'hidden') input.remove();
+        else input.value = '';
+      }
+    });
+    remove.closest('.chip').remove();
+  });
+
+  function showFacet(item) {
+    const menu = item.closest('.finder-facets');
+    if (!menu) return;
+    const name = item.getAttribute('data-facet');
+    menu.querySelectorAll('.facet-item').forEach(function (other) {
+      const on = other === item;
+      other.classList.toggle('is-active', on);
+      other.setAttribute('aria-expanded', on ? 'true' : 'false');
+    });
+    menu.querySelectorAll('.facet-sub').forEach(function (sub) {
+      const on = sub.getAttribute('data-facet-sub') === name;
+      sub.classList.toggle('is-active', on);
+      sub.hidden = !on;
+    });
+  }
+
+  document.body.addEventListener('mouseover', function (evt) {
+    const item = evt.target.closest('.facet-item');
+    if (item && !item.classList.contains('is-active')) showFacet(item);
+  });
+
+  document.body.addEventListener('input', function (evt) {
+    const search = evt.target.closest('.finder-facets .facet-search');
+    if (!search) return;
+    const sub = search.closest('.facet-sub');
+    const query = search.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    sub.querySelectorAll('.facet-values label').forEach(function (option) {
+      const matches = option.textContent.toLocaleLowerCase().includes(query);
+      option.hidden = !matches;
+      if (matches) visible += 1;
+    });
+    sub.querySelector('.facet-no-results').hidden = visible !== 0;
+  });
+
+  // Unticking a value in the menu must also drop the hidden input the chip row submits.
+  document.body.addEventListener('change', function (evt) {
+    const box = evt.target;
+    if (!box.matches('.finder-facets input[type="checkbox"]') || box.checked) return;
+    document.querySelectorAll('input[type="hidden"][name="' + box.name + '"]').forEach(function (hidden) {
+      if (hidden.value === box.value) hidden.remove();
+    });
+    document.querySelectorAll('.chip[data-chip-name="' + box.name + '"]').forEach(function (chip) {
+      if (chip.getAttribute('data-finder-value') === box.value) chip.remove();
+    });
+  });
+
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Escape') {
+      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
+    }
+    if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
+    const query = evt.target.closest('#finder-query-form textarea[name="query"]');
+    if (!query) return;
+    evt.preventDefault();
+    const form = query.form || document.getElementById('finder-query-form');
+    if (form && form.requestSubmit) form.requestSubmit();
+  });
+
   // Resize-on-tab-show: CSS-only report tabs render their Vega charts while the
   // panel is display:none (zero width), so charts come up tiny. When a tab is
   // selected, resize the now-visible panel's tracked views to fit (RES-1021).

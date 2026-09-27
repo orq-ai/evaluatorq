@@ -6,7 +6,7 @@ than replacing it — passing retry_statuses={429} must not disable 503 retries.
 
 from __future__ import annotations
 
-from evaluatorq.common.retry import _is_retryable_status
+from evaluatorq.common.retry import _is_retryable_error, _is_retryable_status
 
 
 def test_default_retries_429():
@@ -218,3 +218,18 @@ async def test_jitter_bounded_at_quarter_of_wait(monkeypatch: pytest.MonkeyPatch
         await with_retry(always_503, max_attempts=3, label="test")
 
     assert uniform_calls == [(0, 2.0 * 0.25), (0, 4.0 * 0.25)]
+
+
+def _http_status_error(status: int) -> httpx.HTTPStatusError:
+    request = httpx.Request('POST', 'https://my.orq.ai/v2/traces/v3oql')
+    return httpx.HTTPStatusError('boom', request=request, response=httpx.Response(status, request=request))
+
+
+def test_raw_httpx_status_error_is_retryable():
+    """The trace endpoints have no SDK method, so their 429/5xx arrive as raw httpx errors."""
+    assert _is_retryable_error(_http_status_error(429)) is True
+    assert _is_retryable_error(_http_status_error(503)) is True
+
+
+def test_raw_httpx_client_error_is_not_retryable():
+    assert _is_retryable_error(_http_status_error(404)) is False

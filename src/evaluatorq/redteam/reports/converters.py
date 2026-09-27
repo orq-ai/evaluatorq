@@ -150,8 +150,12 @@ def _flatten_turns(d: dict[str, Any]) -> dict[str, Any]:
     so JobOutputPayload validates.
     """
     turns_val = d.get('turns')
-    if not isinstance(turns_val, list) or not turns_val:
+    if not isinstance(turns_val, list):
         return d
+    if not turns_val:
+        out = dict(d)
+        out['turns'] = 0
+        return out
     first = turns_val[0]
     if not (isinstance(first, dict) and 'attacker' in first and 'target' in first):
         return d
@@ -320,6 +324,8 @@ def _coerce_job_output_payload(raw_output: Any) -> JobOutputPayload:
         'token_usage',
         'token_usage_adversarial',
         'token_usage_target',
+        'token_usage_bootstrap',
+        'seed_context',
         'system_prompt',
         'error',
         'error_type',
@@ -689,12 +695,14 @@ def dynamic_evaluatorq_results_to_report(
         )
 
         execution = ExecutionDetails(
-            turns=job_output.turns or 1,
+            turns=job_output.turns if job_output.turns is not None else 1,
             max_turns=job_output.max_turns,
             duration_seconds=job_output.duration_seconds,
             objective_achieved=job_output.objective_achieved,
             objective_rationale=job_output.objective_rationale,
             token_usage=token_usage,
+            token_usage_bootstrap=job_output.token_usage_bootstrap,
+            seed_context=job_output.seed_context,
         )
 
         agent = AgentInfo(
@@ -719,6 +727,8 @@ def dynamic_evaluatorq_results_to_report(
                 error_stage=error_stage,
                 error_code=error_code,
                 error_details=error_details,
+                token_usage_bootstrap=job_output.token_usage_bootstrap,
+                seed_context=job_output.seed_context,
                 thread_id=job_output.thread_id,
                 response_traces=job_output.response_traces,
             )

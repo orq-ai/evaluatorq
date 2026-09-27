@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import functools
 import hashlib
+import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import starmap
 from pathlib import Path
@@ -31,6 +33,7 @@ from fasthtml.common import Script
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
+from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
 
 if TYPE_CHECKING:
@@ -38,6 +41,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
+    from evaluatorq.dashboard.orq_scope import OrqScope
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
@@ -742,14 +746,150 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def settings_body(config: list[tuple[str, str | list[str]]]) -> str:
-    """Render the Settings screen: read-only runtime configuration (run stores,
-    default model, API-key presence, Orq host/workspace).
+def _scope_settings_rows(scope: OrqScope, *, workspace: str, chosen_project: str, errors: Mapping[str, str]) -> str:
+    """Render the workspace and project choices for one credential."""
+    workspace_error = (
+        f'<span class="settings-error">{esc(errors["orq_workspace"])}</span>' if 'orq_workspace' in errors else ''
+    )
+    if scope.workspace_key:
+        workspace_control = (
+            f'<select id="orq_workspace" name="orq_workspace">'
+            f'<option value="{esc(scope.workspace_key)}" selected>{esc(scope.workspace_key)}</option></select>'
+        )
+    else:
+        workspace_control = (
+            f'<input id="orq_workspace" name="orq_workspace" type="text" value="{esc(workspace)}" '
+            'placeholder="Workspace slug from the Orq URL">'
+        )
+    rows = [
+        (
+            '<div class="config-row settings-field"><label class="config-key" for="orq_workspace">Orq workspace</label>'
+            f'<span class="config-val">{workspace_control}{workspace_error}</span></div>'
+        )
+    ]
+    if scope.workspace_id and not scope.workspace_key:
+        rows.append(
+            '<p class="settings-error" role="status">The CLI could not verify this workspace slug. '
+            "Enter it from this profile's Orq URL; it controls trace links only.</p>"
+        )
+    project_options = ['<option value="">All accessible projects</option>']
+    if chosen_project and all(project.id != chosen_project for project in scope.projects):
+        project_options.append(
+            f'<option value="{esc(chosen_project)}" selected disabled>Saved project unavailable</option>'
+        )
+    for project in scope.projects:
+        selected = ' selected' if project.id == chosen_project else ''
+        project_options.append(
+            f'<option value="{esc(project.id)}"{selected}>{esc(project.name)} ({esc(project.id[-8:])})</option>'
+        )
+    project_error = (
+        f'<span class="settings-error">{esc(errors["orq_project_id"])}</span>' if 'orq_project_id' in errors else ''
+    )
+    rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="orq_project_id">Orq project</label>'
+        f'<span class="config-val"><select id="orq_project_id" name="orq_project_id">'
+        f'{"".join(project_options)}</select>{project_error}</span></div>'
+    )
+    if scope.error:
+        rows.append(f'<p class="settings-error" role="status">{esc(scope.error)}</p>')
+    return ''.join(rows)
 
-    There's nothing editable here anymore — deep-links derive host + workspace
-    per-run from each run's ``experiment_url``; the host/workspace rows are just
-    the env fallback for runs with no experiment.
+
+def settings_body(
+    config: list[tuple[str, str | list[str]]],
+    settings: Any | None = None,
+    *,
+    errors: Mapping[str, str] | None = None,
+    saved: bool = False,
+    preview: bool = False,
+    profiles: Sequence[Any] = (),
+    scope: OrqScope | None = None,
+) -> str:
+    """Render editable finder settings above the read-only runtime configuration.
+
+    ``profiles`` are the orq CLI's credential profiles; when there are any, an
+    Advanced block offers them as the credentials the dashboard uses.
     """
+    if settings is None:
+        from evaluatorq.trace_finder.settings import effective_settings
+
+        settings = effective_settings()
+    errors = errors or {}
+
+    def setting_value(name: str) -> str:
+        value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
+        return '' if value is None else str(value)
+
+    fields = (
+        ('compiler_model', 'Compiler model', 'text'),
+        ('classifier_model', 'Classifier model', 'text'),
+        ('apply_model', 'Apply-recommendations model', 'text'),
+    )
+    field_rows: list[str] = []
+    for name, label, input_type in fields:
+        error = errors.get(name)
+        error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
+        field_rows.append(
+            f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
+            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="{input_type}" '
+            f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
+        )
+    saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
+    if preview:
+        saved_html += (
+            '<p class="settings-saved" role="status">Profile preview. Choose a project, then Save to apply.</p>'
+        )
+    form_error = f'<p class="settings-error" role="alert">{esc(errors["form"])}</p>' if 'form' in errors else ''
+    advanced = ''
+    scope_rows: list[str] = []
+    chosen = setting_value('orq_profile')
+    if profiles or chosen:
+        options = ['<option value="">Environment (ORQ_API_KEY)</option>']
+        if chosen and all(profile.name != chosen for profile in profiles):
+            options.append(f'<option value="{esc(chosen)}" selected disabled>{esc(chosen)} (unavailable)</option>')
+        for profile in profiles:
+            label = profile.name + (f' ({profile.server})' if profile.server else '')
+            selected = ' selected' if profile.name == chosen else ''
+            if '*' in profile.api_key:
+                label += ' (CLI key masked)'
+                options.append(f'<option value="{esc(profile.name)}"{selected} disabled>{esc(label)}</option>')
+            else:
+                options.append(f'<option value="{esc(profile.name)}"{selected}>{esc(label)}</option>')
+        profile_error = errors.get('orq_profile')
+        profile_error_html = f'<span class="settings-error">{esc(profile_error)}</span>' if profile_error else ''
+        scope_rows.append(
+            '<div class="config-row settings-field">'
+            '<label class="config-key" for="orq_profile">Orq profile</label>'
+            f'<span class="config-val"><select id="orq_profile" name="orq_profile" '
+            f'onchange="location.assign(\'/settings?profile=\'+encodeURIComponent(this.value))">{"".join(options)}</select>'
+            f'{profile_error_html}</span></div>'
+        )
+    if scope is not None:
+        workspace = setting_value('orq_workspace')
+        if not chosen:
+            workspace = (
+                workspace
+                or os.environ.get('ORQ_WORKSPACE', '').strip()
+                or os.environ.get('ORQ_WORKSPACE_SLUG', '').strip()
+            )
+        chosen_project = setting_value('orq_project_id') or (scope.projects[0].id if len(scope.projects) == 1 else '')
+        scope_rows.append(
+            _scope_settings_rows(scope, workspace=workspace, chosen_project=chosen_project, errors=errors)
+        )
+    if scope_rows:
+        advanced = (
+            f'<details class="settings-advanced"{" open" if chosen or any(key.startswith("orq_") for key in errors) else ""}>'
+            f'<summary>Advanced</summary><div class="config-list">{"".join(scope_rows)}</div></details>'
+        )
+    form = (
+        '<form class="settings-form" method="post" action="/settings">'
+        f'{csrf_field()}{form_error}<div class="config-list">{"".join(field_rows)}</div>{advanced}'
+        '<button type="submit" class="rt-apply-btn">Save</button>'
+        '</form>'
+    )
+    settings_panel = _panel(
+        'Models', 'Window, limit and parallelism are set per run on the Trace search page', f'{saved_html}{form}'
+    )
 
     def val_html(v: str | list[str]) -> str:
         # A list renders one item per line; a scalar is a single line.
@@ -762,7 +902,7 @@ def settings_body(config: list[tuple[str, str | list[str]]]) -> str:
         for k, v in config
     )
     config_panel = _panel('Configuration', 'What this dashboard is reading', f'<div class="config-list">{rows}</div>')
-    return f'<section class="dash-wrap">{config_panel}</section>'
+    return f'<section class="dash-wrap">{settings_panel}{config_panel}</section>'
 
 
 def report_not_found(rid: str) -> str:

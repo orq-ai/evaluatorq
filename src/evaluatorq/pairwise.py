@@ -27,7 +27,6 @@ from evaluatorq.common.jury import (
     _run_jury_core,
     _sum_usage,
     _unswap,
-    as_semaphore,
     resolve_panel,
 )
 from evaluatorq.common.tracing import current_otel_context, set_span_attrs, with_span
@@ -762,7 +761,7 @@ async def _pairwise_prediction(
 class _PairwiseCall:
     """The per-comparison inputs every ordering and stand-in round shares.
 
-    Bundled rather than threaded: these seven are identical at all five call
+    Bundled rather than threaded: these are identical at all five call
     sites, and repeating them keyword by keyword is how one of them silently
     stops matching the others. ``jury_ctx`` is the comparison-level OTel context,
     so an instance must be built *after* ``current_otel_context()`` has been
@@ -774,7 +773,6 @@ class _PairwiseCall:
     response_b: Any
     repetitions: int
     propagate_errors: bool
-    semaphore: asyncio.Semaphore | None
     jury_ctx: object | None
 
 
@@ -801,7 +799,6 @@ async def _run_pairwise_ordering(
         replacement_judges=None,
         min_successful_judges=1,
         propagate_errors=call.propagate_errors,
-        max_concurrency=call.semaphore,
         label_swapped=swapped,
         parent_context=call.jury_ctx,
         replacement=replacement,
@@ -907,7 +904,6 @@ async def run_pairwise(
     replacement_judges: Sequence[str] | None = None,
     min_successful_judges: int = 1,
     propagate_errors: bool = False,
-    max_concurrency: int | asyncio.Semaphore | None = None,
 ) -> PairwiseComparison:
     """Run a panel over one A-vs-B comparison and reconcile it into a verdict.
 
@@ -923,19 +919,16 @@ async def run_pairwise(
     ``'inconclusive'`` when fewer than ``min_successful_judges`` cast a decisive
     reconciled vote.
 
-    ``max_concurrency`` caps how many judge calls run at once across the whole
-    comparison (judges x orderings x repetitions, replacements included). Pass
-    an existing ``asyncio.Semaphore`` to share one budget across several
-    comparisons. ``None`` (default) keeps the fan-out unbounded.
+    Concurrency is bounded by the run-scoped LLM ceiling (see
+    ``common.llm_limit``): every judge call routes through ``common.llm_call``
+    and takes a slot, so both orderings and the replacement pass share one
+    run-wide cap rather than a per-comparison one.
 
     Tracing: the whole comparison is ONE ``orq.pairwise_jury`` span (RES-985). Each
     ordering drives ``_run_jury_core`` rather than ``run_jury`` so it doesn't
     mint a second jury span whose aggregates describe half a comparison; every
     judge span hangs off this one, tagged ``judge.label_swapped``.
     """
-    # Normalized once so both orderings (and the replacement pass) draw from
-    # the same budget rather than each minting their own.
-    semaphore = as_semaphore(max_concurrency)
     resolved_panel = resolve_panel(panel)
     jury_ctx: object | None = None
 
@@ -949,7 +942,6 @@ async def run_pairwise(
             response_b=response_b,
             repetitions=repetitions,
             propagate_errors=propagate_errors,
-            semaphore=semaphore,
             jury_ctx=jury_ctx,
         )
         first_votes, second_votes, usages = await _run_pairwise_both(resolved_panel, call, swap=swap)

@@ -1862,6 +1862,61 @@ def test_from_traces_summarizes_once_and_reuses_summary(monkeypatch, tmp_path: P
     assert captured["extend"][0][1]["summaries"] == summaries
 
 
+
+@pytest.mark.parametrize(
+    ("flag", "expected"),
+    [([], 10), (["--llm-parallelism", "3"], 3), (["--llm-parallelism", "-1"], -1)],
+)
+def test_from_traces_runs_every_llm_step_under_the_ceiling(
+    monkeypatch, tmp_path: Path, flag: list[str], expected: int
+) -> None:
+    """Summarize, datapoints and extend all see the --llm-parallelism budget (10 when unset)."""
+    from evaluatorq.common import llm_limit
+    from evaluatorq.simulation import traces as traces_mod
+
+    seen: dict[str, int] = {}
+
+    def record(step: str) -> None:
+        budgets = llm_limit._llm_budgets.get()
+        seen[step] = budgets[-1]._limit if budgets else llm_limit.DEFAULT_LLM_PARALLELISM
+
+    async def fake_fetch(**kwargs: Any) -> list[Any]:
+        return [object()]
+
+    async def fake_summarize(conversations: Any, **kwargs: Any) -> dict[str, str]:
+        record("summarize")
+        return {"trace-1": "summary"}
+
+    async def fake_datapoints(conversations: Any, **kwargs: Any) -> list[Any]:
+        record("datapoints")
+        return [object()]
+
+    async def fake_extend(conversations: Any, **kwargs: Any) -> list[Any]:
+        record("extend")
+        return [object()]
+
+    monkeypatch.setattr(traces_mod, "fetch_trace_conversations", fake_fetch)
+    monkeypatch.setattr(traces_mod, "summarize_conversations", fake_summarize)
+    monkeypatch.setattr(traces_mod, "datapoints_from_traces", fake_datapoints)
+    monkeypatch.setattr(traces_mod, "extend_from_traces", fake_extend)
+    monkeypatch.setattr("evaluatorq.simulation.cli._write_datapoints", lambda *args, **kwargs: None)
+
+    result = CliRunner().invoke(
+        app,
+        ["from-traces", "--output", str(tmp_path / "datapoints.jsonl"), "--extend", "1", *flag],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == {"summarize": expected, "datapoints": expected, "extend": expected}
+
+
+def test_from_traces_rejects_zero_llm_parallelism(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        ["from-traces", "--output", str(tmp_path / "datapoints.jsonl"), "--llm-parallelism", "0"],
+    )
+    assert result.exit_code != 0
+
 def test_old_model_flag_rejected(monkeypatch):
     from typer.testing import CliRunner
 

@@ -20,7 +20,14 @@ from evaluatorq.redteam.adaptive.strategy_registry import (
     select_applicable_strategies,
     select_applicable_strategies_for_vulnerability,
 )
-from evaluatorq.redteam.contracts import PIPELINE_CONFIG, DeliveryMethod, LLMConfig, TurnType, Vulnerability
+from evaluatorq.redteam.contracts import (
+    PIPELINE_CONFIG,
+    AttackTechnique,
+    DeliveryMethod,
+    LLMConfig,
+    TurnType,
+    Vulnerability,
+)
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import resolve_category
 
@@ -45,13 +52,13 @@ async def plan_strategies_for_vulnerabilities(
     max_per_category: int | None,
     generate_additional_strategies: bool,
     generated_strategy_count: int,
-    generation_parallelism: int | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[dict[Vulnerability, list[AttackStrategy]], dict[Vulnerability, dict[str, Any]], AgentCapabilities]:
     """Build per-vulnerability strategy plans for dynamic red teaming.
 
@@ -135,6 +142,7 @@ async def plan_strategies_for_vulnerabilities(
             applicable_hardcoded,
             names=strategy_names,
             delivery_methods=delivery_methods,
+            attack_techniques=attack_techniques,
         )
 
     generated_by_vuln: dict[Vulnerability, list[AttackStrategy]] = {vuln: [] for vuln in vulnerabilities}
@@ -149,30 +157,27 @@ async def plan_strategies_for_vulnerabilities(
                 'orq.redteam.num_vulnerabilities': len(vulnerabilities),
             },
         ) as strat_span:
-            effective_parallelism = max(1, generation_parallelism or len(vulnerabilities) or 1)
-            semaphore = asyncio.Semaphore(effective_parallelism)
 
             async def _generate_for_vulnerability(
                 vuln: Vulnerability,
             ) -> tuple[Vulnerability, list[AttackStrategy], str | None]:
                 try:
-                    async with semaphore:
-                        generated = await generate_strategies_for_vulnerability(
-                            vuln=vuln,
-                            agent_context=agent_context,
-                            llm_client=llm_client,
-                            model=attack_model,
-                            count=generated_strategy_count,
-                            # Generated strategies always run multi-turn: a single-turn
-                            # generated attack gets one shot with no chance to adapt, which
-                            # under-tests the agent. Multi-turn still ends early the moment
-                            # the objective is achieved, so cheap wins stay cheap.
-                            turn_type=TurnType.MULTI,
-                            max_turns=max_turns,
-                            attacker_instructions=attacker_instructions,
-                            llm_kwargs=llm_kwargs,
-                            pipeline_config=cfg,
-                        )
+                    generated = await generate_strategies_for_vulnerability(
+                        vuln=vuln,
+                        agent_context=agent_context,
+                        llm_client=llm_client,
+                        model=attack_model,
+                        count=generated_strategy_count,
+                        # Generated strategies always run multi-turn: a single-turn
+                        # generated attack gets one shot with no chance to adapt, which
+                        # under-tests the agent. Multi-turn still ends early the moment
+                        # the objective is achieved, so cheap wins stay cheap.
+                        turn_type=TurnType.MULTI,
+                        max_turns=max_turns,
+                        attacker_instructions=attacker_instructions,
+                        llm_kwargs=llm_kwargs,
+                        pipeline_config=cfg,
+                    )
                     return vuln, generated, None
                 except Exception as e:  # noqa: BLE001
                     logger.error(
@@ -189,6 +194,7 @@ async def plan_strategies_for_vulnerabilities(
                     generated,
                     names=strategy_names,
                     delivery_methods=delivery_methods,
+                    attack_techniques=attack_techniques,
                 )
                 generated_by_vuln[vuln] = generated
                 generation_errors[vuln] = generation_error
@@ -244,13 +250,13 @@ async def plan_strategies_for_categories(
     max_per_category: int | None,
     generate_additional_strategies: bool,
     generated_strategy_count: int,
-    generation_parallelism: int | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
     agent_capabilities: AgentCapabilities | None = None,
     strategy_names: set[str] | None = None,
     delivery_methods: set[DeliveryMethod | str] | None = None,
+    attack_techniques: set[AttackTechnique] | None = None,
 ) -> tuple[dict[str, list[AttackStrategy]], dict[str, dict[str, Any]], AgentCapabilities]:
     """Build per-category strategy plans for dynamic red teaming.
 
@@ -290,13 +296,13 @@ async def plan_strategies_for_categories(
         max_per_category=max_per_category,
         generate_additional_strategies=generate_additional_strategies,
         generated_strategy_count=generated_strategy_count,
-        generation_parallelism=generation_parallelism,
         attacker_instructions=attacker_instructions,
         llm_kwargs=llm_kwargs,
         pipeline_config=pipeline_config,
         agent_capabilities=agent_capabilities,
         strategy_names=strategy_names,
         delivery_methods=delivery_methods,
+        attack_techniques=attack_techniques,
     )
 
     # Remap results back to original category strings
@@ -319,6 +325,7 @@ async def plan_strategies_for_categories(
                 fallback_strategies,
                 names=strategy_names,
                 delivery_methods=delivery_methods,
+                attack_techniques=attack_techniques,
             )
             strategy_selection[category] = {
                 'all_hardcoded': [s.model_dump(mode='json') for s in all_category_strategies[category]],

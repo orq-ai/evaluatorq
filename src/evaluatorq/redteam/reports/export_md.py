@@ -10,6 +10,7 @@ HTML tags that GitHub-Flavored Markdown and most modern renderers support.
 
 from __future__ import annotations
 
+import html
 import operator
 from typing import TYPE_CHECKING, Any
 
@@ -522,6 +523,19 @@ def _render_turn_depth_analysis_section(section: ReportSection) -> str:
     return f'## {section.title}\n\n{table}'
 
 
+def _render_pipeline_warnings_section(section: ReportSection) -> str:
+    warnings: list[str] = section.data.get('warnings', [])
+    lines = [f'## {section.title}', '', '> [!WARNING]', '> This run was degraded. Read the results with these in mind:']
+    markdown_special = frozenset('\\`*_{}[]#+-.|')
+    for warning in warnings:
+        for index, line in enumerate(str(warning).splitlines() or ['']):
+            escaped = html.escape(
+                ''.join(f'\\{char}' if char in markdown_special else char for char in line), quote=False
+            )
+            lines.append(('> - ' if index == 0 else '>   ') + escaped)
+    return '\n'.join(lines)
+
+
 def _render_error_analysis_section(section: ReportSection) -> str:
     """Render error analysis with a warning callout and breakdown tables."""
     data = section.data
@@ -783,6 +797,7 @@ def _render_methodology_section(section: ReportSection) -> str:
 
 _SECTION_RENDERERS = {
     'summary': _render_summary_section,
+    'pipeline_warnings': _render_pipeline_warnings_section,
     'methodology': _render_methodology_section,
     'agent_context': _render_agent_context_section,
     'focus_areas': _render_focus_areas_section,

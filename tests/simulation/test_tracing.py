@@ -976,6 +976,7 @@ async def test_generated_datapoint_first_message_has_simulation_span(
         CommunicationStyle,
         Persona,
         Scenario,
+        SimulationDatapoint,
     )
 
     persona = Persona(
@@ -996,6 +997,7 @@ async def test_generated_datapoint_first_message_has_simulation_span(
         async with with_simulation_span('orq.simulation.first_message_generation', None):
             datapoint = await _generate_single_datapoint(gen, persona, scenario)
 
+    assert isinstance(datapoint, SimulationDatapoint)
     assert datapoint.first_message == 'Hello there'
     pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     first_msg = _find(span_collector, 'orq.simulation.first_message_generation')
@@ -1483,7 +1485,9 @@ async def test_first_message_generation_span_records_failures(
 
     fake_client = MagicMock()
     fake_client.responses = MagicMock()
-    fake_client.responses.create = AsyncMock(side_effect=RuntimeError('boom'))
+    from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerationError
+
+    fake_client.responses.create = AsyncMock(side_effect=FirstMessageGenerationError('no usable message'))
 
     from evaluatorq.simulation.api import _resolve_or_generate_datapoints
     from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario

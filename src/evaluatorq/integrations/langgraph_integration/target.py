@@ -16,6 +16,7 @@ from evaluatorq.contracts import (
     AgentContext,
     AgentResponse,
     AgentTarget,
+    ConversationHistoryMode,
     MemoryStoreInfo,
     Message,
     OutputMessage,
@@ -264,6 +265,8 @@ class LangGraphTarget(AgentTarget):
     report = await red_team(target=target)
     ```
     """
+
+    history_mode = ConversationHistoryMode.TARGET
 
     def __init__(
         self,

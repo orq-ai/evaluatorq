@@ -10,7 +10,7 @@ async def evaluatorq(
     name: str,
     params: EvaluatorParams | dict[str, Any] | None = None,
     *,
-    data: DatasetIdInput | ExperimentInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
+    data: DatasetIdInput | ExperimentInput | TraceInput | Sequence[Awaitable[DataPoint] | DataPointInput] | None = None,
     jobs: list[Job] | None = None,
     evaluators: list[Evaluator] | None = None,
     datapoint_parallelism: int = 10,
@@ -24,11 +24,11 @@ async def evaluatorq(
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, or an existing experiment |
-| `jobs` | `list[Job]` | **required** | Jobs to run on each data point |
+| `data` | `list[DataPoint \| dict]` \| `list[Awaitable[DataPoint]]` \| `DatasetIdInput` \| `ExperimentInput` \| `TraceInput` | **required** | Data to evaluate — local rows (a `DataPoint` or a plain dict with the same keys), an Orq dataset, an existing experiment, or recorded trace output |
+| `jobs` | `list[Job]` \| `None` | required when `inference=True` | Jobs to run on each data point; omitted and ignored when `inference=False` |
 | `evaluators` | `list[Evaluator]` \| `None` | `None` | Evaluators that score job outputs |
 | `datapoint_parallelism` | `int` (≥1) | `10` | Number of concurrent datapoints. The former name `parallelism` still works, deprecated |
-| `llm_parallelism` | `int` (≥1) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. Unbounded when unset |
+| `llm_parallelism` | `int` (≥1, or `-1`) \| `None` | `None` | Ceiling on in-flight LLM requests for the whole run. `None` keeps an enclosing limit or applies the default of 10; `-1` adds no cap and disables the default only at the top level |
 | `print_results` | `bool` | `True` | Display the progress and results table |
 | `description` | `str` \| `None` | `None` | Optional evaluation description |
 | `path` | `str` \| `None` | `None` | Path for organizing results on the Orq dashboard (e.g. `"Project/Category"`) |
@@ -193,6 +193,48 @@ data=ExperimentInput(experiment_id="<experiment_id>", run_id="<run_id>")
 
 `ORQ_API_KEY` must be set — the recorded rows are fetched from the Orq API. When `inference=False`, `jobs` is optional and ignored. Any row whose recorded response is missing or blank fails loudly rather than being silently skipped.
 
+### Evaluate recorded trace output
+
+`TraceInput` is the async request for recorded trace data, and it has two mutually exclusive modes. **Query mode** selects a bounded batch by `limit`, time bounds (`start_time`/`end_time`), `search` text, or `filters` — the mode you reach for when you do not already have a trace ID. **Trace mode** takes one `trace_id`, with an optional exact `span_id`; `span_id` cannot be used without its trace, and `limit` cannot be combined with `trace_id` because trace mode never reads it. The shared importer returns normalized `Trace` objects and `Trace.to_datapoint()` supplies the evaluatorq row shape.
+
+Query mode is the common path — score whatever ran recently without looking up an ID first:
+
+```python
+from datetime import datetime, timedelta, timezone
+
+from evaluatorq import TraceInput, evaluatorq, orq_evaluator
+
+results = await evaluatorq(
+    name='production-quality',
+    data=TraceInput(
+        limit=50,
+        start_time=datetime.now(timezone.utc) - timedelta(days=1),
+        search='checkout',
+    ),
+    evaluators=[orq_evaluator(evaluator_id='eval-1')],
+)
+```
+
+`filters` is a `list[dict[str, Any]]` passed straight through to the platform's advanced trace filters — the same shape the Orq Traces UI produces. Each entry takes a `field` (the `attr.` prefix over the response's `attributes` path), an `op`, and `values` as a list of strings, even for a single value:
+
+```python
+data=TraceInput(limit=50, filters=[{"field": "attr.orq.billing.cache_read_cost", "op": "gt", "values": ["0"]}])
+```
+
+Once you have a specific trace — from the Orq UI's trace URL, or `orq traces search --from 24h --to now --query checkout -o json` — trace mode replaces the whole query:
+
+```python
+results = await evaluatorq(
+    name='production-quality',
+    data=TraceInput(trace_id='trace_123', span_id='span_456'),
+    evaluators=[orq_evaluator(evaluator_id='eval-1')],
+)
+```
+
+Evaluatorq skips jobs and sends the trace's recorded output to your evaluators — `TraceInput` resolves `inference=False` on its own, so there is no need to pass it. An exact span is parsed on its own; a trace or query selection starts from the latest eligible non-evaluator span and follows parents until it finds messages. Chat Completions, Responses, and OpenTelemetry GenAI messages are accepted from top-level span input/output, flat or nested span attributes, and span event attributes. A query that matches no traces logs a warning, and `evaluatorq()` raises rather than running a green zero-row evaluation.
+
+`orq_evaluator` needs the Orq SDK, which the `evaluatorq[orq]` extra installs (`uv add "evaluatorq[orq]"`) — a base evaluatorq install already carries it, but name the extra explicitly rather than relying on that. `evaluator_id` is required and keyword-only. It identifies an evaluator that already exists in Orq and determines the evaluatorq result name (`orq:eval-1` when `model` is omitted, `orq:eval-1@<model>` when you set one); there is no separate `name=` override. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
+
 ## Built-in evaluators
 
 ```python
@@ -268,15 +310,17 @@ await evaluatorq("parallel-eval", data=[...], jobs=[...], datapoint_parallelism=
 Against a provider concurrency limit, size the request ceiling instead:
 
 ```python
-await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=10)
+await evaluatorq("bounded-eval", data=[...], jobs=[...], llm_parallelism=20)
 ```
+
+Unset, the ceiling is 10 concurrent requests, and that default also covers calls made outside `evaluatorq()`, such as a standalone `run_pairwise()`. Two unconfigured runs in the same event loop share that default cap of 10, protecting the provider from their combined load; a run with an explicit `llm_parallelism=` has its own budget. Pass `-1` at the top level to disable the default ceiling. To bound code that is not an entry point, wrap it in `async with evaluatorq.llm_concurrency_limit(n):`. Nested limits stack: a block set to 5 inside a run set to 10 has a ceiling of 5, while a block set to 20 or `-1` inside that run remains under the run's ceiling of 10.
 
 This counts requests, not tasks, so it holds however the fan-out nests. It is a concurrency bound rather than a rate limit — ten slots against 10s calls is about 60 requests/minute, but the same ten slots become 300/minute if the provider speeds up to 2s.
 
 Requests evaluatorq issues itself (judges, juries, simulation agents, the red-team pipeline) take a slot automatically. A job that calls a provider SDK directly is invisible to the budget unless you wrap it:
 
 ```python
-from evaluatorq.common.llm_limit import llm_slot
+from evaluatorq import llm_slot
 
 async def my_job(data_point, row_index):
     async with llm_slot():

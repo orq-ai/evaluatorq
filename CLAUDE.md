@@ -138,6 +138,8 @@ Read the directory itself for the file list — it is always current, this file 
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |
 | Normalising agent output shapes | `common.output_adapters`, `common.messages` | per-surface `isinstance` ladders |
 | Turning message content or a tool result into text | `contracts.content_to_text` / `tool_result_to_text` | `str()` on a `str \| list[ContentPart]` — it renders a Python repr that a judge then scores |
+| Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
+| Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 
@@ -228,6 +230,12 @@ These tests use fakes and do not require API credentials. The repository does no
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
 - `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
 - `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `openai/gpt-5.6-luna`, the shared `DEFAULT_PIPELINE_MODEL`)
+- `EVALUATORQ_DASHBOARD_SETTINGS` — path to the dashboard and trace-finder settings JSON (default `.evaluatorq/dashboard-settings.json`)
+- `EVALUATORQ_COMPILER_MODEL` — trace-finder compiler model (default `openai/gpt-5.6-luna`)
+- `EVALUATORQ_CLASSIFIER_MODEL` — trace-finder classifier model (default `typesafe/jev-latest`)
+- `EVALUATORQ_FINDER_WINDOW_DAYS` — trace-finder lookback window in days (default `7`)
+- `EVALUATORQ_FINDER_LIMIT` — trace-finder population cap (default `500`)
+- `EVALUATORQ_FINDER_PARALLELISM` — concurrent trace-finder classify calls (default `100`)
 
 ### Code Style
 

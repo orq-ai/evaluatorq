@@ -50,13 +50,17 @@ ORQ_WORKSPACE=orq-research eq dashboard
 | `eq dashboard <dir>` | Only that directory (e.g. `eq dashboard .evaluatorq/sim-runs`) |
 | `eq dashboard <file>.json` | Optional direct deep-link; prints that report's direct URL so you land straight on it |
 
-With no `PATH` the server prints the local URL to open. Pointing at a directory (`eq dashboard .evaluatorq/sim-runs`) scopes the UI to that store. Passing a single JSON report file is an optional direct deep-link that prints that report's direct URL.
+The dashboard opens in your browser when the server starts; pass `--no-browser` to keep it in the terminal. It also reads `.env` from the directory where you run the command, while values already exported in your shell take precedence. Pointing at a directory (`eq dashboard .evaluatorq/sim-runs`) scopes the UI to that store. Passing a single JSON report file prints that report's direct URL.
 
 ### Orq trace links
 
-Set `ORQ_WORKSPACE` when launching the dashboard to show **View Traces** links for conversations and runs. Its value is the workspace slug in the Orq UI URL; for example, `https://my.orq.ai/orq-research/traces` uses `ORQ_WORKSPACE=orq-research`. It is configured explicitly and is not derived from `ORQ_API_KEY`. If it is unset, trace-link buttons are hidden.
+Save an **Orq workspace** on the dashboard Settings page, or set `ORQ_WORKSPACE` when launching the dashboard, to show **View Traces** links for conversations and runs. Its value is the workspace slug in the Orq UI URL; for example, `https://my.orq.ai/orq-research/traces` uses `orq-research`. When the `orq` CLI can identify the workspace for the active key, Settings offers that slug. A saved choice wins over `ORQ_WORKSPACE`; when neither is available, trace-link buttons are hidden.
 
-`ORQ_WORKSPACE_SLUG` remains supported as an alias. For a self-hosted or staging Orq UI, set `ORQ_UI_BASE_URL` as well; otherwise the dashboard uses `ORQ_BASE_URL`, then `https://my.orq.ai`.
+`ORQ_WORKSPACE_SLUG` remains supported as an alias. For an Orq UI on a host different from the selected profile's API host, set `ORQ_UI_BASE_URL`. Otherwise the dashboard uses the saved profile host, then `ORQ_BASE_URL`, then `https://my.orq.ai`.
+
+### Settings and the trace finder
+
+The **Settings** item opens `/settings`, where you can edit the trace-finder compiler model, classifier model, and apply-recommendations model. The search window, trace limit, and parallelism are set per run on the Trace search page. **Advanced** saves the Orq profile, workspace slug, and project alongside the models in `.evaluatorq/dashboard-settings.json`. Changing profiles reloads the workspace and projects available to that profile; choose a project and press **Save** to apply the bundle. A project key usually offers one project, while a broader key can offer several. Choosing a project limits dashboard Trace search to that project by ID. The page also shows read-only runtime configuration such as scanned run stores, API-key presence, Orq host, workspace, and saved project. The CLI masks keys in its profile list, so evaluatorq reads usable keys from the CLI's private local credential file; a profile without an accessible key remains disabled. See the [Trace finder guide](trace-finder.md) for the precedence rules and the `eq find` CLI.
 
 ---
 

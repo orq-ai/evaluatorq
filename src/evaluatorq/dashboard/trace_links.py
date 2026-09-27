@@ -16,26 +16,28 @@ Source of host + workspace:
 
 * The run's own ``experiment_url`` (``{host}/{workspace}/experiments/{id}``) when
   passed — the web app resolves that path for anyone with access.
-* Otherwise the environment: ``ORQ_UI_BASE_URL`` / ``ORQ_BASE_URL`` for the host
-  and ``ORQ_WORKSPACE`` / ``ORQ_WORKSPACE_SLUG`` for the slug. When the slug is
-  unresolvable the buttons are hidden (the builders return ``None``), so we never
-  render a broken link.
+* Otherwise the dashboard's saved profile host and workspace, with
+  ``ORQ_UI_BASE_URL`` overriding the UI host and environment values used when
+  nothing is saved. When the slug is unresolved, the buttons are hidden.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from urllib.parse import quote
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.orq_links import parse_experiment_url
 
-_DEFAULT_UI_BASE = 'https://my.orq.ai'
+_LOCATOR_ID = re.compile(r'[A-Za-z0-9._~-]+\Z')
 
 
 def ui_base_url() -> str:
     """Return the Orq UI base URL (no trailing slash)."""
-    base = os.environ.get('ORQ_UI_BASE_URL') or os.environ.get('ORQ_BASE_URL') or _DEFAULT_UI_BASE
+    from evaluatorq.dashboard.orq_workspace import resolve_base_url
+
+    base = os.environ.get('ORQ_UI_BASE_URL') or resolve_base_url()
     return base.rstrip('/')
 
 
@@ -77,6 +79,13 @@ def single_trace_url(trace_id: str | None, experiment_url: str | None = None) ->
     if not trace_id:
         return None
     return _traces_url(f'trace_id:is:{trace_id}', experiment_url)
+
+
+def trace_span_url(trace_id: str | None, span_id: str | None, experiment_url: str | None = None) -> str | None:
+    """Return an Orq trace inspector link, or None for unsafe locator IDs."""
+    if not trace_id or not span_id or not _LOCATOR_ID.fullmatch(trace_id) or not _LOCATOR_ID.fullmatch(span_id):
+        return None
+    return _traces_url(f'(trace:{trace_id}//span:{span_id})', experiment_url)
 
 
 def run_trace_url(run_id: str | None, experiment_url: str | None = None) -> str | None:

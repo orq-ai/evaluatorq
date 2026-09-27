@@ -46,6 +46,7 @@ from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.llm_limit import check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.simulation.types import DEFAULT_MODEL
@@ -693,8 +694,8 @@ def simulate(
         int | None,
         typer.Option(
             '--llm-parallelism',
-            min=1,
-            help='Ceiling on in-flight LLM requests for the whole run. Unbounded by default; '
+            callback=check_llm_parallelism_option,
+            help='Ceiling on in-flight LLM requests for the whole run. Defaults to 10, -1 for no limit; '
             'size it against your provider concurrency limit.',
         ),
     ] = None,
@@ -1000,8 +1001,8 @@ def run(
         int | None,
         typer.Option(
             '--llm-parallelism',
-            min=1,
-            help='Ceiling on in-flight LLM requests for the whole run. Unbounded by default; '
+            callback=check_llm_parallelism_option,
+            help='Ceiling on in-flight LLM requests for the whole run. Defaults to 10, -1 for no limit; '
             'size it against your provider concurrency limit.',
         ),
     ] = None,
@@ -1543,6 +1544,15 @@ def from_traces(
             ),
         ),
     ] = 50,
+    llm_parallelism: Annotated[
+        int | None,
+        typer.Option(
+            '--llm-parallelism',
+            callback=check_llm_parallelism_option,
+            help='Ceiling on in-flight LLM requests while building datapoints from traces. '
+            'Defaults to 10, -1 for no limit; size it against your provider concurrency limit.',
+        ),
+    ] = None,
     verbose: Annotated[
         int,
         typer.Option(
@@ -1603,23 +1613,25 @@ def from_traces(
             raise RuntimeError(
                 'No traces with a usable conversation found. Widen --lookback-hours, raise --limit, or drop --search.'
             )
-        summaries = await summarize_conversations(conversations, model=sim_model, config=trace_config)
-        datapoints = await datapoints_from_traces(
-            conversations,
-            model=sim_model,
-            config=trace_config,
-            summaries=summaries,
-        )
-        num_direct = len(datapoints)
-        if extend > 0:
-            datapoints += await extend_from_traces(
+        # Bounds the per-conversation summarize/inference/first-message fan-out.
+        async with llm_concurrency_limit(llm_parallelism):
+            summaries = await summarize_conversations(conversations, model=sim_model, config=trace_config)
+            datapoints = await datapoints_from_traces(
                 conversations,
-                num_datapoints=extend,
-                agent_description=agent_description,
                 model=sim_model,
                 config=trace_config,
                 summaries=summaries,
             )
+            num_direct = len(datapoints)
+            if extend > 0:
+                datapoints += await extend_from_traces(
+                    conversations,
+                    num_datapoints=extend,
+                    agent_description=agent_description,
+                    model=sim_model,
+                    config=trace_config,
+                    summaries=summaries,
+                )
         return len(conversations), num_direct, datapoints
 
     try:

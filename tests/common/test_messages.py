@@ -36,10 +36,10 @@ def test_list_surfaces_unknown_part_types_as_placeholders():
     content = [
         {"type": "text", "text": "keep"},
         {"type": "input_audio", "input_audio": {}},
-        {"type": "output_text", "text": "ignored-key"},
+        {"type": "future_part", "text": "ignored-key"},
         "not-a-dict",
     ]
-    assert coerce_content_text(content) == "keep\n[input_audio]\n[output_text]\n[unknown]"
+    assert coerce_content_text(content) == "keep\n[input_audio]\n[future_part]\n[unknown]"
 
 
 def test_empty_list_is_empty_string():

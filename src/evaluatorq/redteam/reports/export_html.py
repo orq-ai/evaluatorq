@@ -539,6 +539,15 @@ def _render_error_bar_chart(errors_by_type: dict[str, int]) -> str:
     return ''.join(parts)
 
 
+def _render_pipeline_warnings_html(section: ReportSection) -> str:
+    items = ''.join(f'<li>{_esc(w)}</li>' for w in section.data.get('warnings', []))
+    return (
+        f'<h2>{_esc(section.title)}</h2>\n'
+        '<div class="callout warn"><p>This run was degraded. Read the results with these in mind:</p>'
+        f'<ul>{items}</ul></div>'
+    )
+
+
 def _render_error_analysis_html(section: ReportSection) -> str:
     """Render the error analysis section with metric cards, bar chart, and detail table."""
     data = section.data
@@ -1453,6 +1462,7 @@ def _render_methodology_html(section: ReportSection) -> str:
 
 _SECTION_RENDERERS = {
     'summary': _render_summary_html,
+    'pipeline_warnings': _render_pipeline_warnings_html,
     'methodology': _render_methodology_html,
     'severity_definitions': _render_severity_definitions_html,
     'focus_areas': _render_focus_areas_html,

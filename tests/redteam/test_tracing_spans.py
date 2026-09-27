@@ -12,6 +12,7 @@ import json
 import sys
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -686,6 +687,7 @@ async def test_static_agent_target_job_traces_attack_and_target_call(span_collec
 async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
     span_collector: _CollectingExporter,
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """The hybrid static leg preserves the AgentTarget static trace contract."""
     from evaluatorq import DataPoint
@@ -769,6 +771,7 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
     assert report.results[0].thread_id == 'hybrid-static-run:Target:0'
 
     monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     # Pin the host rather than asserting the built-in default: a developer with
     # ORQ_BASE_URL set to staging would otherwise fail this test. A non-default
     # value here also proves the link builder reads the env var.

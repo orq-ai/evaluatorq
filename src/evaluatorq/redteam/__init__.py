@@ -109,6 +109,7 @@ from evaluatorq.redteam.hooks import (
 from evaluatorq.redteam.reports.converters import merge_reports
 from evaluatorq.redteam.reports.display import print_report_summary
 from evaluatorq.redteam.runner import red_team
+from evaluatorq.redteam.traces import TraceStart, datapoints_from_traces
 from evaluatorq.redteam.vulnerability_registry import (
     VULNERABILITY_DEFS,
     get_vulnerability_name,
@@ -196,6 +197,7 @@ __all__ = [
     'TokenUsage',
     # Agent context models
     'ToolInfo',
+    'TraceStart',
     # Enums
     'TurnType',
     'TurnTypeSummary',
@@ -209,6 +211,7 @@ __all__ = [
     'append_assistant_turn',
     'append_user_followup',
     'build_openresponses_request',
+    'datapoints_from_traces',
     'get_category_info',
     'get_vulnerability_name',
     # Vulnerability introspection

@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from openai import BadRequestError
 
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span
     from pydantic import BaseModel
 
-    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.common.judge import ClassifyQuestion, ClassifyRequest
 
 logger = logging.getLogger(__name__)
 
@@ -504,16 +504,35 @@ async def execute_response(
     )
 
 
+def classify_request_body(
+    model: str,
+    state: dict[str, Any] | str | list[Any],
+    questions: dict[str, ClassifyQuestion],
+) -> dict[str, Any]:
+    """Build the exact body sent to the Orq ``/classify`` endpoint."""
+    wire_questions: dict[str, dict[str, Any]] = {}
+    for name, current in questions.items():
+        wire_question: dict[str, Any] = {'type': current.kind, 'instructions': current.instructions}
+        if current.criteria is not None:
+            wire_question['criteria'] = current.criteria
+        wire_questions[name] = wire_question
+    return {'model': model, 'state': state, 'questions': wire_questions}
+
+
 async def execute_classify(
     *,
     client: AsyncOpenAI,
     model: str,
-    question: ClassifyQuestion,
+    question: ClassifyQuestion | None = None,
+    request: ClassifyRequest | None = None,
     span: Span | None,
     timeout_s: float,
     inject_trace_headers: bool = True,
 ) -> tuple[Any, TokenUsage | None]:
     """Execute one Orq router ``/classify`` call and return the decoded reply plus its usage.
+
+    Pass exactly one of ``question`` for the single-question form or ``request``
+    for the multi-question form. The request's state is used for every question.
 
     The classify endpoint has no SDK method, so this is the one sanctioned
     ``client.post`` in the package — it owns the same things the chat and
@@ -539,16 +558,21 @@ async def execute_classify(
     **Retry.** None here. The single retry layer on this path is ``run_judge``'s
     ``with_retry``, which is why the client arrives with ``max_retries=0``.
     """
+    if (question is None) == (request is None):
+        raise ValueError('execute_classify requires exactly one of question= or request=')
+
+    if question is not None:
+        questions = {'verdict': question}
+        state = question.state
+    else:
+        request = cast('ClassifyRequest', request)
+        questions = request.questions
+        state = request.state
     # No `apply_pipeline_metadata` here: the /classify wire contract accepts only
     # model, state and questions, so a metadata block is an unknown key on a body
     # the router validates strictly.
-    body: dict[str, Any] = {
-        'model': model,
-        'state': question.state,
-        'questions': {'verdict': {'type': question.kind, 'instructions': question.instructions}},
-    }
-    if question.criteria is not None:
-        body['questions']['verdict']['criteria'] = question.criteria
+    body = classify_request_body(model, state, questions)
+    wire_questions = body['questions']
 
     # `apply_trace_headers` merges into `params['extra_headers']`, the SDK's
     # per-method spelling; `post` takes the same headers under `options`.
@@ -563,16 +587,19 @@ async def execute_classify(
     # The rubric rides on the span as a system message, mirroring what the prompted
     # legs record: a trace reader who sees only the state cannot tell what Jev was
     # asked, and the question is the half of the call the caller authored.
+    single_question = question
+    if single_question is None and len(questions) == 1 and 'verdict' in questions:
+        single_question = questions['verdict']
+    system_content = (
+        {'instructions': single_question.instructions, 'criteria': single_question.criteria}
+        if single_question is not None
+        else {'questions': wire_questions}
+    )
     record_llm_input(
         span,
         [
-            {
-                'role': 'system',
-                'content': json.dumps(
-                    {'instructions': question.instructions, 'criteria': question.criteria}, default=str
-                ),
-            },
-            {'role': 'user', 'content': json.dumps(question.state, default=str)},
+            {'role': 'system', 'content': json.dumps(system_content, default=str)},
+            {'role': 'user', 'content': json.dumps(state, default=str)},
         ],
     )
     payload = await _bounded_call(

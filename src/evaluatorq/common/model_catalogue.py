@@ -267,8 +267,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     price at its own host: hosts republish each other's models and do not always
     match on price, and collapsing them returned tensorix's $1.75/$3.50 for
     ``deepseek/deepseek-v4-pro``, which bills $0.435/$0.87, a fourfold overstate
-    on a seated judge. A disagreement between hosts is logged rather than
-    silently resolved.
+    on a seated judge. Provider-specific entries retain their own prices.
     """
     if not isinstance(payload, list):
         logger.warning(
@@ -317,19 +316,8 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         )
         models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)
-        if existing is not None:
-            if (existing.input_cost_per_1k, existing.output_cost_per_1k) != (
-                info.input_cost_per_1k,
-                info.output_cost_per_1k,
-            ):
-                logger.debug(
-                    'Catalogue prices disagree for {} ({} vs {}); keeping the model_developer entry if there is one',
-                    model_id,
-                    existing.provider,
-                    provider,
-                )
-            if provider != entry.get('model_developer'):
-                continue
+        if existing is not None and provider != entry.get('model_developer'):
+            continue
         models[model_id] = info
     if isinstance(payload, list) and payload and not models:
         logger.warning(

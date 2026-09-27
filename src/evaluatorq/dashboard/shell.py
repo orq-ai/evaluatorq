@@ -38,6 +38,10 @@ _SIDEBAR_TOGGLE_SCRIPT = (
     "document.addEventListener('keydown',function(e){"
     "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='b')"
     '{e.preventDefault();eqToggleSidebar();}});'
+    'function eqFinderTab(el,id){'
+    "var root=el.closest('.rt-drawer');if(!root)return;"
+    "root.querySelectorAll('.fd-tabs [data-panel]').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
+    "root.querySelectorAll('.fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
     # Non-Mac shows "Ctrl B" instead of the ⌘B glyph on the hotkey hint.
     'if(!/Mac|iPhone|iPad/.test(navigator.platform)){'
     "document.addEventListener('DOMContentLoaded',function(){"
@@ -66,6 +70,7 @@ def _load_mark() -> str:
 # tests, and in static exports without depending on the /static/ route.
 _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
+FIND_ICON = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><circle cx="11" cy="11" r="2"/>'
 
 
 def _favicon_link() -> str:
@@ -110,6 +115,12 @@ _NAV: list[tuple[str, str, str, str]] = [
         SURFACE_LABELS['pairwise'],
         '/?surface=pairwise',
         PAIRWISE_ICON_PATH,
+    ),
+    (
+        'find',
+        'Trace search',
+        '/find',
+        FIND_ICON,
     ),
     (
         'settings',
@@ -201,7 +212,7 @@ def page(
         '<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f'{_favicon_link()}'
-        f'<title>{esc(title)} — evaluatorq</title>\n'
+        f'<title>{esc(title)} | evaluatorq</title>\n'
         f'<style>\n{css}\n</style>\n'
         f'<style>\n{EDITORIAL_CSS}\n</style>\n'
         f'<style>\n{DASHBOARD_CSS}\n</style>\n'

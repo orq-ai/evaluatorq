@@ -30,7 +30,9 @@ try:  # noqa: RUF067
 except importlib.metadata.PackageNotFoundError:  # ponytail: source checkout, not installed
     __version__ = '0.0.0.dev0'
 
-from .common.judge import ClassifyQuestion
+from .common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, run_classify
+from .common.llm_limit import llm_concurrency_limit, llm_slot
+from .common.trace_input import fetch_traces
 from .contracts import AgentResponse
 from .deployment import (
     DeploymentResponse,
@@ -42,6 +44,7 @@ from .deployment import (
 from .evaluatorq import evaluatorq
 from .evaluators import (
     exact_match_evaluator,
+    orq_evaluator,
     string_contains_evaluator,
 )
 from .job_helper import job
@@ -83,6 +86,8 @@ from .types import (
     Output,
     Scorer,
     ScorerParameter,
+    Trace,
+    TraceInput,
 )
 
 __all__ = [
@@ -92,7 +97,9 @@ __all__ = [
     # Types
     'BTFit',
     'BTSigmaAggregation',
+    'ClassifyOutcome',
     'ClassifyQuestion',
+    'ClassifyRequest',
     'DataPoint',
     'DataPointComplete',
     'DataPointDict',
@@ -126,6 +133,8 @@ __all__ = [
     'Scorer',
     'ScorerParameter',
     'ThreadConfig',
+    'Trace',
+    'TraceInput',
     '__version__',
     'bt_sigma_aggregation',
     'build_report',
@@ -134,16 +143,22 @@ __all__ = [
     # Main function
     'evaluatorq',
     'exact_match_evaluator',
+    'fetch_traces',
     'fit_bt',
     'get_preset',
     'invoke',
     # Helper functions
     'job',
+    # Run-scoped LLM concurrency ceiling
+    'llm_concurrency_limit',
     # LLM jury evaluator
     'llm_jury',
     'llm_jury_pairwise',
+    'llm_slot',
+    'orq_evaluator',
     'repetition_consistency',
     'repetition_consistency_raw',
+    'run_classify',
     'run_pairwise',
     # Built-in evaluators
     'string_contains_evaluator',

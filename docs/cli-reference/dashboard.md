@@ -2,6 +2,8 @@
 
 Launches the FastHTML dashboard, the only UI for browsing saved runs. The Streamlit viewers it replaced, `eq redteam ui` and `eq sim ui`, have been removed.
 
+When the server starts, it opens the dashboard in your browser unless you pass `--no-browser`. The command reads `.env` in the current directory; existing shell variables take precedence.
+
 For what the dashboard shows once it is open — the run index, the red-team and simulation walkthroughs, and applying recommendations to an agent — see [Dashboard](../dashboard.md). This page covers the command only.
 
 ```bash
@@ -13,6 +15,7 @@ eq dashboard [PATHS]... [OPTIONS]
 | `PATHS` | `Path` (repeatable) | Directories to scan for reports, or a single report file. Omit to scan both default stores. |
 | `--host` | `str` / `127.0.0.1` | Host to bind the server to. |
 | `--port` | `int` / `8080` | Port for the server. |
+| `--no-browser` | `bool` / `false` | Start the server without opening a browser. |
 
 ## What gets scanned
 
@@ -34,6 +37,9 @@ eq dashboard ~/work/api-agent/.evaluatorq/runs ~/work/support-bot/.evaluatorq/si
 
 # open one report directly
 eq dashboard .evaluatorq/runs/red-team-2026-08-18T09-14-02.json
+
+# start the server without opening a browser
+eq dashboard --no-browser
 ```
 
 ## Binding

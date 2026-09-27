@@ -131,7 +131,7 @@ results = await simulate(target='agent:my-agent-v2', previous_run='latest')
 
 Production traces from Orq's observability product can seed simulations (requires `ORQ_API_KEY`). Two modes:
 
-- **Direct** — one datapoint per fetched trace: an LLM infers the persona and scenario from the transcript; the first message is the real user's opening message, verbatim.
+- **Direct** — one datapoint per fetched trace: an LLM infers the persona and scenario from the transcript, and by default writes a fresh opening message from them rather than replaying the recording; pass `config=TraceAnalysisConfig(generate_first_message=False)` to replay the real user's opening message verbatim instead.
 - **Extension** — an LLM distills the fetched traffic into a distribution profile (topic mix, tones, technical levels), then generates *new* distribution-matched datapoints through the standard generators.
 
 ```python

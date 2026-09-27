@@ -21,6 +21,7 @@ from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import should_skip_confirm
+from evaluatorq.common.llm_limit import check_llm_parallelism_option
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.redteam.contracts import (
@@ -521,8 +522,8 @@ def run(
         int | None,
         typer.Option(
             '--llm-parallelism',
-            min=1,
-            help='Ceiling on in-flight LLM requests for the whole run. Unbounded by default; '
+            callback=check_llm_parallelism_option,
+            help='Ceiling on in-flight LLM requests for the whole run. Defaults to 10, -1 for no limit; '
             'size it against your provider concurrency limit.',
         ),
     ] = None,

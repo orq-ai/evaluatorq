@@ -114,6 +114,19 @@ class TestTraceContextPropagation:
         assert invoke.await_args.kwargs["http_headers"] == {"traceparent": "00-abc-def-01"}
 
     @pytest.mark.asyncio
+    async def test_thread_is_forwarded_as_the_sdk_request_thread(self) -> None:
+        from evaluatorq.deployment import deployment
+
+        client, invoke = self._client_with_invoke()
+        with patch.object(deployment_module, "_get_or_create_client", return_value=client):
+            await deployment("some-key", thread={"id": "conversation-123", "tags": ["eval"]})
+            await deployment("some-key", thread={"id": "conversation-456"})
+            await deployment("some-key")
+
+        threads = [call.kwargs["thread"] for call in invoke.await_args_list]
+        assert threads == [{"id": "conversation-123", "tags": ["eval"]}, {"id": "conversation-456"}, None]
+
+    @pytest.mark.asyncio
     async def test_no_headers_sent_when_propagation_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from evaluatorq.deployment import deployment
 

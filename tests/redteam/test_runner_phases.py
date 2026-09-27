@@ -103,7 +103,7 @@ class TestCapStrategyBreakdown:
 
 
 class TestCollectFilterWarnings:
-    """Each branch produces a distinct user-facing string; assert all three verbatim."""
+    """Each branch produces a distinct user-facing string."""
 
     def test_unresolved_category(self):
         warnings = _collect_filter_warnings(prepared_targets=[_prepared('t', {'_unresolved_categories': ['Foo']})])
@@ -124,6 +124,15 @@ class TestCollectFilterWarnings:
 
         assert len(warnings) == 1
         assert 'no applicable strategies found for this agent' in warnings[0]
+
+    def test_generation_error_with_hardcoded_fallback_is_still_reported(self):
+        warnings = _collect_filter_warnings(
+            prepared_targets=[_prepared('t', {'ASI01': {'total_selected': 3, 'generation_error': 'HTTP 429'}})]
+        )
+
+        assert warnings == [
+            "Category 'ASI01': strategy generation failed (HTTP 429); ran 3 hardcoded strategies only"
+        ]
 
     def test_nonzero_selection_and_missing_metadata_warn_about_nothing(self):
         warnings = _collect_filter_warnings(

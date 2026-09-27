@@ -1,6 +1,6 @@
 # Configuration
 
-Everything is configured through environment variables. There is no config file, and nothing to set up before your first run: evaluatorq with no environment at all still runs local jobs and local evaluators.
+Most settings use environment variables. The dashboard and trace finder can also save defaults in `.evaluatorq/dashboard-settings.json`; nothing needs setting up before your first local job or local evaluator.
 
 You only add variables when you want something more — a hosted model, a dataset from Orq, traces, a dashboard.
 
@@ -33,7 +33,7 @@ You only add variables when you want something more — a hosted model, a datase
 
     vLLM, OpenRouter, Azure, Ollama — anything that speaks the OpenAI API. `OPENAI_BASE_URL` is honoured by red teaming's attacker and judge calls and by `OpenAIModelTarget`. It is **not** honoured by `OrqResponsesTarget` or by simulation, which build their client with the host pinned; pass a pre-built client to those instead.
 
-**2. Get it into the process.** Exporting the variables in your shell is enough, and needs nothing installed. evaluatorq never reads a `.env` file itself — if you keep one, load it yourself, and install `python-dotenv` first (`uv add python-dotenv`; it is not a dependency of evaluatorq):
+**2. Get it into the process.** Exporting the variables in your shell is enough, and needs nothing installed. `eq dashboard` reads `.env` from the directory where you launch it, without replacing exported values. For Python code and other evaluatorq commands, load the file yourself and install `python-dotenv` first (`uv add python-dotenv`):
 
 ```python
 from dotenv import load_dotenv
@@ -54,7 +54,7 @@ Four decisions cover almost every real configuration. The rest of this page is r
 | **Which backend runs my LLM calls?** | `ORQ_API_KEY` or `OPENAI_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins when both are set; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route. |
 | **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`) and simulation (`sim-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
 | **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1`, `true`, `yes` or `on` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
-| **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` | unset | Your workspace slug. Unset hides the deep-link buttons — nothing else breaks. |
+| **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` or dashboard Settings | unset | Your workspace slug. The saved Settings value wins; with neither set, deep-link buttons are hidden. |
 
 Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI error into a full traceback, and `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` keeps prompts and responses out of your spans.
 
@@ -76,15 +76,21 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 |---|---|---|---|
 | `EVALUATORQ_DIR` | No | `.evaluatorq` in the current directory | Base directory for the run store, where both red teaming (`runs/`) and simulation (`sim-runs/`) persist reports. Must point at the store directory itself (e.g. `/tmp/x/.evaluatorq`), not its parent — only the working-directory fallback appends `.evaluatorq`. Empty is treated as unset. |
 | `EQ_DEBUG` | No | unset | Set to any non-empty value to show the full traceback on CLI errors instead of the one-line message. CLI-wide; distinct from `ORQ_DEBUG`, which only affects tracing diagnostics. |
-| `EVALUATORQ_LOG_LEVEL` | No | `INFO` | Log level for the dashboard server. Accepts any level name (e.g. `DEBUG`). |
+| `EVALUATORQ_LOG_LEVEL` | No | `INFO` | Dashboard server log level. `DEBUG` logs finder model requests and responses, including trace content, in CLI and dashboard runs; `eq find` also prints changed progress. The default suppresses httpx's per-request INFO line; explicit `INFO` or `DEBUG` allows it. |
 
 ### Dashboard
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `ORQ_WORKSPACE` / `ORQ_WORKSPACE_SLUG` | No | unset | Workspace slug used to build dashboard deep-links into the Orq UI. `ORQ_WORKSPACE` wins when both are set. When neither is set, the deep-link buttons are hidden. See [Dashboard](dashboard.md). |
-| `ORQ_UI_BASE_URL` | No | `ORQ_BASE_URL`, else `https://my.orq.ai` | Base URL for dashboard deep-links into the Orq UI. Set this when the UI host differs from the API host. |
+| `ORQ_WORKSPACE` / `ORQ_WORKSPACE_SLUG` | No | unset | Workspace slug used to build dashboard deep-links into the Orq UI. A workspace saved in dashboard Settings wins; otherwise `ORQ_WORKSPACE` wins over `ORQ_WORKSPACE_SLUG`. When none is set, deep-link buttons are hidden. See [Dashboard](dashboard.md). |
+| `ORQ_UI_BASE_URL` | No | Saved profile host, then `ORQ_BASE_URL`, then `https://my.orq.ai` | Base URL for dashboard deep-links into the Orq UI. Set this when the UI host differs from the selected profile's API host. |
 | `EVALUATORQ_APPLY_MODEL` | No | `openai/gpt-5.6-luna` | Model used by the dashboard's apply-recommendations merge. Shown in the dashboard config panel. See [Dashboard](dashboard.md). |
+| `EVALUATORQ_DASHBOARD_SETTINGS` | No | `.evaluatorq/dashboard-settings.json` | Path to the JSON file used for dashboard and trace-finder settings, including the selected Orq workspace and project. |
+| `EVALUATORQ_COMPILER_MODEL` | No | `openai/gpt-5.6-luna` | Trace-finder model that compiles a natural-language query into a semantic classifier task. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
+| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Trace-finder classifier model used for facet selection and per-trace classification. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
+| `EVALUATORQ_FINDER_WINDOW_DAYS` | No | `7` | Default number of recent days searched by the trace finder. Valid values are `1` through `90`. |
+| `EVALUATORQ_FINDER_LIMIT` | No | `500` | Default maximum number of traces selected for trace-finder classification. Valid values are `1` through `5000`. |
+| `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace classify calls. Valid values are `1` through `200`. |
 | `EVALUATORQ_DASHBOARD_ROOTS` | No | unset | Internal. A JSON array of run-store roots, set by `eq dashboard` for its reloader subprocess and parsed back with `json.loads`. Pass extra stores as positional CLI paths rather than setting this by hand. |
 
 ### Tracing

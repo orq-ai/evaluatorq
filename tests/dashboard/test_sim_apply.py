@@ -128,7 +128,7 @@ class TestSimPreview:
                 return SimpleNamespace(instructions='Old rules.')
 
         fake_orq = SimpleNamespace(agents=FakeAgents())
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (fake_orq, object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (fake_orq, object(), 'm'))
 
         from evaluatorq.common import apply as common_apply
 
@@ -161,7 +161,7 @@ class TestSimPreview:
 
     def test_preview_renders_diff_and_sim_confirm(self, sim_apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, rid, path = sim_apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
 
         async def fake_apply(*args, **kwargs):
             return ApplyRecommendationsResult(
@@ -190,7 +190,7 @@ class TestSimPreview:
         self, sim_apply_client, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         client, rid, _path = sim_apply_client
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (object(), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (object(), object(), 'm'))
         seen: list = []
 
         async def fake_apply(recs, agent_key, *args, **kwargs):
@@ -273,7 +273,7 @@ class TestSimConfirm:
                 return SimpleNamespace(version='2.1.0')
 
         fake_orq = SimpleNamespace(agents=FakeAgents())
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (fake_orq, object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (fake_orq, object(), 'm'))
         token = apply_mod._store_preview({
             'rid': rid,
             'surface': 'sim',
@@ -316,7 +316,7 @@ class TestSimConfirm:
                 calls.append(kwargs)
                 return SimpleNamespace(version='2.1.0')
 
-        monkeypatch.setattr(apply_mod, '_build_clients', lambda: (SimpleNamespace(agents=FakeAgents()), object(), 'm'))
+        monkeypatch.setattr(apply_mod, '_build_clients', lambda _profile: (SimpleNamespace(agents=FakeAgents()), object(), 'm'))
         token = apply_mod._store_preview({
             'rid': rid,
             'surface': 'redteam',

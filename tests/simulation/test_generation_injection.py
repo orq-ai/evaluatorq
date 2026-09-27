@@ -183,15 +183,16 @@ async def test_simulate_first_message_uses_generation_client_without_orq(monkeyp
 
     injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
 
-    mock_gen = AsyncMock(side_effect=RuntimeError("reached-first-message"))
+    from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerationError
+
+    mock_gen = AsyncMock(side_effect=FirstMessageGenerationError("no usable first message"))
     with patch(
         "evaluatorq.simulation.generators.FirstMessageGenerator.generate",
         new=mock_gen,
     ):
-        # The batch loop swallows per-pair generation failures and raises its
-        # own "produced no datapoints" RuntimeError. Reaching that path (and
-        # the mock being called) proves first-message generation ran via the
-        # injected client without an ORQ key.
+        # The batch loop drops an unusable opening and raises its own
+        # "produced no datapoints" error. Reaching that path proves
+        # first-message generation ran without an ORQ key.
         with pytest.raises(RuntimeError, match="produced no datapoints"):
             await simulate(
                 personas=[_persona()],

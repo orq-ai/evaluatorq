@@ -2484,6 +2484,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
         return _render_sections(by_kind, _SECTION_RENDERERS, kinds)
 
     hero = _redteam_hero(by_kind.get('summary'), report)
+    warnings = render('pipeline_warnings')
 
     focus_section = by_kind.get('focus_areas')
     focus_areas_list = focus_section.data.get('focus_areas', []) if focus_section is not None else []
@@ -2514,7 +2515,7 @@ def redteam_report_tabs(rid: str, report: RedTeamReport) -> str:
             ('Config', config_tab),
         ],
     )
-    return f'<div class="report-aligned rt-report">{hero}{tabs}</div>'
+    return f'<div class="report-aligned rt-report">{hero}{warnings}{tabs}</div>'
 
 
 def _rt_agent_pill(stats: dict[str, Any]) -> str:
