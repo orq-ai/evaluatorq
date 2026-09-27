@@ -102,7 +102,17 @@ def _write_run(base, run: InsightsRun, name: str = 'insights_fixture.json'):
     return path
 
 
-def test_insights_page_renders_list_and_population_and_label_chips(tmp_path, minimal_run, monkeypatch):
+def test_empty_insights_overview_points_to_new_run(tmp_path, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+
+    response = TestClient(build_app()).get('/insights')
+
+    assert response.status_code == 200
+    assert 'No Insights runs yet' in response.text
+    assert 'href="/insights/new"' in response.text
+
+
+def test_insights_overview_opens_a_dedicated_run_page(tmp_path, minimal_run, monkeypatch):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     _write_run(tmp_path, minimal_run)
     client = TestClient(build_app())
@@ -111,18 +121,26 @@ def test_insights_page_renders_list_and_population_and_label_chips(tmp_path, min
 
     assert response.status_code == 200
     assert 'minimal run' in response.text
-    assert 'Population' in response.text
-    assert 'refund policy' in response.text
-    assert 'support-bot' in response.text
-    assert 'tokens ≥' in response.text
-    assert '2026-08-25T00:00:00+00:00' in response.text
-    assert '2026-09-01T00:00:00+00:00' in response.text
-    assert '25 Aug 2026, 00:00 UTC' in response.text
-    assert 'Models used' in response.text
-    assert '500' in response.text
-    assert 'sentiment' in response.text
-    assert 'General requests' in response.text
-    assert 'Insights' in response.text
+    assert 'Recent runs' in response.text
+    assert 'href="/insights/run-1"' in response.text
+    assert 'href="/insights/new"' in response.text
+    assert 'General requests' not in response.text
+
+    detail = client.get('/insights/run-1')
+    assert detail.status_code == 200
+    assert 'href="/insights">← All Insights runs</a>' in detail.text
+    assert 'insights-rail' not in detail.text
+    assert 'Population' in detail.text
+    assert 'refund policy' in detail.text
+    assert 'support-bot' in detail.text
+    assert 'tokens ≥' in detail.text
+    assert '2026-08-25T00:00:00+00:00' in detail.text
+    assert '2026-09-01T00:00:00+00:00' in detail.text
+    assert '25 Aug 2026, 00:00 UTC' in detail.text
+    assert 'Models used' in detail.text
+    assert '500' in detail.text
+    assert 'sentiment' in detail.text
+    assert 'General requests' in detail.text
 
 
 def test_error_run_shows_failure_stage_and_failed_trace_note(tmp_path, minimal_run, monkeypatch):
@@ -269,7 +287,7 @@ def test_truncated_run_stays_visible_and_insights_page_renders(tmp_path, monkeyp
     assert 'unreadable' in response.text
 
 
-def test_run_rail_keeps_newest_first_order(tmp_path, minimal_run, monkeypatch):
+def test_run_overview_keeps_newest_first_order(tmp_path, minimal_run, monkeypatch):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     older = _write_run(tmp_path, minimal_run, 'insights_older.json')
     newer_run = minimal_run.model_copy(update={'run_id': 'run-2', 'run_name': 'newer run'})

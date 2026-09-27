@@ -36,36 +36,45 @@ def _stage_name(manifest: RunManifest) -> str:
     return manifest.stage_labels.get(manifest.stage or '', (manifest.stage or 'Starting').replace('_', ' ').title())
 
 
-def run_rail(
-    entries: list[tuple[str, str, str]], selected: str | None, manifests: dict[str, RunManifest] | None = None
+def run_overview(
+    entries: list[tuple[str, str, str]], runs: dict[str, InsightsRun], manifests: dict[str, RunManifest]
 ) -> str:
-    """Render run links and unreadable entries in the left rail."""
+    """Render the saved runs as one navigable overview."""
+    if not entries:
+        return (
+            '<section class="insights-overview-empty"><h2>No Insights runs yet</h2>'
+            '<p>Start a run to find patterns across traces. Its progress and results will appear here.</p>'
+            '<a class="insights-overview-new" href="/insights/new">+ New Run</a></section>'
+        )
     rows = []
     for run_id, label, status in entries:
-        classes = 'insights-run'
-        if run_id == selected:
-            classes += ' selected'
-        if status == 'error' or status == 'unreadable':
-            classes += ' failed'
-        if status == 'running':
-            classes += ' running'
-        href = f'/insights/{quote(run_id, safe="")}'
-        manifest = (manifests or {}).get(run_id)
-        stage = (
-            f'<span class="insights-run-stage">{esc(_stage_name(manifest))}</span>'
-            if manifest is not None and status == 'running'
-            else ''
-        )
+        run = runs.get(run_id)
+        manifest = manifests.get(run_id)
+        stage = _stage_name(manifest) if manifest is not None and status == 'running' else ''
+        started_at = run.created_at if run is not None else manifest.started_at if manifest is not None else None
+        created = started_at.strftime('%d %b %Y, %H:%M UTC') if started_at is not None else ''
+        count = run.counts.get('n_traces', len(run.traces)) if run is not None else None
+        count_html = str(count) if count is not None else '—'
+        dimensions = ', '.join(name.title() for name in run.dimensions) if run is not None else '—'
+        if run is not None and not run.dimensions:
+            dimensions = 'None'
+        status_class = status if status in {'running', 'completed', 'error', 'cancelled', 'unreadable'} else 'other'
         rows.append(
-            f'<a class="{classes}" href="{href}"><span class="insights-run-copy">'
-            f'<span class="insights-run-name">{esc(label)}</span>{stage}</span>'
-            f'<span class="insights-run-status"><span class="insights-run-dot" aria-hidden="true"></span>{esc(status)}</span></a>'
+            f'<a class="insights-overview-row" href="/insights/{quote(run_id, safe="")}">'
+            f'<span class="insights-overview-name"><strong>{esc(label)}</strong>'
+            f'<small>{esc(stage or created or "Run file could not be read")}</small></span>'
+            f'<span class="insights-overview-status {status_class}">{esc(status)}</span>'
+            f'<span class="insights-overview-number">{esc(count_html)}</span>'
+            f'<span class="insights-overview-dimensions">{esc(dimensions)}</span>'
+            '<span class="insights-overview-arrow" aria-hidden="true">→</span></a>'
         )
-    body = ''.join(rows) or '<p class="insights-empty">No Insights runs yet.</p>'
     return (
-        '<aside class="insights-rail"><div class="insights-rail-head"><h2>Runs</h2>'
-        '<a href="/insights/new" class="insights-new-link" aria-label="New Insights run">+ New Run</a></div>'
-        f'{body}</aside>'
+        '<section class="insights-overview"><div class="insights-overview-head">'
+        '<div><h2>Recent runs</h2><p>Explore clusters, labels, traces, and 3D maps from each run.</p></div>'
+        f'<span>{len(entries)} run{"s" if len(entries) != 1 else ""}</span></div>'
+        '<div class="insights-overview-table"><div class="insights-overview-columns">'
+        '<span>Run</span><span>Status</span><span>Traces</span><span>Dimensions</span><span></span></div>'
+        f'{"".join(rows)}</div></section>'
     )
 
 
@@ -754,6 +763,15 @@ def map_tab(run: InsightsRun, selected: str | None = None) -> str:
     )
 
 
+def _map_category(trace: TraceInsight, label_name: str | None, color_by: str) -> str:
+    if label_name:
+        answer = trace.labels.get(label_name)
+        return str(answer.value) if answer and answer.error is None and answer.value is not None else 'No value'
+    if color_by == 'agent':
+        return trace.agent_name or 'Unknown agent'
+    return trace.project or 'Unknown project'
+
+
 def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster') -> dict[str, object]:
     """Keep one dimension's coordinates fixed while colouring by any saved axis."""
     dimension = run.dimensions.get(dimension_name)
@@ -783,18 +801,7 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
     cluster_indexes = {item.id: index for index, item in enumerate(base_clusters)}
     shape_clusters = [item for item in dimension.clusters if item.level == 'base']
     shape_indexes = {item.id: index for index, item in enumerate(shape_clusters)}
-    categories: set[str] = set()
-    if categorical:
-        for trace in run.traces:
-            if label_name:
-                answer = trace.labels.get(label_name)
-                categories.add(
-                    str(answer.value) if answer and answer.error is None and answer.value is not None else 'No value'
-                )
-            elif color_by == 'agent':
-                categories.add(trace.agent_name or 'Unknown agent')
-            else:
-                categories.add(trace.project or 'Unknown project')
+    categories = {_map_category(trace, label_name, color_by) for trace in run.traces} if categorical else set()
     ordered = sorted(category for category in categories if category != 'No value')
     category_colors = {category: QUALITATIVE[index % len(QUALITATIVE)] for index, category in enumerate(ordered)}
     points: list[dict[str, object]] = []
@@ -841,17 +848,7 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
             point['color_value'] = 1.0 - value if 'satisfaction' in (label_name or '') else value
             point['color'] = ''
         elif categorical:
-            if label_name:
-                answer = trace.labels.get(label_name)
-                category = (
-                    str(answer.value) if answer and answer.error is None and answer.value is not None else 'No value'
-                )
-            else:
-                category = (
-                    (trace.agent_name or 'Unknown agent')
-                    if color_by == 'agent'
-                    else (trace.project or 'Unknown project')
-                )
+            category = _map_category(trace, label_name, color_by)
             color = category_colors.get(category, COLORS['sand_400'])
             point.update({
                 'color_value': ordered.index(category) if category in ordered else -1,
@@ -922,33 +919,40 @@ def tab_content(run: InsightsRun, tab: str, *, query: dict[str, str] | None = No
 
 def full_page(
     run: InsightsRun,
-    entries: list[tuple[str, str, str]],
     active_tab: str = 'dimensions',
     *,
     query: dict[str, str] | None = None,
     manifest: RunManifest | None = None,
-    manifests: dict[str, RunManifest] | None = None,
 ) -> str:
     body = (
         '<div class="insights-layout">'
-        f'{run_rail(entries, run.run_id, manifests)}'
         '<div class="insights-main">'
         f'{header(run)}{failures(run)}{progress(manifest)}{tabs(run, active_tab)}'
         f'<div id="insights-content">{tab_content(run, active_tab, query=query)}</div>'
         '</div></div>'
     )
-    return page('Insights', body + '<script src="/static/plotly-gl3d.min.js" defer></script>', active_nav='insights')
-
-
-def landing(entries: list[tuple[str, str, str]], manifests: dict[str, RunManifest] | None = None) -> str:
-    body = (
-        '<div class="insights-layout">'
-        f'{run_rail(entries, None, manifests)}'
-        '<div class="insights-main"><section class="insights-empty-state"><h2>Insights</h2>'
-        '<p>Discover patterns in recent traces, then review clusters, labels, and individual traces here.</p>'
-        '<p><a class="insights-action" href="/insights/new">+ New Run</a></p></section></div></div>'
+    return page(
+        'Insights',
+        body + '<script src="/static/plotly-gl3d.min.js" defer></script>',
+        active_nav='insights',
+        back_html=_back_to_runs(),
     )
-    return page('Insights', body + _refresh_if_running(entries), active_nav='insights')
+
+
+def _back_to_runs() -> str:
+    return '<a class="report-back" href="/insights">← All Insights runs</a>'
+
+
+def overview_page(
+    entries: list[tuple[str, str, str]], runs: dict[str, InsightsRun], manifests: dict[str, RunManifest]
+) -> str:
+    body = f'<div class="insights-layout">{run_overview(entries, runs, manifests)}</div>'
+    return page(
+        'Insights',
+        body + _refresh_if_running(entries),
+        active_nav='insights',
+        actions_html='<a class="insights-overview-new" href="/insights/new">+ New Run</a>',
+    )
 
 
 def _refresh_if_running(entries: list[tuple[str, str, str]]) -> str:
@@ -962,9 +966,7 @@ def _refresh_if_running(entries: list[tuple[str, str, str]]) -> str:
 def running_page(
     run_id: str,
     label: str,
-    entries: list[tuple[str, str, str]],
     manifest: RunManifest,
-    manifests: dict[str, RunManifest] | None = None,
 ) -> str:
     if manifest.status == 'running':
         notice = (
@@ -981,25 +983,18 @@ def running_page(
             f'<section class="insights-empty-state"><h2>{esc(label)}</h2>'
             '<p>This run ended without a report file.</p></section>'
         )
-    body = (
-        '<div class="insights-layout">'
-        f'{run_rail(entries, run_id, manifests)}'
-        f'<div class="insights-main">{notice}'
-        f'{progress(manifest)}</div></div>'
-    )
-    return page('Insights', body + _refresh_if_running(entries), active_nav='insights')
+    body = f'<div class="insights-layout"><div class="insights-main">{notice}{progress(manifest)}</div></div>'
+    refresh = _refresh_if_running([(run_id, label, 'running')]) if manifest.status == 'running' else ''
+    return page('Insights', body + refresh, active_nav='insights', back_html=_back_to_runs())
 
 
-def unreadable_page(
-    run_id: str, error: str, entries: list[tuple[str, str, str]], manifests: dict[str, RunManifest] | None = None
-) -> str:
+def unreadable_page(error: str) -> str:
     body = (
         '<div class="insights-layout">'
-        f'{run_rail(entries, run_id, manifests)}'
         '<div class="insights-main"><section class="insights-error"><h2>Run file is unreadable</h2>'
         f'<p>{esc(error)}</p></section></div></div>'
     )
-    return page('Insights', body, active_nav='insights')
+    return page('Insights', body, active_nav='insights', back_html=_back_to_runs())
 
 
 def facet_options(catalogue: FacetCatalogue | None, selection: FacetSelection) -> str:
@@ -1041,16 +1036,13 @@ def facet_options(catalogue: FacetCatalogue | None, selection: FacetSelection) -
     return unavailable + ''.join(groups)
 
 
-def new_run_page(
-    entries: list[tuple[str, str, str]], manifests: dict[str, RunManifest], *, error: str | None = None
-) -> str:
+def new_run_page(*, error: str | None = None) -> str:
     """Render the three-step run form; JavaScript only controls presentation."""
     error_html = f'<p class="insights-error" role="alert">{esc(error)}</p>' if error else ''
     body = (
         '<div class="insights-layout">'
-        f'{run_rail(entries, None, manifests)}'
         '<div class="insights-main insights-wizard">'
-        '<header class="insights-wizard-head"><a href="/insights">← Insights</a><h2>New Insights run</h2>'
+        '<header class="insights-wizard-head"><h2>New Insights run</h2>'
         '<p>Choose the traces and what to learn from them.</p></header>'
         f'{error_html}'
         '<div class="insights-wizard-steps" aria-label="Wizard steps"><span class="active">1 · Traces</span>'
@@ -1095,4 +1087,4 @@ def new_run_page(
         '<button type="submit" data-wizard-start>Start run</button></div>'
         '</form></div></div><script src="/static/insights-wizard.js" defer></script>'
     )
-    return page('New Insights run', body, active_nav='insights')
+    return page('New Insights run', body, active_nav='insights', back_html=_back_to_runs())

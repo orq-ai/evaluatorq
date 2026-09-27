@@ -20,9 +20,9 @@ from evaluatorq.dashboard.insights_views import (
     TABS,
     facet_options,
     full_page,
-    landing,
     map_payload,
     new_run_page,
+    overview_page,
     running_page,
     tab_content,
     unreadable_page,
@@ -126,27 +126,12 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
     def insights_home() -> Response:
         directory = get_insights_runs_dir()
         entries, loaded, manifests = _entries(directory)
-        active = next((entry for entry in entries if entry[2] == 'running'), None)
-        if active is not None:
-            manifest = manifests.get(active[0])
-            if manifest is not None:
-                return _html(running_page(active[0], active[1], entries, manifest, manifests))
-        latest = next(
-            (
-                loaded.get(entry[0])
-                for entry in entries
-                if isinstance(loaded.get(entry[0], (None, None))[1], InsightsRun)
-            ),
-            None,
-        )
-        if latest is not None and isinstance(latest[1], InsightsRun):
-            return _html(full_page(latest[1], entries, manifest=manifests.get(latest[1].run_id), manifests=manifests))
-        return _html(landing(entries, manifests))
+        runs = {run_id: item[1] for run_id, item in loaded.items() if isinstance(item[1], InsightsRun)}
+        return _html(overview_page(entries, runs, manifests))
 
     @app.get('/insights/new')
     def insights_new() -> Response:
-        entries, _, manifests = _entries(get_insights_runs_dir())
-        return _html(new_run_page(entries, manifests))
+        return _html(new_run_page())
 
     @app.get('/insights/facets')
     async def insights_facets(req: Request) -> Response:
@@ -167,8 +152,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         rejected = request_rejected(req, form)
         directory = get_insights_runs_dir()
         if rejected:
-            entries, _, manifests = _entries(directory)
-            return _html(new_run_page(entries, manifests, error=rejected), 403)
+            return _html(new_run_page(error=rejected), 403)
         try:
             spec = InsightsLaunchSpec.model_validate({
                 'name': form.get('name', ''),
@@ -183,31 +167,28 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 'dimensions': form.getlist('dimensions'),
             })
         except ValidationError as exc:
-            entries, _, manifests = _entries(directory)
             message = '; '.join(error['msg'] for error in exc.errors())
-            return _html(new_run_page(entries, manifests, error=message), 422)
+            return _html(new_run_page(error=message), 422)
         try:
             profile = selected_orq_profile(req.app)
         except ValueError as exc:
-            entries, _, manifests = _entries(directory)
-            return _html(new_run_page(entries, manifests, error=str(exc)), 422)
+            return _html(new_run_page(error=str(exc)), 422)
         run_id = launch_insights(spec, directory, profile=profile)
         return RedirectResponse(f'/insights/{quote(run_id, safe="")}', status_code=303)
 
     @app.get('/insights/{run_id}')
     def insights_run(run_id: str) -> Response:
         directory = get_insights_runs_dir()
-        entries, loaded, manifests = _entries(directory)
+        _, loaded, manifests = _entries(directory)
         resolved = _resolve(run_id, loaded)
         if resolved is None:
             return _html('<h1>Insights run not found</h1>', 404)
         _, run = resolved
         if isinstance(run, InsightsRun):
-            return _html(full_page(run, entries, manifest=manifests.get(run.run_id), manifests=manifests))
+            return _html(full_page(run, manifest=manifests.get(run.run_id)))
         if run in ('running', 'error', 'cancelled', 'completed') and run_id in manifests:
-            label = next((entry[1] for entry in entries if entry[0] == run_id), run_id)
-            return _html(running_page(run_id, label, entries, manifests[run_id], manifests))
-        return _html(unreadable_page(run_id, str(run), entries, manifests))
+            return _html(running_page(run_id, manifests[run_id].run_name, manifests[run_id]))
+        return _html(unreadable_page(str(run)))
 
     @app.get('/insights/{run_id}/tab/{tab}')
     def insights_tab(req: Request, run_id: str, tab: str) -> Response:
@@ -225,15 +206,13 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         }
         if req.headers.get('HX-Request', '').casefold() == 'true':
             return _html(tab_content(resolved[1], tab, query=query))
-        entries, _, manifests = _entries(directory)
+        _, _, manifests = _entries(directory)
         return _html(
             full_page(
                 resolved[1],
-                entries,
                 active_tab=tab,
                 query=query,
                 manifest=manifests.get(resolved[1].run_id),
-                manifests=manifests,
             )
         )
 
