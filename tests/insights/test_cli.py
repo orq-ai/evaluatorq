@@ -83,7 +83,6 @@ def test_cli_uses_selected_profile_for_traces_and_models(
         return SimpleNamespace(client=llm, owned=True)
 
     monkeypatch.setattr(cli_module, 'insights', fake_insights)
-    monkeypatch.setattr(cli_module, '_stored_run_path', lambda run: None)
     monkeypatch.setattr(cli_module, 'resolve_orq_client', fake_orq)
     monkeypatch.setattr(cli_module, 'resolve_llm_client', fake_llm)
     monkeypatch.setattr(cli_module, 'close_orq_client', closed_orq)
@@ -135,7 +134,6 @@ def test_repeated_labels_resolve_preset_and_json_spec(
         return minimal_run
 
     monkeypatch.setattr(cli_module, 'insights', fake_insights)
-    monkeypatch.setattr(cli_module, '_stored_run_path', lambda run: None)
 
     result = CliRunner().invoke(_app(), ['insights', '--label', 'sentiment', '--label', str(label_path)])
 
@@ -160,12 +158,32 @@ def test_repeated_dimensions_are_rejected_before_pipeline_runs(monkeypatch: Any)
     assert invoked == []
 
 
+def test_cli_prints_report_path_without_loading_historical_runs(
+    monkeypatch: Any, minimal_run: Any, tmp_path: Path
+) -> None:
+    report_path = tmp_path / 'insights-new-run.json'
+
+    async def fake_run(population: Any, profile: Any, **kwargs: Any) -> Any:
+        kwargs['_on_saved'](report_path)
+        return minimal_run
+
+    def unexpected_history_scan() -> Any:
+        raise AssertionError('CLI must use the path reported by the pipeline')
+
+    monkeypatch.setattr(cli_module, '_run_insights_with_profile', fake_run)
+    monkeypatch.setattr(cli_module, 'list_runs', unexpected_history_scan, raising=False)
+
+    result = CliRunner().invoke(_app(), ['insights'])
+
+    assert result.exit_code == 0, result.output
+    assert str(report_path) in ''.join(unstyle(result.output).split())
+
+
 def test_error_run_exits_one(monkeypatch: Any, minimal_run: Any) -> None:
     async def fake_insights(population: Any, **kwargs: Any) -> Any:
         return minimal_run.model_copy(update={'status': 'error'})
 
     monkeypatch.setattr(cli_module, 'insights', fake_insights)
-    monkeypatch.setattr(cli_module, '_stored_run_path', lambda run: None)
 
     result = CliRunner().invoke(_app(), ['insights'])
 
@@ -277,7 +295,6 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
         return minimal_run
 
     monkeypatch.setattr(cli_module, 'insights', fake_insights)
-    monkeypatch.setattr(cli_module, '_stored_run_path', lambda run: None)
 
     result = CliRunner().invoke(_app(), ['insights', '--from-finder', str(path)])
 

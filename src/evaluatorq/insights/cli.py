@@ -26,7 +26,6 @@ from evaluatorq.trace_finder.settings import effective_settings
 from . import presets
 from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec
 from .pipeline import insights
-from .store import list_runs
 
 _DIMENSIONS: tuple[DimensionName, ...] = ('intent', 'failure', 'sentiment')
 
@@ -69,13 +68,6 @@ def _resolve_labels(values: list[str] | None) -> list[LabelSpec]:
         except (OSError, json.JSONDecodeError, ValidationError) as exc:
             raise ValueError(f'could not read label spec(s) from {path}: {exc}') from exc
     return labels
-
-
-def _stored_run_path(run: InsightsRun) -> Path | None:
-    for path, stored in list_runs():
-        if isinstance(stored, InsightsRun) and stored.run_id == run.run_id:
-            return path
-    return None
 
 
 def _validate_finder_export(path: Path) -> None:
@@ -296,6 +288,12 @@ def insights_cmd(
         emit_error(exc)
         raise typer.Exit(code=2) from None
 
+    run_path: Path | None = None
+
+    def remember_run_path(path: Path) -> None:
+        nonlocal run_path
+        run_path = path
+
     try:
         run = asyncio.run(
             _run_insights_with_profile(
@@ -312,12 +310,12 @@ def insights_cmd(
                 priority_dimension=priority_dimension,
                 parallelism=settings.parallelism,
                 cache=not no_cache,
+                _on_saved=remember_run_path,
             )
         )
     except (ImportError, OSError, OpenAIError, RuntimeError, TimeoutError, ValueError, httpx.HTTPError) as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None
-    run_path = _stored_run_path(run)
     if json_path is not None:
         try:
             json_path.parent.mkdir(parents=True, exist_ok=True)

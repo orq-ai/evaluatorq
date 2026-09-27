@@ -1771,8 +1771,8 @@ class StageRecord(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     started_at: datetime
     ended_at: datetime | None = None
-    completed: int | None = None
-    total: int | None = None
+    completed: int | None = Field(default=None, strict=True)
+    total: int | None = Field(default=None, strict=True)
 
     @model_validator(mode='after')
     def validate_progress(self) -> StageRecord:

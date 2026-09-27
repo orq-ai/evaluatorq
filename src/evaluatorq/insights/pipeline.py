@@ -47,7 +47,7 @@ MIN_CLUSTER_SIZE = 5
 LOW_CONFIDENCE = 0.6
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
     from openai import AsyncOpenAI
@@ -391,6 +391,7 @@ async def insights(  # noqa: C901
     runs_dir: Path | None = None,
     _run_id: str | None = None,
     _finder_export_source: Path | None = None,
+    _on_saved: Callable[[Path], None] | None = None,
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:
@@ -659,6 +660,8 @@ async def insights(  # noqa: C901
         _stage(writer, 'write')
         run.cost_by_stage = ledger.totals()
         run_path = save_run(run, directory)
+        if _on_saved is not None:
+            _on_saved(run_path)
         _stage_end(writer, 'write')
         if run.status == 'error':
             writer.fail(run.stage_failures[-1].message, stage=run.stage_failures[-1].stage)
@@ -693,6 +696,8 @@ async def insights(  # noqa: C901
                 run.counts = run.counts or {'n_traces': len(run.traces), 'n_failed_traces': 0, 'per_stage_failed': 0}
                 run.cost_by_stage = ledger.totals()
                 report = save_run(run, directory)
+                if _on_saved is not None:
+                    _on_saved(report)
                 if run.status == 'error':
                     writer.fail(run.stage_failures[-1].message, stage=run.stage_failures[-1].stage)
                 else:
