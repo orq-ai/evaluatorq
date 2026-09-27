@@ -124,6 +124,16 @@ class OrqLaunchOptions(BaseModel):
     base_url: str | None = None
     fetch_models: bool = True
 
+    def __init__(
+        self,
+        mcp: bool = True,  # noqa: FBT001, FBT002 - preserve the public dataclass constructor
+        skills: bool = True,  # noqa: FBT001, FBT002 - preserve the public dataclass constructor
+        base_url: str | None = None,
+        fetch_models: bool = True,  # noqa: FBT001, FBT002 - preserve the public dataclass constructor
+    ) -> None:
+        """Keep the public dataclass's positional constructor while validating with Pydantic."""
+        super().__init__(mcp=mcp, skills=skills, base_url=base_url, fetch_models=fetch_models)
+
     def to_flags(self) -> list[str]:
         flags: list[str] = []
         if not self.mcp:
@@ -984,6 +994,7 @@ class CodingAgentTarget(AgentTarget):
                 'evaluatorq.coding_agent.launcher': self._launcher,
             },
         ) as span:
+            turn_succeeded = False
             try:
                 if self._container is not None:
                     set_span_attrs(
@@ -994,61 +1005,63 @@ class CodingAgentTarget(AgentTarget):
                             'evaluatorq.coding_agent.container.restarts': self._restarts,
                         },
                     )
+                returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir, env=env)
+                set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
+                stderr_excerpt = stderr[-STDERR_EXCERPT_CHARS:]
+                if self._container is not None and returncode in (126, 127):
+                    raise CodingAgentUnavailableError(
+                        'cli.agent_not_found',
+                        f'{agent_binary!r} or evq-entrypoint is missing from image {self._container.image!r}: '
+                        f'{stderr_excerpt}',
+                    )
+                if self._container is not None and returncode == 137:
+                    log_kill(self._agent, 'container_lost', f'container {name} was removed while the agent ran')
+                    await self._drop_container_shielded()
+                    set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': 'container_lost'})
+                    raise CodingAgentUnavailableError(
+                        'cli.timeout',
+                        'the container was removed while the agent was running',
+                        kill_reason='container_lost',
+                    )
+                if returncode != 0:
+                    raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
+                events = parse_jsonl(stdout)
+                if stdout.strip() and not events:
+                    raise CodingAgentError(
+                        'cli.parse_error', f'no JSON events in stdout: {stdout[:STDERR_EXCERPT_CHARS]}'
+                    )
                 try:
-                    returncode, stdout, stderr = await self._run(argv, stdin_text, cwd=workdir, env=env)
-                except BaseException:
-                    if on_early_exit is not None:
-                        await await_shielded(on_early_exit())
-                    raise
+                    turn = parse_events(self._agent, events)
+                except Exception as exc:  # Any parser crash is a parse error, not a target crash.
+                    raise CodingAgentError('cli.parse_error', f'could not parse {self._agent} output: {exc!r}') from exc
+                if turn.agent_error is not None:
+                    raise CodingAgentError('cli.agent_error', f'{turn.agent_error} {stderr_excerpt}'.strip())
+                if turn.text is None or not turn.text.strip():
+                    raise CodingAgentError('cli.no_result', f'exit 0 but no final assistant message: {stderr_excerpt}')
+                if turn.usage is None:
+                    logger.warning(f'CodingAgentTarget({self._agent}): no usage in output; usage is None')
+                else:
+                    record_token_usage(span, usage=turn.usage, total_cost=turn.cost_usd)
+                set_span_attrs(
+                    span, {'evaluatorq.coding_agent.cost_usd': turn.cost_usd, 'gen_ai.response.id': turn.session_id}
+                )
+                response = AgentResponse(
+                    output=[*turn.tool_calls, TextOutputItem(text=turn.text, annotations=[])],
+                    usage=turn.usage,
+                    model=turn.model or self._model,
+                    response_id=turn.session_id,
+                )
+                turn_succeeded = True
+                return response
             except CodingAgentError as exc:
                 set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': exc.kill_reason})
                 raise
             except asyncio.CancelledError:
                 set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': 'cancelled'})
                 raise
-            set_span_attrs(span, {'evaluatorq.coding_agent.exit_code': returncode})
-            stderr_excerpt = stderr[-STDERR_EXCERPT_CHARS:]
-            if self._container is not None and returncode in (126, 127):
-                raise CodingAgentUnavailableError(
-                    'cli.agent_not_found',
-                    f'{agent_binary!r} or evq-entrypoint is missing from image {self._container.image!r}: '
-                    f'{stderr_excerpt}',
-                )
-            if self._container is not None and returncode == 137:
-                log_kill(self._agent, 'container_lost', f'container {name} was removed while the agent ran')
-                await self._drop_container_shielded()
-                set_span_attrs(span, {'evaluatorq.coding_agent.kill_reason': 'container_lost'})
-                raise CodingAgentUnavailableError(
-                    'cli.timeout',
-                    'the container was removed while the agent was running',
-                    kill_reason='container_lost',
-                )
-            if returncode != 0:
-                raise CodingAgentError(f'cli.exit.{returncode}', f'{argv[0]} exited {returncode}: {stderr_excerpt}')
-            events = parse_jsonl(stdout)
-            if stdout.strip() and not events:
-                raise CodingAgentError('cli.parse_error', f'no JSON events in stdout: {stdout[:STDERR_EXCERPT_CHARS]}')
-            try:
-                turn = parse_events(self._agent, events)
-            except Exception as exc:  # Any parser crash is a parse error, not a target crash.
-                raise CodingAgentError('cli.parse_error', f'could not parse {self._agent} output: {exc!r}') from exc
-            if turn.agent_error is not None:
-                raise CodingAgentError('cli.agent_error', f'{turn.agent_error} {stderr_excerpt}'.strip())
-            if turn.text is None or not turn.text.strip():
-                raise CodingAgentError('cli.no_result', f'exit 0 but no final assistant message: {stderr_excerpt}')
-            if turn.usage is None:
-                logger.warning(f'CodingAgentTarget({self._agent}): no usage in output; usage is None')
-            else:
-                record_token_usage(span, usage=turn.usage, total_cost=turn.cost_usd)
-            set_span_attrs(
-                span, {'evaluatorq.coding_agent.cost_usd': turn.cost_usd, 'gen_ai.response.id': turn.session_id}
-            )
-            return AgentResponse(
-                output=[*turn.tool_calls, TextOutputItem(text=turn.text, annotations=[])],
-                usage=turn.usage,
-                model=turn.model or self._model,
-                response_id=turn.session_id,
-            )
+            finally:
+                if not turn_succeeded and on_early_exit is not None:
+                    await await_shielded(on_early_exit())
 
     async def _run(
         self,

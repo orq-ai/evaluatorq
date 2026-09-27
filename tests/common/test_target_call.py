@@ -373,6 +373,28 @@ async def test_self_timed_target_still_retried() -> None:
 
 
 @pytest.mark.asyncio
+async def test_self_timed_target_timeout_is_not_retried_or_reported_as_runner_timeout() -> None:
+    class SelfTimed(_Slow):
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.calls += 1
+            raise asyncio.TimeoutError('own limit')
+
+    target = SelfTimed(0)
+    result = await call_target_with_retry(
+        target, [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=2
+    )
+
+    assert target.calls == result.attempts == 1
+    assert result.error is not None and result.error.code == 'target.timeout'
+    assert result.error_details == {
+        'exception_type': 'TimeoutError',
+        'raw_message': 'own limit',
+        'attempts': 1,
+        'timeout_ms': 10_000,
+    }
+
+
+@pytest.mark.asyncio
 async def test_self_timed_target_cancellation_propagates() -> None:
     task = asyncio.create_task(
         call_target_with_retry(_Slow(5), [Message(role='user', content='x')], target_agent_timeout_ms=100, max_target_retries=0)

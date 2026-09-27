@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import stat
+import time
 from pathlib import Path
 
 import pytest
@@ -12,10 +13,18 @@ from loguru import logger
 from evaluatorq.backends import DockerOptions
 from evaluatorq.backends import coding_agent as coding_agent_module
 from evaluatorq.backends import container as c
-from evaluatorq.backends.coding_agent import CodingAgentTarget, CodingAgentUnavailableError
+from evaluatorq.backends.coding_agent import CodingAgentError, CodingAgentTarget, CodingAgentUnavailableError
 from evaluatorq.contracts import Message
 
 FIXTURES = Path(__file__).parent / 'fixtures'
+
+
+async def _wait_until(predicate, description: str, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() >= deadline:
+            raise AssertionError(f'timed out waiting for {description}')
+        await asyncio.sleep(0.01)
 
 FAKE = r"""#!/bin/sh
 printf 'ARGV %s\n' "$*" >> "$FAKE_LOG"
@@ -86,6 +95,16 @@ async def test_turn_runs_in_one_container_and_close_removes_it(docker, monkeypat
     await target.close()
     assert calls('rm')[-1].endswith(f'rm -f {name}')
     assert c.LIVE_CONTAINERS == {}
+
+
+@pytest.mark.asyncio
+async def test_caller_env_overrides_host_env_for_container_exec(docker, monkeypatch) -> None:
+    binary, log, _ = docker
+    monkeypatch.setenv('ANTHROPIC_API_KEY', 'host-key')
+    target = _target(binary, env={'ANTHROPIC_API_KEY': 'caller-key'})
+    await target.respond([Message(role='user', content='hi')])
+    assert 'ENV ANTHROPIC_API_KEY=caller-key' in log.read_text()
+    await target.close()
 
 
 @pytest.mark.asyncio
@@ -179,6 +198,8 @@ async def test_exec_exit_codes(docker, monkeypatch, exit_code: int, code: str) -
     with pytest.raises(CodingAgentUnavailableError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.code == code
+    assert calls('rm')
+    assert c.LIVE_CONTAINERS == {}
     if code == 'cli.agent_not_found':
         assert 'img:1' in info.value.message
     if exit_code == 137:
@@ -188,6 +209,19 @@ async def test_exec_exit_codes(docker, monkeypatch, exit_code: int, code: str) -
         assert info.value.kill_reason == 'container_lost'
         assert span_attrs['evaluatorq.coding_agent.kill_reason'] == 'container_lost'
     await target.close()
+
+
+@pytest.mark.asyncio
+async def test_empty_agent_output_removes_container(docker, monkeypatch, tmp_path: Path) -> None:
+    binary, _, calls = docker
+    empty_output = tmp_path / 'empty.jsonl'
+    empty_output.write_text('')
+    monkeypatch.setenv('FAKE_STDOUT', str(empty_output))
+    target = _target(binary)
+    with pytest.raises(CodingAgentError, match='cli.no_result'):
+        await target.respond([Message(role='user', content='x')])
+    assert calls('rm')
+    assert c.LIVE_CONTAINERS == {}
 
 
 @pytest.mark.asyncio
@@ -228,16 +262,13 @@ async def test_cancellation_removes_container_before_propagating(docker, monkeyp
     monkeypatch.setenv('FAKE_RM_SLEEP', '0.3')
     target = _target(binary)
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
-    while not calls('exec'):
-        await asyncio.sleep(0.05)
+    await _wait_until(lambda: bool(calls('exec')), 'docker exec call')
     task.cancel()
-    while not calls('rm'):
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: bool(calls('rm')), 'docker rm call')
     task.cancel()
     await asyncio.sleep(0.05)
     assert not task.done()
-    while not _log_has(log, 'REMOVED'):
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: _log_has(log, 'REMOVED'), 'container removal')
     with pytest.raises(asyncio.CancelledError):
         await task
     assert len(calls('rm')) == 1 and c.LIVE_CONTAINERS == {}
@@ -250,17 +281,14 @@ async def test_cancel_during_run_still_cleans_up(docker, monkeypatch) -> None:
     target = _target(binary)
     monkeypatch.setenv('FAKE_RUN_SLEEP', '0.3')
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
-    while not c.LIVE_CONTAINERS:
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: bool(c.LIVE_CONTAINERS), 'container registration')
     task.cancel()
     await asyncio.sleep(0.05)
     task.cancel()
     await asyncio.sleep(0.05)
     assert not task.done()
-    while not _log_has(log, 'CREATED'):
-        await asyncio.sleep(0.01)
-    while not calls('rm'):
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: _log_has(log, 'CREATED'), 'container creation')
+    await _wait_until(lambda: bool(calls('rm')), 'docker rm call')
     with pytest.raises(asyncio.CancelledError):
         await task
     assert c.LIVE_CONTAINERS == {} and calls('rm')
@@ -280,15 +308,13 @@ async def test_cancel_during_restart_removal_waits_until_old_container_is_remove
     monkeypatch.setenv('FAKE_RM_SLEEP', '0.3')
 
     task = asyncio.create_task(target.respond([Message(role='user', content='second')]))
-    while not calls('rm'):
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: bool(calls('rm')), 'docker rm call')
     task.cancel()
     await asyncio.sleep(0.05)
     task.cancel()
     await asyncio.sleep(0.05)
     assert not task.done()
-    while not _log_has(log, 'REMOVED'):
-        await asyncio.sleep(0.01)
+    await _wait_until(lambda: _log_has(log, 'REMOVED'), 'container removal')
     with pytest.raises(asyncio.CancelledError):
         await task
     assert old_name not in c.LIVE_CONTAINERS

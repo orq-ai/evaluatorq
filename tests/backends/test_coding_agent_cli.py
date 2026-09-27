@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import os
 import stat
 import subprocess
 from pathlib import Path
 
+from click import unstyle
+import pytest
 from typer.testing import CliRunner
 
 from evaluatorq.backends.coding_agent_cli import BUILD_DIR, app
 from evaluatorq.backends.container import DEFAULT_CODING_AGENT_IMAGE
+
+pytestmark = pytest.mark.skipif(os.name != 'posix', reason='requires Unix shell tooling')
 
 
 def test_build_image_argv(tmp_path: Path) -> None:
@@ -45,7 +50,7 @@ def test_build_image_missing_binary(tmp_path: Path) -> None:
     missing = str(tmp_path / 'missing-docker')
     result = CliRunner().invoke(app, ['build-image', '--binary', missing])
     assert result.exit_code == 2
-    output = ' '.join(result.output.split())
+    output = ' '.join(unstyle(result.output).split())
     assert 'Invalid value for --binary' in output
     assert 'not' in output and 'found on PATH' in output
 

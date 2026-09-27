@@ -24,9 +24,21 @@ KEYS = {'claude': 'ANTHROPIC_API_KEY', 'codex': 'OPENAI_API_KEY', 'opencode': 'A
 
 @pytest.fixture(autouse=True)
 def needs_docker():
-    if shutil.which('docker') is None or subprocess.run(['docker', 'info'], capture_output=True).returncode != 0:
+    if shutil.which('docker') is None:
         pytest.skip('no docker daemon')
-    if subprocess.run(['docker', 'image', 'inspect', DEFAULT_CODING_AGENT_IMAGE], capture_output=True).returncode != 0:
+    try:
+        docker_info = subprocess.run(['docker', 'info'], capture_output=True, timeout=10)
+    except subprocess.TimeoutExpired:
+        pytest.skip('docker info timed out')
+    if docker_info.returncode != 0:
+        pytest.skip('no docker daemon')
+    try:
+        image = subprocess.run(
+            ['docker', 'image', 'inspect', DEFAULT_CODING_AGENT_IMAGE], capture_output=True, timeout=10
+        )
+    except subprocess.TimeoutExpired:
+        pytest.skip('docker image inspect timed out')
+    if image.returncode != 0:
         pytest.skip(f'{DEFAULT_CODING_AGENT_IMAGE} not built; run eq coding-agent build-image')
     yield
     left = subprocess.run(
@@ -36,6 +48,7 @@ def needs_docker():
         ],
         capture_output=True,
         text=True,
+        timeout=10,
     )
     assert left.stdout.strip() == '', 'a coding-agent container was left behind'
 

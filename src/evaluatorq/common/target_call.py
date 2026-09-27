@@ -248,7 +248,19 @@ async def call_target_with_retry(
                 'raw_message': resp.error.message,
                 'attempts': attempt + 1,
             }
-        except asyncio.TimeoutError:
+        except asyncio.TimeoutError as exc:
+            if manages_own_timeout:
+                last_response = _synthetic(
+                    '[ERROR: Target agent timed out under its own limit]',
+                    error_type='timeout',
+                    code='target.timeout',
+                )
+                last_error = last_response.error
+                last_details = {'exception_type': type(exc).__name__, 'raw_message': str(exc), 'attempts': attempt + 1}
+                if isinstance(own_timeout_ms, (int, float)):
+                    last_details['timeout_ms'] = own_timeout_ms
+                logger.warning('Target with manages_own_timeout raised TimeoutError; not retrying')
+                break
             text = f'[ERROR: Target agent timed out after {timeout_s:.0f}s]'
             last_response = _synthetic(text, error_type='timeout', code='target.timeout')
             last_error = last_response.error

@@ -343,20 +343,30 @@ def test_watchdog_script_lifecycle(tmp_path: Path, shell: str) -> None:
     lease, home = tmp_path / 'evq-lease', tmp_path / 'evq-home'
     lease.mkdir()
     home.mkdir()
-    script = c.watchdog_script(check_s=1).replace('/evq-lease', str(lease)).replace('/evq-home', str(home))
+    script = c.watchdog_script(check_s=2).replace('/evq-lease', str(lease)).replace('/evq-home', str(home))
     argv = [shell, 'sh', '-c', script] if shell == 'busybox' else ['sh', '-c', script]
     (lease / 'beat').write_text('0')
     proc = subprocess.Popen(argv)
-    for n in range(1, 4):
-        time.sleep(0.9)
-        (lease / 'beat').write_text(str(n))
-    assert proc.poll() is None
-    assert proc.wait(timeout=5) == 0
+    try:
+        for n in range(1, 4):
+            time.sleep(0.5)
+            (lease / 'beat').write_text(str(n))
+        assert proc.poll() is None
+        assert proc.wait(timeout=8) == 0
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
     assert (home / '.evq-exit').read_text().startswith('lease_expired')
     (home / '.evq-exit').unlink()
     proc = subprocess.Popen(argv)
-    (lease / 'beat').unlink()
-    assert proc.wait(timeout=5) == 0
+    try:
+        (lease / 'beat').unlink()
+        assert proc.wait(timeout=8) == 0
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
 
 
 def test_sweep_removes_dead_owner_on_this_host_only(fake_docker, monkeypatch) -> None:

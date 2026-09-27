@@ -16,6 +16,8 @@ from evaluatorq.contracts import Message
 
 RESULT = '{"type":"result","result":"done","session_id":"s","usage":{"input_tokens":1,"output_tokens":1}}'
 
+pytestmark = pytest.mark.skipif(os.name != 'posix', reason='requires Unix shell tooling')
+
 
 def _agent(tmp_path: Path, body: str) -> dict[str, str]:
     bindir = tmp_path / 'bin'
@@ -102,8 +104,8 @@ async def test_hard_cap_fires_on_steady_output(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_sustained_stderr_resets_idle_limit(tmp_path: Path) -> None:
-    body = 'for i in 1 2 3 4; do echo progress >&2; sleep 0.4; done\n' + f"echo '{RESULT}'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=500)
+    body = 'for i in 1 2 3 4; do echo progress >&2; sleep 1; done\n' + f"echo '{RESULT}'\n"
+    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=2500)
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
     await target.close()
@@ -164,8 +166,8 @@ async def test_one_megabyte_line_parses_without_copying_for_each_deadline_check(
 async def test_partial_line_counts_as_output(tmp_path: Path) -> None:
     half = RESULT[: len(RESULT) // 2]
     rest = RESULT[len(RESULT) // 2 :]
-    body = f"printf '%s' '{half}'\nsleep 0.5\nprintf '%s\\n' '{rest}'\nsleep 0.5\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=800)
+    body = f"sleep 2\nprintf '%s' '{half}'\nsleep 4\nprintf '%s\\n' '{rest}'\n"
+    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=5000)
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
     await target.close()
