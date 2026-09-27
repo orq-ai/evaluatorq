@@ -66,7 +66,7 @@ def docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 def _target(binary: str, **kw) -> CodingAgentTarget:
     opts = kw.pop('opts', {})
-    return CodingAgentTarget('claude', container=DockerOptions(binary=binary, image='img:1', **opts), **kw)
+    return CodingAgentTarget(agent='claude', container=DockerOptions(binary=binary, image='img:1', **opts), **kw)
 
 
 def _log_has(log: Path, text: str) -> bool:

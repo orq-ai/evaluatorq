@@ -38,7 +38,7 @@ def _warnings() -> tuple[list[str], int]:
 @pytest.mark.asyncio
 async def test_steady_output_outlives_idle_limit(tmp_path: Path) -> None:
     body = 'for i in 1 2 3 4 5 6; do echo \'{"type":"system"}\'; sleep 0.5; done\n' + f"echo '{RESULT}'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=3000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=3000)
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
     await target.close()
@@ -47,7 +47,7 @@ async def test_steady_output_outlives_idle_limit(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_silence_past_idle_limit_is_idle_timeout(tmp_path: Path) -> None:
     body = 'echo \'{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","id":"t"}]}}\'\nsleep 30\n'
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=2000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=2000)
     seen, sink = _warnings()
     try:
         with pytest.raises(CodingAgentUnavailableError) as info:
@@ -64,7 +64,7 @@ async def test_silence_past_idle_limit_is_idle_timeout(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_open_child_after_stdout_eof_still_hits_idle_limit(tmp_path: Path) -> None:
     body = "exec python3 -c 'import os,time; os.close(1); time.sleep(30)'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=2000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=2000)
     seen, sink = _warnings()
     try:
         with pytest.raises(CodingAgentUnavailableError) as info:
@@ -80,7 +80,7 @@ async def test_open_child_after_stdout_eof_still_hits_idle_limit(tmp_path: Path)
 @pytest.mark.asyncio
 async def test_descendant_holding_stderr_open_still_hits_idle_limit(tmp_path: Path) -> None:
     body = f"echo '{RESULT}'\npython3 -c 'import subprocess; subprocess.Popen([\"sleep\",\"30\"], stdout=subprocess.DEVNULL)'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=2000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=2000)
     seen, sink = _warnings()
     try:
         with pytest.raises(CodingAgentUnavailableError) as info:
@@ -96,7 +96,7 @@ async def test_descendant_holding_stderr_open_still_hits_idle_limit(tmp_path: Pa
 @pytest.mark.asyncio
 async def test_hard_cap_fires_on_steady_output(tmp_path: Path) -> None:
     body = 'while true; do echo \'{"type":"system"}\'; sleep 0.1; done\n'
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=10_000, max_turn_ms=3000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=10_000, max_turn_ms=3000)
     with pytest.raises(CodingAgentUnavailableError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.kill_reason == 'hard_cap'
@@ -107,7 +107,7 @@ async def test_hard_cap_fires_on_steady_output(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_sustained_stderr_resets_idle_limit(tmp_path: Path) -> None:
     body = 'for i in 1 2 3 4; do echo progress >&2; sleep 0.5; done\n' + f"echo '{RESULT}'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=3000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=3000)
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
     await target.close()
@@ -116,7 +116,7 @@ async def test_sustained_stderr_resets_idle_limit(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_idle_timeout_after_stderr_stops(tmp_path: Path) -> None:
     body = 'echo progress >&2; sleep 30\n'
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=2000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=2000)
     with pytest.raises(CodingAgentUnavailableError) as info:
         await asyncio.wait_for(target.respond([Message(role='user', content='x')]), 5)
     assert info.value.kill_reason == 'idle_timeout'
@@ -126,7 +126,7 @@ async def test_idle_timeout_after_stderr_stops(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_stderr_flood_does_not_stall(tmp_path: Path) -> None:
     body = 'head -c 1048576 /dev/zero | tr "\\0" x >&2\n' + f"echo '{RESULT}'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=5000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=5000)
     response = await asyncio.wait_for(target.respond([Message(role='user', content='x')]), 20)
     assert response.text == 'done'
     await target.close()
@@ -139,7 +139,7 @@ async def test_one_megabyte_line_parses_without_copying_for_each_deadline_check(
     big = 'y' * 1_048_576
     result = RESULT.replace('"done"', f'"{big}"')
     (tmp_path / 'out.jsonl').write_text(result + '\n')
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, f'cat {tmp_path / "out.jsonl"}\n'), timeout_ms=5000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, f'cat {tmp_path / "out.jsonl"}\n'), timeout_ms=5000)
     original_deadline_error = coding_agent.deadline_error
     buffers: list[int] = []
 
@@ -169,7 +169,7 @@ async def test_partial_line_counts_as_output(tmp_path: Path) -> None:
     half = RESULT[: len(RESULT) // 2]
     rest = RESULT[len(RESULT) // 2 :]
     body = f"sleep 2\nprintf '%s' '{half}'\nsleep 6\nprintf '%s\\n' '{rest}'\n"
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, body), timeout_ms=8000)
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=8000)
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
     await target.close()
@@ -177,7 +177,7 @@ async def test_partial_line_counts_as_output(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_cancellation_logs_cancelled(tmp_path: Path) -> None:
-    target = CodingAgentTarget('claude', env=_agent(tmp_path, 'sleep 30\n'))
+    target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, 'sleep 30\n'))
     seen, sink = _warnings()
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
     await asyncio.sleep(1)
@@ -204,6 +204,6 @@ def test_coding_agent_manages_own_timeout() -> None:
 
 def test_limits_must_be_positive() -> None:
     with pytest.raises(ValueError):
-        CodingAgentTarget('claude', max_turn_ms=0)
+        CodingAgentTarget(agent='claude', max_turn_ms=0)
     with pytest.raises(ValueError):
-        CodingAgentTarget('claude', timeout_ms=0)
+        CodingAgentTarget(agent='claude', timeout_ms=0)

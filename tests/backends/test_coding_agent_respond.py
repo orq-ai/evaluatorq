@@ -50,7 +50,7 @@ def _target(tmp_path: Path, agent: str, *, stdout: str | None = None, exit_code:
     env = {'PATH': path, 'FAKE_EXIT': str(exit_code)}
     if stdout is not None:
         env['FAKE_STDOUT'] = str(FIXTURES / f'{stdout}.jsonl')
-    return CodingAgentTarget(cast(AgentName, agent), env=env, **kw)
+    return CodingAgentTarget(agent=cast(AgentName, agent), env=env, **kw)
 
 
 @pytest.mark.asyncio
@@ -101,7 +101,7 @@ async def test_non_json_banner_after_final_event_is_skipped(tmp_path: Path) -> N
         'banner from fake agent\n'
     )
     path = _install(tmp_path, 'codex', _ECHO)
-    target = CodingAgentTarget('codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    target = CodingAgentTarget(agent='codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
 
@@ -111,7 +111,7 @@ async def test_garbage_stdout_is_parse_error(tmp_path: Path) -> None:
     garbage = tmp_path / 'garbage.txt'
     garbage.write_text('not json at all\n')
     path = _install(tmp_path, 'codex', _ECHO)
-    target = CodingAgentTarget('codex', env={'PATH': path, 'FAKE_STDOUT': str(garbage)})
+    target = CodingAgentTarget(agent='codex', env={'PATH': path, 'FAKE_STDOUT': str(garbage)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.parse_error'
@@ -125,7 +125,7 @@ async def test_parser_failure_is_parse_error(tmp_path: Path) -> None:
         '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s"}\n'
     )
     path = _install(tmp_path, 'claude', _ECHO)
-    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.parse_error'
@@ -136,7 +136,7 @@ async def test_empty_agent_message_is_no_result(tmp_path: Path) -> None:
     fx = tmp_path / 'empty.jsonl'
     fx.write_text('{"type":"item.completed","item":{"id":"a","type":"agent_message","text":""}}\n')
     path = _install(tmp_path, 'codex', _ECHO)
-    target = CodingAgentTarget('codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    target = CodingAgentTarget(agent='codex', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.no_result'
@@ -147,7 +147,7 @@ async def test_is_error_result_is_agent_error(tmp_path: Path) -> None:
     fx = tmp_path / 'err.jsonl'
     fx.write_text('{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom","session_id":"s"}\n')
     path = _install(tmp_path, 'claude', _ECHO)
-    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     with pytest.raises(CodingAgentError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.agent_error'
@@ -156,7 +156,7 @@ async def test_is_error_result_is_agent_error(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_missing_binary_is_not_found_and_non_retryable(tmp_path: Path) -> None:
-    target = CodingAgentTarget('claude', env={'PATH': str(tmp_path)})
+    target = CodingAgentTarget(agent='claude', env={'PATH': str(tmp_path)})
     with pytest.raises(CodingAgentUnavailableError) as info:
         await target.respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.not_found'
@@ -166,7 +166,7 @@ async def test_missing_binary_is_not_found_and_non_retryable(tmp_path: Path) -> 
 async def test_timeout_kills_and_is_non_retryable(tmp_path: Path) -> None:
     pidfile = tmp_path / 'pid'
     path = _install(tmp_path, 'claude', _SLEEPER)
-    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)}, timeout_ms=1500)
+    target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)}, timeout_ms=1500)
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
     deadline = time.time() + 10
     while not pidfile.exists() and time.time() < deadline:
@@ -183,7 +183,7 @@ async def test_timeout_kills_and_is_non_retryable(tmp_path: Path) -> None:
 async def test_cancellation_kills_process_group(tmp_path: Path) -> None:
     pidfile = tmp_path / 'pid'
     path = _install(tmp_path, 'claude', _SLEEPER)
-    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)})
+    target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_PIDFILE': str(pidfile)})
     task = asyncio.create_task(target.respond([Message(role='user', content='x')]))
     deadline = time.time() + 10
     while not pidfile.exists() and time.time() < deadline:
@@ -217,7 +217,7 @@ async def test_denied_tool_call_survives_turns_to_messages(tmp_path: Path) -> No
         '{"type":"result","subtype":"success","is_error":false,"result":"not allowed","session_id":"s","usage":{"input_tokens":1,"output_tokens":1},"permission_denials":[{"tool_name":"Bash","tool_use_id":"t1","tool_input":{"command":"rm -rf /"}}]}\n'
     )
     path = _install(tmp_path, 'claude', _ECHO)
-    target = CodingAgentTarget('claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
+    target = CodingAgentTarget(agent='claude', env={'PATH': path, 'FAKE_STDOUT': str(fx)})
     response = await target.respond([Message(role='user', content='wipe it')])
     turn = Turn(attacker=AgentResponse(text='wipe it'), target=response)
     rendered = turns_to_messages([turn])
@@ -230,7 +230,7 @@ async def test_denied_tool_call_survives_turns_to_messages(tmp_path: Path) -> No
 async def test_env_overlay_caller_wins(tmp_path: Path) -> None:
     body = '#!/bin/sh\ncat - >/dev/null\nprintf \'{"type":"item.completed","item":{"id":"a","type":"agent_message","text":"%s"}}\\n\' "$MARKER"\n'
     path = _install(tmp_path, 'codex', body)
-    target = CodingAgentTarget('codex', env={'PATH': path, 'MARKER': 'from-env'})
+    target = CodingAgentTarget(agent='codex', env={'PATH': path, 'MARKER': 'from-env'})
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'from-env'
 
@@ -243,7 +243,7 @@ async def test_argv_too_long_is_non_retryable(monkeypatch: pytest.MonkeyPatch) -
         raise OSError(errno.E2BIG, 'Argument list too long')
 
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', _too_big)
-    target = CodingAgentTarget('codex', launcher='orq')
+    target = CodingAgentTarget(agent='codex', launcher='orq')
     with pytest.raises(CodingAgentUnavailableError) as info:
         await target.respond([Message(role='user', content='hi')])
     assert info.value.code == 'cli.prompt_too_long'

@@ -10,7 +10,7 @@ def test_privilege_escalation_opt_in_warns_about_root() -> None:
     seen: list[str] = []
     handler_id = logger.add(lambda message: seen.append(str(message)), level='WARNING')
     try:
-        CodingAgentTarget('claude', container=DockerOptions(allow_privilege_escalation=True))
+        CodingAgentTarget(agent='claude', container=DockerOptions(allow_privilege_escalation=True))
     finally:
         logger.remove(handler_id)
 

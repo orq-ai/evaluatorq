@@ -19,7 +19,7 @@ pytestmark = pytest.mark.skipif(not hasattr(os, 'fork'), reason='requires Unix f
 
 
 def test_inherited_target_is_rejected_but_new_target_is_process_owned(tmp_path: Path) -> None:
-    target = CodingAgentTarget('claude', container=DockerOptions(binary='docker', image='img:1'))
+    target = CodingAgentTarget(agent='claude', container=DockerOptions(binary='docker', image='img:1'))
     root = tmp_path / 'parent-work'
     root.mkdir()
     target._root = root

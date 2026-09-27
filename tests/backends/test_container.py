@@ -210,31 +210,31 @@ def test_agent_spec_container_fields_are_required() -> None:
 
 
 def test_bypass_defaults_and_caller_wins() -> None:
-    claude = CodingAgentTarget('claude', container=DockerOptions())
+    claude = CodingAgentTarget(agent='claude', container=DockerOptions())
     assert claude._permission_mode == 'bypassPermissions'
-    codex = CodingAgentTarget('codex', container=DockerOptions(), permission_mode='read-only')
+    codex = CodingAgentTarget(agent='codex', container=DockerOptions(), permission_mode='read-only')
     assert codex._permission_mode == 'read-only'
-    opencode = CodingAgentTarget('opencode', container=DockerOptions(), extra_args=['--auto'])
+    opencode = CodingAgentTarget(agent='opencode', container=DockerOptions(), extra_args=['--auto'])
     assert opencode._extra_args.count('--auto') == 1
-    assert CodingAgentTarget('opencode', container=DockerOptions())._extra_args == ['--auto']
-    assert CodingAgentTarget('claude')._permission_mode is None
+    assert CodingAgentTarget(agent='opencode', container=DockerOptions())._extra_args == ['--auto']
+    assert CodingAgentTarget(agent='claude')._permission_mode is None
 
 
 def test_new_carries_container_options() -> None:
     opts = DockerOptions(image='i:1', workdir='/app', name_prefix='task-7', run_args=('--cpus', '1'))
-    clone = CodingAgentTarget('claude', container=opts).new()
+    clone = CodingAgentTarget(agent='claude', container=opts).new()
     assert clone._container == opts
     assert clone._permission_mode == 'bypassPermissions'
 
 
 def test_new_keeps_caller_values_before_container_defaults() -> None:
-    implicit = CodingAgentTarget('claude', container=DockerOptions())
+    implicit = CodingAgentTarget(agent='claude', container=DockerOptions())
     assert implicit._kwargs['permission_mode'] is None
     assert implicit._kwargs['extra_args'] is None
     assert implicit.new()._permission_mode == 'bypassPermissions'
 
     explicit = CodingAgentTarget(
-        'claude', container=DockerOptions(), permission_mode='read-only', extra_args=['--custom']
+        agent='claude', container=DockerOptions(), permission_mode='read-only', extra_args=['--custom']
     )
     assert explicit._kwargs['permission_mode'] == 'read-only'
     assert explicit._kwargs['extra_args'] == ['--custom']
@@ -247,7 +247,7 @@ def test_run_args_and_reserved_env_warn_at_construction() -> None:
     seen: list[str] = []
     sink = logger.add(lambda m: seen.append(str(m)), level='WARNING')
     try:
-        CodingAgentTarget('claude', container=DockerOptions(run_args=('--privileged',)), env={'PATH': '/x'})
+        CodingAgentTarget(agent='claude', container=DockerOptions(run_args=('--privileged',)), env={'PATH': '/x'})
     finally:
         logger.remove(sink)
     assert any('--privileged' in s for s in seen)

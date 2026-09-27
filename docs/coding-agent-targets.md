@@ -89,7 +89,7 @@ On macOS, OrbStack works through Docker's context support. Select it with `Docke
 from evaluatorq.backends import CodingAgentTarget, DockerOptions
 
 target = CodingAgentTarget(
-    'claude',
+    agent='claude',
     launcher='orq',
     model='anthropic/claude-sonnet-5',
     container=DockerOptions(),
@@ -120,7 +120,7 @@ async def main() -> None:
             'Before changing this repository, ask one concise question about any unclear requirement.\n'
         )
         target = CodingAgentTarget(
-            'claude',
+            agent='claude',
             model='claude-sonnet-5',
             permission_mode='acceptEdits',
             skills=[skill],
@@ -142,7 +142,7 @@ The example creates a temporary repository and a one-file `grill-me` skill befor
 from evaluatorq.backends import CodingAgentTarget, OrqLaunchOptions
 
 target = CodingAgentTarget(
-    'claude',
+    agent='claude',
     launcher='orq',
     model='anthropic/claude-sonnet-5',
     orq=OrqLaunchOptions(mcp=True, skills=True),

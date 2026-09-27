@@ -62,7 +62,7 @@ def _needs_key(name: str) -> None:
 @pytest.mark.parametrize('launcher', ['direct', 'orq'])
 async def test_claude_turn(launcher: Launcher) -> None:
     _needs_key('ORQ_API_KEY' if launcher == 'orq' else 'ANTHROPIC_API_KEY')
-    target = CodingAgentTarget('claude', launcher=launcher, container=DockerOptions())
+    target = CodingAgentTarget(agent='claude', launcher=launcher, container=DockerOptions())
     try:
         response = await target.respond([Message(role='user', content='Reply with the single word: pong')])
         assert 'pong' in response.text.lower()
@@ -75,14 +75,14 @@ async def test_claude_turn(launcher: Launcher) -> None:
 @pytest.mark.timeout(180)
 async def test_idle_limit_is_real(agent: AgentName) -> None:
     _needs_key(KEYS[agent])
-    slow = CodingAgentTarget(agent, container=DockerOptions(), timeout_ms=20_000)
+    slow = CodingAgentTarget(agent=agent, container=DockerOptions(), timeout_ms=20_000)
     try:
         with pytest.raises(CodingAgentUnavailableError) as info:
             await slow.respond([Message(role='user', content='Run the shell command `sleep 60`, then say done.')])
         assert info.value.kill_reason == 'idle_timeout'
     finally:
         await close_target(slow)
-    steady = CodingAgentTarget(agent, container=DockerOptions(), timeout_ms=20_000)
+    steady = CodingAgentTarget(agent=agent, container=DockerOptions(), timeout_ms=20_000)
     try:
         started = time.monotonic()
         response = await steady.respond([
@@ -122,7 +122,7 @@ async def test_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     workdir.mkdir()
     (workdir / 'inside.txt').write_text('WORKDIR-READABLE-CONTROL')
     monkeypatch.setenv('EVQ_HOST_ONLY', 'HOST-SECRET-ENV')
-    target = CodingAgentTarget('claude', container=DockerOptions(), workdir=workdir)
+    target = CodingAgentTarget(agent='claude', container=DockerOptions(), workdir=workdir)
     try:
         response = await target.respond([
             Message(
@@ -163,7 +163,7 @@ async def test_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
 @pytest.mark.skipif(os.uname().sysname != 'Linux', reason='macOS engines map ownership to the host user themselves')
 async def test_written_file_owned_by_host_uid() -> None:
     _needs_key('ANTHROPIC_API_KEY')
-    target = CodingAgentTarget('claude', container=DockerOptions(), keep_workdir=True)
+    target = CodingAgentTarget(agent='claude', container=DockerOptions(), keep_workdir=True)
     try:
         await target.respond([Message(role='user', content='Create a file named probe.txt containing x.')])
         assert target.workdir is not None

@@ -108,7 +108,7 @@ from evaluatorq.contracts import Message
 
 async def main() -> None:
     target = CodingAgentTarget(
-        'claude',
+        agent='claude',
         launcher='orq',
         model='anthropic/claude-sonnet-5',
         container=DockerOptions(),
@@ -116,7 +116,7 @@ async def main() -> None:
     )
     try:
         response = await target.respond(
-            [Message(role='user', content='Create hello.py that prints Hello, world.')]
+            messages=[Message(role='user', content='Create hello.py that prints Hello, world.')]
         )
         print(response.text)
     finally:

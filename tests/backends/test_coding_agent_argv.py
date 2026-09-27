@@ -130,8 +130,8 @@ def test_orq_launch_options_keeps_positional_constructor_and_value_semantics() -
 
 def test_container_clone_reapplies_implicit_agent_defaults() -> None:
     for original in (
-        CodingAgentTarget('claude', container=DockerOptions()),
-        CodingAgentTarget('opencode', container=DockerOptions()),
+        CodingAgentTarget(agent='claude', container=DockerOptions()),
+        CodingAgentTarget(agent='opencode', container=DockerOptions()),
     ):
         clone = original.new()
         assert clone._permission_mode == original._permission_mode
