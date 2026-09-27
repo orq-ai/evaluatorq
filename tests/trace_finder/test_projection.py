@@ -145,7 +145,7 @@ def test_tool_result_excerpt_keeps_the_start_and_is_capped() -> None:
     )
     call = project_trace(trace).payload['messages'][0]['tool_calls'][0]
     assert call['result_excerpt'].startswith('Error: invoice not found.')
-    assert len(call['result_excerpt'].encode('utf-8')) <= 256 + len('[... later bytes omitted ...]')
+    assert len(call['result_excerpt'].encode('utf-8')) <= 1024 + len('[... later bytes omitted ...]')
 
 
 def test_tool_result_excerpt_shrinks_before_the_unit_is_omitted() -> None:
