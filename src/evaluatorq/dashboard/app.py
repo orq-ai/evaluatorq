@@ -58,7 +58,11 @@ from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
-from evaluatorq.dashboard.trace_finder.routes import initialize_finder_settings, register_finder_routes
+from evaluatorq.dashboard.trace_finder.routes import (
+    initialize_finder_settings,
+    register_finder_routes,
+    warm_initial_finder,
+)
 from evaluatorq.dashboard.view import (
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
@@ -334,16 +338,38 @@ async def _save_settings(req: Request) -> Response | NotStr:
                 'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
             )
         old_store = getattr(req.app.state, 'finder_store', None)
+        old_warmup = getattr(req.app.state, 'finder_catalogue_warmup', None)
+        old_initial_warmup = getattr(req.app.state, 'finder_initial_warmup', None)
         req.app.state.finder_settings = effective_settings()
         req.app.state.finder_generation += 1
-        for state_name in ('finder_store', 'finder_catalogue_cache'):
+        for state_name in (
+            'finder_store',
+            'finder_catalogue_cache',
+            'finder_catalogue_warmup',
+            'finder_initial_warmup',
+        ):
             if hasattr(req.app.state, state_name):
                 delattr(req.app.state, state_name)
+    await _cancel_background_task(old_initial_warmup)
+    await _cancel_background_task(old_warmup[2] if old_warmup is not None else None)
     if old_store is not None:
         # Retire the old store after removing it from app state so new requests cannot acquire it.
         await old_store.close()
     req.app.state.finder_unavailable_reason = None
     return RedirectResponse('/settings?saved=1', status_code=303)
+
+
+async def _cancel_background_task(task: asyncio.Task[Any] | None) -> None:
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _warm_initial_finder_on_startup(app: FastHTML) -> None:
+    try:
+        await warm_initial_finder(app)
+    except Exception as exc:  # Warmup must never stop dashboard startup.
+        logger.opt(exception=True).warning('Dashboard trace warmup failed: {}', exc)
 
 
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
@@ -740,9 +766,14 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
 
     @asynccontextmanager
     async def lifespan(runtime: FastHTML) -> Any:
+        initial_warmup = asyncio.create_task(_warm_initial_finder_on_startup(runtime))
+        runtime.state.finder_initial_warmup = initial_warmup
         try:
             yield
         finally:
+            await _cancel_background_task(initial_warmup)
+            warmup = getattr(runtime.state, 'finder_catalogue_warmup', None)
+            await _cancel_background_task(warmup[2] if warmup is not None else None)
             store = getattr(runtime.state, 'finder_store', None)
             if store is not None:
                 await store.close()

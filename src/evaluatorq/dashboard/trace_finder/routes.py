@@ -237,19 +237,82 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
     return catalogue
 
 
-def _catalogue_kwargs(app: Any, snapshot: RunSnapshot | None = None) -> dict[str, Any]:
-    """The cached facet catalogue for a page render, or ``pending`` so the menu fetches it itself."""
+async def _warm_catalogue(app: Any, window_days: int) -> None:
+    """Start one background fetch so opening the filter menu can reuse it."""
+    async with app.state.finder_store_lock:
+        generation = app.state.finder_generation
+        cached = getattr(app.state, 'finder_catalogue_cache', None)
+        if cached is not None and cached[0] > datetime.now(timezone.utc) and cached[1] == window_days:
+            return
+        active = getattr(app.state, 'finder_catalogue_warmup', None)
+        if active is not None and active[0:2] == (generation, window_days) and not active[2].done():
+            return
+        if active is not None and not active[2].done():
+            active[2].cancel()
+        task = asyncio.create_task(_load_catalogue(app, window_days))
+        app.state.finder_catalogue_warmup = (generation, window_days, task)
+
+
+async def _catalogue_for_window(app: Any, window_days: int) -> FacetCatalogue | None:
+    """Share an in-flight warmup with the menu request for the same window."""
+    active = getattr(app.state, 'finder_catalogue_warmup', None)
+    if active is not None and active[0:2] == (app.state.finder_generation, window_days) and not active[2].done():
+        try:
+            return await asyncio.shield(active[2])
+        except asyncio.CancelledError:
+            if not active[2].cancelled():
+                raise
+    return await _load_catalogue(app, window_days)
+
+
+def _catalogue_window(app: Any, snapshot: RunSnapshot | None, explorer_view: ExplorerView | None) -> int:
+    """Use the range shown in the controls for the facet catalogue."""
     window_days = _settings(app).window_days
     if snapshot is not None and snapshot.request is not None:
         population = snapshot.request.population
         if population.start is not None and population.end is not None:
-            window_days = (population.end - population.start).days
+            window_days = max(1, round((population.end - population.start).total_seconds() / 86400))
+    elif explorer_view is not None and explorer_view.start is not None and explorer_view.end is not None:
+        window_days = max(1, round((explorer_view.end - explorer_view.start).total_seconds() / 86400))
+    return window_days
+
+
+def _catalogue_kwargs(
+    app: Any, snapshot: RunSnapshot | None = None, *, explorer_view: ExplorerView | None = None
+) -> dict[str, Any]:
+    """The cached facet catalogue for a page render, or ``pending`` so the menu fetches it itself."""
+    window_days = _catalogue_window(app, snapshot, explorer_view)
     cached = getattr(app.state, 'finder_catalogue_cache', None)
     if cached is not None:
         expires, cached_window, catalogue = cached
         if expires > datetime.now(timezone.utc) and cached_window == window_days:
             return {'catalogue': catalogue}
     return {'pending': True}
+
+
+async def warm_initial_finder(app: Any) -> RunStore | None:
+    """Start the default rows and facets without waiting for either Orq query."""
+    if not _api_available(app):
+        return None
+    store = await _store(app)
+    if store is None:
+        return None
+    explorer = store.explorer
+    if explorer is not None:
+        async with app.state.finder_store_lock:
+            if (await explorer.view()).state == 'idle':
+                end = datetime.now(timezone.utc)
+                await explorer.load(
+                    end - timedelta(days=7),
+                    end,
+                    explorer_views.DEFAULT_EXPLORER_ROWS,
+                    facets=FacetSelection(),
+                    numeric=NumericFilters(),
+                )
+        explorer_view = await explorer.view()
+        snapshot = await store.snapshot()
+        await _warm_catalogue(app, _catalogue_window(app, snapshot, explorer_view))
+    return store
 
 
 def _form_values(form: Any, name: str) -> list[str]:
@@ -460,22 +523,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
 
     @app.get('/find')
     async def find_page(req: Request) -> Response:
-        api_available = _api_available(req.app)
         settings = _settings(req.app)
-        store = await _store(req.app) if api_available else None
+        store = await warm_initial_finder(req.app)
         api_available = store is not None
         explorer = store.explorer if store is not None else None
-        if explorer is not None:
-            async with req.app.state.finder_store_lock:
-                if (await explorer.view()).state == 'idle':
-                    end = datetime.now(timezone.utc)
-                    await explorer.load(
-                        end - timedelta(days=7),
-                        end,
-                        explorer_views.DEFAULT_EXPLORER_ROWS,
-                        facets=FacetSelection(),
-                        numeric=NumericFilters(),
-                    )
         explorer_view = await explorer.view() if explorer is not None else None
         snapshot = await store.snapshot() if store is not None else RunSnapshot()
         return _html(
@@ -487,7 +538,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 explorer_html=await _explorer_html(req) if store is not None else '',
                 explorer_view=explorer_view,
                 has_rows=bool(explorer_view and explorer_view.rows),
-                **_catalogue_kwargs(req.app, snapshot),
+                **_catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view),
             )
         )
 
@@ -617,8 +668,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         await store.reset()
         await explorer.load(start, end, rows, facets=facets, numeric=numeric)
         snapshot = await store.snapshot_for_render()
-        load_kwargs = _catalogue_kwargs(req.app, snapshot)
-        load_kwargs.update(explorer_facets=facets, explorer_numeric=numeric)
+        explorer_view = await explorer.view()
+        await _warm_catalogue(req.app, _catalogue_window(req.app, snapshot, explorer_view))
+        load_kwargs = _catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view)
+        load_kwargs.update(explorer_facets=facets, explorer_numeric=numeric, explorer_view=explorer_view)
         body_oob = (
             f'<div id="finder-body" hx-swap-oob="innerHTML">'
             f'{fragment(snapshot, settings, **load_kwargs)}</div>'
@@ -790,7 +843,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             parsed = FinderRunForm(
                 window_days=settings.window_days, limit=settings.limit, parallelism=settings.parallelism
             )
-        catalogue = await _load_catalogue(req.app, parsed.window_days)
+        catalogue = await _catalogue_for_window(req.app, parsed.window_days)
         form_id = params.get('form_id')
         if form_id not in {'finder-query-form', 'finder-start-form'}:
             form_id = 'finder-query-form'

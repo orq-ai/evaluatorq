@@ -3,17 +3,19 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.trace_finder.columns import resolve_columns
 from evaluatorq.trace_finder.explorer import ExplorerView
-from evaluatorq.trace_finder.models import TraceRecord
+from evaluatorq.trace_finder.models import FacetCatalogue, TraceRecord
 from evaluatorq.trace_finder.rows import TraceRow
 
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
@@ -244,6 +246,84 @@ def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) 
 
     client.get('/find')
     assert len(source.calls) == 1
+
+
+def test_server_warms_traces_and_facets_before_the_first_find_request(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    store, source, client = explorer_client
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[int | None] = []
+
+    async def load_catalogue(_app: Any, window_days: int | None = None) -> FacetCatalogue:
+        calls.append(window_days)
+        started.set()
+        await asyncio.to_thread(release.wait)
+        return FacetCatalogue()
+
+    monkeypatch.setattr(store, 'close', store.explorer.close, raising=False)
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    with client:
+        try:
+            assert started.wait(timeout=2)
+            assert client.get('/find').status_code == 200
+            assert len(source.calls) == 1
+            assert calls == [7]
+        finally:
+            release.set()
+
+
+@pytest.mark.asyncio
+async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    _, _, client = explorer_client
+    app = client.app
+    app.state.finder_settings = app.state.finder_settings.model_copy(update={'window_days': 14})
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls: list[int | None] = []
+
+    async def load_catalogue(runtime: Any, window_days: int | None = None) -> FacetCatalogue:
+        calls.append(window_days)
+        started.set()
+        await release.wait()
+        catalogue = FacetCatalogue(project=('warmed-project',))
+        runtime.state.finder_catalogue_cache = (
+            datetime.now(timezone.utc) + timedelta(minutes=5), window_days, catalogue
+        )
+        return catalogue
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://testserver') as http:
+        page = await http.get('/find')
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert page.status_code == 200
+        assert 'name="window_days" value="7"' in page.text
+        assert calls == [7]
+
+        await http.get('/find')
+        assert calls == [7]
+        menu_task = asyncio.create_task(http.get('/find/facets?window_days=7'))
+        await asyncio.sleep(0)
+        assert not menu_task.done()
+        assert calls == [7]
+
+        release.set()
+        menu = await asyncio.wait_for(menu_task, timeout=2)
+        assert menu.status_code == 200
+        assert 'warmed-project' in menu.text
+        assert calls == [7]
+
+        loaded = await http.post('/find/load', data=csrf_data({
+            'from': '2026-09-13',
+            'from_time': '10:00:00',
+            'to': '2026-09-27',
+            'to_time': '10:00:00',
+            'tz_offset': '0',
+            'rows': '10',
+        }))
+        await asyncio.sleep(0)
+        assert loaded.status_code == 200
+        assert 'name="window_days" value="14"' in loaded.text
+        assert calls == [7, 14]
 
 
 def test_find_page_keeps_manually_loaded_range(explorer_client) -> None:

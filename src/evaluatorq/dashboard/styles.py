@@ -2620,7 +2620,7 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .finder-controls .add { display:inline-flex; align-items:center; height:28px; padding:0 12px; border-radius:999px; border:1px dashed var(--border-strong); color:var(--text-muted); background:transparent; font:inherit; font-size:12px; cursor:pointer; transition:border-color .15s ease-out,color .15s ease-out,background .15s ease-out; }
 .finder-controls .add:hover,.finder-controls .addwrap:has(.finder-facets.open) .add { border-style:solid; border-color:var(--accent); color:var(--accent); background:var(--surface-card); }
 .finder-facet-loading { display:none; align-items:center; gap:6px; margin-left:8px; color:var(--text-muted); font-size:11px; }
-.finder-facets.pending + .finder-facet-loading,.finder-facet-loading.htmx-request { display:inline-flex; }
+.finder-facets.pending.open + .finder-facet-loading,.finder-facets.open + .finder-facet-loading.htmx-request { display:inline-flex; }
 .finder-facet-loading::before { content:""; width:9px; height:9px; border:1.5px solid var(--border-strong); border-top-color:var(--accent); border-radius:50%; animation:finder-spin .8s linear infinite; }
 .finder-go-working,.finder-start-working { display:none; }
 .finder-query.htmx-request .finder-go-idle { display:none; }

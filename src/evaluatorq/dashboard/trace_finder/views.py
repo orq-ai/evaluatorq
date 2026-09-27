@@ -263,6 +263,8 @@ def controls(
     window_days = settings.window_days
     if population is not None and population.start is not None and population.end is not None:
         window_days = max(1, round((population.end - population.start).total_seconds() / 86400))
+    elif explorer_view is not None and explorer_view.start is not None and explorer_view.end is not None:
+        window_days = max(1, round((explorer_view.end - explorer_view.start).total_seconds() / 86400))
     values = {
         'window_days': window_days,
         'limit': population.limit if population is not None else settings.limit,
