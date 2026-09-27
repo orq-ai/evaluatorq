@@ -8,6 +8,8 @@ from typing import Any
 import pytest
 from loguru import logger
 
+from evaluatorq.common import model_catalogue
+from evaluatorq.common.model_catalogue import ModelInfo
 from evaluatorq.contracts import Usage
 from evaluatorq.insights.cache import InsightsCache
 from evaluatorq.insights.embed import EmbeddingError, embed_texts
@@ -33,9 +35,16 @@ class _Usage:
 
 
 class _Response:
-    def __init__(self, data: list[_Embedding], *, prompt_tokens: int = 1) -> None:
+    def __init__(
+        self,
+        data: list[_Embedding],
+        *,
+        prompt_tokens: int = 1,
+        model: str | None = MODEL,
+    ) -> None:
         self.data = data
         self.usage = _Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
+        self.model = model
 
 
 def _vector_for(text: str) -> list[float]:
@@ -49,11 +58,13 @@ class _FakeEmbeddingsResource:
         fail_batches: set[int] | None = None,
         wrong_count_batches: set[int] | None = None,
         prompt_tokens: int = 1,
+        response_model: str | None = MODEL,
     ) -> None:
         self.calls: list[list[str]] = []
         self._fail_batches = fail_batches or set()
         self._wrong_count_batches = wrong_count_batches or set()
         self._prompt_tokens = prompt_tokens
+        self._response_model = response_model
 
     async def create(self, *, model: str, input: list[str]) -> _Response:  # noqa: A002
         self.calls.append(list(input))
@@ -62,7 +73,7 @@ class _FakeEmbeddingsResource:
         data = [_Embedding(_vector_for(text)) for text in input]
         if len(self.calls) - 1 in self._wrong_count_batches:
             data = data[:-1]
-        return _Response(data, prompt_tokens=self._prompt_tokens)
+        return _Response(data, prompt_tokens=self._prompt_tokens, model=self._response_model)
 
 
 class _FakeClient:
@@ -72,9 +83,13 @@ class _FakeClient:
         fail_batches: set[int] | None = None,
         wrong_count_batches: set[int] | None = None,
         prompt_tokens: int = 1,
+        response_model: str | None = MODEL,
     ) -> None:
         self.embeddings = _FakeEmbeddingsResource(
-            fail_batches=fail_batches, wrong_count_batches=wrong_count_batches, prompt_tokens=prompt_tokens
+            fail_batches=fail_batches,
+            wrong_count_batches=wrong_count_batches,
+            prompt_tokens=prompt_tokens,
+            response_model=response_model,
         )
 
 
@@ -83,9 +98,13 @@ def fake_client(
     fail_batches: set[int] | None = None,
     wrong_count_batches: set[int] | None = None,
     prompt_tokens: int = 1,
+    response_model: str | None = MODEL,
 ) -> Any:
     return _FakeClient(
-        fail_batches=fail_batches, wrong_count_batches=wrong_count_batches, prompt_tokens=prompt_tokens
+        fail_batches=fail_batches,
+        wrong_count_batches=wrong_count_batches,
+        prompt_tokens=prompt_tokens,
+        response_model=response_model,
     )
 
 
@@ -93,7 +112,9 @@ def fake_client(
 async def test_embed_texts_records_priced_usage(
     cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def price(usage: Usage | None, model: str, client: Any) -> Usage | None:
+    async def price(
+        usage: Usage | None, model: str, client: Any, *, served_model: str | None = None
+    ) -> Usage | None:
         assert usage is not None
         return usage.model_copy(update={'total_cost': 0.000012, 'input_cost': 0.000012, 'priced_calls': 1})
 
@@ -110,10 +131,38 @@ async def test_embed_texts_records_priced_usage(
 
 
 @pytest.mark.asyncio
+async def test_embed_texts_prices_at_the_response_served_model(
+    cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    served_model = 'openai/served-embedding-model'
+
+    async def catalogue(client: Any = None) -> dict[str, ModelInfo]:
+        return {'served-embedding-model': ModelInfo(0.005, 0.0, 'openai', supports_responses=False)}
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
+    ledger = UsageLedger()
+
+    await embed_texts(
+        ['hello'],
+        client=fake_client(prompt_tokens=12, response_model=served_model),
+        model=MODEL,
+        cache=cache,
+        usage=ledger,
+    )
+
+    recorded = ledger.totals()['embed']
+    assert recorded is not None
+    assert recorded.input_cost == pytest.approx(0.00006)
+    assert recorded.total_cost == pytest.approx(0.00006)
+
+
+@pytest.mark.asyncio
 async def test_embed_texts_warns_once_when_model_is_unpriced(
     cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def catalogue_miss(usage: Usage | None, model: str, client: Any) -> Usage | None:
+    async def catalogue_miss(
+        usage: Usage | None, model: str, client: Any, *, served_model: str | None = None
+    ) -> Usage | None:
         return usage
 
     monkeypatch.setattr('evaluatorq.insights.embed.price_usage', catalogue_miss)
@@ -138,7 +187,9 @@ async def test_embed_texts_warns_once_when_model_is_unpriced(
 async def test_embed_texts_without_ledger_warns_once_per_call(
     cache: InsightsCache, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def catalogue_miss(usage: Usage | None, model: str, client: Any) -> Usage | None:
+    async def catalogue_miss(
+        usage: Usage | None, model: str, client: Any, *, served_model: str | None = None
+    ) -> Usage | None:
         return usage
 
     monkeypatch.setattr('evaluatorq.insights.embed.price_usage', catalogue_miss)

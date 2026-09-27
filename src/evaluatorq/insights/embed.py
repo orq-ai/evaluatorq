@@ -50,7 +50,9 @@ async def _embed_batch(
                 total_tokens=response.usage.total_tokens,
                 calls=1,
             )
-            usage = await price_usage(Usage.extract(response.usage), model, client)
+            usage = await price_usage(
+                Usage.extract(response.usage), model, client, served_model=getattr(response, 'model', None)
+            )
             return response, usage
 
     return await with_retry(attempt, label='insights embed')
