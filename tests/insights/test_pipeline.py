@@ -445,7 +445,7 @@ async def test_invalid_config_fails_before_starting_manifest(tmp_path: Path) -> 
 
 
 def test_noise_outlier_is_not_a_priority_member() -> None:
-    from evaluatorq.insights.models import ClusterAssignment, InsightsConfig, LabelSpec, TraceInsight
+    from evaluatorq.insights.models import ClusterAssignment, LabelSpec, TraceInsight
     from evaluatorq.insights.priority import priority_points
 
     satisfaction = LabelSpec(name='customer_satisfaction', kind='score', instructions='score', criteria=['bad', 'good'])

@@ -53,7 +53,7 @@ def prompt_hash(text: str) -> str:
 
 
 def _text_hash(text: str) -> str:
-    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+    return prompt_hash(text)
 
 
 def _pack_vector(vector: list[float]) -> bytes:

@@ -339,6 +339,23 @@ async def test_export_path_with_no_matched_ids_skips_live_reload(tmp_path: Any, 
 
 
 @pytest.mark.asyncio
+async def test_export_path_uses_validated_snapshot_if_file_changes(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    export = _run_export(['t1'])
+    export_path = tmp_path / 'export.json'
+    export_path.write_text(export.model_dump_json())
+    population = InsightsPopulation.from_finder_export(export_path, export=export)
+    export_path.write_text('not json')
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=(make_trace('t1'),))
+
+    resolved = await resolve_population(
+        population, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+    )
+
+    assert [trace.trace_id for trace in resolved.traces] == ['t1']
+
+
+@pytest.mark.asyncio
 async def test_export_path_bad_json_raises_population_error(tmp_path: Any) -> None:
     export_path = tmp_path / 'export.json'
     export_path.write_text('not json')

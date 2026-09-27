@@ -301,4 +301,5 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
 
     assert result.exit_code == 0, result.output
     assert captured['population'].finder_export == path
+    assert captured['population'].finder_export_snapshot() == export
     assert captured['_finder_export_source'] == path

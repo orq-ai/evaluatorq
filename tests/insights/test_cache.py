@@ -72,12 +72,36 @@ def test_vectors_per_text_hit_and_miss(tmp_path, cache_factory):
 
 
 def test_cache_connection_waits_for_overlapping_run_writes(tmp_path, cache_factory):
-    cache = cache_factory(tmp_path / 'c.sqlite')
+    path = tmp_path / 'c.sqlite'
+    cache = cache_factory(path)
     assert cache._conn is not None
+    lock_held = Event()
+    release_lock = Event()
+    writer_started = Event()
+    writer_finished = Event()
 
-    busy_timeout_ms = cache._conn.execute('PRAGMA busy_timeout').fetchone()[0]
+    def hold_write_transaction() -> None:
+        with sqlite3.connect(path) as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            lock_held.set()
+            assert release_lock.wait(timeout=5)
 
-    assert busy_timeout_ms >= 30_000
+    def write_vector() -> None:
+        writer_started.set()
+        cache.put_vectors('e', {'a': [0.5]})
+        writer_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        holder = pool.submit(hold_write_transaction)
+        assert lock_held.wait(timeout=2)
+        writer = pool.submit(write_vector)
+        assert writer_started.wait(timeout=2)
+        assert writer_finished.wait(timeout=0.1) is False
+        release_lock.set()
+        holder.result(timeout=2)
+        writer.result(timeout=2)
+
+    assert cache.get_vectors('e', ['a']) == {'a': [0.5]}
 
 
 def test_vector_lookup_serializes_connection_close(tmp_path, cache_factory):

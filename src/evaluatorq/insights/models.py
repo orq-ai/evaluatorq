@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion
 from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+
+if TYPE_CHECKING:
+    from evaluatorq.trace_finder.export import RunExport
 
 DimensionName = Literal['intent', 'failure', 'sentiment']
 BoundedRatio = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
@@ -63,6 +66,7 @@ class InsightsPopulation(BaseModel):
     window_days: int = Field(default=7, ge=1, le=90)
     limit: int = Field(default=500, ge=1, le=5000)
     finder_export: Path | None = None
+    _finder_export_snapshot: RunExport | None = PrivateAttr(default=None)
 
     @model_validator(mode='after')
     def _finder_export_excludes_live_selection(self) -> Self:
@@ -86,9 +90,15 @@ class InsightsPopulation(BaseModel):
         return self
 
     @classmethod
-    def from_finder_export(cls, path: Path) -> InsightsPopulation:
-        """Build a population hydrated from a finder export JSON; no match question is asked."""
-        return cls(finder_export=path)
+    def from_finder_export(cls, path: Path, *, export: RunExport | None = None) -> InsightsPopulation:
+        """Build a population from a finder export; reuse a CLI-validated snapshot when provided."""
+        population = cls(finder_export=path)
+        population._finder_export_snapshot = export
+        return population
+
+    def finder_export_snapshot(self) -> RunExport | None:
+        """Return the validated export supplied by the CLI, if any."""
+        return self._finder_export_snapshot
 
 
 class LabelAnswer(BaseModel):

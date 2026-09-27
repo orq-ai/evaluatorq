@@ -192,10 +192,12 @@ async def _resolve_from_query(
 async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> ResolvedPopulation:
     assert pop.finder_export is not None  # noqa: S101 - guarded by the caller's dispatch before this is reached
 
-    try:
-        export = RunExport.model_validate_json(pop.finder_export.read_text())
-    except Exception as error:
-        raise PopulationError(f'loading finder export {pop.finder_export} failed: {error}') from error
+    export = pop.finder_export_snapshot()
+    if export is None:
+        try:
+            export = RunExport.model_validate_json(pop.finder_export.read_text())
+        except Exception as error:
+            raise PopulationError(f'loading finder export {pop.finder_export} failed: {error}') from error
 
     facets = _merge_facets(_facets_from_export(export.filters), _facets_from_export(export.generated_filters))
     numeric = _merge_numeric(

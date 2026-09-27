@@ -70,10 +70,10 @@ def _resolve_labels(values: list[str] | None) -> list[LabelSpec]:
     return labels
 
 
-def _validate_finder_export(path: Path) -> None:
+def _validate_finder_export(path: Path) -> RunExport:
     """Reject unreadable or invalid finder exports as CLI input errors before running Insights."""
     try:
-        RunExport.model_validate_json(path.read_text(encoding='utf-8'))
+        return RunExport.model_validate_json(path.read_text(encoding='utf-8'))
     except (OSError, ValueError) as exc:
         raise ValueError(f'could not read a valid finder export from {path}: {exc}') from exc
 
@@ -262,10 +262,8 @@ def insights_cmd(
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
         selected_profile = resolve_cli_profile(profile if profile is not None else settings.orq_profile)
-        if from_finder is not None:
-            _validate_finder_export(from_finder)
         population = (
-            InsightsPopulation.from_finder_export(from_finder)
+            InsightsPopulation.from_finder_export(from_finder, export=_validate_finder_export(from_finder))
             if from_finder is not None
             else InsightsPopulation(
                 query=query,
