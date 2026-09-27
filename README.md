@@ -6,9 +6,11 @@
 |------------------------------------------------------------------------- | -------: | -------: | ------: | --------: |
 | src/evaluatorq/\_\_init\_\_.py                                           |       28 |        2 |     93% |     30-31 |
 | src/evaluatorq/\_\_main\_\_.py                                           |        3 |        3 |      0% |       1-4 |
-| src/evaluatorq/backends/\_\_init\_\_.py                                  |        2 |        0 |    100% |           |
-| src/evaluatorq/backends/coding\_agent.py                                 |      391 |       15 |     96% |285, 304, 369, 374, 385, 434-435, 487, 493, 565, 612, 644-645, 742, 767 |
-| src/evaluatorq/cli.py                                                    |       56 |        1 |     98% |       226 |
+| src/evaluatorq/backends/\_\_init\_\_.py                                  |        3 |        0 |    100% |           |
+| src/evaluatorq/backends/coding\_agent.py                                 |      687 |       29 |     96% |208, 341, 360, 425, 430, 441, 490-491, 543, 549, 590-591, 662, 753, 765, 778, 839-841, 869, 922, 932-933, 1094, 1100-1102, 1221, 1261 |
+| src/evaluatorq/backends/coding\_agent\_cli.py                            |       19 |        0 |    100% |           |
+| src/evaluatorq/backends/container.py                                     |      353 |       34 |     90% |33-34, 178, 193, 275, 308-323, 355-356, 392, 439-443, 449-454, 464-466, 503-504, 514-516, 518-519 |
+| src/evaluatorq/cli.py                                                    |       58 |        1 |     98% |       228 |
 | src/evaluatorq/common/\_\_init\_\_.py                                    |        0 |        0 |    100% |           |
 | src/evaluatorq/common/apply.py                                           |      137 |        6 |     96% |208, 221-222, 228, 331-332 |
 | src/evaluatorq/common/async\_utils.py                                    |       54 |        3 |     94% |60, 92, 97 |
@@ -51,12 +53,12 @@
 | src/evaluatorq/common/run\_store\_dir.py                                 |        8 |        0 |    100% |           |
 | src/evaluatorq/common/sanitize.py                                        |       12 |        0 |    100% |           |
 | src/evaluatorq/common/structured\_output.py                              |      298 |        9 |     97% |164, 252, 275, 354, 539-540, 654, 717, 787 |
-| src/evaluatorq/common/target\_call.py                                    |      124 |        0 |    100% |           |
+| src/evaluatorq/common/target\_call.py                                    |      130 |        0 |    100% |           |
 | src/evaluatorq/common/template\_engine.py                                |       77 |        2 |     97% |    60, 64 |
 | src/evaluatorq/common/thread\_context.py                                 |       62 |        1 |     98% |        75 |
 | src/evaluatorq/common/trace\_input.py                                    |      498 |       66 |     87% |57-58, 72-98, 103-104, 108-109, 113-114, 139-140, 148-149, 170, 172, 174, 180, 214, 221, 231, 258-259, 272-275, 311, 444, 458, 462-463, 479, 489-492, 499, 504, 563, 569, 586, 595, 805 |
 | src/evaluatorq/common/tracing.py                                         |      317 |       27 |     91% |166-177, 215-217, 224, 427, 493-495, 574-576, 613-614, 643-644 |
-| src/evaluatorq/contracts.py                                              |      568 |       18 |     97% |58, 81, 134-136, 339, 913, 1010, 1028, 1032, 1034, 1084, 1089, 1093, 1098, 1100, 1219, 1481, 1807 |
+| src/evaluatorq/contracts.py                                              |      570 |       18 |     97% |58, 81, 134-136, 339, 913, 1010, 1028, 1032, 1034, 1084, 1089, 1093, 1098, 1100, 1219, 1481, 1815 |
 | src/evaluatorq/dashboard/\_\_init\_\_.py                                 |        0 |        0 |    100% |           |
 | src/evaluatorq/dashboard/\_compat.py                                     |       23 |       14 |     39% | 39-53, 71 |
 | src/evaluatorq/dashboard/app.py                                          |      392 |       40 |     90% |100-101, 104-105, 301, 400-401, 421-422, 457, 460, 463, 466-468, 482, 486-488, 515, 542, 546-548, 579, 582, 590-592, 615, 626, 634-636, 650, 678, 681, 689-691 |
@@ -253,7 +255,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      140 |       12 |     91% |97, 184-187, 253, 255-258, 323-324, 345 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |      161 |        3 |     98% |34, 285, 363 |
-| **TOTAL**                                                                | **32425** | **2784** | **91%** |           |
+| **TOTAL**                                                                | **33104** | **2832** | **91%** |           |
 
 
 ## Setup coverage badge
