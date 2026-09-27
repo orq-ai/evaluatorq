@@ -355,12 +355,25 @@ def test_traces_show_active_filter_chips_and_clear_filter_navigation(tmp_path, m
 
 
 def test_tab_route_serves_full_page_on_navigation_and_fragment_for_htmx(tmp_path, minimal_run, monkeypatch):
+    from evaluatorq.dashboard import insights_routes
+
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     _write_run(tmp_path, minimal_run)
+    original_entries = insights_routes._entries
+    entries_calls = 0
+
+    def counted_entries(directory):
+        nonlocal entries_calls
+        entries_calls += 1
+        return original_entries(directory)
+
+    monkeypatch.setattr(insights_routes, '_entries', counted_entries)
     client = TestClient(build_app())
 
     page_response = client.get('/insights/run-1/tab/labels')
+    assert entries_calls == 1
     fragment_response = client.get('/insights/run-1/tab/labels', headers={'HX-Request': 'true'})
+    assert entries_calls == 2
 
     assert page_response.status_code == 200
     assert page_response.text.startswith('<!DOCTYPE html>')

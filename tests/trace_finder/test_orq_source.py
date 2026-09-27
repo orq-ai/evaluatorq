@@ -261,7 +261,7 @@ async def test_targeted_load_stops_starting_pages_after_budget_when_id_is_stale(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     traces = FakeTraces({None: ([summary('unrelated')], True, 'page-2')})
-    ticks = iter((0.0, 0.0, 31.0))
+    ticks = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 31.0))
     monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: next(ticks)))
 
     snapshot = await make_source(FakeOrq(traces)).load_async(
@@ -294,6 +294,75 @@ async def test_targeted_page_budget_includes_project_lookup(monkeypatch: pytest.
 
     assert snapshot.traces == ()
     assert not traces.query_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_project_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    traces = FakeTraces({})
+    client = FakeOrq(traces)
+    project_started = asyncio.Event()
+
+    async def slow_projects(**kwargs: Any) -> Any:
+        project_started.set()
+        await asyncio.sleep(60)
+
+    client.projects.list_async = slow_projects
+    snapshot = await make_source(client).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+    )
+
+    assert project_started.is_set()
+    assert snapshot.traces == ()
+    assert not traces.query_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    traces = FakeTraces({})
+    query_started = asyncio.Event()
+    query_timeouts: list[int] = []
+
+    async def slow_query(**kwargs: Any) -> Any:
+        query_started.set()
+        query_timeouts.append(kwargs['timeout_ms'])
+        await asyncio.sleep(60)
+
+    traces.query_async = slow_query
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+    )
+
+    assert query_started.is_set()
+    assert snapshot.traces == ()
+    assert len(query_timeouts) == 1
+    assert 1 <= query_timeouts[0] <= 10
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
+    hydration_started = asyncio.Event()
+    hydration_timeouts: list[int] = []
+
+    async def slow_span_list(*, trace_id: str, **kwargs: Any) -> Any:
+        hydration_started.set()
+        hydration_timeouts.append(kwargs['timeout_ms'])
+        await asyncio.sleep(60)
+
+    traces.list_spans_async = slow_span_list
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+    )
+
+    assert hydration_started.is_set()
+    assert snapshot.traces == ()
+    assert len(hydration_timeouts) == 1
+    assert 1 <= hydration_timeouts[0] <= 10
 
 
 @pytest.mark.asyncio

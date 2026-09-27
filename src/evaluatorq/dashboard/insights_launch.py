@@ -126,8 +126,16 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
             return False
         heartbeat_at = state.get('heartbeat_at')
         stale = isinstance(heartbeat_at, (int, float)) and time.time() - heartbeat_at > INSIGHTS_WORKER_STALE_SECONDS
-        pid = state.get('pid')
-        process_identity = state.get('process_identity')
+        worker_pid = state.get('pid')
+        worker_identity = state.get('process_identity')
+        launcher_pid = state.get('launcher_pid')
+        launcher_identity = state.get('launcher_process_identity')
+        # Until the worker PID is published, the launcher is the only process
+        # that can prove startup is still in progress. The child waits for a
+        # handshake after that PID has been written.
+        checking_launcher = worker_pid is None
+        pid = launcher_pid if checking_launcher else worker_pid
+        process_identity = launcher_identity if checking_launcher else worker_identity
     except (OSError, ValueError, TypeError):
         return False
     if manifest.status != ManifestStatus.RUNNING or not stale:
@@ -147,8 +155,10 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
     if (
         latest_manifest.status != ManifestStatus.RUNNING
         or not isinstance(latest_state, dict)
-        or latest_state.get('pid') != pid
-        or latest_state.get('process_identity') != process_identity
+        or latest_state.get('pid') != worker_pid
+        or latest_state.get('process_identity') != worker_identity
+        or latest_state.get('launcher_pid') != launcher_pid
+        or latest_state.get('launcher_process_identity') != launcher_identity
         or not isinstance(latest_state.get('heartbeat_at'), (int, float))
         or time.time() - latest_state['heartbeat_at'] <= INSIGHTS_WORKER_STALE_SECONDS
         or _worker_process_is_alive(pid, process_identity)
@@ -254,10 +264,13 @@ def _read_worker_process_identity(pid: int) -> tuple[str, bool] | None:
                 text=True,
                 timeout=2,
             )
-        except (OSError, subprocess.SubprocessError):
+        except (OSError, subprocess.SubprocessError, TypeError, ValueError):
             return None
-        fields = result.stdout.split()
-        if len(fields) < 6:
+        try:
+            fields = result.stdout.split()
+            if len(fields) < 6:
+                return None
+        except (AttributeError, TypeError):
             return None
         return f'darwin:{" ".join(fields[:5])}', fields[5].startswith('Z')
     return None
@@ -411,9 +424,10 @@ def cleanup_worker_state():
     except OSError as cleanup_error:
         print(f"Could not remove Insights worker state: {cleanup_error}", file=__import__("sys").stderr)
 try:
-    # Keep the child from cleaning its state before the parent has recorded
-    # the PID. EOF also releases the child if the parent exits unexpectedly.
-    sys.stdin.buffer.read(1)
+    # Wait until the parent records the PID. If the parent exits before
+    # releasing the child, EOF stops the worker before it can begin the run.
+    if sys.stdin.buffer.read(1) != b"1":
+        raise SystemExit(0)
     runpy.run_module("evaluatorq.dashboard.insights_worker", run_name="__main__")
 except BaseException as exc:
     if isinstance(exc, SystemExit) and exc.code in (None, 0):
@@ -571,6 +585,8 @@ def _initial_worker_state(path: Path, snapshot: Path | None) -> None:
         path,
         {
             'pid': None,
+            'launcher_pid': os.getpid(),
+            'launcher_process_identity': _worker_process_identity(os.getpid()),
             'heartbeat_at': time.time(),
             'snapshot_path': str(snapshot) if snapshot is not None else None,
         },
@@ -741,21 +757,20 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             state['pid'] = process.pid
             state['process_identity'] = _worker_process_identity(process.pid)
             _write_worker_state(state_path, state)
+            if process.stdin is None:
+                raise OSError('Insights worker handshake is unavailable.')
+            process.stdin.write(b'1')
         except (OSError, ValueError, TypeError) as exc:
-            logger.warning('Could not record Insights worker process {}: {}', run_id, exc)
+            logger.warning('Could not record or release Insights worker process {}: {}', run_id, exc)
+            raise
         finally:
-            # The worker waits for this byte before it can finish and remove
-            # its state file, so the PID update cannot recreate a deleted file.
+            # Closing without a release byte stops the child when PID
+            # persistence failed. Otherwise the child can start and clean up.
             if process.stdin is not None:
                 try:
-                    process.stdin.write(b'1')
+                    process.stdin.close()
                 except OSError as exc:
-                    logger.warning('Could not release Insights worker {}: {}', run_id, exc)
-                finally:
-                    try:
-                        process.stdin.close()
-                    except OSError as exc:
-                        logger.warning('Could not close Insights worker handshake {}: {}', run_id, exc)
+                    logger.warning('Could not close Insights worker handshake {}: {}', run_id, exc)
     except Exception as exc:  # noqa: BLE001 — every ordinary setup failure must terminate this run.
         try:
             writer.fail(f'Could not start Insights worker: {exc}', stage='start')

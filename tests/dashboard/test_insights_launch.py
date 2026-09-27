@@ -52,7 +52,11 @@ def test_stage_plan_follows_source_labels_and_dimensions() -> None:
 
 def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
     spec = InsightsLaunchSpec(source='query', query='refunds', labels=['sentiment'], dimensions=['intent', 'failure'])
-    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+    with (
+        patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn,
+        patch('evaluatorq.dashboard.insights_launch._worker_process_identity', return_value='test:1'),
+    ):
+        spawn.return_value.pid = 43210
         run_id = launch_insights(spec, tmp_path)
 
     manifest = list_manifests(tmp_path)[0]
@@ -74,6 +78,7 @@ def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
 
 def test_worker_starts_only_after_parent_records_its_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
+    import os
     import subprocess
     from types import SimpleNamespace
 
@@ -101,6 +106,10 @@ def test_worker_starts_only_after_parent_records_its_pid(tmp_path: Path, monkeyp
         assert isinstance(environment, dict)
         manifest_path = Path(str(environment['EVALUATORQ_INSIGHTS_MANIFEST']))
         state_file = worker_state_path(tmp_path, manifest_path.stem)
+        state = json.loads(state_file.read_text(encoding='utf-8'))
+        assert state['pid'] is None
+        assert state['launcher_pid'] == os.getpid()
+        assert state['launcher_process_identity'] == 'test:1'
         return SimpleNamespace(pid=43210, stdin=WorkerInput())
 
     monkeypatch.setattr('evaluatorq.dashboard.insights_launch.subprocess.Popen', spawn)
@@ -111,6 +120,43 @@ def test_worker_starts_only_after_parent_records_its_pid(tmp_path: Path, monkeyp
 
     assert observed == ['spawned', b'1', 'closed']
     assert json.loads(state_file.read_text(encoding='utf-8'))['pid'] == 43210
+
+
+def test_worker_is_not_released_when_pid_state_cannot_be_saved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard import insights_launch
+
+    observed: list[object] = []
+
+    class WorkerInput:
+        def write(self, data: bytes) -> int:
+            observed.append(data)
+            return len(data)
+
+        def close(self) -> None:
+            observed.append('closed')
+
+    original_write = insights_launch._write_worker_state
+
+    def fail_pid_write(path: Path, state: dict[str, object]) -> None:
+        if state.get('pid') is not None:
+            raise OSError('state unavailable')
+        original_write(path, state)
+
+    monkeypatch.setattr(insights_launch, '_write_worker_state', fail_pid_write)
+    monkeypatch.setattr(insights_launch, '_worker_process_identity', lambda _pid: 'test:1')
+    monkeypatch.setattr(
+        insights_launch.subprocess, 'Popen', lambda *_args, **_kwargs: SimpleNamespace(pid=43210, stdin=WorkerInput())
+    )
+
+    run_id = launch_insights(InsightsLaunchSpec(), tmp_path)
+
+    assert observed == ['closed']
+    manifest = list_manifests(tmp_path)[0]
+    assert manifest.run_id == run_id
+    assert manifest.status.value == 'error'
+    assert manifest.error is not None and 'state unavailable' in manifest.error
 
 
 def test_spawn_failure_is_visible_in_manifest(tmp_path: Path) -> None:
@@ -274,6 +320,28 @@ def test_successful_worker_exit_does_not_recover_manifest(tmp_path: Path, monkey
 
     assert exit_info.value.code == 0
     assert list_manifests(tmp_path)[0].status == 'running'
+
+
+def test_worker_does_not_start_when_launcher_closes_handshake_without_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import runpy
+    import sys
+
+    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV
+
+    start_manifest(run_id='launcher-died-before-release', surface='insights', run_name='demo', runs_dir=tmp_path)
+    monkeypatch.setenv(_MANIFEST_ENV, str(tmp_path / '.manifests' / 'launcher-died-before-release.json'))
+    monkeypatch.setenv(_REQUEST_ENV, '{}')
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(b'')))
+    monkeypatch.setattr(runpy, 'run_module', lambda *_args, **_kwargs: pytest.fail('worker must not start'))
+
+    with pytest.raises(SystemExit) as exit_info:
+        exec(_WORKER_BOOTSTRAP, {})
+
+    assert exit_info.value.code == 0
+    assert list_manifests(tmp_path)[0].status.value == 'running'
 
 
 def test_worker_payload_decode_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -498,13 +566,15 @@ def test_finder_insights_launch_records_source_until_run_finishes(
 ) -> None:
     import json
 
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     export_dir = tmp_path / 'finder-exports'
     export_dir.mkdir()
     export_path = export_dir / 'trace-finder-source.json'
     export_path.write_text(_run_export(['trace-1']).model_dump_json(), encoding='utf-8')
     spec = InsightsLaunchSpec(source='finder', finder_export=export_path.name)
-    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen'):
+    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+        spawn.return_value.pid = 43210
         run_id = launch_insights(spec, tmp_path / 'insights-runs')
 
     reference = finder_export_reference_path(tmp_path / 'insights-runs', run_id)
@@ -618,6 +688,88 @@ def test_stale_reconciliation_detects_reused_pid(tmp_path: Path, monkeypatch: py
 
     assert insights_launch.reconcile_stale_worker(runs_dir, 'reused-worker-pid')
     assert list_manifests(runs_dir)[0].status.value == 'error'
+
+
+def test_stale_reconciliation_recovers_parent_dying_before_worker_pid_is_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    writer = start_manifest(run_id='launcher-died', surface='insights', run_name='demo', runs_dir=runs_dir)
+    _write_worker_state(
+        worker_state_path(runs_dir, 'launcher-died'),
+        {
+            'pid': None,
+            'launcher_pid': 12345,
+            'launcher_process_identity': 'linux:100',
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': None,
+        },
+    )
+    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid, _identity=None: False)
+
+    assert insights_launch.reconcile_stale_worker(runs_dir, 'launcher-died')
+    assert list_manifests(runs_dir)[0].status.value == 'error'
+    assert writer.manifest.status.value == 'running'
+
+
+def test_stale_reconciliation_keeps_live_launcher_with_unpublished_worker_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    writer = start_manifest(run_id='launcher-still-starting', surface='insights', run_name='demo', runs_dir=runs_dir)
+    _write_worker_state(
+        worker_state_path(runs_dir, 'launcher-still-starting'),
+        {
+            'pid': None,
+            'launcher_pid': 12345,
+            'launcher_process_identity': 'linux:100',
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': None,
+        },
+    )
+    monkeypatch.setattr(insights_launch, '_worker_process_is_alive', lambda _pid, _identity=None: True)
+
+    assert not insights_launch.reconcile_stale_worker(runs_dir, 'launcher-still-starting')
+    assert list_manifests(runs_dir)[0].status.value == 'running'
+    assert writer.manifest.status.value == 'running'
+
+
+def test_stale_reconciliation_recovers_reused_launcher_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    from evaluatorq.dashboard import insights_launch
+    from evaluatorq.dashboard.insights_launch import _write_worker_state, worker_state_path
+
+    runs_dir = tmp_path / 'runs'
+    writer = start_manifest(run_id='reused-launcher-pid', surface='insights', run_name='demo', runs_dir=runs_dir)
+    _write_worker_state(
+        worker_state_path(runs_dir, 'reused-launcher-pid'),
+        {
+            'pid': None,
+            'launcher_pid': 12345,
+            'launcher_process_identity': 'darwin:original-start',
+            'heartbeat_at': time.time() - 120,
+            'snapshot_path': None,
+        },
+    )
+    monkeypatch.setattr(insights_launch.os, 'kill', lambda _pid, _signal: None)
+    monkeypatch.setattr(insights_launch, '_read_worker_process_identity', lambda _pid: ('darwin:reused-pid', False))
+
+    assert insights_launch.reconcile_stale_worker(runs_dir, 'reused-launcher-pid')
+    assert list_manifests(runs_dir)[0].status.value == 'error'
+    assert writer.manifest.status.value == 'running'
 
 
 def test_stale_reconciliation_recovers_zombie_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -803,6 +955,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     from evaluatorq.dashboard import insights_worker
     from evaluatorq.dashboard.insights_launch import _REQUEST_ENV, read_launch_payload, worker_state_path
 
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     exports = tmp_path / 'finder-exports'
     exports.mkdir()
@@ -816,6 +969,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     (tmp_path / 'outside.json').write_text(_run_export(['replacement-trace']).model_dump_json(), encoding='utf-8')
 
     with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+        spawn.return_value.pid = 43210
         run_id = launch_insights(spec, tmp_path / 'runs')
     reference = finder_export_reference_path(tmp_path / 'runs', run_id)
     assert reference.exists()
@@ -854,6 +1008,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
 def test_finder_launch_plan_uses_validated_export_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from evaluatorq.dashboard import insights_launch
 
+    monkeypatch.setattr(insights_launch, '_worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     exports = tmp_path / 'finder-exports'
     exports.mkdir()
@@ -872,7 +1027,8 @@ def test_finder_launch_plan_uses_validated_export_snapshot(monkeypatch: pytest.M
         return original_stage_plan(population, labels, dimensions)
 
     monkeypatch.setattr(insights_launch, 'stage_plan', capture_plan)
-    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen'):
+    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+        spawn.return_value.pid = 43210
         launch_insights(spec, tmp_path / 'runs')
 
     assert len(populations) == 1
@@ -904,7 +1060,11 @@ def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> N
     spec = InsightsLaunchSpec(source='query', query='refunds', window_days=3, facets=facets)
     assert spec.population().facets == facets
     assert spec.population().window_days == 3
-    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+    with (
+        patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn,
+        patch('evaluatorq.dashboard.insights_launch._worker_process_identity', return_value='test:1'),
+    ):
+        spawn.return_value.pid = 43210
         launch_insights(spec, tmp_path)
     payload = InsightsLaunchPayload.model_validate_json(spawn.call_args.kwargs['env']['EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'])
     assert payload.spec.population().facets == facets
@@ -917,6 +1077,7 @@ def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> N
 def test_selected_profile_controls_facets_and_worker_credentials(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, host: str | None, expected_host: str
 ) -> None:
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
     monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.example')
@@ -934,6 +1095,7 @@ def test_selected_profile_controls_facets_and_worker_credentials(
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
         patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn,
     ):
+        spawn.return_value.pid = 43210
         assert client.get('/insights/facets?window_days=7').status_code == 200
         response = client.post(
             '/insights/runs',

@@ -8,7 +8,7 @@ import re
 import time
 import weakref
 from collections import defaultdict, deque
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from contextlib import suppress
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
@@ -52,6 +52,37 @@ EVALUATOR_SPAN_TYPES = frozenset({'span.evaluation_engine', 'span.evaluator'})
 _MAX_CAPTURED_RESPONSES = 128
 _CAPTURE_REGISTRATION_ATTR = '_evaluatorq_trace_finder_capture_registration'
 _CAPTURE_REQUEST: ContextVar[object | None] = ContextVar('trace_finder_capture_request', default=None)
+
+
+def _remaining_target_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise asyncio.TimeoutError
+    return remaining
+
+
+def _request_timeout_ms(deadline: float | None) -> int:
+    if deadline is None:
+        return SDK_TIMEOUT_MS
+    return max(1, min(SDK_TIMEOUT_MS, int(_remaining_target_seconds(deadline) * 1000)))
+
+
+async def _await_target_deadline(awaitable: Awaitable[Any], deadline: float | None) -> Any:
+    if deadline is None:
+        return await awaitable
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        close = getattr(awaitable, 'close', None)
+        if callable(close):
+            close()
+        raise asyncio.TimeoutError
+    return await asyncio.wait_for(awaitable, timeout=remaining)
+
+
+def _empty_target_snapshot(start: datetime, end: datetime) -> Snapshot:
+    return Snapshot(
+        traces=(), capture_metadata={'source': 'orq-oql', 'start': start.isoformat(), 'end': end.isoformat()}
+    )
 
 
 class OrqSourceError(ValueError):
@@ -262,10 +293,18 @@ class OrqTraceSource:
         numeric: NumericFilters,
         target_trace_ids: set[str] | frozenset[str] | None = None,
     ) -> Snapshot:
-        # Stop starting new OQL pages after this budget. An already-started SDK
-        # query or trace hydration may finish later under its own timeout.
+        # Targeted reloads share one elapsed-time budget across project lookup,
+        # OQL pages, and trace hydration. Normal scans retain their existing
+        # per-request timeout behavior.
         target_deadline = time.monotonic() + TARGET_RELOAD_PAGE_BUDGET_SECONDS if target_trace_ids is not None else None
-        project_names = await _project_names(self._client)
+        try:
+            project_names = await _await_target_deadline(_project_names(self._client), target_deadline)
+        except asyncio.TimeoutError:
+            logger.warning(
+                'targeted trace reload reached its {} second deadline during project lookup',
+                TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+            )
+            return _empty_target_snapshot(start, end)
         oql = build_oql(facets, numeric, project_names)
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
         records: list[TraceRecord] = []
@@ -310,7 +349,12 @@ class OrqTraceSource:
             )
             registration = self._registration
             marker = _CAPTURE_REQUEST.set(object()) if registration is not None else None
-            try:
+
+            async def query_page(
+                registration: _CaptureRegistration | None = registration,
+                page_limit: int = page_limit,
+                page_token: str | None = page_token,
+            ) -> tuple[Any, dict[str, Any] | None]:
                 if registration is None:
                     response = await self._client.traces.query_async(
                         from_=start,
@@ -318,20 +362,28 @@ class OrqTraceSource:
                         oql=oql,
                         limit=page_limit,
                         page_token=page_token,
-                        timeout_ms=SDK_TIMEOUT_MS,
+                        timeout_ms=_request_timeout_ms(target_deadline),
                     )
-                    raw_page = self._capture.pop('/traces/query')
-                else:
-                    async with registration.lock_for(asyncio.get_running_loop()):
-                        response = await self._client.traces.query_async(
-                            from_=start,
-                            to=end,
-                            oql=oql,
-                            limit=page_limit,
-                            page_token=page_token,
-                            timeout_ms=SDK_TIMEOUT_MS,
-                        )
-                        raw_page = self._capture.pop('/traces/query')
+                    return response, self._capture.pop('/traces/query')
+                async with registration.lock_for(asyncio.get_running_loop()):
+                    response = await self._client.traces.query_async(
+                        from_=start,
+                        to=end,
+                        oql=oql,
+                        limit=page_limit,
+                        page_token=page_token,
+                        timeout_ms=_request_timeout_ms(target_deadline),
+                    )
+                    return response, self._capture.pop('/traces/query')
+
+            try:
+                response, raw_page = await _await_target_deadline(query_page(), target_deadline)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    'targeted trace reload reached its {} second deadline during OQL query',
+                    TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+                )
+                break
             finally:
                 if marker is not None:
                     _CAPTURE_REQUEST.reset(marker)
@@ -349,7 +401,16 @@ class OrqTraceSource:
 
             unique_summaries = _matching_targets(unique_summaries, targets)
 
-            hydrated = await self._hydrate_page(unique_summaries, project_names, semaphore)
+            try:
+                hydrated = await _await_target_deadline(
+                    self._hydrate_page(unique_summaries, project_names, semaphore, target_deadline), target_deadline
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    'targeted trace reload reached its {} second deadline during trace hydration',
+                    TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+                )
+                break
             fallback_count += sum(result[1] for result in hydrated)
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
@@ -398,6 +459,7 @@ class OrqTraceSource:
         summaries: list[tuple[Any, Any, bool]],
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
+        deadline: float | None = None,
     ) -> list[tuple[TraceRecord | None, int]]:
         tasks = [
             asyncio.create_task(
@@ -406,6 +468,7 @@ class OrqTraceSource:
                     raw_summary,
                     project_names,
                     semaphore,
+                    deadline,
                     raw_capture_fallback=raw_capture_fallback,
                 )
             )
@@ -425,6 +488,7 @@ class OrqTraceSource:
         raw_summary: Any,
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
+        deadline: float | None = None,
         *,
         raw_capture_fallback: bool,
     ) -> tuple[TraceRecord | None, int]:
@@ -436,7 +500,7 @@ class OrqTraceSource:
         trace_id = str(_field(summary, 'trace_id') or _field(summary, 'id') or '')
         if not trace_id:
             return None, fallback_count
-        spans = await self._list_spans(trace_id, semaphore)
+        spans = await self._list_spans(trace_id, semaphore, deadline)
         for span in _eligible_spans(spans):
             span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
             if not span_id:
@@ -444,10 +508,13 @@ class OrqTraceSource:
             async with semaphore:
                 marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
                 try:
-                    response = await self._client.traces.get_span_async(
-                        trace_id=trace_id,
-                        span_id=span_id,
-                        timeout_ms=SDK_TIMEOUT_MS,
+                    response = await _await_target_deadline(
+                        self._client.traces.get_span_async(
+                            trace_id=trace_id,
+                            span_id=span_id,
+                            timeout_ms=_request_timeout_ms(deadline),
+                        ),
+                        deadline,
                     )
                     raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
                 finally:
@@ -464,7 +531,9 @@ class OrqTraceSource:
                 return _record(summary, raw_summary, detail, raw_detail, messages, project_names), fallback_count
         return None, fallback_count
 
-    async def _list_spans(self, trace_id: str, semaphore: asyncio.Semaphore) -> list[Any]:
+    async def _list_spans(
+        self, trace_id: str, semaphore: asyncio.Semaphore, deadline: float | None = None
+    ) -> list[Any]:
         spans: list[Any] = []
         page_token: str | None = None
         used_tokens: set[str] = set()
@@ -474,11 +543,14 @@ class OrqTraceSource:
                 raise OrqSourceError(f'span pagination exceeded {MAX_SPAN_PAGES} pages for trace {trace_id!r}')
             pages += 1
             async with semaphore:
-                response = await self._client.traces.list_spans_async(
-                    trace_id=trace_id,
-                    limit=PAGE_SIZE,
-                    page_token=page_token,
-                    timeout_ms=SDK_TIMEOUT_MS,
+                response = await _await_target_deadline(
+                    self._client.traces.list_spans_async(
+                        trace_id=trace_id,
+                        limit=PAGE_SIZE,
+                        page_token=page_token,
+                        timeout_ms=_request_timeout_ms(deadline),
+                    ),
+                    deadline,
                 )
             spans.extend(_as_list(_field(response, 'data')))
             if len(spans) > MAX_SPANS_PER_TRACE:

@@ -263,7 +263,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if tab not in TABS:
             return _html('<p class="insights-empty">Unknown Insights tab.</p>', 404)
         directory = get_insights_runs_dir()
-        _, loaded, _ = _entries(directory)
+        _, loaded, manifests = _entries(directory)
         resolved = _resolve(run_id, loaded)
         if resolved is None or not isinstance(resolved[1], InsightsRun):
             return _html('<p class="insights-empty">Insights run not found.</p>', 404)
@@ -274,7 +274,6 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         }
         if req.headers.get('HX-Request', '').casefold() == 'true':
             return _html(tab_content(resolved[1], tab, query=query))
-        _, _, manifests = _entries(directory)
         return _html(
             full_page(
                 resolved[1],
