@@ -131,7 +131,7 @@ async def main() -> None:
         max_turns=args.max_turns,
         evaluator_names=["goal_achieved", "criteria_met"],
         upload_results=args.upload,
-        exit_on_failure=False,
+        raise_on_execution_failure=False,
     )
 
     if not results:

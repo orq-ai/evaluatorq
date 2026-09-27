@@ -550,6 +550,14 @@ async def test_simulate_report_writes_explicit_path(tmp_path: Path, monkeypatch:
 
 
 @pytest.mark.asyncio
+async def test_simulate_report_path_writes_when_save_is_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    explicit = tmp_path / "nested" / "report.json"
+    await _run_simulate(runs_dir=tmp_path, monkeypatch=monkeypatch, save=True, report_path=explicit)
+    assert explicit.exists()
+    assert json.loads(explicit.read_text())["run_name"]
+
+
+@pytest.mark.asyncio
 async def test_simulate_run_output_alias_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     explicit = tmp_path / "legacy.json"
     with pytest.raises(TypeError, match="run_output"):

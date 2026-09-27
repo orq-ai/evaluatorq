@@ -171,7 +171,7 @@ flowchart LR
 from evaluatorq.simulation import simulate
 
 results = await simulate(
-    evaluation_name="support-agent-sim",
+    run_name="support-agent-sim",
     target="agent:my-support-agent",   # or any local async callable
     personas=[persona],
     scenarios=[scenario],
@@ -180,7 +180,7 @@ results = await simulate(
 print(results[0].goal_achieved, results[0].goal_completion_score)
 ```
 
-Simulation owns its `exit_on_failure=True` gate for dropped rows, so it can drop straight into CI; evaluator score failures remain available in the returned results. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
+Simulation owns its `raise_on_execution_failure=True` gate for dropped, errored, or timed-out conversations, so it can run in CI; evaluator score failures remain available in the returned results. The target can be an Orq agent or any local async callable, including agents built with the OpenAI Agents SDK, LangGraph, CrewAI or PydanticAI — [the examples](examples/agent_simulation/) cover each, with screen recordings.
 
 → [Agent simulation guide](https://orq-ai.github.io/evaluatorq/guides/agent-simulation/) · [Intro notebook](examples/agent_simulation_intro.ipynb) · [Example scripts](examples/agent_simulation/)
 

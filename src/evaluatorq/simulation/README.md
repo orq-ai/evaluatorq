@@ -74,7 +74,7 @@ Override the user-simulator or judge entirely by passing pre-built `BaseAgent` i
 
 Each result carries `goal_achieved`, `goal_completion_score`, `turn_count`, `terminated_by`, `rules_broken`, `criteria_results`, and the full `messages` transcript.
 
-`exit_on_failure=True` (default) makes a run raise `SimulationDroppedError` when a datapoint is dropped — drop it straight into a CI step. Evaluator score failures are returned in the results for callers to inspect. Pass `exit_on_failure=False` for interactive runs where dropped rows should surface as warnings instead.
+`raise_on_execution_failure=True` (default) makes a run raise `SimulationDroppedError` when a datapoint is dropped or ends in error or timeout. Evaluator score failures are returned in the results for callers to inspect. Pass `raise_on_execution_failure=False` for interactive runs where execution failures should surface as warnings instead. Both `simulate()` and `generate_and_simulate()` also accept `experiment_description` for the uploaded Orq experiment, `orq_folder_path` for its destination folder, and `report_path` for a local JSON report written with `save=True`. The earlier `exit_on_failure`, `evaluation_description`, `orq_results_path`, and `report` keywords remain aliases.
 
 ## Datasets
 

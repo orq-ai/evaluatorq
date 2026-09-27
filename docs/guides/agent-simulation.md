@@ -83,6 +83,11 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
             num_scenarios=4,                     # → 12 persona × scenario simulations
             max_turns=6,
             evaluator_names=["goal_achieved", "criteria_met"],
+            experiment_description="September support regression",
+            orq_folder_path="Support/September",
+            report_path="support-simulation.json",
+            save=True,
+            raise_on_execution_failure=True,
         )
 
         passed = sum(r.goal_achieved for r in results)
@@ -148,10 +153,21 @@ The fastest start: `generate_and_simulate()` synthesizes the personas, scenarios
 
 Pass `generation_instructions="..."` to steer the whole generated set. It is a free-text instruction applied to every persona AND scenario (e.g. `"enterprise B2B buyers, frustrated, replying in German"`), stacked on top of the built-in prompts. Unlike a seed, which names one archetype and yields one object, it shapes the entire batch, and it composes with seeds and `edge_case_percentage`. It is accepted by `generate_and_simulate()`, `generate()`, and the seed helpers below; to steer personas and scenarios differently, call `generate_personas()` / `generate_scenarios()` separately. On the CLI it is `--generation-instructions`.
 
-!!! note "CI and local runs"
-    A simulation that produced no conversation — dropped, or ended in `error`/`timeout` — raises by default; ordinary failed goals remain in the returned results. Set `exit_on_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
+`simulate()` and `generate_and_simulate()` accept the same result options:
 
-    `exit_on_failure` gates on datapoints that never produced a conversation, not on scores, so it will not fail a build for an agent that simply answered badly. For a gate on the scores themselves — turning evaluator results into an exit code, with the env vars and workflow step to go with it — see [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
+| Python keyword | What it controls |
+|---|---|
+| `experiment_description` | Description of the experiment uploaded to Orq; has no effect when `upload_results=False`. |
+| `orq_folder_path` | Folder for uploaded results in Orq. |
+| `report_path` | Local JSON report file, written when `save=True`. Without a path, `save=True` writes to the run store. |
+| `raise_on_execution_failure` | Raises `SimulationDroppedError` for a dropped, errored, or timed-out conversation. Defaults to `True`; goal scores do not trigger it. |
+
+The earlier names `evaluation_description`, `orq_results_path`, `report`, and `exit_on_failure` still work. If you supply both names for one option, their values must match.
+
+!!! note "CI and local runs"
+    A simulation that produced no conversation — dropped, or ended in `error`/`timeout` — raises by default; ordinary failed goals remain in the returned results. Set `raise_on_execution_failure=False` for exploratory runs. When `ORQ_API_KEY` is available, results upload to Orq by default; pass `upload_results=False` to suppress the Experiment upload. That is not an offline mode — see [What gets uploaded](simulation-in-evaluatorq.md#what-gets-uploaded).
+
+    `raise_on_execution_failure` gates on datapoints that never produced a conversation, not on scores, so it will not fail a build for an agent that simply answered badly. For a gate on the scores themselves — turning evaluator results into an exit code, with the env vars and workflow step to go with it — see [In an evaluatorq Run › In CI](simulation-in-evaluatorq.md#in-ci).
 
 ## Seed by archetype
 
