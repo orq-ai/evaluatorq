@@ -88,6 +88,57 @@ This is the repo's [`examples/lib/basics/support_agent_eval.py`](examples/lib/ba
 
 → [Getting Started](https://orq-ai.github.io/evaluatorq/guides/getting-started/) · [Evaluation reference](https://orq-ai.github.io/evaluatorq/evaluation-reference/) · [Structured scores](https://orq-ai.github.io/evaluatorq/structured-results/) · [LLM as a jury](https://orq-ai.github.io/evaluatorq/llm-as-a-jury/)
 
+## Run a coding agent in Docker
+
+`CodingAgentTarget` can run Claude Code, Codex CLI or OpenCode in a private Docker container. This example routes Claude Code through Orq, so it needs Docker and an `ORQ_API_KEY` configured in your shell; the image is built once for the installed evaluatorq version.
+
+```bash
+uv add evaluatorq
+uv run eq coding-agent build-image
+```
+
+Save this as `coding_agent.py` and run it with `uv run python coding_agent.py`:
+
+```python
+import asyncio
+
+from evaluatorq.backends import CodingAgentTarget, DockerOptions
+from evaluatorq.contracts import Message
+
+
+async def main() -> None:
+    target = CodingAgentTarget(
+        'claude',
+        launcher='orq',
+        model='anthropic/claude-sonnet-5',
+        container=DockerOptions(),
+        timeout_ms=900_000,
+    )
+    try:
+        response = await target.respond(
+            [Message(role='user', content='Create hello.py that prints Hello, world.')]
+        )
+        print(response.text)
+    finally:
+        await target.close()
+
+
+asyncio.run(main())
+```
+
+The target starts in a temporary workdir that is removed by `close()`. Pass `workdir=Path('my-project')` to work from a copy of an existing project, or set `keep_workdir=True` to retain the generated workdir for inspection.
+
+To use an existing Docker context and cap container resources, pass Docker flags through `run_args`:
+
+```python
+container = DockerOptions(
+    context='orbstack',
+    run_args=('--memory=4g', '--cpus=2'),
+)
+```
+
+Container mode does not build or pull images automatically. Rebuild the image after upgrading evaluatorq. See the [coding agent guide](https://orq-ai.github.io/evaluatorq/coding-agent-targets/) for custom images, direct provider credentials, and lifecycle details.
+
 ## Red teaming
 
 **19 OWASP categories · 18 vulnerabilities · 45 curated attack strategies · 16 delivery methods · 18 LLM judges.** evaluatorq inspects the target, picks attack strategies per vulnerability, generates the prompts, runs them (single- or multi-turn), and judges each response with an evaluator written for that specific vulnerability.
