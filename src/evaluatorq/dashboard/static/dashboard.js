@@ -198,7 +198,7 @@
       if (!response.ok) throw new Error('Map request failed with status ' + response.status);
       return response.json();
     }).then(function (payload) {
-      if (el.__insightsMapRequestId !== requestId) return;
+      if (el.__insightsMapRequestId !== requestId || !el.isConnected) return;
       if (payload.error) throw new Error(payload.error);
       const parent = el.parentElement;
       let empty = parent.querySelector('[data-map-empty]');
@@ -213,7 +213,7 @@
           bgcolor: '#fff', aspectmode: 'cube', dragmode: 'orbit' }, paper_bgcolor: '#fff' };
       const priorRender = el.__insightsMapRender || Promise.resolve();
       const render = priorRender.catch(function () {}).then(function () {
-        if (el.__insightsMapRequestId !== requestId) return;
+        if (el.__insightsMapRequestId !== requestId || !el.isConnected) return;
         if (!hasPoints) {
           if (!empty) {
             empty = document.createElement('div');
@@ -268,7 +268,7 @@
       el.__insightsMapRender = render;
       return render;
     }).catch(function (error) {
-      if (el.__insightsMapRequestId === requestId) showInsightsMapError(el, error);
+      if (el.__insightsMapRequestId === requestId && el.isConnected) showInsightsMapError(el, error);
     });
   }
 

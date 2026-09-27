@@ -69,7 +69,7 @@ _FINDER_EXPORT_THREAD_LOCK = threading.Lock()
 
 @contextlib.contextmanager
 def _finder_export_lock(export_dir: Path):
-    """Serialize Finder export replacement and pruning across threads and Unix processes."""
+    """Serialize Finder export replacement and pruning across threads and processes."""
     export_dir.mkdir(parents=True, exist_ok=True)
     with _FINDER_EXPORT_THREAD_LOCK:
         lock_path = export_dir / '.finder-export.lock'
@@ -82,11 +82,24 @@ def _finder_export_lock(export_dir: Path):
                 os.fchmod(descriptor, 0o600)
             try:
                 import fcntl
-            except ImportError:  # Windows has no fcntl; the thread lock still protects local requests.
-                logger.warning(
-                    'Finder export file locking is unavailable; cleanup is serialized only within this process'
-                )
-                yield
+            except ImportError:
+                try:
+                    import msvcrt
+                except ImportError as exc:
+                    raise OSError('Finder export inter-process locking is unavailable') from exc
+                # msvcrt locks byte ranges, so make byte zero available first.
+                # Competing initializers write the same byte at offset zero.
+                if os.fstat(descriptor).st_size == 0:
+                    os.write(descriptor, b'\0')
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                # LK_LOCK waits for contention and raises if it cannot acquire
+                # the lock. Never continue with only the process-local lock.
+                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(descriptor, fcntl.LOCK_EX)
                 try:

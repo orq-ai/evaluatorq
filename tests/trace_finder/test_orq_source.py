@@ -257,6 +257,46 @@ async def test_targeted_load_scans_past_unrelated_summaries_without_hydrating_th
 
 
 @pytest.mark.asyncio
+async def test_targeted_load_stops_starting_pages_after_budget_when_id_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    traces = FakeTraces({None: ([summary('unrelated')], True, 'page-2')})
+    ticks = iter((0.0, 0.0, 31.0))
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'stale'},
+    )
+
+    assert snapshot.traces == ()
+    assert len(traces.query_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_targeted_page_budget_includes_project_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    traces = FakeTraces({})
+    ticks = iter((0.0, 31.0))
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'stale'},
+    )
+
+    assert snapshot.traces == ()
+    assert not traces.query_calls
+
+
+@pytest.mark.asyncio
 async def test_populates_summary_metadata_without_listing_spans() -> None:
     trace = summary('complete', messages=user_messages('from summary'))
     trace.agent_name = 'support-agent'

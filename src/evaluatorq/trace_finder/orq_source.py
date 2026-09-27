@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import weakref
 from collections import defaultdict, deque
 from collections.abc import Mapping
@@ -39,6 +40,7 @@ PAGE_SIZE = 200
 MAX_SPAN_PAGES = 10
 MAX_SPANS_PER_TRACE = PAGE_SIZE * MAX_SPAN_PAGES
 SDK_TIMEOUT_MS = 30_000
+TARGET_RELOAD_PAGE_BUDGET_SECONDS = 30
 DEFAULT_LOOKBACK = timedelta(days=7)
 CONVERSATION_SPAN_TYPES = frozenset({
     'span.chat_completion',
@@ -251,7 +253,7 @@ class OrqTraceSource:
             target_trace_ids,
         )
 
-    async def _load(
+    async def _load(  # noqa: C901 - page, scan, and elapsed-time bounds must guard the same acquisition loop
         self,
         start: datetime,
         end: datetime,
@@ -260,6 +262,9 @@ class OrqTraceSource:
         numeric: NumericFilters,
         target_trace_ids: set[str] | frozenset[str] | None = None,
     ) -> Snapshot:
+        # Stop starting new OQL pages after this budget. An already-started SDK
+        # query or trace hydration may finish later under its own timeout.
+        target_deadline = time.monotonic() + TARGET_RELOAD_PAGE_BUDGET_SECONDS if target_trace_ids is not None else None
         project_names = await _project_names(self._client)
         oql = build_oql(facets, numeric, project_names)
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
@@ -277,6 +282,14 @@ class OrqTraceSource:
         page_token: str | None = None
 
         while not _load_target_reached(records, limit, targets):
+            if target_deadline is not None and time.monotonic() >= target_deadline:
+                logger.warning(
+                    'stopped starting targeted trace pages after {} seconds with {} of {} requested trace(s)',
+                    TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+                    len(records),
+                    len(targets or ()),
+                )
+                break
             if scanned_count >= max_scanned or pages_scanned >= max_pages:
                 logger.warning(
                     'stopped trace search after scanning {} summaries across {} pages for {} usable traces',

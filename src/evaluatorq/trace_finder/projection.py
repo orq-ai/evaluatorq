@@ -236,6 +236,7 @@ def _tool_result_category(call_id: Any, results: tuple[dict[str, Any], ...]) -> 
 
 
 def _recognized_tool_result_category(text: str) -> str | None:
+    """Classify broad error hints heuristically; a substring is not a provider verdict."""
     lowered = text.casefold()
     return next(
         (category for category, markers in _TOOL_RESULT_CATEGORIES if any(marker in lowered for marker in markers)),

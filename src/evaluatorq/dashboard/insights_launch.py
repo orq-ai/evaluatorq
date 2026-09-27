@@ -342,7 +342,7 @@ def _worker_process_identity(pid: int) -> str | None:
 # runs before importing the package worker, then edits the already-created
 # manifest if Python cannot import the worker or its dependencies.
 _WORKER_BOOTSTRAP = """
-import datetime, json, os, runpy, stat, tempfile
+import datetime, json, os, runpy, stat, sys, tempfile
 manifest = os.environ.get("EVALUATORQ_INSIGHTS_MANIFEST")
 request = os.environ.get("EVALUATORQ_INSIGHTS_LAUNCH_REQUEST")
 def cleanup_snapshot():
@@ -411,6 +411,9 @@ def cleanup_worker_state():
     except OSError as cleanup_error:
         print(f"Could not remove Insights worker state: {cleanup_error}", file=__import__("sys").stderr)
 try:
+    # Keep the child from cleaning its state before the parent has recorded
+    # the PID. EOF also releases the child if the parent exits unexpectedly.
+    sys.stdin.buffer.read(1)
     runpy.run_module("evaluatorq.dashboard.insights_worker", run_name="__main__")
 except BaseException as exc:
     if isinstance(exc, SystemExit) and exc.code in (None, 0):
@@ -670,7 +673,7 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
         with (log_dir / f'{run_id}.log').open('a', encoding='utf-8') as log:
             process = subprocess.Popen(
                 [sys.executable, '-c', _WORKER_BOOTSTRAP],
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=log,
                 stderr=subprocess.STDOUT,
                 env=worker_env,
@@ -683,6 +686,19 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             _write_worker_state(state_path, state)
         except (OSError, ValueError, TypeError) as exc:
             logger.warning('Could not record Insights worker process {}: {}', run_id, exc)
+        finally:
+            # The worker waits for this byte before it can finish and remove
+            # its state file, so the PID update cannot recreate a deleted file.
+            if process.stdin is not None:
+                try:
+                    process.stdin.write(b'1')
+                except OSError as exc:
+                    logger.warning('Could not release Insights worker {}: {}', run_id, exc)
+                finally:
+                    try:
+                        process.stdin.close()
+                    except OSError as exc:
+                        logger.warning('Could not close Insights worker handshake {}: {}', run_id, exc)
     except Exception as exc:  # noqa: BLE001 — every ordinary setup failure must terminate this run.
         try:
             writer.fail(f'Could not start Insights worker: {exc}', stage='start')

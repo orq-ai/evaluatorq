@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Literal
 
 import pytest
@@ -668,6 +669,50 @@ def test_find_export_survives_non_object_manifest_during_retention(
     assert response.status_code == 200
     assert json.loads(response.text)['counts']['matched'] == 1
     assert marker.exists()
+
+
+def test_finder_export_lock_uses_windows_interprocess_lock_when_fcntl_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    operations: list[int] = []
+
+    def locking(descriptor: int, mode: int, length: int) -> None:
+        assert length == 1
+        assert os.lseek(descriptor, 0, os.SEEK_CUR) == 0
+        operations.append(mode)
+
+    monkeypatch.setitem(sys.modules, 'fcntl', None)
+    monkeypatch.setitem(
+        sys.modules,
+        'msvcrt',
+        SimpleNamespace(LK_LOCK=1, LK_UNLCK=2, locking=locking),
+    )
+    export_dir = tmp_path / 'finder-exports'
+
+    with finder_routes._finder_export_lock(export_dir):
+        lock_path = export_dir / '.finder-export.lock'
+        assert lock_path.stat().st_size == 1
+        assert operations == [1]
+
+    assert operations == [1, 2]
+
+
+def test_finder_export_lock_fails_closed_when_windows_lock_cannot_be_acquired(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail_lock(descriptor: int, mode: int, length: int) -> None:
+        raise OSError('lock failed')
+
+    monkeypatch.setitem(sys.modules, 'fcntl', None)
+    monkeypatch.setitem(
+        sys.modules,
+        'msvcrt',
+        SimpleNamespace(LK_LOCK=1, LK_UNLCK=2, locking=fail_lock),
+    )
+
+    with pytest.raises(OSError, match='lock failed'):
+        with finder_routes._finder_export_lock(tmp_path / 'finder-exports'):
+            pytest.fail('export mutation must not run without the inter-process lock')
 
 
 def test_finder_pruning_skips_when_a_lease_is_malformed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

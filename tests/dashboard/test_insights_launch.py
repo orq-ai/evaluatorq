@@ -72,6 +72,47 @@ def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
     assert spawn.call_args.kwargs['start_new_session'] is True
 
 
+def test_worker_starts_only_after_parent_records_its_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+    import subprocess
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.insights_launch import worker_state_path
+
+    observed: list[object] = []
+    state_file: Path | None = None
+
+    class WorkerInput:
+        def write(self, data: bytes) -> int:
+            assert state_file is not None
+            state = json.loads(state_file.read_text(encoding='utf-8'))
+            assert state['pid'] == 43210
+            observed.append(data)
+            return len(data)
+
+        def close(self) -> None:
+            observed.append('closed')
+
+    def spawn(*_args: object, **kwargs: object) -> SimpleNamespace:
+        nonlocal state_file
+        observed.append('spawned')
+        assert kwargs['stdin'] == subprocess.PIPE
+        environment = kwargs['env']
+        assert isinstance(environment, dict)
+        manifest_path = Path(str(environment['EVALUATORQ_INSIGHTS_MANIFEST']))
+        state_file = worker_state_path(tmp_path, manifest_path.stem)
+        return SimpleNamespace(pid=43210, stdin=WorkerInput())
+
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch.subprocess.Popen', spawn)
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
+
+    run_id = launch_insights(InsightsLaunchSpec(), tmp_path)
+    state_file = worker_state_path(tmp_path, run_id)
+
+    assert observed == ['spawned', b'1', 'closed']
+    assert json.loads(state_file.read_text(encoding='utf-8'))['pid'] == 43210
+
+
 def test_spawn_failure_is_visible_in_manifest(tmp_path: Path) -> None:
     with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen', side_effect=OSError('worker unavailable')):
         run_id = launch_insights(InsightsLaunchSpec(), tmp_path)
@@ -177,7 +218,9 @@ def test_non_oserror_setup_failure_marks_manifest_and_cleans_finder_files(
 
 
 def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
     import runpy
+    import sys
     import tempfile
 
     from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV, _SNAPSHOT_ENV
@@ -193,6 +236,7 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
     snapshot_path.write_text('{}', encoding='utf-8')
     monkeypatch.setenv(_REQUEST_ENV, '{truncated request')
     monkeypatch.setenv(_SNAPSHOT_ENV, str(snapshot_path))
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(b'1')))
 
     def fail_import(*args, **kwargs):
         raise ImportError('missing optional dependency')
@@ -209,13 +253,16 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
 
 
 def test_successful_worker_exit_does_not_recover_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
     import runpy
+    import sys
 
     from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV
 
     writer = start_manifest(run_id='worker-success', surface='insights', run_name='demo', runs_dir=tmp_path)
     monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
     monkeypatch.setenv(_REQUEST_ENV, '{invalid request')
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(b'1')))
 
     def exit_cleanly(*args, **kwargs):
         raise SystemExit(0)

@@ -392,6 +392,39 @@ def test_category_map_keeps_delimiter_values_distinct():
     assert all(trace['showlegend'] for trace in traces)
 
 
+def test_map_fetch_finishing_after_htmx_removal_does_not_render_detached_chart():
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    script = Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js'
+    source = script.read_text(encoding='utf-8')
+    start = source.index('  function drawInsightsMap(el) {')
+    end = source.index('  function initInsightsMaps', start)
+    javascript = source[start:end] + r'''
+let releaseFetch;
+let connected = true;
+let renders = 0;
+const el = {
+  get isConnected() { return connected; },
+  offsetParent: {},
+  parentElement: { querySelector: function () { return null; } },
+  style: {},
+  __insightsMapRequestId: 0,
+  closest: function () { return { querySelector: function () { return { value: 'cluster' }; } }; },
+  getAttribute: function (name) { return name === 'data-map-url' ? '/map?color_by=cluster' : ''; },
+};
+global.window = { Plotly: { react: function () { renders += 1; } } };
+global.fetch = function () { return new Promise(function (resolve) { releaseFetch = resolve; }); };
+drawInsightsMap(el);
+connected = false;
+el.parentElement = null;
+releaseFetch({ ok: true, json: function () { return Promise.resolve({ points: [], missing_points: [] }); } });
+setTimeout(function () { console.log(JSON.stringify({ renders: renders })); }, 0);
+'''
+    result = subprocess.run(['node', '-e', javascript], capture_output=True, text=True, check=True)
+
+    assert json.loads(result.stdout) == {'renders': 0}
+
+
 def test_cluster_detail_returns_content_for_existing_detail_panel():
     markup = insights_views.cluster_detail(_map_run(), 'base-1')
 
