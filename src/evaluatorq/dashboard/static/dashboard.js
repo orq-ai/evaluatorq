@@ -40,7 +40,9 @@
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     var scope = evt.detail.target;
     if (scope && scope.id === 'insights-content') syncInsightsTab();
-    if (!scope || !window.vegaEmbed) return;
+    if (!scope) return;
+    initInsightsMaps(scope);
+    if (!window.vegaEmbed) return;
 
     let tags = scope.querySelectorAll('[data-vega-for]');
     // htmx removes script tags when allowScriptTags is false, including the
@@ -75,7 +77,6 @@
         window.__orqVegaViews[id] = r;
       });
     });
-    initInsightsMaps(scope);
   });
 
   function syncInsightsTab() {

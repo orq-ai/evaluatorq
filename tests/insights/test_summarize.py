@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -55,8 +57,12 @@ class _BilledError(RuntimeError):
 
 
 @pytest.fixture
-def cache(tmp_path: Path) -> InsightsCache:
-    return InsightsCache(tmp_path / 'insights.sqlite')
+def cache(tmp_path: Path) -> Iterator[InsightsCache]:
+    instance = InsightsCache(tmp_path / 'insights.sqlite')
+    try:
+        yield instance
+    finally:
+        instance.close()
 
 
 class _FakeClient:
@@ -97,6 +103,43 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
         'trace-1', 'span-trace-1', 'openai/gpt-6-luna', prompt_hash(captured_messages[0][0]['content'])
     )
     assert cached == summary
+
+
+@pytest.mark.asyncio
+async def test_cache_reads_and_writes_leave_event_loop_responsive(
+    monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
+) -> None:
+    read_released = Event()
+    write_released = Event()
+    original_get = cache.get_summary
+    original_put = cache.put_summary
+
+    def slow_get(*args: Any) -> TraceSummary | None:
+        assert read_released.wait(1), 'cache read blocked the event loop'
+        return original_get(*args)
+
+    def slow_put(*args: Any) -> None:
+        assert write_released.wait(1), 'cache write blocked the event loop'
+        original_put(*args)
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[TraceSummary]:
+        return StructuredResult(parsed=make_summary(), raw='')
+
+    async def release_io() -> None:
+        await asyncio.sleep(0.01)
+        read_released.set()
+        await asyncio.sleep(0.01)
+        write_released.set()
+
+    monkeypatch.setattr(cache, 'get_summary', slow_get)
+    monkeypatch.setattr(cache, 'put_summary', slow_put)
+    monkeypatch.setattr(summarize_module, 'generate_structured', fake_generate_structured)
+
+    release = asyncio.create_task(release_io())
+    result = await summarize_traces([make_trace('trace-1')], client=fake_client(), model='m', cache=cache)
+    await release
+
+    assert result == {'trace-1': make_summary()}
 
 
 @pytest.mark.asyncio

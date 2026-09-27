@@ -1,9 +1,9 @@
 """Local sqlite cache for trace summaries and embedding vectors.
 
-One connection per `InsightsCache` instance, used only from the event loop thread that
-constructs it; each `put_*` call is a single batched transaction. No retry layer here —
-a cache miss is always safe (the caller recomputes), so `sqlite3.Error` degrades to a
-miss with a `logger.warning` rather than being retried or raised into the run.
+One connection per `InsightsCache` instance. Summary operations may run in worker
+threads and are serialized by a lock; each `put_*` call is a single batched
+transaction. No retry layer here — a cache miss is always safe (the caller
+recomputes), so `sqlite3.Error` degrades to a miss with a `logger.warning`.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import hashlib
 import math
 import sqlite3
 import struct
+from threading import RLock
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -85,6 +86,7 @@ class InsightsCache:
     """
 
     def __init__(self, path: Path | None = None, *, enabled: bool = True) -> None:
+        self._summary_lock = RLock()
         self._conn: sqlite3.Connection | None = None
         if not enabled:
             return
@@ -104,16 +106,17 @@ class InsightsCache:
 
     def get_summary(self, trace_id: str, span_id: str, model: str, prompt_hash_value: str) -> TraceSummary | None:
         """Look up a cached summary; a miss on any of trace/span/model/prompt-hash returns None."""
-        if self._conn is None:
-            return None
-        try:
-            row = self._conn.execute(
-                'SELECT payload FROM summaries WHERE trace_id = ? AND span_id = ? AND model = ? AND prompt_hash = ?',
-                (trace_id, span_id, model, prompt_hash_value),
-            ).fetchone()
-        except sqlite3.Error as exc:
-            logger.warning(f'InsightsCache.get_summary: {exc}; treating as a miss')
-            return None
+        with self._summary_lock:
+            if self._conn is None:
+                return None
+            try:
+                row = self._conn.execute(
+                    'SELECT payload FROM summaries WHERE trace_id = ? AND span_id = ? AND model = ? AND prompt_hash = ?',
+                    (trace_id, span_id, model, prompt_hash_value),
+                ).fetchone()
+            except sqlite3.Error as exc:
+                logger.warning(f'InsightsCache.get_summary: {exc}; treating as a miss')
+                return None
         if row is None:
             return None
         try:
@@ -126,17 +129,18 @@ class InsightsCache:
         self, trace_id: str, span_id: str, model: str, prompt_hash_value: str, summary: TraceSummary
     ) -> None:
         """Cache a summary keyed on (trace_id, span_id, model, prompt_hash); no-op if disabled."""
-        if self._conn is None:
-            return
-        try:
-            with self._conn:
-                self._conn.execute(
-                    'INSERT OR REPLACE INTO summaries (trace_id, span_id, model, prompt_hash, payload) '
-                    'VALUES (?, ?, ?, ?, ?)',
-                    (trace_id, span_id, model, prompt_hash_value, summary.model_dump_json()),
-                )
-        except sqlite3.Error as exc:
-            logger.warning(f'InsightsCache.put_summary: {exc}; summary for {trace_id}/{span_id} not cached')
+        with self._summary_lock:
+            if self._conn is None:
+                return
+            try:
+                with self._conn:
+                    self._conn.execute(
+                        'INSERT OR REPLACE INTO summaries (trace_id, span_id, model, prompt_hash, payload) '
+                        'VALUES (?, ?, ?, ?, ?)',
+                        (trace_id, span_id, model, prompt_hash_value, summary.model_dump_json()),
+                    )
+            except sqlite3.Error as exc:
+                logger.warning(f'InsightsCache.put_summary: {exc}; summary for {trace_id}/{span_id} not cached')
 
     def get_vectors(self, model: str, texts: Iterable[str]) -> dict[str, list[float]]:
         """Return the subset of `texts` found in the cache for `model`, keyed by the original text."""
@@ -217,6 +221,7 @@ class InsightsCache:
 
     def close(self) -> None:
         """Close the underlying connection; safe to call on a disabled or already-closed cache."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._summary_lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None

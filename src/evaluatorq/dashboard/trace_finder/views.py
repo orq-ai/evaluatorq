@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import shlex
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from evaluatorq.common.reports import esc
+from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.dashboard.apply_ui import drawer as drawer_shell
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
@@ -671,17 +673,19 @@ def body(
     analyze = ''
     if snapshot.state == 'completed' and snapshot.compiled is not None:
         export_name = export_filename(snapshot)
+        export_path = (get_store_dir('finder-exports') / export_name).resolve()
         python = (
             'from evaluatorq.insights import InsightsPopulation, insights_sync\n\n'
-            f'population = InsightsPopulation.from_finder_export("{export_name}")\n'
+            f'population = InsightsPopulation.from_finder_export({str(export_path)!r})\n'
             'run = insights_sync(population)'
         )
         analyze = (
             '<section class="finder-analyze-matches"><h3>Analyze matches</h3>'
-            '<p>Download this completed Finder export. The dashboard also saves a copy for Insights; '
-            f'enter {esc(export_name)} in the Insights wizard to analyze these matches.</p>'
-            f'<p><a class="btn-secondary" href="/find/export.json">Download {esc(export_name)}</a></p>'
-            f'<label>CLI</label><pre><code>eq insights --from-finder {esc(export_name)}</code></pre>'
+            '<p>Download the completed export first. This also saves a copy for Insights at '
+            f'<code>{esc(str(export_path))}</code>. Then use that path in the commands below on the dashboard host '
+            'or enter it in the Insights wizard. Use the downloaded copy when running commands elsewhere.</p>'
+            f'<p><a class="btn-secondary" href="/find/export.json">Download and save {esc(export_name)}</a></p>'
+            f'<label>CLI</label><pre><code>eq insights --from-finder {esc(shlex.quote(str(export_path)))}</code></pre>'
             f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
         )
     return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}{analyze}'

@@ -103,7 +103,7 @@ async def _summarize_one(
 ) -> tuple[str, TraceSummary | str]:
     prompt = _build_prompt(trace)
     key = prompt_hash(prompt)
-    cached = cache.get_summary(trace.trace_id, trace.span_id, model, key)
+    cached = await asyncio.to_thread(cache.get_summary, trace.trace_id, trace.span_id, model, key)
     if cached is not None:
         return trace.trace_id, cached
 
@@ -133,7 +133,7 @@ async def _summarize_one(
         logger.warning('Insights summary for trace {} produced unparseable model output', trace.trace_id)
         return trace.trace_id, 'summary: unparseable model output'
 
-    cache.put_summary(trace.trace_id, trace.span_id, model, key, result.parsed)
+    await asyncio.to_thread(cache.put_summary, trace.trace_id, trace.span_id, model, key, result.parsed)
     return trace.trace_id, result.parsed
 
 
