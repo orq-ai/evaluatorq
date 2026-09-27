@@ -414,7 +414,7 @@ async def test_self_timed_target_downstream_timeout_does_not_claim_own_or_runner
 
 @pytest.mark.asyncio
 async def test_self_timed_target_own_limit_uses_nonretryable_error() -> None:
-    class OwnLimit(NonRetryableTargetError):
+    class OwnLimit(asyncio.TimeoutError, NonRetryableTargetError):
         pass
 
     class SelfTimed(_Slow):

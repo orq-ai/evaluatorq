@@ -264,6 +264,9 @@ async def call_target_with_retry(
                 last_response = _synthetic(text, error_type='timeout', code='target.timeout')
                 last_error = last_response.error
                 last_details = {'timeout_ms': target_agent_timeout_ms, 'attempts': attempt + 1}
+            if isinstance(exc, NonRetryableTargetError):
+                logger.warning(f'Target call failed with non-retryable timeout ({type(exc).__name__}); not retrying')
+                break
         except Exception as exc:
             mapped = map_error(exc)
             code, msg = mapped if mapped is not None else default_map_error(exc)
