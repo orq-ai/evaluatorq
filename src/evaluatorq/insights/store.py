@@ -56,43 +56,37 @@ def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
             except OSError as exc:
                 if exc.errno not in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}:
                     raise
-                # A symlink to the completed staging file gives readers a
-                # valid report until the final atomic replacement. Its
-                # creation still fails when another run owns the name.
-                try:
-                    path.symlink_to(temporary.resolve())
-                except FileExistsError:
-                    suffix += 1
-                    continue
-                except OSError:
-                    logger.warning(
-                        'Hard links and symlinks are unavailable in {}; saving run with a non-atomic copy', directory
-                    )
-                else:
-                    try:
-                        temporary.replace(path)
-                    except Exception:
-                        with contextlib.suppress(OSError):
-                            if path.is_symlink() and path.readlink() == temporary.resolve():
-                                path.unlink()
-                        raise
-                    break
-                # Last resort: reserve the name exclusively so this copy
-                # cannot overwrite an existing run.
+                # Never publish with replace(): another process could claim
+                # the name after a staging symlink was created. O_EXCL
+                # atomically reserves the final name, so a collision advances
+                # the suffix without replacing the other run.
+                logger.warning('Hard links are unavailable in {}; saving run with a non-atomic copy', directory)
                 try:
                     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
                 except FileExistsError:
                     suffix += 1
                     continue
+                reserved_stat = None
                 try:
-                    with os.fdopen(descriptor, 'wb') as output, temporary.open('rb') as source:
+                    reserved_stat = os.fstat(descriptor)
+                    output = os.fdopen(descriptor, 'wb')
+                    descriptor = -1  # The output stream owns the descriptor now.
+                    with output, temporary.open('rb') as source:
                         while chunk := source.read(1024 * 1024):
                             output.write(chunk)
                         output.flush()
                         os.fsync(output.fileno())
                 except Exception:
+                    if descriptor >= 0:
+                        with contextlib.suppress(OSError):
+                            os.close(descriptor)
                     with contextlib.suppress(OSError):
-                        path.unlink(missing_ok=True)
+                        current_stat = path.lstat()
+                        if reserved_stat is not None and (current_stat.st_dev, current_stat.st_ino) == (
+                            reserved_stat.st_dev,
+                            reserved_stat.st_ino,
+                        ):
+                            path.unlink()
                     raise
                 break
         with contextlib.suppress(OSError):

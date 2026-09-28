@@ -40,13 +40,11 @@ def test_save_run_falls_back_when_hard_links_are_unsupported(tmp_path: Path, min
         raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
 
     monkeypatch.setattr(os, 'link', unsupported_link)
-    original_replace = Path.replace
 
-    def inspect_replace(source: Path, destination: Path) -> Path:
-        assert load_run(destination) == minimal_run
-        return original_replace(source, destination)
+    def unexpected_replace(self: Path, destination: Path) -> Path:
+        raise AssertionError('fallback must never replace a claimed filename')
 
-    monkeypatch.setattr(Path, 'replace', inspect_replace)
+    monkeypatch.setattr(Path, 'replace', unexpected_replace)
 
     path = save_run(minimal_run, tmp_path)
 
@@ -54,23 +52,99 @@ def test_save_run_falls_back_when_hard_links_are_unsupported(tmp_path: Path, min
     assert not path.is_symlink()
 
 
-def test_fallback_symlink_is_readable_with_relative_runs_dir(tmp_path: Path, minimal_run, monkeypatch) -> None:
+def test_fallback_copy_is_readable_with_relative_runs_dir(tmp_path: Path, minimal_run, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
     def unsupported_link(source: Path, destination: Path) -> None:
         raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
 
     monkeypatch.setattr(os, 'link', unsupported_link)
-    original_replace = Path.replace
 
-    def inspect_replace(source: Path, destination: Path) -> Path:
-        assert load_run(destination) == minimal_run
-        return original_replace(source, destination)
+    def unexpected_replace(self: Path, destination: Path) -> Path:
+        raise AssertionError('fallback must never replace a claimed filename')
 
-    monkeypatch.setattr(Path, 'replace', inspect_replace)
+    monkeypatch.setattr(Path, 'replace', unexpected_replace)
 
     path = save_run(minimal_run, Path('runs'))
     assert load_run(path) == minimal_run
+
+
+def test_save_run_fallback_does_not_overwrite_name_claimed_during_publication(
+    tmp_path: Path, minimal_run, monkeypatch
+) -> None:
+    def unsupported_link(source: Path, destination: Path) -> None:
+        raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
+
+    monkeypatch.setattr(os, 'link', unsupported_link)
+    original_open = os.open
+    raced_path = tmp_path / 'insights_20260901-000000_minimal-run.json'
+    claimed = False
+
+    def claim_before_exclusive_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal claimed
+        if Path(path) == raced_path and not claimed:
+            claimed = True
+            fd = original_open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666, dir_fd=dir_fd)
+            with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+                handle.write('claimed by another process')
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, 'open', claim_before_exclusive_open)
+
+    saved = save_run(minimal_run, tmp_path)
+
+    assert claimed
+    assert raced_path.read_text(encoding='utf-8') == 'claimed by another process'
+    assert saved.name == 'insights_20260901-000000_minimal-run-2.json'
+    assert load_run(saved) == minimal_run
+
+
+def test_save_run_fallback_cleanup_preserves_replacement_file(tmp_path: Path, minimal_run, monkeypatch) -> None:
+    def unsupported_link(source: Path, destination: Path) -> None:
+        raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
+
+    monkeypatch.setattr(os, 'link', unsupported_link)
+    original_fsync = os.fsync
+    final_path = tmp_path / 'insights_20260901-000000_minimal-run.json'
+    calls = 0
+
+    def replace_reserved_file_before_failure(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            final_path.unlink()
+            final_path.write_text('replacement from another process', encoding='utf-8')
+            raise OSError(errno.EIO, 'simulated copy failure')
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(os, 'fsync', replace_reserved_file_before_failure)
+
+    with pytest.raises(OSError, match='simulated copy failure'):
+        save_run(minimal_run, tmp_path)
+
+    assert final_path.read_text(encoding='utf-8') == 'replacement from another process'
+
+
+def test_save_run_fallback_closes_descriptor_when_fdopen_fails(tmp_path: Path, minimal_run, monkeypatch) -> None:
+    def unsupported_link(source: Path, destination: Path) -> None:
+        raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
+
+    monkeypatch.setattr(os, 'link', unsupported_link)
+    reserved_descriptors: list[int] = []
+
+    def fail_fdopen(descriptor: int, *args, **kwargs):
+        reserved_descriptors.append(descriptor)
+        raise OSError(errno.EMFILE, 'simulated fdopen failure')
+
+    monkeypatch.setattr(os, 'fdopen', fail_fdopen)
+
+    with pytest.raises(OSError, match='simulated fdopen failure'):
+        save_run(minimal_run, tmp_path)
+
+    assert len(reserved_descriptors) == 1
+    with pytest.raises(OSError, match='Bad file descriptor'):
+        os.fstat(reserved_descriptors[0])
+    assert list_run_paths(tmp_path) == []
 
 
 def test_save_run_fallback_does_not_overwrite_collision(tmp_path: Path, minimal_run, monkeypatch) -> None:
