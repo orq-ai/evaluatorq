@@ -42,6 +42,7 @@ from evaluatorq.backends.container import (
     build_exec_argv,
     build_run_argv,
     forwarded_env_names,
+    host_ids,
     isolation_breaking_flags,
     register,
     release_containers,
@@ -822,9 +823,10 @@ class CodingAgentTarget(AgentTarget):
         register(name, LiveContainer(binary=opts.binary, context=opts.context, beat=beat))
         self._owned.append(name)
         self._container_name = name
+        uid, gid = host_ids()
         try:
             started = await self._docker(
-                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=os.getuid(), gid=os.getgid())
+                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=uid, gid=gid)
             )
         except BaseException:
             await self._drop_container_shielded()
@@ -1271,6 +1273,15 @@ def parse_jsonl(stdout: str) -> list[dict[str, Any]]:
 
 def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
     if proc.returncode is not None and not force:
+        return
+    if not hasattr(os, 'killpg'):
+        # Windows has no process groups, so this is best effort: taskkill /T ends the tree it can still
+        # reach from the pid. Once the CLI has exited, its children are unreachable and the pid may be reused.
+        if proc.returncode is None:
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                subprocess.run(
+                    ['taskkill', '/T', '/F', '/PID', str(proc.pid)], capture_output=True, check=False, timeout=10
+                )
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)

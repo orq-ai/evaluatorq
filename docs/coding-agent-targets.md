@@ -85,6 +85,8 @@ One container belongs to each target clone. Its workdir and container home are h
 
 On macOS, OrbStack works through Docker's context support. Select it with `DockerOptions(context='orbstack')` as described in the [OrbStack Docker documentation](https://docs.orbstack.dev/docker/); commercial use requires a paid OrbStack Pro licence ([pricing](https://orbstack.dev/pricing)). A remote Docker context can start the container, but host workdir bind mounts resolve on the remote machine and usually cannot see the local temporary directory. Embedded applications should call `await target.close()` when finished; SIGTERM cleanup is also registered, while SIGKILL cannot be handled and relies on the five-minute lease.
 
+On Windows, Docker Desktop works as is. A Windows host has no uid to pass through, so the container runs as the image's `agent` user (uid 1001); a custom image without that user still works, because the entrypoint adds a passwd entry for it. Cleanup relies on `close()`, `atexit` and the five-minute lease, since Windows delivers no SIGTERM or SIGHUP. Ending a timed-out host-mode turn is best effort: `taskkill /T` reaches the processes still attached to the agent CLI, not ones it left behind after exiting.
+
 ```python
 from evaluatorq.backends import CodingAgentTarget, DockerOptions
 
