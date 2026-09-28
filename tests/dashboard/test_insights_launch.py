@@ -678,7 +678,66 @@ def test_windows_finder_export_reparse_swap_is_rejected(monkeypatch: pytest.Monk
 
     with pytest.raises(OSError, match='reparse point'):
         insights_launch._open_windows_approved_regular_file(exports, approved)
-    assert calls == ['open-without-following-reparse']
+    assert calls == ['open-without-following-reparse', 'open-without-following-reparse']
+
+
+def test_windows_finder_export_pins_parent_without_delete_sharing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import ctypes
+    import types
+
+    from evaluatorq.dashboard import insights_launch
+
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    approved = exports / 'approved.json'
+    approved.write_text('{}', encoding='utf-8')
+    calls: list[tuple[object, ...]] = []
+    closed: list[int] = []
+
+    def create_file(*args: object) -> int:
+        calls.append(args)
+        return 123 if args[0] == str(exports) else 456
+
+    class type_info(ctypes.Structure):
+        _fields_ = [('attributes', ctypes.c_uint32), ('reparse_tag', ctypes.c_uint32)]
+
+    def get_info(_handle: object, _kind: int, info_pointer: object, _size: int) -> int:
+        info = ctypes.cast(info_pointer, ctypes.POINTER(type_info)).contents
+        info.attributes = 0
+        return 1
+
+    def get_final_path(_handle: object, buffer: object, _size: int, _flags: int) -> int:
+        value = ctypes.create_unicode_buffer(str(approved))
+        ctypes.memmove(buffer, value, ctypes.sizeof(value))
+        return len(value.value)
+
+    api = types.SimpleNamespace(
+        CreateFileW=create_file,
+        GetFileInformationByHandleEx=get_info,
+        GetFinalPathNameByHandleW=get_final_path,
+        CloseHandle=lambda handle: closed.append(handle) or 1,
+    )
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: api, raising=False)
+    monkeypatch.setattr(insights_launch, '_windows_directory_identity', lambda _root: (1, 2, 3))
+    monkeypatch.setitem(
+        __import__('sys').modules,
+        'msvcrt',
+        types.SimpleNamespace(open_osfhandle=lambda *_args: 789),
+    )
+
+    descriptor, identity = insights_launch._open_windows_approved_regular_file(exports, approved)
+
+    assert (descriptor, identity) == (789, (1, 2, 3))
+    assert len(calls) == 2
+    assert calls[0][0] == str(exports)
+    assert calls[0][1] == 0x80  # FILE_READ_ATTRIBUTES
+    assert calls[0][2] == 0x1 | 0x2  # Share read/write, deny delete sharing.
+    assert calls[0][4] == 3  # OPEN_EXISTING
+    assert calls[0][5] == 0x00200000 | 0x02000000  # OPEN_REPARSE_POINT | BACKUP_SEMANTICS
+    assert calls[1][0] == str(approved)
+    assert closed == [123]
 
 
 def test_windows_finder_export_directory_swap_during_create_file_is_rejected(
@@ -740,8 +799,9 @@ def test_windows_finder_export_directory_swap_during_create_file_is_rejected(
 
     with pytest.raises(OSError, match='directory changed while opening'):
         insights_launch._open_windows_approved_regular_file(exports, approved)
-    assert len(root_identities) == 2
-    assert root_identities[0] != root_identities[1]
+    assert len(root_identities) == 3
+    assert root_identities[0] == root_identities[1]
+    assert root_identities[0] != root_identities[2]
 
 
 def test_windows_finder_lease_read_rejects_reparse_point_before_path_open(
@@ -791,7 +851,7 @@ def test_windows_finder_lease_read_rejects_reparse_point_before_path_open(
 
     with pytest.raises(OSError, match='reparse point'):
         insights_launch.read_private_finder_reference(lease)
-    assert opened == [str(lease)]
+    assert opened == [str(lease.parent), str(lease)]
 
 
 def test_finder_export_descriptor_closes_when_fdopen_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -867,6 +927,48 @@ def test_finder_reference_rejects_shared_directory_and_file_modes(tmp_path: Path
     reference.parent.chmod(0o755)
     with pytest.raises(OSError, match='not private'):
         read_private_finder_reference(reference)
+
+
+def test_finder_reference_open_stays_in_validated_directory_if_path_is_swapped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import os
+    import json
+
+    from evaluatorq.dashboard import insights_launch
+
+    if os.name == 'nt' or not hasattr(os, 'O_DIRECTORY') or not hasattr(os, 'O_NOFOLLOW'):
+        pytest.skip('POSIX directory-relative open is unavailable')
+
+    reference = finder_export_reference_path(tmp_path / 'runs', 'private-run')
+    ensure_private_finder_reference_dir(reference.parent)
+    reference.write_text(json.dumps({'source': 'approved'}), encoding='utf-8')
+    reference.chmod(0o600)
+
+    attacker = tmp_path / 'attacker'
+    attacker.mkdir(mode=0o700)
+    (attacker / reference.name).write_text(json.dumps({'source': 'attacker'}), encoding='utf-8')
+    (attacker / reference.name).chmod(0o600)
+
+    original_directory = reference.parent.with_name('leases-original')
+    real_open = os.open
+    swapped = False
+
+    def swap_then_open(file: str | bytes | os.PathLike[str], flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal swapped
+        if kwargs.get('dir_fd') is not None and file == reference.name and not swapped:
+            reference.parent.rename(original_directory)
+            reference.parent.symlink_to(attacker, target_is_directory=True)
+            swapped = True
+        return real_open(file, flags, *args, **kwargs)
+
+    monkeypatch.setattr(insights_launch.os, 'open', swap_then_open)
+    try:
+        assert read_private_finder_reference(reference) == {'source': 'approved'}
+        assert swapped
+    finally:
+        reference.parent.unlink()
+        original_directory.rename(reference.parent)
 
 
 def test_stale_reconciliation_leaves_a_live_worker_and_its_finder_artifacts(

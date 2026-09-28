@@ -593,7 +593,10 @@ def _open_windows_approved_regular_file(
     invalid_handle = ctypes.c_void_p(-1).value
     open_existing = 3
     share_read = 0x1
+    share_read_write = 0x1 | 0x2
+    file_read_attributes = 0x80
     flag_open_reparse_point = 0x00200000
+    flag_backup_semantics = 0x02000000
     file_attribute_tag_info = 9
     file_attribute_directory = 0x10
     file_attribute_reparse_point = 0x400
@@ -602,35 +605,54 @@ def _open_windows_approved_regular_file(
     class FileAttributeTagInfo(ctypes.Structure):
         _fields_ = [('attributes', ctypes.c_uint32), ('reparse_tag', ctypes.c_uint32)]
 
-    handle = create_file(str(path), 0x80000000, share_read, None, open_existing, flag_open_reparse_point, None)
-    if handle == invalid_handle or handle is None:
+    directory_handle = create_file(
+        str(root),
+        file_read_attributes,
+        share_read_write,
+        None,
+        open_existing,
+        flag_open_reparse_point | flag_backup_semantics,
+        None,
+    )
+    if directory_handle == invalid_handle or directory_handle is None:
         raise ctypes.WinError(ctypes.get_last_error())
     try:
-        info = FileAttributeTagInfo()
-        if not get_info(handle, file_attribute_tag_info, ctypes.byref(info), ctypes.sizeof(info)):
-            raise ctypes.WinError(ctypes.get_last_error())
-        if info.attributes & (file_attribute_directory | file_attribute_reparse_point):
-            raise OSError(f'{description} must be a regular file, not a directory or reparse point.')
-
-        path_buffer = ctypes.create_unicode_buffer(32768)
-        length = get_final_path(handle, path_buffer, len(path_buffer), 0)
-        if not length or length >= len(path_buffer):
-            raise OSError(f'Could not verify the final path of the {description.lower()}.')
-
-        final_path = _normalized_windows_path(path_buffer.value)
-        approved_root = _normalized_windows_path(str(root))
-        if str(PureWindowsPath(final_path).parent) != approved_root:
-            raise OSError(f'{description} handle resolved outside the approved directory.')
-
+        # Deny FILE_SHARE_DELETE to pin this directory name until its child has been opened.
+        # Recheck after pinning to reject a replacement that won the race before CreateFileW.
         if _windows_directory_identity(root) != directory_identity:
-            raise OSError(f'{description} directory changed while opening the file.')
+            raise OSError(f'{description} directory changed while pinning it.')
 
-        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
-        handle = None
-        return descriptor, directory_identity
+        handle = create_file(str(path), 0x80000000, share_read, None, open_existing, flag_open_reparse_point, None)
+        if handle == invalid_handle or handle is None:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            info = FileAttributeTagInfo()
+            if not get_info(handle, file_attribute_tag_info, ctypes.byref(info), ctypes.sizeof(info)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if info.attributes & (file_attribute_directory | file_attribute_reparse_point):
+                raise OSError(f'{description} must be a regular file, not a directory or reparse point.')
+
+            path_buffer = ctypes.create_unicode_buffer(32768)
+            length = get_final_path(handle, path_buffer, len(path_buffer), 0)
+            if not length or length >= len(path_buffer):
+                raise OSError(f'Could not verify the final path of the {description.lower()}.')
+
+            final_path = _normalized_windows_path(path_buffer.value)
+            approved_root = _normalized_windows_path(str(root))
+            if str(PureWindowsPath(final_path).parent) != approved_root:
+                raise OSError(f'{description} handle resolved outside the approved directory.')
+
+            if _windows_directory_identity(root) != directory_identity:
+                raise OSError(f'{description} directory changed while opening the file.')
+
+            descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+            handle = None
+            return descriptor, directory_identity
+        finally:
+            if handle is not None:
+                close_handle(handle)
     finally:
-        if handle is not None:
-            close_handle(handle)
+        close_handle(directory_handle)
 
 
 def _read_approved_finder_export(root: Path, path: Path) -> bytes:
@@ -744,8 +766,24 @@ def read_private_finder_reference(path: Path) -> dict[str, object]:
             path.parent, path, description='Finder export lease'
         )
     else:
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
-        descriptor = os.open(path, flags)
+        if not hasattr(os, 'O_DIRECTORY') or not hasattr(os, 'O_NOFOLLOW'):
+            raise OSError('Safe Finder export lease opening is unavailable on this platform.')
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        directory_fd = os.open(path.parent, directory_flags)
+        try:
+            directory_info = os.fstat(directory_fd)
+            path_info = path.parent.lstat()
+            if (
+                not stat.S_ISDIR(directory_info.st_mode)
+                or (hasattr(os, 'getuid') and directory_info.st_uid != os.getuid())
+                or stat.S_IMODE(directory_info.st_mode) & 0o022
+                or (directory_info.st_dev, directory_info.st_ino) != (path_info.st_dev, path_info.st_ino)
+            ):
+                raise OSError(f'Finder export lease directory changed while opening: {path.parent}')
+            flags = os.O_RDONLY | os.O_NOFOLLOW
+            descriptor = os.open(path.name, flags, dir_fd=directory_fd)
+        finally:
+            os.close(directory_fd)
     try:
         info = os.fstat(descriptor)
         if (
