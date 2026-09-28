@@ -85,7 +85,7 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
     async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[TraceSummary]:
         captured_messages.append(kwargs['messages'])
         assert kwargs['response_format'] is TraceSummary
-        assert kwargs['max_tokens'] == 3000
+        assert kwargs['max_tokens'] == 4096
         assert kwargs['label'] == 'insights.summary'
         return StructuredResult(parsed=summary, raw='')
 

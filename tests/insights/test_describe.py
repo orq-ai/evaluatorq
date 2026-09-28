@@ -90,7 +90,7 @@ async def test_describe_clusters_calls_generate_structured_per_cluster(monkeypat
     assert result[1] == ClusterName(name='Refund requests', description='Users asked about refunds.')
     for kwargs in calls:
         assert kwargs['response_format'] is ClusterName
-        assert kwargs['max_tokens'] == 1200
+        assert kwargs['max_tokens'] == 4096
         assert kwargs['label'] == 'insights.describe'
 
 
@@ -210,7 +210,7 @@ async def test_describe_top_level_names_group_from_children(monkeypatch: pytest.
     async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
         captured.append(kwargs['messages'][0]['content'])
         assert kwargs['response_format'] is ClusterName
-        assert kwargs['max_tokens'] == 1200
+        assert kwargs['max_tokens'] == 4096
         return StructuredResult(parsed=ClusterName(name='Billing support', description='Covers refunds and billing questions.'), raw='')
 
     monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
