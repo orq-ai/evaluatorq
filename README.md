@@ -7,9 +7,9 @@
 | src/evaluatorq/\_\_init\_\_.py                                           |       28 |        2 |     93% |     30-31 |
 | src/evaluatorq/\_\_main\_\_.py                                           |        3 |        3 |      0% |       1-4 |
 | src/evaluatorq/backends/\_\_init\_\_.py                                  |        3 |        0 |    100% |           |
-| src/evaluatorq/backends/coding\_agent.py                                 |      687 |       29 |     96% |208, 341, 360, 425, 430, 441, 490-491, 543, 549, 590-591, 662, 753, 765, 778, 839-841, 869, 922, 932-933, 1094, 1100-1102, 1221, 1261 |
+| src/evaluatorq/backends/coding\_agent.py                                 |      715 |       37 |     95% |209, 342, 361, 426, 431, 442, 491-492, 544, 550, 591-592, 663, 754, 766, 779, 841-843, 871, 924, 934-935, 1096, 1102-1104, 1223, 1263, 1280-1284, 1311-1316 |
 | src/evaluatorq/backends/coding\_agent\_cli.py                            |       19 |        0 |    100% |           |
-| src/evaluatorq/backends/container.py                                     |      353 |       34 |     90% |33-34, 178, 193, 275, 308-323, 355-356, 392, 439-443, 449-454, 464-466, 503-504, 514-516, 518-519 |
+| src/evaluatorq/backends/container.py                                     |      383 |       51 |     87% |35-36, 197, 212, 294, 327-342, 374-375, 411, 458-462, 468-473, 483-485, 525-526, 536-556, 565-567, 569-570 |
 | src/evaluatorq/cli.py                                                    |       58 |        1 |     98% |       228 |
 | src/evaluatorq/common/\_\_init\_\_.py                                    |        0 |        0 |    100% |           |
 | src/evaluatorq/common/apply.py                                           |      137 |        6 |     96% |208, 221-222, 228, 331-332 |
@@ -255,7 +255,7 @@
 | src/evaluatorq/tracing/setup.py                                          |      140 |       12 |     91% |97, 184-187, 253, 255-258, 323-324, 345 |
 | src/evaluatorq/tracing/spans.py                                          |       84 |        1 |     99% |       130 |
 | src/evaluatorq/types.py                                                  |      161 |        3 |     98% |34, 285, 363 |
-| **TOTAL**                                                                | **33104** | **2832** | **91%** |           |
+| **TOTAL**                                                                | **33162** | **2857** | **91%** |           |
 
 
 ## Setup coverage badge
