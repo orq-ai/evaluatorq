@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -313,6 +314,7 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
     snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
     snapshot_path = snapshot_directory / 'finder-export.json'
     snapshot_path.write_text('{}', encoding='utf-8')
+    snapshot_path.chmod(0o600)
     monkeypatch.setenv(_REQUEST_ENV, '{truncated request')
     monkeypatch.setenv(_SNAPSHOT_ENV, str(snapshot_path))
     monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(b'1')))
@@ -329,6 +331,60 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
     assert manifest.error is not None and 'missing optional dependency' in manifest.error
     assert not snapshot_directory.exists()
     assert not reference.exists()
+
+
+def test_worker_bootstrap_snapshot_cleanup_does_not_follow_directory_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+    import runpy
+    import sys
+    import tempfile
+
+    from evaluatorq.dashboard.insights_launch import _WORKER_BOOTSTRAP, _MANIFEST_ENV, _REQUEST_ENV, _SNAPSHOT_ENV
+
+    writer = start_manifest(run_id='bootstrap-snapshot-swap', surface='insights', run_name='demo', runs_dir=tmp_path)
+    monkeypatch.setenv(_MANIFEST_ENV, str(writer.path))
+    monkeypatch.setenv(_REQUEST_ENV, '{truncated request')
+    monkeypatch.setattr(sys, 'stdin', io.TextIOWrapper(io.BytesIO(b'1')))
+
+    snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+    snapshot_path = snapshot_directory / 'finder-export.json'
+    snapshot_path.write_text('{}', encoding='utf-8')
+    snapshot_path.chmod(0o600)
+    replacement = Path(tempfile.mkdtemp(prefix='snapshot-replacement-'))
+    protected = replacement / 'keep.txt'
+    protected.write_text('keep', encoding='utf-8')
+    original_directory = snapshot_directory.with_name('original-bootstrap-snapshot')
+    monkeypatch.setenv(_SNAPSHOT_ENV, str(snapshot_path))
+
+    original_open = os.open
+    swapped = False
+
+    def swap_after_directory_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if path == snapshot_directory.name and dir_fd is not None and not swapped:
+            swapped = True
+            snapshot_directory.rename(original_directory)
+            replacement.rename(snapshot_directory)
+        return descriptor
+
+    monkeypatch.setattr(os, 'open', swap_after_directory_open)
+
+    def fail_import(*args, **kwargs):
+        raise ImportError('missing optional dependency')
+
+    with patch.object(runpy, 'run_module', side_effect=fail_import), pytest.raises(ImportError):
+        exec(_WORKER_BOOTSTRAP, {})
+
+    assert swapped
+    assert (snapshot_directory / 'keep.txt').read_text(encoding='utf-8') == 'keep'
+    assert not (original_directory / 'finder-export.json').exists()
+    assert list_manifests(tmp_path)[0].status == 'error'
+    (snapshot_directory / 'keep.txt').unlink()
+    snapshot_directory.rmdir()
+    original_directory.rmdir()
 
 
 def test_successful_worker_exit_does_not_recover_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1346,6 +1402,7 @@ def test_finder_launch_plan_uses_validated_export_snapshot(monkeypatch: pytest.M
 
 
 def test_finder_snapshot_cleanup_without_getuid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import ctypes
     from types import SimpleNamespace
 
     from evaluatorq.dashboard import insights_worker
@@ -1356,11 +1413,114 @@ def test_finder_snapshot_cleanup_without_getuid(tmp_path: Path, monkeypatch: pyt
     snapshot.write_text('{}', encoding='utf-8')
     snapshot.chmod(0o600)
     monkeypatch.setattr(insights_worker.tempfile, 'gettempdir', lambda: str(tmp_path))
-    monkeypatch.setattr(insights_worker, 'os', SimpleNamespace(name='nt'))
+    deleted = False
+    monkeypatch.setattr(
+        insights_worker,
+        'os',
+        SimpleNamespace(name='nt', listdir=lambda _path: [] if deleted else [snapshot.name]),
+    )
+    monkeypatch.setattr(
+        insights_worker,
+        '_windows_directory_identity',
+        lambda _path: (1, 0, 3),
+    )
+
+    handles = {str(directory): 101, str(snapshot): 102}
+    handle_paths = {handle: path for path, handle in handles.items()}
+    create_calls: list[tuple[str, int, int, int]] = []
+    deleted_handles: list[int] = []
+    closed_handles: list[int] = []
+
+    def create_file(path, access, share, _security, _creation, flags, _template):
+        create_calls.append((path, access, share, flags))
+        return handles[path]
+
+    def get_file_info(handle, info_pointer):
+        info = info_pointer._obj
+        info.attributes = 0x10 if handle == handles[str(directory)] else 0
+        info.volume_serial = 1 if handle == handles[str(directory)] else 9
+        info.index_high = 0
+        info.index_low = 3 if handle == handles[str(directory)] else 4
+        return 1
+
+    def get_final_path(handle, buffer, _length, _flags):
+        value = handle_paths[handle]
+        buffer.value = value
+        return len(value)
+
+    def set_file_info(handle, _kind, info_pointer, _size):
+        nonlocal deleted
+        assert info_pointer._obj.delete_file == 1
+        deleted_handles.append(handle)
+        if handle == handles[str(snapshot)]:
+            deleted = True
+            snapshot.unlink()
+        return 1
+
+    def close_handle(handle):
+        closed_handles.append(handle)
+        return 1
+
+    kernel32 = SimpleNamespace(
+        CreateFileW=create_file,
+        GetFileInformationByHandle=get_file_info,
+        GetFinalPathNameByHandleW=get_final_path,
+        SetFileInformationByHandle=set_file_info,
+        CloseHandle=close_handle,
+    )
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: kernel32, raising=False)
 
     insights_worker._cleanup_snapshot(snapshot)
 
-    assert not directory.exists()
+    assert [call[0] for call in create_calls] == [str(directory), str(snapshot)]
+    assert all(call[1] == 0x10080 and call[2] == 0x3 for call in create_calls)
+    assert create_calls[0][3] == 0x00200000 | 0x02000000
+    assert create_calls[1][3] == 0x00200000
+    assert deleted_handles == [handles[str(snapshot)], handles[str(directory)]]
+    assert closed_handles == [handles[str(snapshot)], handles[str(directory)]]
+    if snapshot.exists():
+        snapshot.unlink()
+    directory.rmdir()
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX descriptor-relative cleanup')
+def test_snapshot_cleanup_does_not_follow_directory_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    temp_root = tmp_path / 'tmp'
+    temp_root.mkdir()
+    directory = temp_root / 'evaluatorq-finder-snapshot-test'
+    directory.mkdir(mode=0o700)
+    snapshot = directory / 'finder-export.json'
+    snapshot.write_text('{}', encoding='utf-8')
+    snapshot.chmod(0o600)
+    replacement = temp_root / 'replacement'
+    replacement.mkdir()
+    protected = replacement / 'keep.txt'
+    protected.write_text('keep', encoding='utf-8')
+    monkeypatch.setattr(insights_worker.tempfile, 'gettempdir', lambda: str(temp_root))
+
+    original_open = insights_worker.os.open
+    swapped = False
+
+    def swap_after_directory_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if path == directory.name and dir_fd is not None and not swapped:
+            swapped = True
+            directory.rename(temp_root / 'original-snapshot')
+            replacement.rename(directory)
+        return descriptor
+
+    monkeypatch.setattr(insights_worker.os, 'open', swap_after_directory_open)
+    insights_worker._cleanup_snapshot(snapshot)
+
+    assert swapped
+    assert (directory / 'keep.txt').read_text(encoding='utf-8') == 'keep'
+    assert directory.exists()
+    assert (temp_root / 'original-snapshot').exists()
 
 
 def test_live_facet_selection_reaches_population_and_worker(tmp_path: Path) -> None:

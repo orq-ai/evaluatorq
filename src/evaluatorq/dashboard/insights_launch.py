@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import stat
 import subprocess
 import sys
@@ -367,18 +366,39 @@ def cleanup_snapshot():
         if not isinstance(snapshot, str) or os.path.basename(snapshot) != "finder-export.json":
             return
         directory = os.path.dirname(snapshot)
-        if not os.path.exists(directory):
+        if (not os.path.basename(directory).startswith("evaluatorq-finder-snapshot-")
+                or os.path.dirname(os.path.realpath(directory)) != os.path.realpath(tempfile.gettempdir())):
             return
-        info = os.stat(directory, follow_symlinks=False)
-        if (os.path.islink(directory) or not os.path.basename(directory).startswith("evaluatorq-finder-snapshot-")
-                or os.path.dirname(os.path.realpath(directory)) != os.path.realpath(tempfile.gettempdir())
-                or (os.name != "nt" and stat.S_IMODE(info.st_mode) != 0o700)
-                or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+        if os.name == "nt":
+            print("Leaving Finder snapshot after bootstrap failure; safe Windows cleanup is unavailable.",
+                  file=__import__("sys").stderr)
             return
-        if os.path.islink(snapshot) or not os.path.isfile(snapshot):
+        if not hasattr(os, "O_DIRECTORY") or not hasattr(os, "O_NOFOLLOW"):
             return
-        os.unlink(snapshot)
-        os.rmdir(directory)
+        root = os.path.realpath(tempfile.gettempdir())
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            directory_fd = os.open(os.path.basename(directory), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                   dir_fd=root_fd)
+            try:
+                info = os.fstat(directory_fd)
+                if (not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700
+                        or (hasattr(os, "getuid") and info.st_uid != os.getuid())
+                        or os.listdir(directory_fd) != [os.path.basename(snapshot)]):
+                    return
+                snapshot_info = os.stat(os.path.basename(snapshot), dir_fd=directory_fd, follow_symlinks=False)
+                if (not stat.S_ISREG(snapshot_info.st_mode) or stat.S_IMODE(snapshot_info.st_mode) != 0o600
+                        or (hasattr(os, "getuid") and snapshot_info.st_uid != os.getuid())):
+                    return
+                os.unlink(os.path.basename(snapshot), dir_fd=directory_fd)
+                if not os.listdir(directory_fd):
+                    current = os.stat(os.path.basename(directory), dir_fd=root_fd, follow_symlinks=False)
+                    if stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
+                        os.rmdir(os.path.basename(directory), dir_fd=root_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            os.close(root_fd)
     except (OSError, ValueError, TypeError) as cleanup_error:
         print(f"Could not remove validated Finder snapshot: {cleanup_error}", file=__import__("sys").stderr)
 def cleanup_reference():
@@ -953,12 +973,9 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             except OSError as cleanup_error:
                 logger.warning('Could not remove Insights worker state {}: {}', state_path, cleanup_error)
             if snapshot_path is not None:
-                try:
-                    shutil.rmtree(snapshot_path.parent)
-                except OSError as cleanup_error:
-                    logger.warning(
-                        'Could not remove Finder snapshot directory {}: {}', snapshot_path.parent, cleanup_error
-                    )
+                from evaluatorq.dashboard.insights_worker import _cleanup_snapshot
+
+                _cleanup_snapshot(snapshot_path)
     return run_id
 
 

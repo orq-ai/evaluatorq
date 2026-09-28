@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
 import stat
 import tempfile
 from pathlib import Path
@@ -109,27 +108,222 @@ def _read_private_snapshot(path: Path) -> bytes:
 
 def _cleanup_snapshot(path: Path) -> None:
     directory = path.parent
+    expected_root = Path(tempfile.gettempdir()).resolve()
+    if os.name != 'nt':
+        _cleanup_snapshot_posix(path, directory, expected_root)
+        return
+    _cleanup_snapshot_windows(path, directory, expected_root)
+
+
+def _cleanup_snapshot_windows(path: Path, directory: Path, expected_root: Path) -> None:  # noqa: C901 — each branch rejects an unsafe handle before deletion
+    """Delete a validated Windows snapshot through pinned file handles."""
     try:
         info = directory.lstat()
         snapshot_info = path.lstat()
-        expected_root = Path(tempfile.gettempdir()).resolve()
         if (
             path.name != 'finder-export.json'
             or directory.is_symlink()
             or not stat.S_ISREG(snapshot_info.st_mode)
             or not directory.name.startswith('evaluatorq-finder-snapshot-')
             or directory.resolve().parent != expected_root
-            or (os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o700)
-            or (os.name != 'nt' and stat.S_IMODE(snapshot_info.st_mode) != 0o600)
             or (hasattr(os, 'getuid') and info.st_uid != os.getuid())
             or (hasattr(os, 'getuid') and snapshot_info.st_uid != os.getuid())
             or {entry.name for entry in directory.iterdir()} != {path.name}
         ):
             logger.warning('Leaving untrusted Finder snapshot path in place: {}', path)
             return
-        shutil.rmtree(directory)
+
+        import ctypes
+
+        from evaluatorq.dashboard.insights_launch import _normalized_windows_path
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        create_file.restype = ctypes.c_void_p
+        get_info = kernel32.GetFileInformationByHandle
+        get_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        get_info.restype = ctypes.c_int
+        get_final_path = kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
+        get_final_path.restype = ctypes.c_uint32
+        set_info = kernel32.SetFileInformationByHandle
+        set_info.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        set_info.restype = ctypes.c_int
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        close_handle.restype = ctypes.c_int
+
+        class FileTime(ctypes.Structure):
+            _fields_ = [('low', ctypes.c_uint32), ('high', ctypes.c_uint32)]
+
+        class ByHandleFileInfo(ctypes.Structure):
+            _fields_ = [
+                ('attributes', ctypes.c_uint32),
+                ('creation_time', FileTime),
+                ('access_time', FileTime),
+                ('write_time', FileTime),
+                ('volume_serial', ctypes.c_uint32),
+                ('size_high', ctypes.c_uint32),
+                ('size_low', ctypes.c_uint32),
+                ('links', ctypes.c_uint32),
+                ('index_high', ctypes.c_uint32),
+                ('index_low', ctypes.c_uint32),
+            ]
+
+        class FileDispositionInfo(ctypes.Structure):
+            _fields_ = [('delete_file', ctypes.c_ubyte)]
+
+        invalid_handle = ctypes.c_void_p(-1).value
+        share_read_write = 0x1 | 0x2  # Keep the path from being renamed while its handle is open.
+        open_existing = 3
+        open_reparse_point = 0x00200000
+        backup_semantics = 0x02000000
+        delete_and_read_attributes = 0x00010000 | 0x80
+        file_attribute_directory = 0x10
+        file_attribute_reparse_point = 0x400
+        directory_identity = _windows_directory_identity(directory)
+
+        def open_checked_handle(target: Path, *, is_directory: bool) -> tuple[int, ByHandleFileInfo]:
+            flags = open_reparse_point | (backup_semantics if is_directory else 0)
+            handle = create_file(
+                str(target),
+                delete_and_read_attributes,
+                share_read_write,
+                None,
+                open_existing,
+                flags,
+                None,
+            )
+            if handle == invalid_handle or handle is None:
+                raise ctypes.WinError(ctypes.get_last_error())
+            file_info = ByHandleFileInfo()
+            if not get_info(handle, ctypes.byref(file_info)):
+                error = ctypes.WinError(ctypes.get_last_error())
+                close_handle(handle)
+                raise error
+            final_path = ctypes.create_unicode_buffer(32768)
+            length = get_final_path(handle, final_path, len(final_path), 0)
+            if not length or length >= len(final_path):
+                close_handle(handle)
+                raise OSError('Could not verify the final path of the Finder snapshot handle.')
+            if _normalized_windows_path(final_path.value) != _normalized_windows_path(str(target)):
+                close_handle(handle)
+                raise OSError('Finder snapshot handle resolved outside its approved path.')
+            if is_directory:
+                if (
+                    not file_info.attributes & file_attribute_directory
+                    or file_info.attributes & file_attribute_reparse_point
+                ):
+                    close_handle(handle)
+                    raise OSError('Finder snapshot directory must not be a reparse point.')
+                identity = (file_info.volume_serial, file_info.index_high, file_info.index_low)
+                if identity != directory_identity:
+                    close_handle(handle)
+                    raise OSError('Finder snapshot directory changed while opening its handle.')
+            elif file_info.attributes & (file_attribute_directory | file_attribute_reparse_point):
+                close_handle(handle)
+                raise OSError('Finder snapshot must be a regular file, not a reparse point.')
+            return handle, file_info
+
+        directory_handle: int | None = None
+        snapshot_handle: int | None = None
+        try:
+            directory_handle, _directory_info = open_checked_handle(directory, is_directory=True)
+            snapshot_handle, _snapshot_handle_info = open_checked_handle(path, is_directory=False)
+            if not set_info(
+                snapshot_handle,
+                4,  # FileDispositionInfo
+                ctypes.byref(FileDispositionInfo(1)),
+                ctypes.sizeof(FileDispositionInfo),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            close_handle(snapshot_handle)
+            snapshot_handle = None
+
+            if any(directory.iterdir()):
+                logger.warning('Leaving non-empty Finder snapshot directory in place: {}', directory)
+                return
+            if not set_info(
+                directory_handle,
+                4,  # FileDispositionInfo
+                ctypes.byref(FileDispositionInfo(1)),
+                ctypes.sizeof(FileDispositionInfo),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            if snapshot_handle is not None:
+                close_handle(snapshot_handle)
+            if directory_handle is not None:
+                close_handle(directory_handle)
     except OSError as exc:
         logger.warning('Could not remove Finder snapshot directory {}: {}', directory, exc)
+
+
+def _cleanup_snapshot_posix(path: Path, directory: Path, expected_root: Path) -> None:
+    """Remove only the snapshot file from the opened private directory."""
+    if (
+        path.name != 'finder-export.json'
+        or not directory.name.startswith('evaluatorq-finder-snapshot-')
+        or directory.parent.resolve() != expected_root
+        or not hasattr(os, 'O_DIRECTORY')
+        or not hasattr(os, 'O_NOFOLLOW')
+    ):
+        logger.warning('Leaving untrusted Finder snapshot path in place: {}', path)
+        return
+
+    root_fd: int | None = None
+    directory_fd: int | None = None
+    try:
+        root_fd = os.open(expected_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        directory_fd = os.open(
+            directory.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=root_fd,
+        )
+        info = os.fstat(directory_fd)
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700
+            or os.listdir(directory_fd) != [path.name]  # noqa: PTH208 — enumerate the opened directory handle
+        ):
+            logger.warning('Leaving untrusted Finder snapshot path in place: {}', path)
+            return
+
+        snapshot_info = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(snapshot_info.st_mode)
+            or snapshot_info.st_uid != os.getuid()
+            or stat.S_IMODE(snapshot_info.st_mode) != 0o600
+        ):
+            logger.warning('Leaving untrusted Finder snapshot path in place: {}', path)
+            return
+
+        os.unlink(path.name, dir_fd=directory_fd)
+        if os.listdir(directory_fd):  # noqa: PTH208 — enumerate the opened directory handle
+            logger.warning('Leaving non-empty Finder snapshot directory in place: {}', directory)
+            return
+        current = os.stat(directory.name, dir_fd=root_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            logger.warning('Leaving changed Finder snapshot directory in place: {}', directory)
+            return
+        os.rmdir(directory.name, dir_fd=root_fd)
+    except OSError as exc:
+        logger.warning('Could not remove Finder snapshot directory {}: {}', directory, exc)
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
+        if root_fd is not None:
+            os.close(root_fd)
 
 
 def _snapshot_candidate_from_request() -> Path | None:
