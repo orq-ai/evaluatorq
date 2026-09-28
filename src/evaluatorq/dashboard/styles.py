@@ -2879,7 +2879,7 @@ _INSIGHTS_CSS = """
 .insights-warning { border-color:var(--orange-100); background:var(--orange-50); color:var(--text-body); }
 .insights-warning:has(ul) { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; }
 .insights-warning ul { margin:0; padding-left:0; list-style:none; }
-.insights-progress { width:100%; max-width:1100px; box-sizing:border-box; margin:14px 0; padding:13px 15px 15px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-card); }
+.insights-progress { width:100%; box-sizing:border-box; margin:14px 0; padding:13px 15px 15px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-card); }
 .insights-progress-head { display:flex; justify-content:space-between; align-items:center; gap:24px; margin-bottom:10px; }
 .insights-progress-head h3 { margin:0; color:var(--text-strong); font-size:13px; }
 .insights-progress-head span { color:var(--text-muted); font-size:12px; }
