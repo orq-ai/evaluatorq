@@ -46,3 +46,24 @@ def test_preview_pretty_prints_json_and_truncates() -> None:
     long = preview('y' * 500)
     assert len(long) == 241
     assert long.endswith('…')
+
+
+def test_orq_native_kind_parts_map_to_their_kinds() -> None:
+    messages = [
+        {'role': 'user', 'parts': [{'_id': 'text_1', 'kind': 'text', 'text': 'Find the refund'}]},
+        {
+            'role': 'agent',
+            'parts': [
+                {'kind': 'reasoning', 'reasoning': 'Need the order first'},
+                {'kind': 'tool_call', 'tool_name': 'lookup', 'tool_call_id': 'c1', 'arguments': {'id': 7}},
+            ],
+        },
+        {'role': 'tool', 'parts': [{'kind': 'tool_result', 'tool_call_id': 'c1', 'result': {'status': 'paid'}}]},
+        {'role': 'agent', 'parts': [{'_id': 'text_2', 'kind': 'text', 'text': 'Refund issued'}]},
+    ]
+
+    out = segments(messages)
+
+    assert [s.kind for s in out] == ['user', 'reasoning', 'call', 'result', 'assistant']
+    assert out[2].label == 'lookup'
+    assert 'paid' in out[3].preview

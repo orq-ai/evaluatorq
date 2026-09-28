@@ -79,7 +79,10 @@ def _cache(row: TraceRow) -> str:
     pct = row.cache_pct
     if pct is None:
         return DASH
-    return f'<span class="cachebar"><i style="width:{pct * 100:.0f}%"></i></span>{pct * 100:.0f}%'
+    return (
+        f'<span title="{row.cached_tokens:,} cache-read tokens / {row.tokens_in:,} input tokens">'
+        f'<span class="cachebar"><i style="width:{pct * 100:.0f}%"></i></span>{pct * 100:.0f}%</span>'
+    )
 
 
 @dataclass(frozen=True)
@@ -112,7 +115,7 @@ _ENTRIES = (
         numeric=True,
         default=True,
     ),
-    Column('cache_pct', 'Cache', lambda r: r.cache_pct, _cache, numeric=True, default=True),
+    Column('cache_pct', 'Cache read %', lambda r: r.cache_pct, _cache, numeric=True, default=True),
     Column(
         'cost', 'Cost', lambda r: r.cost_total, lambda r: fmt_cost(r.cost_total, r.currency), numeric=True, default=True
     ),

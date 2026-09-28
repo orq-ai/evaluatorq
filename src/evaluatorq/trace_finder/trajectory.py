@@ -29,6 +29,8 @@ _ROLE_KINDS: Mapping[str, Kind] = MappingProxyType({
     'developer': 'system',
     'user': 'user',
     'assistant': 'assistant',
+    'agent': 'assistant',
+    'model': 'assistant',
     'tool': 'result',
 })
 _TEXT_TYPES = frozenset({'text', 'input_text', 'output_text'})
@@ -71,7 +73,7 @@ def _part(part: Any, role_kind: Kind, index: int, tool_name: str | None) -> Segm
         return _segment(role_kind, part, index, tool_name if role_kind == 'result' else None)
     if not isinstance(part, Mapping):
         return _segment('other', _text(part), index)
-    kind = part.get('type')
+    kind = part.get('type') or part.get('kind')  # Orq-native parts carry `kind`, OpenAI-style ones `type`
     call: Mapping[str, Any] = part
     function = part.get('function')
     if isinstance(function, Mapping):
@@ -84,13 +86,20 @@ def _part(part: Any, role_kind: Kind, index: int, tool_name: str | None) -> Segm
             tool_name if role_kind == 'result' else None,
         )
     if kind == 'reasoning':
-        return _segment('reasoning', _text(part.get('content') or part.get('text') or part.get('summary')), index)
+        return _segment(
+            'reasoning',
+            _text(part.get('content') or part.get('text') or part.get('reasoning') or part.get('summary')),
+            index,
+        )
     if kind in _CALL_TYPES:
         return _segment(
-            'call', _text(call.get('arguments') or call.get('input')), index, _text(call.get('name')) or None
+            'call',
+            _text(call.get('arguments') or call.get('input')),
+            index,
+            _text(call.get('name') or call.get('tool_name')) or None,
         )
     if kind in _RESULT_TYPES:
-        body = part.get('response', part.get('output', part.get('content')))
+        body = part.get('response', part.get('output', part.get('result', part.get('content'))))
         return _segment('result', _text(body), index, _text(part.get('name')) or tool_name)
     return _segment('other', _text(part), index)
 

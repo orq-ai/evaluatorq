@@ -22,6 +22,12 @@ def test_inclusive_router_usage_on_cache_read() -> None:
     assert usage.cached == 9114
 
 
+def test_cache_percentage_uses_reads_even_when_most_input_is_cache_writes() -> None:
+    usage = normalise_usage(TraceUsage(prompt_tokens=1000, completion_tokens=40, prompt_cached_tokens=250, prompt_cache_creation_tokens=700))
+    row = TraceRow(trace_id='mixed-cache', tokens_in=usage.tokens_in, cached_tokens=usage.cached, cache_write_tokens=usage.cache_write)
+    assert row.cache_pct == 0.25
+
+
 def test_native_exclusive_usage_adds_cache_tokens_to_input() -> None:
     usage = normalise_usage(TraceUsage(prompt_tokens=1150, completion_tokens=900, total_tokens=2050, prompt_cached_tokens=65_600_000, prompt_cache_creation_tokens=120_000))
     assert usage.tokens_in == 1150 + 65_600_000 + 120_000

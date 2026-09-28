@@ -116,7 +116,10 @@ class TraceRow(BaseModel):
 
     @property
     def cache_pct(self) -> float | None:
-        """Cached share of the input; ``None`` when either side is unknown or the input is zero."""
+        """Cache-read tokens divided by all input tokens, excluding writes from the numerator.
+
+        Return ``None`` when either token count is unknown or the input is zero.
+        """
         if not self.tokens_in or self.cached_tokens is None:
             return None
         return self.cached_tokens / self.tokens_in

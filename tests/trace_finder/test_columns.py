@@ -40,6 +40,13 @@ def test_every_column_renders_on_a_sparse_row() -> None:
     assert COLUMNS['cost'].render(row) == '—'
 
 
+def test_cache_column_names_and_displays_cache_reads() -> None:
+    row = TraceRow(trace_id='t', tokens_in=1000, cached_tokens=250, cache_write_tokens=700)
+    assert COLUMNS['cache_pct'].label == 'Cache read %'
+    assert '250 cache-read tokens / 1,000 input tokens' in COLUMNS['cache_pct'].render(row)
+    assert 'width:25%' in COLUMNS['cache_pct'].render(row)
+
+
 def test_resolve_drops_unknown_keys() -> None:
     assert [column.key for column in resolve_columns(['model', 'nope'])] == ['model']
     assert [column.key for column in resolve_columns(None)] == list(DEFAULT_COLUMNS)
