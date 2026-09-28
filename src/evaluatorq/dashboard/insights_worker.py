@@ -19,6 +19,8 @@ from evaluatorq.dashboard.insights_launch import (
     _MANIFEST_ENV,
     _SNAPSHOT_ENV,
     MAX_FINDER_EXPORT_BYTES,
+    _open_windows_approved_regular_file,
+    _windows_directory_identity,
     finder_export_reference_path,
     read_launch_payload,
     start_worker_heartbeat,
@@ -38,6 +40,71 @@ def _fail_running(path: Path, error: str) -> None:
         return
     if manifest.status == ManifestStatus.RUNNING:
         ManifestWriter(manifest, path).fail(error, stage='setup')
+
+
+def _read_private_snapshot(path: Path) -> bytes:
+    """Read a private bounded snapshot through handles that cannot follow swaps."""
+    expected_root = Path(tempfile.gettempdir()).resolve()
+    if (
+        path.name != 'finder-export.json'
+        or not path.parent.name.startswith('evaluatorq-finder-snapshot-')
+        or path.parent.parent.resolve() != expected_root
+    ):
+        raise ValueError('Finder export snapshot is outside its private temporary directory')
+
+    directory_fd: int | None = None
+    descriptor: int | None = None
+    windows_directory_identity: tuple[int, int, int] | None = None
+    try:
+        if os.name == 'nt':
+            descriptor, windows_directory_identity = _open_windows_approved_regular_file(
+                path.parent, path, description='Finder export snapshot'
+            )
+        else:
+            if not hasattr(os, 'O_DIRECTORY') or not hasattr(os, 'O_NOFOLLOW'):
+                raise OSError('Safe Finder snapshot opening is unavailable on this platform.')
+            root_fd = os.open(expected_root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                directory_fd = os.open(
+                    path.parent.name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=root_fd,
+                )
+            finally:
+                os.close(root_fd)
+            directory = os.fstat(directory_fd)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or directory.st_uid != os.getuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700
+            ):
+                raise ValueError('Finder export snapshot directory has unsafe ownership or permissions')
+            descriptor = os.open(
+                path.name,
+                os.O_RDONLY | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (
+            os.name != 'nt' and (opened.st_uid != os.getuid() or stat.S_IMODE(opened.st_mode) != 0o600)
+        ):
+            raise ValueError('Finder export snapshot must be a private regular file')
+        with os.fdopen(descriptor, 'rb') as snapshot_file:
+            descriptor = None
+            contents = snapshot_file.read(MAX_FINDER_EXPORT_BYTES + 1)
+        if os.name == 'nt' and (
+            windows_directory_identity is None or _windows_directory_identity(path.parent) != windows_directory_identity
+        ):
+            raise ValueError('Finder export snapshot directory changed while reading the file.')
+        if len(contents) > MAX_FINDER_EXPORT_BYTES:
+            raise ValueError('Missing or oversized validated Finder export snapshot')
+        return contents
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def _cleanup_snapshot(path: Path) -> None:
@@ -122,10 +189,12 @@ def main() -> int:
             snapshot = payload.finder_export_snapshot
             if snapshot is None:
                 raise ValueError('Missing or oversized validated Finder export snapshot')
-            with snapshot.open('rb') as snapshot_file:
-                raw_snapshot = snapshot_file.read(MAX_FINDER_EXPORT_BYTES + 1)
-            if len(raw_snapshot) > MAX_FINDER_EXPORT_BYTES:
-                raise ValueError('Missing or oversized validated Finder export snapshot')
+            raw_snapshot = _read_private_snapshot(snapshot)
+            if (
+                payload.finder_export_snapshot_sha256 is None
+                or hashlib.sha256(raw_snapshot).hexdigest() != payload.finder_export_snapshot_sha256
+            ):
+                raise ValueError('Finder export snapshot changed after launch')
             validated_export = RunExport.model_validate_json(raw_snapshot)
             run = asyncio.run(
                 insights(

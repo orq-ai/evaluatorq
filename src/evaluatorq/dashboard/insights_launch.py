@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import hashlib
 import json
 import os
 import re
@@ -662,12 +663,12 @@ def _write_private_finder_snapshot(path: Path, contents: str) -> None:
     """Write a new private snapshot and close the raw descriptor if wrapping fails."""
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        snapshot_file = os.fdopen(descriptor, 'w', encoding='utf-8')
+        snapshot_file = os.fdopen(descriptor, 'wb')
     except OSError:
         os.close(descriptor)
         raise
     with snapshot_file:
-        snapshot_file.write(contents)
+        snapshot_file.write(contents.encode('utf-8'))
 
 
 def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
@@ -833,6 +834,7 @@ class InsightsLaunchPayload(BaseModel):
     runs_dir: Path
     spec: InsightsLaunchSpec
     finder_export_snapshot: Path | None = None
+    finder_export_snapshot_sha256: str | None = None
 
 
 def _population_for_launch_plan(spec: InsightsLaunchSpec) -> tuple[InsightsPopulation, str | None]:
@@ -890,6 +892,9 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
             'runs_dir': str(runs_dir),
             'spec': spec.model_dump(mode='json'),
             'finder_export_snapshot': str(snapshot_path) if snapshot_path is not None else None,
+            'finder_export_snapshot_sha256': hashlib.sha256(finder_snapshot.encode('utf-8')).hexdigest()
+            if finder_snapshot is not None
+            else None,
         })
         worker_env = {
             **os.environ,

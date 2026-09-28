@@ -1232,6 +1232,87 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert list_manifests(tmp_path / 'runs')[0].status == 'completed'
 
 
+def test_finder_worker_rejects_snapshot_replaced_after_payload_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import hashlib
+
+    from evaluatorq.dashboard import insights_worker
+    from evaluatorq.dashboard.insights_launch import _REQUEST_ENV, read_launch_payload
+
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    (exports / 'finder.json').write_text(_run_export(['approved-trace']).model_dump_json(), encoding='utf-8')
+    spec = InsightsLaunchSpec(source='finder', finder_export='finder.json', labels=[], dimensions=['intent'])
+
+    with patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn:
+        spawn.return_value.pid = 43210
+        run_id = launch_insights(spec, tmp_path / 'runs')
+    payload_json = spawn.call_args.kwargs['env'][_REQUEST_ENV]
+    monkeypatch.setenv(_REQUEST_ENV, payload_json)
+    payload = read_launch_payload()
+    snapshot = payload.finder_export_snapshot
+    assert snapshot is not None
+    assert payload.finder_export_snapshot_sha256 == hashlib.sha256(snapshot.read_bytes()).hexdigest()
+
+    outside = tmp_path / 'outside.json'
+    outside.write_text(_run_export(['replacement-trace']).model_dump_json(), encoding='utf-8')
+    outside.chmod(0o600)
+
+    def replace_snapshot_after_validation():
+        outside.replace(snapshot)
+        return payload
+
+    monkeypatch.setattr(insights_worker, 'read_launch_payload', replace_snapshot_after_validation)
+    monkeypatch.setattr(insights_worker, 'insights', lambda *_args, **_kwargs: pytest.fail('unsafe snapshot was used'))
+
+    assert insights_worker.main() == 1
+    manifest = list_manifests(tmp_path / 'runs')[0]
+    assert manifest.status == 'error'
+    assert manifest.error is not None and 'snapshot changed after launch' in manifest.error
+    assert not outside.exists()
+    assert not snapshot.exists()
+
+
+def test_windows_snapshot_read_checks_directory_identity_after_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import os
+    import tempfile
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard import insights_worker
+
+    snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
+    snapshot = snapshot_directory / 'finder-export.json'
+    snapshot.write_text('{}', encoding='utf-8')
+    snapshot.chmod(0o600)
+    file_descriptor = os.open(snapshot, os.O_RDONLY)
+    identities = iter(((1, 2, 3), (4, 5, 6)))
+
+    def open_approved_snapshot(*_args, **_kwargs):
+        return file_descriptor, next(identities)
+
+    monkeypatch.setattr(
+        insights_worker,
+        'os',
+        SimpleNamespace(name='nt', O_RDONLY=os.O_RDONLY, fstat=os.fstat, fdopen=os.fdopen, close=os.close),
+    )
+    monkeypatch.setattr(
+        insights_worker,
+        '_open_windows_approved_regular_file',
+        open_approved_snapshot,
+    )
+    monkeypatch.setattr(insights_worker, '_windows_directory_identity', lambda _path: next(identities))
+
+    with pytest.raises(ValueError, match='directory changed while reading'):
+        insights_worker._read_private_snapshot(snapshot)
+    snapshot.unlink()
+    snapshot_directory.rmdir()
+
+
 def test_finder_launch_plan_uses_validated_export_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from evaluatorq.dashboard import insights_launch
 
