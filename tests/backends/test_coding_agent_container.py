@@ -461,8 +461,22 @@ async def test_kill_group_uses_taskkill_without_killpg(monkeypatch: pytest.Monke
 
     monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
     monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
-    await coding_agent_module.kill_group(SimpleNamespace(returncode=None, pid=4242))
+    await coding_agent_module.kill_group(SimpleNamespace(returncode=None, pid=4242))  # pyright: ignore[reportArgumentType]
     assert calls == [['taskkill', '/T', '/F', '/PID', '4242']]
+
+
+@pytest.mark.asyncio
+async def test_kill_group_kills_agent_process_when_taskkill_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    killed: list[int] = []
+
+    def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 1, '', 'ERROR: Access is denied.')
+
+    monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
+    monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
+    proc = SimpleNamespace(returncode=None, pid=4242, kill=lambda: killed.append(4242))
+    await coding_agent_module.kill_group(proc)  # pyright: ignore[reportArgumentType]
+    assert killed == [4242]
 
 
 def test_pid_alive_dispatches_to_windows_probe(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -456,7 +456,19 @@ def test_worker_first_exit_hooks_still_install_signals_on_main_thread(monkeypatc
     assert installed_signals == []
 
     c.install_exit_hooks()
-    assert installed_signals == [signal.SIGTERM, signal.SIGHUP]
+    assert installed_signals == [signal.SIGTERM, *((signal.SIGHUP,) if hasattr(signal, 'SIGHUP') else ())]
+
+
+def test_exit_hooks_skip_sighup_where_it_does_not_exist(monkeypatch) -> None:
+    installed_signals: list[signal.Signals] = []
+    monkeypatch.setattr(c, 'atexit_installed', False)
+    monkeypatch.setattr(c, 'signal_hooks_installed', False)
+    monkeypatch.setattr(c.atexit, 'register', lambda *args: None)
+    monkeypatch.setattr(c.signal, 'signal', lambda sig, handler: installed_signals.append(sig))
+    monkeypatch.delattr(c.signal, 'SIGHUP', raising=False)
+
+    c.install_exit_hooks()
+    assert installed_signals == [signal.SIGTERM]
 
 
 def test_unregister_waits_for_inflight_heartbeat_write(fake_docker, tmp_path, monkeypatch) -> None:

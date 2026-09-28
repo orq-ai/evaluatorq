@@ -1271,21 +1271,31 @@ def parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     return events
 
 
-def taskkill_tree(pid: int) -> None:
-    """End a Windows process tree with taskkill /T, logging every way it can fail to."""
+def taskkill_tree(pid: int) -> bool:
+    """End a Windows process tree with taskkill /T. Return whether it succeeded, logging why when it did not."""
     try:
         result = subprocess.run(
             ['taskkill', '/T', '/F', '/PID', str(pid)], capture_output=True, text=True, check=False, timeout=10
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        logger.warning(f'CodingAgentTarget: taskkill could not end process tree {pid}, it may still be running: {exc}')
-        return
+        logger.warning(
+            f'CodingAgentTarget: taskkill could not end process tree {pid}, killing the agent process only: {exc}'
+        )
+        return False
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[:STDERR_EXCERPT_CHARS]
         logger.warning(
             f'CodingAgentTarget: taskkill exited {result.returncode} for process tree {pid}, '
-            f'it may still be running: {detail}'
+            f'killing the agent process only; its children may still be running: {detail}'
         )
+        return False
+    return True
+
+
+def kill_direct(proc: asyncio.subprocess.Process) -> None:
+    """Fallback when taskkill fails: end the agent process itself. Its children are out of reach."""
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
 
 
 async def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
@@ -1297,11 +1307,15 @@ async def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -
         if proc.returncode is None:
             operation = asyncio.ensure_future(asyncio.to_thread(taskkill_tree, proc.pid))
             try:
-                await asyncio.shield(operation)
+                tree_killed = await asyncio.shield(operation)
             except asyncio.CancelledError:
                 # `to_thread` cannot stop taskkill. Wait for its bounded result so cleanup runs after the kill.
                 await finish_task_uninterruptibly(operation)
+                if operation.cancelled() or operation.exception() is not None or not operation.result():
+                    kill_direct(proc)
                 raise
+            if not tree_killed:
+                kill_direct(proc)
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)
