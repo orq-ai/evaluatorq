@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import stat
+import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from loguru import logger
@@ -442,3 +444,30 @@ async def test_orphan_sweep_runs_before_first_container(docker) -> None:
     subcommands = [l.split()[1] for l in log.read_text().splitlines() if l.startswith('ARGV')]
     assert subcommands[:3] == ['image', 'ps', 'run']
     await target.close()
+
+
+def test_host_ids_falls_back_to_image_agent_without_getuid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(c.os, 'getuid', raising=False)
+    assert c.host_ids() == (c.IMAGE_AGENT_ID, c.IMAGE_AGENT_ID)
+
+
+@pytest.mark.asyncio
+async def test_kill_group_uses_taskkill_without_killpg(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, '', '')
+
+    monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
+    monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
+    await coding_agent_module.kill_group(SimpleNamespace(returncode=None, pid=4242))
+    assert calls == [['taskkill', '/T', '/F', '/PID', '4242']]
+
+
+def test_pid_alive_dispatches_to_windows_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    probed: list[int] = []
+    monkeypatch.setattr(c.sys, 'platform', 'win32')
+    monkeypatch.setattr(c, 'windows_pid_alive', lambda pid: probed.append(pid) or False)
+    assert c.pid_alive(4242) is False
+    assert probed == [4242]

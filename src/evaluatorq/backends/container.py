@@ -528,7 +528,11 @@ def pid_alive(pid: int) -> bool:
 
 
 def windows_pid_alive(pid: int) -> bool:
-    """Windows liveness check. `os.kill(pid, 0)` is not a probe there: signal 0 is CTRL_C_EVENT."""
+    """Windows liveness check. `os.kill(pid, 0)` is not a probe there: signal 0 is CTRL_C_EVENT.
+
+    Limit: a process that exited with code 259 reads as alive, because 259 is also `STILL_ACTIVE`, so
+    `sweep_orphans` leaves its container to the lease.
+    """
     if sys.platform != 'win32':
         raise RuntimeError('windows_pid_alive is Windows only')
     kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -542,6 +546,10 @@ def windows_pid_alive(pid: int) -> bool:
     try:
         code = ctypes.c_ulong()
         if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            logger.warning(
+                f'pid liveness: GetExitCodeProcess failed for pid {pid} (error {ctypes.get_last_error()}); '
+                'treating it as alive'
+            )
             return True
         return code.value == STILL_ACTIVE
     finally:
