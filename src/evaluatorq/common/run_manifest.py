@@ -130,7 +130,7 @@ class ManifestWriter:
         self._close(rec, ManifestStatus.ERROR if error else ManifestStatus.COMPLETED)
         self.flush()
 
-    def stage_progress(self, stage: Any, completed: int, total: int) -> None:
+    def stage_progress(self, stage: Any, completed: int, total: int, *, target: str | None = None) -> None:
         """Record progress with one-second write throttling.
 
         A failed write keeps the latest counts in memory and does not advance
@@ -151,7 +151,7 @@ class ManifestWriter:
             )
             return
         name = getattr(stage, 'value', stage)
-        rec = self._open_stage(str(name))
+        rec = self._open_stage(str(name), target)
         if rec is None or self.manifest.status != ManifestStatus.RUNNING:
             return
         rec.completed, rec.total = completed, total

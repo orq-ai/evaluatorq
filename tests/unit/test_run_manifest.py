@@ -144,6 +144,28 @@ def test_first_progress_for_each_stage_is_flushed(tmp_path: Path) -> None:
     assert (record.completed, record.total) == (1, 3)
 
 
+def test_stage_progress_updates_only_matching_target(tmp_path: Path) -> None:
+    writer = start_manifest(run_id='target-progress', surface='sim', run_name='demo', runs_dir=tmp_path)
+    writer.start_stage('prepare', target='agent-a')
+    writer.start_stage('prepare', target='agent-b')
+
+    writer.stage_progress('prepare', 2, 5, target='agent-a')
+
+    by_target = {stage.target: stage for stage in writer.manifest.stages}
+    assert (by_target['agent-a'].completed, by_target['agent-a'].total) == (2, 5)
+    assert (by_target['agent-b'].completed, by_target['agent-b'].total) == (None, None)
+
+
+def test_targetless_stage_progress_does_not_update_targeted_stages(tmp_path: Path) -> None:
+    writer = start_manifest(run_id='targetless-progress', surface='sim', run_name='demo', runs_dir=tmp_path)
+    writer.start_stage('prepare', target='agent-a')
+    writer.start_stage('prepare', target='agent-b')
+
+    writer.stage_progress('prepare', 2, 5)
+
+    assert all((stage.completed, stage.total) == (None, None) for stage in writer.manifest.stages)
+
+
 def test_failed_progress_flush_retries_latest_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = [0.0]
     started = start_manifest(run_id='failed-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
