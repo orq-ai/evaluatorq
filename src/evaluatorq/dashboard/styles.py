@@ -493,6 +493,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-auth-card-copy small { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
 .settings-auth-card-check { display: none; }
 .settings-auth-config { min-height: 188px; margin-top: 16px; padding: 16px 18px; border: 1px solid var(--border-default); border-radius: 12px; background: var(--surface-sunken); }
+.settings-auth-panel:has(input[name="orq_auth_method"][value="environment"]:checked) .settings-auth-config { display: none; }
 .settings-auth-config > .settings-auth-step { margin: 0 0 14px; }
 .settings-auth-detail { display: none; max-width: 640px; gap: 7px; }
 .settings-auth-panel:has(input[value="environment"]:checked) .settings-auth-detail[data-auth-method="environment"],
@@ -516,10 +517,6 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .eq-auth-toast a { color: var(--teal-600); font-weight: 650; white-space: nowrap; }
 .eq-auth-toast button { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 18px; line-height: 1; }
 .settings-auth-note { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-.settings-scope-note { margin: 8px 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-.settings-auth-panel:has(input[name="orq_auth_method"][value="cli_profile"]:checked) .settings-auth-scope,
-.settings-auth-panel:has(input[name="orq_auth_method"][value="stored_api_key"]:checked) .settings-auth-scope,
-.settings-auth-panel:has(input[name="orq_auth_method"][value="cli_oauth"]:checked) .settings-auth-scope { display: none; }
 .settings-save { align-self: flex-start; }
 @media (max-width: 600px) {
   body.eq-dashboard:has(.settings-auth-panel) .config-row { flex-direction: column; align-items: stretch; gap: 6px; }

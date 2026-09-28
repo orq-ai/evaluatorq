@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import starmap
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
 
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
-    from evaluatorq.dashboard.orq_scope import OrqScope
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
@@ -747,61 +745,6 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
-def _scope_settings_rows(scope: OrqScope, *, workspace: str, chosen_project: str, errors: Mapping[str, str]) -> str:
-    """Render the workspace and project choices for one credential."""
-    workspace_error = (
-        f'<span class="settings-error">{esc(errors["orq_workspace"])}</span>' if 'orq_workspace' in errors else ''
-    )
-    if scope.workspace_key:
-        workspace_control = (
-            f'<select id="orq_workspace" name="orq_workspace">'
-            f'<option value="{esc(scope.workspace_key)}" selected>{esc(scope.workspace_key)}</option></select>'
-        )
-    else:
-        workspace_control = (
-            f'<input id="orq_workspace" name="orq_workspace" type="text" value="{esc(workspace)}" '
-            'placeholder="Workspace slug from the Orq URL">'
-        )
-    rows = [
-        (
-            '<div class="config-row settings-field"><label class="config-key" for="orq_workspace">Orq workspace</label>'
-            f'<span class="config-val">{workspace_control}{workspace_error}</span></div>'
-        )
-    ]
-    if scope.workspace_id and not scope.workspace_key:
-        rows.append(
-            '<p class="settings-error" role="status">The CLI could not verify this workspace slug. '
-            "Enter it from this profile's Orq URL; it controls trace links only.</p>"
-        )
-    project_options = ['<option value="">All accessible projects</option>']
-    if chosen_project and all(project.id != chosen_project for project in scope.projects):
-        project_options.append(
-            f'<option value="{esc(chosen_project)}" selected disabled>Saved project unavailable</option>'
-        )
-    for project in scope.projects:
-        selected = ' selected' if project.id == chosen_project else ''
-        project_options.append(
-            f'<option value="{esc(project.id)}"{selected}>{esc(project.name)} ({esc(project.id[-8:])})</option>'
-        )
-    project_error = (
-        f'<span class="settings-error">{esc(errors["orq_project_id"])}</span>' if 'orq_project_id' in errors else ''
-    )
-    rows.append(
-        '<div class="config-row settings-field"><label class="config-key" for="orq_project_id">Orq project</label>'
-        f'<span class="config-val"><select id="orq_project_id" name="orq_project_id">'
-        f'{"".join(project_options)}</select>{project_error}</span></div>'
-    )
-    if scope.error:
-        if scope.error.startswith('The orq CLI could not list workspaces'):
-            rows.append(
-                '<p class="settings-scope-note" role="status">The CLI could not list workspaces for this credential. '
-                'Trace access may still work.</p>'
-            )
-        else:
-            rows.append(f'<p class="settings-error" role="status">{esc(scope.error)}</p>')
-    return ''.join(rows)
-
-
 MODEL_FIELDS = {
     'compiler_model': 'Compiler model',
     'classifier_model': 'Classifier model',
@@ -863,7 +806,6 @@ def settings_body(  # noqa: C901
     saved: bool = False,
     preview: bool = False,
     profiles: Sequence[Any] = (),
-    scope: OrqScope | None = None,
 ) -> str:
     """Render model and authentication settings above the runtime configuration."""
     if settings is None:
@@ -993,22 +935,7 @@ def settings_body(  # noqa: C901
         elif value == 'cli_profile':
             detail += f'<p class="settings-auth-note">{esc(profile_note)}</p>'
         auth_rows.append(f'<div class="settings-auth-detail" data-auth-method="{value}">{detail}</div>')
-    auth_rows.append('</div>')
-    if scope is not None:
-        workspace = setting_value('orq_workspace')
-        if method == 'environment':
-            workspace = (
-                workspace
-                or os.environ.get('ORQ_WORKSPACE', '').strip()
-                or os.environ.get('ORQ_WORKSPACE_SLUG', '').strip()
-            )
-        chosen_project = setting_value('orq_project_id') or (scope.projects[0].id if len(scope.projects) == 1 else '')
-        auth_rows.append(
-            '<div class="settings-auth-scope">'
-            f'{_scope_settings_rows(scope, workspace=workspace, chosen_project=chosen_project, errors=errors)}'
-            '</div>'
-        )
-    auth_rows.append('</div>')
+    auth_rows.extend(('</div>', '</div>'))
     models_panel = _panel(
         'Models',
         'Window, limit and parallelism are set per run on the Trace search page',
@@ -1048,9 +975,6 @@ def settings_body(  # noqa: C901
         'const inactive=panel.dataset.authMethod!==selected.value;'
         'panel.querySelectorAll("input,select,textarea").forEach(function(field){field.disabled=inactive;});'
         '});'
-        'const scopeInactive=selected.value!=="environment";'
-        'form.querySelectorAll(".settings-auth-scope input,.settings-auth-scope select").forEach(function(field){'
-        'field.disabled=scopeInactive;});'
         '}'
         'form.addEventListener("change",function(event){'
         'if(event.target.name==="orq_auth_method")syncAuthFields();});'

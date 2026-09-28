@@ -14,7 +14,6 @@ from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import apply_ui
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
-from evaluatorq.dashboard.orq_scope import OrqProject, OrqScope
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
@@ -254,66 +253,37 @@ def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> No
     assert 'Settings saved.' in response.text
 
 
-def test_project_key_scope_is_saved_and_used_for_trace_search(
-    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+def test_environment_auth_ignores_old_and_submitted_scope(
+    settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from evaluatorq.dashboard.trace_links import trace_span_url
-    from evaluatorq.trace_finder.settings import load_settings
+    from evaluatorq.trace_finder.settings import effective_settings
 
-    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
-    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
-    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
-    monkeypatch.delenv('ORQ_WORKSPACE_SLUG', raising=False)
+    save_settings(DashboardSettings.model_validate({
+        'orq_workspace': 'old-workspace',
+        'orq_project_id': 'old-project',
+        'orq_project_name': 'Old project',
+    }), settings_file)
+    monkeypatch.setenv('ORQ_WORKSPACE', 'environment-workspace')
+    fresh = TestClient(build_app(roots=[settings_file.parent]), follow_redirects=False)
 
-    page = client.get('/settings').text
-    assert '<option value="project-bauke" selected>Bauke' in page
-    response = client.post('/settings', data=csrf_data({
+    page = fresh.get('/settings').text
+    assert 'name="orq_workspace"' not in page
+    assert 'name="orq_project_id"' not in page
+    assert 'old-project' not in fresh.get('/find').text
+    assert effective_settings().orq_project_id is None
+    response = fresh.post('/settings', data=csrf_data({
         **_MODELS,
-        'orq_workspace': 'orq-research',
-        'orq_project_id': 'project-bauke',
+        'orq_workspace': 'submitted-workspace',
+        'orq_project_id': 'submitted-project',
     }))
 
     assert response.status_code == 303
     saved = load_settings(settings_file)
-    assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (
-        'orq-research', 'project-bauke', 'Bauke'
-    )
-    assert '/orq-research/traces?' in (trace_span_url('trace-1', 'span-1') or '')
-    run = finder_routes._run_request({'query': 'Frustrated customers'}, saved)
-    assert run.population.facets.project_id == 'project-bauke'
-    assert '<b>Project</b><a href="/settings">Bauke</a>' in client.get('/find').text
-
-
-def test_settings_rejects_project_outside_selected_key(
-    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
-    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
-
-    response = client.post('/settings', data=csrf_data({
-        **_MODELS,
-        'orq_workspace': 'orq-research',
-        'orq_project_id': 'project-other',
-    }))
-
-    assert response.status_code == 422
-    assert 'not available to the selected credential' in response.text
-    assert not settings_file.exists()
-
-
-def test_settings_rejects_workspace_outside_selected_key(
-    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
-    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
-
-    response = client.post('/settings', data=csrf_data({
-        **_MODELS, 'orq_workspace': 'other-workspace', 'orq_project_id': 'project-bauke',
-    }))
-
-    assert response.status_code == 422
-    assert 'does not match the selected credential' in response.text
-    assert not settings_file.exists()
+    assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (None, None, None)
+    assert '/environment-workspace/traces?' in (trace_span_url('trace-1', 'span-1') or '')
+    run = finder_routes._run_request({'query': 'Frustrated customers'}, effective_settings())
+    assert run.population.facets.project_id is None
 
 
 def test_apply_model_uses_saved_setting_then_environment(
@@ -351,7 +321,8 @@ def test_settings_page_shows_environment_authentication_without_cli_profiles(
     assert 'name="orq_auth_method" value="environment" checked' in html
     assert 'name="orq_auth_method" value="cli_oauth"' in html
     assert 'name="orq_auth_method" value="stored_api_key"' in html
-    assert 'name="orq_workspace"' in html
+    assert 'name="orq_workspace"' not in html
+    assert 'name="orq_project_id"' not in html
 
 
 def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -455,12 +426,6 @@ def test_selecting_another_profile_does_not_show_its_scope_before_save(
 ) -> None:
     save_settings(DashboardSettings.model_validate({'orq_workspace': 'orq-research', 'orq_project_id': 'project-bauke'}), settings_file)
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
-    def no_profile_discovery(profile: str | None) -> OrqScope:
-        assert profile is None
-        return OrqScope()
-
-    monkeypatch.setattr(app_module, 'discover_orq_scope', no_profile_discovery)
-
     html = client.get('/settings?profile=staging').text
 
     assert 'Profile preview. Save settings to use it.' in html
@@ -468,7 +433,7 @@ def test_selecting_another_profile_does_not_show_its_scope_before_save(
     assert 'https://staging.orq.ai' in html
     assert 'Selected profile API key' in html
     assert 'onchange="location.assign' not in html
-    assert 'const scopeInactive=selected.value!=="environment"' in html
+    assert 'settings-auth-scope' not in html
     assert 'project-staging' not in html
     assert 'project-bauke' not in html
     assert json.loads(settings_file.read_text())['orq_project_id'] == 'project-bauke'

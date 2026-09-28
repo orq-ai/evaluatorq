@@ -178,11 +178,14 @@ def test_old_profile_config_migrates_to_cli_profile_but_explicit_auth_wins() -> 
     assert explicit.orq_auth_method == 'environment'
 
 
-def test_legacy_profile_scope_is_ignored_by_effective_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize('method', ['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'])
+def test_legacy_scope_is_ignored_by_effective_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, method: str
+) -> None:
     path = tmp_path / 'settings.json'
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
     save_settings(DashboardSettings.model_validate({
-        'orq_auth_method': 'cli_profile', 'orq_profile': 'research-bauke',
+        'orq_auth_method': method, 'orq_profile': 'research-bauke',
         'orq_workspace': 'old-workspace', 'orq_project_id': 'old-project',
         'orq_project_name': 'Old project',
     }), path)

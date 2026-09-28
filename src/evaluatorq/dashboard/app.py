@@ -56,7 +56,6 @@ from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
-from evaluatorq.dashboard.orq_scope import OrqScope, discover_orq_scope
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import page
@@ -325,12 +324,6 @@ async def _settings(req: Request) -> NotStr:
                     'orq_project_name': None,
                 }
             )
-    if settings.orq_auth_method == 'environment':
-        scope = await asyncio.to_thread(discover_orq_scope, None)
-    elif settings.orq_auth_method == 'cli_profile':
-        scope = OrqScope()
-    else:
-        scope = OrqScope(error='Save this authentication method to refresh the workspace and project choices.')
     body = settings_body(
         _settings_config(
             roots,
@@ -344,7 +337,6 @@ async def _settings(req: Request) -> NotStr:
         saved=req.query_params.get('saved') == '1',
         preview='profile' in req.query_params,
         profiles=profiles,
-        scope=scope,
     )
     return NotStr(page('Settings', body, active_nav='settings'))
 
@@ -403,16 +395,6 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
             location = detail.get('loc', ())
             field = str(location[0]) if location else 'form'
             errors[field] = str(detail.get('msg', 'Invalid value'))
-    if settings is not None and settings.orq_auth_method != current.orq_auth_method:
-        settings = settings.model_copy(
-            update={
-                'orq_workspace': None if settings.orq_workspace == current.orq_workspace else settings.orq_workspace,
-                'orq_project_id': None
-                if settings.orq_project_id == current.orq_project_id
-                else settings.orq_project_id,
-                'orq_project_name': None,
-            }
-        )
     if settings is not None and settings.orq_auth_method == 'stored_api_key':
         entered_key = str(form_data.get('orq_api_key_entry', '')).strip()
         if entered_key:
@@ -448,15 +430,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
         errors.setdefault('orq_profile', 'Choose an Orq CLI API-key profile.')
     if selected_profile is not None and '*' in selected_profile.api_key:
         errors['orq_profile'] = 'The installed orq CLI masks this profile key; use Environment credentials.'
-    if settings is not None and settings.orq_auth_method == 'environment':
-        scope = await asyncio.to_thread(discover_orq_scope, None)
-    else:
-        scope = OrqScope()
     if settings is not None:
-        if settings.orq_auth_method != 'environment':
-            settings = settings.model_copy(
-                update={'orq_workspace': None, 'orq_project_id': None, 'orq_project_name': None}
-            )
+        settings = settings.model_copy(update={'orq_workspace': None, 'orq_project_id': None, 'orq_project_name': None})
         try:
             auth = resolve_dashboard_auth(settings, profiles=profiles)
         except ValueError:
@@ -474,24 +449,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
                 ),
             }
         )
-        if scope.workspace_key and settings.orq_workspace and settings.orq_workspace != scope.workspace_key:
-            errors['orq_workspace'] = 'This workspace does not match the selected credential.'
-        if settings.orq_project_id:
-            project = next((item for item in scope.projects if item.id == settings.orq_project_id), None)
-            if project is None:
-                errors['orq_project_id'] = 'This project is not available to the selected credential.'
-            else:
-                settings = settings.model_copy(update={'orq_project_name': project.name})
-        else:
-            settings = settings.model_copy(update={'orq_project_name': None})
     if settings is None or errors:
-        body = settings_body(
-            _settings_config(roots),
-            values,
-            errors=errors,
-            profiles=profiles,
-            scope=scope,
-        )
+        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     await asyncio.to_thread(save_settings, settings)
@@ -536,9 +495,9 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_api_key_ciphertext'] = current.orq_api_key_ciphertext
     values['orq_oauth_server'] = form_data.get('orq_oauth_server', current.orq_oauth_server)
     values['orq_credential_fingerprint'] = current.orq_credential_fingerprint
-    values['orq_workspace'] = form_data.get('orq_workspace', current.orq_workspace)
-    values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
-    values['orq_project_name'] = current.orq_project_name
+    values['orq_workspace'] = None
+    values['orq_project_id'] = None
+    values['orq_project_name'] = None
     values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
     return values
 

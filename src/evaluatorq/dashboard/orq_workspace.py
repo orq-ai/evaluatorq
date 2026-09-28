@@ -4,8 +4,8 @@ Deep-links now derive their host + workspace from each run's own
 ``experiment_url`` (``{host}/{workspace}/experiments/{id}``; see
 ``orq_links.parse_experiment_url``), which the web app resolves correctly for
 anyone with access — no API key, no workspace config, no ``orq`` CLI. This module
-is the fallback for runs without an ``experiment_url``: it reads a saved
-environment workspace, then the environment. Links are hidden
+is the fallback for runs without an ``experiment_url``: it reads the
+environment workspace. Links are hidden
 when no workspace slug is available.
 """
 
@@ -20,12 +20,7 @@ DEFAULT_BASE_URL = 'https://my.orq.ai'
 
 
 def resolve_slug() -> str | None:
-    """Workspace slug saved in dashboard settings, or the environment fallback."""
-    from evaluatorq.trace_finder.settings import load_settings
-
-    settings = load_settings()
-    if settings.orq_auth_method == 'environment' and settings.orq_workspace:
-        return settings.orq_workspace
+    """Workspace slug from the dashboard process environment, if available."""
     env = os.environ.get('ORQ_WORKSPACE') or os.environ.get('ORQ_WORKSPACE_SLUG')
     return env.strip() or None if env and env.strip() else None
 

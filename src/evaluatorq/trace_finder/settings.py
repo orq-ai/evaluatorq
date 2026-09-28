@@ -162,10 +162,10 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     are ignored with a warning.
     """
     values = load_settings().model_dump()
-    if values['orq_auth_method'] == 'cli_profile':
-        # Older Settings files may contain a project chosen for this profile.
-        # Profile mode now uses every project the credential can access.
-        values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
+    # Older Settings files may contain a saved workspace or project. Authentication
+    # now uses the selected credential's full scope; callers can still override
+    # these fields explicitly for a single invocation.
+    values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
     for field, env_name in (
         ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
         ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
