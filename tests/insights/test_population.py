@@ -99,6 +99,26 @@ def _reset_fake_source() -> None:
 
 
 @pytest.mark.asyncio
+async def test_targeted_reload_rejects_incomplete_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(
+        traces=(make_trace('t1'),), capture_metadata={'incomplete_reason': 'target_deadline'}
+    )
+
+    with pytest.raises(PopulationError, match='reloading Finder export traces was incomplete: target_deadline'):
+        await population_module._load_traces(
+            _orq(),
+            start=None,
+            end=None,
+            limit=2,
+            facets=FacetSelection(),
+            numeric=NumericFilters(),
+            target_trace_ids={'t1', 't2'},
+        )
+    assert FakeSource.closed
+
+
+@pytest.mark.asyncio
 async def test_filter_only_path_loads_directly_with_no_compile(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
     traces = (make_trace('t1'), make_trace('t2'))

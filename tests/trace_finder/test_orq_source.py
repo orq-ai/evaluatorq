@@ -314,6 +314,7 @@ async def test_targeted_deadline_cancels_slow_project_lookup(monkeypatch: pytest
 
     assert project_started.is_set()
     assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
     assert not traces.query_calls
 
 
@@ -355,6 +356,7 @@ async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout
 
     assert query_started.is_set()
     assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
     assert len(query_timeouts) == 1
     assert 1 <= query_timeouts[0] <= 10
 
@@ -394,6 +396,7 @@ async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest
 
     assert hydration_started.is_set()
     assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
     assert len(hydration_timeouts) == 1
     assert 1 <= hydration_timeouts[0] <= 10
 
@@ -448,7 +451,22 @@ async def test_targeted_hydration_deadline_keeps_completed_traces(monkeypatch: p
     assert slow_started.is_set()
     assert slow_cancelled.is_set()
     assert [record.trace_id for record in snapshot.traces] == ['fast']
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
     assert any('during trace hydration' in str(args[0]) for args in warnings)
+
+
+@pytest.mark.asyncio
+async def test_targeted_scan_limit_marks_snapshot_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.MAX_LIVE_TRACES', 1)
+    traces = FakeTraces({None: ([summary('other', messages=user_messages('other'))], True, 'next')})
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+    )
+
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'scan_limit'
+    assert len(traces.query_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -988,6 +1006,30 @@ def test_conversation_messages_keeps_responses_calls_beside_chat_parts() -> None
     assert messages[1]['role'] == 'assistant'
     assert messages[1]['tool_calls'][0]['function']['name'] == 'lookup_order'
     assert messages[2] == {'role': 'tool', 'tool_call_id': 'c9', 'content': 'order found'}
+
+
+def test_conversation_messages_keeps_mixed_responses_envelope_sides() -> None:
+    payload = {
+        'input': {
+            'input': [
+                {'role': 'user', 'parts': [{'type': 'text', 'text': 'find order 9'}]},
+                {'type': 'function_call_output', 'call_id': 'c9', 'output': 'order found'},
+            ]
+        },
+        'output': {
+            'output': [
+                {'role': 'assistant', 'parts': [{'type': 'text', 'text': 'found it'}]},
+                {'type': 'function_call', 'call_id': 'c10', 'name': 'send_update', 'arguments': '{}'},
+            ]
+        },
+    }
+
+    messages = _conversation_messages(payload)
+
+    assert messages[0] == {'role': 'user', 'content': 'find order 9'}
+    assert messages[1] == {'role': 'tool', 'tool_call_id': 'c9', 'content': 'order found'}
+    assert messages[2] == {'role': 'assistant', 'content': 'found it'}
+    assert messages[3]['tool_calls'][0]['function']['name'] == 'send_update'
 
 
 def namespace(**values: Any) -> SimpleNamespace:

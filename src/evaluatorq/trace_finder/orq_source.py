@@ -95,7 +95,13 @@ async def _await_target_deadline(awaitable: Awaitable[Any], deadline: float | No
 
 def _empty_target_snapshot(start: datetime, end: datetime) -> Snapshot:
     return Snapshot(
-        traces=(), capture_metadata={'source': 'orq-oql', 'start': start.isoformat(), 'end': end.isoformat()}
+        traces=(),
+        capture_metadata={
+            'source': 'orq-oql',
+            'start': start.isoformat(),
+            'end': end.isoformat(),
+            'incomplete_reason': 'target_deadline',
+        },
     )
 
 
@@ -333,6 +339,7 @@ class OrqTraceSource:
         pages_scanned = 0
         max_pages = max(20, (max_scanned + PAGE_SIZE - 1) // PAGE_SIZE * 2)
         page_token: str | None = None
+        incomplete_reason: str | None = None
 
         while not _load_target_reached(records, limit, targets):
             if target_deadline is not None and time.monotonic() >= target_deadline:
@@ -342,6 +349,7 @@ class OrqTraceSource:
                     len(records),
                     len(targets or ()),
                 )
+                incomplete_reason = 'target_deadline'
                 break
             if scanned_count >= max_scanned or pages_scanned >= max_pages:
                 logger.warning(
@@ -350,6 +358,8 @@ class OrqTraceSource:
                     pages_scanned,
                     limit,
                 )
+                if targets is not None:
+                    incomplete_reason = 'scan_limit'
                 break
             pages_scanned += 1
             if page_token is not None:
@@ -397,6 +407,7 @@ class OrqTraceSource:
                     'targeted trace reload reached its {} second deadline during OQL query',
                     TARGET_RELOAD_PAGE_BUDGET_SECONDS,
                 )
+                incomplete_reason = 'target_deadline'
                 break
             finally:
                 if marker is not None:
@@ -427,6 +438,7 @@ class OrqTraceSource:
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
             if hydration_timed_out:
+                incomplete_reason = 'target_deadline'
                 break
             if targets is None and len(records) >= limit:
                 break
@@ -459,13 +471,12 @@ class OrqTraceSource:
         if dropped_count:
             logger.warning('dropped {} trace(s) because messages or timestamps were unusable', dropped_count)
         records.sort(key=lambda record: (record.timestamp, record.trace_id), reverse=True)
+        capture_metadata = {'source': 'orq-oql', 'start': start.isoformat(), 'end': end.isoformat()}
+        if incomplete_reason is not None:
+            capture_metadata['incomplete_reason'] = incomplete_reason
         return Snapshot(
             traces=tuple(records[:limit]),
-            capture_metadata={
-                'source': 'orq-oql',
-                'start': start.isoformat(),
-                'end': end.isoformat(),
-            },
+            capture_metadata=capture_metadata,
         )
 
     async def _hydrate_page(
@@ -790,7 +801,7 @@ def _normalised_messages(
     value: Any, *, default_role: Literal['user', 'assistant'] | None = None
 ) -> list[dict[str, Any]]:
     message_format = detect_message_format(value)
-    mixed_responses = _mixed_chat_parts_and_responses(value)
+    mixed_responses = _mixed_chat_parts_and_responses(value, default_role=default_role)
     if mixed_responses is not None:
         parsed, _ = parse_messages(mixed_responses, hinted='responses', default_role=default_role or 'user')
         return [message.to_chat_completion() for message in parsed]
@@ -816,7 +827,9 @@ def _normalised_messages(
     return messages
 
 
-def _mixed_chat_parts_and_responses(value: Any) -> list[dict[str, Any]] | None:
+def _mixed_chat_parts_and_responses(
+    value: Any, *, default_role: Literal['user', 'assistant'] | None
+) -> list[dict[str, Any]] | None:
     """Bridge text-only chat parts when a payload also contains Responses items."""
     decoded = _plain(value)
     if isinstance(decoded, str):
@@ -825,7 +838,8 @@ def _mixed_chat_parts_and_responses(value: Any) -> list[dict[str, Any]] | None:
         except json.JSONDecodeError:
             return None
     if isinstance(decoded, Mapping):
-        decoded = decoded.get('messages')
+        sides = ('output', 'input') if default_role == 'assistant' else ('input', 'output')
+        decoded = next((decoded[key] for key in ('messages', *sides) if isinstance(decoded.get(key), list)), None)
     if not isinstance(decoded, list) or not _has_chat_text_parts(decoded):
         return None
     if not any(isinstance(item, Mapping) and is_responses_item(dict(item)) for item in decoded):

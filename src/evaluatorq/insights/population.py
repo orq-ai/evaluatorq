@@ -116,6 +116,10 @@ async def _load_traces(
         raise PopulationError(f'loading the trace population failed: {error}') from error
     finally:
         source.close()
+    if target_trace_ids is not None and snapshot.capture_metadata.get('incomplete_reason'):
+        raise PopulationError(
+            f'reloading Finder export traces was incomplete: {snapshot.capture_metadata["incomplete_reason"]}'
+        )
     return snapshot.traces
 
 
