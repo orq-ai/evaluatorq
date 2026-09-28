@@ -42,6 +42,7 @@ from evaluatorq.backends.container import (
     build_exec_argv,
     build_run_argv,
     forwarded_env_names,
+    host_ids,
     isolation_breaking_flags,
     register,
     release_containers,
@@ -822,9 +823,10 @@ class CodingAgentTarget(AgentTarget):
         register(name, LiveContainer(binary=opts.binary, context=opts.context, beat=beat))
         self._owned.append(name)
         self._container_name = name
+        uid, gid = host_ids()
         try:
             started = await self._docker(
-                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=os.getuid(), gid=os.getgid())
+                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=uid, gid=gid)
             )
         except BaseException:
             await self._drop_container_shielded()
@@ -929,7 +931,7 @@ class CodingAgentTarget(AgentTarget):
         self._require_creator_process('close')
         proc = self._proc
         if proc is not None:
-            kill_group(proc)
+            await kill_group(proc)
             self._proc = None
         if self._container is not None:
             await self._drop_container_shielded()
@@ -1097,7 +1099,7 @@ class CodingAgentTarget(AgentTarget):
             ) from exc
         self._proc = proc
         if proc.stdout is None or proc.stderr is None:
-            kill_group(proc)
+            await kill_group(proc)
             self._proc = None
             raise RuntimeError('coding-agent process was created without stdout and stderr pipes')
         activity = [asyncio.get_running_loop().time()]
@@ -1130,7 +1132,7 @@ class CodingAgentTarget(AgentTarget):
             log_kill(self._agent, 'cancelled', 'the caller cancelled the turn')
             raise
         finally:
-            kill_group(proc, force=not finished)
+            await kill_group(proc, force=not finished)
             self._proc = None
             if stdin_task is not None:
                 stdin_task.cancel()
@@ -1269,8 +1271,51 @@ def parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     return events
 
 
-def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
+def taskkill_tree(pid: int) -> bool:
+    """End a Windows process tree with taskkill /T. Return whether it succeeded, logging why when it did not."""
+    try:
+        result = subprocess.run(
+            ['taskkill', '/T', '/F', '/PID', str(pid)], capture_output=True, text=True, check=False, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning(
+            f'CodingAgentTarget: taskkill could not end process tree {pid}, killing the agent process only: {exc}'
+        )
+        return False
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:STDERR_EXCERPT_CHARS]
+        logger.warning(
+            f'CodingAgentTarget: taskkill exited {result.returncode} for process tree {pid}, '
+            f'killing the agent process only; its children may still be running: {detail}'
+        )
+        return False
+    return True
+
+
+def kill_direct(proc: asyncio.subprocess.Process) -> None:
+    """Fallback when taskkill fails: end the agent process itself. Its children are out of reach."""
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+
+
+async def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
     if proc.returncode is not None and not force:
+        return
+    if not hasattr(os, 'killpg'):
+        # Windows has no process groups, so this is best effort: taskkill /T ends the tree it can still
+        # reach from the pid. Once the CLI has exited, its children are unreachable and the pid may be reused.
+        if proc.returncode is None:
+            operation = asyncio.ensure_future(asyncio.to_thread(taskkill_tree, proc.pid))
+            try:
+                tree_killed = await asyncio.shield(operation)
+            except asyncio.CancelledError:
+                # `to_thread` cannot stop taskkill. Wait for its bounded result so cleanup runs after the kill.
+                await finish_task_uninterruptibly(operation)
+                if operation.cancelled() or operation.exception() is not None or not operation.result():
+                    kill_direct(proc)
+                raise
+            if not tree_killed:
+                kill_direct(proc)
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)
