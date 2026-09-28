@@ -790,3 +790,90 @@ def test_a_criteria_shape_the_endpoint_would_reject_is_refused_locally(kwargs: d
     """Rejected before the call is paid for, not after a 400."""
     with pytest.raises(ValidationError):
         ClassifyQuestion(instructions='q', state='s', **kwargs)  # pyright: ignore[reportArgumentType]
+
+
+# ---------------------------------------------------------------------------
+# Capability is additive: the caller's question picks the endpoint (#245)
+# ---------------------------------------------------------------------------
+
+
+def _chat_reply() -> Any:
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"value": true, "explanation": "ok"}'))],
+        usage={'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_chat_model_that_gains_classify_stays_on_the_prompt_path(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The router grants classify to models that also serve chat.
+
+    A caller that never built a classify question must be unaffected by that. This is the
+    regression that stopped every red-team judge scoring when `openai/gpt-5.6-luna` picked
+    the flag up, and it fails on the pre-fix gate.
+    """
+
+    async def catalogue(client=None):  # noqa: ANN001, ARG001
+        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)}  # noqa: FBT003
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
+    model_catalogue.reset_catalogue_cache()
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    handler_id = logger.add(caplog.handler, format='{message}', level='WARNING')
+    try:
+        outcome = await _judge(client, None, model='gpt-5-mini', api='chat_completions')
+    finally:
+        logger.remove(handler_id)
+
+    assert outcome.error_kind is None
+    assert outcome.endpoint == 'chat'
+    assert outcome.payload is not None
+    assert outcome.payload.value is True
+    client.post.assert_not_called()
+    assert 'built no classify question' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_classify_question_announces_itself(caplog: pytest.LogCaptureFixture):
+    """A question the model cannot be asked is dropped, and the degrade says so."""
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    handler_id = logger.add(caplog.handler, format='{message}', level='WARNING')
+    try:
+        outcome = await _judge(client, _noul_question(), model='gpt-5-mini', api='chat_completions')
+    finally:
+        logger.remove(handler_id)
+
+    assert outcome.endpoint == 'chat'
+    assert 'does not serve the classify endpoint' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_classify_only_model_fails_before_the_call_even_off_the_router():
+    """Routing does not change what the model can serve.
+
+    The classify endpoint is the router's, so an injected non-Orq client cannot reach it —
+    but prompting a classify-only model still buys a rejection rather than a verdict, so the
+    guard must not hang off the routing check.
+    """
+    client = MagicMock()
+    client.base_url = 'https://api.openai.com/v1'
+    client.post = AsyncMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
+
+    outcome = await _judge(client, None)
+
+    assert outcome.error_kind is JudgeError.UNKNOWN
+    assert outcome.error_message is not None
+    assert JEV in outcome.error_message
+    assert outcome.endpoint is None
+    client.post.assert_not_called()
+    client.chat.completions.create.assert_not_called()
+    client.chat.completions.parse.assert_not_called()
