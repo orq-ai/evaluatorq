@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from loguru import logger
 
 from evaluatorq.common.trace_input import detect_message_format, parse_messages
+from evaluatorq.openresponses.otel_messages import is_responses_item
 
 from .facets import _project_names, project_labels
 from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
@@ -789,6 +790,10 @@ def _normalised_messages(
     value: Any, *, default_role: Literal['user', 'assistant'] | None = None
 ) -> list[dict[str, Any]]:
     message_format = detect_message_format(value)
+    mixed_responses = _mixed_chat_parts_and_responses(value)
+    if mixed_responses is not None:
+        parsed, _ = parse_messages(mixed_responses, hinted='responses', default_role=default_role or 'user')
+        return [message.to_chat_completion() for message in parsed]
     if message_format == 'chat_completions' or _has_chat_text_parts(value):
         messages = _message_list(value, default_role=default_role)
         # Chat shaped payloads can still carry OTel-style ``parts`` instead of
@@ -809,6 +814,39 @@ def _normalised_messages(
     if message_format == 'otel_genai':
         _attach_otel_tool_result_metadata(messages, value)
     return messages
+
+
+def _mixed_chat_parts_and_responses(value: Any) -> list[dict[str, Any]] | None:
+    """Bridge text-only chat parts when a payload also contains Responses items."""
+    decoded = _plain(value)
+    if isinstance(decoded, str):
+        try:
+            decoded = json.loads(decoded)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(decoded, Mapping):
+        decoded = decoded.get('messages')
+    if not isinstance(decoded, list) or not _has_chat_text_parts(decoded):
+        return None
+    if not any(isinstance(item, Mapping) and is_responses_item(dict(item)) for item in decoded):
+        return None
+
+    prepared: list[dict[str, Any]] = []
+    for item in decoded:
+        if not isinstance(item, Mapping):
+            continue
+        message = dict(item)
+        parts = message.get('parts')
+        if message.get('content') is None and isinstance(parts, list):
+            text: list[str] = [
+                part_text
+                for part in parts
+                if isinstance(part, Mapping) and isinstance(part_text := part.get('text'), str)
+            ]
+            if text:
+                message['content'] = ''.join(text)
+        prepared.append(message)
+    return prepared
 
 
 def _attach_otel_tool_result_metadata(messages: list[dict[str, Any]], value: Any) -> None:

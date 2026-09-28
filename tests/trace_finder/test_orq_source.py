@@ -973,6 +973,23 @@ def test_conversation_messages_normalises_responses_items() -> None:
     assert any(m['role'] == 'tool' and 'order not found' in m['content'] for m in messages)
 
 
+def test_conversation_messages_keeps_responses_calls_beside_chat_parts() -> None:
+    payload = {
+        'input': [
+            {'role': 'user', 'parts': [{'type': 'text', 'text': 'find order 9'}]},
+            {'type': 'function_call', 'call_id': 'c9', 'name': 'lookup_order', 'arguments': '{"id": 9}'},
+            {'type': 'function_call_output', 'call_id': 'c9', 'output': 'order found'},
+        ]
+    }
+
+    messages = _conversation_messages(payload)
+
+    assert messages[0] == {'role': 'user', 'content': 'find order 9'}
+    assert messages[1]['role'] == 'assistant'
+    assert messages[1]['tool_calls'][0]['function']['name'] == 'lookup_order'
+    assert messages[2] == {'role': 'tool', 'tool_call_id': 'c9', 'content': 'order found'}
+
+
 def namespace(**values: Any) -> SimpleNamespace:
     return SimpleNamespace(**values)
 
