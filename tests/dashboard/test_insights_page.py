@@ -187,7 +187,7 @@ def test_insights_progress_renders_stage_completed_and_total() -> None:
         updated_at=now,
     )
 
-    assert '<small>running 40/100</small>' in progress(manifest)
+    assert '<small>40/100</small>' in progress(manifest)
 
 
 @pytest.fixture

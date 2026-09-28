@@ -145,6 +145,24 @@ def progress(manifest: RunManifest | None) -> str:
     items = []
     for name, label, status in rows:
         record = records.get(name)
+        short_label = (
+            name.split(':', 1)[1].title()
+            if name.startswith('dimension:')
+            else {
+                'Load local traces': 'Load local',
+                'Load Finder matches': 'Load Finder',
+                'Find matching traces': 'Find matches',
+                'Load recent traces': 'Load recent',
+                'Classify traces': 'Classify',
+                'Match traces': 'Match',
+                'Match and classify traces': 'Match + classify',
+                'Prepare traces': 'Prepare',
+                'Summarize traces': 'Summarize',
+                'Build priority matrix': 'Priority',
+                'Check priority matrix': 'Priority',
+                'Save run': 'Save',
+            }.get(label, label)
+        )
         flag = ''
         if status == 'running':
             elapsed = _elapsed(record.started_at, None) if record is not None else ''
@@ -152,14 +170,15 @@ def progress(manifest: RunManifest | None) -> str:
         elif status == 'error':
             flag = '<span class="insights-stage-flag">Failed</span>'
         stage_count = (
-            f'<small>{esc(status)} {record.completed}/{record.total}</small>'
+            f'<small>{record.completed}/{record.total}</small>'
             if record is not None and record.completed is not None and record.total is not None
             else ''
         )
         items.append(
-            f'<li class="insights-stage {esc(status)}" title="{esc(label)}: {esc(status)}">{flag}{stage_count}'
+            f'<li class="insights-stage {esc(status)}" title="{esc(label)}: {esc(status)}">{flag}'
             f'<span class="insights-stage-mark" aria-hidden="true"></span>'
-            f'<span class="insights-stage-label">{esc(label)}</span><span class="sr-only">{esc(status)}</span></li>'
+            f'<span class="insights-stage-label">{esc(short_label)}</span>{stage_count}'
+            f'<span class="sr-only">{esc(status)}</span></li>'
         )
     done = sum(status == 'completed' for _, _, status in rows)
     current = _stage_name(manifest) if manifest.status == 'running' else manifest.status.value.title()
