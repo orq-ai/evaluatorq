@@ -207,8 +207,9 @@
       const bg = payload.background_color;
       const axis = function (title) { return { title: { text: title }, showgrid: true, gridcolor: sand,
         zeroline: false, showbackground: true, backgroundcolor: bg, showticklabels: true }; };
-      const layout = { margin: { l: 0, r: 0, t: 5, b: 0 }, showlegend: true, uirevision: 'insights-map',
-        legend: { bgcolor: 'rgba(255,255,255,.8)', font: { size: 11 } },
+      const layout = { margin: { l: 0, r: 0, t: 12, b: 0 }, showlegend: true, uirevision: 'insights-map',
+        legend: { orientation: 'h', x: 0, xanchor: 'left', y: 1, yanchor: 'bottom',
+          bgcolor: 'rgba(255,255,255,.8)', font: { size: 11 } },
         scene: { xaxis: axis('UMAP 1'), yaxis: axis('UMAP 2'), zaxis: axis('UMAP 3'),
           bgcolor: '#fff', aspectmode: 'cube', dragmode: 'orbit' }, paper_bgcolor: '#fff' };
       const priorRender = el.__insightsMapRender || Promise.resolve();
