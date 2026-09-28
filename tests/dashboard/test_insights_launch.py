@@ -583,6 +583,111 @@ def test_finder_export_directory_replacement_during_open_is_rejected(
         InsightsLaunchSpec(source='finder', finder_export='approved.json')
 
 
+def test_windows_finder_export_reparse_swap_is_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import ctypes
+    import types
+
+    from evaluatorq.dashboard import insights_launch
+
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    approved = exports / 'approved.json'
+    approved.write_text('{}', encoding='utf-8')
+    calls: list[str] = []
+
+    def create_file(*_args: object) -> int:
+        calls.append('open-without-following-reparse')
+        return 123
+
+    def get_info(_handle: object, _kind: int, info_pointer: object, _size: int) -> int:
+        info = ctypes.cast(info_pointer, ctypes.POINTER(type_info)).contents
+        info.attributes = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT on the opened handle.
+        return 1
+
+    class type_info(ctypes.Structure):
+        _fields_ = [('attributes', ctypes.c_uint32), ('reparse_tag', ctypes.c_uint32)]
+
+    def unused(*_args: object) -> int:
+        raise AssertionError('A reparse point must be rejected before resolving or reading its target.')
+
+    api = types.SimpleNamespace(
+        CreateFileW=create_file,
+        GetFileInformationByHandleEx=get_info,
+        GetFinalPathNameByHandleW=unused,
+        CloseHandle=lambda _handle: 1,
+    )
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: api, raising=False)
+    monkeypatch.setattr(insights_launch, '_windows_directory_identity', lambda _root: (1, 2, 3))
+    monkeypatch.setitem(__import__('sys').modules, 'msvcrt', types.SimpleNamespace())
+
+    with pytest.raises(OSError, match='reparse point'):
+        insights_launch._open_windows_approved_finder_export(exports, approved)
+    assert calls == ['open-without-following-reparse']
+
+
+def test_windows_finder_export_directory_swap_during_create_file_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import ctypes
+    import types
+
+    from evaluatorq.dashboard import insights_launch
+
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    approved = exports / 'approved.json'
+    approved.write_text('{}', encoding='utf-8')
+    replacement = tmp_path / 'replacement'
+    replacement.mkdir()
+    (replacement / approved.name).write_text('outside', encoding='utf-8')
+    root_identities: list[tuple[int, int, int]] = []
+
+    def directory_identity(root: Path) -> tuple[int, int, int]:
+        info = root.stat()
+        identity = (info.st_dev, info.st_ino, 0)
+        root_identities.append(identity)
+        return identity
+
+    monkeypatch.setattr(insights_launch, '_windows_directory_identity', directory_identity)
+
+    def create_file(path: str, *_args: object) -> int:
+        if path == str(approved):
+            exports.rename(tmp_path / 'original-exports')
+            replacement.rename(exports)
+        return 123
+
+    def get_info(_handle: object, _kind: int, info_pointer: object, _size: int) -> int:
+        info = ctypes.cast(info_pointer, ctypes.POINTER(type_info)).contents
+        info.attributes = 0
+        return 1
+
+    class type_info(ctypes.Structure):
+        _fields_ = [('attributes', ctypes.c_uint32), ('reparse_tag', ctypes.c_uint32)]
+
+    def get_final_path(_handle: object, buffer: object, _size: int, _flags: int) -> int:
+        value = ctypes.create_unicode_buffer(str(approved))
+        ctypes.memmove(buffer, value, ctypes.sizeof(value))
+        return len(value.value)
+
+    api = types.SimpleNamespace(
+        CreateFileW=create_file,
+        GetFileInformationByHandleEx=get_info,
+        GetFinalPathNameByHandleW=get_final_path,
+        CloseHandle=lambda _handle: 1,
+    )
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: api, raising=False)
+    monkeypatch.setitem(
+        __import__('sys').modules,
+        'msvcrt',
+        types.SimpleNamespace(open_osfhandle=lambda *_args: 456),
+    )
+
+    with pytest.raises(OSError, match='directory changed while opening'):
+        insights_launch._open_windows_approved_finder_export(exports, approved)
+    assert len(root_identities) == 2
+    assert root_identities[0] != root_identities[1]
+
+
 def test_finder_export_descriptor_closes_when_fdopen_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import os
 

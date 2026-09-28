@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from loguru import logger
@@ -462,10 +462,159 @@ def get_finder_exports_dir() -> Path:
     return get_store_dir('finder-exports')
 
 
+def _normalized_windows_path(value: str) -> str:
+    if value.startswith('\\\\?\\UNC\\'):
+        value = '\\\\' + value[8:]
+    elif value.startswith('\\\\?\\'):
+        value = value[4:]
+    return str(PureWindowsPath(value)).casefold()
+
+
+def _windows_directory_identity(root: Path) -> tuple[int, int, int]:
+    """Return the file ID of the approved Windows directory, rejecting reparse paths."""
+    try:
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        create_file.restype = ctypes.c_void_p
+        get_info = kernel32.GetFileInformationByHandle
+        get_info.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        get_info.restype = ctypes.c_int
+        get_final_path = kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
+        get_final_path.restype = ctypes.c_uint32
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        close_handle.restype = ctypes.c_int
+    except (AttributeError, OSError) as exc:
+        raise OSError('Safe Finder export directory checks are unavailable on Windows.') from exc
+
+    class FileTime(ctypes.Structure):
+        _fields_ = [('low', ctypes.c_uint32), ('high', ctypes.c_uint32)]
+
+    class ByHandleFileInfo(ctypes.Structure):
+        _fields_ = [
+            ('attributes', ctypes.c_uint32),
+            ('creation_time', FileTime),
+            ('access_time', FileTime),
+            ('write_time', FileTime),
+            ('volume_serial', ctypes.c_uint32),
+            ('size_high', ctypes.c_uint32),
+            ('size_low', ctypes.c_uint32),
+            ('links', ctypes.c_uint32),
+            ('index_high', ctypes.c_uint32),
+            ('index_low', ctypes.c_uint32),
+        ]
+
+    invalid_handle = ctypes.c_void_p(-1).value
+    handle = create_file(
+        str(root), 0x80, 0x7, None, 3, 0x02000000 | 0x00200000, None
+    )  # FILE_READ_ATTRIBUTES, shared read/write/delete, backup semantics, no reparse following.
+    if handle == invalid_handle or handle is None:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        info = ByHandleFileInfo()
+        if not get_info(handle, ctypes.byref(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not info.attributes & 0x10 or info.attributes & 0x400:
+            raise OSError('Finder export directory must be a directory without reparse points.')
+
+        path_buffer = ctypes.create_unicode_buffer(32768)
+        length = get_final_path(handle, path_buffer, len(path_buffer), 0)
+        if not length or length >= len(path_buffer):
+            raise OSError('Could not verify the final path of the Finder export directory.')
+        if _normalized_windows_path(path_buffer.value) != _normalized_windows_path(str(root)):
+            raise OSError('Finder export directory handle resolved outside the approved path.')
+        return info.volume_serial, info.index_high, info.index_low
+    finally:
+        close_handle(handle)
+
+
+def _open_windows_approved_finder_export(root: Path, path: Path) -> tuple[int, tuple[int, int, int]]:
+    """Open a Windows export without following reparse points and verify its final path."""
+    try:
+        import msvcrt
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        create_file = kernel32.CreateFileW
+        create_file.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        create_file.restype = ctypes.c_void_p
+        get_info = kernel32.GetFileInformationByHandleEx
+        get_info.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        get_info.restype = ctypes.c_int
+        get_final_path = kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint32, ctypes.c_uint32]
+        get_final_path.restype = ctypes.c_uint32
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        close_handle.restype = ctypes.c_int
+    except (AttributeError, ImportError, OSError) as exc:
+        raise OSError('Safe Finder export opening is unavailable on Windows.') from exc
+
+    invalid_handle = ctypes.c_void_p(-1).value
+    open_existing = 3
+    share_read = 0x1
+    flag_open_reparse_point = 0x00200000
+    file_attribute_tag_info = 9
+    file_attribute_directory = 0x10
+    file_attribute_reparse_point = 0x400
+    directory_identity = _windows_directory_identity(root)
+
+    class FileAttributeTagInfo(ctypes.Structure):
+        _fields_ = [('attributes', ctypes.c_uint32), ('reparse_tag', ctypes.c_uint32)]
+
+    handle = create_file(str(path), 0x80000000, share_read, None, open_existing, flag_open_reparse_point, None)
+    if handle == invalid_handle or handle is None:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        info = FileAttributeTagInfo()
+        if not get_info(handle, file_attribute_tag_info, ctypes.byref(info), ctypes.sizeof(info)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if info.attributes & (file_attribute_directory | file_attribute_reparse_point):
+            raise OSError('Finder export must be a regular file, not a directory or reparse point.')
+
+        path_buffer = ctypes.create_unicode_buffer(32768)
+        length = get_final_path(handle, path_buffer, len(path_buffer), 0)
+        if not length or length >= len(path_buffer):
+            raise OSError('Could not verify the final path of the Finder export.')
+
+        final_path = _normalized_windows_path(path_buffer.value)
+        approved_root = _normalized_windows_path(str(root))
+        if str(PureWindowsPath(final_path).parent) != approved_root:
+            raise OSError('Finder export handle resolved outside the approved directory.')
+
+        if _windows_directory_identity(root) != directory_identity:
+            raise OSError('Finder export directory changed while opening the file.')
+
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
+        handle = None
+        return descriptor, directory_identity
+    finally:
+        if handle is not None:
+            close_handle(handle)
+
+
 def _read_approved_finder_export(root: Path, path: Path) -> bytes:
     """Read a bounded export from the opened approved directory and file descriptors."""
     directory_fd: int | None = None
     directory_before: os.stat_result | None = None
+    windows_directory_identity: tuple[int, int, int] | None = None
     try:
         if os.name != 'nt':
             if not hasattr(os, 'O_DIRECTORY') or not hasattr(os, 'O_NOFOLLOW'):
@@ -480,12 +629,7 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
                 raise ValueError('Finder export directory has unsafe ownership or permissions.')
             descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
         else:
-            # Windows has no openat-style dir_fd here; verify the opened file
-            # against the current directory entry before reading its bytes.
-            directory_before = root.lstat()
-            if not stat.S_ISDIR(directory_before.st_mode):
-                raise ValueError('Finder export directory must be a regular directory.')
-            descriptor = os.open(path, os.O_RDONLY)
+            descriptor, windows_directory_identity = _open_windows_approved_finder_export(root, path)
         try:
             export_file = os.fdopen(descriptor, 'rb')
         except OSError:
@@ -493,16 +637,7 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
             raise
         with export_file:
             opened = os.fstat(export_file.fileno())
-            current = path.lstat()
-            if os.name == 'nt':
-                if directory_before is None:
-                    raise ValueError('Finder export directory was not validated before opening the file.')
-                directory_after = root.lstat()
-                if not stat.S_ISDIR(directory_after.st_mode) or (directory_before.st_dev, directory_before.st_ino) != (
-                    directory_after.st_dev,
-                    directory_after.st_ino,
-                ):
-                    raise ValueError('Finder export directory changed while opening the file.')
+            current = path.lstat() if os.name != 'nt' else opened
             if (
                 not stat.S_ISREG(opened.st_mode)
                 or not stat.S_ISREG(current.st_mode)
@@ -510,7 +645,12 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
                 or (os.name != 'nt' and (opened.st_uid != os.getuid() or stat.S_IMODE(opened.st_mode) & 0o022))
             ):
                 raise ValueError('Finder export must be a safe regular file in the approved directory.')
-            return export_file.read(MAX_FINDER_EXPORT_BYTES + 1)
+            contents = export_file.read(MAX_FINDER_EXPORT_BYTES + 1)
+            if os.name == 'nt' and (
+                windows_directory_identity is None or _windows_directory_identity(root) != windows_directory_identity
+            ):
+                raise ValueError('Finder export directory changed while reading the file.')
+            return contents
     finally:
         if directory_fd is not None:
             os.close(directory_fd)
