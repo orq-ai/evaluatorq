@@ -102,17 +102,17 @@ def _body(
 ) -> str:
     status = shared.status_indicator(snapshot)
     controls = _controls(snapshot, settings, catalogue, pending=pending)
-    if snapshot.state == 'awaiting_review' and snapshot.compiled is not None:
+    if snapshot.state == 'awaiting_review' and snapshot.dimensions is not None:
         return (
             f'{status}{controls}<div class="finder-review"><span>⏸</span><span><b>Review the plan before running per-trace classification.</b> Edit the task, criteria or filters, then start.</span></div>'
-            f'{shared.task_panel(snapshot.compiled, editable=True, open_=True, request=snapshot.request)}'
+            f'{shared.task_panel(snapshot.dimensions, editable=True, open_=True, request=snapshot.request)}'
             f'{shared.filter_output_panel(snapshot)}'
         )
     result = f'{status}{controls}{shared.field(snapshot, api_available=api_available, export_url="/find/export.json?surface=search")}'
     if snapshot.state not in {'idle', 'awaiting_review'}:
         result += shared.table(snapshot)
-        if snapshot.compiled:
-            result += shared.task_panel(snapshot.compiled, editable=False) + shared.filter_output_panel(snapshot)
+        if snapshot.dimensions is not None:
+            result += shared.task_panel(snapshot.dimensions, editable=False) + shared.filter_output_panel(snapshot)
     return result
 
 

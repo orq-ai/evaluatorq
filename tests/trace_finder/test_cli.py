@@ -21,6 +21,7 @@ from evaluatorq.common.judge import ClassifyQuestion
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.trace_finder import (
     CompiledQuery,
+    DimensionAnswer,
     RunSnapshot,
     TraceClassification,
     TraceRecord,
@@ -79,6 +80,7 @@ class FakeStore:
         self.request = request
         trace = _trace()
         compiled = CompiledQuery(
+            name='Refund',
             task=ClassifyQuestion(
                 kind='choice',
                 instructions='Does the trace mention a refund?',
@@ -90,15 +92,14 @@ class FakeStore:
         result = TraceClassification(
             trace_id=trace.trace_id,
             span_id=trace.span_id,
-            value='yes',
-            confidence=0.94,
+            answers=(DimensionAnswer(value='yes', confidence=0.94, matched=True),),
             matched=True,
             raw_result={'value': 'yes'},
         )
         return RunSnapshot(
             state='completed',
             request=request,
-            compiled=compiled,
+            dimensions=(compiled,),
             trace_ids=(trace.trace_id,),
             traces=(trace,),
             results={trace.trace_id: result},
@@ -241,7 +242,7 @@ def test_find_positive_only_filters_json_and_keeps_summary(monkeypatch: Any, tmp
                     negative.trace_id: TraceClassification(
                         trace_id=negative.trace_id,
                         span_id=negative.span_id,
-                        value='no',
+                        answers=(DimensionAnswer(value='no', matched=False),),
                         matched=False,
                         raw_result={'value': 'no'},
                     ),

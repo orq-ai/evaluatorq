@@ -19,7 +19,17 @@ from evaluatorq.common import judge as judge_mod
 from evaluatorq.common import llm_call
 from evaluatorq.common import model_catalogue
 from evaluatorq.common import tracing
-from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, JudgeError, run_classify, run_judge
+from evaluatorq.common.judge import (
+    ClassifyOutcome,
+    ClassifyQuestion,
+    ClassifyRequest,
+    EvaluatorResponsePayload,
+    JudgeError,
+    JudgeOutcome,
+    run_classify,
+    run_classify_judges,
+    run_judge,
+)
 from evaluatorq.contracts import LLMCallConfig
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
@@ -790,3 +800,100 @@ def test_a_criteria_shape_the_endpoint_would_reject_is_refused_locally(kwargs: d
     """Rejected before the call is paid for, not after a 400."""
     with pytest.raises(ValidationError):
         ClassifyQuestion(instructions='q', state='s', **kwargs)  # pyright: ignore[reportArgumentType]
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_answers_several_questions_in_one_classify_call() -> None:
+    """A classify-capable model answers every dimension in one round trip, keyed by question."""
+    client = _client({
+        'answers': {
+            'tone': {'type': 'choice', 'choice': 'neutral'},
+            'risk': {'type': 'noul', 'noul': 0.9},
+        },
+        'usage': _usage(),
+        'model': 'jev-latest',
+    })
+    questions = {
+        'tone': ClassifyQuestion(
+            kind='choice', instructions='Classify the tone.', criteria={'neutral': 'plain'}, state='ignored'
+        ),
+        'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state={'reply': 'hello'}, questions=questions
+    )
+
+    assert client.post.await_count == 1
+    assert set(outcomes) == {'tone', 'risk'}
+    assert outcomes['tone'].payload is not None
+    assert outcomes['tone'].payload.value == 'neutral'
+    assert outcomes['tone'].endpoint == 'classify'
+    assert outcomes['risk'].payload is not None
+    assert outcomes['risk'].payload.value is True
+    assert outcomes['risk'].endpoint == 'classify'
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_empty_questions_returns_immediately() -> None:
+    client = _client()
+
+    outcomes = await run_classify_judges(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='x', questions={})
+
+    assert outcomes == {}
+    client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question_for_a_non_classify_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model that cannot serve /classify gets one `run_judge` call per question, run concurrently."""
+    calls: list[dict[str, Any]] = []
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        calls.append(kwargs)
+        question = kwargs['classify']
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=f'answered-{question.instructions}', explanation='ok'),
+            endpoint='chat',
+        )
+
+    monkeypatch.setattr(judge_mod, 'run_judge', fake_run_judge)
+    questions = {
+        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+    }
+    client = _client()
+
+    outcomes = await run_classify_judges(
+        client=client, model='gpt-5-mini', cfg=LLMCallConfig(model='gpt-5-mini'), state='reply', questions=questions
+    )
+
+    assert len(calls) == 2
+    client.post.assert_not_called()
+    assert outcomes['tone'].payload is not None
+    assert outcomes['tone'].payload.value == 'answered-tone?'
+    assert outcomes['risk'].payload is not None
+    assert outcomes['risk'].payload.value == 'answered-risk?'
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_maps_an_api_error_to_every_question_key() -> None:
+    """A failed classify call is a failure for every dimension it was asked about, not just one."""
+    client = _client(APITimeoutError(request=MagicMock()))
+    questions = {
+        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV, retry_count=0), state='reply', questions=questions
+    )
+
+    assert client.post.await_count == 1
+    assert set(outcomes) == {'tone', 'risk'}
+    for outcome in outcomes.values():
+        assert outcome.error_kind is JudgeError.TIMEOUT
+        assert outcome.endpoint == 'classify'
+        assert outcome.payload is None

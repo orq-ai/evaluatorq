@@ -7,7 +7,7 @@ import tempfile
 from contextlib import suppress
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -35,6 +35,7 @@ class DashboardSettings(BaseModel):
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
+    ask_ai_mode: Literal['immediate', 'review'] = 'immediate'
     orq_profile: str | None = None
     orq_profile_host: str | None = None
     orq_credential_fingerprint: str | None = None

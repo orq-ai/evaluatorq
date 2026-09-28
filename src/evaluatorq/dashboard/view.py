@@ -837,6 +837,15 @@ def settings_body(
             f' {input_attrs} '
             f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
         )
+    mode = setting_value('ask_ai_mode') or 'immediate'
+    mode_options = ''.join(
+        f'<option value="{value}"{" selected" if value == mode else ""}>{label}</option>'
+        for value, label in (('immediate', 'Just proceed'), ('review', 'Review first'))
+    )
+    field_rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
+        f'<span class="config-val"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></div>'
+    )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     if preview:
         saved_html += (

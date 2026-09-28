@@ -167,7 +167,7 @@ def resolve_columns(keys: Sequence[str] | None) -> tuple[Column, ...]:
 def _match_value(result: TraceClassification | None) -> object:
     if result is None or result.error:
         return None
-    return (result.matched, str(result.value))
+    return (result.matched, tuple(str(answer.value) for answer in result.answers))
 
 
 def sort_rows(

@@ -145,15 +145,27 @@ def test_table_renders_one_row_per_page_row_with_drawer_links() -> None:
 
 
 def test_table_shows_escaped_ai_match_text_and_aligns_numeric_columns() -> None:
-    from evaluatorq.trace_finder import RunSnapshot, TraceClassification
+    from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
+    from evaluatorq.common.judge import ClassifyQuestion
 
+    dimension = CompiledQuery(
+        name='Refund<&',
+        task=ClassifyQuestion(
+            kind='choice', instructions='Judge it.', criteria={'Refund <&>': 'x', 'other': 'y'}, state={}
+        ),
+        selection=ValueSelection(kind='values', values=('Refund <&>',)),
+    )
     row = TraceRow(trace_id='trace<&', name='refund<&', agent_name='support<&', status='ok', tokens_in=1000)
     result = TraceClassification(
-        trace_id=row.trace_id, span_id='s', value='Refund <&>', matched=True, raw_result={}
+        trace_id=row.trace_id,
+        span_id='s',
+        answers=(DimensionAnswer(value='Refund <&>', matched=True),),
+        matched=True,
+        raw_result={},
     )
     html = explorer_views.results(
         ExplorerView(state='loaded', rows=(row,)), resolve_columns(None), records=None,
-        snapshot=RunSnapshot(results={row.trace_id: result}, within_results=True),
+        snapshot=RunSnapshot(results={row.trace_id: result}, within_results=True, dimensions=(dimension,)),
     )
     assert 'refund&lt;&amp;' in html
     assert 'support&lt;&amp; · trace&lt;&amp;' in html
@@ -201,6 +213,11 @@ def test_trajectories_draws_a_row_for_a_failed_hydration() -> None:
     assert 'tv-nomsg' in html
     assert 'data-tv-msg="1"' in html
     assert '2 msgs' in html
+    assert '<span class="tv-end">2 msgs</span>' in html
+    assert '<span class="tv-end">no messages</span>' in html
+    assert 'Cache reads' in html
+    assert '<small>in</small>' in html
+    assert '<small>out</small>' in html
 
 
 class FakeRowSource:
@@ -494,7 +511,7 @@ def test_poll_appends_explorer_results_during_classification(explorer_client) ->
     assert 'name="facet_model" value="poll-model"' in html
 
 
-def test_traces_starts_with_one_collapsed_filter_panel(explorer_client) -> None:
+def test_traces_filters_button_opens_the_facet_menu_directly(explorer_client) -> None:
     from evaluatorq.dashboard import styles
 
     _, _, client = explorer_client
@@ -502,10 +519,19 @@ def test_traces_starts_with_one_collapsed_filter_panel(explorer_client) -> None:
     css = styles._FINDER_CSS  # pyright: ignore[reportPrivateUsage]
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     assert html.count('id="finder-controls"') == 1
-    assert 'data-explorer-filters aria-controls="finder-controls" aria-expanded="false"' in html
-    assert '.finder-command ~ #finder-body .finder-controls { display:none; }' in css
-    assert '.finder.filter-panel-open #finder-body .finder-controls { display:flex; }' in css
-    assert "finder.classList.toggle('filter-panel-open')" in js
+    assert 'data-explorer-filters aria-haspopup="true" aria-expanded="false">Filters</button>' in html
+    assert '.finder-command ~ #finder-body .finder-controls .add { display:none; }' in css
+    assert 'else if (menu) openFacetMenu(menu, filtersButton);' in js
+    assert 'if (filtersDirty) { filtersDirty = false; loadExplorer(); }' in js
+
+
+def test_toolbar_shows_removable_filter_chips_and_count(explorer_client) -> None:
+    _, _, client = explorer_client
+    html = _load(client, facet_model='gpt-x', tokens_min='100').text
+    toolbar = html[html.index('class="xr-toolbar"') :]
+    assert '>Filters · 2</button>' in toolbar
+    assert 'class="xr-chips"><span class="chip is-editable" data-chip-name="facet_model" data-finder-value="gpt-x">' in toolbar
+    assert 'data-finder-remove="tokens_min"' in toolbar
 
 
 def test_load_keeps_filter_values_and_enables_within_scope(explorer_client) -> None:
@@ -567,7 +593,7 @@ def test_terminal_poll_includes_last_explorer_results(explorer_client) -> None:
     _load(client)
     from evaluatorq.trace_finder import TraceClassification
 
-    result = TraceClassification(trace_id='trace-0000', span_id='s', value=True, matched=True, raw_result={})
+    result = TraceClassification(trace_id='trace-0000', span_id='s', matched=True, raw_result={})
     store.snapshot_value = replace(
         store.snapshot_value, state='completed', results={'trace-0000': result}, within_results=True
     )

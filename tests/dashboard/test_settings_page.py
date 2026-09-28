@@ -62,6 +62,7 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
             'window_days': '14',
             'limit': '42',
             'parallelism': '7',
+            'ask_ai_mode': 'review',
         }),
     )
 
@@ -71,6 +72,7 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     saved = json.loads(settings_file.read_text())
     assert saved['limit'] == 42
     assert saved['parallelism'] == 7
+    assert saved['ask_ai_mode'] == 'review'
 
 
 def test_settings_expose_validated_ai_limits(client: TestClient) -> None:
@@ -78,6 +80,7 @@ def test_settings_expose_validated_ai_limits(client: TestClient) -> None:
 
     assert 'id="limit" name="limit" type="number" min="1" max="5000"' in html
     assert 'id="parallelism" name="parallelism" type="number" min="1" max="200"' in html
+    assert '<option value="immediate" selected>Just proceed</option>' in html
 
 
 def test_ai_limits_reject_out_of_range_values(client: TestClient, settings_file: Path) -> None:

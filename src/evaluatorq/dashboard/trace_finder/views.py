@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from evaluatorq.trace_finder import (
         CompiledQuery,
         DashboardSettings,
+        DimensionAnswer,
         FacetCatalogue,
         FacetSelection,
         RunRequest,
@@ -102,7 +103,9 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
     )
 
 
-def traces_command_strip(query: str, *, api_available: bool, error: str | None = None, has_rows: bool = False) -> str:
+def traces_command_strip(
+    query: str, *, api_available: bool, error: str | None = None, has_rows: bool = False, mode: str = 'immediate'
+) -> str:
     """Compact AI query strip used by /traces; /find keeps its own legacy search hero."""
     disabled = '' if api_available else ' disabled'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
@@ -113,7 +116,7 @@ def traces_command_strip(query: str, *, api_available: bool, error: str | None =
         'hx-swap="innerHTML" hx-include="#finder-controls" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
         f'<div class="col"><textarea class="finder-command-textarea" name="query" rows="1" placeholder="Ask about these traces…" required{disabled}>'
-        f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="review">'
+        f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="{esc(mode)}">'
         '<div id="finder-scope" class="finder-seg" role="radiogroup" aria-label="Ask AI scope">'
         f'{scope_toggle(has_rows=has_rows)}</div><a href="/settings" aria-label="AI configuration" title="AI configuration" '
         'class="finder-command-gear" style="min-width:42px;min-height:42px">⚙</a>'
@@ -365,18 +368,57 @@ def _value_text(value: object) -> str:
     return str(value)
 
 
-def _result_color(result: TraceClassification | None, compiled: CompiledQuery | None) -> str:
+def _answer_color(answer: DimensionAnswer, dimension: CompiledQuery) -> str:
+    if answer.error:
+        return 'var(--red-600)'
+    if dimension.task.kind == 'score' and isinstance(answer.value, (int, float)) and not isinstance(answer.value, bool):
+        score = max(0.0, min(1.0, answer.value))
+        return f'color-mix(in srgb, var(--chart-5) {score * 100:g}%, var(--chart-2))'
+    for item in classification_legend(dimension):
+        if item.label == _value_text(answer.value):
+            return item.color
+    return 'var(--chart-5)' if answer.matched else 'var(--chart-2)'
+
+
+def _result_color(result: TraceClassification | None, dimensions: tuple[CompiledQuery, ...] | None) -> str:
+    """Colour a trace by its only dimension's answer, or by the combined match when there are several."""
+
     if result is None or result.error:
         return 'var(--red-600)' if result and result.error else '#3d3c4a'
-    if compiled is None:
-        return 'var(--chart-5)' if result.matched else 'var(--chart-2)'
-    if compiled.task.kind == 'score' and isinstance(result.value, (int, float)) and not isinstance(result.value, bool):
-        score = max(0.0, min(1.0, result.value))
-        return f'color-mix(in srgb, var(--chart-5) {score * 100:g}%, var(--chart-2))'
-    for item in classification_legend(compiled):
-        if item.label == _value_text(result.value):
-            return item.color
+    if dimensions is not None and len(dimensions) == 1 and len(result.answers) == 1:
+        return _answer_color(result.answers[0], dimensions[0])
     return 'var(--chart-5)' if result.matched else 'var(--chart-2)'
+
+
+def _answers_text(result: TraceClassification, dimensions: tuple[CompiledQuery, ...] | None) -> str:
+    """One-line summary of a trace's answers, named by dimension."""
+
+    if not result.answers:
+        return 'matched by filters'
+    names = [dimension.name for dimension in dimensions or ()]
+    return ' · '.join(
+        f'{names[index] + ": " if index < len(names) else ""}{_value_text(answer.value)}'
+        + (f' ({answer.confidence:.2f})' if answer.confidence is not None else '')
+        for index, answer in enumerate(result.answers)
+    )
+
+
+def _answer_cells(result: TraceClassification, dimensions: tuple[CompiledQuery, ...]) -> str:
+    """One verdict cell per dimension, each coloured by that dimension's legend."""
+
+    cells: list[str] = []
+    for index, dimension in enumerate(dimensions):
+        answer = result.answers[index] if index < len(result.answers) else None
+        if answer is None:
+            cells.append('<td>—</td>')
+            continue
+        label = 'Judgment failed' if answer.error else _value_text(answer.value)
+        confidence = f' <span class="conf">{answer.confidence:.2f}</span>' if answer.confidence is not None else ''
+        cells.append(
+            f'<td><span class="verdict"><span class="sw" style="background:{esc(_answer_color(answer, dimension))}"></span>'
+            f'{esc(label)}</span>{confidence}</td>'
+        )
+    return ''.join(cells)
 
 
 def matrix(snapshot: RunSnapshot) -> str:
@@ -391,15 +433,12 @@ def matrix(snapshot: RunSnapshot) -> str:
         result = snapshot.results.get(trace.trace_id)
         if result is not None:
             state = 'failed' if result.error else 'match' if result.matched else 'unmatched'
-            title = (
-                result.error
-                or f'{_value_text(result.value)} · {_value_text(result.confidence) if result.confidence is not None else "no confidence"}'
-            )
+            title = result.error or _answers_text(result, snapshot.dimensions)
         elif trace.trace_id in active:
             state, title = 'active', 'classifying'
         else:
             state, title = 'pending', 'pending'
-        color = _result_color(result, snapshot.compiled)
+        color = _result_color(result, snapshot.dimensions)
         trace_id = quote(trace.trace_id, safe='')
         dots.append(
             f'<i class="{state}" style="--c:{esc(color)}" title="{esc(title)}" '
@@ -409,24 +448,29 @@ def matrix(snapshot: RunSnapshot) -> str:
 
 
 def legend(snapshot: RunSnapshot) -> str:
-    counts: dict[str, int] = {}
-    for result in snapshot.results.values():
-        if result.error is None:
-            label = _value_text(result.value)
-            counts[label] = counts.get(label, 0) + 1
-    if snapshot.compiled is not None and snapshot.compiled.task.kind == 'score':
-        entries = classification_legend(snapshot.compiled)
-        counts[entries[0].label] = sum(result.error is None for result in snapshot.results.values())
-        counts[entries[1].label] = snapshot.matched
-    items = ''.join(
-        f'<span><span class="sw" style="background:{esc(item.color)}"></span>{esc(item.label)} '
-        f'<b>{counts.get(item.label, 0)}</b></span>'
-        for item in (classification_legend(snapshot.compiled) if snapshot.compiled else ())
-    )
+    """Value counts for a single dimension; several dimensions colour by the combined match, so show only that."""
+
+    items = ''
+    if snapshot.dimensions is not None and len(snapshot.dimensions) == 1:
+        dimension = snapshot.dimensions[0]
+        counts: dict[str, int] = {}
+        for result in snapshot.results.values():
+            if result.error is None and result.answers:
+                label = _value_text(result.answers[0].value)
+                counts[label] = counts.get(label, 0) + 1
+        entries = classification_legend(dimension)
+        if dimension.task.kind == 'score':
+            counts[entries[0].label] = sum(result.error is None for result in snapshot.results.values())
+            counts[entries[1].label] = snapshot.matched
+        items = '<span class="muted">|</span>' + ''.join(
+            f'<span><span class="sw" style="background:{esc(item.color)}"></span>{esc(item.label)} '
+            f'<b>{counts.get(item.label, 0)}</b></span>'
+            for item in entries
+        )
     return (
         '<div class="finder-legend">'
         f'<span><span class="sw match"></span><span class="num hot">{snapshot.matched}</span> included</span>'
-        f'<span class="muted">|</span>{items}'
+        f'{items}'
         f'<span><span class="sw failed"></span>failed <b>{snapshot.failed}</b></span>'
         f'<span class="muted">|</span><span class="muted">{snapshot.completed} judged</span></div>'
     )
@@ -468,13 +512,16 @@ def progress(snapshot: RunSnapshot, *, export_url: str = '/find/export.json') ->
         if snapshot.state == 'compiling'
         else '<span class="sep">·</span><span>Stopped before traces were loaded</span>'
         if snapshot.total == 0
+        else f'<span class="sep">·</span><span><b>{snapshot.matched}</b> kept by filters</span>'
+        '<span class="sep">·</span><span>no AI classification needed</span>'
+        if snapshot.dimensions == ()
         else f'<span class="sep">·</span><span><b>{snapshot.completed} / {snapshot.total}</b> judged</span>'
         f'<span class="sep">·</span><span><b>{snapshot.failed}</b> failed</span><span class="sep">·</span>'
         f'<span><b>{snapshot.rate:.1f}</b>/s</span>'
     )
     elapsed_html = (
         f'<span class="sep">·</span><span>{snapshot.elapsed:.1f}s</span>'
-        if snapshot.state != 'compiling' and snapshot.total
+        if snapshot.state != 'compiling' and snapshot.total and snapshot.dimensions != ()
         else ''
     )
     return (
@@ -506,7 +553,7 @@ def field(snapshot: RunSnapshot, *, api_available: bool = True, export_url: str 
     elif not snapshot.traces:
         body += '<div class="finder-hint"><div class="inner"><h4>No traces loaded.</h4><p>No traces match the current window and filters.</p></div></div>'
     unavailable = ' unavailable' if snapshot.state == 'idle' and not api_available else ''
-    return f'<div class="finder-field{unavailable}">{progress(snapshot, export_url=export_url) if snapshot.state != "idle" else ""}{body}{legend(snapshot) if snapshot.compiled else ""}</div>'
+    return f'<div class="finder-field{unavailable}">{progress(snapshot, export_url=export_url) if snapshot.state != "idle" else ""}{body}{legend(snapshot) if snapshot.dimensions is not None else ""}</div>'
 
 
 def table(snapshot: RunSnapshot) -> str:
@@ -520,10 +567,10 @@ def table(snapshot: RunSnapshot) -> str:
         and not snapshot.results[trace_id].error
     ]
     matches.sort(key=lambda pair: pair[0].timestamp, reverse=True)
+    dimensions = snapshot.dimensions or ()
     rows = ''.join(
         f'<tr hx-get="/find/trace/{quote(trace.trace_id, safe="")}" hx-target="#finder-drawer" hx-swap="innerHTML" hx-indicator="#finder-drawer-loading">'
-        f'<td class="id">{esc(trace.trace_id)}</td><td><span class="verdict"><span class="sw" style="background:{esc(_result_color(result, snapshot.compiled))}"></span>{esc(_value_text(result.value))}</span></td>'
-        f'<td class="conf">{esc(f"{result.confidence:.2f}" if result.confidence is not None else "—")}</td>'
+        f'<td class="id">{esc(trace.trace_id)}</td>{_answer_cells(result, dimensions)}'
         f'<td>{esc(trace.project)}</td><td>{esc(trace.model)}</td><td>{esc(trace.status)}</td><td>{esc(trace.timestamp.strftime("%Y-%m-%d %H:%M"))}</td></tr>'
         for trace, result in matches
     )
@@ -531,12 +578,14 @@ def table(snapshot: RunSnapshot) -> str:
     return (
         '<section class="finder-section"><h3 class="finder-section-title">Included traces</h3>'
         f'<p class="finder-section-sub">{snapshot.matched} of {snapshot.total or 0} judged as included, newest first. Click a row to inspect.</p>'
-        '<table class="finder-table"><thead><tr><th>Trace</th><th>Verdict</th><th>Conf.</th><th>Project</th><th>Model</th><th>Status</th><th>Time</th></tr></thead>'
+        '<table class="finder-table"><thead><tr><th>Trace</th>'
+        + ''.join(f'<th>{esc(dimension.name)}</th>' for dimension in dimensions)
+        + '<th>Project</th><th>Model</th><th>Status</th><th>Time</th></tr></thead>'
         f'<tbody>{rows}</tbody></table>{empty}</section>'
     )
 
 
-def _selection_rule_html(compiled: CompiledQuery, *, editable: bool) -> str:
+def _selection_rule_html(compiled: CompiledQuery, *, editable: bool, prefix: str = '') -> str:
     from evaluatorq.trace_finder import ThresholdSelection
 
     task = compiled.task
@@ -552,7 +601,7 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool) -> str:
             f'<option value="{esc(str(label))}"{" selected" if label == selected else ""}>{esc(str(label))}</option>'
             for label in labels
         )
-        return f'<select name="selection_value">{options}</select>'
+        return f'<select name="{prefix}selection_value">{options}</select>'
     if task.kind == 'noul':
         selected_bool = next((value for value in getattr(selection, 'values', ()) if type(value) is bool), False)
         if not editable:
@@ -561,7 +610,7 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool) -> str:
             f'<option value="{value}"{" selected" if selected_bool == (value == "true") else ""}>{value}</option>'
             for value in ('true', 'false')
         )
-        return f'<select name="selection_value">{options}</select>'
+        return f'<select name="{prefix}selection_value">{options}</select>'
     if not isinstance(selection, ThresholdSelection):
         operator, threshold = 'gte', 0.5
     else:
@@ -578,18 +627,18 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool) -> str:
         f'<option value="{op}:{value:g}"{" selected" if operator == op and threshold == value else ""}>{op} {value:g}</option>'
         for op, value in presets
     )
-    return f'<select name="selection_rule">{options}</select>'
+    return f'<select name="{prefix}selection_rule">{options}</select>'
 
 
-def _criterion_html(compiled: CompiledQuery, *, editable: bool) -> tuple[str, int]:
+def _criterion_html(compiled: CompiledQuery, *, editable: bool, prefix: str = '') -> tuple[str, int]:
     task = compiled.task
     if task.kind == 'choice' and isinstance(task.criteria, dict):
         pairs = tuple(task.criteria.items())
         if editable:
             return (
                 ''.join(
-                    f'<div class="finder-crit-row"><input name="criteria_label_{index}" value="{esc(str(label))}" required>'
-                    f'<input name="criteria_description_{index}" value="{esc(str(description or ""))}" required></div>'
+                    f'<div class="finder-crit-row"><input name="{prefix}criteria_label_{index}" value="{esc(str(label))}" required>'
+                    f'<input name="{prefix}criteria_description_{index}" value="{esc(str(description or ""))}" required></div>'
                     for index, (label, description) in enumerate(pairs)
                 ),
                 len(pairs),
@@ -607,7 +656,7 @@ def _criterion_html(compiled: CompiledQuery, *, editable: bool) -> tuple[str, in
             return (
                 ''.join(
                     f'<div class="finder-crit-row"><span class="lab">Level {index + 1}</span>'
-                    f'<input name="score_criteria_{index}" value="{esc(str(description))}" required></div>'
+                    f'<input name="{prefix}score_criteria_{index}" value="{esc(str(description))}" required></div>'
                     for index, description in enumerate(task.criteria)
                 ),
                 len(task.criteria),
@@ -622,26 +671,25 @@ def _criterion_html(compiled: CompiledQuery, *, editable: bool) -> tuple[str, in
     return '<p>Binary true / false judgment.</p>', 0
 
 
-def task_panel(
-    compiled: CompiledQuery,
-    *,
-    editable: bool,
-    open_: bool = False,
-    request: RunRequest | None = None,
-    total: int = 0,
-) -> str:
+def _dimension_card(compiled: CompiledQuery, *, editable: bool, open_: bool, prefix: str) -> str:
+    """One classifier dimension: its question, what the model returns, and the rule that counts as a match."""
     task = compiled.task
-    criterion_html, criterion_count = _criterion_html(compiled, editable=editable)
+    criterion_html, criterion_count = _criterion_html(compiled, editable=editable, prefix=prefix)
     kind_label = {'noul': 'Yes / no', 'choice': 'Choice', 'score': 'Score'}[task.kind]
     instruction = (
-        f'<textarea name="instructions" required>{esc(task.instructions)}</textarea>'
+        f'<textarea name="{prefix}instructions" required>{esc(task.instructions)}</textarea>'
         if editable
         else f'<p>{esc(task.instructions)}</p>'
+    )
+    title = (
+        f'<input class="finder-task-name" name="{prefix}name" value="{esc(compiled.name)}" maxlength="40" required aria-label="Dimension name">'
+        if editable
+        else f'<span class="finder-task-title">{esc(compiled.name)}</span>'
     )
     threshold = ''
     if task.kind == 'noul':
         value = (
-            f'<input name="noul_threshold" type="number" min="0" max="1" step="0.01" value="{task.noul_threshold:g}">'
+            f'<input name="{prefix}noul_threshold" type="number" min="0" max="1" step="0.01" value="{task.noul_threshold:g}">'
             if editable
             else f'<p>{task.noul_threshold:g}</p>'
         )
@@ -652,28 +700,47 @@ def task_panel(
         else ''
     )
     count_html = f'<span class="finder-task-count">{criterion_count} labels</span>' if criterion_count else ''
-    if editable:
-        form_open = '<form id="finder-start-form" hx-post="/find/start" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">'
-        hidden_request = ''
-        if request is not None:
-            hidden_request = (
-                f'<input type="hidden" name="query" value="{esc(request.query)}">'
-                f'<input type="hidden" name="mode" value="review">'
-            )
-        form_open += hidden_request + csrf_field()
-        form_close = f'<button class="rt-apply-btn" type="submit">Apply + classify {total}</button><span class="finder-start-working" role="status">Starting classification…</span></form>'
-    else:
-        form_open = ''
-        form_close = ''
     return (
         f'<details class="finder-task"{" open" if open_ else ""}><summary><span class="chev" aria-hidden="true">▸</span>'
-        f'<span class="finder-task-title">Classifier task</span><span class="kind">{kind_label}</span>'
-        f'{count_html}</summary>{form_open}'
+        f'{title}<span class="kind">{kind_label}</span>{count_html}</summary>'
         f'<div class="finder-task-body"><div class="finder-task-question"><h5>Question asked of each trace</h5>{instruction}</div>'
         f'<div class="finder-task-flow"><div class="finder-task-stage"><h5>Model returns</h5><strong>{kind_label}</strong></div>'
         '<span class="finder-task-arrow" aria-hidden="true">→</span>'
-        f'<div class="finder-task-stage"><h5>Include when</h5>{_selection_rule_html(compiled, editable=editable)}</div>'
-        f'{threshold}</div>{criteria}</div>{form_close}</details>'
+        f'<div class="finder-task-stage"><h5>Include when</h5>{_selection_rule_html(compiled, editable=editable, prefix=prefix)}</div>'
+        f'{threshold}</div>{criteria}</div></details>'
+    )
+
+
+def task_panel(
+    dimensions: tuple[CompiledQuery, ...],
+    *,
+    editable: bool,
+    open_: bool = False,
+    request: RunRequest | None = None,
+    total: int = 0,
+) -> str:
+    """One card per classifier dimension; a trace is included only when it matches every dimension."""
+    cards = ''.join(
+        _dimension_card(dimension, editable=editable, open_=open_, prefix=f'd{index}_')
+        for index, dimension in enumerate(dimensions)
+    )
+    if not dimensions:
+        cards = '<p class="finder-task-none">Filters answer this question, so no per-trace AI classification runs. Every trace the filters keep is included.</p>'
+    elif len(dimensions) > 1:
+        cards = f'<p class="finder-task-none">A trace is included only when it matches all {len(dimensions)} dimensions.</p>{cards}'
+    if not editable:
+        return f'<div class="finder-tasks">{cards}</div>'
+    hidden_request = ''
+    if request is not None:
+        hidden_request = (
+            f'<input type="hidden" name="query" value="{esc(request.query)}">'
+            '<input type="hidden" name="mode" value="review">'
+        )
+    action = f'Apply + classify {total}' if dimensions else f'Apply + include {total}'
+    return (
+        '<form id="finder-start-form" class="finder-tasks" hx-post="/find/start" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">'
+        f'{hidden_request}{csrf_field()}{cards}'
+        f'<button class="rt-apply-btn" type="submit">{action}</button><span class="finder-start-working" role="status">Starting classification…</span></form>'
     )
 
 
@@ -750,11 +817,11 @@ def body(
     explorer_view: ExplorerView | None = None,
 ) -> str:
     indicator = status_indicator(snapshot)
-    if snapshot.state == 'awaiting_review' and snapshot.compiled is not None:
+    if snapshot.state == 'awaiting_review' and snapshot.dimensions is not None:
         return (
             f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}<div class="finder-review"><span>⏸</span><span><b>Review the plan before running per-trace classification.</b> '
             'Edit the task, criteria or filters, then start.</span></div>'
-            f'{task_panel(snapshot.compiled, editable=True, open_=True, request=snapshot.request, total=snapshot.total)}'
+            f'{task_panel(snapshot.dimensions, editable=True, open_=True, request=snapshot.request, total=snapshot.total)}'
             f'{filter_output_panel(snapshot)}'
             '<div class="finder-review-actions"><button class="btn-secondary" type="submit" form="explorer-load-form" '
             'hx-post="/find/load" hx-include="#finder-start-form, #finder-controls" hx-target="#explorer-results" hx-swap="outerHTML">'
@@ -772,7 +839,7 @@ def body(
         explorer_numeric=explorer_numeric,
         explorer_view=explorer_view,
     )
-    details = task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ''
+    details = task_panel(snapshot.dimensions, editable=False) if snapshot.dimensions is not None else ''
     return f'{indicator}{controls_html}{progress(snapshot)}{details}'
 
 
@@ -803,7 +870,7 @@ def page_html(
         from evaluatorq.trace_finder.explorer import ExplorerView
 
         explorer_html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
-    html = f'<div class="finder">{traces_command_strip(query, api_available=api_available, error=error, has_rows=has_rows)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
+    html = f'<div class="finder">{traces_command_strip(query, api_available=api_available, error=error, has_rows=has_rows, mode=settings.ask_ai_mode)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
     return page('Traces', html, active_nav='traces')
 
 
@@ -848,7 +915,7 @@ def drawer(
         '<p>Not classified yet.</p>'
         if result is None
         else (
-            f'<p><b>{"Included" if result.matched and not result.error else "Not included"}</b> · {esc(_value_text(result.value))}</p>'
+            f'<p><b>{"Included" if result.matched and not result.error else "Not included"}</b> · {esc(_answers_text(result, detail.dimensions))}</p>'
             if not result.error
             else f'<p role="alert">Failed: {esc(result.error)}</p>'
         )
@@ -891,7 +958,7 @@ def drawer(
         f'{row_header}{mini_html}'
         f'<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
         f'<dt>project</dt><dd>{esc(trace.project)}</dd><dt>model</dt><dd>{esc(trace.model)}</dd><dt>time</dt><dd>{esc(trace.timestamp.isoformat())}</dd></dl>'
-        f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.compiled))}"></span>{result_html}</div>'
+        f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
         '<div class="fd-tabs">'
         '<button type="button" class="on" data-panel="fd-thread" onclick="eqFinderTab(this,\'fd-thread\')">Full thread</button>'
         '<button type="button" data-panel="fd-input" onclick="eqFinderTab(this,\'fd-input\')">Classifier input</button>'

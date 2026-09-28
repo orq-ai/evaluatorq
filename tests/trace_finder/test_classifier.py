@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, cast
 
@@ -86,18 +87,25 @@ def _projection() -> TraceProjection:
 
 @pytest.mark.asyncio
 async def test_trace_classifier_request_and_response_are_debug_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
-        return JudgeOutcome(
-            payload=EvaluatorResponsePayload(value='frustrated', explanation='The customer is frustrated.'),
-            raw_content='{"choice":"frustrated"}',
-            endpoint='classify',
-        )
+    async def fake_run_classify_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
+        questions = kwargs['questions']
+        return {
+            key: JudgeOutcome(
+                payload=EvaluatorResponsePayload(value='frustrated', explanation='The customer is frustrated.'),
+                raw_content='{"choice":"frustrated"}',
+                endpoint='classify',
+            )
+            for key in questions
+        }
 
-    monkeypatch.setattr(classifier, 'run_judge', fake_run_judge)
+    monkeypatch.setattr(classifier, 'run_classify_judges', fake_run_classify_judges)
     monkeypatch.delenv('EVALUATORQ_LOG_LEVEL', raising=False)
     messages: list[str] = []
     sink_id = logger.add(lambda message: messages.append(str(message)), format='{message}', level='DEBUG')
-    scorer = cast(Any, build_classifier_evaluator(_compiled(), model='typesafe/jev-latest', client=cast(Any, 'client'))['scorer'])
+    scorer = cast(
+        Any,
+        build_classifier_evaluator((_compiled(),), model='typesafe/jev-latest', client=cast(Any, 'client'))['scorer'],
+    )
     params = {'data': build_datapoint(_trace(), _projection()), 'output': 'classifier state prepared'}
     try:
         await scorer(params)
@@ -110,8 +118,8 @@ async def test_trace_classifier_request_and_response_are_debug_only(monkeypatch:
     request_line = next(message for message in messages if 'Trace finder trace classifier request' in message)
     request_body = json.loads(request_line.split(' input=', 1)[1])
     assert request_body['state'] == _projection().payload
-    assert request_body['questions']['verdict']['type'] == 'choice'
-    assert 'state' not in request_body['questions']['verdict']
+    assert request_body['questions']['d0']['type'] == 'choice'
+    assert 'state' not in request_body['questions']['d0']
     assert any('Trace finder trace classifier response' in message and 'frustrated' in message for message in messages)
 
 
@@ -133,30 +141,31 @@ async def test_build_classifier_evaluator_passes_exact_question_and_state(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+    async def fake_run_classify_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
         calls.append(kwargs)
         value: str | bool | float = {'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind]
-        return JudgeOutcome(
-            payload=EvaluatorResponsePayload(value=value, explanation='classified', abstain=False),
-            raw_output={'type': kind, kind: value},
-            endpoint='classify',
-        )
+        return {
+            'd0': JudgeOutcome(
+                payload=EvaluatorResponsePayload(value=value, explanation='classified', abstain=False),
+                raw_output={'type': kind, kind: value},
+                endpoint='classify',
+            )
+        }
 
-    monkeypatch.setattr(classifier, 'run_judge', fake_run_judge)
+    monkeypatch.setattr(classifier, 'run_classify_judges', fake_run_classify_judges)
     compiled = _compiled(kind)
-    evaluator = build_classifier_evaluator(compiled, model='typesafe/jev-latest', client=cast(Any, 'client'))
+    evaluator = build_classifier_evaluator((compiled,), model='typesafe/jev-latest', client=cast(Any, 'client'))
 
     scorer = cast(Any, evaluator['scorer'])
     result = await scorer({'data': build_datapoint(_trace(), _projection()), 'output': 'classifier state prepared'})
 
     assert evaluator['name'] == 'classifier'
-    assert type(result.value) is type({'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind])
-    assert result.value == {'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind]
+    expected = {'choice': 'frustrated', 'noul': True, 'score': 1.0}[kind]
+    assert result.value == {'d0': expected}
     assert calls[0]['model'] == 'typesafe/jev-latest'
     assert calls[0]['cfg'].timeout_ms == 90_000
-    assert calls[0]['prompt_template'] == ''
-    assert calls[0]['replacements'] == {}
-    assert calls[0]['classify'] == compiled.task.model_copy(update={'state': _projection().payload})
+    assert calls[0]['state'] == _projection().payload
+    assert calls[0]['questions'] == {'d0': compiled.task}
 
 
 @pytest.mark.parametrize(
@@ -172,27 +181,45 @@ async def test_build_classifier_evaluator_passes_exact_question_and_state(
     ],
 )
 def test_invalid_verdict_is_a_terminal_error(kind: str, value: str | bool | float) -> None:
-    classification = parse_datapoint_result(_result(value=value), _compiled(kind))
+    dimensions = (_compiled(kind),)
+    classification = parse_datapoint_result(_result(dimensions=dimensions, values=[value]), dimensions)
     assert classification.error is not None
-    assert classification.value is None
+    assert classification.answers[0].error is not None
+    assert classification.answers[0].value is None
     assert not classification.matched
+
+
+def _entry(value: object, raw_answer: dict[str, Any] | None) -> dict[str, Any]:
+    raw_output = None if raw_answer is None else {'jury': {'votes': [{'repetitions': [{'raw_output': raw_answer}]}]}}
+    return {'value': value, 'explanation': 'The customer is frustrated.', 'raw_output': raw_output}
 
 
 def _result(
     *,
-    value: str | bool | float = 'frustrated',
-    raw_answer: dict[str, Any] | None = None,
+    dimensions: Sequence[CompiledQuery] = (_compiled(),),
+    values: Sequence[Any] | None = None,
+    raw_answers: Sequence[dict[str, Any] | None] | None = None,
     datapoint_error: str | None = None,
     job_error: str | None = None,
     evaluator_error: str | None = None,
     job_results: list[JobResult] | None = None,
 ) -> DataPointResult:
     if job_results is None:
-        raw_output = None if raw_answer is None else {'jury': {'votes': [{'repetitions': [{'raw_output': raw_answer}]}]}}
+        count = len(dimensions)
+        resolved_values = list(values) if values is not None else ['frustrated'] * count
+        resolved_raw_answers = list(raw_answers) if raw_answers is not None else [None] * count
+        entries = [
+            _entry(value, raw_answer)
+            for value, raw_answer in zip(resolved_values, resolved_raw_answers, strict=True)
+        ]
         score = EvaluatorScore(
             evaluator_name='classifier',
             error=evaluator_error,
-            score=EvaluationResult(value=value, explanation='The customer is frustrated.', raw_output=raw_output),
+            score=EvaluationResult(
+                value={f'd{index}': value for index, value in enumerate(resolved_values)},
+                explanation='The customer is frustrated.',
+                raw_output={'dimensions': entries},
+            ),
         )
         job_results = [
             JobResult(job_name='replay', output='classifier state prepared', error=job_error, evaluator_scores=[score])
@@ -202,14 +229,24 @@ def _result(
     )
 
 
-def _result_from_evaluation(evaluation: EvaluationResult) -> DataPointResult:
+def _result_from_evaluation(
+    evaluation: EvaluationResult, dimensions: Sequence[CompiledQuery] = (_compiled(),)
+) -> DataPointResult:
+    entry = {'value': evaluation.value, 'explanation': evaluation.explanation, 'raw_output': evaluation.raw_output}
     return DataPointResult(
         data_point=build_datapoint(_trace(), _projection()),
         job_results=[
             JobResult(
                 job_name='replay',
                 output='classifier state prepared',
-                evaluator_scores=[EvaluatorScore(evaluator_name='classifier', score=evaluation)],
+                evaluator_scores=[
+                    EvaluatorScore(
+                        evaluator_name='classifier',
+                        score=EvaluationResult(
+                            value={'d0': evaluation.value}, raw_output={'dimensions': [entry] * len(dimensions)}
+                        ),
+                    )
+                ],
             )
         ],
     )
@@ -236,31 +273,40 @@ def test_outcome_result_maps_clean_abstention_to_an_inconclusive_classification(
     assert jury['judges_failed'] == 0
     assert jury['inconclusive'] is True
 
-    classification = parse_datapoint_result(_result_from_evaluation(evaluation), _compiled())
+    dimensions = (_compiled(),)
+    classification = parse_datapoint_result(_result_from_evaluation(evaluation, dimensions), dimensions)
     assert classification.matched is False
-    assert classification.error == 'judge abstained'
+    assert classification.error == f'{dimensions[0].name}: judge abstained'
 
 
 def test_parse_datapoint_result_extracts_label_confidence_probabilities_and_raw_result() -> None:
+    dimensions = (_compiled(),)
     result = _result(
-        raw_answer={'choice': 'frustrated', 'confidence': 0.86, 'probabilities': {'frustrated': 0.86, 'neutral': 0.14}}
+        dimensions=dimensions,
+        raw_answers=[{'choice': 'frustrated', 'confidence': 0.86, 'probabilities': {'frustrated': 0.86, 'neutral': 0.14}}],
     )
 
-    classification = parse_datapoint_result(result, _compiled())
+    classification = parse_datapoint_result(result, dimensions)
 
-    assert classification.value == 'frustrated'
-    assert classification.confidence == 0.86
-    assert classification.probabilities == {'frustrated': 0.86, 'neutral': 0.14}
+    answer = classification.answers[0]
+    assert answer.value == 'frustrated'
+    assert answer.confidence == 0.86
+    assert answer.probabilities == {'frustrated': 0.86, 'neutral': 0.14}
+    assert answer.matched is True
+    assert answer.summary == 'The customer is frustrated.'
     assert classification.matched is True
     assert classification.error is None
-    assert classification.summary == 'The customer is frustrated.'
     assert classification.raw_result == result.model_dump(mode='json', by_alias=True)
 
 
 def test_parse_datapoint_result_keeps_absent_classification_details_absent() -> None:
-    classification = parse_datapoint_result(_result(raw_answer={'choice': 'frustrated'}), _compiled())
-    assert classification.confidence is None
-    assert classification.probabilities is None
+    dimensions = (_compiled(),)
+    classification = parse_datapoint_result(
+        _result(dimensions=dimensions, raw_answers=[{'choice': 'frustrated'}]), dimensions
+    )
+    answer = classification.answers[0]
+    assert answer.confidence is None
+    assert answer.probabilities is None
 
 
 def test_parse_datapoint_result_propagates_unexpected_parser_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,46 +315,55 @@ def test_parse_datapoint_result_propagates_unexpected_parser_error(monkeypatch: 
 
     monkeypatch.setattr(classifier, '_raw_answer', broken_parser)
 
+    dimensions = (_compiled(),)
     with pytest.raises(RuntimeError, match='parser implementation broke'):
-        parse_datapoint_result(_result(raw_answer={'choice': 'frustrated'}), _compiled())
+        parse_datapoint_result(_result(dimensions=dimensions, raw_answers=[{'choice': 'frustrated'}]), dimensions)
 
 
 @pytest.mark.parametrize('confidence', [-0.1, 1.1, float('nan'), float('inf')])
 def test_parse_datapoint_result_treats_invalid_confidence_as_terminal_result(confidence: float) -> None:
+    dimensions = (_compiled(),)
     classification = parse_datapoint_result(
-        _result(raw_answer={'choice': 'frustrated', 'confidence': confidence}), _compiled()
+        _result(dimensions=dimensions, raw_answers=[{'choice': 'frustrated', 'confidence': confidence}]), dimensions
     )
 
-    assert classification.error == 'malformed classifier confidence'
+    assert classification.answers[0].error == 'malformed classifier confidence'
+    assert classification.error == f'{dimensions[0].name}: malformed classifier confidence'
     assert classification.matched is False
 
 
 @pytest.mark.parametrize('probability', [-0.1, 1.1, float('nan'), float('inf')])
 def test_parse_datapoint_result_rejects_invalid_probabilities(probability: float) -> None:
+    dimensions = (_compiled(),)
     classification = parse_datapoint_result(
-        _result(raw_answer={'choice': 'frustrated', 'probabilities': {'frustrated': probability}}), _compiled()
+        _result(dimensions=dimensions, raw_answers=[{'choice': 'frustrated', 'probabilities': {'frustrated': probability}}]),
+        dimensions,
     )
 
-    assert classification.error == 'malformed classifier probabilities'
+    assert classification.answers[0].error == 'malformed classifier probabilities'
+    assert classification.error == f'{dimensions[0].name}: malformed classifier probabilities'
     assert classification.matched is False
 
 
 def test_parse_datapoint_result_returns_terminal_classification_for_malformed_tree() -> None:
-    result = _result()
+    dimensions = (_compiled(),)
+    result = _result(dimensions=dimensions)
     assert result.job_results is not None
     assert result.job_results[0].evaluator_scores is not None
-    result.job_results[0].evaluator_scores[0].score.raw_output = {'jury': {'votes': []}}
+    result.job_results[0].evaluator_scores[0].score.raw_output = {
+        'dimensions': [{'value': 'frustrated', 'explanation': None, 'raw_output': {'jury': {'votes': []}}}]
+    }
 
     messages: list[str] = []
     sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
     try:
-        classification = parse_datapoint_result(result, _compiled())
+        classification = parse_datapoint_result(result, dimensions)
     finally:
         logger.remove(sink_id)
 
-    assert classification.value is None
+    assert classification.answers[0].error == 'malformed classifier result tree'
     assert not classification.matched
-    assert classification.error == 'malformed classifier result tree'
+    assert classification.error == f'{dimensions[0].name}: malformed classifier result tree'
     assert classification.raw_result == result.model_dump(mode='json', by_alias=True)
     assert any(
         'trace-1' in message and 'span-1' in message and 'malformed classifier result tree' in message for message in messages
@@ -348,29 +403,55 @@ def test_matches_selection_is_inclusive_at_threshold_and_exact_for_values(
 def test_parse_datapoint_result_returns_terminal_classification_for_error_tree(
     result: DataPointResult, message: str
 ) -> None:
-    classification = parse_datapoint_result(result, _compiled())
+    classification = parse_datapoint_result(result, (_compiled(),))
     assert classification.trace_id == 'trace-1'
     assert classification.span_id == 'span-1'
-    assert classification.value is None
+    assert classification.answers == ()
     assert not classification.matched
     assert classification.error is not None
     assert message in classification.error
+
+
+def test_parse_datapoint_result_requires_every_dimension_to_match() -> None:
+    dimensions = (_compiled('choice'), _compiled('noul'))
+    result = _result(dimensions=dimensions, values=['frustrated', False])
+
+    classification = parse_datapoint_result(result, dimensions)
+
+    assert classification.answers[0].matched is True
+    assert classification.answers[1].matched is False
+    assert classification.matched is False
+    assert classification.error is None
+
+
+def test_parse_datapoint_result_names_the_failing_dimension_in_the_trace_error() -> None:
+    dimensions = (_compiled('choice'), _compiled('noul'))
+    result = _result(dimensions=dimensions, values=['frustrated', 'not-a-bool'])
+
+    classification = parse_datapoint_result(result, dimensions)
+
+    assert classification.answers[0].error is None
+    assert classification.answers[0].matched is True
+    assert classification.answers[1].error is not None
+    assert classification.matched is False
+    assert classification.error == f'{dimensions[1].name}: {classification.answers[1].error}'
 
 
 @pytest.mark.asyncio
 async def test_run_classifier_uses_matching_parallelism_and_calls_terminal_callback_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    result = _result(raw_answer={'choice': 'frustrated'})
+    dimensions = (_compiled(),)
+    result = _result(dimensions=dimensions, raw_answers=[{'choice': 'frustrated'}])
     received: list[tuple[str, dict[str, Any]]] = []
     completed: list[object] = []
     parse_calls = 0
     original_parser = classifier.parse_datapoint_result
 
-    def count_parse(result: DataPointResult, compiled: CompiledQuery) -> TraceClassification:
+    def count_parse(result: DataPointResult, dims: Sequence[CompiledQuery]) -> TraceClassification:
         nonlocal parse_calls
         parse_calls += 1
-        return original_parser(result, compiled)
+        return original_parser(result, dims)
 
     monkeypatch.setattr(classifier, 'parse_datapoint_result', count_parse)
 
@@ -393,7 +474,7 @@ async def test_run_classifier_uses_matching_parallelism_and_calls_terminal_callb
     classifications = await run_classifier(
         (_trace(),),
         projections,
-        _compiled(),
+        dimensions,
         model='typesafe/jev-latest',
         client=cast(Any, 'client'),
         parallelism=3,
@@ -412,3 +493,48 @@ async def test_run_classifier_uses_matching_parallelism_and_calls_terminal_callb
     assert kwargs['llm_parallelism'] == 3
     assert kwargs['print_results'] is False
     assert kwargs['_send_results'] is False
+
+
+@pytest.mark.asyncio
+async def test_run_classifier_with_no_dimensions_matches_every_trace_without_any_classifier_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Filters alone answered the question, so every trace is matched with no LLM call at all."""
+    evaluator_calls: list[object] = []
+    evaluatorq_calls: list[object] = []
+
+    def fake_build_classifier_evaluator(*args: object, **kwargs: object) -> dict[str, str]:
+        evaluator_calls.append((args, kwargs))
+        return {'name': 'classifier'}
+
+    async def fake_evaluatorq(*args: object, **kwargs: object) -> list[DataPointResult]:
+        evaluatorq_calls.append((args, kwargs))
+        return []
+
+    monkeypatch.setattr(classifier, 'build_classifier_evaluator', fake_build_classifier_evaluator)
+    monkeypatch.setattr(classifier, 'evaluatorq', fake_evaluatorq)
+
+    completed: list[TraceClassification] = []
+
+    async def on_complete(classification: TraceClassification) -> None:
+        completed.append(classification)
+
+    projections = {'trace-1': _projection()}
+    classifications = await run_classifier(
+        (_trace(),),
+        projections,
+        (),
+        model='typesafe/jev-latest',
+        client=cast(Any, 'client'),
+        parallelism=3,
+        on_complete=on_complete,
+    )
+
+    assert len(classifications) == 1
+    assert classifications[0].trace_id == 'trace-1'
+    assert classifications[0].matched is True
+    assert classifications[0].answers == ()
+    assert classifications[0].error is None
+    assert completed == classifications
+    assert evaluator_calls == []
+    assert evaluatorq_calls == []

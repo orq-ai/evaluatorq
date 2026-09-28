@@ -425,21 +425,22 @@ def _run_request(
     )
 
 
-def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
+def _compiled_from_form(current: CompiledQuery, form: Any, *, prefix: str) -> CompiledQuery:
+    """Rebuild one reviewed dimension from its ``prefix``-named form fields, keeping current values for blanks."""
     from evaluatorq.common.judge import ClassifyQuestion
     from evaluatorq.trace_finder import ThresholdSelection, ValueSelection
 
     current_task = current.task
     kind = current_task.kind
-    instructions = str(form.get('instructions') or current_task.instructions).strip()
+    instructions = str(form.get(f'{prefix}instructions') or current_task.instructions).strip()
 
     if kind == 'choice':
         existing = current_task.criteria.items() if isinstance(current_task.criteria, dict) else ()
         existing_pairs = tuple(existing)
         pairs: list[tuple[str, str]] = []
         for index, (old_label, old_description) in enumerate(existing_pairs):
-            label = str(form.get(f'criteria_label_{index}') or old_label).strip()
-            description = str(form.get(f'criteria_description_{index}') or old_description or '').strip()
+            label = str(form.get(f'{prefix}criteria_label_{index}') or old_label).strip()
+            description = str(form.get(f'{prefix}criteria_description_{index}') or old_description or '').strip()
             pairs.append((label, description))
         if not pairs:
             old_descriptions = current_task.criteria if isinstance(current_task.criteria, list) else ()
@@ -452,7 +453,9 @@ def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
         if not existing_descriptions and isinstance(current_task.criteria, dict):
             existing_descriptions = tuple(current_task.criteria.values())
         criteria_values = [
-            str(form.get(f'score_criteria_{index}') or form.get(f'criteria_{index}') or description).strip()
+            str(
+                form.get(f'{prefix}score_criteria_{index}') or form.get(f'{prefix}criteria_{index}') or description
+            ).strip()
             for index, description in enumerate(existing_descriptions)
         ]
         if not criteria_values:
@@ -463,7 +466,7 @@ def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
     else:
         raise ValueError('kind must be one of choice, noul, or score')
 
-    raw_noul_threshold = form.get('noul_threshold')
+    raw_noul_threshold = form.get(f'{prefix}noul_threshold')
     threshold = float(current_task.noul_threshold if raw_noul_threshold in (None, '') else raw_noul_threshold)
     task = ClassifyQuestion(
         kind=kind,
@@ -473,7 +476,7 @@ def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
         state={},
     )
 
-    values = _form_values(form, 'selection_value') or _form_values(form, 'selection_values')
+    values = _form_values(form, f'{prefix}selection_value') or _form_values(form, f'{prefix}selection_values')
     if kind == 'choice':
         labels = tuple(criteria) if isinstance(criteria, dict) else ()
         selected = tuple(value for value in values if value in labels)
@@ -487,20 +490,21 @@ def _compiled_from_form(current: CompiledQuery, form: Any) -> CompiledQuery:
             selected_bool = tuple(value for value in getattr(current.selection, 'values', ()) if type(value) is bool)
         selection = ValueSelection(kind='values', values=selected_bool or (False,))
     else:
-        rule = str(form.get('selection_rule') or '')
+        rule = str(form.get(f'{prefix}selection_rule') or '')
         if ':' in rule:
             operator, raw_threshold = rule.split(':', 1)
             score_threshold = float(raw_threshold)
         else:
-            operator = str(form.get('selection_operator') or getattr(current.selection, 'operator', 'gte'))
-            raw_threshold = form.get('selection_threshold')
+            operator = str(form.get(f'{prefix}selection_operator') or getattr(current.selection, 'operator', 'gte'))
+            raw_threshold = form.get(f'{prefix}selection_threshold')
             if raw_threshold in (None, ''):
-                raw_threshold = form.get('selection_value')
+                raw_threshold = form.get(f'{prefix}selection_value')
             score_threshold = float(
                 getattr(current.selection, 'value', 0.5) if raw_threshold in (None, '') else raw_threshold
             )
         selection = ThresholdSelection(operator=operator, value=score_threshold, kind='threshold')
-    return CompiledQuery(task=task, selection=selection)
+    name = str(form.get(f'{prefix}name') or current.name).strip() or current.name
+    return CompiledQuery(name=name, task=task, selection=selection)
 
 
 def _html(content: str, *, status_code: int = 200) -> Response:
@@ -804,7 +808,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 )
             )
         current = await store.snapshot()
-        if current.state != 'awaiting_review' or current.request is None or current.compiled is None:
+        if current.state != 'awaiting_review' or current.request is None or current.dimensions is None:
             return _html(
                 render_fragment(
                     req,
@@ -819,8 +823,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             request = _run_request(
                 form, settings, anchor=current.request.population, query_fallback=current.request.query
             )
-            compiled = _compiled_from_form(current.compiled, form)
-            snapshot = await store.start(request, compiled, wait=False)
+            dimensions = tuple(
+                _compiled_from_form(dimension, form, prefix=f'd{index}_')
+                for index, dimension in enumerate(current.dimensions)
+            )
+            snapshot = await store.start(request, dimensions, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(
                 render_fragment(req, current, settings, error=str(exc), **_catalogue_kwargs(req.app, current)),
@@ -900,7 +907,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         if store is None:
             return Response('Not found', status_code=404, media_type='text/plain')
         snapshot = await store.snapshot()
-        if snapshot.state != 'completed' or snapshot.request is None or snapshot.compiled is None:
+        if snapshot.state != 'completed' or snapshot.request is None or snapshot.dimensions is None:
             return Response('Not found', status_code=404, media_type='text/plain')
         return Response(
             export_json(snapshot),

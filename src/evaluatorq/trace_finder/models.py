@@ -81,20 +81,34 @@ class TraceProjection(BaseModel):
     omitted_bytes: int = Field(ge=0, description='Bytes omitted to fit the token budget; excludes schema projection.')
 
 
-class TraceClassification(BaseModel):
-    """One terminal EvaluatorQ classification, including its source result."""
+class DimensionAnswer(BaseModel):
+    """The classifier's verdict for one dimension of one trace."""
 
     model_config = ConfigDict(frozen=True)
 
-    trace_id: str
-    span_id: str
     value: bool | float | str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     probabilities: dict[str, float] | None = None
     matched: bool = False
     error: str | None = None
     summary: str | None = None
-    raw_result: dict[str, Any]
+
+
+class TraceClassification(BaseModel):
+    """One trace's terminal result: an answer per dimension, matched only when every dimension matched.
+
+    A run with no dimensions answers from its filters alone, so each of its traces is matched
+    with no answers.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    trace_id: str
+    span_id: str
+    answers: tuple[DimensionAnswer, ...] = ()
+    matched: bool = False
+    error: str | None = None
+    raw_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class Snapshot(BaseModel):
@@ -214,11 +228,15 @@ class ThresholdSelection(BaseModel):
 SelectionRule = Annotated[ValueSelection | ThresholdSelection, Field(discriminator='kind')]
 
 
+MAX_DIMENSIONS = 3
+
+
 class CompiledQuery(BaseModel):
-    """A semantic classifier task and its validated inclusion rule."""
+    """One classifier dimension: a short column name, a semantic task and its validated inclusion rule."""
 
     model_config = ConfigDict(frozen=True)
 
+    name: str = Field(default='AI match', min_length=1, max_length=40)
     task: ClassifyQuestion
     selection: SelectionRule
 
@@ -263,7 +281,7 @@ class RunSnapshot:
     phase: RunPhase | None = None
     request: RunRequest | None = None
     within_results: bool = False
-    compiled: CompiledQuery | None = None
+    dimensions: tuple[CompiledQuery, ...] | None = None
     explicit_filters: FacetSelection = field(default_factory=FacetSelection)
     explicit_numeric: NumericFilters = field(default_factory=NumericFilters)
     generated_filters: FacetSelection = field(default_factory=FacetSelection)
@@ -300,7 +318,7 @@ class TraceDetail:
     trace: TraceRecord
     projection: TraceProjection | None
     classification: TraceClassification | None
-    compiled: CompiledQuery | None = None
+    dimensions: tuple[CompiledQuery, ...] | None = None
 
 
 def validate_compiled_query(task: ClassifyQuestion, selection: SelectionRule) -> None:

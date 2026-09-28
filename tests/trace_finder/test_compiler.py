@@ -23,17 +23,22 @@ from evaluatorq.trace_finder.debug import cli_debug
 
 def choice_document() -> dict[str, Any]:
     return {
-        'task': {
-            'kind': 'choice',
-            'instructions': 'Classify the support need.',
-            'choice_criteria': [
-                {'label': 'billing', 'description': 'Billing help.'},
-                {'label': 'technical', 'description': 'Technical help.'},
-            ],
-            'score_criteria': None,
-            'noul_threshold': 0.5,
-        },
-        'selection': {'kind': 'values', 'values': ['billing']},
+        'dimensions': [
+            {
+                'name': 'Support need',
+                'task': {
+                    'kind': 'choice',
+                    'instructions': 'Classify the support need.',
+                    'choice_criteria': [
+                        {'label': 'billing', 'description': 'Billing help.'},
+                        {'label': 'technical', 'description': 'Technical help.'},
+                    ],
+                    'score_criteria': None,
+                    'noul_threshold': 0.5,
+                },
+                'selection': {'kind': 'values', 'values': ['billing']},
+            }
+        ],
         'numeric': {
             'tokens_min': 20_000,
             'tokens_max': None,
@@ -45,10 +50,11 @@ def choice_document() -> dict[str, Any]:
 
 def test_noul_yes_no_selection_is_normalized_to_booleans() -> None:
     document = choice_document()
-    document['task'].update(kind='noul', choice_criteria=None)
-    document['selection'] = {'kind': 'values', 'values': ['yes']}
+    document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': ['yes']}
 
-    compiled, _ = CompilerWireQuery.model_validate(document).to_domain()
+    dimensions, _ = CompilerWireQuery.model_validate(document).to_domain()
+    compiled = dimensions[0]
 
     assert compiled.task.kind == 'noul'
     assert isinstance(compiled.selection, ValueSelection)
@@ -74,7 +80,7 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     client = cast(Any, object())
     plan = await compile_query(client, 'compiler-model', '  find long billing requests  ')
 
-    assert plan.compiled.task.kind == 'choice'
+    assert plan.dimensions[0].task.kind == 'choice'
     assert plan.numeric.tokens_min == 20_000
     assert plan.numeric.duration_ms_min is None
     assert calls[0]['client'] is client
@@ -204,7 +210,7 @@ async def test_compile_query_reports_impossible_strict_bounds(monkeypatch, query
 
     monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
 
-    with pytest.raises(CompileError, match='contradictory numeric bounds'):
+    with pytest.raises(CompileError, match='Compiler produced an invalid plan'):
         await compile_query(cast(Any, object()), 'compiler-model', query)
 
 
@@ -274,12 +280,12 @@ def test_compiler_wire_schema_is_strict_mode_compatible() -> None:
     schema = json.dumps(CompilerWireQuery.model_json_schema())
     assert 'oneOf' not in schema
     assert 'anyOf' in schema
-    assert CompilerWireQuery.model_validate(choice_document()).selection.kind == 'values'
+    assert CompilerWireQuery.model_validate(choice_document()).dimensions[0].selection.kind == 'values'
 
 
 def test_compiler_wire_selection_schema_forbids_extra_fields() -> None:
     document = choice_document()
-    document['selection']['unexpected'] = 1
+    document['dimensions'][0]['selection']['unexpected'] = 1
 
     with pytest.raises(ValidationError):
         CompilerWireQuery.model_validate(document)

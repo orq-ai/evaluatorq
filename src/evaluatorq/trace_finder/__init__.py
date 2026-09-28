@@ -29,7 +29,9 @@ from .facets import load_facet_catalogue
 from .filter_selector import NO_FILTER_LABEL, FilterSelectionError, select_filters
 from .models import (
     FACET_NAMES,
+    MAX_DIMENSIONS,
     CompiledQuery,
+    DimensionAnswer,
     FacetCatalogue,
     FacetName,
     FacetSelection,
@@ -65,6 +67,7 @@ from .settings import (
 
 __all__ = [
     'FACET_NAMES',
+    'MAX_DIMENSIONS',
     'MAX_TOKEN_BUDGET',
     'NO_FILTER_LABEL',
     'OMISSION_MARKER',
@@ -73,6 +76,7 @@ __all__ = [
     'CompiledPlan',
     'CompiledQuery',
     'DashboardSettings',
+    'DimensionAnswer',
     'ExplorerStore',
     'ExplorerView',
     'ExportCounts',

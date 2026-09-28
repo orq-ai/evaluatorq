@@ -106,24 +106,25 @@
       if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
       return;
     }
+    const filtersButton = evt.target.closest('[data-explorer-filters]');
+    if (filtersButton) {
+      const menu = document.querySelector('.finder-controls .finder-facets');
+      if (menu && menu.classList.contains('open')) closeFacetMenus();
+      else if (menu) openFacetMenu(menu, filtersButton);
+      return;
+    }
     const chipOpen = evt.target.closest('[data-chip-open]');
     if (chipOpen) {
       const menu = document.querySelector('.finder-controls .finder-facets');
       const target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
       if (target) {
         // Anchor the menu under the clicked chip instead of under + Filter.
-        const chip = chipOpen.closest('.chip').getBoundingClientRect();
-        const wrap = menu.parentElement.getBoundingClientRect();
-        menu.style.left = (chip.left - wrap.left) + 'px';
-        menu.style.top = (chip.bottom - wrap.top + 6) + 'px';
-        menu.classList.add('open');
+        openFacetMenu(menu, chipOpen.closest('.chip'));
         showFacet(target);
       }
       return;
     }
-    if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) closeFacetMenus();
 
     const remove = evt.target.closest('[data-finder-remove]');
     if (!remove) return;
@@ -137,7 +138,32 @@
         else input.value = '';
       }
     });
+    const fromToolbar = remove.closest('.xr-chips');
     remove.closest('.chip').remove();
+    if (fromToolbar) loadExplorer();
+  });
+
+  // On /traces the Filters button opens the facet menu itself; picks apply with one reload when it closes.
+  let filtersDirty = false;
+  function loadExplorer() {
+    const form = document.getElementById('explorer-load-form');
+    if (form && form.requestSubmit) form.requestSubmit();
+  }
+  function openFacetMenu(menu, anchor) {
+    const box = anchor.getBoundingClientRect();
+    const wrap = menu.parentElement.getBoundingClientRect();
+    menu.style.left = (box.left - wrap.left) + 'px';
+    menu.style.top = (box.bottom - wrap.top + 6) + 'px';
+    menu.classList.add('open');
+    document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'true'); });
+  }
+  function closeFacetMenus() {
+    document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
+    document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
+    if (filtersDirty) { filtersDirty = false; loadExplorer(); }
+  }
+  document.body.addEventListener('change', function (evt) {
+    if (evt.target.closest('.finder-facets') && document.querySelector('[data-explorer-filters]')) filtersDirty = true;
   });
 
   function showFacet(item) {
@@ -188,9 +214,7 @@
   });
 
   document.addEventListener('keydown', function (evt) {
-    if (evt.key === 'Escape') {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (evt.key === 'Escape') closeFacetMenus();
     if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
     const query = evt.target.closest('#finder-query-form textarea[name="query"]');
     if (!query) return;
@@ -723,9 +747,6 @@
     const exact = document.querySelector('[data-explorer-range-mode]')?.value === 'exact';
     explorerUpdateRangeLabel();
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = exact; });
-    const filterButton = document.querySelector('[data-explorer-filters]');
-    const finder = filterButton && filterButton.closest('.finder');
-    if (filterButton && finder) filterButton.setAttribute('aria-expanded', String(finder.classList.contains('filter-panel-open')));
     explorerUpdateOffsets();
   }
   function explorerUpdateRangeLabel(presetLabel) {
@@ -766,14 +787,6 @@
     if (evt.target && (evt.target.id === 'explorer-from' || evt.target.id === 'explorer-to' || evt.target.id === 'explorer-from-time' || evt.target.id === 'explorer-to-time')) explorerUpdateOffsets();
   });
   document.addEventListener('click', function (evt) {
-    const filters = evt.target.closest('[data-explorer-filters]');
-    if (filters) {
-      const finder = filters.closest('.finder');
-      if (finder) {
-        const isOpen = finder.classList.toggle('filter-panel-open');
-        filters.setAttribute('aria-expanded', String(isOpen));
-      }
-    }
     if (evt.target.closest('.xr-exact > summary')) {
       const mode = document.querySelector('[data-explorer-range-mode]');
       if (mode) mode.value = 'exact';

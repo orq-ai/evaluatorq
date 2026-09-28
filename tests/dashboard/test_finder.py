@@ -16,6 +16,7 @@ from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.dashboard.trace_links import trace_span_url
 from evaluatorq.trace_finder import (
     CompiledQuery,
+    DimensionAnswer,
     FacetCatalogue,
     FacetSelection,
     TraceProjection,
@@ -81,8 +82,8 @@ def test_review_form_preserves_zero_thresholds() -> None:
         selection=ThresholdSelection(kind='threshold', operator='gte', value=0.5),
     )
 
-    assert finder_routes._compiled_from_form(noul, {'noul_threshold': '0'}).task.noul_threshold == 0
-    assert finder_routes._compiled_from_form(score, {'selection_threshold': '0'}).selection.value == 0
+    assert finder_routes._compiled_from_form(noul, {'noul_threshold': '0'}, prefix='').task.noul_threshold == 0
+    assert finder_routes._compiled_from_form(score, {'selection_threshold': '0'}, prefix='').selection.value == 0
 
 
 class FakeStore:
@@ -102,7 +103,7 @@ class FakeStore:
         self.compile_request: Any | None = None
         self.compile_wait: bool | None = None
         self.started_request: Any | None = None
-        self.started_compiled: CompiledQuery | None = None
+        self.started_dimensions: tuple[CompiledQuery, ...] | None = None
         self.start_wait: bool | None = None
 
     async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
@@ -113,7 +114,7 @@ class FakeStore:
             generation=1,
             state=state,
             request=request,
-            compiled=self.compiled,
+            dimensions=(self.compiled,),
             generated_filters=FacetSelection(project=frozenset({'support-agent'})),
             generated_numeric=NumericFilters(),
             explicit_filters=request.population.facets,
@@ -127,25 +128,30 @@ class FakeStore:
         )
         return self.snapshot_value
 
-    async def start(self, request: Any, compiled: CompiledQuery, *, wait: bool = True) -> RunSnapshot:
+    async def start(self, request: Any, dimensions: tuple[CompiledQuery, ...], *, wait: bool = True) -> RunSnapshot:
         self.started = True
         self.start_wait = wait
         self.started_request = request
-        self.started_compiled = compiled
+        self.started_dimensions = tuple(dimensions)
         result = TraceClassification(
             trace_id=self.trace.trace_id,
             span_id=self.trace.span_id,
-            value='frustrated',
-            confidence=0.91,
-            probabilities={'frustrated': 0.91, 'neutral': 0.09},
+            answers=(
+                DimensionAnswer(
+                    value='frustrated',
+                    confidence=0.91,
+                    probabilities={'frustrated': 0.91, 'neutral': 0.09},
+                    matched=True,
+                    summary='The customer repeats the request.',
+                ),
+            ),
             matched=True,
-            summary='The customer repeats the request.',
             raw_result={'value': 'frustrated'},
         )
         self.snapshot_value = replace(
             self.snapshot_value,
             state='completed',
-            compiled=compiled,
+            dimensions=self.started_dimensions,
             projections={self.trace.trace_id: self.projection},
             results=MappingProxyType({self.trace.trace_id: result}),
             completed=1,
@@ -173,23 +179,29 @@ class FakeStore:
             trace=self.trace,
             projection=self.projection,
             classification=next(iter(self.snapshot_value.results.values()), None),
-            compiled=self.snapshot_value.compiled,
+            dimensions=self.snapshot_value.dimensions,
         )
 
     def complete(self) -> None:
         result = TraceClassification(
             trace_id=self.trace.trace_id,
             span_id=self.trace.span_id,
-            value='frustrated',
-            confidence=0.91,
-            probabilities={'frustrated': 0.91, 'neutral': 0.09},
+            answers=(
+                DimensionAnswer(
+                    value='frustrated',
+                    confidence=0.91,
+                    probabilities={'frustrated': 0.91, 'neutral': 0.09},
+                    matched=True,
+                    summary='The customer repeats the request.',
+                ),
+            ),
             matched=True,
-            summary='The customer repeats the request.',
             raw_result={'value': 'frustrated'},
         )
         self.snapshot_value = replace(
             self.snapshot_value,
             state='completed',
+            dimensions=self.snapshot_value.dimensions or (self.compiled,),
             results={self.trace.trace_id: result},
             completed=1,
             matched=1,
@@ -440,20 +452,100 @@ def test_score_review_keeps_generated_threshold_and_colors_scores() -> None:
         task=ClassifyQuestion(kind='score', instructions='Score the trace.', criteria=['Low', 'High'], state={}),
         selection=ThresholdSelection(kind='threshold', operator='gte', value=0.65),
     )
-    review = finder_views.task_panel(compiled, editable=True)
+    review = finder_views.task_panel((compiled,), editable=True)
     assert '<option value="gte:0.65" selected>gte 0.65</option>' in review
     assert 'Question asked of each trace' in review
     assert 'Raw plan' not in review
 
-    result = TraceClassification(trace_id='trace-1', span_id='span-1', value=0.8, matched=True, raw_result={})
+    result = TraceClassification(
+        trace_id='trace-1', span_id='span-1', answers=(DimensionAnswer(value=0.8, matched=True),), matched=True,
+        raw_result={},
+    )
     snapshot = RunSnapshot(
-        state='completed', compiled=compiled, trace_ids=('trace-1',), traces=(_trace(),),
+        state='completed', dimensions=(compiled,), trace_ids=('trace-1',), traces=(_trace(),),
         results={'trace-1': result}, total=1, completed=1, matched=1,
     )
     assert 'color-mix(in srgb, var(--chart-5) 80%, var(--chart-2))' in finder_views.matrix(snapshot)
     legend = finder_views.legend(snapshot)
     assert '0.0 → 1.0 <b>1</b>' in legend
     assert 'gte 0.65 <b>1</b>' in legend
+
+
+def test_completed_table_renders_one_verdict_column_per_dimension() -> None:
+    """A two-dimension run names each result column after its dimension, not the old fixed Verdict/Conf. pair."""
+    sentiment = CompiledQuery(
+        name='Sentiment',
+        task=ClassifyQuestion(
+            kind='choice', instructions="Judge the customer's tone.",
+            criteria={'frustrated': 'Annoyed.', 'neutral': 'Calm.'}, state={},
+        ),
+        selection=ValueSelection(kind='values', values=('frustrated',)),
+    )
+    escalated = CompiledQuery(
+        name='Escalated',
+        task=ClassifyQuestion(kind='noul', instructions='Was this escalated?', noul_threshold=0.5, state={}),
+        selection=ValueSelection(kind='values', values=(True,)),
+    )
+    trace = _trace()
+    result = TraceClassification(
+        trace_id=trace.trace_id,
+        span_id=trace.span_id,
+        answers=(
+            DimensionAnswer(value='frustrated', matched=True),
+            DimensionAnswer(value=True, matched=True),
+        ),
+        matched=True,
+        raw_result={},
+    )
+    snapshot = RunSnapshot(
+        state='completed', dimensions=(sentiment, escalated), trace_ids=(trace.trace_id,), traces=(trace,),
+        results={trace.trace_id: result}, total=1, completed=1, matched=1,
+    )
+
+    html = finder_views.table(snapshot)
+
+    assert '<th>Sentiment</th>' in html
+    assert '<th>Escalated</th>' in html
+    assert '<th>Verdict</th>' not in html
+    assert '<th>Conf.</th>' not in html
+
+
+def test_review_form_with_two_dimensions_posts_dimension_prefixed_fields(setup_finder) -> None:
+    """Each dimension's edited fields carry its own ``d{index}_`` prefix, and store.start gets both dimensions."""
+    store, client = setup_finder
+    review = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'review'}))
+    assert review.status_code == 200
+
+    sentiment = CompiledQuery(
+        name='Sentiment',
+        task=ClassifyQuestion(kind='noul', instructions='Is the user frustrated?', noul_threshold=0.5, state={}),
+        selection=ValueSelection(kind='values', values=(True,)),
+    )
+    escalated = CompiledQuery(
+        name='Escalated',
+        task=ClassifyQuestion(kind='noul', instructions='Was this escalated?', noul_threshold=0.5, state={}),
+        selection=ValueSelection(kind='values', values=(True,)),
+    )
+    store.snapshot_value = replace(store.snapshot_value, dimensions=(sentiment, escalated))
+    review = client.get('/find').text
+    assert 'name="d0_instructions"' in review
+    assert 'name="d1_instructions"' in review
+
+    started = client.post(
+        '/find/start',
+        data=csrf_data({
+            'd0_instructions': 'Is the user upset?',
+            'd0_selection_value': 'true',
+            'd1_instructions': 'Did this reach a human?',
+            'd1_selection_value': 'true',
+        }),
+    )
+
+    assert started.status_code == 200
+    assert store.started_dimensions is not None
+    assert len(store.started_dimensions) == 2
+    assert store.started_dimensions[0].task.instructions == 'Is the user upset?'
+    assert store.started_dimensions[1].task.instructions == 'Did this reach a human?'
 
 
 def test_filter_output_panel_shows_structured_llm_reply_and_escaped_values() -> None:
@@ -483,10 +575,10 @@ def test_filter_output_panel_reports_selection_failure() -> None:
 
 
 def test_noul_task_panel_omits_empty_label_and_criteria_sections() -> None:
-    html = finder_views.task_panel(_compiled().model_copy(update={
+    html = finder_views.task_panel((_compiled().model_copy(update={
         'task': ClassifyQuestion(kind='noul', instructions='Does this match?', state={}),
         'selection': ValueSelection(kind='values', values=(True,)),
-    }), editable=False)
+    }),), editable=False)
 
     assert 'Yes / no' in html
     assert 'Yes threshold' in html
@@ -544,17 +636,17 @@ def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     review = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'review'}))
     assert review.status_code == 200
     assert 'Review the plan before running per-trace classification.' in review.text
-    assert 'name="instructions"' in review.text
+    assert 'name="d0_instructions"' in review.text
 
     started = client.post(
         '/find/start',
         data=csrf_data({
-            'instructions': 'Edited instructions',
-            'criteria_label_0': 'frustrated',
-            'criteria_description_0': 'Changed criterion',
-            'criteria_label_1': 'neutral',
-            'criteria_description_1': 'Transactional.',
-            'selection_value': 'frustrated',
+            'd0_instructions': 'Edited instructions',
+            'd0_criteria_label_0': 'frustrated',
+            'd0_criteria_description_0': 'Changed criterion',
+            'd0_criteria_label_1': 'neutral',
+            'd0_criteria_description_1': 'Transactional.',
+            'd0_selection_value': 'frustrated',
             'window_days': '14',
             'limit': '12',
             'parallelism': '3',
@@ -575,9 +667,9 @@ def test_find_review_start_transitions_to_classification(setup_finder) -> None:
     assert store.started_request.population.numeric.tokens_min == 900
     assert store.compile_request is not None
     assert store.started_request.population.end == store.compile_request.population.end
-    assert store.started_compiled is not None
-    assert store.started_compiled.task.instructions == 'Edited instructions'
-    assert store.started_compiled.task.criteria['frustrated'] == 'Changed criterion'
+    assert store.started_dimensions is not None
+    assert store.started_dimensions[0].task.instructions == 'Edited instructions'
+    assert store.started_dimensions[0].task.criteria['frustrated'] == 'Changed criterion'
     assert 'name="kind"' not in review.text
 
 
@@ -831,7 +923,7 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
     assert 'value="new" form="finder-query-form"' in html
     assert 'Ask AI <span aria-hidden="true">↗</span>' not in html
     assert 'class="finder-hint' not in html
-    assert 'type="hidden" name="mode" value="review"' in html
+    assert 'type="hidden" name="mode" value="immediate"' in html
     assert 'type="hidden" form="finder-query-form" name="limit"' in html
     assert 'type="hidden" form="finder-query-form" name="parallelism"' in html
     assert 'name="limit" value="500"' in html
@@ -847,8 +939,8 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
     store.complete()
     classified = client.get('/traces').text
     assert 'finder-progress' in classified
-    assert 'Classifier task' in classified
-    assert 'Filter selection' in classified
+    assert 'finder-task-title">AI match<' in classified
+    assert 'Filter selection' not in classified
     assert '<div class="finder-matrix' not in classified
     assert '<table class="finder-table' not in classified
     assert 'Included traces' not in classified

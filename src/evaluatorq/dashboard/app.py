@@ -406,6 +406,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_workspace'] = form_data.get('orq_workspace', current.orq_workspace)
     values['orq_project_id'] = form_data.get('orq_project_id', current.orq_project_id)
     values['orq_project_name'] = current.orq_project_name
+    values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
     values['window_days'] = current.window_days
     values['explorer_columns'] = current.explorer_columns
     return values

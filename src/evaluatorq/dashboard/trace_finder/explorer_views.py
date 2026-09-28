@@ -64,14 +64,24 @@ def _empty(title: str, body: str) -> str:
     return f'<div class="xr-empty"><h4>{esc(title)}</h4><p>{esc(body)}</p></div>'
 
 
-def _match_cell(row: TraceRow, snapshot: RunSnapshot | None) -> str:
-    from evaluatorq.dashboard.trace_finder.views import _result_color, _value_text
+def _match_names(snapshot: RunSnapshot | None, fallback: str) -> tuple[str, ...]:
+    """Header labels for the AI match column: one per classifier dimension, or the column's own label."""
+    names = tuple(dimension.name for dimension in (snapshot.dimensions or ())) if snapshot is not None else ()
+    return names or (fallback,)
+
+
+def _match_cells(row: TraceRow, snapshot: RunSnapshot | None) -> str:
+    from evaluatorq.dashboard.trace_finder.views import _answer_cells, _result_color
 
     result = snapshot.results.get(row.trace_id) if snapshot is not None else None
+    dimensions = (snapshot.dimensions or ()) if snapshot is not None else ()
     if result is None:
-        return '<td class="muted">—</td>'
-    label = 'Judgment failed' if result.error else _value_text(result.value)
-    return f'<td><span class="verdict xr-match"><span class="sw" style="background:{esc(_result_color(result, snapshot.compiled if snapshot else None))}"></span>{esc(label)}</span></td>'
+        return '<td class="muted">—</td>' * max(1, len(dimensions))
+    if result.error or not dimensions:
+        label = 'Judgment failed' if result.error else 'Included' if result.matched else 'Not included'
+        cell = f'<td><span class="verdict xr-match"><span class="sw" style="background:{esc(_result_color(result, dimensions))}"></span>{esc(label)}</span></td>'
+        return cell * max(1, len(dimensions))
+    return _answer_cells(result, dimensions)
 
 
 def _within_snapshot(snapshot: RunSnapshot | None) -> RunSnapshot | None:
@@ -90,16 +100,18 @@ def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot |
     for column in columns:
         arrow = (' ↓' if view.descending else ' ↑') if view.sort == column.key else ''
         direction = 'asc' if view.sort == column.key and view.descending else 'desc'
-        heads += (
+        labels = _match_names(snapshot, column.label) if column.key == MATCH else (column.label,)
+        heads += ''.join(
             f'<th class="{"num" if column.numeric else ""}"><button type="button" class="link" '
-            f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{esc(column.label)}{arrow}</button></th>'
+            f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{esc(label)}{arrow}</button></th>'
+            for label in labels
         )
     if not columns:
         return _empty('No columns selected.', 'Choose at least one column from Columns to show trace details.')
     body = ''.join(
         f'<tr data-tv-row="{esc(row.trace_id)}" {_drawer_attrs(row.trace_id)}>'
         + ''.join(
-            _match_cell(row, snapshot)
+            _match_cells(row, snapshot)
             if c.key == MATCH
             else f'<td class="{"num" if c.numeric else ""}">{c.render(row)}</td>'
             for c in columns
@@ -126,7 +138,7 @@ def _identity(row: TraceRow, snapshot: RunSnapshot | None) -> str:
     if result is not None:
         from evaluatorq.dashboard.trace_finder.views import _result_color
 
-        tick = f'<span class="tv-tick" style="background:{esc(_result_color(result, snapshot.compiled if snapshot else None))}"></span>'
+        tick = f'<span class="tv-tick" style="background:{esc(_result_color(result, snapshot.dimensions if snapshot else None))}"></span>'
     return (
         f'<div class="tv-id"><span class="dot {status}"></span>{tick}<div class="t">'
         f'<div class="a">{esc(row.agent_name or row.name or "—")}{model}</div>'
@@ -136,14 +148,16 @@ def _identity(row: TraceRow, snapshot: RunSnapshot | None) -> str:
 
 def _metrics(row: TraceRow) -> str:
     pct = row.cache_pct
-    ring = (
-        f'<span class="cc"><span class="ring" style="background:conic-gradient(var(--traj-assistant) {pct * 360:.0f}deg,#ebe9e4 0)"></span>{pct * 100:.0f}%</span>'
+    cache = (
+        f'<span class="cc" title="{row.cached_tokens:,} cache-read tokens / {row.tokens_in:,} input tokens">'
+        f'<b>{pct * 100:.0f}%</b><span class="cache-track"><i style="width:{pct * 100:.0f}%"></i></span></span>'
         if pct is not None
-        else '<span class="cc">—</span>'
+        else '<span class="cc muted">—</span>'
     )
     return (
-        f'<div class="tv-m"><span class="io"><b>{fmt_tokens(row.tokens_in)}</b> <span>→</span> {fmt_tokens(row.tokens_out)}</span>'
-        f'{ring}<span>{fmt_cost(row.cost_total, row.currency)}</span></div>'
+        f'<div class="tv-m"><span class="io"><span><b>{fmt_tokens(row.tokens_in)}</b><small>in</small></span>'
+        f'<span><b>{fmt_tokens(row.tokens_out)}</b><small>out</small></span></span>'
+        f'{cache}<span class="tv-cost">{fmt_cost(row.cost_total, row.currency)}</span></div>'
     )
 
 
@@ -179,16 +193,20 @@ def trajectories(view: ExplorerView, records: Mapping[str, TraceRecord | None], 
                 for n, s in enumerate(segs, start=1)
             )
             count = len({s.index for s in segs})
-            bar = f'<div class="tv-segs" style="width:{width:.2f}%">{inner}</div><span class="tv-end" style="left:{width:.2f}%">{count} msgs</span>'
+            bar = f'<div class="tv-segs" style="width:{width:.2f}%">{inner}</div>'
+            message_count = f'{count} msgs'
         else:
-            bar = '<div class="tv-segs tv-nomsg" style="width:100%"><i class="k-other" style="flex-grow:1"></i></div><span class="tv-end" style="left:0">no messages</span>'
+            bar = '<div class="tv-segs tv-nomsg" style="width:100%"><i class="k-other" style="flex-grow:1"></i></div>'
+            message_count = 'no messages'
         rows_html += (
             f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" {_drawer_attrs(row.trace_id)}>'
-            f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-track"></div>{bar}</div>{_metrics(row)}</div>'
+            f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-plot"><div class="tv-track"></div>{bar}</div>'
+            f'<span class="tv-end">{message_count}</span></div>{_metrics(row)}</div>'
         )
     return (
         f'<div class="tv"><div class="tv-lg">{legend}</div>'
-        f'<div class="tv-hd"><span>Trace</span><div class="ax">{ticks}</div><span class="m">In → out · cache · cost</span></div>'
+        f'<div class="tv-hd"><span>Trace</span><div class="ax"><div class="tv-scale">{ticks}</div><span>Messages</span></div>'
+        '<div class="tv-mh"><span>Input / output</span><span>Cache reads</span><span>Cost</span></div></div>'
         f'<div class="tv-rows">{rows_html}</div><div class="tv-tip" role="tooltip" hidden></div></div>'
     )
 
@@ -230,24 +248,14 @@ def _toolbar(view: ExplorerView, columns: Sequence[Column], *, has_results: bool
     date_and_rows = range_inputs(view.start, view.end, window_days, include_load=False)
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary" type="submit" form="explorer-load-form">Load</button>'
-    chips = ''.join(
-        f'<span class="xr-chip"><b>{esc(name)}</b> {esc(value)}</span>'
-        for name in ('project', 'agent_name', 'model', 'provider', 'status', 'product', 'trace_type', 'tool_name')
-        for value in sorted(getattr(view.facets, name))
-    )
-    if not chips:
-        chips = ''.join(
-            f'<span class="xr-chip"><b>{esc(label)}</b> {operator} {value}</span>'
-            for label, key, operator in (
-                ('Tokens', 'tokens_min', '≥'),
-                ('Tokens', 'tokens_max', '≤'),
-                ('Duration', 'duration_ms_min', '≥'),
-                ('Duration', 'duration_ms_max', '≤'),
-            )
-            if (value := getattr(view.numeric, key)) is not None
-        )
+    from evaluatorq.dashboard.trace_finder.views import _facet_chips  # pyright: ignore[reportPrivateUsage]
+
+    chips = _facet_chips(view.facets, view.numeric, removable=True)
+    active = chips.count('class="chip ')
+    label = f'Filters · {active}' if active else 'Filters'
     return (
-        f'<div class="xr-toolbar"><button type="button" class="xr-filter" data-explorer-filters aria-controls="finder-controls" aria-expanded="false">Filters</button>{chips}'
+        f'<div class="xr-toolbar"><button type="button" class="xr-filter" data-explorer-filters aria-haspopup="true" aria-expanded="false">{label}</button>'
+        f'<span class="xr-chips">{chips}</span>'
         f'<span class="xr-quickviews" role="group" aria-label="Quick views">{quick_views}</span>'
         f'<span class="spacer"></span><span class="xr-toolbar-right">{date_and_rows}{context_menu}{load}'
         f'<span class="finder-seg xr-switch" role="group" aria-label="View">{switch}</span></span></div>'
