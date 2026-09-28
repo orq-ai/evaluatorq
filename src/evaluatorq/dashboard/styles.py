@@ -14,6 +14,7 @@ from __future__ import annotations
 
 _TRACES_DENSITY_CSS = """
 /* /traces density pass. The command strip exists only on /traces; /find keeps its search hero. */
+.finder:not(:has(> .finder-command)) { max-width:1040px; }
 .finder:has(> .finder-command) { gap:0; max-width:1420px; margin:0 auto; overflow:hidden; border:1px solid #dedfe2; border-radius:10px; background:#fff; box-shadow:0 7px 28px #2928310a; color:#25232e; }
 .finder:has(> .finder-command) .finder-command { align-self:stretch; max-width:none; padding:13px 16px 0; border:0; border-radius:0; background:#fff; box-shadow:none; }
 .finder:has(> .finder-command) .finder-command-title { margin:0 0 8px; font-size:20px; line-height:1.3; letter-spacing:-.02em; }
