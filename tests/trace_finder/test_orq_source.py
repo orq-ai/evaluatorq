@@ -318,6 +318,23 @@ async def test_targeted_deadline_cancels_slow_project_lookup(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_targeted_project_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({})
+    client = FakeOrq(traces)
+
+    async def provider_timeout(**_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError('provider project lookup timed out')
+
+    client.projects.list_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider project lookup timed out') as error:
+        await make_source(client).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
 async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -343,6 +360,22 @@ async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout
 
 
 @pytest.mark.asyncio
+async def test_targeted_query_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({})
+
+    async def provider_timeout(**_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError('provider query timed out')
+
+    traces.query_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider query timed out') as error:
+        await make_source(FakeOrq(traces)).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
 async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
     traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
@@ -363,6 +396,22 @@ async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest
     assert snapshot.traces == ()
     assert len(hydration_timeouts) == 1
     assert 1 <= hydration_timeouts[0] <= 10
+
+
+@pytest.mark.asyncio
+async def test_targeted_hydration_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
+
+    async def provider_timeout(*, trace_id: str, **_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError(f'provider span timed out for {trace_id}')
+
+    traces.list_spans_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider span timed out') as error:
+        await make_source(FakeOrq(traces)).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
 
 
 @pytest.mark.asyncio

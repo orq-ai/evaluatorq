@@ -54,10 +54,14 @@ _CAPTURE_REGISTRATION_ATTR = '_evaluatorq_trace_finder_capture_registration'
 _CAPTURE_REQUEST: ContextVar[object | None] = ContextVar('trace_finder_capture_request', default=None)
 
 
+class _TargetDeadlineExceeded(asyncio.TimeoutError):
+    """The local targeted-reload budget expired, distinct from a provider timeout."""
+
+
 def _remaining_target_seconds(deadline: float) -> float:
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        raise asyncio.TimeoutError
+        raise _TargetDeadlineExceeded
     return remaining
 
 
@@ -75,8 +79,17 @@ async def _await_target_deadline(awaitable: Awaitable[Any], deadline: float | No
         close = getattr(awaitable, 'close', None)
         if callable(close):
             close()
-        raise asyncio.TimeoutError
-    return await asyncio.wait_for(awaitable, timeout=remaining)
+        raise _TargetDeadlineExceeded
+    task = asyncio.ensure_future(awaitable)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=remaining)
+        if done:
+            return task.result()
+        raise _TargetDeadlineExceeded
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 def _empty_target_snapshot(start: datetime, end: datetime) -> Snapshot:
@@ -299,7 +312,7 @@ class OrqTraceSource:
         target_deadline = time.monotonic() + TARGET_RELOAD_PAGE_BUDGET_SECONDS if target_trace_ids is not None else None
         try:
             project_names = await _await_target_deadline(_project_names(self._client), target_deadline)
-        except asyncio.TimeoutError:
+        except _TargetDeadlineExceeded:
             logger.warning(
                 'targeted trace reload reached its {} second deadline during project lookup',
                 TARGET_RELOAD_PAGE_BUDGET_SECONDS,
@@ -378,7 +391,7 @@ class OrqTraceSource:
 
             try:
                 response, raw_page = await _await_target_deadline(query_page(), target_deadline)
-            except asyncio.TimeoutError:
+            except _TargetDeadlineExceeded:
                 logger.warning(
                     'targeted trace reload reached its {} second deadline during OQL query',
                     TARGET_RELOAD_PAGE_BUDGET_SECONDS,
@@ -490,9 +503,7 @@ class OrqTraceSource:
                     continue
                 try:
                     completed.append(task.result())
-                except TimeoutError:
-                    if time.monotonic() < deadline:
-                        raise
+                except _TargetDeadlineExceeded:
                     hydration_timed_out = True
             if not pending:
                 return completed, hydration_timed_out
