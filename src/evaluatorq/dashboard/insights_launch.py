@@ -538,8 +538,10 @@ def _windows_directory_identity(root: Path) -> tuple[int, int, int]:
         close_handle(handle)
 
 
-def _open_windows_approved_finder_export(root: Path, path: Path) -> tuple[int, tuple[int, int, int]]:
-    """Open a Windows export without following reparse points and verify its final path."""
+def _open_windows_approved_regular_file(
+    root: Path, path: Path, *, description: str = 'Finder export'
+) -> tuple[int, tuple[int, int, int]]:
+    """Open a Windows file without following reparse points and verify its final path."""
     try:
         import msvcrt
 
@@ -565,7 +567,7 @@ def _open_windows_approved_finder_export(root: Path, path: Path) -> tuple[int, t
         close_handle.argtypes = [ctypes.c_void_p]
         close_handle.restype = ctypes.c_int
     except (AttributeError, ImportError, OSError) as exc:
-        raise OSError('Safe Finder export opening is unavailable on Windows.') from exc
+        raise OSError(f'Safe {description.lower()} opening is unavailable on Windows.') from exc
 
     invalid_handle = ctypes.c_void_p(-1).value
     open_existing = 3
@@ -587,20 +589,20 @@ def _open_windows_approved_finder_export(root: Path, path: Path) -> tuple[int, t
         if not get_info(handle, file_attribute_tag_info, ctypes.byref(info), ctypes.sizeof(info)):
             raise ctypes.WinError(ctypes.get_last_error())
         if info.attributes & (file_attribute_directory | file_attribute_reparse_point):
-            raise OSError('Finder export must be a regular file, not a directory or reparse point.')
+            raise OSError(f'{description} must be a regular file, not a directory or reparse point.')
 
         path_buffer = ctypes.create_unicode_buffer(32768)
         length = get_final_path(handle, path_buffer, len(path_buffer), 0)
         if not length or length >= len(path_buffer):
-            raise OSError('Could not verify the final path of the Finder export.')
+            raise OSError(f'Could not verify the final path of the {description.lower()}.')
 
         final_path = _normalized_windows_path(path_buffer.value)
         approved_root = _normalized_windows_path(str(root))
         if str(PureWindowsPath(final_path).parent) != approved_root:
-            raise OSError('Finder export handle resolved outside the approved directory.')
+            raise OSError(f'{description} handle resolved outside the approved directory.')
 
         if _windows_directory_identity(root) != directory_identity:
-            raise OSError('Finder export directory changed while opening the file.')
+            raise OSError(f'{description} directory changed while opening the file.')
 
         descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | getattr(os, 'O_BINARY', 0))
         handle = None
@@ -629,7 +631,7 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
                 raise ValueError('Finder export directory has unsafe ownership or permissions.')
             descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
         else:
-            descriptor, windows_directory_identity = _open_windows_approved_finder_export(root, path)
+            descriptor, windows_directory_identity = _open_windows_approved_regular_file(root, path)
         try:
             export_file = os.fdopen(descriptor, 'rb')
         except OSError:
@@ -716,8 +718,13 @@ def validate_private_finder_reference(path: Path) -> None:
 def read_private_finder_reference(path: Path) -> dict[str, object]:
     """Read a lease only after checking owner, mode, and regular-file type."""
     validate_private_finder_reference(path)
-    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
-    descriptor = os.open(path, flags)
+    if os.name == 'nt':
+        descriptor, _directory_identity = _open_windows_approved_regular_file(
+            path.parent, path, description='Finder export lease'
+        )
+    else:
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        descriptor = os.open(path, flags)
     try:
         info = os.fstat(descriptor)
         if (

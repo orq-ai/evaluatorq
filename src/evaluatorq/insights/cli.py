@@ -184,9 +184,12 @@ def insights_cmd(
         typer.Option('--embedding-model', help='Model used to embed discovered-dimension text.'),
     ] = 'openai/text-embedding-3-small',
     priority_dimension: Annotated[
-        str,
-        typer.Option('--priority-dimension', help='Dimension used for the optional priority matrix.'),
-    ] = 'intent',
+        str | None,
+        typer.Option(
+            '--priority-dimension',
+            help='Priority matrix dimension; defaults to intent or the first selected dimension.',
+        ),
+    ] = None,
     no_cache: Annotated[bool, typer.Option('--no-cache', help='Disable the local Insights cache.')] = False,  # noqa: FBT002
     json_path: Annotated[
         Path | None, typer.Option('--json', help='Write a copy of the completed run JSON to PATH.')
@@ -256,9 +259,13 @@ def insights_cmd(
         emit_error(f'--dimension cannot be repeated: {", ".join(sorted(duplicate_dimensions))}')
         raise typer.Exit(code=2)
     dimensions = cast('tuple[DimensionName, ...]', raw_dimensions)
-    if priority_dimension not in _DIMENSIONS:
+    if priority_dimension is not None and priority_dimension not in _DIMENSIONS:
         emit_error(f'unknown priority dimension: {priority_dimension!r}')
         raise typer.Exit(code=2)
+    if priority_dimension is not None and priority_dimension not in dimensions:
+        emit_error(f'--priority-dimension {priority_dimension!r} must also be included with --dimension')
+        raise typer.Exit(code=2)
+    selected_priority_dimension = priority_dimension or ('intent' if 'intent' in dimensions else dimensions[0])
     try:
         labels = _resolve_labels(label)
         numeric = NumericFilters(
@@ -312,7 +319,7 @@ def insights_cmd(
                 summary_model=summary_model,
                 classifier_model=classifier_model,
                 embedding_model=embedding_model,
-                priority_dimension=priority_dimension,
+                priority_dimension=selected_priority_dimension,
                 parallelism=settings.parallelism,
                 cache=not no_cache,
                 _finder_export_source=from_finder.resolve() if from_finder is not None else None,

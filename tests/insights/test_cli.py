@@ -173,6 +173,55 @@ def test_repeated_dimensions_are_rejected_before_pipeline_runs(monkeypatch: Any)
     assert invoked == []
 
 
+def test_priority_dimension_must_be_in_selected_dimensions(monkeypatch: Any) -> None:
+    invoked: list[bool] = []
+
+    async def fake_insights(population: Any, **kwargs: Any) -> Any:
+        invoked.append(True)
+        raise AssertionError('pipeline must not run for a missing priority dimension')
+
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    result = CliRunner().invoke(
+        _app(), ['insights', '--dimension', 'failure', '--priority-dimension', 'intent']
+    )
+
+    assert result.exit_code == 2, result.output
+    assert "--priority-dimension 'intent' must also be included with --dimension" in unstyle(result.output)
+    assert invoked == []
+
+
+def test_selected_priority_dimension_reaches_pipeline(monkeypatch: Any, minimal_run: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run(population: Any, profile: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return minimal_run
+
+    monkeypatch.setattr(cli_module, '_run_insights_with_profile', fake_run)
+    result = CliRunner().invoke(
+        _app(), ['insights', '--dimension', 'failure', '--priority-dimension', 'failure']
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured['dimensions'] == ('failure',)
+    assert captured['priority_dimension'] == 'failure'
+
+
+def test_priority_defaults_to_a_selected_dimension(monkeypatch: Any, minimal_run: Any) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run(population: Any, profile: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
+        return minimal_run
+
+    monkeypatch.setattr(cli_module, '_run_insights_with_profile', fake_run)
+    result = CliRunner().invoke(_app(), ['insights', '--dimension', 'failure'])
+
+    assert result.exit_code == 0, result.output
+    assert captured['dimensions'] == ('failure',)
+    assert captured['priority_dimension'] == 'failure'
+
+
 def test_cli_prints_report_path_without_loading_historical_runs(
     monkeypatch: Any, minimal_run: Any, tmp_path: Path
 ) -> None:

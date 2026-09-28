@@ -621,7 +621,7 @@ def test_windows_finder_export_reparse_swap_is_rejected(monkeypatch: pytest.Monk
     monkeypatch.setitem(__import__('sys').modules, 'msvcrt', types.SimpleNamespace())
 
     with pytest.raises(OSError, match='reparse point'):
-        insights_launch._open_windows_approved_finder_export(exports, approved)
+        insights_launch._open_windows_approved_regular_file(exports, approved)
     assert calls == ['open-without-following-reparse']
 
 
@@ -683,9 +683,59 @@ def test_windows_finder_export_directory_swap_during_create_file_is_rejected(
     )
 
     with pytest.raises(OSError, match='directory changed while opening'):
-        insights_launch._open_windows_approved_finder_export(exports, approved)
+        insights_launch._open_windows_approved_regular_file(exports, approved)
     assert len(root_identities) == 2
     assert root_identities[0] != root_identities[1]
+
+
+def test_windows_finder_lease_read_rejects_reparse_point_before_path_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import ctypes
+    import types
+
+    from evaluatorq.dashboard import insights_launch
+
+    lease_dir = tmp_path / 'finder-references'
+    lease_dir.mkdir(mode=0o700)
+    lease = lease_dir / 'run.json'
+    lease.write_text('{"finder_export":"approved.json"}', encoding='utf-8')
+    opened: list[str] = []
+
+    def create_file(path: str, *_args: object) -> int:
+        opened.append(path)
+        return 123
+
+    class type_info(ctypes.Structure):
+        _fields_ = [('attributes', ctypes.c_uint32), ('reparse_tag', ctypes.c_uint32)]
+
+    def get_info(_handle: object, _kind: int, info_pointer: object, _size: int) -> int:
+        info = ctypes.cast(info_pointer, ctypes.POINTER(type_info)).contents
+        info.attributes = 0x400
+        return 1
+
+    def unused(*_args: object) -> int:
+        raise AssertionError('A reparse point must be rejected before resolving or reading its target.')
+
+    api = types.SimpleNamespace(
+        CreateFileW=create_file,
+        GetFileInformationByHandleEx=get_info,
+        GetFinalPathNameByHandleW=unused,
+        CloseHandle=lambda _handle: 1,
+    )
+    monkeypatch.setattr(ctypes, 'WinDLL', lambda *_args, **_kwargs: api, raising=False)
+    monkeypatch.setattr(insights_launch.os, 'name', 'nt')
+    monkeypatch.setattr(insights_launch, '_windows_directory_identity', lambda _root: (1, 2, 3))
+    monkeypatch.setitem(__import__('sys').modules, 'msvcrt', types.SimpleNamespace())
+    monkeypatch.setattr(
+        insights_launch.os,
+        'open',
+        lambda *_args, **_kwargs: pytest.fail('Windows lease reads must not use pathname os.open.'),
+    )
+
+    with pytest.raises(OSError, match='reparse point'):
+        insights_launch.read_private_finder_reference(lease)
+    assert opened == [str(lease)]
 
 
 def test_finder_export_descriptor_closes_when_fdopen_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -25,6 +25,11 @@ def _slug(value: str) -> str:
     return re.sub(r'-+', '-', re.sub(r'[^a-z0-9]+', '-', value.lower())).strip('-')[:64] or 'insights'
 
 
+def _rename_is_exclusive() -> bool:
+    """Windows refuses to rename over an existing destination; POSIX does not."""
+    return os.name == 'nt'
+
+
 def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
     """Save a run JSON without overwriting an existing run and return its path."""
     directory = runs_dir or get_insights_runs_dir()
@@ -32,6 +37,7 @@ def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
     stamp = run.created_at.astimezone(timezone.utc).strftime('%Y%m%d-%H%M%S')
     base_name = f'insights_{stamp}_{_slug(run.run_name)}'
     temporary: Path | None = None
+    keep_temporary = False
     try:
         with tempfile.NamedTemporaryFile(
             mode='w', encoding='utf-8', dir=directory, prefix=f'.{base_name}.', suffix='.tmp', delete=False
@@ -56,43 +62,32 @@ def save_run(run: InsightsRun, runs_dir: Path | None = None) -> Path:
             except OSError as exc:
                 if exc.errno not in {errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV}:
                     raise
-                # Never publish with replace(): another process could claim
-                # the name after a staging symlink was created. O_EXCL
-                # atomically reserves the final name, so a collision advances
-                # the suffix without replacing the other run.
-                logger.warning('Hard links are unavailable in {}; saving run with a non-atomic copy', directory)
+                if _rename_is_exclusive():
+                    # Windows rename publishes the complete file atomically
+                    # and rejects a destination claimed by another process.
+                    try:
+                        temporary.rename(path)
+                    except FileExistsError:
+                        suffix += 1
+                        continue
+                    break
+                # Point the public name at the fully written temporary file.
+                # Creating a symlink is atomic and fails if another save has
+                # already claimed the name; copying into an O_EXCL reservation
+                # would let readers see a partial JSON document.
+                logger.warning('Hard links are unavailable in {}; saving run through an atomic symlink', directory)
                 try:
-                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                    path.symlink_to(temporary.name)
                 except FileExistsError:
                     suffix += 1
                     continue
-                reserved_stat = None
-                try:
-                    reserved_stat = os.fstat(descriptor)
-                    output = os.fdopen(descriptor, 'wb')
-                    descriptor = -1  # The output stream owns the descriptor now.
-                    with output, temporary.open('rb') as source:
-                        while chunk := source.read(1024 * 1024):
-                            output.write(chunk)
-                        output.flush()
-                        os.fsync(output.fileno())
-                except Exception:
-                    if descriptor >= 0:
-                        with contextlib.suppress(OSError):
-                            os.close(descriptor)
-                    with contextlib.suppress(OSError):
-                        current_stat = path.lstat()
-                        if reserved_stat is not None and (current_stat.st_dev, current_stat.st_ino) == (
-                            reserved_stat.st_dev,
-                            reserved_stat.st_ino,
-                        ):
-                            path.unlink()
-                    raise
+                keep_temporary = True
                 break
-        with contextlib.suppress(OSError):
-            temporary.unlink()
+        if not keep_temporary:
+            with contextlib.suppress(OSError):
+                temporary.unlink()
     except Exception:
-        if temporary is not None:
+        if temporary is not None and not keep_temporary:
             with contextlib.suppress(OSError):
                 temporary.unlink(missing_ok=True)
         raise

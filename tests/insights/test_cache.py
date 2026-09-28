@@ -186,7 +186,7 @@ def test_disabled_cache_never_hits(tmp_path, cache_factory):
     assert c.get_vectors('e', ['a']) == {}
 
 
-def test_corrupt_file_degrades_to_miss(tmp_path, caplog, cache_factory):
+def test_corrupt_file_degrades_to_miss(tmp_path, cache_factory):
     p = tmp_path / 'c.sqlite'
     p.write_bytes(b'not sqlite')
     assert cache_factory(p).get_vectors('e', ['a']) == {}
