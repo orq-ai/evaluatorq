@@ -282,3 +282,9 @@ class InsightsRun(BaseModel):
                 if not valid:
                     raise ValueError(f'trace {trace.trace_id!r} label {name!r} has a value incompatible with {kind!r}')
         return self
+
+    @model_validator(mode='after')
+    def _created_at_is_timezone_aware(self) -> Self:
+        if self.created_at.tzinfo is None or self.created_at.utcoffset() is None:
+            raise ValueError('created_at must be timezone-aware')
+        return self

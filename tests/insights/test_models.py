@@ -77,6 +77,14 @@ def test_run_round_trips_json(minimal_run: InsightsRun) -> None:
     assert InsightsRun.model_validate_json(minimal_run.model_dump_json()) == minimal_run
 
 
+def test_run_rejects_naive_created_at(minimal_run: InsightsRun) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['created_at'] = '2026-09-01T00:00:00'
+
+    with pytest.raises(ValidationError, match='created_at must be timezone-aware'):
+        InsightsRun.model_validate(payload)
+
+
 @pytest.mark.parametrize(('kind', 'value'), [('noul', 'yes'), ('choice', True), ('score', '0.8')])
 def test_saved_run_rejects_label_values_incompatible_with_spec(
     minimal_run: InsightsRun, kind: str, value: str | bool
