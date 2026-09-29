@@ -24,6 +24,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -258,7 +259,7 @@ BATCH_SUFFIXES = frozenset({'.bat', '.cmd'})
 
 
 def is_batch_launcher(executable: str) -> bool:
-    return Path(executable).suffix.lower() in BATCH_SUFFIXES
+    return sys.platform == 'win32' and Path(executable).suffix.lower() in BATCH_SUFFIXES
 
 
 def refuse_unsafe_batch_args(argv: list[str]) -> None:

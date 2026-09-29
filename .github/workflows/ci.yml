@@ -30,8 +30,7 @@ jobs:
         run: uv run ruff format --check src
 
   check:
-    # Linux legs keep the bare `(3.x)` name: the main ruleset requires those exact
-    # check names, so renaming them blocks every merge.
+    # Linux legs keep the bare `(3.x)` name, which the main ruleset requires.
     name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15

@@ -26,7 +26,8 @@ def shell_join(args: Sequence[str]) -> str:
 
     POSIX gets ``shlex`` quoting. Windows gets ``subprocess.list2cmdline``, which follows the C runtime's
     argv rules, not either shell's: it wraps an argument with spaces in double quotes, which is enough for
-    the paths and names these hints carry, but it escapes neither cmd.exe's ``%`` nor PowerShell's ``$``.
+    the paths and names these hints carry, but it escapes no shell metacharacter, such as cmd.exe's ``&``
+    and ``%`` or PowerShell's ``$``.
     """
     if sys.platform == 'win32':
         return subprocess.list2cmdline(args)
