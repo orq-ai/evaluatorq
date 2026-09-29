@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 from click import unstyle
@@ -11,15 +12,12 @@ from typer.testing import CliRunner
 
 from evaluatorq.backends.coding_agent_cli import BUILD_DIR, app
 from evaluatorq.backends.container import DEFAULT_CODING_AGENT_IMAGE
-
-pytestmark = pytest.mark.skipif(os.name != 'posix', reason='requires Unix shell tooling')
-
+from tests.backends.fakes import install_fake
 
 def test_build_image_argv(tmp_path: Path) -> None:
     log = tmp_path / 'log'
-    fake = tmp_path / 'docker'
-    fake.write_text(f'#!/bin/sh\nfor arg do printf "[%s]\\n" "$arg"; done > {log}\nexit 3\n')
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    source = f'import sys\nopen({str(log)!r}, "w").writelines(f"[{{a}}]\\n" for a in sys.argv[1:])\nsys.exit(3)\n'
+    fake = install_fake(tmp_path, 'docker', source)
     result = CliRunner().invoke(
         app,
         [
@@ -61,6 +59,7 @@ def test_build_dir_ships_both_files() -> None:
     assert (BUILD_DIR / 'Dockerfile').is_file() and (BUILD_DIR / 'entrypoint.sh').is_file()
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='entrypoint.sh runs inside a Linux container')
 def test_entrypoint_is_idempotent_and_execs(tmp_path: Path) -> None:
     passwd = tmp_path / 'passwd'
     passwd.write_text('root:x:0:0::/root:/bin/sh\n')

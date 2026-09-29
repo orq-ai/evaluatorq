@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import types
+from pathlib import Path
 from typing import Any
 
 import pydantic
 import pytest
 
-from evaluatorq.backends.coding_agent import AGENTS, CodingAgentTarget, DockerOptions, OrqLaunchOptions, ParsedTurn, build_argv
+from evaluatorq.backends import coding_agent as coding_agent_module
+from evaluatorq.backends.coding_agent import (
+    AGENTS,
+    CodingAgentTarget,
+    CodingAgentUnavailableError,
+    DockerOptions,
+    OrqLaunchOptions,
+    ParsedTurn,
+    build_argv,
+    resolve_executable,
+)
+from tests.backends.fakes import ECHO, install_fake
 
 PROMPT = 'reply to the user'
 
@@ -154,3 +166,21 @@ def test_parsed_turn_stays_mutable() -> None:
     turn = ParsedTurn()
     turn.text = 'hi'
     assert turn.text == 'hi' and turn.tool_calls == []
+
+
+def test_resolve_executable_searches_the_child_path(tmp_path: Path) -> None:
+    launcher = install_fake(tmp_path, 'claude', ECHO)
+    assert resolve_executable(['claude', '-p'], str(tmp_path)) == [str(launcher), '-p']
+    assert resolve_executable(['claude', '-p'], str(tmp_path / 'empty')) == ['claude', '-p']
+
+
+@pytest.mark.parametrize('arg', ['a & calc', 'say "hi"', '%PATH%', 'line\nbreak'])
+def test_resolve_executable_refuses_cmd_metacharacters_for_batch_launchers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arg: str
+) -> None:
+    shim = tmp_path / 'claude.cmd'
+    monkeypatch.setattr(coding_agent_module.shutil, 'which', lambda name, path=None: str(shim))
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        resolve_executable(['claude', '--append-system-prompt', arg], None)
+    assert info.value.code == 'cli.unsafe_shim'
+    assert resolve_executable(['claude', '-p', '--verbose'], None) == [str(shim), '-p', '--verbose']

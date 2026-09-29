@@ -104,7 +104,7 @@ class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheri
     CodingAgentError, NonRetryableTargetError
 ):
     """Non-retryable codes: ``cli.not_found``, ``cli.timeout``, ``cli.prompt_too_long``,
-    ``cli.agent_not_found``, ``cli.image_missing``, and ``cli.container_start``. Retrying these
+    ``cli.agent_not_found``, ``cli.image_missing``, ``cli.container_start``, and ``cli.unsafe_shim``. Retrying these
     outcomes repeats the same failure, so the retry loop stops.
     """
 
@@ -249,6 +249,30 @@ def build_argv(
         return ['orq', 'launch', 'claude', *orq_flags, '--', *agent_args], prompt
     # orq launch injects the subcommand (``exec`` / ``run``) itself, so the leading entry is dropped.
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
+
+
+# cmd.exe re-parses a .cmd/.bat command line, and CPython does not escape for it (the BatBadBut class),
+# so these characters in an argument could run commands. Refuse rather than guess at an escaping scheme.
+CMD_METACHARACTERS = frozenset('"%&|<>^!\r\n')
+
+
+def resolve_executable(argv: list[str], path: str | None) -> list[str]:
+    """Resolve ``argv[0]`` against the child's ``PATH`` instead of the parent's.
+
+    POSIX already searches the child environment, but Windows searches the parent's ``PATH`` and only
+    finds ``.exe`` files, so an npm-installed ``claude.cmd`` or a caller-supplied ``PATH`` is missed
+    there. A batch-file launcher is refused when any argument could be re-parsed as a command.
+    """
+    resolved = shutil.which(argv[0], path=path)
+    if resolved is None:
+        return argv
+    if Path(resolved).suffix.lower() in {'.bat', '.cmd'} and any(CMD_METACHARACTERS & set(a) for a in argv[1:]):
+        raise CodingAgentUnavailableError(
+            'cli.unsafe_shim',
+            f'{resolved} is a batch-file launcher and the arguments carry characters cmd.exe would interpret; '
+            'install the native executable or move the text out of the arguments',
+        )
+    return [resolved, *argv[1:]]
 
 
 PROMPT_INSTRUCTION = (
@@ -783,7 +807,7 @@ class CodingAgentTarget(AgentTarget):
                 return self._container_name
             old_name = self._container_name
             marker = root / 'home' / '.evq-exit'
-            cause = marker.read_text().strip() if marker.exists() else None
+            cause = marker.read_text(encoding='utf-8').strip() if marker.exists() else None
             marker.unlink(missing_ok=True)
             log_kill(
                 self._agent,
@@ -1079,6 +1103,7 @@ class CodingAgentTarget(AgentTarget):
         Stdout is read in chunks, so neither a long JSONL line nor a partial one can stall or crash the read.
         The caller owns container cleanup after this method has killed the process group on early exit.
         """
+        argv = resolve_executable(argv, env.get('PATH'))
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

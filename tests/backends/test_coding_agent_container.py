@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import stat
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +16,7 @@ from evaluatorq.backends import coding_agent as coding_agent_module
 from evaluatorq.backends import container as c
 from evaluatorq.backends.coding_agent import CodingAgentError, CodingAgentTarget, CodingAgentUnavailableError
 from evaluatorq.contracts import Message
+from tests.backends.fakes import install_fake
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
@@ -28,29 +28,65 @@ async def _wait_until(predicate, description: str, timeout: float = 5.0) -> None
             raise AssertionError(f'timed out waiting for {description}')
         await asyncio.sleep(0.01)
 
-FAKE = r"""#!/bin/sh
-printf 'ARGV %s\n' "$*" >> "$FAKE_LOG"
-[ "$1" = "--context" ] && shift 2
-case "$1" in
-  image) [ -n "$FAKE_IMAGE_ERROR" ] && echo "$FAKE_IMAGE_ERROR" >&2
-         exit ${FAKE_IMAGE_EXIT:-0};;
-  ps) exit 0;;
-  run) [ -n "$FAKE_RUN_SLEEP" ] && sleep "$FAKE_RUN_SLEEP"
-       [ -n "$FAKE_RUN_EXIT" ] && { echo "daemon down" >&2; exit $FAKE_RUN_EXIT; }; echo CREATED >> "$FAKE_LOG"; [ -n "$FAKE_RUN_STOPPED" ] && touch "$FAKE_STOPPED"; echo cid; exit 0;;
-  inspect) if [ -f "$FAKE_STOPPED" ]; then rm "$FAKE_STOPPED"; echo false; else echo true; fi; exit 0;;
-  exec) env | sed 's/^/ENV /' >> "$FAKE_LOG"; cat - >/dev/null
-        [ -n "$FAKE_EXEC_SLEEP" ] && sleep "$FAKE_EXEC_SLEEP"
-        [ -n "$FAKE_STDOUT" ] && cat "$FAKE_STDOUT"; exit ${FAKE_EXEC_EXIT:-0};;
-  rm) [ -n "$FAKE_RM_SLEEP" ] && sleep "$FAKE_RM_SLEEP"; [ -n "$FAKE_RM_EXIT" ] && exit "$FAKE_RM_EXIT"; echo REMOVED >> "$FAKE_LOG"; exit 0;;
-esac
+FAKE = """\
+import os, sys, time
+from pathlib import Path
+
+args, env = sys.argv[1:], os.environ.get
+
+
+def log(line):
+    with open(os.environ['FAKE_LOG'], 'a', encoding='utf-8') as f:
+        f.write(line + '\\n')
+
+
+log('ARGV ' + ' '.join(args))
+if args[:1] == ['--context']:
+    args = args[2:]
+sub = args[0] if args else ''
+if sub == 'image':
+    if env('FAKE_IMAGE_ERROR'):
+        print(env('FAKE_IMAGE_ERROR'), file=sys.stderr)
+    sys.exit(int(env('FAKE_IMAGE_EXIT') or 0))
+if sub == 'run':
+    if env('FAKE_RUN_SLEEP'):
+        time.sleep(float(env('FAKE_RUN_SLEEP')))
+    if env('FAKE_RUN_EXIT'):
+        print('daemon down', file=sys.stderr)
+        sys.exit(int(env('FAKE_RUN_EXIT')))
+    log('CREATED')
+    if env('FAKE_RUN_STOPPED'):
+        Path(env('FAKE_STOPPED')).touch()
+    print('cid')
+if sub == 'inspect':
+    stopped = Path(env('FAKE_STOPPED') or os.devnull)
+    if env('FAKE_STOPPED') and stopped.is_file():
+        stopped.unlink()
+        print('false')
+    else:
+        print('true')
+if sub == 'exec':
+    for key, value in os.environ.items():
+        log(f'ENV {key}={value}')
+    sys.stdin.read()
+    if env('FAKE_EXEC_SLEEP'):
+        time.sleep(float(env('FAKE_EXEC_SLEEP')))
+    if env('FAKE_STDOUT'):
+        with open(env('FAKE_STDOUT'), 'rb') as f:
+            sys.stdout.buffer.write(f.read())
+    sys.exit(int(env('FAKE_EXEC_EXIT') or 0))
+if sub == 'rm':
+    if env('FAKE_RM_SLEEP'):
+        time.sleep(float(env('FAKE_RM_SLEEP')))
+    if env('FAKE_RM_EXIT'):
+        sys.exit(int(env('FAKE_RM_EXIT')))
+    log('REMOVED')
 """
 
 
 @pytest.fixture
 def docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    script = tmp_path / 'docker'
-    script.write_text(FAKE)
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    script = install_fake(tmp_path, 'docker', FAKE)
     log = tmp_path / 'log'
     monkeypatch.setenv('FAKE_LOG', str(log))
     monkeypatch.setenv('FAKE_STDOUT', str(FIXTURES / 'claude_tool.jsonl'))
