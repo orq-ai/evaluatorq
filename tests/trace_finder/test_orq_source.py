@@ -305,6 +305,51 @@ async def test_uses_raw_query_payload_for_fields_dropped_by_sdk_models() -> None
 
 
 @pytest.mark.asyncio
+async def test_prepends_system_prompt_from_span_detail_when_summary_lacks_it() -> None:
+    # Live Orq shape: the trace summary's gen_ai.input is only the last user turn (a JSON string),
+    # while get_span serves gen_ai.input.messages with the system message first, as role + parts.
+    trace = summary('trace', messages=[])
+    trace.span_id = 'leading'
+    trace.attributes = {'gen_ai': {'input': '"which traces had tool errors?"'}}
+    detail_payload = namespace(
+        attributes={
+            'gen_ai': {
+                'input': {
+                    'messages': [
+                        {'role': 'system', 'parts': [{'type': 'text', 'content': 'You compile queries.'}]},
+                        {'role': 'user', 'parts': [{'type': 'text', 'content': 'which traces had tool errors?'}]},
+                    ]
+                }
+            }
+        }
+    )
+    traces = FakeTraces({None: ([trace], False, None)}, details={('trace', 'leading'): detail_payload})
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    messages = snapshot.traces[0].messages
+    assert [m['role'] for m in messages] == ['system', 'user']
+    assert messages[0]['parts'][0]['content'] == 'You compile queries.'
+    assert messages[1]['role'] == 'user'
+    assert [call['span_id'] for call in traces.get_span_calls] == ['leading']
+
+
+@pytest.mark.asyncio
+async def test_keeps_summary_messages_when_system_prompt_lookup_fails() -> None:
+    trace = summary('trace', messages=user_messages('hello'))
+    trace.span_id = 'leading'
+    traces = FakeTraces({None: ([trace], False, None)})
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert snapshot.traces[0].messages == ({'role': 'user', 'content': 'hello'},)
+
+
+@pytest.mark.asyncio
 async def test_hydrates_latest_eligible_span_and_maps_project_metadata() -> None:
     traces = FakeTraces(
         {None: ([summary('trace', messages=[], project_id='project-1')], False, None)},
@@ -641,6 +686,28 @@ def test_conversation_messages_accepts_direct_messages() -> None:
     ]
 
 
+def test_conversation_messages_keeps_output_with_direct_input_messages() -> None:
+    assert _conversation_messages({
+        'messages': [{'role': 'user', 'content': 'question'}],
+        'attributes': {'gen_ai': {'output': {'messages': [{'role': 'assistant', 'content': 'answer'}]}}},
+    }) == [{'role': 'user', 'content': 'question'}, {'role': 'assistant', 'content': 'answer'}]
+
+
+def test_conversation_messages_omits_empty_reasoning_part_before_visible_answer() -> None:
+    assert _conversation_messages({
+        'attributes': {'gen_ai': {
+            'input': {'messages': [{'role': 'system', 'content': 'instructions'}]},
+            'output': {'messages': [
+                {'role': 'assistant', 'parts': [{'type': 'reasoning', 'content': '[encrypted]'}]},
+                {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'answer'}]},
+            ]},
+        }},
+    }) == [
+        {'role': 'system', 'content': 'instructions'},
+        {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'answer'}]},
+    ]
+
+
 def test_conversation_messages_uses_input_when_direct_messages_are_blank() -> None:
     assert _conversation_messages({
         'messages': [{'role': 'user', 'content': ''}],
@@ -771,6 +838,69 @@ def user_messages(content: str) -> list[dict[str, Any]]:
 
 def conversation_attributes(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return {'gen_ai': {'input': {'messages': messages}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('summary_messages', [
+    user_messages('short question'),
+    [
+        {'role': 'user', 'content': 'earlier question'},
+        {'role': 'assistant', 'content': 'earlier answer'},
+        {'role': 'user', 'content': 'short question'},
+    ],
+])
+async def test_hydrate_rows_fetches_full_span_when_summary_omits_reported_reply(
+    summary_messages: list[dict[str, Any]],
+) -> None:
+    trace = summary('partial', messages=summary_messages)
+    trace.usage = namespace(prompt_tokens=1339, completion_tokens=262, prompt_cached_tokens=1336)
+    hydrated = detail('reply', '', minute=1)
+    hydrated.attributes = {
+        'gen_ai': {
+            'input': {'messages': [
+                {'role': 'system', 'parts': [{'type': 'text', 'content': 'full instructions'}]},
+                {'role': 'user', 'parts': [{'type': 'text', 'content': 'short question'}]},
+            ]},
+            'output': {'messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'full answer'}]}]},
+        }
+    }
+    traces = FakeTraces(
+        {None: ([trace], False, None)},
+        spans={'partial': [span('reply', minute=1, span_type='span.responses')]},
+        details={('partial', 'reply'): hydrated},
+    )
+    source = make_source(FakeOrq(traces))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    record = records['partial']
+    assert record is not None
+    assert record.span_id == 'reply'
+    assert [message['role'] for message in record.messages] == ['system', 'user', 'assistant']
+    assert record.messages[-1]['parts'][0]['content'] == 'full answer'
+    assert [call['span_id'] for call in traces.get_span_calls] == ['reply']
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_warns_and_keeps_summary_if_reported_reply_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace = summary('partial', messages=user_messages('short question'))
+    trace.usage = namespace(prompt_tokens=10, completion_tokens=5)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    source = make_source(FakeOrq(FakeTraces({None: ([trace], False, None)})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records['partial'] is not None
+    assert records['partial'].messages == ({'role': 'user', 'content': 'short question'},)
+    assert any('reports output tokens but its hydrated spans contain no visible reply' in warning for warning in warnings)
 
 
 @pytest.mark.asyncio

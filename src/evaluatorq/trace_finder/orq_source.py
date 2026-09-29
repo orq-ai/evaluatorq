@@ -496,13 +496,24 @@ class OrqTraceSource:
     ) -> tuple[TraceRecord | None, int]:
         fallback_count = int(raw_capture_fallback)
         messages = _conversation_messages(raw_summary)
-        if _usable(messages):
+        output_tokens = _field(_field(raw_summary, 'usage'), 'completion_tokens')
+        if output_tokens is None:
+            output_tokens = _field(_field(summary, 'usage'), 'completion_tokens')
+        missing_reply = (
+            isinstance(output_tokens, (int, float))
+            and not isinstance(output_tokens, bool)
+            and output_tokens > 0
+            and not _has_reply(messages)
+        )
+        if _usable(messages) and not missing_reply:
+            messages = await self._with_system_prompt(summary, raw_summary, messages, semaphore)
             return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
 
         trace_id = str(_field(summary, 'trace_id') or _field(summary, 'id') or '')
         if not trace_id:
             return None, fallback_count
         spans = await self._list_spans(trace_id, semaphore)
+        fallback: TraceRecord | None = None
         for span in _eligible_spans(spans):
             span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
             if not span_id:
@@ -525,10 +536,52 @@ class OrqTraceSource:
             if detail_fallback:
                 raw_detail = _plain(detail)
             fallback_count += int(detail_fallback)
-            messages = _conversation_messages(raw_detail)
-            if _usable(messages):
-                return _record(summary, raw_summary, detail, raw_detail, messages, project_names), fallback_count
+            detail_messages = _conversation_messages(raw_detail)
+            if _usable(detail_messages):
+                record = _record(summary, raw_summary, detail, raw_detail, detail_messages, project_names)
+                if not missing_reply or _has_reply(detail_messages):
+                    return record, fallback_count
+                if fallback is None:
+                    fallback = record
+        if missing_reply:
+            logger.warning('trace {} reports output tokens but its hydrated spans contain no visible reply', trace_id)
+        if fallback is not None:
+            return fallback, fallback_count
+        if _usable(messages):
+            return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
         return None, fallback_count
+
+    async def _with_system_prompt(
+        self,
+        summary: Any,
+        raw_summary: Any,
+        messages: list[dict[str, Any]],
+        semaphore: asyncio.Semaphore,
+    ) -> list[dict[str, Any]]:
+        """Prepend the system prompt, which Orq keeps only on the span detail.
+
+        The trace summary's ``gen_ai.input`` is just the last user turn; the full
+        ``gen_ai.input.messages`` (system message first) is served by ``get_span``.
+        """
+        if any(message.get('role') == 'system' for message in messages):
+            return messages
+        trace_id = str(_field(summary, 'trace_id') or _field(summary, 'id') or '')
+        span_id = str(_field(summary, 'span_id') or _field(raw_summary, 'span_id') or '')
+        if not trace_id or not span_id:
+            return messages
+        try:
+            async with semaphore:
+                response = await self._client.traces.get_span_async(
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    timeout_ms=SDK_TIMEOUT_MS,
+                )
+        except Exception as exc:  # noqa: BLE001 - enrichment is best-effort and logged
+            logger.warning('trace {} system prompt lookup failed: {}', trace_id, exc)
+            return messages
+        detail = _plain(_field(response, 'span') or response)
+        system = [m for m in _conversation_messages(detail) if m.get('role') == 'system' and _message_has_content(m)]
+        return [*system, *messages]
 
     async def _list_spans(self, trace_id: str, semaphore: asyncio.Semaphore) -> list[Any]:
         spans: list[Any] = []
@@ -716,20 +769,34 @@ def _conversation_messages(payload: Any) -> list[dict[str, Any]]:
     attributes = _mapping(payload.get('attributes'))
     gen_ai = _mapping(attributes.get('gen_ai'))
     direct = _message_list(payload.get('messages'))
-    if _usable(direct):
-        return direct
-
     inputs = [gen_ai.get('input'), attributes.get('gen_ai.input'), payload.get('input')]
     outputs = [gen_ai.get('output'), attributes.get('gen_ai.output'), payload.get('output')]
-    messages = next((parsed for value in inputs if (parsed := _message_list(value, default_role='user'))), [])
+    messages = (
+        direct
+        if _usable(direct)
+        else next((parsed for value in inputs if (parsed := _message_list(value, default_role='user'))), [])
+    )
     output_messages = next(
         (parsed for value in outputs if (parsed := _message_list(value, default_role='assistant'))),
         [],
     )
     for message in output_messages:
+        if not _message_has_content(message):
+            continue
         if not messages or message != messages[-1]:
             messages.append(message)
     return messages
+
+
+def _has_reply(messages: list[dict[str, Any]]) -> bool:
+    return next(
+        (
+            message.get('role') in {'assistant', 'tool'}
+            for message in reversed(messages)
+            if _message_has_content(message)
+        ),
+        False,
+    )
 
 
 def _message_list(value: Any, *, default_role: str | None = None) -> list[dict[str, Any]]:
@@ -825,6 +892,8 @@ def _content_has_value(value: Any) -> bool:
 def _content_block_has_value(value: Any) -> bool:
     if not isinstance(value, Mapping):
         return _content_has_value(value)
+    if value.get('type') == 'reasoning':
+        return False
     content_keys = ('content', 'image_url', 'input_text', 'output_text', 'text')
     if any(key in value for key in content_keys):
         return any(_content_has_value(value.get(key)) for key in content_keys if key in value)
