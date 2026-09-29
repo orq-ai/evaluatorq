@@ -582,6 +582,48 @@ async def test_static_and_hybrid_legs_return_the_same_error_payload() -> None:
     assert static_out['thread_id']
 
 
+async def test_hybrid_static_leg_creates_and_closes_a_distinct_target_per_row() -> None:
+    """Each hybrid static row receives an isolated target, which the job then closes."""
+
+    class _TrackedTarget:
+        def __init__(self, identifier: int) -> None:
+            self.identifier = identifier
+            self.calls = 0
+            self.closed = 0
+
+        async def respond(self, messages: list[Message]) -> AgentResponse:
+            self.calls += 1
+            return AgentResponse(text=f'response {self.identifier}')
+
+        async def close(self) -> None:
+            self.closed += 1
+
+    class _FreshTargetBackend:
+        def __init__(self) -> None:
+            self.targets: list[_TrackedTarget] = []
+
+        def create_target(self, _agent_key: str) -> _TrackedTarget:
+            target = _TrackedTarget(len(self.targets))
+            self.targets.append(target)
+            return target
+
+        def map_error(self, exc: Exception) -> tuple[str, str]:
+            return ('target_error', str(exc))
+
+    backend = _FreshTargetBackend()
+    job = _hybrid_static_job(backend)
+    first = DataPoint(inputs={'hybrid_source': 'static', 'messages': [{'role': 'user', 'content': 'first'}]})
+    second = DataPoint(inputs={'hybrid_source': 'static', 'messages': [{'role': 'user', 'content': 'second'}]})
+
+    first_out = (await job(first, 0))['output']
+    second_out = (await job(second, 1))['output']
+
+    assert [target.calls for target in backend.targets] == [1, 1]
+    assert [target.closed for target in backend.targets] == [1, 1]
+    assert first_out['response'] == 'response 0'
+    assert second_out['response'] == 'response 1'
+
+
 async def test_hybrid_static_leg_rejects_an_empty_prompt_before_creating_a_target() -> None:
     """A static row with no user content fails the job instead of sending an empty prompt."""
     from evaluatorq.job_helper import JobError
