@@ -1795,6 +1795,36 @@ class JuryReliability(BaseModel):
     )
 
 
+class JuryHealth(BaseModel):
+    """Run-level panel-of-judges operational health across multi-judge samples (RES-1649).
+
+    Complements ``JuryReliability`` (how much the judges agreed) with how well the
+    panel actually ran: how often a configured judge failed, a replacement stood in,
+    the decisive votes tied, the panel went inconclusive, a judge's repetitions
+    produced no usable verdict, or a judge cleanly abstained. Counts are over samples
+    that carried a multi-judge jury (``judges_configured >= 2``). ``None`` for
+    single-judge runs, so the field stays absent on the common path.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    samples: int = Field(ge=0, description='Multi-judge samples considered')
+    samples_with_judge_failure: int = Field(
+        default=0, ge=0, description='Samples where at least one configured judge failed mechanically'
+    )
+    replacements_used: int = Field(default=0, ge=0, description='Total replacement judges invoked across samples')
+    ties: int = Field(default=0, ge=0, description='Samples where the decisive votes tied')
+    inconclusive: int = Field(default=0, ge=0, description='Samples with too few decisive judges to conclude')
+    samples_with_repetition_failure: int = Field(
+        default=0,
+        ge=0,
+        description='Samples where at least one judge had a repetition fail to produce a usable verdict',
+    )
+    samples_with_abstention: int = Field(
+        default=0, ge=0, description='Samples where at least one judge cleanly abstained'
+    )
+
+
 class ReportSummary(BaseModel):
     """Aggregate summary statistics for a report."""
 
@@ -1842,6 +1872,11 @@ class ReportSummary(BaseModel):
         default=None,
         description='Chance-corrected inter-judge reliability across panel-of-judges samples (RES-739). '
         'None for single-judge runs.',
+    )
+    jury_health: JuryHealth | None = Field(
+        default=None,
+        description='Panel-of-judges operational health across multi-judge samples (RES-1649): judge failures, '
+        'replacements, ties, inconclusive panels, repetition failures, abstentions. None for single-judge runs.',
     )
     datapoint_breakdown: dict[str, int] | None = Field(
         default=None,

@@ -133,6 +133,7 @@ def _build_summary_section(report: RedTeamReport) -> ReportSection:
             'confidence_note': confidence_note,
             'narrative': report.executive_summary,
             'jury_reliability': s.jury_reliability.model_dump(mode='json') if s.jury_reliability else None,
+            'jury_health': s.jury_health.model_dump(mode='json') if s.jury_health else None,
         },
     )
 
