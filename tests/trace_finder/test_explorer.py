@@ -78,6 +78,40 @@ async def test_load_then_page_and_sort() -> None:
 
 
 @pytest.mark.asyncio
+async def test_switching_quick_view_clears_sort() -> None:
+    store = store_for(FakeSource((TraceRow(trace_id='a'),)))
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.set_view(sort='tokens_in')
+    view = await store.set_view(quick_view='slow')
+    assert view.sort is None
+
+
+@pytest.mark.asyncio
+async def test_narrow_updates_rows_filters_and_page_only_for_current_generation() -> None:
+    rows = tuple(TraceRow(trace_id=f't{i}') for i in range(3))
+    store = store_for(FakeSource(rows))
+    view = await store.load(START, END, 3, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.set_view(page=2)
+
+    facets = FacetSelection(model=frozenset({'gpt-5'}))
+    numeric = NumericFilters(tokens_min=100)
+    await store.narrow(view.generation, {'t1'}, facets=facets, numeric=numeric)
+
+    narrowed = await store.view()
+    assert [row.trace_id for row in narrowed.rows] == ['t1']
+    assert narrowed.facets == facets
+    assert narrowed.numeric == numeric
+    assert narrowed.page == 0
+    assert narrowed.narrowed_from == 3
+
+    await store.narrow(view.generation, {'t1'}, facets=facets, numeric=numeric)
+    assert (await store.view()).narrowed_from == 3
+
+    await store.narrow(view.generation - 1, {'t2'}, facets=FacetSelection(), numeric=NumericFilters())
+    assert await store.view() == narrowed
+
+
+@pytest.mark.asyncio
 async def test_matched_only_filters_with_results_and_is_ignored_without() -> None:
     rows = tuple(TraceRow(trace_id=f't{i}') for i in range(3))
     store = store_for(FakeSource(rows))
@@ -159,6 +193,47 @@ async def test_stale_hydration_does_not_fill_the_next_load_cache() -> None:
 
 
 @pytest.mark.asyncio
+async def test_message_counts_ignores_stale_generation() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        entered.set()
+        await release.wait()
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    store = ExplorerStore(search=FakeSource((TraceRow(trace_id='old'),)).search, hydrate=slow_hydrate)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    counts = asyncio.create_task(store.message_counts())
+    await entered.wait()
+    store._search = FakeSource((TraceRow(trace_id='new'),)).search  # pyright: ignore[reportPrivateUsage]
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    release.set()
+    await counts
+
+    assert (await store.view()).message_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_message_counts_fill_from_hydrated_records() -> None:
+    rows = tuple(TraceRow(trace_id=trace_id) for trace_id in ('a', 'b', 'c'))
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        sizes = {'a': 3, 'b': 7}
+        return {
+            row.trace_id: record(row.trace_id).model_copy(update={'messages': ({'role': 'user'},) * sizes[row.trace_id]})
+            if row.trace_id in sizes
+            else None
+            for row in rows
+        }
+
+    store = ExplorerStore(search=FakeSource(rows).search, hydrate=hydrate)
+    await store.load(START, END, 3, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    view = await store.message_counts()
+    assert view.message_counts == {'a': 3, 'b': 7}
+
+
+@pytest.mark.asyncio
 async def test_concurrent_records_requests_share_hydration() -> None:
     entered = asyncio.Event()
     release = asyncio.Event()
@@ -201,3 +276,80 @@ async def test_new_load_supersedes_the_old_one() -> None:
 
     assert [row.trace_id for row in (await store.view()).rows] == ['new']
     assert view.state == 'loaded'
+
+
+def test_top_share_views_keep_heaviest_tenth_and_skip_rows_without_the_metric() -> None:
+    from evaluatorq.trace_finder.explorer import ExplorerView
+    from evaluatorq.trace_finder.rows import TraceRow
+
+    rows = tuple(
+        TraceRow(trace_id=f't{i}', duration_ms=i * 10, cost_total=None if i == 19 else i / 100, tokens_in=i, tokens_out=None)
+        for i in range(20)
+    )
+    slow = ExplorerView(state='loaded', rows=rows, quick_view='slow').visible_rows()
+    assert [row.trace_id for row in slow] == ['t19', 't18']
+    costly = ExplorerView(state='loaded', rows=rows, quick_view='costly').visible_rows()
+    assert [row.trace_id for row in costly] == ['t18', 't17']
+    assert ExplorerView(state='loaded', rows=(TraceRow(trace_id='x'),), quick_view='tokens').visible_rows() == ()
+
+
+def test_largest_context_view_keeps_largest_tenth_and_skips_missing_context() -> None:
+    from evaluatorq.trace_finder.explorer import ExplorerView
+
+    rows = tuple(TraceRow(trace_id=f't{i}', context_tokens=None if i == 19 else i) for i in range(20))
+
+    visible = ExplorerView(state='loaded', rows=rows, quick_view='context').visible_rows()
+
+    assert [row.trace_id for row in visible] == ['t18', 't17']
+
+
+def test_top_conversations_groups_falls_back_excludes_unvalued_and_orders_rows() -> None:
+    from evaluatorq.trace_finder.explorer import top_conversations
+
+    rows = [
+        TraceRow(
+            trace_id='thread-late',
+            thread_id='thread',
+            started_at=START.replace(hour=2),
+            cost_total=1,
+        ),
+        TraceRow(
+            trace_id='thread-early',
+            thread_id='thread',
+            started_at=START.replace(hour=1),
+            cost_total=4,
+        ),
+        TraceRow(trace_id='session-top', session_id='session', cost_total=3),
+        TraceRow(trace_id='unidentified', cost_total=100),
+        TraceRow(trace_id='unvalued', thread_id='unvalued'),
+    ]
+    rows.extend(TraceRow(trace_id=f'low-{i}', session_id=f'low-{i}', cost_total=0.1) for i in range(9))
+
+    selected = top_conversations(rows, lambda group, _counts: sum(row.cost_total or 0 for row in group))
+
+    assert [row.trace_id for row in selected] == ['thread-early', 'thread-late', 'session-top']
+
+    no_metric = top_conversations(
+        [TraceRow(trace_id='missing', thread_id='missing')],
+        lambda group, _counts: None,
+    )
+    assert no_metric == ()
+
+
+def test_longest_conversations_use_maximum_message_count_and_skip_missing_records() -> None:
+    from evaluatorq.trace_finder.explorer import ExplorerView
+
+    rows = tuple(
+        TraceRow(trace_id=trace_id, thread_id=conversation)
+        for trace_id, conversation in (
+            ('a-early', 'a'), ('a-late', 'a'), ('b', 'b'), ('c', 'c'), ('missing', 'missing'),
+        )
+    )
+    view = ExplorerView(
+        state='loaded',
+        rows=rows,
+        quick_view='conv_longest',
+        message_counts={'a-early': 3, 'a-late': 7, 'b': 6, 'c': 1},
+    )
+
+    assert [row.trace_id for row in view.visible_rows()] == ['a-early', 'a-late']

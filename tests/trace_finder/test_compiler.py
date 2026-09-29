@@ -48,10 +48,11 @@ def choice_document() -> dict[str, Any]:
     }
 
 
-def test_noul_yes_no_selection_is_normalized_to_booleans() -> None:
+@pytest.mark.parametrize('label', ['yes', 'true', 'True'])
+def test_noul_text_selection_is_normalized_to_booleans(label: str) -> None:
     document = choice_document()
     document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
-    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': ['yes']}
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': [label]}
 
     dimensions, _ = CompilerWireQuery.model_validate(document).to_domain()
     compiled = dimensions[0]
@@ -92,6 +93,60 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     assert calls[0]['label'] == 'trace_finder.compile'
     assert calls[0]['max_tokens'] == 2000
     assert calls[0]['api'] == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_compile_query_retries_all_labels_selection(monkeypatch) -> None:
+    invalid = choice_document()
+    invalid['dimensions'][0]['selection']['values'] = ['billing', 'technical']
+    valid = choice_document()
+    responses = iter([invalid, valid])
+    calls: list[dict[str, Any]] = []
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        calls.append(kwargs)
+        return FakeStructuredResult(CompilerWireQuery.model_validate(next(responses)), raw=json.dumps(invalid))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+
+    selection = plan.dimensions[0].selection
+    assert isinstance(selection, ValueSelection)
+    assert selection.values == ('billing',)
+    assert len(calls) == 2
+    assert calls[1]['messages'][-2]['role'] == 'assistant'
+    assert 'selection must list only' in calls[1]['messages'][-1]['content']
+
+
+def test_compiler_wire_rejects_both_noul_values() -> None:
+    document = choice_document()
+    document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': [True, False]}
+
+    with pytest.raises(ValueError, match="dimension 'Support need'.*not both true and false"):
+        CompilerWireQuery.model_validate(document).to_domain()
+
+
+@pytest.mark.asyncio
+async def test_compile_query_raises_after_two_invalid_plans(monkeypatch) -> None:
+    invalid = choice_document()
+    invalid['dimensions'][0]['selection']['values'] = ['billing', 'technical']
+    calls = 0
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        nonlocal calls
+        calls += 1
+        return FakeStructuredResult(CompilerWireQuery.model_validate(invalid), raw=json.dumps(invalid))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid plan.*selection must list only'):
+        await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+    assert calls == 2
+
+
+def test_compiler_prompt_explains_match_selection() -> None:
+    assert 'only answers that satisfy the request' in COMPILER_INSTRUCTIONS
 
 
 @pytest.mark.asyncio
@@ -289,6 +344,13 @@ def test_compiler_wire_selection_schema_forbids_extra_fields() -> None:
 
     with pytest.raises(ValidationError):
         CompilerWireQuery.model_validate(document)
+
+
+def test_compiler_prompt_keeps_descriptive_phrases_as_dimensions() -> None:
+    # "all coding agents with more than 50k tokens" once compiled to zero dimensions, so the
+    # filter picker found nothing and every trace over 50k matched, coding or not.
+    assert 'coding agents over 50k tokens' in COMPILER_INSTRUCTIONS
+    assert 'only when every part of the request' in COMPILER_INSTRUCTIONS
 
 
 def test_classification_legend_uses_dashboard_chart_tokens() -> None:

@@ -109,6 +109,7 @@ class TraceRow(BaseModel):
     cached_tokens: int | None = None
     cache_write_tokens: int | None = None
     reasoning_tokens: int | None = None
+    context_tokens: int | None = None
     usage_exclusive: bool = False
     cost_total: float | None = None
     currency: str | None = None
@@ -141,6 +142,11 @@ def row_from_summary(summary: Any, raw: Mapping[str, Any] | None) -> TraceRow | 
     if not trace_id:
         return None
     usage = normalise_usage(pick('usage'))
+    attributes = _get(raw, 'attributes') if raw is not None else None
+    gen_ai_attributes = _get(attributes, 'gen_ai')
+    context_tokens = _int(_get(_get(gen_ai_attributes, 'usage'), 'prompt_tokens'))
+    if context_tokens is None:
+        context_tokens = _int(_get(attributes, 'gen_ai.usage.prompt_tokens'))
     cost = pick('cost')
     agent = pick('agent')
     return TraceRow(
@@ -163,6 +169,7 @@ def row_from_summary(summary: Any, raw: Mapping[str, Any] | None) -> TraceRow | 
         cached_tokens=usage.cached,
         cache_write_tokens=usage.cache_write,
         reasoning_tokens=usage.reasoning,
+        context_tokens=context_tokens,
         usage_exclusive=usage.exclusive,
         cost_total=_float(_get(cost, 'total')) if cost is not None else None,
         currency=_str(_get(cost, 'currency')) if cost is not None else None,

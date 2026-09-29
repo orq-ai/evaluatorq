@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.trace_finder.columns import resolve_columns
 from evaluatorq.trace_finder.explorer import ExplorerView
-from evaluatorq.trace_finder.models import FacetCatalogue, TraceRecord
+from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection, PopulationRequest, TraceRecord
 from evaluatorq.trace_finder.rows import TraceRow
 
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
@@ -143,6 +143,24 @@ def test_table_renders_one_row_per_page_row_with_drawer_links() -> None:
     assert 'Success' in html
     assert 'hx-sync="#explorer-results:replace"' in html
 
+    all_view = explorer_views.results(
+        ExplorerView(state='loaded', rows=_rows(2)), resolve_columns(None), records=None, snapshot=None
+    )
+    conversation_rows = tuple(row.model_copy(update={'thread_id': 'thread-1'}) for row in _rows(2))
+    conversation_view = explorer_views.results(
+        ExplorerView(
+            state='loaded',
+            rows=conversation_rows,
+            quick_view='conv_longest',
+            message_counts={row.trace_id: 1 for row in conversation_rows},
+        ),
+        resolve_columns(None),
+        records=None,
+        snapshot=None,
+    )
+    assert 'data-conv=' not in all_view
+    assert 'data-conv=' in conversation_view
+
 
 def test_table_shows_escaped_ai_match_text_and_aligns_numeric_columns() -> None:
     from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
@@ -224,6 +242,7 @@ class FakeRowSource:
     def __init__(self, rows: tuple[TraceRow, ...]) -> None:
         self.rows = rows
         self.calls: list[dict[str, Any]] = []
+        self.hydrate_calls: list[tuple[str, ...]] = []
 
     async def search(
         self, start: Any, end: Any, limit: int, *, facets: Any, numeric: Any, on_page: Any = None
@@ -234,6 +253,7 @@ class FakeRowSource:
         return self.rows[:limit]
 
     async def hydrate_rows(self, rows: Any) -> dict[str, Any]:
+        self.hydrate_calls.append(tuple(row.trace_id for row in rows))
         return {row.trace_id: None for row in rows}
 
 
@@ -401,7 +421,7 @@ def test_load_then_rows_then_sort_then_page(explorer_client) -> None:
     store, source, client = explorer_client
     response = _load(client)
     assert response.status_code == 200
-    assert store.reset_calls == 1
+    assert store.reset_calls == 0
     assert source.calls[0]['limit'] == 250
     assert 'finder-body' in response.text
     html = client.get('/find/rows').text
@@ -412,12 +432,156 @@ def test_load_then_rows_then_sort_then_page(explorer_client) -> None:
     assert 'Page 3 of 3' in html
 
 
+def test_load_keeps_ai_results_and_renders_answers_for_loaded_rows(explorer_client) -> None:
+    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
+
+    store, _, client = explorer_client
+    result = TraceClassification(
+        trace_id='trace-0000',
+        span_id='s',
+        answers=(DimensionAnswer(value=True, matched=True, summary='Asked for a refund.'),),
+        matched=True,
+        raw_result={},
+    )
+    store.snapshot_value = RunSnapshot(
+        state='completed',
+        results={'trace-0000': result},
+        completed=1,
+        matched=1,
+        within_results=True,
+        dimensions=(CompiledQuery(
+            task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+            selection=ValueSelection(kind='values', values=(True,)),
+        ),),
+    )
+
+    response = _load(client)
+    rows_html = client.get('/find/rows').text
+
+    assert response.status_code == 200
+    assert store.reset_calls == 0
+    assert store.snapshot_value.results == {'trace-0000': result}
+    assert '>yes</span>' in rows_html
+    assert '249 not judged' in rows_html
+    assert 'outside the rows the question ran on' in rows_html
+    assert 'over the AI trace limit' in rows_html
+    assert 'no conversation to read, such as embedding calls' in rows_html
+    assert '(no conversation)' not in rows_html
+
+
 def test_rows_route_updates_quick_view_state_and_toolbar(explorer_client) -> None:
     _, _, client = explorer_client
     _load(client)
     html = client.get('/find/rows?quick_view=errors').text
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=errors"' in html
+    assert '<summary class="">Top 10% ▾</summary>' in html
     assert 'No errors found.' in html
+
+
+def test_reset_refreshes_explorer_results_out_of_band(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    matches = client.get('/find/rows?quick_view=matches').text
+    assert 'aria-pressed="true" hx-get="/find/rows?quick_view=matches"' in matches
+    response = client.post('/find/reset', data=csrf_data())
+    assert response.status_code == 200
+    assert '<section id="explorer-results" class="xr" hx-sync="this:replace" hx-swap-oob="true"' in response.text
+    assert 'aria-pressed="true" hx-get="/find/rows?quick_view=all"' in response.text
+
+
+def test_status_line_reports_judged_and_matches_for_current_rows() -> None:
+    from evaluatorq.trace_finder import RunSnapshot, TraceClassification
+
+    rows = (TraceRow(trace_id='a'), TraceRow(trace_id='b'), TraceRow(trace_id='c'))
+    snapshot = RunSnapshot(
+        state='completed',
+        within_results=True,
+        total=2,
+        matched=1,
+        results={
+            'a': TraceClassification(trace_id='a', span_id='s1', matched=True, raw_result={}),
+            'b': TraceClassification(trace_id='b', span_id='s2', matched=False, raw_result={}),
+        },
+    )
+    first = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows), resolve_columns(None), records=None, snapshot=snapshot
+    )
+    assert '3 traces loaded · 2 judged, 1 match · ' in first
+    assert '1 not judged' in first
+
+    changed = explorer_views.results(
+        ExplorerView(state='loaded', rows=(rows[0],)), resolve_columns(None), records=None, snapshot=snapshot
+    )
+    assert '1 traces loaded · 1 judged, 1 match' in changed
+
+
+def test_narrowed_status_reports_judged_and_matches_before_not_judged() -> None:
+    from evaluatorq.trace_finder import RunSnapshot, TraceClassification
+
+    snapshot = RunSnapshot(
+        state='completed',
+        within_results=True,
+        loaded=5,
+        total=2,
+        matched=1,
+        results={
+            'a': TraceClassification(trace_id='a', span_id='s1', matched=True, raw_result={}),
+            'b': TraceClassification(trace_id='b', span_id='s2', matched=False, raw_result={}),
+        },
+    )
+    view = ExplorerView(state='loaded', rows=(TraceRow(trace_id='a'), TraceRow(trace_id='b')), narrowed_from=5)
+    html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=snapshot)
+    assert '2 of 5 loaded traces match the filters · 2 judged, 1 match' in html
+
+
+def test_rows_route_renders_costly_conversation_view_empty_state(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+
+    html = client.get('/find/rows?quick_view=conv_costly').text
+
+    assert 'aria-pressed="true"' in html
+    assert 'hx-get="/find/rows?quick_view=conv_costly"' in html
+    assert '<summary class="on">Costliest conversations ▾</summary>' in html
+    for key in ('slow', 'costly', 'tokens', 'conv_costly', 'conv_tokens', 'conv_longest'):
+        assert f'hx-get="/find/rows?quick_view={key}"' in html
+    assert 'Top 10% of conversations by cost · 0 conversations, 0 of 250 loaded traces' in html
+    assert 'No conversations in the loaded traces.' in html
+    assert 'These views group traces by thread or session id, and none of the loaded traces carry one.' in html
+
+
+def test_rows_route_hydrates_longest_conversation_view_and_shows_message_status(explorer_client) -> None:
+    _, source, client = explorer_client
+    _load(client)
+
+    html = client.get('/find/rows?quick_view=conv_longest').text
+
+    assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows)]
+    assert 'Top 10% of conversations by messages' in html
+
+
+def test_rows_route_reports_message_count_hydration_failure(explorer_client) -> None:
+    store, _, client = explorer_client
+
+    async def fail(_rows: Any) -> dict[str, Any]:
+        raise RuntimeError('hydrator offline')
+
+    store.explorer._hydrate = fail
+    _load(client)
+    response = client.get('/find/rows?quick_view=conv_longest')
+
+    assert response.status_code == 200
+    assert 'Could not count messages: hydrator offline' in response.text
+
+
+def test_table_omits_conversation_markers_when_sorted() -> None:
+    rows = tuple(row.model_copy(update={'thread_id': 'thread-1'}) for row in _rows(2))
+    html = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, quick_view='conv_longest', sort='tokens_in', message_counts={r.trace_id: 1 for r in rows}),
+        resolve_columns(None), records=None, snapshot=None,
+    )
+    assert 'data-conv=' not in html
 
 
 def test_load_rejects_an_inverted_range(explorer_client) -> None:
@@ -670,6 +834,7 @@ def test_quick_views_filter_only_loaded_population_and_render_empty_state() -> N
     )
     assert 'trace-0001' in match_html
     assert 'trace-0000' not in match_html and 'not-loaded' not in match_html
+    assert 'not judged' not in match_html
     empty_html = explorer_views.results(
         ExplorerView(state='loaded', rows=rows, quick_view='matches'),
         resolve_columns(None),
@@ -794,7 +959,7 @@ def test_ask_within_results_keeps_filters_and_uses_loaded_rows(explorer_client) 
     _load(client, facet_model='gpt-5.6-luna')
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None) -> Any:
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
         captured['request'] = request
         captured['traces'] = traces
         return store.snapshot_value
@@ -820,16 +985,38 @@ def test_ask_within_results_keeps_filters_and_uses_loaded_rows(explorer_client) 
     assert population.facets == view.facets
     assert population.facets.model == frozenset({'gpt-5.6-luna'})
     assert population.numeric == view.numeric
-    assert population.limit == 250
+    # The AI trace limit from the form caps the judged rows, not the 250 loaded ones.
+    assert population.limit == 200
     assert len(source.calls) == 1
     assert [row.trace_id for row in view.rows] == [row.trace_id for row in source.rows]
+
+
+def test_ask_new_search_reloads_the_table_with_the_searched_population(explorer_client) -> None:
+    store, source, client = explorer_client
+    captured: dict[str, Any] = {}
+
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+        captured['table'] = table
+        return store.snapshot_value
+
+    store.compile = compile
+    client.post('/find/run', data=csrf_data({'query': 'jev traces', 'scope': 'new', 'window_days': '7', 'limit': '20', 'parallelism': '10'}))
+
+    assert captured['table'] is not None
+    population = PopulationRequest(facets=FacetSelection(model=frozenset({'jev-latest'})), limit=20)
+    asyncio.run(captured['table'](population))
+    view = asyncio.run(store.explorer.view())
+    assert source.calls[-1]['facets'] == population.facets
+    assert source.calls[-1]['limit'] == 20
+    assert view.facets == population.facets
+    assert len(view.rows) == 20
 
 
 def test_ask_new_search_uses_calendar_range(explorer_client) -> None:
     store, _, client = explorer_client
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None) -> Any:
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
         captured['request'] = request
         return store.snapshot_value
 
@@ -894,7 +1081,7 @@ def test_large_within_run_is_forced_through_review(explorer_client) -> None:
     _load(client, rows='600')
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None) -> Any:
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
         captured['request'] = request
         return store.snapshot_value
 
@@ -906,7 +1093,7 @@ def test_large_within_run_is_forced_through_review(explorer_client) -> None:
             'scope': 'within',
             'mode': 'immediate',
             'window_days': '7',
-            'limit': '200',
+            'limit': '600',
             'parallelism': '10',
         }),
     )
@@ -946,3 +1133,37 @@ def test_generated_filter_chip_carries_ai_badge() -> None:
         generated=FacetSelection(model=frozenset({'gpt-5.6-luna'})),
     )
     assert html.count('ai-badge') == 1
+
+
+def test_numeric_chip_formats_total_tokens_with_grouping() -> None:
+    from evaluatorq.dashboard.trace_finder.views import _facet_chips
+    from evaluatorq.trace_finder.models import NumericFilters
+
+    html = _facet_chips(FacetSelection(), NumericFilters(tokens_min=20_001), removable=True)
+    assert '<b>total tokens</b><span class="v">≥ 20,001</span>' in html
+    assert 'aria-label="Edit total tokens ≥ 20,001"' in html
+
+
+def test_narrowed_empty_state_and_status_explain_loaded_row_scope() -> None:
+    view = ExplorerView(state='loaded', narrowed_from=200)
+    html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=None)
+    assert '0 of 200 loaded traces match the filters' in html
+    assert 'No loaded traces match.' in html
+    assert 'None of the 200 loaded traces meet the filters. Remove a filter, or use New search to look beyond the loaded rows.' in html
+
+
+def test_facet_menu_calls_numeric_token_bound_total_tokens() -> None:
+    from evaluatorq.dashboard.trace_finder.views import facet_menu
+
+    html = facet_menu()
+    assert '<span>total tokens</span>' in html
+    assert '<div class="hd">total tokens</div>' in html
+
+
+def test_narrowed_status_accounts_for_traces_without_conversation() -> None:
+    from evaluatorq.trace_finder import RunSnapshot
+
+    view = ExplorerView(state='loaded', narrowed_from=200)
+    snapshot = RunSnapshot(within_results=True, state='completed', loaded=190)
+    html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=snapshot)
+    assert '0 of 200 loaded traces match the filters · 10 of the 200 have no conversation' in html

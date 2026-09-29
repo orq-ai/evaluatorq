@@ -288,10 +288,13 @@ class RunSnapshot:
     generated_numeric: NumericFilters = field(default_factory=NumericFilters)
     filter_response: ClassifyResponse | None = None
     filter_selection_error: str | None = None
+    plan_warning: str | None = None
     trace_ids: tuple[str, ...] = ()
     traces: tuple[TraceRecord, ...] = ()
     results: Mapping[str, TraceClassification] = field(default_factory=lambda: MappingProxyType({}))
     projections: Mapping[str, TraceProjection] = field(default_factory=lambda: MappingProxyType({}))
+    loaded: int = 0
+    to_load: int = 0
     total: int = 0
     completed: int = 0
     failed: int = 0

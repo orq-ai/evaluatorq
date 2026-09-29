@@ -19,6 +19,7 @@ from loguru import logger
 
 from .facets import _project_names, project_labels
 from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
+from .progress import report_load_progress
 from .rows import TraceRow, row_from_summary
 from .rows import parse_time as _parse_time
 
@@ -267,6 +268,7 @@ class OrqTraceSource:
             fallback_count += sum(result[1] for result in hydrated)
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
+            report_load_progress(min(len(records), limit), limit)
         wrong_project_count = scan.wrong_project
 
         if wrong_project_count:
@@ -427,7 +429,10 @@ class OrqTraceSource:
         errors: list[str] = []
         fallbacks: list[str] = []
 
+        done = 0
+
         async def one(row: TraceRow) -> TraceRecord | None:
+            nonlocal done
             try:
                 record, fallback_count = await self._hydrate_trace(
                     row.raw, row.raw, project_names, semaphore, raw_capture_fallback=False
@@ -437,6 +442,9 @@ class OrqTraceSource:
             except Exception as error:  # noqa: BLE001 — one trace's failure must not blank the page
                 errors.append(f'{type(error).__name__}: {error}')
                 return None
+            finally:
+                done += 1
+                report_load_progress(done, len(rows))
             return record
 
         records = await asyncio.gather(*(one(row) for row in rows))
@@ -577,7 +585,9 @@ def _select_summaries(
 def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Mapping[str, str]) -> str:
     """Compile selected categorical and numeric filters into deterministic OQL."""
 
-    clauses = [BASE_FILTER]
+    # A bare model call (jev, the compiler, any router call) is a generate_content trace, so the base filter
+    # would hide every trace of the model or provider the user just picked; drop it for those.
+    clauses = [] if facets.model or facets.provider else [BASE_FILTER]
     if facets.project_id:
         if facets.project_id not in project_names:
             raise OrqSourceError(f'cannot resolve selected project id: {facets.project_id}')

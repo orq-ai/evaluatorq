@@ -745,6 +745,21 @@
     document.querySelectorAll('[data-explorer-tz]').forEach((el) => { el.value = String(new Date().getTimezoneOffset()); });
     document.querySelectorAll('#explorer-from, #explorer-to').forEach(explorerLocal);
     const exact = document.querySelector('[data-explorer-range-mode]')?.value === 'exact';
+    const seconds = document.querySelector('[data-explorer-range-seconds]')?.value;
+    document.querySelectorAll('[data-explorer-preset]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(!exact && b.getAttribute('data-explorer-preset') === seconds));
+    });
+    const custom = document.querySelector('.xr-exact');
+    if (custom) {
+      custom.open = exact;
+      custom.querySelector('summary')?.toggleAttribute('data-active', exact);
+    }
+    const tz = document.querySelector('[data-explorer-tz-label]');
+    if (tz) {
+      const off = -new Date().getTimezoneOffset();
+      const pad = (n) => String(Math.floor(Math.abs(n))).padStart(2, '0');
+      tz.textContent = 'Local time (UTC' + (off >= 0 ? '+' : '−') + pad(off / 60) + ':' + pad(off % 60) + ')';
+    }
     explorerUpdateRangeLabel();
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = exact; });
     explorerUpdateOffsets();
@@ -753,13 +768,31 @@
     const label = document.querySelector('[data-explorer-range-label]');
     if (!label) return;
     const mode = document.querySelector('[data-explorer-range-mode]');
-    if (mode?.value === 'exact') { label.textContent = 'Exact'; return; }
+    if (mode?.value === 'exact') {
+      const read = (id) => new Date((document.getElementById(id)?.value || '') + 'T' + (document.getElementById(id + '-time')?.value || '00:00:00'));
+      const from = read('explorer-from'), to = read('explorer-to');
+      if (isNaN(from) || isNaN(to)) { label.textContent = 'Custom range'; return; }
+      const year = new Date().getFullYear();
+      const showYear = from.getFullYear() !== year || to.getFullYear() !== year;
+      const day = (d) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: showYear ? 'numeric' : undefined });
+      const time = (d) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+      const sameDay = day(from) === day(to);
+      // ponytail: ranges of a day or more show dates only; the exact seconds live in the tooltip and the inputs.
+      label.textContent = to - from >= 86400000 ? day(from) + ' – ' + day(to)
+        : sameDay ? day(from) + ' ' + time(from) + '–' + time(to)
+        : day(from) + ' ' + time(from) + ' – ' + day(to) + ' ' + time(to);
+      label.title = from.toLocaleString() + ' – ' + to.toLocaleString();
+      return;
+    }
     if (presetLabel) {
       const labels = { '15m': '15 minutes', '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
       label.textContent = 'Last ' + (labels[presetLabel] || presetLabel);
       return;
     }
-    const days = Number(document.querySelector('[data-explorer-range-seconds]')?.value || 604800) / 86400;
+    const seconds = document.querySelector('[data-explorer-range-seconds]')?.value || '604800';
+    const match = document.querySelector('[data-explorer-preset="' + seconds + '"]');
+    if (match) { explorerUpdateRangeLabel(match.textContent.trim()); return; }
+    const days = Number(seconds) / 86400;
     label.textContent = 'Last ' + (Number.isInteger(days) ? days : days.toFixed(1)) + ' days';
   }
   document.addEventListener('submit', function (evt) {
@@ -787,11 +820,22 @@
     if (evt.target && (evt.target.id === 'explorer-from' || evt.target.id === 'explorer-to' || evt.target.id === 'explorer-from-time' || evt.target.id === 'explorer-to-time')) explorerUpdateOffsets();
   });
   document.addEventListener('click', function (evt) {
-    if (evt.target.closest('.xr-exact > summary')) {
+    if (evt.target.closest('[data-explorer-apply]')) {
+      const val = (id) => (document.getElementById(id)?.value || '') + 'T' + (document.getElementById(id + '-time')?.value || '');
+      const toInput = document.getElementById('explorer-to-time');
+      if (toInput) {
+        toInput.setCustomValidity(val('explorer-from') >= val('explorer-to') ? 'End must be after start' : '');
+        if (!toInput.reportValidity()) return;
+      }
       const mode = document.querySelector('[data-explorer-range-mode]');
       if (mode) mode.value = 'exact';
-      explorerUpdateRangeLabel();
+      document.querySelectorAll('[data-explorer-preset]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
       document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = true; });
+      explorerUpdateRangeLabel();
+      const menu = evt.target.closest('.xr-time-menu');
+      if (menu) menu.open = false;
+      document.getElementById('explorer-load-form')?.requestSubmit();
+      return;
     }
     const preset = evt.target.closest('[data-explorer-preset]');
     if (!preset) return;
@@ -799,6 +843,7 @@
     const seconds = document.querySelector('[data-explorer-range-seconds]');
     if (mode) mode.value = 'relative';
     if (seconds) seconds.value = preset.getAttribute('data-explorer-preset');
+    document.querySelectorAll('[data-explorer-preset]').forEach((b) => b.setAttribute('aria-pressed', String(b === preset)));
     explorerUpdateRangeLabel(preset.textContent.trim());
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = false; });
     const to = new Date();
@@ -818,6 +863,32 @@
     explorerUpdateOffsets();
     const exact = preset.closest('.xr-time-options')?.querySelector('.xr-exact');
     if (exact) exact.open = false;
+    const menu = preset.closest('.xr-time-menu');
+    if (menu) menu.open = false;
+    document.getElementById('explorer-load-form')?.requestSubmit();
+  });
+
+  // Edit question: hand the question back to the Ask AI input instead of making the user retype it.
+  document.addEventListener('click', function (evt) {
+    if (!evt.target.closest('[data-finder-edit]')) return;
+    const input = document.querySelector('.finder-command-textarea');
+    if (!input) return;
+    input.focus();
+    input.select();
+    input.scrollIntoView({ block: 'nearest' });
+  });
+
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Enter' && evt.target.matches?.('.xr-exact input')) {
+      evt.preventDefault();
+      document.querySelector('[data-explorer-apply]')?.click();
+      return;
+    }
+    if (evt.key !== 'Escape') return;
+    const menu = evt.target.closest?.('.xr-time-menu[open], .xr-cols[open], .xr-sort[open], .xr-top-menu[open]');
+    if (!menu) return;
+    menu.open = false;
+    menu.querySelector('summary')?.focus();
   });
 
   // Trajectories: one tooltip, positioned from the hovered segment's data-* attributes.

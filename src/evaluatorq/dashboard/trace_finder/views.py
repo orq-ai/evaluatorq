@@ -48,7 +48,7 @@ FACET_LABELS = (
     ('product', 'product'),
     ('trace_type', 'trace type'),
     ('tool_name', 'tool'),
-    ('tokens', 'tokens'),
+    ('tokens', 'total tokens'),
     ('duration_ms', 'duration'),
 )
 if {name for name, _ in FACET_LABELS} != {*FACET_NAMES, *NUMERIC_FACET_NAMES}:
@@ -256,8 +256,8 @@ def _facet_chips(
             for value in sorted(getattr(selection, name, frozenset()))
         )
     for name, label, operator in (
-        ('tokens_min', 'tokens', '≥'),
-        ('tokens_max', 'tokens', '≤'),
+        ('tokens_min', 'total tokens', '≥'),
+        ('tokens_max', 'total tokens', '≤'),
         ('duration_ms_min', 'duration', '≥'),
         ('duration_ms_max', 'duration', '≤'),
     ):
@@ -265,7 +265,8 @@ def _facet_chips(
         if value is None:
             continue
         facet = name.rsplit('_', 1)[0]
-        chips.append(chip(facet, label, f'{operator} {value}', name, None, f'{label} {operator} {value}'))
+        formatted = f'{operator} {value:,}'
+        chips.append(chip(facet, label, formatted, name, None, f'{label} {formatted}'))
     return ''.join(chips)
 
 
@@ -476,7 +477,11 @@ def legend(snapshot: RunSnapshot) -> str:
     )
 
 
-def progress(snapshot: RunSnapshot, *, export_url: str = '/find/export.json') -> str:
+def progress(
+    snapshot: RunSnapshot,
+    *,
+    export_url: str = '/find/export.json',
+) -> str:
     running = snapshot.state in {'compiling', 'classifying'}
     state = {
         'planning': 'planning search',
@@ -484,14 +489,22 @@ def progress(snapshot: RunSnapshot, *, export_url: str = '/find/export.json') ->
         'starting_classification': 'starting classification',
     }.get(snapshot.phase or '', snapshot.state.replace('_', ' '))
     reset = (
-        f'<form class="finder-progress-action" hx-post="/find/reset" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">{csrf_field()}<button class="btn-secondary" type="submit">Reset</button><span role="status">Resetting…</span></form>'
+        f'<form class="finder-progress-action" hx-post="/find/reset" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">{csrf_field()}<button class="btn-secondary" type="submit">Clear AI results</button><span role="status">Clearing…</span></form>'
         if snapshot.state != 'idle'
         else ''
     )
     action = (
         f'<form class="finder-progress-action" hx-post="/find/cancel" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">{csrf_field()}<button class="btn-secondary" type="submit">Cancel</button><span role="status">Cancelling…</span></form>'
         if running
-        else f'<a class="btn-secondary" href="{esc(export_url)}">Download JSON</a>{reset}'
+        else (
+            '<button type="button" class="btn-secondary" data-finder-edit>Edit question</button>'
+            + (
+                f'<a class="btn-secondary" href="{esc(export_url)}" title="Every judged trace with its answers, as JSON">Download results</a>'
+                if snapshot.total
+                else ''
+            )
+            + reset
+        )
         if snapshot.state == 'completed'
         else reset
     )
@@ -499,25 +512,21 @@ def progress(snapshot: RunSnapshot, *, export_url: str = '/find/export.json') ->
     error_html = (
         f'<span class="finder-progress-error finder-review" role="alert">{esc(snapshot.error)}</span>'
         if snapshot.error
+        else f'<span class="finder-progress-error finder-progress-warning finder-review" role="status">{esc(snapshot.plan_warning)}</span>'
+        if snapshot.plan_warning
         else ''
     )
     counts = (
-        '<span class="sep">·</span><span>'
-        + {
-            'planning': 'compiling the question and selecting metadata filters',
-            'loading_traces': 'loading selected traces',
-            'starting_classification': 'preparing the reviewed task',
-        }.get(snapshot.phase or '', 'preparing the search')
-        + '</span>'
+        '<span class="sep">·</span><span>' + _compiling_text(snapshot) + '</span>'
         if snapshot.state == 'compiling'
+        else f'<span class="sep">·</span><span><b>{snapshot.loaded}</b> traces loaded, none kept</span>'
+        if snapshot.total == 0 and snapshot.loaded
         else '<span class="sep">·</span><span>Stopped before traces were loaded</span>'
         if snapshot.total == 0
         else f'<span class="sep">·</span><span><b>{snapshot.matched}</b> kept by filters</span>'
         '<span class="sep">·</span><span>no AI classification needed</span>'
         if snapshot.dimensions == ()
-        else f'<span class="sep">·</span><span><b>{snapshot.completed} / {snapshot.total}</b> judged</span>'
-        f'<span class="sep">·</span><span><b>{snapshot.failed}</b> failed</span><span class="sep">·</span>'
-        f'<span><b>{snapshot.rate:.1f}</b>/s</span>'
+        else _judging_text(snapshot)
     )
     elapsed_html = (
         f'<span class="sep">·</span><span>{snapshot.elapsed:.1f}s</span>'
@@ -525,9 +534,52 @@ def progress(snapshot: RunSnapshot, *, export_url: str = '/find/export.json') ->
         else ''
     )
     return (
-        f'<div class="finder-progress">{live_html}<span class="state">{esc(state)}</span>{counts}'
-        f'{elapsed_html}{error_html}{action}</div>'
+        f'<div class="finder-progress" data-state="{esc(snapshot.state)}">{live_html}<span class="state">{esc(state)}</span>{counts}'
+        f'{elapsed_html}{error_html}{action}{_progress_bar(snapshot)}</div>'
     )
+
+
+def _judging_text(snapshot: RunSnapshot) -> str:
+    """Lead with the answer (how many match), then the work done; zero failures stay silent."""
+    done = snapshot.state == 'completed'
+    parts = [
+        f'<span class="finder-progress-answer"><b>{snapshot.matched}</b> of {snapshot.total} judged traces match</span>'
+        if done
+        else f'<span><b>{snapshot.matched}</b> matching so far</span><span class="sep">·</span>'
+        f'<span>{snapshot.completed} / {snapshot.total} judged</span>'
+    ]
+    if snapshot.failed:
+        parts.append(f'<span class="finder-progress-failed"><b>{snapshot.failed}</b> failed</span>')
+    parts.append('<span>within the loaded rows</span>' if snapshot.within_results else '<span>new search</span>')
+    if not done:
+        parts.append(f'<span>{snapshot.rate:.1f}/s</span>')
+    return ''.join(f'<span class="sep">·</span>{part}' for part in parts)
+
+
+def _compiling_text(snapshot: RunSnapshot) -> str:
+    """Describe the current planning step, with a live count while traces load."""
+    if snapshot.phase == 'loading_traces' and snapshot.to_load:
+        if snapshot.within_results:
+            return f'fetching conversations <b>{snapshot.loaded} / {snapshot.to_load}</b>'
+        return f'<b>{snapshot.loaded}</b> traces loaded, up to {snapshot.to_load}'
+    if snapshot.phase == 'planning' and snapshot.within_results:
+        return 'turning your question into a yes/no check'
+    return {
+        'planning': 'compiling the question and selecting metadata filters',
+        'loading_traces': 'loading selected traces',
+        'starting_classification': 'preparing the reviewed task',
+    }.get(snapshot.phase or '', 'preparing the search')
+
+
+def _progress_bar(snapshot: RunSnapshot) -> str:
+    """A thin bar under the progress line for the step that has a known size."""
+    if snapshot.state == 'compiling' and snapshot.phase == 'loading_traces' and snapshot.to_load:
+        fraction = snapshot.loaded / snapshot.to_load
+    elif snapshot.state == 'classifying' and snapshot.total:
+        fraction = snapshot.completed / snapshot.total
+    else:
+        return ''
+    return f'<span class="finder-progress-bar" aria-hidden="true"><i style="width:{min(fraction, 1.0) * 100:.1f}%"></i></span>'
 
 
 def field(snapshot: RunSnapshot, *, api_available: bool = True, export_url: str = '/find/export.json') -> str:
@@ -605,7 +657,7 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool, prefix: str
     if task.kind == 'noul':
         selected_bool = next((value for value in getattr(selection, 'values', ()) if type(value) is bool), False)
         if not editable:
-            return f'<p>Verdict <b>{str(selected_bool).lower()}</b></p>'
+            return f'<p>Answer is <b>{"yes" if selected_bool else "no"}</b></p>'
         options = ''.join(
             f'<option value="{value}"{" selected" if selected_bool == (value == "true") else ""}>{value}</option>'
             for value in ('true', 'false')
@@ -691,9 +743,9 @@ def _dimension_card(compiled: CompiledQuery, *, editable: bool, open_: bool, pre
         value = (
             f'<input name="{prefix}noul_threshold" type="number" min="0" max="1" step="0.01" value="{task.noul_threshold:g}">'
             if editable
-            else f'<p>{task.noul_threshold:g}</p>'
+            else f'<p>{task.noul_threshold:.0%}</p>'
         )
-        threshold = f'<div class="finder-task-stage"><h5>Yes threshold</h5>{value}</div>'
+        threshold = f'<div class="finder-task-stage"><h5>Confidence needed for yes</h5>{value}</div>'
     criteria = (
         f'<div class="finder-task-criteria"><h5>Verdict labels</h5><div class="finder-crit">{criterion_html}</div></div>'
         if criterion_count
@@ -702,7 +754,8 @@ def _dimension_card(compiled: CompiledQuery, *, editable: bool, open_: bool, pre
     count_html = f'<span class="finder-task-count">{criterion_count} labels</span>' if criterion_count else ''
     return (
         f'<details class="finder-task"{" open" if open_ else ""}><summary><span class="chev" aria-hidden="true">▸</span>'
-        f'{title}<span class="kind">{kind_label}</span>{count_html}</summary>'
+        f'{title}<span class="kind">{kind_label}</span>{count_html}'
+        f'{"" if editable else f"<span class=finder-task-q title={chr(34)}{esc(task.instructions)}{chr(34)}>{esc(task.instructions)}</span>"}</summary>'
         f'<div class="finder-task-body"><div class="finder-task-question"><h5>Question asked of each trace</h5>{instruction}</div>'
         f'<div class="finder-task-flow"><div class="finder-task-stage"><h5>Model returns</h5><strong>{kind_label}</strong></div>'
         '<span class="finder-task-arrow" aria-hidden="true">→</span>'
@@ -755,6 +808,9 @@ def filter_output_panel(snapshot: RunSnapshot) -> str:
         f'<span class="finder-filter-chip"><b>{esc(name)}</b>{esc(value)}</span>' for name, value in selected
     )
     chips_html = chips or '<span class="finder-filter-none">No metadata filters selected.</span>'
+    warning = (
+        f'<p class="finder-filter-note" role="status">{esc(snapshot.plan_warning)}</p>' if snapshot.plan_warning else ''
+    )
     if snapshot.filter_selection_error:
         response = f'<p class="finder-filter-note" role="alert">Filter selection was unavailable: {esc(snapshot.filter_selection_error)}</p>'
     elif snapshot.filter_response is None:
@@ -772,7 +828,7 @@ def filter_output_panel(snapshot: RunSnapshot) -> str:
         '<h3>Filter selection</h3><p>The model proposes metadata filters before your choices take precedence.</p>'
         f'</div><span class="finder-filter-count">{len(selected)} chosen</span></div>'
         f'<div class="finder-filter-chips">{chips_html}</div>'
-        f'{response}</section>'
+        f'{warning}{response}</section>'
     )
 
 
@@ -840,7 +896,9 @@ def body(
         explorer_view=explorer_view,
     )
     details = task_panel(snapshot.dimensions, editable=False) if snapshot.dimensions is not None else ''
-    return f'{indicator}{controls_html}{progress(snapshot)}{details}'
+    # The progress line under Ask AI names the running step, so the corner badge would repeat it.
+    running = snapshot.state in {'compiling', 'classifying'}
+    return f'{"" if running else indicator}{controls_html}{progress(snapshot)}{details}'
 
 
 def page_html(

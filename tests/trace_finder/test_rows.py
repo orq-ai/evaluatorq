@@ -78,6 +78,16 @@ def test_row_without_usage_or_cost_has_unknown_values() -> None:
     assert row.started_at is not None
 
 
+def test_row_reads_nested_and_flat_context_tokens_and_leaves_missing_unknown() -> None:
+    nested = row_from_summary(None, {'trace_id': 'nested', 'attributes': {'gen_ai': {'usage': {'prompt_tokens': 321}}}})
+    flat = row_from_summary(None, {'trace_id': 'flat', 'attributes': {'gen_ai.usage.prompt_tokens': 654}})
+    missing = row_from_summary(None, {'trace_id': 'missing', 'attributes': {}})
+
+    assert nested is not None and nested.context_tokens == 321
+    assert flat is not None and flat.context_tokens == 654
+    assert missing is not None and missing.context_tokens is None
+
+
 def test_row_without_trace_id_is_dropped() -> None:
     assert row_from_summary(None, {'name': 'orphan'}) is None
 

@@ -106,7 +106,7 @@ class FakeStore:
         self.started_dimensions: tuple[CompiledQuery, ...] | None = None
         self.start_wait: bool | None = None
 
-    async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+    async def compile(self, request: Any, *, wait: bool = True, table: Any = None) -> RunSnapshot:
         self.compile_request = request
         self.compile_wait = wait
         state = 'awaiting_review' if request.mode == 'review' else 'classifying'
@@ -248,7 +248,7 @@ def test_async_controls_and_trace_drawer_have_request_feedback(setup_finder) -> 
 
     store.complete()
     completed = client.get('/find/poll?surface=search').text
-    assert 'role="status">Resetting…' in completed
+    assert 'role="status">Clearing…' in completed
 
 
 def test_classifier_picked_filters_do_not_carry_into_the_next_query(setup_finder) -> None:
@@ -581,7 +581,7 @@ def test_noul_task_panel_omits_empty_label_and_criteria_sections() -> None:
     }),), editable=False)
 
     assert 'Yes / no' in html
-    assert 'Yes threshold' in html
+    assert 'Confidence needed for yes' in html
     assert '0 labels' not in html
     assert 'Verdict labels' not in html
     assert 'Raw plan' not in html
@@ -621,7 +621,7 @@ def test_find_run_passes_numeric_filter_and_renders_chip(setup_finder) -> None:
     assert response.status_code == 200
     assert store.compile_request is not None
     assert store.compile_request.population.numeric.tokens_min == 5000
-    assert '<span class="chip"><b>tokens</b><span class="v">≥ 5000</span>' in response.text
+    assert '<span class="chip"><b>total tokens</b><span class="v">≥ 5,000</span>' in response.text
     assert 'name="tokens_min"' in response.text
 
     store.complete()
@@ -901,6 +901,44 @@ def test_working_phases_show_matching_field_and_progress(
     assert '0.0s' not in html
 
 
+def test_progress_line_counts_loaded_traces_and_draws_a_bar() -> None:
+    from evaluatorq.dashboard.trace_finder.views import progress
+
+    loading = progress(RunSnapshot(state='compiling', phase='loading_traces', loaded=40, to_load=200, within_results=True))
+    assert 'fetching conversations <b>40 / 200</b>' in loading
+    assert 'style="width:20.0%"' in loading
+
+    classifying = progress(RunSnapshot(state='classifying', completed=3, total=4))
+    assert 'style="width:75.0%"' in classifying
+
+    emptied = progress(RunSnapshot(state='failed', loaded=190, error='None of the 190 loaded traces have at least 50,001 tokens'))
+    assert '190</b> traces loaded, none kept' in emptied
+    assert 'Stopped before traces were loaded' not in emptied
+
+
+def test_completed_within_progress_reports_run_counts() -> None:
+    from evaluatorq.dashboard.trace_finder.views import progress
+
+    matched = TraceClassification(trace_id='trace-1', span_id='span-1', matched=True, raw_result={})
+    missed = TraceClassification(trace_id='trace-2', span_id='span-2', matched=False, raw_result={})
+    snapshot = RunSnapshot(
+        state='completed', within_results=True, results={'trace-1': matched, 'trace-2': missed}, total=2, matched=1
+    )
+    html = progress(snapshot)
+    assert '<b>1</b> of 2 judged traces match' in html
+    assert 'judged traces in view' not in html
+    assert 'when asked' not in html
+
+
+def test_completed_empty_run_keeps_edit_and_clear_without_download() -> None:
+    from evaluatorq.dashboard.trace_finder.views import progress
+
+    html = progress(RunSnapshot(state='completed', total=0))
+    assert 'Edit question' in html
+    assert 'Clear AI results' in html
+    assert 'Download results' not in html
+
+
 def test_run_controls_are_preserved_across_polls_per_form(setup_finder) -> None:
     store, client = setup_finder
     client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
@@ -947,7 +985,9 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
 
     store.snapshot_value = replace(store.snapshot_value, state='compiling', phase='planning')
     compiling = client.get('/traces').text
-    assert 'Planning search' in compiling
+    # The step is named inline under Ask AI, not in the corner badge.
+    assert 'compiling the question and selecting metadata filters' in compiling
+    assert '<div class="finder-status' not in compiling
     assert '<div class="finder-matrix' not in compiling
     assert '<table class="finder-table' not in compiling
 

@@ -42,8 +42,15 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) #explorer-rows { width:38px!important; border:0; background:transparent; color:#4d4b56; font:inherit; text-align:center; }
 .finder:has(> .finder-command) .xr-toolbar-right .btn-secondary { min-height:31px; padding:5px 9px; border-radius:6px; background:#25232e; border-color:#25232e; color:#fff; font-size:12px; }
 .finder:has(> .finder-command) .xr-toolbar-right .finder-seg { justify-self:stretch; }
-.finder:has(> .finder-command) .xr-table-wrap { display:block; overflow-x:auto; margin:-12px 0 0; padding:0; line-height:normal; -webkit-overflow-scrolling:touch; }
-.finder:has(> .finder-command) .xr-table { min-width:1020px; border-collapse:collapse; font-size:12px; }
+.finder:has(> .finder-command) .xr-table-wrap { display:block; overflow:auto; max-height:calc(100vh - 160px); margin:-12px 0 0; padding:0; line-height:normal; -webkit-overflow-scrolling:touch; }
+/* Many columns scroll sideways inside the card: the header and the time column stay put, the scrollbar stays on screen. */
+.finder:has(> .finder-command) .xr-table thead th { position:sticky; top:0; z-index:2; }
+.finder:has(> .finder-command) .xr-table th:first-child, .finder:has(> .finder-command) .xr-table td:first-child { position:sticky; left:0; z-index:1; background:#fff; box-shadow:inset -1px 0 0 #e8e9ec; }
+.finder:has(> .finder-command) .xr-table thead th:first-child { z-index:3; background:#f8f9fa; }
+.finder:has(> .finder-command) .xr-table tbody tr:hover td:first-child { background:#f8faf8; }
+.finder:has(> .finder-command) .xr-table tr.sel td:first-child { background:#f3f8f7; }
+.finder:has(> .finder-command) .xr-table th:last-child, .finder:has(> .finder-command) .xr-table td:last-child { padding-right:18px; }
+.finder:has(> .finder-command) .xr-table { min-width:1020px; border-collapse:collapse; font-size:12px; overflow:visible; }
 .finder:has(> .finder-command) .xr-table thead { display:table-header-group!important; }
 .finder:has(> .finder-command) .xr-table tbody tr { display:table-row!important; height:auto!important; }
 .finder:has(> .finder-command) .xr-table td { display:table-cell!important; }
@@ -75,18 +82,34 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .finder-seg label { display:flex; flex:1 1 0; }
 .finder:has(> .finder-command) .finder-seg span { flex:1; justify-content:center; height:auto; border-radius:0; }
 .finder:has(> .finder-command) .xr-toolbar { padding:0 16px; }
-.finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:128px 86px 94px 57px 180px; align-items:center; }
-.finder:has(> .finder-command) .xr-quickviews button { height:var(--ctl); padding:0 8px; }
+.finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:172px 86px 94px 57px 180px; align-items:center; }
+.finder:has(> .finder-command) .xr-quickviews > button { height:var(--ctl); padding:0 7px; white-space:nowrap; }
 .finder:has(> .finder-command) .xr-chips .chip,
 .finder:has(> .finder-command) .tv { border-radius:0; }
 .finder:has(> .finder-command) .xr-switch button { flex:1 1 0; height:auto; padding:0 8px; border-radius:0; text-align:center; }
 @media (max-width:850px) { .finder:has(> .finder-command) .finder-command-query > button { flex:1 1 100%; } }
 /* Quick-view tabs carry the table's status colours: errors red, AI matches amber. */
-.finder:has(> .finder-command) .xr-quickviews button:nth-child(2) { color:#a8473b; }
-.finder:has(> .finder-command) .xr-quickviews button:nth-child(2).on { color:#bd5548; border-color:#bd5548; background:#fdf3f1; }
-.finder:has(> .finder-command) .xr-quickviews button:nth-child(3) { color:#94591f; }
-.finder:has(> .finder-command) .xr-quickviews button:nth-child(3).on { color:#a66124; border-color:#ed8844; background:#fff6ec; }
-.finder:has(> .finder-command) .xr-quickviews button:first-child.on { background:#f4f3f1; }
+.finder:has(> .finder-command) .xr-quickviews > button:nth-child(2) { color:#a8473b; }
+.finder:has(> .finder-command) .xr-quickviews > button:nth-child(2).on { color:#bd5548; border-color:#bd5548; background:#fdf3f1; }
+.finder:has(> .finder-command) .xr-quickviews > button:nth-child(3) { color:#94591f; }
+.finder:has(> .finder-command) .xr-quickviews > button:nth-child(3).on { color:#a66124; border-color:#ed8844; background:#fff6ec; }
+.finder:has(> .finder-command) .xr-quickviews > button:first-child.on { background:#f4f3f1; }
+.finder:has(> .finder-command) .xr-qv-sep { flex:none; width:1px; height:18px; margin:0 4px; background:#d5d8df; }
+.finder:has(> .finder-command) .xr-top-menu { position:relative; }
+.finder:has(> .finder-command) .xr-top-menu > summary { display:flex; align-items:center; height:var(--ctl); padding:0 7px; list-style:none; cursor:pointer; white-space:nowrap; color:var(--text-muted); border-bottom:2px solid transparent; }
+.finder:has(> .finder-command) .xr-top-menu > summary::-webkit-details-marker { display:none; }
+.finder:has(> .finder-command) .xr-top-menu > summary:hover { background:#f7f7f8; }
+.finder:has(> .finder-command) .xr-top-menu > summary.on { color:#25232e; font-weight:700; border-bottom-color:#25232e; background:#f4f3f1; }
+.finder:has(> .finder-command) .xr-top-menu > summary:focus-visible { outline:2px solid #025558; outline-offset:1px; }
+.finder:has(> .finder-command) .xr-top-list { position:absolute; top:calc(100% + 4px); left:0; z-index:30; display:flex; flex-direction:column; min-width:230px; padding:4px 0; background:#fff; border:1px solid #d5d8df; border-radius:0; box-shadow:0 6px 18px rgba(20,20,30,.08); }
+.finder:has(> .finder-command) .xr-top-head { padding:8px 12px 4px; font-size:10.5px; font-weight:600; letter-spacing:.05em; text-transform:uppercase; color:#686a74; }
+.finder:has(> .finder-command) .xr-top-head:not(:first-child) { margin-top:4px; border-top:1px solid #eceef2; padding-top:10px; }
+.finder:has(> .finder-command) .xr-top-list > button { height:34px; padding:0 12px; border:0; border-radius:0; background:#fff; color:#25232e; text-align:left; font:inherit; font-size:13px; cursor:pointer; white-space:nowrap; }
+.finder:has(> .finder-command) .xr-top-list > button:hover { background:#f7f7f8; }
+.finder:has(> .finder-command) .xr-top-list > button.on { font-weight:700; background:#f4f3f1; }
+.finder:has(> .finder-command) .xr-top-list > button:focus-visible { outline:2px solid #025558; outline-offset:1px; }
+.finder:has(> .finder-command) .xr-top-list > button.htmx-request::after { content:' · counting messages…'; color:#686a74; font-weight:400; }
+.finder:has(> .finder-command) .xr-table tr[data-conv] td { border-top:2px solid #d5d8df; }
 /* One weight for secondary controls, one for primary actions; white on bright orange failed AA (2.3:1), so Search matches Load as in the mockup. */
 .finder:has(> .finder-command) .xr-filter,
 .finder:has(> .finder-command) .xr-time-menu > summary,
@@ -102,8 +125,80 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-cols > summary:hover,
 .finder:has(> .finder-command) .xr-sort > summary:hover,
 .finder:has(> .finder-command) .finder-command-query > a:hover { background:#f5f5f6; }
-.finder:has(> .finder-command) .xr-quickviews button:not(.on):hover { background:#f7f7f8; }
+.finder:has(> .finder-command) .xr-quickviews > button:not(.on):hover { background:#f7f7f8; }
 .finder:has(> .finder-command) :is(.finder-command-query > a, .finder-command-query > button, .xr-filter, .xr-quickviews button, .xr-toolbar-right summary, .xr-toolbar-right .btn-secondary, .xr-switch button):focus-visible { outline:2px solid #025558; outline-offset:1px; }
+/* Time-range popover: presets as one square segmented row, then a Custom range disclosure with aligned From/To rows. */
+.finder:has(> .finder-command) .xr-time-options { left:0; right:auto; width:320px; min-width:0; box-sizing:border-box; gap:0; padding:0; border:1px solid #d5d8df; border-radius:0; box-shadow:0 6px 16px #25232e1f; }
+.finder:has(> .finder-command) .xr-time-options .xr-presets { display:grid; grid-template-columns:repeat(5,1fr); gap:0; margin:12px; border:1px solid #d5d8df; }
+.finder:has(> .finder-command) .xr-preset { height:32px; border:0; border-left:1px solid #d5d8df; background:#fff; color:#4d4b56; font:inherit; font-size:12px; font-weight:500; font-variant-numeric:tabular-nums; cursor:pointer; transition:background .15s ease-out; }
+.finder:has(> .finder-command) .xr-preset:first-child { border-left:0; }
+.finder:has(> .finder-command) .xr-preset:hover { background:#f5f5f6; }
+.finder:has(> .finder-command) .xr-preset[aria-pressed="true"] { background:#25232e; color:#fff; font-weight:600; }
+.finder:has(> .finder-command) .xr-exact { border-top:1px solid #e5e6e9; }
+.finder:has(> .finder-command) .xr-exact > summary { display:flex; align-items:center; justify-content:flex-start; height:40px; margin:0 12px; padding:0; color:#25232e; font-size:12px; font-weight:600; }
+.finder:has(> .finder-command) .xr-exact > summary::-webkit-details-marker { display:none; }
+.finder:has(> .finder-command) .xr-time-menu > summary::after { content:'▾'; flex:none; margin-left:6px; color:#77747e; font-size:10px; }
+.finder:has(> .finder-command) .xr-exact > summary::after { content:'▾'; margin-left:6px; color:#77747e; font-size:10px; transition:transform .15s ease-out; }
+.finder:has(> .finder-command) .xr-exact[open] > summary::after { transform:rotate(180deg); }
+.finder:has(> .finder-command) .xr-exact > summary { cursor:pointer; }
+.finder:has(> .finder-command) .xr-exact > summary:hover { color:#000; }
+.finder:has(> .finder-command) .xr-exact > summary::before { content:''; flex:none; width:6px; height:6px; margin-right:8px; background:#25232e; visibility:hidden; }
+.finder:has(> .finder-command) .xr-exact > summary[data-active]::before { visibility:visible; }
+.finder:has(> .finder-command) .xr-tz { margin:0 12px 0 54px; color:#77747e; font-size:11px; }
+.finder:has(> .finder-command) .xr-time-menu > summary { justify-content:safe center; min-width:0; }
+.finder:has(> .finder-command) .xr-time-label { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.finder:has(> .finder-command) .xr-time-menu > summary::-webkit-details-marker { display:none; }
+.finder:has(> .finder-command) .xr-exact[open] { display:grid; gap:8px; padding-bottom:12px; }
+.finder:has(> .finder-command) .xr-time-options .xr-range { display:grid; grid-template-columns:36px minmax(0,1fr) 104px; align-items:center; gap:6px; margin:0 12px; }
+.finder:has(> .finder-command) .xr-range b { color:#77747e; font-size:11px; font-weight:600; }
+.finder:has(> .finder-command) .xr-range input { box-sizing:border-box; width:100%; height:32px; padding:0 8px; border:1px solid #d5d8df; border-radius:0; background:#fff; color:#25232e; font:inherit; font-size:12px; font-variant-numeric:tabular-nums; }
+.finder:has(> .finder-command) .xr-range input::-webkit-calendar-picker-indicator { opacity:.35; margin-left:2px; cursor:pointer; }
+.finder:has(> .finder-command) .xr-range input:hover::-webkit-calendar-picker-indicator { opacity:.7; }
+.finder:has(> .finder-command) .xr-apply { justify-self:stretch; width:calc(100% - 66px); height:32px; margin:4px 12px 0 54px; border:1px solid #25232e; border-radius:0; background:#25232e; color:#fff; font:inherit; font-size:12px; font-weight:600; cursor:pointer; transition:background .15s ease-out; }
+.finder:has(> .finder-command) .xr-apply:hover { background:#3a3844; }
+.finder:has(> .finder-command) .xr-apply:focus-visible { outline:2px solid #025558; outline-offset:1px; }
+@media (max-width:850px) { .finder:has(> .finder-command) .xr-time-options { width:calc(100vw - 50px); } }
+@media (max-width:850px) { .finder:has(> .finder-command) .xr-quickviews { flex:1 1 100%; flex-wrap:wrap; } }
+.finder:has(> .finder-command) .xr-range input:focus-visible,
+.finder:has(> .finder-command) .xr-preset:focus-visible,
+.finder:has(> .finder-command) .xr-exact > summary:focus-visible { outline:2px solid #025558; outline-offset:-2px; }
+/* Ask AI results: the answer leads, actions look like buttons, yes/no stays neutral (a match is not an error). */
+.finder:has(> .finder-command) .finder-progress { gap:10px; padding:0 16px; min-height:44px; font-family:var(--font-sans); font-size:12px; }
+.finder:has(> .finder-command) .finder-progress .state { font-size:10.5px; }
+.finder:has(> .finder-command) .finder-progress-answer { color:var(--text-strong); font-size:13px; }
+.finder:has(> .finder-command) .finder-progress-answer b { font-weight:700; }
+.finder:has(> .finder-command) .finder-progress-failed b { color:#bd5548; }
+.finder:has(> .finder-command) .finder-progress .btn-secondary,
+.finder:has(> .finder-command) .finder-progress-action .btn-secondary { display:inline-flex; align-items:center; height:30px; margin-left:0; padding:0 10px; border:1px solid #d5d8df; border-radius:0; background:#fff; color:#25232e; font-family:var(--font-sans); font-size:12px; font-weight:500; text-decoration:none; white-space:nowrap; flex-shrink:0; }
+.finder:has(> .finder-command) .finder-progress > a.btn-secondary { margin-left:auto; }
+.finder:has(> .finder-command) .finder-progress .btn-secondary:hover { background:#f5f5f6; }
+.finder:has(> .finder-command) .finder-progress-action { margin-left:0; }
+.finder:has(> .finder-command) .finder-progress-bar { height:3px; }
+.finder:has(> .finder-command) .finder-tasks { padding:0; }
+.finder:has(> .finder-command) .finder-task { margin:0; border:0; border-bottom:1px solid #e5e6e9; border-radius:0; box-shadow:none; background:#fcfcfd; }
+.finder:has(> .finder-command) .finder-task > summary { display:flex; align-items:center; gap:10px; min-height:40px; padding:0 16px; }
+.finder:has(> .finder-command) .finder-task .kind { border-radius:0; }
+.finder:has(> .finder-command) .finder-task > summary > :not(.finder-task-q) { flex-shrink:0; white-space:nowrap; }
+.finder:has(> .finder-command) .finder-task-q { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-body); font-size:12px; }
+.finder:has(> .finder-command) .finder-task[open] .finder-task-q { display:none; }
+.finder:has(> .finder-command) .xr-count { margin-left:3px; color:inherit; opacity:.7; font-variant-numeric:tabular-nums; font-weight:500; }
+.finder:has(> .finder-command) .xr-yn { display:inline-flex; align-items:center; gap:6px; font-weight:600; }
+.finder:has(> .finder-command) .xr-yn::before { content:''; width:8px; height:8px; box-sizing:border-box; }
+.finder:has(> .finder-command) .xr-yn.yes { color:#25232e; }
+.finder:has(> .finder-command) .xr-yn.yes::before { background:#25232e; }
+.finder:has(> .finder-command) .xr-yn.no { color:#77747e; font-weight:400; }
+.finder:has(> .finder-command) .xr-yn.no::before { border:1px solid #a9a7ae; }
+.finder:has(> .finder-command) .xr-yn.failed { color:#bd5548; }
+.finder:has(> .finder-command) .xr-yn.failed::before { background:#bd5548; }
+.finder:has(> .finder-command) .xr-pending { letter-spacing:.1em; }
+.finder:has(> .finder-command) .finder-progress[data-state="completed"] .state { color:#686a74; }
+.finder:has(> .finder-command) .finder-progress[data-state="completed"] [data-finder-edit] { margin-left:auto; }
+.finder:has(> .finder-command) .finder-progress[data-state="completed"] > a.btn-secondary { margin-left:0; }
+body:has(.finder-command) .finder-status.done { display:none; }
+.finder:has(> .finder-command) .xr-empty { border-radius:0; }
+.finder:has(> .finder-command) .xr-empty h4 { text-transform:none; letter-spacing:0; }
+body:has(.xr-empty [data-finder-edit]) .finder-progress [data-finder-edit] { display:none; }
+.finder:has(> .finder-command) .xr-empty .btn-secondary { height:32px; margin-top:8px; padding:0 12px; border:1px solid #d5d8df; border-radius:0; background:#fff; color:#25232e; font:inherit; font-size:12px; cursor:pointer; }
 @media (prefers-reduced-motion:reduce) { .finder:has(> .finder-command) * { transition:none!important; } }
 @media (max-width:850px) {
   body:has(.finder-command) .app-sidebar { display:none; }
@@ -115,7 +210,7 @@ _TRACES_DENSITY_CSS = """
   .finder:has(> .finder-command) .xr-toolbar .spacer { display:none; }
   .finder:has(> .finder-command) .xr-toolbar-right { flex:1 1 100%; width:100%; min-width:0; margin:0 0 2px; grid-template-columns:repeat(3,minmax(0,1fr)); }
   .finder:has(> .finder-command) .xr-toolbar-right .finder-seg { grid-column:span 2; }
-  .finder:has(> .finder-command) .xr-table { width:980px; min-width:980px; table-layout:fixed; }
+  .finder:has(> .finder-command) .xr-table { width:auto; min-width:980px; }
   .finder:has(> .finder-command) .xr-table th:first-child,
   .finder:has(> .finder-command) .xr-table td:first-child { width:110px; }
   .finder:has(> .finder-command) .xr-table th:nth-child(2),
@@ -2749,7 +2844,7 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 #finder-drawer-loading { display:none; position:fixed; top:20px; right:20px; z-index:101; padding:8px 12px; border-radius:999px; background:#16151c; color:#f2f1f5; box-shadow:var(--shadow-lg); font-size:12px; }
 #finder-drawer-loading.htmx-request { display:block; }
 #finder-start-form.htmx-request .finder-start-working { display:inline-flex; align-items:center; margin:0 16px 16px; color:var(--text-muted); font-size:12px; }
-.finder-progress-action { display:flex; align-items:center; gap:8px; margin-left:auto; }
+.finder-progress-action { display:flex; align-items:center; gap:8px; margin-left:auto; white-space:nowrap; flex-shrink:0; }
 .finder-progress-action > span { display:none; }
 .finder-progress-action.htmx-request > span { display:inline; }
 .finder-progress-action.htmx-request button { display:none; }
@@ -2791,6 +2886,9 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .finder-field { position:relative; border-radius:18px; overflow:hidden; background:#16151c; background-image:radial-gradient(ellipse at 20% 0%,rgba(255,143,52,.10),transparent 55%),radial-gradient(ellipse at 90% 100%,rgba(2,85,88,.25),transparent 55%); box-shadow:0 1px 2px rgba(20,18,30,.06),0 20px 50px -24px rgba(20,18,30,.45); }
 .finder-progress { display:flex; align-items:center; gap:14px; padding:14px 20px; font-size:12.5px; color:#b9b7c2; border-bottom:1px solid rgba(255,255,255,.06); font-family:var(--font-mono); }
 .finder-progress b { color:#f2f1f5; font-weight:500; }
+.finder-progress { position:relative; }
+.finder-progress-bar { position:absolute; left:0; right:0; bottom:-1px; height:2px; background:transparent; }
+.finder-progress-bar i { display:block; height:100%; background:var(--accent); transition:width .4s ease; }
 /* /traces renders the progress line on a light card, not the dark /find field. */
 .finder:has(> .finder-command) .finder-progress { color:var(--text-muted); border-bottom-color:var(--border-subtle); }
 .finder:has(> .finder-command) .finder-progress b { color:var(--text-strong); }
@@ -2879,7 +2977,8 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .finder-status.failed .icon { color:var(--red-700); }
 @keyframes finder-spin { to { transform:rotate(360deg); } }
 @media (prefers-reduced-motion:reduce) { .finder-status .spin,.finder-facet-loading::before { animation:none; } }
-.finder-progress-error { margin-left:auto; padding:4px 8px; font-size:12px; color:var(--red-700); }
+.finder-progress-error { min-width:0; flex:1 1 auto; margin-left:auto; padding:4px 8px; font-size:12px; color:var(--red-700); }
+.finder-progress-warning { color:var(--orange-700); }
 .finder-task-body select { width:100%; border:1px solid var(--border-default); border-radius:6px; padding:6px 8px; font:inherit; font-size:13px; color:var(--text-strong); background:var(--surface-card); }
 .finder-crit-row { display:grid; grid-column:1 / -1; grid-template-columns:110px 1fr; gap:4px 10px; }
 .fd-meta { display:grid; grid-template-columns:auto 1fr; gap:4px 14px; font-size:12px; margin-bottom:14px; }

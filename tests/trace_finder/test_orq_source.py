@@ -136,8 +136,7 @@ def test_build_oql_includes_categorical_and_numeric_filters() -> None:
     numeric = NumericFilters(tokens_min=500, tokens_max=5000, duration_ms_min=10, duration_ms_max=1000)
 
     assert build_oql(facets, numeric, {'project-123': 'Research'}) == (
-        'fetch traces | filter operation not_in ("generate_content") '
-        '| filter project_id in ("project-123") '
+        'fetch traces | filter project_id in ("project-123") '
         '| filter model in ("gpt-5") '
         '| filter provider in ("openai") '
         '| filter status in ("error") '
@@ -151,6 +150,15 @@ def test_build_oql_includes_categorical_and_numeric_filters() -> None:
         '| filter duration_ms <= 1000 '
         '| sort end_time desc'
     )
+
+
+def test_build_oql_keeps_the_base_filter_unless_a_model_or_provider_is_picked() -> None:
+    base = 'operation not_in ("generate_content")'
+
+    assert base in build_oql(FacetSelection(status=frozenset({'error'})), NumericFilters(), {})
+    # jev and other bare model calls are generate_content traces; the base filter would hide all of them.
+    assert base not in build_oql(FacetSelection(model=frozenset({'jev-latest'})), NumericFilters(), {})
+    assert base not in build_oql(FacetSelection(provider=frozenset({'typesafe'})), NumericFilters(), {})
 
 
 def test_build_oql_rejects_a_project_name_that_cannot_be_resolved() -> None:
@@ -870,6 +878,24 @@ async def test_hydrate_rows_returns_none_for_a_failed_trace() -> None:
     assert records['ok'] is not None
     assert records['ok'].messages[0]['content'] == 'hello'
     assert records['empty'] is None
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_reports_progress_to_the_run() -> None:
+    from evaluatorq.trace_finder.progress import set_load_reporter
+
+    traces = FakeTraces({None: ([summary('a'), summary('b')], False, None)})
+    source = make_source(FakeOrq(traces))
+    rows = await source.search(START, END, 5, facets=FacetSelection(), numeric=NumericFilters())
+    seen: list[tuple[int, int]] = []
+
+    async def hydrate() -> None:
+        set_load_reporter(lambda done, total: seen.append((done, total)))
+        await source.hydrate_rows(rows)
+
+    await asyncio.create_task(hydrate())
+
+    assert sorted(seen) == [(1, 2), (2, 2)]
 
 
 @pytest.mark.asyncio

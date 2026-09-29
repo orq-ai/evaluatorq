@@ -24,6 +24,8 @@ from evaluatorq.trace_finder.models import (
     TraceRecord,
 )
 from evaluatorq.trace_finder.run_store import RunStore
+from evaluatorq.trace_finder.explorer import ExplorerStore
+from evaluatorq.trace_finder.rows import TraceRow
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -704,13 +706,14 @@ async def test_compile_with_traces_applies_question_numeric_bounds_to_loaded_row
 
 
 @pytest.mark.asyncio
-async def test_compile_with_traces_fails_when_no_loaded_row_meets_the_bounds() -> None:
+async def test_compile_with_traces_completes_with_warning_when_no_loaded_row_meets_the_bounds() -> None:
     store, _, _, _, _ = make_store()
 
     snapshot = await store.compile(request(), traces=lambda: _small_traces())
 
-    assert snapshot.state == 'failed'
-    assert snapshot.error == 'None of the loaded traces match the filters or bounds in the question.'
+    assert snapshot.state == 'completed'
+    assert snapshot.error is None
+    assert snapshot.plan_warning == 'None of the 1 loaded traces have at least 100 tokens (the largest has 50). Try New search to look beyond the loaded rows.'
 
 
 def _unbounded_planner() -> Planner:
@@ -739,7 +742,7 @@ async def test_compile_with_traces_narrows_loaded_rows_to_the_generated_facet_se
 
 
 @pytest.mark.asyncio
-async def test_compile_with_traces_fails_when_no_loaded_row_matches_the_generated_facet_selection() -> None:
+async def test_compile_with_traces_completes_with_warning_when_no_loaded_row_matches_the_generated_facet_selection() -> None:
     store, _, _, _, _ = make_store(planner=_unbounded_planner(), filters=FacetSelection(model=frozenset({'gpt-4'})))
 
     async def loader() -> tuple[TraceRecord, ...]:
@@ -747,8 +750,58 @@ async def test_compile_with_traces_fails_when_no_loaded_row_matches_the_generate
 
     snapshot = await store.compile(request(), traces=loader)
 
-    assert snapshot.state == 'failed'
-    assert snapshot.error == 'None of the loaded traces match the filters or bounds in the question.'
+    assert snapshot.state == 'completed'
+    assert snapshot.error is None
+    assert snapshot.plan_warning == 'None of the 1 loaded traces have model gpt-4. Try New search to look beyond the loaded rows.'
+
+
+@pytest.mark.asyncio
+async def test_within_results_compile_narrows_explorer_for_kept_and_empty_results() -> None:
+    class ExplorerSource:
+        def __init__(self) -> None:
+            self.rows = (TraceRow(trace_id='trace-1'), TraceRow(trace_id='trace-2'))
+
+        async def search(self, *args: Any, **kwargs: Any) -> tuple[TraceRow, ...]:
+            del args
+            kwargs['on_page'](self.rows)
+            return self.rows
+
+        async def hydrate_rows(self, rows: Any) -> dict[str, TraceRecord | None]:
+            del rows
+            return {}
+
+    source = ExplorerSource()
+    explorer = ExplorerStore(search=source.search, hydrate=source.hydrate_rows)
+    await explorer.load(
+        datetime(2026, 9, 20, tzinfo=timezone.utc),
+        datetime(2026, 9, 21, tzinfo=timezone.utc),
+        2,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        wait=True,
+    )
+    planner = Planner()
+    planner.plan = CompiledPlan(dimensions=(compiled_query(),), numeric=NumericFilters(tokens_min=102))
+    store, _, _, _, _ = make_store(planner=planner)
+    store.explorer = explorer
+
+    async def traces() -> tuple[TraceRecord, ...]:
+        return (trace(1), trace(2))
+
+    kept = await store.compile(request(mode='review'), traces=traces)
+    view = await explorer.view()
+    assert kept.trace_ids == ('trace-2',)
+    assert [row.trace_id for row in view.rows] == ['trace-2']
+    assert view.numeric.tokens_min == 102
+
+    planner.plan = CompiledPlan(dimensions=(compiled_query(),), numeric=NumericFilters(tokens_min=1_000))
+    empty = await store.compile(request(mode='review'), traces=traces)
+    view = await explorer.view()
+    assert empty.state == 'completed'
+    assert empty.plan_warning is not None
+    assert empty.trace_ids == ()
+    assert view.rows == ()
+    assert view.numeric.tokens_min == 1_000
 
 
 async def _loaded_traces() -> tuple[TraceRecord, ...]:
@@ -842,3 +895,47 @@ async def test_load_resets_running_classification() -> None:
 
     assert snapshot.state == 'idle'
     assert snapshot.results == {}
+
+
+@pytest.mark.asyncio
+async def test_numeric_only_plan_warns_when_the_question_says_more_than_numbers() -> None:
+    planner = Planner()
+    planner.plan = CompiledPlan(dimensions=(), numeric=NumericFilters(tokens_min=50_001))
+    store, _, _, _, _ = make_store(planner=planner, filters=FacetSelection())
+    coding = request(mode='review').model_copy(update={'query': 'all coding agents with more than 50k tokens'})
+    plain = request(mode='review').model_copy(update={'query': 'traces with more than 50k tokens'})
+
+    warned = await store.compile(coding, traces=lambda: _loaded_traces())
+    assert warned.plan_warning is not None
+    assert '"coding agents"' in warned.plan_warning
+
+    quiet = await store.compile(plain, traces=lambda: _loaded_traces())
+    assert quiet.plan_warning is None
+
+
+@pytest.mark.asyncio
+async def test_compile_with_traces_records_how_many_rows_were_loaded() -> None:
+    store, _, _, _, _ = make_store(planner=_unbounded_planner())
+
+    snapshot = await store.compile(request(), traces=lambda: _small_traces())
+
+    assert snapshot.state == 'classifying'
+    assert (snapshot.loaded, snapshot.to_load) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_new_search_through_the_table_queries_it_with_the_merged_filters() -> None:
+    store, _, loader, _, _ = make_store(filters=FacetSelection(model=frozenset({'jev-latest'})))
+    asked: list[PopulationRequest] = []
+
+    async def table(population: PopulationRequest) -> tuple[TraceRecord, ...]:
+        asked.append(population)
+        return (trace(1).model_copy(update={'total_tokens': 500, 'duration_ms': 500}),)
+
+    snapshot = await store.compile(request(mode='review'), table=table)
+
+    assert asked[0].facets.model == frozenset({'jev-latest'})
+    assert asked[0].numeric == NumericFilters(tokens_min=100, duration_ms_min=20)
+    assert snapshot.within_results
+    assert snapshot.trace_ids == ('trace-1',)
+    assert loader.calls == []

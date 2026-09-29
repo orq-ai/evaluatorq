@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
@@ -50,11 +51,14 @@ _STRICT_DURATION_MAX = re.compile(
 COMPILER_INSTRUCTIONS = """Compile the user's request into zero to three semantic classification dimensions.
 
 Each dimension is one independent judgment of a conversation, shown to the user as its own table
-column, and a trace matches only when every dimension matches. Return an empty dimensions list when
-filters alone answer the request: token or duration bounds (extracted below) and metadata facets
-such as project, agent, model, provider, status, product, trace type, tool, or time, which a
-separate filter step applies. Add a dimension only for something that needs reading the
-conversation, such as sentiment, intent, quality, or whether an event happened. Use one dimension
+column, and a trace matches only when every dimension matches. Return an empty dimensions list
+only when every part of the request is a token or duration bound (extracted below) or names an
+exact metadata value: a project, agent, model, provider, status, product, trace type, tool, or time,
+which a separate filter step applies. Any descriptive phrase about what the trace is or does needs
+a dimension, even when it sounds like a category: "coding agents over 50k tokens" needs a
+dimension for "coding agent" plus tokens_min 50001, because no metadata field says which traces are
+coding agents. Add dimensions for things that need reading the conversation, such as kind of
+work, sentiment, intent, quality, or whether an event happened. Use one dimension
 for one judgment and never split a single judgment across several; use two or three only when the
 request combines separate judgments. Never add more than three.
 
@@ -74,6 +78,10 @@ Choose exactly one task kind per dimension:
   selection.kind is threshold with an inclusive gte or lte value from 0.0 to 1.0.
 
 Write precise task instructions and criteria that directly answer the user's semantic request.
+The selection lists only answers that satisfy the request: the traces the user is searching for.
+Never select a neutral, none, neither, other, normal, or appropriate label, or every label. For
+negated requests such as "does not behave", "fails to", or "without X", select the failure or
+absence label, not the healthy one. For noul, select [true] when true means the requested thing.
 
 Extract numeric constraints on total tokens and duration into numeric. Bounds are inclusive integer
 counts, so strict phrases must move by one unit: "over 20k tokens" → tokens_min: 20001 and
@@ -85,6 +93,9 @@ provider, status, product, trace type, agent, or tool constraints; the classifie
 
 class CompileError(RuntimeError):
     """The compiler did not return an OpenAI structured-output document."""
+
+
+_BOOLEAN_LABELS = MappingProxyType({'yes': True, 'true': True, 'no': False, 'false': False})
 
 
 class WireCriterion(BaseModel):
@@ -173,9 +184,21 @@ class WireDimension(BaseModel):
 
         if isinstance(self.selection, WireValueSelection):
             selection_values = self.selection.values
-            if task.kind == 'noul' and all(value in ('yes', 'no') for value in selection_values):
-                logger.warning('trace query compiler returned yes/no labels for a boolean selection; converting them')
-                selection_values = tuple(value == 'yes' for value in selection_values)
+            if task.kind == 'noul' and all(
+                isinstance(value, str) and value.casefold() in _BOOLEAN_LABELS for value in selection_values
+            ):
+                logger.warning('trace query compiler returned text labels for a boolean selection; converting them')
+                selection_values = tuple(_BOOLEAN_LABELS[str(value).casefold()] for value in selection_values)
+            if task.kind == 'choice' and criteria is not None and set(selection_values) == set(criteria):
+                raise ValueError(
+                    f"dimension '{self.name}': selection must list only the answers the user is looking for, "
+                    'not every label'
+                )
+            if task.kind == 'noul' and set(selection_values) == {True, False}:
+                raise ValueError(
+                    f"dimension '{self.name}': selection must list only the answers the user is looking for, "
+                    'not both true and false'
+                )
             selection: ValueSelection | ThresholdSelection = ValueSelection(kind='values', values=selection_values)
         else:
             selection = ThresholdSelection.model_validate(self.selection.model_dump())
@@ -244,34 +267,43 @@ async def compile_query(
         logger.debug(
             'Trace finder compiler request model={} messages={}', model, json.dumps(messages, ensure_ascii=False)
         )
-    result = await generate_structured(
-        client,
-        model=model,
-        messages=messages,
-        response_format=CompilerWireQuery,
-        max_tokens=2000,
-        label='trace_finder.compile',
-        api='responses',
-        config=cfg,
-    )
-    if result.parsed is None:
-        if debug_enabled():
-            logger.debug('Trace finder compiler response model={} raw={}', model, result.raw)
-        raise CompileError(f'Compiler returned no structured task. Raw: {result.raw[:300]}')
+    for attempt in range(2):
+        result = await generate_structured(
+            client,
+            model=model,
+            messages=messages,
+            response_format=CompilerWireQuery,
+            max_tokens=2000,
+            label='trace_finder.compile',
+            api='responses',
+            config=cfg,
+        )
+        if result.parsed is None:
+            if debug_enabled():
+                logger.debug('Trace finder compiler response model={} raw={}', model, result.raw)
+            raise CompileError(f'Compiler returned no structured task. Raw: {result.raw[:300]}')
 
-    wire = (
-        result.parsed
-        if isinstance(result.parsed, CompilerWireQuery)
-        else CompilerWireQuery.model_validate(result.parsed)
-    )
-    if debug_enabled():
-        logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
-    try:
-        dimensions, numeric = wire.to_domain()
-        numeric = _tighten_strict_bounds(normalized, numeric)
-    except ValidationError as exc:
-        raise CompileError(f'Compiler produced an invalid plan: {exc}') from exc
-    return CompiledPlan(dimensions=dimensions, numeric=numeric)
+        wire = (
+            result.parsed
+            if isinstance(result.parsed, CompilerWireQuery)
+            else CompilerWireQuery.model_validate(result.parsed)
+        )
+        if debug_enabled():
+            logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
+        try:
+            dimensions, numeric = wire.to_domain()
+            numeric = _tighten_strict_bounds(normalized, numeric)
+            return CompiledPlan(dimensions=dimensions, numeric=numeric)
+        except (ValidationError, ValueError) as exc:
+            if attempt:
+                raise CompileError(f'Compiler produced an invalid plan: {exc}') from exc
+            logger.warning('Trace query compiler returned an invalid plan; retrying: {}', exc)
+            messages = [
+                *messages,
+                {'role': 'assistant', 'content': result.raw or wire.model_dump_json()},
+                {'role': 'user', 'content': f'Your plan was invalid: {exc}. Correct it and return a valid plan.'},
+            ]
+    raise AssertionError('unreachable compiler retry state')
 
 
 def _tighten_strict_bounds(query: str, numeric: NumericFilters) -> NumericFilters:

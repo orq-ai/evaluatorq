@@ -49,7 +49,7 @@ from evaluatorq.trace_finder import (
 if TYPE_CHECKING:
     from evaluatorq.trace_finder import FacetCatalogue
 from evaluatorq.trace_finder.columns import COLUMNS, resolve_columns
-from evaluatorq.trace_finder.explorer import ExplorerView
+from evaluatorq.trace_finder.explorer import QUICK_VIEWS, ExplorerView
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES, TraceRecord
 from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
 from evaluatorq.trace_finder.settings import (
@@ -632,6 +632,17 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 )
             )
         try:
+
+            async def hydrate_explorer_rows(ids: list[str]) -> tuple[TraceRecord, ...]:
+                explorer_store = store.explorer
+                if explorer_store is None:
+                    raise RuntimeError('The trace table is unavailable.')
+                records = await explorer_store.records(ids)
+                missing = sum(record is None for record in records.values())
+                if missing:
+                    logger.warning('Skipping {} loaded trace(s) without usable messages in the classification', missing)
+                return tuple(record for record in records.values() if record is not None)
+
             if str(form.get('scope') or 'new') == 'within':
                 explorer = store.explorer
                 explorer_view = await explorer.view() if explorer is not None else None
@@ -646,33 +657,48 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                         )
                     )
                 base = _run_request(form, settings)
+                # The AI trace limit caps how many rows are judged, not how many the table loaded.
+                limit = min(len(explorer_view.rows), base.population.limit)
                 request = base.model_copy(
                     update={
-                        'mode': 'review' if len(explorer_view.rows) > CONFIRM_ROWS else base.mode,
+                        'mode': 'review' if limit > CONFIRM_ROWS else base.mode,
                         'population': PopulationRequest(
                             start=explorer_view.start,
                             end=explorer_view.end,
                             facets=explorer_view.facets,
                             numeric=explorer_view.numeric,
-                            limit=len(explorer_view.rows),
+                            limit=limit,
                         ),
                     }
                 )
                 ids = [row.trace_id for row in explorer_view.rows]
 
                 async def loaded_traces() -> tuple[TraceRecord, ...]:
-                    records = await explorer.records(ids)
-                    missing = sum(record is None for record in records.values())
-                    if missing:
-                        logger.warning(
-                            'Skipping {} loaded trace(s) without usable messages in the classification', missing
-                        )
-                    return tuple(record for record in records.values() if record is not None)
+                    return await hydrate_explorer_rows(ids)
 
                 snapshot = await store.compile(request, wait=False, traces=loaded_traces)
             else:
                 request = _run_request(form, settings)
-                snapshot = await store.compile(request, wait=False)
+                explorer = store.explorer if req.state.finder_surface != 'search' else None
+
+                async def load_table(population: PopulationRequest) -> tuple[TraceRecord, ...]:
+                    if explorer is None:
+                        raise RuntimeError('The trace table is unavailable.')
+                    end = population.end or datetime.now(timezone.utc)
+                    start = population.start or end - timedelta(days=settings.window_days)
+                    view = await explorer.load(
+                        start,
+                        end,
+                        population.limit,
+                        facets=population.facets,
+                        numeric=population.numeric,
+                        wait=True,
+                    )
+                    if view.state == 'failed':
+                        raise RuntimeError(view.error or 'Trace table loading failed.')
+                    return await hydrate_explorer_rows([row.trace_id for row in view.rows])
+
+                snapshot = await store.compile(request, wait=False, table=load_table if explorer is not None else None)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(
                 render_fragment(req, RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=str(exc)),
@@ -702,7 +728,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             **fragment_kwargs,
         )
         if explorer is not None and explorer_view is not None:
-            if explorer_view.rows and (snapshot.state == 'classifying' or snapshot.results):
+            # A within-results run may narrow the table to zero rows, so it still needs the refresh.
+            if (explorer_view.rows or snapshot.within_results) and (
+                snapshot.state in {'classifying', 'completed'} or snapshot.results
+            ):
                 body += await _explorer_html(req, oob=True)
         return _html(body)
 
@@ -734,7 +763,6 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             project_id=settings.orq_project_id,
             **{name: frozenset(_form_values(form, f'facet_{name}')) for name in FACET_NAMES},
         )
-        await store.reset()
         await explorer.load(start, end, rows, facets=facets, numeric=numeric)
         snapshot = await store.snapshot_for_render()
         explorer_view = await explorer.view()
@@ -762,10 +790,15 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 page=int(page) if page and page.isdigit() else (0 if params.get('sort') else None),
                 view=params.get('view') if params.get('view') in {'table', 'trajectories'} else None,
                 matched_only={'1': True, '0': False}.get(params.get('matched_only') or ''),
-                quick_view=params.get('quick_view')
-                if params.get('quick_view') in {'all', 'errors', 'matches'}
-                else None,
+                quick_view=params.get('quick_view') if params.get('quick_view') in QUICK_VIEWS else None,
             )
+            view = await explorer.view()
+            if view.state == 'loaded' and view.quick_view == 'conv_longest' and view.rows:
+                try:
+                    await explorer.message_counts()
+                except Exception as exc:  # noqa: BLE001 - hydration must not jam the table
+                    logger.warning('Counting conversation messages failed: {}', exc)
+                    return _html(await _explorer_html(req, error=f'Could not count messages: {exc}'))
         body = await _explorer_html(req)
         if explorer is not None:
             body += f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows))}</div>'
@@ -869,10 +902,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         settings = _settings(req.app)
         store = await store_for(req)
         snapshot = await store.reset() if store is not None else RunSnapshot()
+        if store is not None and store.explorer is not None:
+            await store.explorer.set_view(quick_view='all')
         return _html(
             render_fragment(
                 req, snapshot, settings, api_available=store is not None, **_catalogue_kwargs(req.app, snapshot)
             )
+            + (await _explorer_html(req, oob=True) if not is_search(req) else '')
         )
 
     @app.get('/find/trace/{trace_id:path}')

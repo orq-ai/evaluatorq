@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -28,6 +29,7 @@ from .models import (
     TraceProjection,
     TraceRecord,
 )
+from .progress import set_load_reporter
 from .projection import project_trace as default_project_trace
 
 if TYPE_CHECKING:
@@ -43,6 +45,12 @@ class PopulationLoader(Protocol):
     """Load the bounded trace population after planning has completed."""
 
     def __call__(self, request: PopulationRequest) -> Awaitable[Snapshot]: ...
+
+
+class TableLoader(Protocol):
+    """Load the records that the dashboard explorer should display."""
+
+    def __call__(self, request: PopulationRequest) -> Awaitable[tuple[TraceRecord, ...]]: ...
 
 
 class ClassifierRunner(Protocol):
@@ -107,6 +115,7 @@ class RunStore:
         *,
         wait: bool = True,
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
         """Compile, select the population, and stage or start the requested run.
 
@@ -117,7 +126,7 @@ class RunStore:
         skipped, and the generated facets and numeric bounds narrow the loaded rows locally.
         """
 
-        return await self._prepare(request, None, compile_query=True, wait=wait, traces=traces)
+        return await self._prepare(request, None, compile_query=True, wait=wait, traces=traces, table=table)
 
     async def start(
         self, request: RunRequest, dimensions: Sequence[CompiledQuery], *, wait: bool = True
@@ -134,12 +143,13 @@ class RunStore:
         compile_query: bool,
         wait: bool = True,
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
         generation, staged_traces = await self._begin(
-            request, compile_query=compile_query, within_results=traces is not None
+            request, compile_query=compile_query, within_results=traces is not None or table is not None
         )
         work = self._plan_and_start(
-            generation, staged_traces, request, dimensions, compile_query=compile_query, traces=traces
+            generation, staged_traces, request, dimensions, compile_query=compile_query, traces=traces, table=table
         )
         if wait:
             return await work
@@ -194,6 +204,7 @@ class RunStore:
                 generated_numeric = NumericFilters() if compile_query else self._snapshot.generated_numeric
                 filter_response = None if compile_query else self._snapshot.filter_response
                 filter_selection_error = None if compile_query else self._snapshot.filter_selection_error
+                plan_warning = None if compile_query else self._snapshot.plan_warning
                 self._snapshot = RunSnapshot(
                     generation=generation,
                     state='compiling',
@@ -206,13 +217,14 @@ class RunStore:
                     generated_numeric=generated_numeric.model_copy(deep=True),
                     filter_response=filter_response.model_copy(deep=True) if filter_response is not None else None,
                     filter_selection_error=filter_selection_error,
+                    plan_warning=plan_warning,
                     created_at=self._now_utc(),
                 )
                 self._started_monotonic = None
                 self._task = None
                 return generation, staged_traces
 
-    async def _plan_and_start(
+    async def _plan_and_start(  # noqa: C901
         self,
         generation: int,
         staged_traces: tuple[TraceRecord, ...],
@@ -221,7 +233,12 @@ class RunStore:
         *,
         compile_query: bool,
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
+        # The table narrows with the run only while it still shows the rows this run was asked about.
+        explorer_generation = (
+            (await self.explorer.view()).generation if traces is not None and self.explorer is not None else None
+        )
         try:
             if compile_query:
                 plan_task = asyncio.create_task(self._plan(request.query, request.population))
@@ -235,6 +252,9 @@ class RunStore:
                 generated_filters = filter_result.selection
                 generated_numeric = plan.numeric.model_copy(deep=True)
                 dimensions = _revalidated(plan.dimensions)
+                plan_warning = _uncovered_words_warning(request.query, dimensions, generated_filters)
+                # Already-loaded rows are narrowed locally instead; a fresh population, from Orq or the
+                # table, is queried with the question's filters.
                 if traces is None:
                     population = request.population.model_copy(
                         update={
@@ -252,6 +272,7 @@ class RunStore:
                 filter_result = FilterSelectionResult(
                     generated_filters, self._snapshot.filter_response, self._snapshot.filter_selection_error
                 )
+                plan_warning = self._snapshot.plan_warning
 
             async with self._lock:
                 if generation != self._generation or self._snapshot.state != 'compiling':
@@ -264,14 +285,48 @@ class RunStore:
                     generated_numeric=generated_numeric.model_copy(deep=True),
                     filter_response=filter_result.response.model_copy(deep=True) if filter_result.response else None,
                     filter_selection_error=filter_result.error,
+                    plan_warning=plan_warning,
                     request=request.model_copy(deep=True),
                 )
 
             if not staged_traces:
-                if traces is not None:
-                    loaded_traces = await self._load_owned(generation, traces)
-                    # Loaded rows skip the Orq query, so apply the question's generated filters here.
-                    staged_traces = _narrowed(loaded_traces or (), generated_filters, generated_numeric)
+                if traces is not None or table is not None:
+                    population = request.population
+                    loader = traces or (lambda: table(population))  # pyright: ignore[reportOptionalCall]
+                    loaded_traces = await self._load_owned(generation, loader)
+                    self._report_loaded(generation, len(loaded_traces or ()), len(loaded_traces or ()))
+                    # Loaded rows skip the Orq query, so apply the question's generated filters here
+                    # and to the table only for within-results runs.
+                    staged_traces = (
+                        _narrowed(loaded_traces or (), generated_filters, generated_numeric)
+                        if traces is not None
+                        else tuple(loaded_traces or ())
+                    )
+                    if (
+                        traces is not None
+                        and explorer_generation is not None
+                        and self.explorer is not None
+                        and staged_traces != loaded_traces
+                    ):
+                        await self.explorer.narrow(
+                            explorer_generation,
+                            {trace.trace_id for trace in staged_traces},
+                            facets=_merge_facets(request.population.facets, generated_filters),
+                            numeric=_merge_numeric(request.population.numeric, generated_numeric),
+                        )
+                    staged_traces = staged_traces[: request.population.limit]
+                    if loaded_traces and not staged_traces:
+                        async with self._lock:
+                            if generation == self._generation and self._snapshot.state == 'compiling':
+                                self._snapshot = replace(
+                                    self._snapshot,
+                                    plan_warning=_nothing_kept_message(
+                                        loaded_traces, generated_filters, generated_numeric
+                                    ),
+                                )
+                                self._finish('completed')
+                                self._task = None
+                            return self._view()
                 else:
                     loaded = await self._load_population(generation, request.population)
                     staged_traces = tuple(loaded.traces[: request.population.limit])
@@ -339,6 +394,7 @@ class RunStore:
         """Run one load as cancellable generation-owned work."""
 
         async def load() -> T:
+            set_load_reporter(lambda done, total: self._report_loaded(generation, done, total))
             return await factory()
 
         task = asyncio.create_task(load())
@@ -362,6 +418,11 @@ class RunStore:
                 if generation != self._generation or self._stopped_generation == generation:
                     return None
             raise
+
+    def _report_loaded(self, generation: int, done: int, total: int) -> None:
+        """Record loading progress; called synchronously on the loop, so no lock is needed."""
+        if generation == self._generation and self._snapshot.state == 'compiling':
+            self._snapshot = replace(self._snapshot, loaded=done, to_load=total)
 
     async def _plan(self, query: str, population: PopulationRequest) -> tuple[CompiledPlan, FilterSelectionResult]:
         """Run semantic and facet planning concurrently and clean up both."""
@@ -629,15 +690,117 @@ def _revalidated(dimensions: Sequence[CompiledQuery]) -> tuple[CompiledQuery, ..
     return tuple(CompiledQuery.model_validate(dimension.model_dump()) for dimension in dimensions)
 
 
+# ponytail: a word list, not a parser; it only has to spot a question that says more than its numeric bounds.
+_NUMERIC_QUERY_WORDS = frozenset([
+    'all',
+    'any',
+    'and',
+    'are',
+    'between',
+    'calls',
+    'conversations',
+    'duration',
+    'faster',
+    'fewer',
+    'find',
+    'for',
+    'get',
+    'has',
+    'have',
+    'least',
+    'less',
+    'list',
+    'longer',
+    'milliseconds',
+    'minutes',
+    'more',
+    'most',
+    'over',
+    'requests',
+    'runs',
+    'second',
+    'seconds',
+    'show',
+    'shorter',
+    'slower',
+    'than',
+    'that',
+    'the',
+    'them',
+    'those',
+    'total',
+    'trace',
+    'traces',
+    'token',
+    'tokens',
+    'under',
+    'used',
+    'using',
+    'which',
+    'with',
+    'above',
+    'below',
+    'took',
+    'taking',
+])
+
+
+def _uncovered_words_warning(query: str, dimensions: tuple[CompiledQuery, ...], filters: FacetSelection) -> str | None:
+    """Warn when nothing but numeric bounds survived planning, yet the question says more than numbers."""
+
+    if dimensions or any(getattr(filters, name) for name in FACET_NAMES):
+        return None
+    words = tuple(dict.fromkeys(w for w in re.findall(r'[a-z]{3,}', query.casefold()) if w not in _NUMERIC_QUERY_WORDS))
+    if not words:
+        return None
+    logger.warning('Trace finder plan applies only numeric bounds; the question also says {}', ', '.join(words))
+    return (
+        f'Only the numeric bounds were applied. No AI question or filter covers "{" ".join(words)}", '
+        'so rephrase the question or use Review to add one.'
+    )
+
+
 def _narrowed(
     traces: tuple[TraceRecord, ...], facets: FacetSelection, bounds: NumericFilters
 ) -> tuple[TraceRecord, ...]:
-    """Keep loaded traces inside the generated filters; fail loudly when the filters drop every row."""
+    """Keep loaded traces inside the generated filters."""
 
-    kept = tuple(trace for trace in traces if _within_facets(trace, facets) and _within_numeric(trace, bounds))
-    if traces and not kept:
-        raise ValueError('None of the loaded traces match the filters or bounds in the question.')
-    return kept
+    return tuple(trace for trace in traces if _within_facets(trace, facets) and _within_numeric(trace, bounds))
+
+
+def _nothing_kept_message(traces: tuple[TraceRecord, ...], facets: FacetSelection, bounds: NumericFilters) -> str:
+    """Name each filter or bound that dropped loaded rows, with the nearest loaded value, so the user knows what to change."""
+
+    reasons: list[str] = []
+    for name in FACET_NAMES:
+        selected: frozenset[str] = getattr(facets, name)
+        if selected and not all(
+            _within_facets(trace, FacetSelection.model_validate({name: selected})) for trace in traces
+        ):
+            reasons.append(f'{name.replace("_", " ")} {" or ".join(sorted(selected))}')
+    tokens = [trace.total_tokens for trace in traces if trace.total_tokens is not None]
+    durations = [trace.duration_ms for trace in traces if trace.duration_ms is not None]
+    for field, values, wanted, nearest in (
+        ('tokens_min', tokens, 'at least {:,} tokens', lambda: f'the largest has {max(tokens):,}'),
+        ('tokens_max', tokens, 'at most {:,} tokens', lambda: f'the smallest has {min(tokens):,}'),
+        (
+            'duration_ms_min',
+            durations,
+            'a duration of at least {:,} ms',
+            lambda: f'the longest took {max(durations):,} ms',
+        ),
+        (
+            'duration_ms_max',
+            durations,
+            'a duration of at most {:,} ms',
+            lambda: f'the shortest took {min(durations):,} ms',
+        ),
+    ):
+        bound: int | None = getattr(bounds, field)
+        if bound is not None and not all(_within_numeric(trace, NumericFilters(**{field: bound})) for trace in traces):
+            reasons.append(wanted.format(bound) + (f' ({nearest()})' if values else ''))
+    detail = ' and '.join(reasons) or 'the filters in the question'
+    return f'None of the {len(traces):,} loaded traces have {detail}. Try New search to look beyond the loaded rows.'
 
 
 def _within_facets(trace: TraceRecord, facets: FacetSelection) -> bool:

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import operator
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Literal, Protocol
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Literal, Protocol, get_args
 
 from loguru import logger
 
@@ -12,14 +15,98 @@ from .columns import sort_rows
 from .models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Mapping, Sequence
+    from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
     from datetime import datetime
 
     from .models import TraceClassification, TraceRecord
     from .rows import TraceRow
 
 ViewMode = Literal['table', 'trajectories']
-QuickView = Literal['all', 'errors', 'matches']
+QuickView = Literal[
+    'all', 'errors', 'matches', 'slow', 'costly', 'tokens', 'context', 'conv_costly', 'conv_tokens', 'conv_longest'
+]
+QUICK_VIEWS: frozenset[str] = frozenset(get_args(QuickView))
+TOP_SHARE = 0.10
+
+
+def _total_tokens(row: TraceRow) -> int | None:
+    if row.tokens_in is None and row.tokens_out is None:
+        return None
+    return (row.tokens_in or 0) + (row.tokens_out or 0)
+
+
+# Built-in views (BOPS-1243): the top 10% of loaded rows by one metric, heaviest first.
+TOP_METRICS: Mapping[str, tuple[str, Callable[[TraceRow], float | None]]] = {
+    'slow': ('duration', lambda row: row.duration_ms),
+    'costly': ('cost', lambda row: row.cost_total),
+    'tokens': ('total tokens', _total_tokens),
+    'context': ('largest prompt', lambda row: row.context_tokens),
+}
+CONVERSATION_METRICS: Mapping[str, tuple[str, Callable[[Sequence[TraceRow], Mapping[str, int]], float | None]]] = {
+    'conv_costly': (
+        'cost',
+        lambda rows, _message_counts: (
+            sum(row.cost_total for row in rows if row.cost_total is not None)
+            if any(row.cost_total is not None for row in rows)
+            else None
+        ),
+    ),
+    'conv_tokens': (
+        'total tokens',
+        lambda rows, _message_counts: (
+            sum(tokens for row in rows if (tokens := _total_tokens(row)) is not None)
+            if any(_total_tokens(row) is not None for row in rows)
+            else None
+        ),
+    ),
+    'conv_longest': (
+        'messages',
+        lambda rows, message_counts: max(
+            (message_counts[row.trace_id] for row in rows if row.trace_id in message_counts), default=None
+        ),
+    ),
+}
+
+
+def conversation_key(row: TraceRow) -> str | None:
+    return row.thread_id or row.session_id
+
+
+def _conversation_groups(
+    rows: Sequence[TraceRow],
+    metric: Callable[[Sequence[TraceRow], Mapping[str, int]], float | None],
+    message_counts: Mapping[str, int],
+) -> list[tuple[float, tuple[TraceRow, ...]]]:
+    grouped: dict[str, list[TraceRow]] = {}
+    for row in rows:
+        if (key := conversation_key(row)) is not None:
+            grouped.setdefault(key, []).append(row)
+    valued: list[tuple[float, tuple[TraceRow, ...]]] = []
+    for conversation in grouped.values():
+        value = metric(conversation, message_counts)
+        if value is not None:
+            ordered = tuple(sorted(conversation, key=lambda row: (row.started_at is None, row.started_at)))
+            valued.append((value, ordered))
+    return sorted(valued, key=operator.itemgetter(0), reverse=True)
+
+
+def top_conversations(
+    rows: Sequence[TraceRow],
+    metric: Callable[[Sequence[TraceRow], Mapping[str, int]], float | None],
+    message_counts: Mapping[str, int] | None = None,
+) -> tuple[TraceRow, ...]:
+    """Return rows from the top 10% of conversations reporting a metric."""
+    groups = _conversation_groups(rows, metric, message_counts or {})
+    kept = groups[: math.ceil(len(groups) * TOP_SHARE)]
+    return tuple(row for _, conversation in kept for row in conversation)
+
+
+def top_share(rows: Sequence[TraceRow], metric: Callable[[TraceRow], float | None]) -> tuple[TraceRow, ...]:
+    """The top 10% (at least one) of rows that report the metric, largest first; rows without it are left out."""
+    valued = sorted((row for row in rows if metric(row) is not None), key=lambda row: metric(row) or 0, reverse=True)
+    return tuple(valued[: math.ceil(len(valued) * TOP_SHARE)])
+
+
 ExplorerState = Literal['idle', 'loading', 'loaded', 'failed']
 PAGE_ROWS = 100
 
@@ -50,6 +137,7 @@ class ExplorerView:
     start: datetime | None = None
     end: datetime | None = None
     facets: FacetSelection = field(default_factory=FacetSelection)
+    message_counts: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
     numeric: NumericFilters = field(default_factory=NumericFilters)
     error: str | None = None
     sort: str | None = None
@@ -58,6 +146,7 @@ class ExplorerView:
     view: ViewMode = 'table'
     matched_only: bool = False
     quick_view: QuickView = 'all'
+    narrowed_from: int | None = None
 
     def visible_rows(self, results: Mapping[str, TraceClassification] | None = None) -> tuple[TraceRow, ...]:
         rows = self.rows
@@ -69,6 +158,10 @@ class ExplorerView:
                 for row in rows
                 if results is not None and (result := results.get(row.trace_id)) is not None and result.matched
             )
+        elif self.quick_view in TOP_METRICS:
+            rows = top_share(rows, TOP_METRICS[self.quick_view][1])
+        elif self.quick_view in CONVERSATION_METRICS:
+            rows = top_conversations(rows, CONVERSATION_METRICS[self.quick_view][1], self.message_counts)
         if self.matched_only and results:
             rows = tuple(row for row in rows if (result := results.get(row.trace_id)) is not None and result.matched)
         if self.sort is None:
@@ -156,16 +249,32 @@ class ExplorerStore:
     ) -> ExplorerView:
         """Change display state; ``page`` is clamped when rendered because matches affect row count."""
         current = self._view
+        switching_quick_view = quick_view is not None and quick_view != current.quick_view
         self._view = replace(
             current,
-            sort=sort if sort is not None else current.sort,
+            sort=None if switching_quick_view and sort is None else sort if sort is not None else current.sort,
             descending=descending if descending is not None else current.descending,
-            page=max(0, page if page is not None else current.page),
+            page=0 if switching_quick_view and sort is None else max(0, page if page is not None else current.page),
             view=view if view is not None else current.view,
             matched_only=matched_only if matched_only is not None else current.matched_only,
             quick_view=quick_view if quick_view is not None else current.quick_view,
         )
         return self._view
+
+    async def narrow(
+        self, generation: int, keep: Collection[str], *, facets: FacetSelection, numeric: NumericFilters
+    ) -> None:
+        """Show only ``keep`` under the given filters, unless a newer load replaced the rows."""
+        if self._view.generation != generation:
+            return
+        self._view = replace(
+            self._view,
+            narrowed_from=self._view.narrowed_from if self._view.narrowed_from is not None else len(self._view.rows),
+            rows=tuple(row for row in self._view.rows if row.trace_id in keep),
+            facets=facets,
+            numeric=numeric,
+            page=0,
+        )
 
     async def records(self, trace_ids: Sequence[str]) -> dict[str, TraceRecord | None]:
         """Hydrate requested rows; successes and failures are cached until the next load."""
@@ -182,6 +291,18 @@ class ExplorerStore:
                     return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
                 return {trace_id: hydrated.get(trace_id) for trace_id in trace_ids}
             return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
+
+    async def message_counts(self) -> ExplorerView:
+        generation = self._view.generation
+        records = await self.records([row.trace_id for row in self._view.rows])
+        if self._view.generation == generation:
+            self._view = replace(
+                self._view,
+                message_counts=MappingProxyType({
+                    trace_id: len(record.messages) for trace_id, record in records.items() if record is not None
+                }),
+            )
+        return self._view
 
     async def row(self, trace_id: str) -> TraceRow | None:
         return next((row for row in self._view.rows if row.trace_id == trace_id), None)
