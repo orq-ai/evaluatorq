@@ -336,7 +336,7 @@ def test_project_key_scope_is_saved_and_used_for_trace_search(
     assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (
         'orq-research', 'project-bauke', 'Bauke'
     )
-    assert '/orq-research/traces?' in (trace_span_url('trace-1', 'span-1') or '')
+    assert '/orq-research/traces/(trace:trace-1//span:span-1)' in (trace_span_url('trace-1', 'span-1') or '')
     run = finder_routes._run_request({'query': 'Frustrated customers'}, saved)
     assert run.population.facets.project_id == 'project-bauke'
     assert '<b>Project</b><a href="/settings">Bauke</a>' in client.get('/find').text

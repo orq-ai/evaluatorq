@@ -717,6 +717,7 @@ def test_find_trace_drawer_renders_thread_and_classifier_input(setup_finder, mon
     assert 'Full thread' in drawer.text
     assert 'Classifier input' in drawer.text
     assert 'Raw result' in drawer.text
+    assert '/workspace/traces/(trace:trace-1//span:span-1)' in drawer.text
     assert 'This is the third time' in drawer.text
     assert drawer.text.count('<details class="fd-msg') == 2
     assert '<summary><span class="role"><b>User</b></span><em class="fd-msg-meta">#1 · ~' in drawer.text

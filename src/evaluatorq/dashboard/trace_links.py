@@ -1,7 +1,7 @@
 """Deep links from the dashboard into Orq trace observability.
 
-Builds ``…/<workspace-slug>/traces?query=…`` URLs so a conversation or a whole
-run can be opened in the Orq traces UI. Each run mints a ``run_id`` and its
+Builds ``…/<workspace-slug>/traces?query=…`` filter URLs and
+``…/<workspace-slug>/traces/(trace:…//span:…)`` inspector URLs. Each run mints a ``run_id`` and its
 conversations get a run-scoped ``thread_id`` built by
 ``evaluatorq.common.thread_context.build_thread_id`` — ``{run_id}:{index}`` for
 simulations, ``{run_id}:{agent_key}:{index}`` for red-team attacks. Both share
@@ -50,14 +50,19 @@ def workspace_slug() -> str | None:
     return slug or None
 
 
-def _traces_url(query: str, experiment_url: str | None) -> str | None:
+def _traces_base_url(experiment_url: str | None) -> str | None:
     # Prefer the run's own experiment_url (host + workspace); then resolve dashboard scope.
     host, slug = parse_experiment_url(experiment_url)
     if not (host and slug):
         host, slug = ui_base_url(), workspace_slug()
     if not slug:
         return None
-    return f'{host.rstrip("/")}/{quote(slug, safe="")}/traces?query={quote(query, safe="")}'
+    return f'{host.rstrip("/")}/{quote(slug, safe="")}/traces'
+
+
+def _traces_url(query: str, experiment_url: str | None) -> str | None:
+    base = _traces_base_url(experiment_url)
+    return f'{base}?query={quote(query, safe="")}' if base else None
 
 
 def thread_trace_url(thread_id: str | None, experiment_url: str | None = None) -> str | None:
@@ -86,7 +91,8 @@ def trace_span_url(trace_id: str | None, span_id: str | None, experiment_url: st
     """Return an Orq trace inspector link, or None for unsafe locator IDs."""
     if not trace_id or not span_id or not _LOCATOR_ID.fullmatch(trace_id) or not _LOCATOR_ID.fullmatch(span_id):
         return None
-    return _traces_url(f'(trace:{trace_id}//span:{span_id})', experiment_url)
+    base = _traces_base_url(experiment_url)
+    return f'{base}/(trace:{trace_id}//span:{span_id})' if base else None
 
 
 def run_trace_url(run_id: str | None, experiment_url: str | None = None) -> str | None:
