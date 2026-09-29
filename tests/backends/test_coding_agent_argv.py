@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import types
 from pathlib import Path
 from typing import Any
@@ -170,7 +171,9 @@ def test_parsed_turn_stays_mutable() -> None:
 
 def test_resolve_executable_searches_the_child_path(tmp_path: Path) -> None:
     launcher = install_fake(tmp_path, 'claude', ECHO)
-    assert resolve_executable(['claude', '-p'], str(tmp_path)) == [str(launcher), '-p']
+    resolved, flag = resolve_executable(['claude', '-p'], str(tmp_path))
+    # Windows returns the extension in PATHEXT's case (``.CMD``), so compare as the filesystem does.
+    assert (os.path.normcase(resolved), flag) == (os.path.normcase(launcher), '-p')
     assert resolve_executable(['claude', '-p'], str(tmp_path / 'empty')) == ['claude', '-p']
 
 

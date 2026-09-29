@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -122,7 +123,7 @@ async def test_turn_runs_in_one_container_and_close_removes_it(docker, monkeypat
     await target.respond([Message(role='user', content='again')])
     assert len(calls('run')) == 1 and len(calls('exec')) == 2
     [run] = calls('run')
-    assert '--context orbstack' in run and '--name task-7-claude-' in run and '/work:/app' in run
+    assert '--context orbstack' in run and '--name task-7-claude-' in run and f'{os.sep}work:/app' in run
     [exec1, _] = calls('exec')
     assert '-e EXTRA -e ANTHROPIC_API_KEY' in exec1 and 'evq-entrypoint claude' in exec1
     text = log.read_text()
@@ -154,7 +155,7 @@ async def test_image_missing(docker, monkeypatch, error: str) -> None:
     with pytest.raises(CodingAgentUnavailableError) as info:
         await _target(binary).respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.image_missing'
-    assert 'eq coding-agent build-image' in info.value.message and 'docker build' in info.value.message
+    assert 'eq coding-agent build-image' in info.value.message and 'build -t img:1' in info.value.message
 
 
 @pytest.mark.asyncio

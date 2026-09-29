@@ -52,6 +52,7 @@ from evaluatorq.backends.container import (
     unsafe_mounts,
     write_beat,
 )
+from evaluatorq.common.cli_tty import shell_join
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
@@ -825,8 +826,9 @@ class CodingAgentTarget(AgentTarget):
                 if any(phrase in detail.lower() for phrase in ('no such image', 'no such object', 'image not known')):
                     raise CodingAgentUnavailableError(
                         'cli.image_missing',
-                        f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '
-                        f'or `{opts.binary} build -t {opts.image} {build_dir}`',
+                        f'image {opts.image!r} not found. Build it with '
+                        f'`{shell_join(["eq", "coding-agent", "build-image", "--tag", opts.image])}` '
+                        f'or `{shell_join([opts.binary, "build", "-t", opts.image, str(build_dir)])}`',
                     )
                 raise CodingAgentUnavailableError(
                     'cli.container_start',
