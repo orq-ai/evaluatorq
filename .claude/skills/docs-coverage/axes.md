@@ -43,6 +43,12 @@ Supplying neither is the common case and is not a gap: a field the caller never 
 
 Never confuse this axis with the target under test. The target is the thing being measured; it is configured where it is constructed (`target_reasoning_effort`, the backend's own settings), never through this config.
 
+### `VercelAISdkTarget` crosses with both entry points
+
+This file used to list `red_team()` × Vercel as impossible, on the grounds that Vercel AI SDK agents were a simulation target kind only. That was wrong and the row is gone. There is one `AgentTarget` class, shared by `contracts`, `redteam` and `simulation` (`contracts.AgentTarget is redteam.AgentTarget`), `red_team()` is annotated `str | AgentTarget | list[str | AgentTarget]`, and a live static run against a Vercel endpoint executed its attack and invoked the target. Nothing about the kind is simulation-specific: it is an HTTP transport.
+
+What is genuinely specific to it is that context discovery cannot cross HTTP, so `get_agent_context()` returns an opaque placeholder unless the caller passes one, and capability-gated attack strategies are filtered out. That is a documented failure mode, not an impossible combination.
+
 ### `replay` is a data source, not a fourth mode
 
 Replay is reached by `previous_run=` / `--from-run`, which is explicitly **incompatible** with `--mode`. The reason is not that they are rival ways of saying the same thing — it is that a replayed run *already has* a mode. Replay loads a stored run and does `mode = replay.pipeline` (`redteam/runner.py`), so replaying a run that was `static` runs static, and replaying a `hybrid` run runs hybrid. Passing `--mode` alongside would be supplying a value that is about to be overwritten, which is why it raises instead of silently losing.
@@ -74,7 +80,6 @@ Marked `N/A` in the matrix, never reported as a gap.
 | trace replay position × data sources other than trace-derived datapoints | `start_from` belongs to `datapoints_from_traces()` and is not carried by ordinary inline rows, datasets, generated rows, or stored-run replay |
 | dashboard × target kind | it reads saved artifacts; no target is invoked |
 | dashboard × entry points that write no artifacts | nothing lands in the run store, so there is nothing to browse |
-| `red_team()` × target kind `Vercel` | Vercel AI SDK agents are a simulation target kind only |
 | `static` mode × generated data source | static mode consumes a fixed dataset by definition |
 | any `mode` × data source `replay` | `previous_run=` restores the stored run's pipeline and raises if `mode` is also supplied; the pair cannot be expressed |
 | CLI × custom `AgentTarget` | custom targets are constructed in Python; the CLI resolves string identifiers |
