@@ -24,9 +24,9 @@ def should_skip_confirm(yes: bool) -> bool:  # noqa: FBT001
 def shell_join(args: Sequence[str]) -> str:
     """Join *args* into a command the user can paste into a terminal.
 
-    POSIX gets ``shlex`` quoting. Windows gets ``subprocess.list2cmdline``, whose double quotes cmd.exe
-    and PowerShell both accept for paths and plain words; an argument holding ``"``, ``%`` or ``$`` is not
-    guaranteed to survive either shell.
+    POSIX gets ``shlex`` quoting. Windows gets ``subprocess.list2cmdline``, which follows the C runtime's
+    argv rules, not either shell's: it wraps an argument with spaces in double quotes, which is enough for
+    the paths and names these hints carry, but it escapes neither cmd.exe's ``%`` nor PowerShell's ``$``.
     """
     if sys.platform == 'win32':
         return subprocess.list2cmdline(args)
