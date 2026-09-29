@@ -40,9 +40,10 @@ def log(line):
     with open(os.environ['FAKE_LOG'], 'a', encoding='utf-8') as f:
         if os.name == 'nt':
             # Windows emulates O_APPEND, so concurrent fakes drop lines; the OS frees this lock if we are killed.
+            # The lock sits past EOF because Windows byte locks are mandatory and would fail the test's reads.
             import msvcrt
 
-            f.seek(0)
+            f.seek(1 << 30)
             msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
         f.write(line + '\\n')
 
