@@ -264,13 +264,18 @@ def is_batch_launcher(executable: str) -> bool:
 def refuse_unsafe_batch_args(argv: list[str]) -> None:
     if not is_batch_launcher(argv[0]):
         return
+    native = (
+        'download orq-win32-x64.exe from https://github.com/orq-ai/orq-cli/releases and put it on PATH as orq.exe'
+        if Path(argv[0]).stem.lower() == 'orq'
+        else 'install the agent CLI as a native .exe'
+    )
     for arg in argv[1:]:
         if found := sorted(CMD_METACHARACTERS & set(arg)):
             raise CodingAgentUnavailableError(
                 'cli.unsafe_shim',
                 f'{argv[0]} is a Windows batch-file launcher, and cmd.exe would interpret '
                 f'{", ".join(repr(c) for c in found)} in the argument {arg!r}. Remove those characters from '
-                '`extra_args` or `model`, or install the agent CLI as a native .exe so evaluatorq can call it directly.',
+                f'`extra_args` or `model`, or {native} so evaluatorq can call it directly.',
             )
 
 

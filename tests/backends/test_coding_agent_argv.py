@@ -197,3 +197,9 @@ async def test_batch_launcher_moves_system_prompt_to_stdin(tmp_path: Path, monke
     assert '--append-system-prompt' not in seen['argv']
     assert '{"role": "system", "content": "Say \\"hi\\"' in seen['stdin']
     await target.close()
+
+
+def test_orq_batch_launcher_points_at_the_native_release() -> None:
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        refuse_unsafe_batch_args(['C:/npm/orq.cmd', 'claude', '--model', 'a & b'])
+    assert 'orq-win32-x64.exe' in info.value.message and 'native .exe' not in info.value.message
