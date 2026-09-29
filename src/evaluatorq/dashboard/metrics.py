@@ -1039,7 +1039,7 @@ def _sim_run_stats(path_str: str, mtime_ns: int) -> _SimRunStats | None:  # mtim
 
 
 @functools.lru_cache(maxsize=4)
-def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> SimOverview:
+def _sim_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]) -> SimOverview:
     """Unpaged sim aggregate, cached against the run stores' fingerprint.
 
     The KPI band sums over every run, so paging can't shrink the work — but
@@ -1284,7 +1284,7 @@ def _redteam_run_stats(path_str: str, mtime_ns: int) -> _RedTeamRunStats | None:
 
 
 @functools.lru_cache(maxsize=4)
-def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int]) -> RedTeamOverview:
+def _redteam_aggregate(roots_key: tuple[str, ...], fingerprint: tuple[int, int, int]) -> RedTeamOverview:
     """Unpaged red team aggregate, cached on fingerprint. See `_sim_aggregate`."""
     roots = [Path(r) for r in roots_key]
     runs: list[RedTeamRunRow] = []

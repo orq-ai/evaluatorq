@@ -299,6 +299,23 @@ def test_fingerprint_changes_when_an_in_flight_manifest_advances(tmp_path):
     assert fingerprint([rt]) != before
 
 
+
+def test_fingerprint_changes_when_a_manifest_is_replaced_within_one_clock_tick(tmp_path):
+    """Windows ticks every ~16 ms, so a stage advance can keep the old mtime; the replaced inode still moves."""
+    import os
+
+    from evaluatorq.dashboard.library import fingerprint
+
+    rt = tmp_path / 'runs'
+    rt.mkdir()
+    w = _start_manifest(rt, 'live', 'sim', 'in-flight')
+    manifest = next((rt / '.manifests').glob('*.json'))
+    mtime = manifest.stat().st_mtime_ns
+    before = fingerprint([rt])
+    w.start_stage('generating')
+    os.utime(manifest, ns=(mtime, mtime))
+    assert fingerprint([rt]) != before
+
 def test_fingerprint_changes_when_a_report_lands(tmp_path):
     from evaluatorq.dashboard.library import fingerprint
 
