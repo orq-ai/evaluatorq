@@ -630,3 +630,17 @@ async def test_hybrid_static_leg_rejects_an_empty_prompt_before_creating_a_targe
     with pytest.raises(JobError, match="'empty-1'.*empty prompt"):
         await job(datapoint, 0)
     backend.create_target.assert_not_called()
+
+
+async def test_static_job_rejects_an_empty_prompt_before_creating_a_target() -> None:
+    """The plain static leg fails a row with no user content instead of scoring a reply to ''."""
+    from evaluatorq.job_helper import JobError
+    from evaluatorq.redteam.runner import _create_static_job_for_agent_target
+
+    factory = MagicMock()
+    job = _create_static_job_for_agent_target(factory, 'victim')
+    datapoint = DataPoint(inputs={'id': 'empty-2', 'messages': [{'role': 'system', 'content': 'sys'}]})
+
+    with pytest.raises(JobError, match="'empty-2'.*empty prompt"):
+        await job(datapoint, 0)
+    factory.assert_not_called()

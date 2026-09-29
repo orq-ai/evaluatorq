@@ -1871,7 +1871,6 @@ def _create_static_job_for_agent_target(
     *,
     map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
     run_id: str | None = None,
-    reject_empty_prompt: bool = False,
 ) -> Any:
     """Create an evaluatorq static job that drives an `AgentTarget`.
 
@@ -1886,8 +1885,8 @@ def _create_static_job_for_agent_target(
     so the static leg reports the same normalized error taxonomy as hybrid/dynamic
     instead of a backend-agnostic default.
 
-    ``reject_empty_prompt`` raises ``ValueError`` before any target is created
-    when the datapoint has no user content.
+    A datapoint with no user content raises ``ValueError`` before any target is
+    created, so an empty prompt is never sent and scored.
     """
     safe = _sanitize_job_name(label)
     cfg = cfg or PIPELINE_CONFIG
@@ -1895,7 +1894,7 @@ def _create_static_job_for_agent_target(
     @job(f'redteam:static:{safe}')
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
         prompt = _extract_static_prompt(data)
-        if reject_empty_prompt and not prompt:
+        if not prompt:
             sample_id = data.inputs.get('id', 'unknown')
             raise ValueError(
                 f'Static datapoint {sample_id!r} for target {label!r} '
@@ -3151,7 +3150,6 @@ def _build_agent_target_jobs(
             pipeline_config,
             map_error=at_backend.map_error,
             run_id=run_id,
-            reject_empty_prompt=True,
         )
 
         @job(f'redteam:hybrid:{at_safe}')
