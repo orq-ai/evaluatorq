@@ -252,22 +252,21 @@ def build_argv(
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
 
 
-# cmd.exe re-parses a .cmd/.bat command line, and CPython does not escape for it (the BatBadBut class),
-# so these characters in an argument could run commands. Refuse rather than guess at an escaping scheme.
+# cmd.exe re-parses a batch launcher's command line and CPython does not escape for it (BatBadBut).
 CMD_METACHARACTERS = frozenset('"%&|<>^!\r\n')
+BATCH_SUFFIXES = frozenset({'.bat', '.cmd'})
+
+
+def is_batch_launcher(executable: str) -> bool:
+    return Path(executable).suffix.lower() in BATCH_SUFFIXES
 
 
 def resolve_executable(argv: list[str], path: str | None) -> list[str]:
-    """Resolve ``argv[0]`` against the child's ``PATH`` instead of the parent's.
-
-    POSIX already searches the child environment, but Windows searches the parent's ``PATH`` and only
-    finds ``.exe`` files, so an npm-installed ``claude.cmd`` or a caller-supplied ``PATH`` is missed
-    there. A batch-file launcher is refused when any argument could be re-parsed as a command.
-    """
+    """Resolve ``argv[0]`` on the child's ``PATH``; Windows otherwise searches the parent's, for ``.exe`` only."""
     resolved = shutil.which(argv[0], path=path)
     if resolved is None:
         return argv
-    if Path(resolved).suffix.lower() in {'.bat', '.cmd'} and any(CMD_METACHARACTERS & set(a) for a in argv[1:]):
+    if is_batch_launcher(resolved) and any(CMD_METACHARACTERS & set(a) for a in argv[1:]):
         raise CodingAgentUnavailableError(
             'cli.unsafe_shim',
             f'{resolved} is a batch-file launcher and the arguments carry characters cmd.exe would interpret; '
@@ -306,7 +305,8 @@ def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_
     """Render the transcript as a delimited JSON conversation followed by the reply instruction.
 
     ``inline_system`` prepends ``system_prompt`` as a ``system`` entry for agents without a
-    system-prompt flag (codex, opencode). Claude receives it via ``--append-system-prompt`` instead.
+    system-prompt flag (codex, opencode), or for claude behind a Windows ``.cmd`` launcher; otherwise
+    Claude receives it via ``--append-system-prompt``.
     """
     entries: list[dict[str, Any]] = []
     if inline_system and system_prompt:
@@ -995,21 +995,24 @@ class CodingAgentTarget(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         self._require_creator_process('respond')
         workdir = self._ensure_workdir()
-        prompt = render_prompt(
-            messages, system_prompt=self._system_prompt, inline_system=self._spec.system_prompt_flag is None
+        env = {**os.environ, **self._env}
+        host_binary = shutil.which('orq' if self._launcher == 'orq' else self._spec.binary, path=env.get('PATH'))
+        # A batch launcher cannot carry free text safely, so the system prompt rides in the stdin transcript.
+        inline_system = self._spec.system_prompt_flag is None or (
+            self._container is None and host_binary is not None and is_batch_launcher(host_binary)
         )
+        prompt = render_prompt(messages, system_prompt=self._system_prompt, inline_system=inline_system)
         argv, stdin_text = build_argv(
             agent=self._agent,
             launcher=self._launcher,
             model=self._model,
             permission_mode=self._permission_mode,
-            system_prompt=self._system_prompt,
+            system_prompt=None if inline_system else self._system_prompt,
             extra_args=self._extra_args,
             orq=self._orq,
             prompt=prompt,
         )
         on_early_exit: Callable[[], Awaitable[None]] | None = None
-        env = {**os.environ, **self._env}
         agent_binary = argv[0]
         argv, on_early_exit, name = await self._prepare_container_exec(argv)
         async with with_llm_span(

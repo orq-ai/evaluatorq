@@ -21,6 +21,7 @@ from evaluatorq.backends.coding_agent import (
     build_argv,
     resolve_executable,
 )
+from evaluatorq.contracts import Message
 from tests.backends.fakes import ECHO, install_fake
 
 PROMPT = 'reply to the user'
@@ -187,3 +188,23 @@ def test_resolve_executable_refuses_cmd_metacharacters_for_batch_launchers(
         resolve_executable(['claude', '--append-system-prompt', arg], None)
     assert info.value.code == 'cli.unsafe_shim'
     assert resolve_executable(['claude', '-p', '--verbose'], None) == [str(shim), '-p', '--verbose']
+
+
+@pytest.mark.asyncio
+async def test_batch_launcher_moves_system_prompt_to_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    shim = tmp_path / 'claude.cmd'
+    monkeypatch.setattr(coding_agent_module.shutil, 'which', lambda name, path=None: str(shim))
+    seen: dict[str, Any] = {}
+
+    async def fake_run(self: CodingAgentTarget, argv: list[str], stdin_text: str | None, **_: Any) -> tuple[int, str, str]:
+        seen.update(argv=argv, stdin=stdin_text)
+        return 0, '{"type":"result","result":"done","session_id":"s"}\n', ''
+
+    monkeypatch.setattr(CodingAgentTarget, '_run', fake_run)
+    system_prompt = 'Say "hi" & stop\nnow'
+    target = CodingAgentTarget(agent='claude', system_prompt=system_prompt)
+    response = await target.respond([Message(role='user', content='x')])
+    assert response.text == 'done'
+    assert '--append-system-prompt' not in seen['argv']
+    assert '{"role": "system", "content": "Say \\"hi\\"' in seen['stdin']
+    await target.close()

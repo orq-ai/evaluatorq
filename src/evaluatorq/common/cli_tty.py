@@ -22,10 +22,11 @@ def should_skip_confirm(yes: bool) -> bool:  # noqa: FBT001
 
 
 def shell_join(args: Sequence[str]) -> str:
-    """Join *args* into a command the user can paste into their own shell.
+    """Join *args* into a command the user can paste into a terminal.
 
-    ``shlex`` quoting is POSIX-only: cmd.exe and PowerShell do not unwrap single quotes, and backslashes
-    in a Windows path make ``shlex`` quote every path. Windows gets ``subprocess.list2cmdline``.
+    POSIX gets ``shlex`` quoting. Windows gets ``subprocess.list2cmdline``, whose double quotes cmd.exe
+    and PowerShell both accept for paths and plain words; an argument holding ``"``, ``%`` or ``$`` is not
+    guaranteed to survive either shell.
     """
     if sys.platform == 'win32':
         return subprocess.list2cmdline(args)

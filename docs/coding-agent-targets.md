@@ -180,7 +180,7 @@ Failures surface as `cli.*` error codes on the result, in this order of preceden
 | `cli.image_missing` | The configured container image is not available locally; build it with `eq coding-agent build-image` or `docker build` | No |
 | `cli.container_start` | The container CLI cannot start the container, for example because the daemon, context or `run_args` is invalid | No |
 | `cli.agent_not_found` | The selected agent or `evq-entrypoint` is missing from the image `PATH` | No |
-| `cli.unsafe_shim` | Windows only: the binary resolves to a `.cmd` or `.bat` launcher, such as an npm-installed `claude.cmd`, and an argument carries a character `cmd.exe` would interpret (`" % & \| < > ^ !` or a line break), typically in `system_prompt` or `extra_args`. Install the native executable or move the text out of the arguments | No |
+| `cli.unsafe_shim` | Windows only: the binary resolves to a `.cmd` or `.bat` launcher, such as an npm-installed `claude.cmd`, and an argument carries a character `cmd.exe` would interpret (`" % & \| < > ^ !` or a line break). The system prompt is moved into the stdin transcript there, so this comes from `extra_args` or `model`. Install the native executable or drop the character | No |
 | `cli.prompt_too_long` | The OS refused the argv; under `launcher='orq'` codex and opencode take the rendered transcript as one argument, so a long conversation can exceed the limit | No |
 | `cli.exit.<code>` | Non-zero exit, even if a result was printed | Yes |
 | `cli.parse_error` | Stdout contained no JSON events | Yes |
