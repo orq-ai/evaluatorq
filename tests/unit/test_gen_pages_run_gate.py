@@ -55,7 +55,7 @@ def test_shadowed_entry_points_are_emitted_on_the_package_page(tmp_path: Path) -
     with editor:
         runpy.run_path(str(GEN_PAGES))
 
-    page = (tmp_path / "reference" / "evaluatorq.md").read_text()
+    page = (tmp_path / "reference" / "evaluatorq.md").read_text(encoding="utf-8")
     for dotted in (
         "evaluatorq.evaluatorq.evaluatorq",
         "evaluatorq.deployment.deployment",
@@ -119,7 +119,7 @@ def test_every_exported_symbol_is_documented_exactly_once(tmp_path: Path) -> Non
     for page in sorted((tmp_path / "reference").rglob("*.md")):
         rendered: set[str] = set()
         target, pinned = "", []
-        for line in [*page.read_text().splitlines(), "::: "]:
+        for line in [*page.read_text(encoding="utf-8").splitlines(), "::: "]:
             if line.startswith("::: "):
                 if target:
                     rendered |= block_renders(target, pinned)

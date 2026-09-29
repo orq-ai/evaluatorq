@@ -90,7 +90,7 @@ def _stored_profile_keys(path: Path) -> dict[str, str]:
         if os.name != 'nt' and stat.S_IMODE(path.stat().st_mode) & 0o077:
             logger.warning('Orq profile credentials at {} are not private; run orq doctor --fix', path)
             return {}
-        stored = json.loads(path.read_text())
+        stored = json.loads(path.read_text(encoding='utf-8'))
     except FileNotFoundError:
         return {}
     except (OSError, ValueError) as exc:

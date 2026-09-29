@@ -626,7 +626,7 @@ class TestConversationRows:
         assert 'hx-trigger="toggle once' not in html
 
     def test_dashboard_runtime_has_no_failure_anchor_handler(self) -> None:
-        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+        source = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text(encoding='utf-8')
 
         assert 'a[href^="#conv-"]' not in source
 
