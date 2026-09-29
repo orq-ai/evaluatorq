@@ -262,12 +262,16 @@ def is_batch_launcher(executable: str) -> bool:
 
 
 def refuse_unsafe_batch_args(argv: list[str]) -> None:
-    if is_batch_launcher(argv[0]) and any(CMD_METACHARACTERS & set(a) for a in argv[1:]):
-        raise CodingAgentUnavailableError(
-            'cli.unsafe_shim',
-            f'{argv[0]} is a batch-file launcher and the arguments carry characters cmd.exe would interpret; '
-            'install the native executable or move the text out of the arguments',
-        )
+    if not is_batch_launcher(argv[0]):
+        return
+    for arg in argv[1:]:
+        if found := sorted(CMD_METACHARACTERS & set(arg)):
+            raise CodingAgentUnavailableError(
+                'cli.unsafe_shim',
+                f'{argv[0]} is a Windows batch-file launcher, and cmd.exe would interpret '
+                f'{", ".join(repr(c) for c in found)} in the argument {arg!r}. Remove those characters from '
+                '`extra_args` or `model`, or install the agent CLI as a native .exe so evaluatorq can call it directly.',
+            )
 
 
 PROMPT_INSTRUCTION = (

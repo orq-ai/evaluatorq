@@ -173,6 +173,7 @@ def test_batch_launcher_refuses_cmd_metacharacters(arg: str) -> None:
     with pytest.raises(CodingAgentUnavailableError) as info:
         refuse_unsafe_batch_args(['C:\\npm\\claude.CMD', '--model', arg])
     assert info.value.code == 'cli.unsafe_shim'
+    assert repr(arg) in info.value.message and 'native .exe' in info.value.message
     refuse_unsafe_batch_args(['C:\\npm\\claude.cmd', '-p', '--verbose'])
     refuse_unsafe_batch_args(['/usr/bin/claude', '--model', arg])
 
