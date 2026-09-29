@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -26,6 +27,9 @@ from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig, Message, To
 from evaluatorq.redteam.exceptions import CredentialError
 from evaluatorq.redteam.tracing import with_llm_span, with_redteam_span
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 
 def _sanitize_job_name(value: str) -> str:
     """Sanitize a value for use in job names (alphanumeric, dash, underscore)."""
@@ -44,6 +48,35 @@ def _static_attack_attrs(data: DataPoint) -> dict[str, str]:
 def _static_target_input(messages: list[dict[str, Any]]) -> str:
     """Flatten the exact static request messages for bounded trace capture."""
     return truncate_for_span('\n\n'.join(coerce_content_text(message.get('content')) for message in messages))
+
+
+@asynccontextmanager
+async def static_target_spans(
+    data: DataPoint,
+    safe: str,
+    run_id: str | None,
+    row: int,
+    target_input: str,
+) -> AsyncIterator[tuple[Any, str]]:
+    """Open the attack and target_call spans plus the conversation thread for one static row.
+
+    Every static job, deployment or agent target, wraps its target call in this
+    so both report the same span tree.
+
+    Yields:
+        ``(target_span, thread_id)`` for the row.
+    """
+    attack_attrs = _static_attack_attrs(data)
+    thread_id = build_static_thread_id(run_id, safe, row)
+    async with (
+        with_redteam_span('orq.redteam.attack', attack_attrs),
+        with_redteam_span(
+            'orq.redteam.target_call',
+            {**attack_attrs, 'input': target_input, 'orq.redteam.input': target_input},
+        ) as target_span,
+    ):
+        with conversation_thread(thread_id):
+            yield target_span, thread_id
 
 
 def create_deployment_job(
@@ -92,61 +125,52 @@ def create_deployment_job(
     async def deployment_job(data: DataPoint, _row: int) -> dict[str, Any]:
         """Invoke the ORQ deployment and return the response with token usage."""
         messages = _build_messages(data)
-        attack_attrs = _static_attack_attrs(data)
-        target_input = _static_target_input(messages)
-        thread_id = build_static_thread_id(run_id, safe_key, _row)
         async with (
-            with_redteam_span('orq.redteam.attack', attack_attrs),
-            with_redteam_span(
-                'orq.redteam.target_call',
-                {
-                    **attack_attrs,
-                    'input': target_input,
-                    'orq.redteam.input': target_input,
-                },
-            ) as target_span,
+            static_target_spans(data, safe_key, run_id, _row, _static_target_input(messages)) as (
+                target_span,
+                thread_id,
+            ),
+            with_llm_span(
+                model=f'deployment:{deployment_key}',
+                operation='invoke',
+                provider='orq',
+                input_messages=messages,
+                attributes={'orq.redteam.llm_purpose': 'target'},
+            ) as llm_span,
         ):
-            with conversation_thread(thread_id):
-                async with with_llm_span(
-                    model=f'deployment:{deployment_key}',
-                    operation='invoke',
-                    provider='orq',
-                    input_messages=messages,
-                    attributes={'orq.redteam.llm_purpose': 'target'},
-                ) as llm_span:
-                    invoke_kwargs: dict[str, Any] = {
-                        'key': deployment_key,
-                        'messages': messages,
-                    }
-                    # This leg bypasses the shared chat-completion helper, so run
-                    # metadata is applied explicitly.
-                    apply_pipeline_metadata(invoke_kwargs)
-                    invoke_kwargs.update(thread_body_param())
-                    # Propagate W3C trace context so the deployment's server-side
-                    # execution nests under this span. Captured inside the span so
-                    # `traceparent` points at it; gated by
-                    # EVALUATORQ_PROPAGATE_TRACE_CONTEXT.
-                    trace_headers = await get_trace_context_headers()
-                    if trace_headers:
-                        invoke_kwargs['http_headers'] = trace_headers
+            invoke_kwargs: dict[str, Any] = {
+                'key': deployment_key,
+                'messages': messages,
+            }
+            # This leg bypasses the shared chat-completion helper, so run
+            # metadata is applied explicitly.
+            apply_pipeline_metadata(invoke_kwargs)
+            invoke_kwargs.update(thread_body_param())
+            # Propagate W3C trace context so the deployment's server-side
+            # execution nests under this span. Captured inside the span so
+            # `traceparent` points at it; gated by
+            # EVALUATORQ_PROPAGATE_TRACE_CONTEXT.
+            trace_headers = await get_trace_context_headers()
+            if trace_headers:
+                invoke_kwargs['http_headers'] = trace_headers
 
-                    async def _invoke() -> Any:
-                        return await asyncio.wait_for(
-                            deployment_client.deployments.invoke_async(**invoke_kwargs),
-                            timeout=cfg.target_agent_timeout_ms / 1000.0,
-                        )
+            async def _invoke() -> Any:
+                return await asyncio.wait_for(
+                    deployment_client.deployments.invoke_async(**invoke_kwargs),
+                    timeout=cfg.target_agent_timeout_ms / 1000.0,
+                )
 
-                    # Sole retry layer for this leg (see docstring): the deployment
-                    # client exposes no per-call retry budget.
-                    completion = await with_retry(
-                        _invoke,
-                        max_attempts=cfg.max_target_retries + 1,
-                        label=f'deployment:{deployment_key}',
-                    )
-                    content = _extract_deployment_content(completion)
-                    record_llm_response(llm_span, completion, output_content=content)
-                    output = truncate_for_span(content)
-                    set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
+            # Sole retry layer for this leg (see docstring): the deployment
+            # client exposes no per-call retry budget.
+            completion = await with_retry(
+                _invoke,
+                max_attempts=cfg.max_target_retries + 1,
+                label=f'deployment:{deployment_key}',
+            )
+            content = _extract_deployment_content(completion)
+            record_llm_response(llm_span, completion, output_content=content)
+            output = truncate_for_span(content)
+            set_span_attrs(target_span, {'output': output, 'orq.redteam.output': output})
 
         # Advance the global progress bar for static attacks.
         active_progress = _get_active_progress()

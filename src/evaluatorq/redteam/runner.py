@@ -33,8 +33,6 @@ from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.target_call import call_target_with_retry, close_target, default_map_error
 from evaluatorq.common.thread_context import (
     _evaluatorq_run_scope,
-    build_static_thread_id,
-    conversation_thread,
     evaluatorq_pipeline,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
@@ -93,7 +91,12 @@ from evaluatorq.redteam.replay import DATAPOINTS_KEY as REPLAY_DATAPOINTS_KEY
 from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
-from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_deployment_job
+from evaluatorq.redteam.runtime.jobs import (
+    _build_messages,
+    _sanitize_job_name,
+    create_deployment_job,
+    static_target_spans,
+)
 from evaluatorq.redteam.traces import TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
@@ -1823,15 +1826,6 @@ def _extract_static_prompt(data: DataPoint) -> str:
     return '\n\n'.join(p for p in user_parts if p)
 
 
-def _static_attack_attrs(data: DataPoint) -> dict[str, str]:
-    """Return the common trace attributes for a static red-team datapoint."""
-    return {
-        'orq.redteam.category': data.inputs.get('category', ''),
-        'orq.redteam.vulnerability': data.inputs.get('vulnerability', data.inputs.get('category', '')),
-        'orq.redteam.strategy_name': data.inputs.get('strategy_name', ''),
-    }
-
-
 async def _run_static_target_call(
     target: Any,
     prompt: str,
@@ -1902,48 +1896,37 @@ def _create_static_job_for_agent_target(
             )
         target = target_factory()
         try:
-            attack_attrs = _static_attack_attrs(data)
             target_input = truncate_for_span(prompt)
-            thread_id = build_static_thread_id(run_id, safe, _row)
             async with (
-                with_redteam_span('orq.redteam.attack', attack_attrs),
+                static_target_spans(data, safe, run_id, _row, target_input) as (target_span, thread_id),
                 with_redteam_span(
-                    'orq.redteam.target_call',
+                    f'agent {label}',
                     {
-                        **attack_attrs,
+                        'orq.redteam.llm_purpose': 'target',
                         'input': target_input,
                         'orq.redteam.input': target_input,
                     },
-                ) as target_span,
+                ) as agent_span,
             ):
-                with conversation_thread(thread_id):
-                    async with with_redteam_span(
-                        f'agent {label}',
-                        {
-                            'orq.redteam.llm_purpose': 'target',
-                            'input': target_input,
-                            'orq.redteam.input': target_input,
-                        },
-                    ) as agent_span:
-                        output = await _run_static_target_call(
-                            target,
-                            prompt,
-                            target_agent_timeout_ms=cfg.target_agent_timeout_ms,
-                            max_target_retries=cfg.max_target_retries,
-                            map_error=map_error,
-                        )
-                        if output['error'] is not None:
-                            error_attrs: AttrMap = {
-                                'orq.redteam.error_type': output['error_type'],
-                                'orq.redteam.error_code': output['error_code'],
-                            }
-                            set_span_attrs(target_span, error_attrs)
-                            set_span_attrs(agent_span, error_attrs)
-                        else:
-                            response_text = truncate_for_span(output['response'])
-                            output_attrs: AttrMap = {'output': response_text, 'orq.redteam.output': response_text}
-                            set_span_attrs(target_span, output_attrs)
-                            set_span_attrs(agent_span, output_attrs)
+                output = await _run_static_target_call(
+                    target,
+                    prompt,
+                    target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                    max_target_retries=cfg.max_target_retries,
+                    map_error=map_error,
+                )
+                if output['error'] is not None:
+                    error_attrs: AttrMap = {
+                        'orq.redteam.error_type': output['error_type'],
+                        'orq.redteam.error_code': output['error_code'],
+                    }
+                    set_span_attrs(target_span, error_attrs)
+                    set_span_attrs(agent_span, error_attrs)
+                else:
+                    response_text = truncate_for_span(output['response'])
+                    output_attrs: AttrMap = {'output': response_text, 'orq.redteam.output': response_text}
+                    set_span_attrs(target_span, output_attrs)
+                    set_span_attrs(agent_span, output_attrs)
 
             return {**output, 'thread_id': thread_id}
         finally:
