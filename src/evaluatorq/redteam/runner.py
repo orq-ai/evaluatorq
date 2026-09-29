@@ -1876,8 +1876,12 @@ def _create_static_job_for_agent_target(
     *,
     map_error: Callable[[Exception], tuple[str, str] | None] = default_map_error,
     run_id: str | None = None,
+    reject_empty_prompt: bool = False,
 ) -> Any:
     """Create an evaluatorq static job that drives an `AgentTarget`.
+
+    Both the static and the hybrid pipeline's static leg use this job, so target
+    lifetime, spans, error attributes and thread ids live in one place.
 
     ``target_factory`` mints a fresh, isolated target per attack; the job closes
     it afterwards (a no-op for externally-injected, caller-owned clients). Callers
@@ -1889,6 +1893,9 @@ def _create_static_job_for_agent_target(
     ``default_map_error`` — a generic ``target_error`` — when the caller has none)
     so the static leg reports the same normalized error taxonomy as hybrid/dynamic
     instead of a backend-agnostic default.
+
+    ``reject_empty_prompt`` raises ``ValueError`` before any target is created
+    when the datapoint has no user content (the hybrid leg sets it).
     """
     safe = _sanitize_job_name(label)
     cfg = cfg or PIPELINE_CONFIG
@@ -1896,6 +1903,12 @@ def _create_static_job_for_agent_target(
     @job(f'redteam:static:{safe}')
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
         prompt = _extract_static_prompt(data)
+        if reject_empty_prompt and not prompt:
+            sample_id = data.inputs.get('id', 'unknown')
+            raise ValueError(
+                f'Static datapoint {sample_id!r} for target {label!r} '
+                f'produced an empty prompt ({len(_build_messages(data))} messages, none with user content).'
+            )
         target = target_factory()
         try:
             attack_attrs = _static_attack_attrs(data)
@@ -3140,80 +3153,16 @@ def _build_agent_target_jobs(
         for dp in at_static_dps:
             dp.inputs['hybrid_source'] = 'static'
 
-        # Build a static job that invokes the AgentTarget directly
-        # Reuse the same BareTargetBackend created for the dynamic job
-        @job(f'redteam:static:{at_safe}')
-        async def at_static_job(
-            data: DataPoint,
-            _row: int,
-            _backend: Any = at_backend,
-            _label: str = at_label,
-            _safe: str = at_safe,
-            _cfg: LLMConfig = pipeline_config or PIPELINE_CONFIG,
-        ) -> Any:
-            """Send a static datapoint to the AgentTarget via respond."""
-            messages = _build_messages(data)
-            prompt = _extract_static_prompt(data)
-            if not prompt:
-                sample_id = data.inputs.get('id', 'unknown')
-                raise ValueError(
-                    f'Static datapoint {sample_id!r} for target {_label!r} '
-                    f'produced an empty prompt ({len(messages)} messages, none with user content).'
-                )
-            target_instance = _backend.create_target(_label)
-            try:
-                attack_attrs = _static_attack_attrs(data)
-                target_input = truncate_for_span(prompt)
-                thread_id = build_static_thread_id(run_id, _safe, _row)
-                async with (
-                    with_redteam_span('orq.redteam.attack', attack_attrs),
-                    with_redteam_span(
-                        'orq.redteam.target_call',
-                        {
-                            **attack_attrs,
-                            'input': target_input,
-                            'orq.redteam.input': target_input,
-                        },
-                    ) as target_span,
-                ):
-                    with conversation_thread(thread_id):
-                        async with with_redteam_span(
-                            f'agent {_label}',
-                            {
-                                'orq.redteam.llm_purpose': 'target',
-                                'input': target_input,
-                                'orq.redteam.input': target_input,
-                            },
-                        ) as agent_span:
-                            # Shared with the non-hybrid static path: retry, timeout, error key.
-                            output = await _run_static_target_call(
-                                target_instance,
-                                prompt,
-                                target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
-                                max_target_retries=_cfg.max_target_retries,
-                                map_error=_backend.map_error,
-                            )
-                            if output['error'] is not None:
-                                error_attrs: AttrMap = {
-                                    'orq.redteam.error_type': output['error_type'],
-                                    'orq.redteam.error_code': output['error_code'],
-                                }
-                                set_span_attrs(target_span, error_attrs)
-                                set_span_attrs(agent_span, error_attrs)
-                            else:
-                                response_text = truncate_for_span(output['response'])
-                                output_attrs: AttrMap = {
-                                    'output': response_text,
-                                    'orq.redteam.output': response_text,
-                                }
-                                set_span_attrs(target_span, output_attrs)
-                                set_span_attrs(agent_span, output_attrs)
-                return {
-                    **output,
-                    'thread_id': thread_id,
-                }
-            finally:
-                await close_target(target_instance)
+        # Same static job as the non-hybrid path, with one fresh target per row
+        # from the BareTargetBackend shared with the dynamic job.
+        at_static_job = _create_static_job_for_agent_target(
+            lambda: at_backend.create_target(at_label),
+            at_label,
+            pipeline_config,
+            map_error=at_backend.map_error,
+            run_id=run_id,
+            reject_empty_prompt=True,
+        )
 
         @job(f'redteam:hybrid:{at_safe}')
         async def at_target_job(

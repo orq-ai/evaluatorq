@@ -533,3 +533,70 @@ async def test_static_leg_without_a_backend_mapper_falls_back_to_target_error() 
     assert out['error_code'] == 'target_error'
     assert out['error'] is not None
     assert 'backend exploded' in out['error']
+
+
+# ---------------------------------------------------------------------------
+# Static and hybrid legs share one job implementation
+# ---------------------------------------------------------------------------
+
+
+def _hybrid_static_job(backend: Any, run_id: str = 'run-1') -> Any:
+    """Build the hybrid router job for one static datapoint through ``_build_agent_target_jobs``."""
+    from evaluatorq.redteam.contracts import Pipeline
+    from evaluatorq.redteam.runner import _AgentTargetJobInputs, _build_agent_target_jobs
+
+    job, _dyn, _static, _all = _build_agent_target_jobs(
+        inputs=_AgentTargetJobInputs(
+            mode=Pipeline.HYBRID,
+            at_dps=[],
+            static_data=[],
+            at_safe='victim',
+            at_backend=backend,
+            at_label='victim',
+            pipeline_config=None,
+            at_dyn_job=AsyncMock(),
+            run_id=run_id,
+        )
+    )
+    return job
+
+
+async def test_static_and_hybrid_legs_return_the_same_error_payload() -> None:
+    """A failing target yields one payload whichever pipeline drives it: mapped code, nested error, thread id."""
+    from evaluatorq.redteam.runner import _create_static_job_for_agent_target
+
+    backend: Any = _MappingBackend(_RaisingTarget())
+    static_job = _create_static_job_for_agent_target(
+        lambda: backend.create_target('victim'), 'victim', map_error=backend.map_error, run_id='run-1'
+    )
+    hybrid_job = _hybrid_static_job(backend)
+
+    datapoint = DataPoint(inputs={'hybrid_source': 'static', 'messages': [{'role': 'user', 'content': 'attack'}]})
+    static_out = (await static_job(datapoint, 3))['output']
+    hybrid_out = (await hybrid_job(datapoint, 3))['output']
+
+    assert hybrid_out == static_out
+    assert static_out['error_code'] == 'orq.http.429'
+    assert 'backend mapped' in static_out['error']
+    assert static_out['error_stage'] == 'target_call'
+    assert static_out['thread_id']
+
+
+async def test_hybrid_static_leg_rejects_an_empty_prompt_before_creating_a_target() -> None:
+    """A static row with no user content fails the job instead of sending an empty prompt."""
+    from evaluatorq.job_helper import JobError
+
+    backend = MagicMock()
+    job = _hybrid_static_job(backend)
+    datapoint = DataPoint(
+        inputs={'id': 'empty-1', 'hybrid_source': 'static', 'messages': [{'role': 'system', 'content': 'sys'}]}
+    )
+
+    with pytest.raises(JobError) as excinfo:
+        await job(datapoint, 0)
+    assert isinstance(excinfo.value.__cause__, JobError)
+    root = excinfo.value.__cause__.__cause__
+    assert isinstance(root, ValueError)
+    assert "'empty-1'" in str(root)
+    assert 'empty prompt' in str(root)
+    backend.create_target.assert_not_called()
