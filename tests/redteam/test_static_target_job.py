@@ -24,12 +24,15 @@ pytestmark = pytest.mark.asyncio
 class _StubTarget:
     def __init__(self, resp: AgentResponse) -> None:
         self._resp = resp
+        self.calls = 0
+        self.closed = 0
 
     async def respond(self, messages: list[Message]) -> AgentResponse:
+        self.calls += 1
         return self._resp
 
     async def close(self) -> None:
-        pass
+        self.closed += 1
 
 
 class _RaisingTarget:
@@ -540,11 +543,12 @@ async def test_static_leg_without_a_backend_mapper_falls_back_to_target_error() 
 # ---------------------------------------------------------------------------
 
 
-def _hybrid_static_job(backend: Any, run_id: str = 'run-1') -> Any:
-    """Build the hybrid router job for one static datapoint through ``_build_agent_target_jobs``."""
+def _hybrid_static_job(backend: Any, run_id: str = 'run-1') -> tuple[Any, AsyncMock]:
+    """Build the hybrid router job through ``_build_agent_target_jobs``; also return its dynamic-leg mock."""
     from evaluatorq.redteam.contracts import Pipeline
     from evaluatorq.redteam.runner import _AgentTargetJobInputs, _build_agent_target_jobs
 
+    dyn_job = AsyncMock()
     job, _dyn, _static, _all = _build_agent_target_jobs(
         inputs=_AgentTargetJobInputs(
             mode=Pipeline.HYBRID,
@@ -554,11 +558,11 @@ def _hybrid_static_job(backend: Any, run_id: str = 'run-1') -> Any:
             at_backend=backend,
             at_label='victim',
             pipeline_config=None,
-            at_dyn_job=AsyncMock(),
+            at_dyn_job=dyn_job,
             run_id=run_id,
         )
     )
-    return job
+    return job, dyn_job
 
 
 async def test_static_and_hybrid_legs_return_the_same_error_payload() -> None:
@@ -569,12 +573,13 @@ async def test_static_and_hybrid_legs_return_the_same_error_payload() -> None:
     static_job = _create_static_job_for_agent_target(
         lambda: backend.create_target('victim'), 'victim', map_error=backend.map_error, run_id='run-1'
     )
-    hybrid_job = _hybrid_static_job(backend)
+    hybrid_job, dyn_job = _hybrid_static_job(backend)
 
     datapoint = DataPoint(inputs={'hybrid_source': 'static', 'messages': [{'role': 'user', 'content': 'attack'}]})
     static_out = (await static_job(datapoint, 3))['output']
     hybrid_out = (await hybrid_job(datapoint, 3))['output']
 
+    dyn_job.assert_not_awaited()
     assert hybrid_out == static_out
     assert static_out['error_code'] == 'orq.http.429'
     assert 'backend mapped' in static_out['error']
@@ -585,25 +590,12 @@ async def test_static_and_hybrid_legs_return_the_same_error_payload() -> None:
 async def test_hybrid_static_leg_creates_and_closes_a_distinct_target_per_row() -> None:
     """Each hybrid static row receives an isolated target, which the job then closes."""
 
-    class _TrackedTarget:
-        def __init__(self, identifier: int) -> None:
-            self.identifier = identifier
-            self.calls = 0
-            self.closed = 0
-
-        async def respond(self, messages: list[Message]) -> AgentResponse:
-            self.calls += 1
-            return AgentResponse(text=f'response {self.identifier}')
-
-        async def close(self) -> None:
-            self.closed += 1
-
     class _FreshTargetBackend:
         def __init__(self) -> None:
-            self.targets: list[_TrackedTarget] = []
+            self.targets: list[_StubTarget] = []
 
-        def create_target(self, _agent_key: str) -> _TrackedTarget:
-            target = _TrackedTarget(len(self.targets))
+        def create_target(self, _agent_key: str) -> _StubTarget:
+            target = _StubTarget(AgentResponse(text=f'response {len(self.targets)}'))
             self.targets.append(target)
             return target
 
@@ -611,13 +603,14 @@ async def test_hybrid_static_leg_creates_and_closes_a_distinct_target_per_row() 
             return ('target_error', str(exc))
 
     backend = _FreshTargetBackend()
-    job = _hybrid_static_job(backend)
+    job, dyn_job = _hybrid_static_job(backend)
     first = DataPoint(inputs={'hybrid_source': 'static', 'messages': [{'role': 'user', 'content': 'first'}]})
     second = DataPoint(inputs={'hybrid_source': 'static', 'messages': [{'role': 'user', 'content': 'second'}]})
 
     first_out = (await job(first, 0))['output']
     second_out = (await job(second, 1))['output']
 
+    dyn_job.assert_not_awaited()
     assert [target.calls for target in backend.targets] == [1, 1]
     assert [target.closed for target in backend.targets] == [1, 1]
     assert first_out['response'] == 'response 0'
@@ -629,16 +622,11 @@ async def test_hybrid_static_leg_rejects_an_empty_prompt_before_creating_a_targe
     from evaluatorq.job_helper import JobError
 
     backend = MagicMock()
-    job = _hybrid_static_job(backend)
+    job, _dyn_job = _hybrid_static_job(backend)
     datapoint = DataPoint(
         inputs={'id': 'empty-1', 'hybrid_source': 'static', 'messages': [{'role': 'system', 'content': 'sys'}]}
     )
 
-    with pytest.raises(JobError) as excinfo:
+    with pytest.raises(JobError, match="'empty-1'.*empty prompt"):
         await job(datapoint, 0)
-    assert isinstance(excinfo.value.__cause__, JobError)
-    root = excinfo.value.__cause__.__cause__
-    assert isinstance(root, ValueError)
-    assert "'empty-1'" in str(root)
-    assert 'empty prompt' in str(root)
     backend.create_target.assert_not_called()

@@ -1768,11 +1768,6 @@ def _safe_resolve_target_kind(at: Any) -> TargetKind:
         return TargetKind.DIRECT
 
 
-def _make_safe_target(value: str) -> str:
-    """Return a job-name-safe slug from a target value."""
-    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in value).strip('-') or 'unknown'
-
-
 def _deduplicate_target_labels(
     string_targets: Sequence[str],
     agent_targets: Sequence[Any],
@@ -1880,9 +1875,6 @@ def _create_static_job_for_agent_target(
 ) -> Any:
     """Create an evaluatorq static job that drives an `AgentTarget`.
 
-    Both the static and the hybrid pipeline's static leg use this job, so target
-    lifetime, spans, error attributes and thread ids live in one place.
-
     ``target_factory`` mints a fresh, isolated target per attack; the job closes
     it afterwards (a no-op for externally-injected, caller-owned clients). Callers
     that own the target lifecycle pass ``at.new``; the internal ``agent:`` path
@@ -1895,7 +1887,7 @@ def _create_static_job_for_agent_target(
     instead of a backend-agnostic default.
 
     ``reject_empty_prompt`` raises ``ValueError`` before any target is created
-    when the datapoint has no user content (the hybrid leg sets it).
+    when the datapoint has no user content.
     """
     safe = _sanitize_job_name(label)
     cfg = cfg or PIPELINE_CONFIG
@@ -2246,7 +2238,7 @@ async def _prepare_target(
         A `PreparedTarget` instance with all per-target state.
     """
     target_kind, target_value = _parse_dynamic_target(target, mode)
-    safe_target = _make_safe_target(target_value)
+    safe_target = _sanitize_job_name(target_value)
     backend = make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
 
     # Context retrieval (skip if already fetched for the confirm step)
@@ -3153,8 +3145,6 @@ def _build_agent_target_jobs(
         for dp in at_static_dps:
             dp.inputs['hybrid_source'] = 'static'
 
-        # Same static job as the non-hybrid path, with one fresh target per row
-        # from the BareTargetBackend shared with the dynamic job.
         at_static_job = _create_static_job_for_agent_target(
             lambda: at_backend.create_target(at_label),
             at_label,
@@ -3489,7 +3479,7 @@ async def _run_dynamic_or_hybrid(
                 run_id=run_id,
             )
 
-            at_safe = _make_safe_target(at_label)
+            at_safe = _sanitize_job_name(at_label)
 
             at_is_generating = shared_at_dps is None
             if shared_at_dps is None:
@@ -4536,7 +4526,7 @@ def _patch_static_job_reports(
     job_name_to_target: dict[str, tuple[TargetKind, str]] = {}
     for t in targets:
         t_kind, t_value = parse_target(t)
-        safe = _make_safe_target(t_value)
+        safe = _sanitize_job_name(t_value)
         # create_deployment_job names follow "redteam:static:<safe_target>" convention;
         # use the safe slug for the lookup key to handle collisions gracefully.
         job_name_to_target[safe] = (t_kind, t_value)
