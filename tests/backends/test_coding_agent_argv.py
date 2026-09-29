@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import types
 from pathlib import Path
 from typing import Any
@@ -19,10 +18,9 @@ from evaluatorq.backends.coding_agent import (
     OrqLaunchOptions,
     ParsedTurn,
     build_argv,
-    resolve_executable,
+    refuse_unsafe_batch_args,
 )
 from evaluatorq.contracts import Message
-from tests.backends.fakes import ECHO, install_fake
 
 PROMPT = 'reply to the user'
 
@@ -170,24 +168,13 @@ def test_parsed_turn_stays_mutable() -> None:
     assert turn.text == 'hi' and turn.tool_calls == []
 
 
-def test_resolve_executable_searches_the_child_path(tmp_path: Path) -> None:
-    launcher = install_fake(tmp_path, 'claude', ECHO)
-    resolved, flag = resolve_executable(['claude', '-p'], str(tmp_path))
-    # Windows returns the extension in PATHEXT's case (``.CMD``), so compare as the filesystem does.
-    assert (os.path.normcase(resolved), flag) == (os.path.normcase(launcher), '-p')
-    assert resolve_executable(['claude', '-p'], str(tmp_path / 'empty')) == ['claude', '-p']
-
-
 @pytest.mark.parametrize('arg', ['a & calc', 'say "hi"', '%PATH%', 'line\nbreak'])
-def test_resolve_executable_refuses_cmd_metacharacters_for_batch_launchers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arg: str
-) -> None:
-    shim = tmp_path / 'claude.cmd'
-    monkeypatch.setattr(coding_agent_module.shutil, 'which', lambda name, path=None: str(shim))
+def test_batch_launcher_refuses_cmd_metacharacters(arg: str) -> None:
     with pytest.raises(CodingAgentUnavailableError) as info:
-        resolve_executable(['claude', '--append-system-prompt', arg], None)
+        refuse_unsafe_batch_args(['C:\\npm\\claude.CMD', '--model', arg])
     assert info.value.code == 'cli.unsafe_shim'
-    assert resolve_executable(['claude', '-p', '--verbose'], None) == [str(shim), '-p', '--verbose']
+    refuse_unsafe_batch_args(['C:\\npm\\claude.cmd', '-p', '--verbose'])
+    refuse_unsafe_batch_args(['/usr/bin/claude', '--model', arg])
 
 
 @pytest.mark.asyncio
@@ -205,6 +192,7 @@ async def test_batch_launcher_moves_system_prompt_to_stdin(tmp_path: Path, monke
     target = CodingAgentTarget(agent='claude', system_prompt=system_prompt)
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'
+    assert seen['argv'][0] == str(shim)
     assert '--append-system-prompt' not in seen['argv']
     assert '{"role": "system", "content": "Say \\"hi\\"' in seen['stdin']
     await target.close()

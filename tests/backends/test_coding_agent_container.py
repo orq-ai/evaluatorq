@@ -38,6 +38,12 @@ args, env = sys.argv[1:], os.environ.get
 
 def log(line):
     with open(os.environ['FAKE_LOG'], 'a', encoding='utf-8') as f:
+        if os.name == 'nt':
+            # Windows emulates O_APPEND, so concurrent fakes drop lines; the OS frees this lock if we are killed.
+            import msvcrt
+
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
         f.write(line + '\\n')
 
 
@@ -67,8 +73,7 @@ if sub == 'inspect':
     else:
         print('true')
 if sub == 'exec':
-    for key, value in os.environ.items():
-        log(f'ENV {key}={value}')
+    log('\\n'.join(f'ENV {key}={value}' for key, value in os.environ.items()))
     sys.stdin.read()
     if env('FAKE_EXEC_SLEEP'):
         time.sleep(float(env('FAKE_EXEC_SLEEP')))
