@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.signals import autonomy, structure, tools
+from evaluatorq.signals import autonomy, structure, tags, tools
 from evaluatorq.signals.config import SignalsConfig
 from evaluatorq.signals.models import Group, SignalFn, SignalReport, SignalResult
 from evaluatorq.signals.walk import SignalContext
@@ -36,7 +36,7 @@ def _merge(*tables: SignalTable) -> SignalTable:
     return MappingProxyType(merged)
 
 
-SIGNALS: SignalTable = _merge(structure.SIGNALS, tools.SIGNALS, autonomy.SIGNALS)
+SIGNALS: SignalTable = _merge(structure.SIGNALS, tools.SIGNALS, autonomy.SIGNALS, tags.SIGNALS)
 SIGNAL_NAMES: tuple[str, ...] = tuple(SIGNALS)
 
 
@@ -62,6 +62,12 @@ def compute_signals(
     if wanted is not None and (unknown := sorted(wanted - set(SIGNALS))):
         msg = f'Unknown signal names: {", ".join(unknown)}'
         raise ValueError(msg)
+    if wanted is not None:
+        pending = list(wanted)
+        while pending:
+            name = pending.pop()
+            pending.extend(dependency for dependency in tags.TAG_DEPENDENCIES.get(name, ()) if dependency not in wanted)
+            wanted.update(tags.TAG_DEPENDENCIES.get(name, ()))
     selected = {name: entry for name, entry in SIGNALS.items() if wanted is None or name in wanted}
     report = partial(SignalReport, trajectory_id=trajectory.trajectory_id, config_version=config.version)
     results: dict[str, SignalResult] = {}
