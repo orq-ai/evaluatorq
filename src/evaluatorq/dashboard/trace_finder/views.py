@@ -12,7 +12,7 @@ from evaluatorq.dashboard.apply_ui import drawer as drawer_shell
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_finder import explorer_views
-from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
+from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
 from evaluatorq.trace_finder.columns import fmt_cost, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
@@ -1259,17 +1259,22 @@ def drawer(
 
 def missing_trace_drawer(trace_id: str, *, reason: str | None = None, traces_layout: bool = False) -> str:
     if traces_layout:
+        failure_reason = reason or 'The conversation could not be loaded for this trace.'
+        footer = (
+            trace_link_button(single_trace_url(trace_id), 'Open in Orq ↗')
+            + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
+        )
         return drawer_shell(
             'Trace conversation',
-            '<div class="fd-traces"><div class="fd-no-messages" role="status"><b>No messages available</b>'
-            '<span>This trace has no conversation text to display.</span></div>'
+            '<div class="fd-traces"><div class="fd-no-messages" role="status"><b>Conversation unavailable</b>'
+            f'<span>{esc(failure_reason)}</span></div>'
             '<div class="fd-tabs"><button type="button" class="on" onclick="eqFinderTraceTab(this,\'fd-thread\')">'
             'Conversation</button><button type="button" hx-get="/find/trace-spans?trace_id='
             + quote(trace_id, safe='')
             + '" hx-target="#fd-spans" hx-swap="innerHTML" onclick="eqFinderTraceTab(this,\'fd-spans\')">Spans</button></div>'
-            '<div id="fd-thread" class="fd-panel"><p class="fd-no-messages">Open the Spans tab to inspect this trace.</p></div>'
+            '<div id="fd-thread" class="fd-panel"><p class="fd-no-messages">Conversation content is unavailable.</p></div>'
             '<div id="fd-spans" class="fd-panel" hidden><p class="finder-empty">Open Spans to load span details.</p></div></div>',
-            '',
+            footer,
             dismiss_route='/find/dismiss',
             drawer_id='finder-drawer',
         )

@@ -1575,18 +1575,25 @@ def test_span_tree_renders_lazy_raw_error_message_escaped() -> None:
     assert '<raw & detail>' not in tree
 
 
-def test_traces_missing_conversation_drawer_keeps_lazy_spans_tab() -> None:
+def test_traces_missing_conversation_drawer_keeps_lazy_spans_tab_and_trace_actions(monkeypatch) -> None:
     from evaluatorq.dashboard.trace_finder.views import missing_trace_drawer
 
+    monkeypatch.setenv('ORQ_WORKSPACE', 'workspace')
+    monkeypatch.setenv('ORQ_UI_BASE_URL', 'https://orq.example')
+    monkeypatch.setattr('evaluatorq.dashboard.orq_workspace.resolve_slug', lambda: 'workspace')
     html = missing_trace_drawer(
         'trace/with slash',
-        reason='Messages did not hydrate.',
+        reason='<Messages did not hydrate.>',
         traces_layout=True,
     )
 
-    assert 'No messages available' in html
+    assert 'Conversation unavailable' in html
+    assert '&lt;Messages did not hydrate.&gt;' in html
+    assert 'No messages available' not in html
     assert 'Spans</button>' in html
     assert 'hx-get="/find/trace-spans?trace_id=trace%2Fwith%20slash"' in html
+    assert 'href="https://orq.example/workspace/traces?query=trace_id%3Ais%3Atrace%2Fwith%20slash"' in html
+    assert 'Copy trace id' in html and 'data-trace-id="trace/with slash"' in html
 
 
 def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() -> None:

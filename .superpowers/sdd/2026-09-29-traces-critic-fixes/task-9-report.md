@@ -13,3 +13,5 @@ Raw status-message support: the generated `SpanSummary` has no message field, bu
 No Ask AI submissions were made. Unrelated dirty Task 1/2/3/7 reports and the untracked `--session critic-designer` file were preserved.
 
 Follow-up verification: `uv run pytest tests/trace_finder/test_orq_source.py tests/dashboard/test_explorer.py -q` passed (145 passed); `uv run ruff check src` passed; `uv run basedpyright` reported 0 errors and 2 existing warnings in `tests/trace_finder/test_classifier.py`. The saved browser screenshot predates this follow-up; a new browser check was not run here.
+
+Review follow-up: `/traces` hydration-failure drawers now display the escaped failure reason, use the accurate “Conversation unavailable” state, and retain the safe Open in Orq and Copy trace ID footer actions. The lazy Spans tab remains available. `uv run pytest tests/dashboard/test_explorer.py -q` passed (94 passed); `uv run ruff check src` passed; `uv run basedpyright` reported 0 errors and the same 2 warnings in `tests/trace_finder/test_classifier.py`. No browser server was started or stopped for this follow-up.
