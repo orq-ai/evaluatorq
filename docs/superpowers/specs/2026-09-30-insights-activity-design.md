@@ -14,6 +14,8 @@ For each item, show `traces using` as the number of eligible traces with a posit
 
 Replace the Priority navigation item with Activity and retain the current run's page shell, filters, URL state, and trace detail drawer. The Activity view opens on Skills, with Tools and Shell commands as adjacent sections. Each section shows summary counts for distinct items, recorded loads or calls, and traces with any recorded use. A searchable ranking shows item name, traces using, total loads or calls, and a coverage bar. Sort by trace coverage by default, with a total-use sort. Selecting an item opens its detail panel and the matching trace list; selecting a trace opens the existing trace detail.
 
+The ranking shows a horizontal bar under both numeric columns. The `Traces using` bar shows the share of eligible traces, and the `Total loads/calls` bar is relative to the largest visible item in that category. Keep the exact counts visible and explain both scales beside the ranking. Shell command program rows use the same bars, with their call bars compared to the largest visible program; expanded command rows compare with the largest visible command. Search and helper visibility update the relative call scale. At narrow widths, stack the detail panel beneath the ranking and put each item's two bars side by side below its name.
+
 The Shell commands section groups normalized commands by program, with expandable individual commands. Hide routine helpers by default behind a visible toggle; search still finds them. Mark commands that might change state with a cautious label such as `Potentially state-changing`. That marker is a heuristic on the normalized command name, not a verdict about what happened in the trace.
 
 ## Selected-item detail
