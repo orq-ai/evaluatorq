@@ -162,7 +162,7 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-apply:hover { background:#3a3844; }
 .finder:has(> .finder-command) .xr-apply:focus-visible { outline:2px solid #025558; outline-offset:1px; }
 @media (max-width:850px) { .finder:has(> .finder-command) .xr-time-options { width:calc(100vw - 50px); } }
-@media (max-width:1100px) { .finder:has(> .finder-command) .xr-quickviews { flex:1 1 100%; flex-wrap:wrap; } }
+@media (max-width:1100px) { .finder:has(> .finder-command) .xr-quickviews { flex:0 1 auto; flex-wrap:wrap; } }
 .finder:has(> .finder-command) .xr-range input:focus-visible,
 .finder:has(> .finder-command) .xr-preset:focus-visible,
 .finder:has(> .finder-command) .xr-exact > summary:focus-visible { outline:2px solid #025558; outline-offset:-2px; }
@@ -229,12 +229,54 @@ body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder
   .finder:has(> .finder-command) .xr-toolbar { padding:6px 10px; }
   .finder:has(> .finder-command) .xr-toolbar .spacer { display:none; }
 }
-/* The toolbar's five controls need ~640px; below that width they take a full row of their own instead of clipping. */
+/* Toolbar hierarchy: Search and Load are the only solid buttons, every other control is a 32px ghost with a 6px radius, and the
+   Table/Trajectories switch is a quiet track whose active segment is a white chip, so it never competes with Load. */
+.finder:has(> .finder-command) { --ctl:32px; }
+.finder:has(> .finder-command) :is(.finder-ai-label, .finder-command-query > a, .finder-command-query > button, .finder-seg, .xr-filter, .xr-time-menu > summary, .xr-toolbar-right > .quiet, .xr-cols > summary, .xr-sort > summary, .xr-toolbar-right .btn-secondary) { border-radius:6px; }
+.finder:has(> .finder-command) .finder-command-query > button { flex:0 0 auto; min-width:88px; padding:0 16px; }
+.finder:has(> .finder-command) .finder-seg { padding:2px; border:1px solid #d5d8df; background:#f1f0ee; }
+.finder:has(> .finder-command) .finder-seg span,
+.finder:has(> .finder-command) .xr-switch button { border-radius:4px; background:transparent; color:#5b5964; font-weight:500; }
+.finder:has(> .finder-command) .finder-seg input:checked + span,
+.finder:has(> .finder-command) .xr-switch button.on { background:#fff; color:#25232e; font-weight:600; box-shadow:0 0 0 1px #d5d8df, 0 1px 2px rgba(20,20,30,.12); }
+.finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:150px 80px 90px 57px 170px; }
+/* The toolbar sits directly under the question box and never moves: the Ask AI result band, its criteria and the run progress
+   render under the toolbar (order 2) instead of pushing it down when a run finishes. */
+.finder:has(> .finder-command) :is(#finder-body, .finder-body-fragment, #explorer-results-slot, .xr) { display:contents; }
+.finder:has(> .finder-command) .xr > .xr-toolbar { order:1; }
+.finder:has(> .finder-command) .finder-body-fragment > * { order:2; }
+.finder:has(> .finder-command) .xr > :not(.xr-toolbar) { order:3; }
+/* An empty chip slot would still cost one flex gap. */
+.finder:has(> .finder-command) .xr-chips:empty { display:none; }
+/* Active filter chips get their own row under the controls, so adding a filter never pushes the controls onto another line. */
+.finder:has(> .finder-command) .xr-chips:not(:empty) { order:5; flex:1 0 100%; display:flex; flex-wrap:wrap; gap:6px; padding:0 0 8px; }
+/* Filters menu: an opaque panel above the sticky table header, so nothing behind it shows through. */
+.finder:has(> .finder-command) .finder-facets { z-index:60; }
+.finder:has(> .finder-command) .finder-facets .facet-list,
+.finder:has(> .finder-command) .finder-facets .facet-sub { background:#fff; opacity:1; border:1px solid #cfd2d9; border-radius:8px; box-shadow:0 12px 32px rgba(20,20,30,.18), 0 2px 6px rgba(20,20,30,.08); }
+.finder:has(> .finder-command) .finder-facets .facet-sub label { border-radius:6px; }
+.finder:has(> .finder-command) .finder-facets .facet-n { margin-left:auto; padding-left:12px; color:#686a74; font-size:11.5px; font-variant-numeric:tabular-nums; }
+.finder:has(> .finder-command) .finder-facets .facet-scope { margin:2px 10px 6px; color:#686a74; font-size:11px; line-height:1.35; }
+.finder:has(> .finder-command) .finder-command-textarea::placeholder { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+/* Below 1100px the question takes a full row, and no control is left alone on a row. In the command strip the second row holds
+   Search in, AI settings and Search. In the toolbar the first row holds Filters and the quick views, and the
+   second holds the time range, Rows, Columns, Load and the view switch. */
 @media (max-width:1100px) {
-  .finder:has(> .finder-command) .finder-command-query { flex-wrap:wrap; }
-  .finder:has(> .finder-command) .finder-command-query .col { flex:1 1 200px; min-width:0; }
-  .finder:has(> .finder-command) .xr-toolbar-right { flex:1 1 100%; width:100%; min-width:0; margin:0 0 2px; grid-template-columns:repeat(3,minmax(0,1fr)); }
-  .finder:has(> .finder-command) .xr-toolbar-right .finder-seg { grid-column:span 2; }
+  .finder:has(> .finder-command) .finder-command-query { flex-wrap:wrap; row-gap:8px; }
+  .finder:has(> .finder-command) .finder-command-query .col { flex:1 1 calc(100% - 92px); min-width:0; }
+  .finder:has(> .finder-command) .finder-command-query > .finder-command-gear { margin-left:auto; }
+  .finder:has(> .finder-command) .xr-toolbar { row-gap:6px; padding-top:8px; padding-bottom:8px; }
+  .finder:has(> .finder-command) .xr-toolbar-right { display:contents; }
+  .finder:has(> .finder-command) .xr-toolbar > .xr-filter,
+  .finder:has(> .finder-command) .xr-toolbar > .xr-quickviews { order:1; }
+  .finder:has(> .finder-command) .xr-toolbar .spacer { display:none; }
+  .finder:has(> .finder-command) .xr-toolbar-right .xr-switch { flex:0 0 160px; width:160px; }
+  .finder:has(> .finder-command) .xr-toolbar::after { content:''; order:2; flex:1 0 100%; height:0; margin-top:-6px; }
+  .finder:has(> .finder-command) .xr-toolbar-right > * { order:3; }
+  .finder:has(> .finder-command) .xr-time-menu { flex:1 1 110px; min-width:0; }
+  .finder:has(> .finder-command) .xr-toolbar-right > .quiet { flex:0 0 86px; }
+  .finder:has(> .finder-command) .xr-cols, .finder:has(> .finder-command) .xr-sort { flex:0 0 94px; }
+  .finder:has(> .finder-command) .xr-toolbar-right .btn-secondary { flex:0 0 57px; }
 }
 """
 

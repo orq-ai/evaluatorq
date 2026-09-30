@@ -1318,3 +1318,24 @@ def test_totals_of_no_rows_do_not_divide_by_zero() -> None:
 
     t = totals([])
     assert (t.traces, t.cost, t.cache_share, t.p50_ms) == (0, None, None, None)
+
+
+def test_facet_menu_counts_values_from_loaded_rows_only() -> None:
+    from evaluatorq.dashboard.trace_finder.views import facet_menu
+
+    rows = [
+        TraceRow(trace_id='a', models=('gpt-6-luna',), providers=('openai',), status='Success'),
+        TraceRow(trace_id='b', models=('gpt-6-luna',), providers=('openai',), status='Success'),
+        TraceRow(trace_id='c', models=('claude-x',), providers=('anthropic',), status='error'),
+    ]
+    catalogue = FacetCatalogue(model=('claude-x', 'gpt-6-luna', 'unused'))
+
+    html = facet_menu(catalogue, loaded_rows=rows)
+
+    assert 'Counts are of the 3 loaded traces.' in html
+    # Most common value first, zero for a catalogue value no loaded row carries.
+    assert html.index('gpt-6-luna') < html.index('claude-x') < html.index('unused')
+    assert '<span class="facet-n" title="Loaded traces">2</span>' in html
+    assert '<span class="facet-n" title="Loaded traces">0</span>' in html
+    # Without rows the menu is unchanged (the /find surface).
+    assert 'class="facet-n"' not in facet_menu(catalogue)

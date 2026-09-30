@@ -998,7 +998,14 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 logger.warning('Find facet menu ignores {} because it is below {}', maximum, minimum)
                 numeric_values[maximum] = None
         numeric = NumericFilters(**numeric_values)
-        return _html(facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=selection))
+        loaded_rows = None
+        if params.get('counts') == 'loaded':
+            store = await _store(req.app)
+            explorer = store.explorer if store is not None else None
+            loaded_rows = (await explorer.view()).rows if explorer is not None else None
+        return _html(
+            facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=selection, loaded_rows=loaded_rows)
+        )
 
     @app.get('/find/dismiss')
     def find_dismiss() -> Response:

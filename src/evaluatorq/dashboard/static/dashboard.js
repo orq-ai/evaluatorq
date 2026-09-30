@@ -194,7 +194,8 @@
     const query = search.value.trim().toLocaleLowerCase();
     let visible = 0;
     sub.querySelectorAll('.facet-values label').forEach(function (option) {
-      const matches = option.textContent.toLocaleLowerCase().includes(query);
+      const label = option.querySelector('input + span');
+      const matches = (label ? label.textContent : option.textContent).toLocaleLowerCase().includes(query);
       option.hidden = !matches;
       if (matches) visible += 1;
     });

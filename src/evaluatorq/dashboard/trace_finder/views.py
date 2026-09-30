@@ -19,6 +19,8 @@ from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, Kind, Segment, segments
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from evaluatorq.trace_finder import (
         CompiledQuery,
         DashboardSettings,
@@ -146,6 +148,31 @@ def traces_command_strip(
     )
 
 
+def _loaded_tallies(rows: Sequence[TraceRow]) -> dict[str, dict[str, tuple[str, int]]]:
+    """Tally loaded rows per facet: ``{facet: {casefolded value: (display value, count)}}``.
+
+    Project, trace type and tool are not on a row (project values are shown by name, rows hold ids),
+    so those menus carry no counts rather than a wrong one.
+    """
+    single = {'agent_name': 'agent_name', 'status': 'status', 'product': 'product'}
+    multi = {'model': 'models', 'provider': 'providers'}
+    tallies: dict[str, dict[str, tuple[str, int]]] = {name: {} for name in (*single, *multi)}
+
+    def bump(facet: str, value: str) -> None:
+        shown, count = tallies[facet].get(value.casefold(), (value, 0))
+        tallies[facet][value.casefold()] = (shown, count + 1)
+
+    for row in rows:
+        for facet, attr in single.items():
+            value = getattr(row, attr)
+            if value:
+                bump(facet, str(value))
+        for facet, attr in multi.items():
+            for value in dict.fromkeys(getattr(row, attr)):
+                bump(facet, value)
+    return tallies
+
+
 def _facet_values(catalogue: FacetCatalogue | None, name: str) -> tuple[str, ...]:
     if catalogue is None or name in NUMERIC_FACET_NAMES:
         return ()
@@ -160,12 +187,17 @@ def facet_menu(
     form_id: str = 'finder-query-form',
     selection: FacetSelection | None = None,
     pending: bool = False,
+    loaded_rows: Sequence[TraceRow] | None = None,
 ) -> str:
     """Two-level filter menu: a category list, and a value popout the client opens per category.
 
     ``pending`` renders the menu without values and has it fetch them itself as soon as it lands
     on the page, so a page render never waits on the Orq facet call.
+
+    ``loaded_rows`` adds a count next to each value, tallied from the rows already on the page (no
+    extra Orq call), so a count is of loaded traces, not of everything Orq holds.
     """
+    tallies = _loaded_tallies(loaded_rows) if loaded_rows is not None else {}
     items: list[str] = []
     subs: list[str] = []
     for name, label in FACET_LABELS:
@@ -184,8 +216,23 @@ def facet_menu(
             )
         else:
             count = len(selected_values)
+            tally = tallies.get(name)
+            counts = {key: count for key, (_, count) in tally.items()} if tally is not None else None
+            if tally is not None and counts is not None:
+                # Catalogue values first, then values only the loaded rows carry (the catalogue may be
+                # unavailable); most common first, and sorted() is stable so ties keep catalogue order.
+                known = {value.casefold() for value in values}
+                values = (*values, *(shown for key, (shown, _) in tally.items() if key not in known))
+                by_count = counts
+                values = tuple(sorted(values, key=lambda v: -by_count.get(v.casefold(), 0)))
             options = ''.join(
-                f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}><span>{esc(value)}</span></label>'
+                f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}><span>{esc(value)}</span>'
+                + (
+                    f'<span class="facet-n" title="Loaded traces">{counts.get(value.casefold(), 0):,}</span>'
+                    if counts is not None
+                    else ''
+                )
+                + '</label>'
                 for value in values
             )
             if options:
@@ -194,8 +241,13 @@ def facet_menu(
                     if catalogue is not None and name in catalogue.truncated_facets
                     else ''
                 )
+                loaded_note = (
+                    f'<p class="facet-scope">Counts are of the {len(loaded_rows):,} loaded traces.</p>'
+                    if tally is not None and loaded_rows is not None
+                    else ''
+                )
                 body = (
-                    f'<input class="facet-search" type="search" placeholder="Search values" aria-label="Search {esc(label)} values" autocomplete="off">'
+                    f'{loaded_note}<input class="facet-search" type="search" placeholder="Search values" aria-label="Search {esc(label)} values" autocomplete="off">'
                     f'<div class="facet-values">{options}</div>'
                     '<p class="facet-no-results" hidden>No matching values in this list.</p>'
                     f'{overflow}'
@@ -212,10 +264,13 @@ def facet_menu(
         )
     if pending:
         note = '<p class="finder-empty">Loading facet values…</p>'
-        loader = f' hx-get="/find/facets?form_id={form_id}" hx-trigger="load" hx-include="#finder-controls" hx-swap="outerHTML" hx-indicator=".finder-facet-loading"'
+        counts_param = '&counts=loaded' if loaded_rows is not None else ''
+        loader = f' hx-get="/find/facets?form_id={form_id}{counts_param}" hx-trigger="load" hx-include="#finder-controls" hx-swap="outerHTML" hx-indicator=".finder-facet-loading"'
     else:
         note = (
             '<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>'
+            if catalogue is None and loaded_rows is None
+            else '<p class="facet-note">Orq\'s full value list is unavailable; showing values from the loaded traces.</p>'
             if catalogue is None
             else ''
         )
@@ -365,7 +420,7 @@ def controls(
         '<div class="finder-controls" id="finder-controls">'
         f'{hidden_facets}{scope_html}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"}, generated=generated_only)}'
         f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
-        f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}'
+        f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending, loaded_rows=explorer_view.rows if explorer_view is not None else None)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
         f'<input {keep["limit"]} type="hidden" form="{form_id}" name="limit" value="{values["limit"]}">'
