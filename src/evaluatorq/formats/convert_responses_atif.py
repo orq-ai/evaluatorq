@@ -51,7 +51,13 @@ from evaluatorq.formats.atif import (
     AtifToolCall,
     AtifTrajectory,
 )
-from evaluatorq.formats.responses import ResponsesConversation, is_output_item, output_item, response_starts
+from evaluatorq.formats.responses import (
+    ResponsesConversation,
+    is_output_item,
+    output_item,
+    response_starts,
+    walk_items,
+)
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 
 if TYPE_CHECKING:
@@ -124,30 +130,29 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
             drafts.append(last)
         return last
 
-    for index, item in enumerate(items):
-        item_type = item.get('type')
-        if item_type is None and 'role' in item:
-            item_type = 'message'
+    def message(index: int, item: dict[str, Any]) -> None:
         role = item.get('role')
-        if item_type == 'message' and role in ('user', 'system', 'developer'):
+        if role in ('user', 'system', 'developer'):
             drafts.append(_Draft(source='user' if role == 'user' else 'system', item=item))
-        elif item_type == 'message' and role == 'assistant':
+        elif role == 'assistant':
             current_agent(index).texts.append(_assistant_text(item.get('content')))
-        elif item_type == 'message':
-            logger.warning('Skipping Responses message with role {!r}: ATIF has no such step source.', role)
-        elif item_type == 'reasoning':
-            current_agent(index).reasoning.append(item)
-        elif item_type == 'function_call':
-            if isinstance(item.get('call_id'), str) and item['call_id']:
-                current_agent(index).calls.append(item)
-            else:
-                logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
-        elif item_type == 'function_call_output':
-            _attach_output(item, drafts)
-        elif item_type == 'compaction':
-            drafts.append(_Draft(source='system', item=item))
         else:
-            logger.warning('Skipping Responses item of type {!r}: ATIF has no equivalent.', item_type)
+            logger.warning('Skipping Responses message with role {!r}: ATIF has no such step source.', role)
+
+    def call(index: int, item: dict[str, Any]) -> None:
+        if isinstance(item.get('call_id'), str) and item['call_id']:
+            current_agent(index).calls.append(item)
+        else:
+            logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
+
+    handlers = {
+        'message': message,
+        'reasoning': lambda index, item: current_agent(index).reasoning.append(item),
+        'function_call': call,
+        'function_call_output': lambda _, item: _attach_output(item, drafts),
+        'compaction': lambda _, item: drafts.append(_Draft(source='system', item=item)),
+    }
+    walk_items(items, handlers, 'ATIF')
     return drafts
 
 

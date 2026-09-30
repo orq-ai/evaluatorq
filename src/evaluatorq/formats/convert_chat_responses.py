@@ -18,7 +18,7 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.formats._shared import arguments_text, join_text, part_text, tool_arguments
 from evaluatorq.formats.chat import ChatConversation
-from evaluatorq.formats.responses import ResponsesConversation
+from evaluatorq.formats.responses import ResponsesConversation, walk_items
 from evaluatorq.openresponses.input_items import messages_to_responses_input, responses_function_call_item_id
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text', 'refusal'})
@@ -43,18 +43,17 @@ def chat_to_responses(conv: ChatConversation) -> ResponsesConversation:
 def responses_to_chat(conv: ResponsesConversation) -> ChatConversation:
     """Render Responses items as chat messages; see `ResponsesConversation.to_chat` for the losses."""
     state = _State()
-    for item in conv.items:
-        item_type = item.get('type')
-        if item_type == 'message' or (item_type is None and 'role' in item):
-            _message_item(item, state)
-        elif item_type == 'function_call':
-            _call_item(item, state)
-        elif item_type == 'function_call_output':
-            _output_item(item, state)
-        elif item_type == 'reasoning':
-            state.reasoning_dropped += 1
-        else:
-            logger.warning('Skipping Responses item of type {!r}: chat has no equivalent.', item_type)
+
+    def reasoning(_index: int, _item: dict[str, Any]) -> None:
+        state.reasoning_dropped += 1
+
+    handlers = {
+        'message': lambda _, item: _message_item(item, state),
+        'function_call': lambda _, item: _call_item(item, state),
+        'function_call_output': lambda _, item: _output_item(item, state),
+        'reasoning': reasoning,
+    }
+    walk_items(conv.items, handlers, 'chat')
     if state.reasoning_dropped:
         logger.warning('dropped {} reasoning items (chat has no reasoning slot)', state.reasoning_dropped)
     return ChatConversation(messages=state.messages)

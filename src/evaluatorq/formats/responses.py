@@ -13,6 +13,8 @@ from evaluatorq.formats._shared import arguments_text, tool_arguments
 from evaluatorq.openresponses.otel_messages import RESPONSES_ITEM_TYPES
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from evaluatorq.formats.atif import AtifTrajectory
     from evaluatorq.formats.chat import ChatConversation
     from evaluatorq.formats.otel import OtelTrace
@@ -26,6 +28,19 @@ def item_type(item: dict[str, Any]) -> Any:
     """The item's `type`; a bare `{"role", "content"}` dict is a `message`."""
     kind = item.get('type')
     return 'message' if kind is None and 'role' in item else kind
+
+
+def walk_items(
+    items: list[dict[str, Any]], handlers: Mapping[str, Callable[[int, dict[str, Any]], None]], target: str
+) -> None:
+    """Call the handler for each item's `item_type` with its index; an item with no handler is warned and skipped."""
+    for index, item in enumerate(items):
+        kind = item_type(item)
+        handler = handlers.get(kind) if isinstance(kind, str) else None
+        if handler is None:
+            logger.warning('Skipping Responses item of type {!r}: {} has no equivalent.', kind, target)
+        else:
+            handler(index, item)
 
 
 def is_output_item(item: dict[str, Any]) -> bool:
