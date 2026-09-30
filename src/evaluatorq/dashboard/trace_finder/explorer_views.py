@@ -255,7 +255,7 @@ def table(
     snapshot = _within_snapshot(snapshot)
     columns = _visible_columns(columns, snapshot)
     results = snapshot.results if snapshot is not None and snapshot.results else None
-    heads = ''
+    heads = '<th class="xr-compare-head">Compare</th>' if traces_layout else ''
     for column in columns:
         sorted_here = view.sort == column.key
         arrow = (
@@ -293,7 +293,7 @@ def table(
     # One text column takes no fixed width so it absorbs the card's spare room; the table's
     # min-width keeps every column at least as wide as its measured content.
     flex_key = next((key for key in ('trace', 'name', 'agent') if key in rendered_keys), None)
-    colgroup = ''.join(
+    colgroup = ('<col style="width:9ch">' if traces_layout else '') + ''.join(
         '<col>' if key == flex_key else f'<col style="width:{width}ch">'
         for key, width in zip(rendered_keys, widths, strict=True)
     )
@@ -312,8 +312,16 @@ def table(
             else []
         )
         row_class = f' class="{" ".join(row_classes)}"' if row_classes else ''
+        compare_cell = (
+            f'<td class="xr-compare-cell"><label data-trace-compare-control>'
+            f'<input type="checkbox" name="trace_ids" value="{esc(row.trace_id)}" form="trace-compare-form" '
+            f'aria-label="Select trace {esc(row.name or row.trace_id)} to compare"><span>Select</span></label></td>'
+            if traces_layout
+            else ''
+        )
         body += (
             f'<tr data-tv-row="{esc(row.trace_id)}"{marker}{row_class} tabindex="0" {_drawer_attrs(row.trace_id, traces_layout=traces_layout)}>'
+            + compare_cell
             + ''.join(
                 _match_cells(row, snapshot)
                 if c.key == MATCH
@@ -327,11 +335,14 @@ def table(
         conversation = key
     if view.state == 'loading':
         body += ''.join(
-            '<tr class="xr-skeleton" aria-hidden="true">' + ''.join('<td><i></i></td>' for _ in rendered_keys) + '</tr>'
+            '<tr class="xr-skeleton" aria-hidden="true">'
+            + ('<td></td>' if traces_layout else '')
+            + ''.join('<td><i></i></td>' for _ in rendered_keys)
+            + '</tr>'
             for _ in range(4)
         )
     return (
-        f'<table class="finder-table xr-table" style="min-width:{sum(widths)}ch"><colgroup>{colgroup}</colgroup>'
+        f'<table class="finder-table xr-table" style="min-width:{sum(widths) + (9 if traces_layout else 0)}ch"><colgroup>{colgroup}</colgroup>'
         f'<thead><tr>{heads}</tr></thead><tbody>{body}</tbody></table>'
     )
 
@@ -598,6 +609,12 @@ def _toolbar(
         if traces_layout and view.view == 'table'
         else ''
     )
+    compare = (
+        '<form id="trace-compare-form" class="xr-compare-form" hx-post="/traces/compare" hx-target="#trace-comparison" hx-swap="innerHTML">'
+        f'{_csrf()}<button class="btn-secondary xr-compare-action" type="submit" disabled>Compare (0/2)</button></form>'
+        if traces_layout and view.view == 'table'
+        else ''
+    )
     date_and_rows = range_inputs(view.start, view.end, window_days, include_load=False)
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary xr-load" type="submit" form="explorer-load-form">Load</button>'
@@ -611,7 +628,7 @@ def _toolbar(
         f'<span class="xr-chips">{chips}</span>'
         f'<span class="xr-quickviews" role="group" aria-label="Quick views">{quick_views}</span>'
         f'<span class="spacer"></span><span class="xr-toolbar-right">{date_and_rows}{context_menu}{export}{load}'
-        f'<span class="finder-seg xr-switch" role="group" aria-label="View">{switch}</span></span></div>'
+        f'<span class="finder-seg xr-switch" role="group" aria-label="View">{switch}</span>{compare}</span></div>'
     )
 
 
@@ -851,7 +868,7 @@ def results(
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     # The toolbar travels beside the section, out of band, so the page can keep it ahead of the Ask AI band in the DOM.
     return (
-        f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll}>{error_html}{inner}</section>'
+        f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll}>{error_html}{inner}<div id="trace-comparison" aria-live="polite"></div></section>'
         f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true">{toolbar}</div>'
     )
 
