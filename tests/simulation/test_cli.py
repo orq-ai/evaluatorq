@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from typing import IO
 
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from click.testing import Result
 from typer import Typer
 from typer.testing import CliRunner
 
+from evaluatorq.common.cli_tty import shell_path
 from evaluatorq.simulation.cli import (
     _auto_save_run,
     _configure_logging,
@@ -23,7 +25,6 @@ from evaluatorq.simulation.cli import (
     _resolve_agent_description,
     _resolve_target,
     _sanitise_run_name,
-    _shell_path,
     _write_report,
     app,
 )
@@ -163,8 +164,10 @@ def test_provider_context_uses_openai_when_orq_is_absent(
     assert 'secret' not in output
 
 
-def test_shell_path_quotes_paths_with_spaces() -> None:
-    assert _shell_path(Path('/tmp/sim runs')) == "'/tmp/sim runs'"
+def test_shell_path_quotes_paths_with_spaces(tmp_path: Path) -> None:
+    spaced = tmp_path / 'sim runs'
+    quote_char = '"' if sys.platform == 'win32' else "'"
+    assert shell_path(spaced) == f'{quote_char}{spaced}{quote_char}'
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +548,7 @@ def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
     result = runner.invoke(app, ["runs", str(runs_dir)])
 
     assert result.exit_code == 0, result.output
-    assert f"open: eq dashboard '{runs_dir}'" in result.stdout
+    assert f"open: eq dashboard {shell_path(runs_dir)}" in result.stdout
 
 
 def test_runs_full_does_not_truncate(tmp_path: Path) -> None:
@@ -722,8 +725,7 @@ def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None
     # stderr lines (e.g. the "Run saved" log). The dashboard hand-off must point
     # at the directory, not the specific run file.
     handoff = result.stderr.split('▸ Next', 1)[1]
-    assert "eq dashboard '" in handoff
-    assert str(runs_dir) in handoff
+    assert f"eq dashboard {shell_path(runs_dir)}" in handoff
     assert saved_run.name not in handoff
 
 
