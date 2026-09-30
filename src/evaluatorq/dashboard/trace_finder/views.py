@@ -264,7 +264,10 @@ def facet_menu(
         )
     row_scoped = form_id == 'explorer-load-form'
     if pending or row_scoped:
-        note = '<p class="finder-empty">Loading facet values…</p>'
+        # The /traces facet menu already has counts from its loaded rows. Keep the
+        # background catalogue refresh quiet there instead of implying those counts
+        # are still waiting to load.
+        note = '' if row_scoped and loaded_rows is not None else '<p class="finder-empty">Loading facet values…</p>'
         counts_param = '&counts=loaded' if loaded_rows is not None or row_scoped else ''
         triggers = 'load, refreshFacets' if pending else 'refreshFacets'
         loader = (
@@ -1176,7 +1179,12 @@ def drawer(
     mini_html = f'<div class="fd-mini">{mini}</div>' if segs else ''
     payload = json.dumps(detail.projection.payload if detail.projection else {}, indent=2, ensure_ascii=False)
     raw = json.dumps(result.raw_result if result else {}, indent=2, ensure_ascii=False)
-    thread_html = messages or '<p class="finder-empty">No messages.</p>'
+    has_conversation = any(segment.preview.strip() or segment.label for segment in segs)
+    thread_html = (
+        messages
+        if has_conversation
+        else '<div class="fd-no-messages" role="status"><b>No messages available</b><span>This trace has no conversation text to display.</span></div>'
+    )
     row_header = ''
     if row is not None:
         models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
@@ -1188,26 +1196,25 @@ def drawer(
             f'{esc(fmt_tokens(row.tokens_out))} out{reasoning} · {esc(fmt_tokens(row.cached_tokens))} cache · '
             f'{fmt_cost(row.cost_total, row.currency)}</div>'
         )
-    body_html = (
-        f'{row_header}{mini_html}'
-        f'<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
+    technical_html = (
+        f'{row_header}<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
         f'<dt>project</dt><dd>{esc(trace.project)}</dd><dt>model</dt><dd>{esc(trace.model)}</dd><dt>time</dt><dd>{esc(trace.timestamp.isoformat())}</dd></dl>'
-        f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
+        f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
         '<div class="fd-tabs">'
-        '<button type="button" class="on" data-panel="fd-thread" onclick="eqFinderTab(this,\'fd-thread\')">Full thread</button>'
         '<button type="button" data-panel="fd-input" onclick="eqFinderTab(this,\'fd-input\')">Classifier input</button>'
         '<button type="button" data-panel="fd-raw" onclick="eqFinderTab(this,\'fd-raw\')">Raw result</button></div>'
-        f'<div id="fd-thread" class="fd-panel"><div class="fd-panel-title">Full thread</div>{thread_html}</div>'
         f'<div id="fd-input" class="fd-panel" hidden><div class="fd-panel-title">Classifier input</div><pre>{esc(payload)}</pre></div>'
         f'<div id="fd-raw" class="fd-panel" hidden><div class="fd-panel-title">Raw result</div><pre>{esc(raw)}</pre></div>'
     )
-    url = trace_span_url(trace.trace_id, trace.span_id, experiment_url)
-    footer = (
-        trace_link_button(url, 'Open in Orq ↗')
-        + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
+    body_html = (
+        f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
+        f'{mini_html}<div id="fd-thread" class="fd-panel"><div class="fd-panel-title">Full thread</div>{thread_html}</div>'
+        f'<details class="fd-technical"><summary>Technical details</summary>{technical_html}</details>'
     )
+    url = trace_span_url(trace.trace_id, trace.span_id, experiment_url)
+    footer = trace_link_button(url, 'Open in Orq ↗')
     return drawer_shell(
-        f'Trace {esc(trace.trace_id)}', body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer'
+        'Trace conversation', body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer'
     )
 
 

@@ -34,9 +34,7 @@ def test_parse_range_applies_browser_offset() -> None:
 def test_parse_range_uses_each_endpoint_offset_across_dst() -> None:
     # Amsterdam leaves summer time on 25 October 2026: getTimezoneOffset is
     # -120 before the change and -60 after it.
-    start, end = finder_routes.parse_range(
-        '2026-10-24T22:00', '2026-10-25T04:00', '-120', '-120', '-60'
-    )
+    start, end = finder_routes.parse_range('2026-10-24T22:00', '2026-10-25T04:00', '-120', '-120', '-60')
     assert start == datetime(2026, 10, 24, 20, 0, tzinfo=timezone.utc)
     assert end == datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc)
 
@@ -75,7 +73,12 @@ def test_calendar_date_and_time_values_keep_seconds_and_timezone() -> None:
 
 
 def test_calendar_range_rejects_missing_time() -> None:
-    values = finder_routes._range_values({'from': '2026-09-27', 'from_time': '', 'to': '2026-09-27', 'to_time': '11:00:00'})
+    values = finder_routes._range_values({
+        'from': '2026-09-27',
+        'from_time': '',
+        'to': '2026-09-27',
+        'to_time': '11:00:00',
+    })
     with pytest.raises(ValueError, match='full dates and times'):
         finder_routes.parse_range(*values, '0')
 
@@ -143,7 +146,6 @@ def test_table_renders_one_row_per_page_row_with_drawer_links() -> None:
     assert '<small>support · trace-00</small>' in html
     assert 'Success' in html
     assert 'hx-sync="#explorer-results:replace"' in html
-
     all_view = explorer_views.results(
         ExplorerView(state='loaded', rows=_rows(2)), resolve_columns(None), records=None, snapshot=None
     )
@@ -161,6 +163,36 @@ def test_table_renders_one_row_per_page_row_with_drawer_links() -> None:
     )
     assert 'data-conv=' not in all_view
     assert 'data-conv=' in conversation_view
+
+
+def test_loading_rows_show_skeletons_and_explain_a_reached_fetch_cap() -> None:
+    loading_html = explorer_views.results(
+        ExplorerView(state='loading', rows=_rows(2), limit=2), resolve_columns(None), records=None, snapshot=None
+    )
+    cap_html = explorer_views.results(
+        ExplorerView(state='loaded', rows=_rows(2), limit=2), resolve_columns(None), records=None, snapshot=None
+    )
+
+    assert loading_html.count('class="xr-skeleton"') == 4
+    assert 'Showing 2 of 2 loaded traces' in cap_html
+    assert 'requested cap 2' in cap_html
+
+
+def test_trajectory_rows_show_duration_status_and_label_missing_messages() -> None:
+    row = _rows(1)[0].model_copy(update={'duration_ms': 1000, 'status': 'failed'})
+    html = explorer_views.trajectories(ExplorerView(state='loaded', rows=(row,)), {}, None)
+
+    assert 'No messages available' in html
+    assert '1.0s' in html
+    assert 'tv-status err">Error' in html
+    cancelled = explorer_views.trajectories(
+        ExplorerView(state='loaded', rows=(_rows(1)[0].model_copy(update={'status': 'cancelled'}),)), {}, None
+    )
+    unknown = explorer_views.trajectories(
+        ExplorerView(state='loaded', rows=(_rows(1)[0].model_copy(update={'status': None}),)), {}, None
+    )
+    assert 'tv-status other">Cancelled' in cancelled
+    assert 'tv-status other">Unknown' in unknown
 
 
 def test_table_column_widths_are_fixed_per_header_and_stable_across_pages() -> None:
@@ -208,7 +240,9 @@ def test_table_shows_escaped_ai_match_text_and_aligns_numeric_columns() -> None:
         raw_result={},
     )
     html = explorer_views.results(
-        ExplorerView(state='loaded', rows=(row,)), resolve_columns(None), records=None,
+        ExplorerView(state='loaded', rows=(row,)),
+        resolve_columns(None),
+        records=None,
         snapshot=RunSnapshot(results={row.trace_id: result}, within_results=True, dimensions=(dimension,)),
     )
     assert 'refund&lt;&amp;' in html
@@ -257,8 +291,8 @@ def test_trajectories_draws_a_row_for_a_failed_hydration() -> None:
     assert 'tv-nomsg' in html
     assert 'data-tv-msg="1"' in html
     assert '2 msgs' in html
-    assert '<span class="tv-end">2 msgs</span>' in html
-    assert '<span class="tv-end">no messages</span>' in html
+    assert '<span class="tv-end">2 msgs · —</span>' in html
+    assert '<span class="tv-end">No messages available · —</span>' in html
     assert 'Cache reads' in html
     assert '<small>in</small>' in html
     assert '<small>out</small>' in html
@@ -356,7 +390,9 @@ def test_initial_traces_respect_saved_project(explorer_client) -> None:
     assert source.calls[0]['facets'].project_id == 'project-selected'
 
 
-def test_server_warms_traces_and_facets_before_the_first_find_request(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_server_warms_traces_and_facets_before_the_first_find_request(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store, source, client = explorer_client
     started = threading.Event()
     release = threading.Event()
@@ -381,7 +417,9 @@ def test_server_warms_traces_and_facets_before_the_first_find_request(explorer_c
 
 
 @pytest.mark.asyncio
-async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_find_page_warms_facets_without_waiting_or_fetching_twice(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, _, client = explorer_client
     app = client.app
     app.state.finder_settings = app.state.finder_settings.model_copy(update={'window_days': 14})
@@ -395,7 +433,9 @@ async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer
         await release.wait()
         catalogue = FacetCatalogue(project=('warmed-project',))
         runtime.state.finder_catalogue_cache = (
-            datetime.now(timezone.utc) + timedelta(minutes=5), window_days, catalogue
+            datetime.now(timezone.utc) + timedelta(minutes=5),
+            window_days,
+            catalogue,
         )
         return catalogue
 
@@ -420,14 +460,17 @@ async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer
         assert 'warmed-project' in menu.text
         assert calls == [7]
 
-        loaded = await http.post('/find/load', data=csrf_data({
-            'from': '2026-09-13',
-            'from_time': '10:00:00',
-            'to': '2026-09-27',
-            'to_time': '10:00:00',
-            'tz_offset': '0',
-            'rows': '10',
-        }))
+        loaded = await http.post(
+            '/find/load',
+            data=csrf_data({
+                'from': '2026-09-13',
+                'from_time': '10:00:00',
+                'to': '2026-09-27',
+                'to_time': '10:00:00',
+                'tz_offset': '0',
+                'rows': '10',
+            }),
+        )
         await asyncio.sleep(0)
         assert loaded.status_code == 200
         assert 'name="window_days" value="14"' in loaded.text
@@ -476,10 +519,12 @@ def test_load_keeps_ai_results_and_renders_answers_for_loaded_rows(explorer_clie
         completed=1,
         matched=1,
         within_results=True,
-        dimensions=(CompiledQuery(
-            task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
-            selection=ValueSelection(kind='values', values=(True,)),
-        ),),
+        dimensions=(
+            CompiledQuery(
+                task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+                selection=ValueSelection(kind='values', values=(True,)),
+            ),
+        ),
     )
 
     response = _load(client)
@@ -513,8 +558,12 @@ def test_reset_refreshes_explorer_results_out_of_band(explorer_client) -> None:
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=matches"' in matches
     response = client.post('/find/reset', data=csrf_data())
     assert response.status_code == 200
-    assert '<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope" hx-swap-oob="true"' in response.text
+    assert (
+        '<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope" hx-swap-oob="true"'
+        in response.text
+    )
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=all"' in response.text
+
 
 def _judged_snapshot(**kwargs: Any) -> Any:
     """A completed within-results run whose classifier judged the given trace ids (a: match, b: no match)."""
@@ -543,19 +592,20 @@ def _judged_snapshot(**kwargs: Any) -> Any:
     )
     return RunSnapshot(state='completed', within_results=True, results=results, dimensions=(dimension,), **kwargs)
 
+
 def test_status_line_reports_judged_and_matches_for_current_rows() -> None:
     rows = (TraceRow(trace_id='a'), TraceRow(trace_id='b'), TraceRow(trace_id='c'))
     snapshot = _judged_snapshot(total=2, matched=1, verdicts={'a': True, 'b': False})
     first = explorer_views.results(
         ExplorerView(state='loaded', rows=rows), resolve_columns(None), records=None, snapshot=snapshot
     )
-    assert '3 traces loaded · 2 judged, 1 match · ' in first
+    assert 'Showing 3 of 3 loaded traces · 2 judged, 1 match · ' in first
     assert '1 not judged' in first
 
     changed = explorer_views.results(
         ExplorerView(state='loaded', rows=(rows[0],)), resolve_columns(None), records=None, snapshot=snapshot
     )
-    assert '1 traces loaded · 1 judged, 1 match' in changed
+    assert 'Showing 1 of 1 loaded traces · 1 judged, 1 match' in changed
 
 
 def test_filter_only_run_does_not_report_judged_or_ai_matches() -> None:
@@ -567,7 +617,9 @@ def test_filter_only_run_does_not_report_judged_or_ai_matches() -> None:
         within_results=True,
         total=2,
         matched=2,
-        results={r.trace_id: TraceClassification(trace_id=r.trace_id, span_id='s', matched=True, raw_result={}) for r in rows},
+        results={
+            r.trace_id: TraceClassification(trace_id=r.trace_id, span_id='s', matched=True, raw_result={}) for r in rows
+        },
     )
     view = ExplorerView(state='loaded', rows=rows)
     html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=snapshot)
@@ -628,8 +680,16 @@ def test_rows_route_reports_message_count_hydration_failure(explorer_client) -> 
 def test_table_omits_conversation_markers_when_sorted() -> None:
     rows = tuple(row.model_copy(update={'thread_id': 'thread-1'}) for row in _rows(2))
     html = explorer_views.results(
-        ExplorerView(state='loaded', rows=rows, quick_view='conv_longest', sort='tokens_in', message_counts={r.trace_id: 1 for r in rows}),
-        resolve_columns(None), records=None, snapshot=None,
+        ExplorerView(
+            state='loaded',
+            rows=rows,
+            quick_view='conv_longest',
+            sort='tokens_in',
+            message_counts={r.trace_id: 1 for r in rows},
+        ),
+        resolve_columns(None),
+        records=None,
+        snapshot=None,
     )
     assert 'data-conv=' not in html
 
@@ -702,10 +762,12 @@ def test_match_column_choice_survives_a_columns_edit_made_before_any_ai_run(expl
         completed=1,
         matched=1,
         within_results=True,
-        dimensions=(CompiledQuery(
-            task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
-            selection=ValueSelection(kind='values', values=(True,)),
-        ),),
+        dimensions=(
+            CompiledQuery(
+                task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+                selection=ValueSelection(kind='values', values=(True,)),
+            ),
+        ),
     )
 
     rows_html = client.get('/find/rows').text
@@ -795,15 +857,20 @@ def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
     html = client.get('/traces').text
 
     assert 'Counts are of the 2 rows currently loaded' in html
+    assert 'Loading facet values…' not in html
     assert 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' in html
     assert '<span class="facet-n" title="Loaded traces">2</span>' in html
-    assert 'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls"' in html
+    assert (
+        'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls"'
+        in html
+    )
 
     refreshed_menu = client.get('/find/facets?form_id=explorer-load-form&counts=loaded').text
     assert 'Counts are of the 2 rows currently loaded' in refreshed_menu
     refreshed_checkbox = 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"'
     assert refreshed_checkbox in refreshed_menu
     assert '<span class="facet-n" title="Loaded traces">2</span>' in refreshed_menu
+    assert 'Loading facet values…' not in refreshed_menu
     assert 'form="finder-query-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' not in refreshed_menu
 
     unscoped_menu = client.get('/find/facets?form_id=explorer-load-form').text
@@ -846,7 +913,10 @@ def test_toolbar_shows_removable_filter_chips_and_count(explorer_client) -> None
     html = _load(client, facet_model='gpt-x', tokens_min='100').text
     toolbar = html[html.index('class="xr-toolbar"') :]
     assert '>Filters · 2</button>' in toolbar
-    assert 'class="xr-chips"><span class="chip is-editable" data-chip-name="facet_model" data-finder-value="gpt-x">' in toolbar
+    assert (
+        'class="xr-chips"><span class="chip is-editable" data-chip-name="facet_model" data-finder-value="gpt-x">'
+        in toolbar
+    )
     assert 'data-finder-remove="tokens_min"' in toolbar
 
 
@@ -1039,6 +1109,39 @@ def test_drawer_opens_at_the_requested_message() -> None:
     assert 'EUR&amp;amp;' not in html
     assert 'fd-msg-meta' in html
     assert '148 reasoning' in html
+    assert 'Trace conversation' in html
+    assert 'Trace t1' not in html
+    assert html.index('fd-verdict') < html.index('fd-thread') < html.index('fd-technical')
+    assert '<details class="fd-technical"><summary>Technical details</summary>' in html
+    assert '<dt>trace</dt>' in html[html.index('fd-technical') :]
+
+
+def test_finder_technical_tabs_do_not_hide_the_conversation() -> None:
+    shell = Path('src/evaluatorq/dashboard/shell.py').read_text()
+    assert "root.querySelectorAll('.fd-technical .fd-panel')" in shell
+
+
+def test_drawer_labels_empty_conversation_state() -> None:
+    from evaluatorq.dashboard.trace_finder.views import drawer
+    from evaluatorq.trace_finder import TraceDetail
+
+    trace = TraceRecord(
+        schema_version=1,
+        trace_id='empty',
+        span_id='span',
+        timestamp=datetime(2026, 9, 27, tzinfo=timezone.utc),
+        project='p',
+        model='gpt-5.6-luna',
+        provider='openai',
+        status='ok',
+        product='chat',
+        trace_type='agent',
+        messages=({'role': 'user', 'content': ''},),
+    )
+    html = drawer(TraceDetail(trace=trace, projection=None, classification=None))
+
+    assert 'class="fd-no-messages" role="status"' in html
+    assert '<b>No messages available</b>' in html
 
 
 def test_missing_trace_reason_is_escaped_and_wrapped() -> None:
@@ -1051,7 +1154,7 @@ def test_missing_trace_reason_is_escaped_and_wrapped() -> None:
 def test_drawer_message_meta_and_segment_click_browser_fixes() -> None:
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     styles = Path('src/evaluatorq/dashboard/styles.py').read_text()
-    assert "if (tip) tip.hidden = true;" in js
+    assert 'if (tip) tip.hidden = true;' in js
     assert '.fd-msg summary .fd-msg-meta { white-space:nowrap;' in styles
     assert 'background:var(--surface-sunken)' in styles
 
@@ -1180,7 +1283,10 @@ def test_ask_new_search_reloads_the_table_with_the_searched_population(explorer_
         return store.snapshot_value
 
     store.compile = compile
-    client.post('/find/run', data=csrf_data({'query': 'jev traces', 'scope': 'new', 'window_days': '7', 'limit': '20', 'parallelism': '10'}))
+    client.post(
+        '/find/run',
+        data=csrf_data({'query': 'jev traces', 'scope': 'new', 'window_days': '7', 'limit': '20', 'parallelism': '10'}),
+    )
 
     assert captured['table'] is not None
     population = PopulationRequest(facets=FacetSelection(model=frozenset({'jev-latest'})), limit=20)
@@ -1329,7 +1435,10 @@ def test_narrowed_empty_state_and_status_explain_loaded_row_scope() -> None:
     html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=None)
     assert '0 of 200 loaded traces match the filters' in html
     assert 'No loaded traces match.' in html
-    assert 'None of the 200 loaded traces meet the filters. Remove a filter, or use New search to look beyond the loaded rows.' in html
+    assert (
+        'None of the 200 loaded traces meet the filters. Remove a filter, or use New search to look beyond the loaded rows.'
+        in html
+    )
 
 
 def test_facet_menu_calls_numeric_token_bound_total_tokens() -> None:
@@ -1365,8 +1474,12 @@ def test_totals_sum_rows_and_use_inclusive_cache_share() -> None:
     from evaluatorq.trace_finder.rows import TraceRow
 
     rows = [
-        TraceRow(trace_id='a', status='ok', tokens_in=100, tokens_out=10, cached_tokens=50, cost_total=0.5, duration_ms=100),
-        TraceRow(trace_id='b', status='error', tokens_in=300, tokens_out=20, cached_tokens=0, cost_total=1.0, duration_ms=900),
+        TraceRow(
+            trace_id='a', status='ok', tokens_in=100, tokens_out=10, cached_tokens=50, cost_total=0.5, duration_ms=100
+        ),
+        TraceRow(
+            trace_id='b', status='error', tokens_in=300, tokens_out=20, cached_tokens=0, cost_total=1.0, duration_ms=900
+        ),
         TraceRow(trace_id='c', tokens_in=None, tokens_out=None, cost_total=None, duration_ms=None),
     ]
     t = totals(rows)
@@ -1405,7 +1518,10 @@ def test_facet_menu_counts_values_from_loaded_rows_only() -> None:
 
 def test_failed_load_offers_retry_and_plain_words_for_an_orq_outage() -> None:
     outage = explorer_views.results(
-        ExplorerView(state='failed', error='503: no healthy upstream'), resolve_columns(None), records=None, snapshot=None
+        ExplorerView(state='failed', error='503: no healthy upstream'),
+        resolve_columns(None),
+        records=None,
+        snapshot=None,
     )
     assert 'Orq is temporarily unavailable. Try again.' in outage
     assert '503: no healthy upstream' in outage

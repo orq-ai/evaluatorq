@@ -3045,6 +3045,11 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .fd-meta dt { color:var(--text-faint); }.fd-meta dd { margin:0; color:var(--text-strong); font-family:var(--font-mono); font-size:11.5px; }
 .fd-row-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:14px; margin-bottom:4px; }
 .fd-row-meta { font-size:12px; color:var(--text-muted); font-variant-numeric:tabular-nums; margin-bottom:12px; }
+.fd-technical { margin-top:16px; border-top:1px solid var(--border-subtle); padding-top:12px; }
+.fd-technical > summary { cursor:pointer; color:var(--text-muted); font-size:12px; font-weight:600; }
+.fd-technical[open] > summary { margin-bottom:12px; color:var(--text-strong); }
+.fd-no-messages { display:flex; flex-direction:column; gap:4px; padding:18px; border:1px dashed var(--border-default); border-radius:8px; color:var(--text-muted); font-size:12px; }
+.fd-no-messages b { color:var(--text-strong); font-size:13px; }
 .fd-msg summary .fd-msg-meta { white-space:nowrap; color:var(--text-muted); background:var(--surface-sunken); border-radius:4px; padding:1px 4px; }
 .fd-verdict { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:8px; background:var(--surface-sunken); margin-bottom:14px; font-size:13px; }
 .fd-verdict .sw { width:12px; height:12px; border-radius:3px; }.fd-tabs { display:flex; border-bottom:1px solid var(--border-subtle); margin-bottom:12px; }.fd-tabs button { padding:8px 12px; font:inherit; font-size:13px; color:var(--text-muted); border:0; border-bottom:2px solid transparent; background:transparent; cursor:pointer; }.fd-tabs button.on { color:var(--text-strong); border-color:var(--accent); }
@@ -3069,6 +3074,18 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .xr-table td.num,.xr-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
 .xr-table td small { display:block; margin-top:2px; color:var(--text-muted); font-size:10.5px; }.xr-table .trace-name { font-weight:600; }.xr-table .status-label { display:inline-flex; align-items:center; gap:6px; }.xr-table .status-label.ok { color:var(--green-600); font-weight:600; }.xr-table .status-label.err { color:var(--red-600); font-weight:600; }.xr-table .xr-match { color:#a66124; }
 .xr-table tr.sel,.tv-r.sel { box-shadow:inset 3px 0 0 var(--traj-assistant); background:#f3f8f7; }
+.finder:has(> .finder-command) .xr-skeleton td { height:30px; }
+.finder:has(> .finder-command) .xr-skeleton td i { display:block; height:10px; max-width:85%; border-radius:5px; background:linear-gradient(90deg,#f0f1f3 25%,#e5e7eb 40%,#f0f1f3 65%); background-size:300% 100%; animation:xr-shimmer 1.3s ease infinite; }
+.tv-status { display:inline-flex; align-items:center; border-radius:999px; padding:2px 7px; font-size:9.5px; font-weight:700; line-height:1.3; }
+.tv-status.ok { color:#155c36; background:#e5f3e9; }.tv-status.err { color:#9a1c17; background:#fde9e7; }.tv-status.other { color:#4f5663; background:#eceef1; }
+.tv-end { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+.tv-nomsg { display:flex; align-items:center; justify-content:center; border:1px dashed #c9c8c2; background:#faf9f6; }
+.tv-nomsg::after { content:"No conversation"; color:var(--text-muted); font:11px ui-sans-serif,system-ui; }
+.tv-skeleton { height:58px; }
+.tv-skeleton i { display:block; height:10px; border-radius:5px; background:linear-gradient(90deg,#f0f1f3 25%,#e5e7eb 40%,#f0f1f3 65%); background-size:300% 100%; animation:xr-shimmer 1.3s ease infinite; }
+.tv-skeleton i:first-child { width:70%; }.tv-skeleton i:nth-child(2) { width:100%; }.tv-skeleton i:last-child { width:60%; }
+@keyframes xr-shimmer { to { background-position:-150% 0; } }
+@media (prefers-reduced-motion:reduce) { .finder:has(> .finder-command) .xr-skeleton td i,.tv-skeleton i { animation:none; } }
 .cachebar { display:inline-block; width:34px; height:4px; background:#ece9e4; border-radius:2px; margin-right:6px; vertical-align:middle; }
 .cachebar i { display:block; height:4px; border-radius:2px; background:var(--traj-assistant); }
 .xr-pager { display:flex; gap:14px; justify-content:center; font-size:12px; color:var(--text-muted); }

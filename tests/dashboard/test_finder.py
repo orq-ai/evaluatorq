@@ -326,7 +326,7 @@ def test_facet_menu_loads_itself_after_the_page_renders(setup_finder, monkeypatc
     monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
     page = client.get('/find').text
     assert loads == []
-    assert 'hx-get="/find/facets?form_id=finder-query-form" hx-trigger="load" hx-include="#finder-controls"' in page
+    assert 'hx-get="/find/facets?form_id=finder-query-form" hx-trigger="load, refreshFacets" hx-include="#finder-controls"' in page
     assert 'Loading facet values…' in page
     assert 'class="finder-facet-loading" role="status">Loading filters…' in page
     assert '<button class="add" type="button" aria-haspopup="true">+ Filter</button>' in page

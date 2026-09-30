@@ -305,6 +305,11 @@ def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot |
             + '</tr>'
         )
         conversation = key
+    if view.state == 'loading':
+        body += ''.join(
+            '<tr class="xr-skeleton" aria-hidden="true">' + ''.join('<td><i></i></td>' for _ in rendered_keys) + '</tr>'
+            for _ in range(4)
+        )
     return (
         f'<table class="finder-table xr-table" style="min-width:{sum(widths)}ch"><colgroup>{colgroup}</colgroup>'
         f'<thead><tr>{heads}</tr></thead><tbody>{body}</tbody></table>'
@@ -320,7 +325,15 @@ def _tip_attrs(segment: Segment, position: int, count: int) -> str:
 
 
 def _identity(row: TraceRow, snapshot: RunSnapshot | None) -> str:
-    status = 'err' if row.is_error else 'ok'
+    raw_status = (row.status or 'unknown').casefold()
+    status = 'err' if row.is_error else 'ok' if raw_status in {'ok', 'success'} else 'other'
+    status_label = (
+        'Error'
+        if row.is_error
+        else 'Success'
+        if status == 'ok'
+        else (row.status or 'Unknown').replace('_', ' ').title()
+    )
     model = f'<span class="pill">{esc(row.models[0])}</span>' if row.models else ''
     tick = ''
     result = snapshot.results.get(row.trace_id) if snapshot is not None else None
@@ -330,7 +343,8 @@ def _identity(row: TraceRow, snapshot: RunSnapshot | None) -> str:
         tick = f'<span class="tv-tick" style="background:{esc(_result_color(result, snapshot.dimensions if snapshot else None))}"></span>'
     return (
         f'<div class="tv-id"><span class="dot {status}"></span>{tick}<div class="t">'
-        f'<div class="a">{esc(row.agent_name or row.name or "—")}{model}</div>'
+        f'<div class="a">{esc(row.agent_name or row.name or "—")}{model}'
+        f'<span class="tv-status {status}">{esc(status_label)}</span></div>'
         f'<div class="s mono">{esc(fmt_time(row.started_at))} · {esc(row.trace_id[:8])}</div></div></div>'
     )
 
@@ -382,7 +396,8 @@ def trajectories(
         result = snapshot.results.get(row.trace_id) if classified and snapshot is not None else None
         dim = (' hit' if ai_matched(result) else ' nomatch') if result is not None else ''
         dim += ' row-err' if row.is_error else ''
-        if segs:
+        has_conversation = bool(segs) and any(segment.preview.strip() or segment.label for segment in segs or ())
+        if has_conversation and segs:
             width = sum(s.tokens for s in segs) / widest * 100
             inner = ''.join(
                 f'<i class="k-{s.kind}" style="flex-grow:{s.tokens}" {_tip_attrs(s, n, len(segs))}></i>'
@@ -392,12 +407,17 @@ def trajectories(
             bar = f'<div class="tv-segs" style="width:{width:.2f}%">{inner}</div>'
             message_count = f'{count} msgs'
         else:
-            bar = '<div class="tv-segs tv-nomsg" style="width:100%"><i class="k-other" style="flex-grow:1"></i></div>'
-            message_count = 'loading…' if loading and row.trace_id not in records else 'no messages'
+            bar = '<div class="tv-segs tv-nomsg" style="width:100%"></div>'
+            message_count = 'Loading messages…' if loading and row.trace_id not in records else 'No messages available'
+        row_summary = f'{message_count} · {fmt_duration(row.duration_ms)}'
         rows_html += (
             f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0" {_drawer_attrs(row.trace_id)}>'
             f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-plot"><div class="tv-track"></div>{bar}</div>'
-            f'<span class="tv-end">{message_count}</span></div>{_metrics(row)}</div>'
+            f'<span class="tv-end">{row_summary}</span></div>{_metrics(row)}</div>'
+        )
+    if loading:
+        rows_html += ''.join(
+            '<div class="tv-r tv-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>' for _ in range(4)
         )
     return (
         f'<div class="tv"><div class="tv-lg">{legend}<span class="tv-note" title="{esc(TRAJECTORIES_HELP)}">Bar sizes are estimates (text length ÷ 4), not exact token counts.</span></div>'
@@ -595,8 +615,12 @@ def results(
         else ''
     )
     shown = len(view.visible_rows(judged))
+    at_fetch_cap = bool(view.limit and len(view.rows) >= view.limit)
     shown_loaded = (
-        f'{len(view.rows)} traces loaded' if shown == len(view.rows) else f'{shown} of {len(view.rows)} loaded traces'
+        f'Showing {shown} of {len(view.rows)} loaded traces · requested cap {view.limit:,}; '
+        'more traces may exist, so raise Rows or narrow the range'
+        if at_fetch_cap
+        else f'Showing {shown} of {len(view.rows)} loaded traces'
     )
     status = (
         f'<div class="xr-status" role="status">Loading traces · {len(view.rows)} / {view.limit}</div>'
@@ -608,7 +632,8 @@ def results(
         if view.quick_view in TOP_METRICS
         else f'<div class="xr-status" role="status">Top 10% of conversations by {CONVERSATION_METRICS[view.quick_view][0]} · {len({conversation_key(row) for row in view.visible_rows(judged) if conversation_key(row) is not None})} conversation{"s" if len({conversation_key(row) for row in view.visible_rows(judged) if conversation_key(row) is not None}) != 1 else ""}, {len(view.visible_rows(judged))} of {len(view.rows)} loaded traces</div>'
         if view.quick_view in CONVERSATION_METRICS
-        else f'<div class="xr-status" role="status">{len(view.rows)} of {view.narrowed_from} loaded traces match the filters{judged_status}{missing_conversations}{not_judged}</div>'
+        else f'<div class="xr-status" role="status">Showing {len(view.rows)} of {view.narrowed_from} loaded traces match the filters{judged_status}{missing_conversations}{not_judged}'
+        f'{f" · {view.limit:,}-trace fetch cap reached" if at_fetch_cap else ""}</div>'
         if view.narrowed_from is not None
         else f'<div class="xr-status" role="status">{shown_loaded}{judged_status}{not_judged}</div>'
     )
