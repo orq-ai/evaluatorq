@@ -31,18 +31,19 @@ function classList() {
   };
 }
 
-function loadDashboard({ elements = new Map(), query = () => null } = {}) {
+function loadDashboard({ elements = new Map(), query = () => null, queryAll = () => [] } = {}) {
   const body = emitter();
   const documentEvents = emitter();
   const windowEvents = emitter();
   const scheduled = new Map();
+  const intervals = new Map();
   let nextTimer = 1;
   const document = {
     body,
     addEventListener: documentEvents.addEventListener,
     getElementById(id) { return elements.get(id) || null; },
     querySelector: query,
-    querySelectorAll() { return []; },
+    querySelectorAll: queryAll,
   };
   const window = {
     addEventListener: windowEvents.addEventListener,
@@ -52,6 +53,12 @@ function loadDashboard({ elements = new Map(), query = () => null } = {}) {
       return id;
     },
     clearTimeout(id) { scheduled.delete(id); },
+    setInterval(callback, delay) {
+      const id = nextTimer++;
+      intervals.set(id, { callback, delay });
+      return id;
+    },
+    clearInterval(id) { intervals.delete(id); },
   };
   const entries = [{ state: null }];
   let index = 0;
@@ -73,8 +80,26 @@ function loadDashboard({ elements = new Map(), query = () => null } = {}) {
     document, window, history, location: { hash: '' },
     FormData: class {}, Event: class {}, CSS: { escape: value => value },
   });
-  return { body, document, history, entries, scheduled };
+  return { body, document, history, entries, scheduled, intervals };
 }
+
+test('finder placeholders rotate on the interval and stop after dismissal', () => {
+  const query = {
+    dataset: { finderPlaceholders: '["First example", "Second example"]' },
+    value: '',
+    placeholder: '',
+  };
+  const app = loadDashboard({ queryAll: () => [query] });
+
+  assert.equal(app.intervals.size, 1);
+  const [{ callback, delay }] = app.intervals.values();
+  assert.equal(delay, 4000);
+  callback();
+  assert.equal(query.placeholder, 'Second example');
+  query.dataset.finderPlaceholderDismissed = 'true';
+  callback();
+  assert.equal(query.placeholder, 'Second example');
+});
 
 test('open filter dropdown survives a fragment swap', () => {
   const old = { id: 'filter-dd-persona', open: true };
@@ -85,7 +110,7 @@ test('open filter dropdown survives a fragment swap', () => {
   ]);
   const app = loadDashboard({ elements });
 
-  app.body.emit('htmx:beforeSwap');
+  app.body.emit('htmx:beforeSwap', { detail: { target: null } });
   elements.set(old.id, replacement);
   elements.set(untouched.id, untouched);
   app.body.emit('htmx:afterSwap', { detail: { target: null } });
@@ -96,7 +121,7 @@ test('open filter dropdown survives a fragment swap', () => {
   // The next swap has no open dropdown; an old snapshot must not reopen it.
   elements.set('filter-form', { querySelectorAll() { return []; } });
   replacement.open = false;
-  app.body.emit('htmx:beforeSwap');
+  app.body.emit('htmx:beforeSwap', { detail: { target: null } });
   app.body.emit('htmx:afterSwap', { detail: { target: null } });
   assert.equal(replacement.open, false);
 });
