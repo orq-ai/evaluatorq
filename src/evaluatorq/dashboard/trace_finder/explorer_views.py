@@ -961,10 +961,11 @@ def results(
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     section_body = f'{error_html}{inner}'
     marks = f' data-view-version="{view.version}"' + (' data-poll' if poll else '')
+    initial_load_mark = ' data-initial-load="ready"' if poll and view.initial_load and view.state == 'loaded' else ''
     # The toolbar travels beside the section, out of band, so the page can keep it ahead of the Ask AI band in the DOM.
     return (
         f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll_attrs}'
-        f'{marks} data-render-key="{_render_key(poll_attrs + section_body)}">{section_body}</section>'
+        f'{marks}{initial_load_mark} data-render-key="{_render_key(poll_attrs + section_body)}">{section_body}</section>'
         f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true"{marks} data-render-key="{_render_key(toolbar)}">{toolbar}</div>'
     )
 

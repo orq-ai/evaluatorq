@@ -357,6 +357,7 @@ async def warm_initial_finder(app: Any, session_id: str, request_state: Any) -> 
                     explorer_views.DEFAULT_EXPLORER_ROWS,
                     facets=FacetSelection(project_id=_settings(app).orq_project_id),
                     numeric=NumericFilters(),
+                    initial_load=True,
                 )
         explorer_view = await explorer.view()
         snapshot = await store.snapshot()
@@ -700,6 +701,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 explorer_html=await _explorer_html(req) if store is not None else '',
                 explorer_view=explorer_view,
                 has_rows=bool(explorer_view and explorer_view.rows),
+                auto_scope_pending=bool(
+                    explorer_view and explorer_view.initial_load and explorer_view.state == 'loading'
+                ),
                 **_catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view),
             )
         )

@@ -116,7 +116,13 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
 
 
 def traces_command_strip(
-    query: str, *, api_available: bool, error: str | None = None, has_rows: bool = False, mode: str = 'immediate'
+    query: str,
+    *,
+    api_available: bool,
+    error: str | None = None,
+    has_rows: bool = False,
+    mode: str = 'immediate',
+    auto_scope_pending: bool = False,
 ) -> str:
     """Compact AI query strip used by /traces; /find keeps its own legacy search hero."""
     disabled = '' if api_available else ' disabled'
@@ -125,6 +131,7 @@ def traces_command_strip(
         f'<button type="button" data-finder-example="{esc(sample)}">{esc(sample)}</button>'
         for sample in COMMAND_EXAMPLES
     )
+    auto_scope_attr = ' data-auto-scope="pending"' if auto_scope_pending else ''
     return (
         '<section class="finder-hero finder-command">'
         f'<p class="finder-command-lede">{esc(COMMAND_LEDE)}</p>'
@@ -135,7 +142,8 @@ def traces_command_strip(
         f'data-finder-placeholders="{esc(json.dumps(COMMAND_EXAMPLES))}" required{disabled}>'
         f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="{esc(mode)}">'
         '<span class="finder-scope-label" id="finder-scope-label">Search in</span>'
-        '<div id="finder-scope" class="finder-seg" role="radiogroup" aria-labelledby="finder-scope-label">'
+        f'<div id="finder-scope" class="finder-seg" role="radiogroup" aria-labelledby="finder-scope-label"'
+        f'{auto_scope_attr}>'
         f'{scope_toggle(has_rows=has_rows)}</div><a href="/settings" title="Choose the models Ask AI uses" '
         'class="finder-command-gear" aria-label="AI settings"><span aria-hidden="true">⚙</span></a>'
         f'<button class="finder-go finder-command-search" type="submit"{disabled}><span class="finder-go-idle">Search</span>'
@@ -1103,6 +1111,7 @@ def page_html(
     explorer_html: str = '',
     explorer_view: ExplorerView | None = None,
     has_rows: bool = False,
+    auto_scope_pending: bool = False,
 ) -> str:
     request = snapshot.request
     query = request.query if request is not None else ''
@@ -1120,7 +1129,7 @@ def page_html(
 
         explorer_html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
     toolbar_html, explorer_html = explorer_views.split_toolbar(explorer_html)
-    html = f'<div class="finder">{traces_command_strip(query, api_available=api_available, error=error, has_rows=has_rows, mode=settings.ask_ai_mode)}{toolbar_html}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
+    html = f'<div class="finder">{traces_command_strip(query, api_available=api_available, error=error, has_rows=has_rows, mode=settings.ask_ai_mode, auto_scope_pending=auto_scope_pending)}{toolbar_html}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
     return page('Traces', html, active_nav='traces')
 
 

@@ -192,6 +192,7 @@ class ExplorerView:
     generation: int = 0
     version: int = 0
     state: ExplorerState = 'idle'
+    initial_load: bool = False
     trajectory_warming: bool = False
     rows: tuple[TraceRow, ...] = ()
     limit: int = 0
@@ -299,6 +300,7 @@ class ExplorerStore:
         numeric: NumericFilters,
         wait: bool = False,
         warm_trajectories: bool = True,
+        initial_load: bool = False,
     ) -> ExplorerView:
         await self._cancel()
         self._hydrations.clear()
@@ -312,6 +314,7 @@ class ExplorerStore:
             generation=generation,
             version=generation,
             state='loading',
+            initial_load=initial_load,
             limit=limit,
             start=start,
             end=end,

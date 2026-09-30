@@ -15,7 +15,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from starlette.testclient import TestClient
 
-from evaluatorq.dashboard.trace_finder import explorer_views
+from evaluatorq.dashboard.trace_finder import explorer_views, views as finder_views
 from evaluatorq.trace_finder.columns import resolve_columns
 from evaluatorq.trace_finder.explorer import PAGE_ROWS, ExplorerView
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection, PopulationRequest, TraceRecord
@@ -534,6 +534,7 @@ def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) 
 
     assert response.status_code == 200
     assert len(source.calls) == 1
+    assert asyncio.run(store.explorer.view()).initial_load
     call = source.calls[0]
     assert before <= call['end'] <= after
     assert call['end'] - call['start'] == timedelta(days=7)
@@ -548,6 +549,44 @@ def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) 
 
     client.get('/traces')
     assert len(source.calls) == 1
+
+
+def test_initial_auto_scope_is_pending_only_while_initial_load_runs() -> None:
+    from evaluatorq.trace_finder import DashboardSettings, RunSnapshot
+
+    html = finder_views.page_html(
+        RunSnapshot(),
+        DashboardSettings(window_days=7, limit=200, parallelism=10),
+        api_available=True,
+        has_rows=False,
+        explorer_view=ExplorerView(state='loading', initial_load=True),
+        auto_scope_pending=True,
+    )
+    assert 'data-auto-scope="pending"' in html
+    assert 'name="scope" value="new" form="finder-query-form" checked' in html
+    assert 'name="scope" value="within" form="finder-query-form" disabled' in html
+
+
+def test_initial_auto_load_poll_marks_ready_only_after_success() -> None:
+    loaded = explorer_views.results(
+        ExplorerView(state='loaded', initial_load=True), resolve_columns(None), records=None, snapshot=None, poll=True
+    )
+    regular = explorer_views.results(
+        ExplorerView(state='loaded'), resolve_columns(None), records=None, snapshot=None, poll=True
+    )
+    failed = explorer_views.results(
+        ExplorerView(state='failed', initial_load=True), resolve_columns(None), records=None, snapshot=None, poll=True
+    )
+    assert 'data-initial-load="ready"' in loaded
+    assert 'data-initial-load="ready"' not in regular
+    assert 'data-initial-load="ready"' not in failed
+
+
+def test_initial_auto_scope_js_respects_a_user_scope_click() -> None:
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert "scope?.getAttribute('data-auto-scope') === 'pending'" in js
+    assert "scope.removeAttribute('data-auto-scope');" in js
+    assert "evt.target.closest('#finder-scope')" in js
 
 
 def test_initial_traces_respect_saved_project(explorer_client) -> None:

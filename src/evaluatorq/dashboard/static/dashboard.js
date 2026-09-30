@@ -1139,6 +1139,23 @@
   document.body.addEventListener('htmx:oobAfterSwap', function (evt) {
     const id = evt.detail.target && evt.detail.target.id;
     if (id && pollKept[id]) pollAfterSwap(id);
+    const results = id === 'explorer-results' ? document.getElementById('explorer-results') : null;
+    if (results?.hasAttribute('data-initial-load')) {
+      const scope = document.getElementById('finder-scope');
+      const within = scope?.querySelector('input[name="scope"][value="within"]');
+      const fresh = scope?.querySelector('input[name="scope"][value="new"]');
+      if (scope?.getAttribute('data-auto-scope') === 'pending' && within && fresh) {
+        within.disabled = false;
+        within.checked = true;
+        fresh.checked = false;
+        scope.removeAttribute('data-auto-scope');
+      }
+    }
+  });
+  document.body.addEventListener('click', function (evt) {
+    if (evt.target.closest('#finder-scope')) {
+      document.getElementById('finder-scope')?.removeAttribute('data-auto-scope');
+    }
   });
   // The run-status slot is the Ask AI poll's main target; keep its open criteria cards across ticks.
   document.body.addEventListener('htmx:beforeSwap', function (evt) {
