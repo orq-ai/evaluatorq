@@ -54,10 +54,28 @@ def test_usage_maps_to_metrics_and_extra() -> None:
     assert steps[2].metrics is None
 
 
-def test_response_count_mismatch_ignores_responses(caplog: pytest.LogCaptureFixture) -> None:
-    conv = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', None)])
-    assert conv.to_atif().steps[1].model_name is None
-    assert 'responses' in caplog.text
+def test_response_count_mismatch_is_rejected() -> None:
+    with pytest.raises(ValueError, match='1 responses with no output for 2 runs'):
+        ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', None)])
+
+
+def test_response_output_holds_the_output_items_of_each_step() -> None:
+    conv = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', None), _response('gpt-y', None)])
+    assert conv.responses is not None
+    dumped = [[o.model_dump(mode='json', exclude_none=True) for o in r.output] for r in conv.responses]
+    assert [[o['type'] for o in out] for out in dumped] == [['reasoning', 'function_call'], ['message']]
+    assert dumped[0][1]['call_id'] == 'c1' and dumped[1][0]['content'][0]['text'] == 'It is 12C.'
+    back = conv.to_atif().to_responses()
+    assert back.responses is not None
+    assert [[o.type for o in r.output] for r in back.responses] == [['reasoning', 'function_call'], ['message']]
+
+
+def test_response_output_that_disagrees_with_items_is_rejected() -> None:
+    conv = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', None), _response('gpt-y', None)])
+    assert conv.responses is not None
+    swapped = [conv.responses[1], conv.responses[0]]
+    with pytest.raises(ValueError, match='does not match'):
+        ResponsesConversation(items=_ITEMS, responses=swapped)
 
 
 def test_orphan_function_call_output_warns_and_attaches(caplog: pytest.LogCaptureFixture) -> None:

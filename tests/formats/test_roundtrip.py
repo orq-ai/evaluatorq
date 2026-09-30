@@ -77,17 +77,16 @@ def test_atif_responses_atif_keeps_messages_calls_reasoning_metrics() -> None:
     assert usage(back) == usage(src)
 
 
-def test_atif_responses_atif_merges_steps_whose_results_have_no_call_id() -> None:
-    # Documented loss: a result with no source_call_id is dropped (warned), so the agent steps it separated merge,
-    # and the per-step responses no longer line up one to one, so their metrics are ignored (warned).
+def test_atif_responses_atif_keeps_steps_whose_results_have_no_call_id_apart() -> None:
+    # A result with no source_call_id is dropped (warned), but each step's Response.output marks where its model
+    # call starts, so the agent steps it separated stay apart and keep their metrics.
     src = AtifTrajectory.from_json((FIX / 'atif' / 'harbor_invalid_json_v18.json').read_text())
     back = src.to_responses().to_atif()
-    assert [s.source for s in back.steps] == ['user', 'agent', 'agent']
-    calls = [c.tool_call_id for s in back.steps for c in s.tool_calls or []]
-    assert calls == [c.tool_call_id for s in src.steps for c in s.tool_calls or []]
-    reasoning = '\n'.join(s.reasoning_content or '' for s in back.steps if s.reasoning_content)
-    assert all(s.reasoning_content in reasoning for s in src.steps if s.reasoning_content)
-    assert all(s.metrics is None for s in back.steps)
+    assert _step_sig(back) == _step_sig(src)
+    assert [s.reasoning_content for s in back.steps] == [s.reasoning_content for s in src.steps]
+    assert [s.metrics.prompt_tokens if s.metrics else None for s in back.steps] == [
+        s.metrics.prompt_tokens if s.metrics else None for s in src.steps
+    ]
 
 
 def test_chat_otel_chat_keeps_messages_and_item_ids() -> None:

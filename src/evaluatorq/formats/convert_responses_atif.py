@@ -1,9 +1,9 @@
 """Convert between Responses transcripts and ATIF trajectories.
 
-`items` are authoritative: steps are cut from them. `responses` only enrich agent steps with model,
-usage, timing and finish status, and only when there is exactly one per agent step. `atif_to_responses`
-emits one `Response` per agent step, but consecutive agent steps with no tool result between them merge
-into one step when the items are read back, so their `Response` list no longer lines up and is ignored.
+`items` are authoritative: steps are cut from them. Each `Response` starts a new agent step at its first
+output item and enriches it with model, usage, timing and finish status. `atif_to_responses` emits one
+`Response` per agent step whose `output` holds that step's output items, so consecutive agent steps with no
+tool result between them come back as separate steps.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from loguru import logger
-from openai.types.responses import Response, ResponseError, ResponseStatus
+from openai.types.responses import Response, ResponseError, ResponseOutputItem, ResponseStatus
 from openai.types.responses.response import IncompleteDetails
 from pydantic import BaseModel, ValidationError
 
@@ -51,7 +51,7 @@ from evaluatorq.formats.atif import (
     AtifToolCall,
     AtifTrajectory,
 )
-from evaluatorq.formats.responses import ResponsesConversation
+from evaluatorq.formats.responses import ResponsesConversation, is_output_item, output_item, response_starts
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 
 if TYPE_CHECKING:
@@ -83,6 +83,7 @@ class _Draft:
     results: list[dict[str, Any]] = field(default_factory=list)
     seen_result: bool = False
     item: dict[str, Any] | None = None  # the message item of a user/system step
+    response: Response | None = None  # the model call that produced an agent step
 
 
 # Responses -> ATIF
@@ -96,28 +97,13 @@ def responses_to_atif(
     session_id: str | None = None,
 ) -> AtifTrajectory:
     """Build an ATIF trajectory from Responses items; see `ResponsesConversation.to_atif` for the mapping."""
-    drafts = _segment(conv.items)
+    drafts = _segment(conv.items, response_starts(conv.items, conv.responses or []))
     if not drafts:
         raise ValueError(_NO_STEPS)
-    agent_count = sum(1 for d in drafts if d.source == 'agent')
-    responses: list[Response | None] = [None] * agent_count
-    if conv.responses is not None:
-        if len(conv.responses) == agent_count:
-            responses = list(conv.responses)
-        else:
-            logger.warning(
-                'Got {} responses for {} agent steps; ignoring all responses (items stay authoritative).',
-                len(conv.responses),
-                agent_count,
-            )
-    steps: list[AtifStep] = []
-    agent_index = 0
-    for index, draft in enumerate(drafts):
-        if draft.source == 'agent':
-            steps.append(_agent_step(draft, index + 1, responses[agent_index]))
-            agent_index += 1
-        else:
-            steps.append(_user_step(draft, index + 1))
+    steps = [
+        _agent_step(draft, index + 1) if draft.source == 'agent' else _user_step(draft, index + 1)
+        for index, draft in enumerate(drafts)
+    ]
     return AtifTrajectory(
         session_id=session_id or stable_hex(content_seed(conv.items), length=16),
         agent=AtifAgent(name=agent_name, version=agent_version),
@@ -126,18 +112,19 @@ def responses_to_atif(
     )
 
 
-def _segment(items: list[dict[str, Any]]) -> list[_Draft]:
-    """Cut Responses items into step drafts (user/system messages, and agent turns closed by tool results)."""
+def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_Draft]:
+    """Cut Responses items into step drafts: user/system messages, and agent turns closed by a tool result or
+    by the first output item of the next `Response` (`starts` maps item indices to responses)."""
     drafts: list[_Draft] = []
 
-    def current_agent() -> _Draft:
+    def current_agent(index: int) -> _Draft:
         last = drafts[-1] if drafts else None
-        if last is None or last.source != 'agent' or last.seen_result:
-            last = _Draft(source='agent')
+        if last is None or last.source != 'agent' or last.seen_result or index in starts:
+            last = _Draft(source='agent', response=starts.get(index))
             drafts.append(last)
         return last
 
-    for item in items:
+    for index, item in enumerate(items):
         item_type = item.get('type')
         if item_type is None and 'role' in item:
             item_type = 'message'
@@ -145,14 +132,14 @@ def _segment(items: list[dict[str, Any]]) -> list[_Draft]:
         if item_type == 'message' and role in ('user', 'system', 'developer'):
             drafts.append(_Draft(source='user' if role == 'user' else 'system', item=item))
         elif item_type == 'message' and role == 'assistant':
-            current_agent().texts.append(_assistant_text(item.get('content')))
+            current_agent(index).texts.append(_assistant_text(item.get('content')))
         elif item_type == 'message':
             logger.warning('Skipping Responses message with role {!r}: ATIF has no such step source.', role)
         elif item_type == 'reasoning':
-            current_agent().reasoning.append(item)
+            current_agent(index).reasoning.append(item)
         elif item_type == 'function_call':
             if isinstance(item.get('call_id'), str) and item['call_id']:
-                current_agent().calls.append(item)
+                current_agent(index).calls.append(item)
             else:
                 logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
         elif item_type == 'function_call_output':
@@ -253,7 +240,8 @@ def _image_media_type(url: str) -> Literal['image/jpeg', 'image/png', 'image/gif
     return 'image/png'
 
 
-def _agent_step(draft: _Draft, step_id: int, response: Response | None) -> AtifStep:
+def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
+    response = draft.response
     extra: dict[str, Any] = {}
     reasoning_texts: list[str] = []
     for item in draft.reasoning:
@@ -355,6 +343,8 @@ def _metrics_from_usage(usage: ResponseUsage | None, unset: frozenset[str]) -> A
 def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
     """Render an ATIF trajectory as Responses items plus exactly one `Response` per agent step.
 
+    Each `Response.output` holds the output items of its step (assistant message, reasoning, function calls).
+
     A step without model, metrics or timestamp gets a placeholder (`model=''`, `usage=None`, `created_at=0.0`),
     which `responses_to_atif` reads back as absent. Responses usage has no unset token count, so an unset ATIF
     count is written as 0 and named in `Response.metadata['atif_unset_usage']`, which reads back as unset.
@@ -374,8 +364,9 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
     unmapped: dict[str, int] = {}
     for step in traj.steps:
         if step.source == 'agent':
-            items.extend(_agent_items(step, seed))
-            responses.append(_response(step, seed))
+            step_items = _agent_items(step, seed)
+            items.extend(step_items)
+            responses.append(_response(step, seed, [output_item(i) for i in step_items if is_output_item(i)]))
             for name in _UNMAPPED_METRICS:
                 if step.metrics is not None and getattr(step.metrics, name) is not None:
                     unmapped[name] = unmapped.get(name, 0) + 1
@@ -457,7 +448,7 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     return items
 
 
-def _response(step: AtifStep, seed: str) -> Response:
+def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Response:
     extra = step.extra or {}
     usage: dict[str, Any] | None = None
     metadata: dict[str, str] | None = None
@@ -494,7 +485,7 @@ def _response(step: AtifStep, seed: str) -> Response:
         'created_at': _epoch(step.timestamp),
         'model': step.model_name or '',
         'object': 'response',
-        'output': [],
+        'output': output,
         'parallel_tool_calls': False,
         'tool_choice': 'auto',
         'tools': [],
