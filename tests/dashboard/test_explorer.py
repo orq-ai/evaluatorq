@@ -504,6 +504,65 @@ def test_first_traces_request_warms_rows_and_facets_for_its_session(
 
 
 @pytest.mark.asyncio
+async def test_initial_trace_warmups_fetch_concurrently_across_sessions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    app = build_app(roots=[tmp_path])
+    started = {session_id: asyncio.Event() for session_id in ('first', 'second')}
+    release = {session_id: asyncio.Event() for session_id in ('first', 'second')}
+    stores: dict[str, Any] = {}
+
+    for session_id in started:
+        async def search(
+            _start: datetime,
+            _end: datetime,
+            _limit: int,
+            *,
+            facets: FacetSelection,
+            numeric: Any,
+            on_page: Any = None,
+            session: str = session_id,
+        ) -> tuple[TraceRow, ...]:
+            del facets, numeric, on_page
+            started[session].set()
+            await release[session].wait()
+            return ()
+
+        store = FakeStore()
+        store.explorer = ExplorerStore(search=search, hydrate=lambda _rows: empty_hydration())
+        store.snapshot = lambda: empty_snapshot()
+        stores[session_id] = store
+
+    async def get_store(_app: Any, *, session_id: str, **_kwargs: Any) -> Any:
+        return stores[session_id]
+
+    async def warm_catalogue(_app: Any, _window_days: int) -> None:
+        return None
+
+    async def empty_hydration() -> dict[str, Any]:
+        return {}
+
+    async def empty_snapshot() -> None:
+        return None
+
+    monkeypatch.setattr(finder_routes, '_api_available', lambda _app: True)
+    monkeypatch.setattr(finder_routes, '_store', get_store)
+    monkeypatch.setattr(finder_routes, '_warm_catalogue', warm_catalogue)
+
+    try:
+        await asyncio.gather(
+            *(finder_routes.warm_initial_finder(app, session_id, {}) for session_id in started)
+        )
+        await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started.values())), timeout=2)
+        assert all(event.is_set() for event in started.values())
+    finally:
+        for event in release.values():
+            event.set()
+        await asyncio.gather(*(store.explorer.close() for store in stores.values()))
+
+
+@pytest.mark.asyncio
 async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, client = explorer_client
     app = client.app
