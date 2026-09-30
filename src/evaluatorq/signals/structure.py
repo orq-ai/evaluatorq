@@ -6,12 +6,15 @@ import re
 import shlex
 from collections import Counter
 from itertools import starmap
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
 from evaluatorq.signals import preconditions as pre
 from evaluatorq.signals.models import Evidence, SignalFn, SignalResult, result
 from evaluatorq.signals.walk import SignalContext, WalkedStep, finish_reasons, infer_provider, is_llm_step, step_model
+
+if TYPE_CHECKING:
+    from evaluatorq.formats.atif import AtifTrajectory
 
 _CLIS = frozenset({'git', 'orq', 'gh', 'uv', 'docker', 'kubectl', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go'})
 _ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z_0-9]*=.*')
@@ -39,9 +42,25 @@ def _count(name: str, value: Any, evidence: list[Evidence]) -> SignalResult:
 
 
 def max_depth(ctx: SignalContext) -> SignalResult:
-    """Deepest linked subagent nesting level; root is zero."""
-    depth = max((entry.depth for entry in ctx.walked), default=0)
-    return _count('max_depth', depth, [_ev(w) for w in ctx.walked if w.depth == depth])
+    """Deepest embedded subagent nesting level; root is zero, even for unlinked subtrees."""
+    levels: list[tuple[int, tuple[str, ...], AtifTrajectory]] = []
+
+    def visit(trajectory: AtifTrajectory, depth: int, path: tuple[str, ...]) -> None:
+        levels.append((depth, path, trajectory))
+        for subagent in trajectory.subagent_trajectories or []:
+            child_path = (*path, subagent.trajectory_id) if subagent.trajectory_id else path
+            visit(subagent, depth + 1, child_path)
+
+    visit(ctx.trajectory, 0, ())
+    depth = max(level for level, _, _ in levels)
+    evidence = []
+    for level, path, trajectory in levels:
+        if level != depth:
+            continue
+        first = next((entry for entry in ctx.walked if entry.trajectory is trajectory), None)
+        if first is not None:
+            evidence.append(Evidence(step_id=first.step.step_id, agent_path=path))
+    return _count('max_depth', depth, evidence)
 
 
 def llm_call_count(ctx: SignalContext) -> SignalResult:
@@ -272,11 +291,31 @@ def _subagent_paths(ctx: SignalContext) -> set[tuple[str, ...]]:
 def subagent_invocation_count(ctx: SignalContext) -> SignalResult:
     paths = _subagent_paths(ctx)
     pc = pre.subagent_linkage(ctx)
-    evidence = [_call_ev(call) for call in ctx.calls if call.result is not None and call.result.subagent_trajectory_ref]
-    # Any embedded but unlinked child is still an invocation and walk marks it explicitly.
+    first_by_path: dict[tuple[str, ...], WalkedStep] = {}
     for entry in ctx.walked:
-        if entry.unlinked and entry.agent_path and not any(e.agent_path == entry.agent_path for e in evidence):
-            evidence.append(_ev(entry, 'unlinked subagent'))
+        if entry.agent_path:
+            first_by_path.setdefault(entry.agent_path, entry)
+
+    evidence: list[Evidence] = []
+    for call in ctx.calls:
+        if call.result is None:
+            continue
+        for ref in call.result.subagent_trajectory_ref or []:
+            if ref.trajectory_id is None:
+                continue
+            child_path = (*call.step.agent_path, ref.trajectory_id)
+            first = first_by_path.get(child_path)
+            if first is not None:
+                evidence.append(
+                    Evidence(
+                        step_id=first.step.step_id,
+                        agent_path=first.agent_path,
+                        related=[(call.step.agent_path, call.step.step.step_id)],
+                        related_call_ids=[call.call.tool_call_id],
+                    )
+                )
+    # Any embedded but unlinked child is still an invocation and walk marks it explicitly.
+    evidence.extend(_ev(entry, 'unlinked subagent') for entry in first_by_path.values() if entry.unlinked)
     return result('subagent_invocation_count', 'A', len(paths), evidence, [pc])
 
 
