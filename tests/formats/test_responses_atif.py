@@ -183,3 +183,25 @@ def test_embedded_subagent_is_warned_as_lost(caplog: pytest.LogCaptureFixture) -
     traj = AtifTrajectory.model_validate_json((FIXTURES / 'phoenix_v17_embedded_subagents.json').read_text())
     traj.to_responses()
     assert 'not representable in Responses' in caplog.text
+
+
+def test_one_response_per_agent_step_keeps_metadata_aligned(caplog: pytest.LogCaptureFixture) -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'}, 'session_id': 's',
+        'steps': [
+            {'step_id': 1, 'source': 'user', 'message': 'weather?'},
+            {'step_id': 2, 'source': 'agent', 'message': '',
+             'tool_calls': [{'tool_call_id': 'c1', 'function_name': 'get_weather', 'arguments': {'city': 'Berlin'}}],
+             'observation': {'results': [{'source_call_id': 'c1', 'content': '12C'}]}},
+            {'step_id': 3, 'source': 'agent', 'message': 'It is 12C.', 'model_name': 'gpt-x', 'llm_call_count': 1,
+             'metrics': {'prompt_tokens': 5, 'completion_tokens': 2, 'cached_tokens': 1}},
+        ]})
+    conv = traj.to_responses()
+    assert conv.responses is not None and len(conv.responses) == 2
+    again = conv.to_atif()
+    assert [s.model_name for s in again.steps] == [None, None, 'gpt-x']
+    assert again.steps[1].metrics is None
+    metrics = again.steps[2].metrics
+    assert metrics is not None and (metrics.prompt_tokens, metrics.completion_tokens, metrics.cached_tokens) == (5, 2, 1)
+    assert again.steps[1].timestamp is None
+    assert not [r for r in caplog.records if r.levelname == 'WARNING']

@@ -1,7 +1,9 @@
 """Convert between Responses transcripts and ATIF trajectories.
 
 `items` are authoritative: steps are cut from them. `responses` only enrich agent steps with model,
-usage, timing and finish status, and only when there is exactly one per agent step.
+usage, timing and finish status, and only when there is exactly one per agent step. `atif_to_responses`
+emits one `Response` per agent step, but consecutive agent steps with no tool result between them merge
+into one step when the items are read back, so their `Response` list no longer lines up and is ignored.
 """
 
 from __future__ import annotations
@@ -258,8 +260,12 @@ def _agent_step(draft: _Draft, step_id: int, response: Response | None) -> AtifS
     if response is not None:
         extra.update(_response_extra(response))
         fields = {
-            'model_name': response.model,
-            'timestamp': datetime.fromtimestamp(response.created_at, tz=timezone.utc).isoformat(),
+            'model_name': response.model or None,
+            'timestamp': (
+                datetime.fromtimestamp(response.created_at, tz=timezone.utc).isoformat()
+                if response.created_at
+                else None
+            ),
             'metrics': _metrics_from_usage(response.usage),
             'llm_call_count': 1,
         }
@@ -335,7 +341,10 @@ def _final_metrics(steps: list[AtifStep]) -> AtifFinalMetrics | None:
 
 
 def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
-    """Render an ATIF trajectory as Responses items plus one `Response` per agent step with LLM metadata.
+    """Render an ATIF trajectory as Responses items plus exactly one `Response` per agent step.
+
+    A step without model, metrics or timestamp gets a placeholder (`model=''`, `usage=None`, `created_at=0.0`),
+    which `responses_to_atif` reads back as absent.
 
     Lost: embedded and referenced subagent trajectories (warned), results with no `source_call_id`
     (warned), non-text parts in agent messages, and audio or file-path images in user messages
@@ -349,8 +358,7 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
     for step in traj.steps:
         if step.source == 'agent':
             items.extend(_agent_items(step, seed))
-            if step.model_name is not None or step.metrics is not None or step.timestamp is not None:
-                responses.append(_response(step, seed))
+            responses.append(_response(step, seed))
         else:
             role = 'developer' if (step.extra or {}).get('original_role') == 'developer' else step.source
             content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
