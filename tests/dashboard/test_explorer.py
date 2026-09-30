@@ -2041,3 +2041,52 @@ def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() ->
     tree = span_tree('trace', [*chain, *cycle])
     assert tree.count('fd-span-row') == 2002
     assert 'span-1999' in tree and 'cycle-a' in tree and 'cycle-b' in tree
+
+
+def test_summary_status_and_trajectory_polling_are_independent_during_prewarm(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, source, client = explorer_client
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def gated_hydrate(rows: Any) -> dict[str, TraceRecord]:
+        source.hydrate_calls.append(tuple(row.trace_id for row in rows))
+        entered.set()
+        await asyncio.to_thread(release.wait)
+        return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'hello'}) for row in rows}
+
+    store.explorer._hydrate = gated_hydrate  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(store, 'close', store.explorer.close, raising=False)
+
+    async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    with client:
+        try:
+            _load(client)
+            assert entered.wait(timeout=2)
+
+            table_html = client.get('/find/rows').text
+            assert 'Showing 250 of 250 loaded traces' in table_html
+            assert 'Loading traces' not in table_html
+            assert 'class="xr-skeleton"' not in table_html
+            assert 'hx-trigger="every 1s"' in table_html
+
+            trajectory_html = client.get('/find/rows?view=trajectories').text
+            assert 'Loading messages…' in trajectory_html
+            assert 'tv-skeleton' not in trajectory_html
+            assert 'hx-trigger="every 1s"' in trajectory_html
+            assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows[:100])]
+        finally:
+            release.set()
+
+        for _ in range(20):
+            trajectory_html = client.get('/find/rows?view=trajectories').text
+            if 'hx-trigger="every 1s"' not in trajectory_html:
+                break
+            threading.Event().wait(0.01)
+    assert 'tv-segs' in trajectory_html
+    assert 'hx-trigger="every 1s"' not in trajectory_html
+    assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows[:100])]

@@ -78,6 +78,63 @@ async def test_load_then_page_and_sort() -> None:
 
 
 @pytest.mark.asyncio
+async def test_summary_load_finishes_before_first_page_trajectory_warmup() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    rows = tuple(TraceRow(trace_id=f't{i}') for i in range(100))
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        entered.set()
+        await release.wait()
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    store = ExplorerStore(search=FakeSource(rows).search, hydrate=hydrate)
+    view = await store.load(START, END, 100, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await entered.wait()
+
+    assert view.state == 'loaded'
+    assert view.trajectory_warming
+    assert store.cached_records(['t0']) == {}
+
+    release.set()
+    prewarm_task = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    assert prewarm_task is not None
+    await prewarm_task
+
+    view = await store.view()
+    assert view.state == 'loaded'
+    assert not view.trajectory_warming
+    assert store.cached_records(['t0']) == {'t0': record('t0')}
+
+
+@pytest.mark.asyncio
+async def test_failed_trajectory_warmup_clears_flag_and_can_retry() -> None:
+    rows = tuple(TraceRow(trace_id=f't{i}') for i in range(100))
+    calls = 0
+
+    async def flaky_hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(0)
+            raise RuntimeError('trajectory store unavailable')
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    store = ExplorerStore(search=FakeSource(rows).search, hydrate=flaky_hydrate)
+    view = await store.load(START, END, 100, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    prewarm_task = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    assert prewarm_task is not None
+    await prewarm_task
+
+    view = await store.view()
+    assert view.state == 'loaded'
+    assert not view.trajectory_warming
+    assert calls == 1
+    assert await store.records(['t0']) == {'t0': record('t0')}
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_switching_quick_view_clears_sort() -> None:
     store = store_for(FakeSource((TraceRow(trace_id='a'),)))
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)

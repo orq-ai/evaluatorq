@@ -155,7 +155,7 @@ def _match_cells(row: TraceRow, snapshot: RunSnapshot | None) -> str:
 
 
 def _yes_no_cell(answer: DimensionAnswer | None) -> str:
-    """A compact yes/no verdict; a match carries the classifier's reason when it gave prose."""
+    """A compact yes/no verdict with the classifier score when available."""
     from evaluatorq.dashboard.trace_finder.views import _reason_line
 
     if answer is None:
@@ -419,8 +419,11 @@ def trajectories(
     snapshot: RunSnapshot | None,
     *,
     loading: bool = False,
+    summary_loading: bool | None = None,
     traces_layout: bool = False,
 ) -> str:
+    if summary_loading is None:
+        summary_loading = loading
     snapshot = _within_snapshot(snapshot)
     page = view.page_rows(snapshot.results if snapshot is not None and snapshot.results else None)
     bars = {row.trace_id: segments(record.messages) if (record := records.get(row.trace_id)) else None for row in page}
@@ -520,7 +523,7 @@ def trajectories(
             f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-plot"><div class="tv-track"></div>{bar}</div>'
             f'<span class="tv-end">{row_summary}</span></div>{_metrics(row)}</div>'
         )
-    if loading:
+    if summary_loading:
         rows_html += ''.join(
             '<div class="tv-r tv-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>' for _ in range(4)
         )
@@ -734,7 +737,11 @@ def results(
         unmatched = tuple(row for row in view.rows if not ai_matched(snapshot.results.get(row.trace_id)))
         view = replace(view, rows=(*matched, *unmatched))
     oob_attr = ' hx-swap-oob="true"' if oob else ''
-    poll = ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="outerHTML"' if view.state == 'loading' else ''
+    poll = (
+        ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="outerHTML"'
+        if view.state == 'loading' or view.trajectory_warming
+        else ''
+    )
     judged = snapshot.results if snapshot is not None and snapshot.results else None
     counts: dict[str, int] = {'errors': sum(1 for row in view.rows if row.is_error)} if view.rows else {}
     classified = bool(judged) and _classified(snapshot)
@@ -824,7 +831,14 @@ def results(
         results = snapshot.results if snapshot is not None and snapshot.within_results else None
         visible_rows = view.visible_rows(results)
         body = (
-            trajectories(view, records or {}, snapshot, loading=view.state == 'loading', traces_layout=traces_layout)
+            trajectories(
+                view,
+                records or {},
+                snapshot,
+                loading=view.state == 'loading' or view.trajectory_warming,
+                summary_loading=view.state == 'loading',
+                traces_layout=traces_layout,
+            )
             if view.view == 'trajectories'
             else f'<div class="xr-table-wrap">{table(view, columns, snapshot, traces_layout=traces_layout)}</div>'
         )

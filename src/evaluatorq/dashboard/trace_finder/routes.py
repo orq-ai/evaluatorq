@@ -602,7 +602,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         page_ids = [row.trace_id for row in view.page_rows(results)]
         records = None
         if view.view == 'trajectories' and view.rows:
-            records = explorer.cached_records(page_ids) if view.state == 'loading' else await explorer.records(page_ids)
+            records = (
+                explorer.cached_records(page_ids)
+                if view.state == 'loading' or view.trajectory_warming
+                else await explorer.records(page_ids)
+            )
         return explorer_views.results(
             view,
             resolve_columns(_settings(req.app).explorer_columns),

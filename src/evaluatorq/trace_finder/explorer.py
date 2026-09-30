@@ -187,6 +187,7 @@ class RowHydrator(Protocol):
 class ExplorerView:
     generation: int = 0
     state: ExplorerState = 'idle'
+    trajectory_warming: bool = False
     rows: tuple[TraceRow, ...] = ()
     limit: int = 0
     start: datetime | None = None
@@ -245,6 +246,7 @@ class ExplorerStore:
         self._load_first_error_message = load_first_error_message
         self._view = ExplorerView()
         self._task: asyncio.Task[None] | None = None
+        self._prewarm_task: asyncio.Task[None] | None = None
         self._records: dict[str, TraceRecord | None] = {}
         self._records_lock = asyncio.Lock()
 
@@ -285,8 +287,6 @@ class ExplorerStore:
             view=self._view.view,
         )
 
-        prewarm_task: asyncio.Task[None] | None = None
-
         async def prewarm(rows: Sequence[TraceRow]) -> None:
             try:
                 await self.records([row.trace_id for row in rows])
@@ -294,39 +294,38 @@ class ExplorerStore:
                 raise
             except Exception as error:  # noqa: BLE001 — trajectory data must not fail the summary load
                 logger.warning('Explorer trajectory prewarm failed: {}', error)
+            finally:
+                if self._view.generation == generation:
+                    self._view = replace(self._view, trajectory_warming=False)
+
+        def start_prewarm(rows: Sequence[TraceRow]) -> None:
+            if self._prewarm_task is None and warm_trajectories:
+                self._view = replace(self._view, trajectory_warming=True)
+                self._prewarm_task = asyncio.create_task(prewarm(rows[:PAGE_ROWS]))
 
         def on_page(rows: tuple[TraceRow, ...]) -> None:
-            nonlocal prewarm_task
             if self._view.generation == generation:
                 self._view = replace(self._view, rows=rows)
-                if warm_trajectories and len(rows) >= PAGE_ROWS and prewarm_task is None:
-                    prewarm_task = asyncio.create_task(prewarm(rows[:PAGE_ROWS]))
+                if len(rows) >= PAGE_ROWS:
+                    start_prewarm(rows)
 
         async def run() -> None:
             try:
                 rows = await self._search(start, end, limit, facets=facets, numeric=numeric, on_page=on_page)
             except asyncio.CancelledError:
-                if prewarm_task is not None and not prewarm_task.done():
-                    prewarm_task.cancel()
-                    await asyncio.gather(prewarm_task, return_exceptions=True)
                 raise
             except Exception as error:  # noqa: BLE001 — keep rows loaded so far and name the failure
-                if prewarm_task is not None and not prewarm_task.done():
-                    prewarm_task.cancel()
-                    await asyncio.gather(prewarm_task, return_exceptions=True)
+                if self._prewarm_task is not None and not self._prewarm_task.done():
+                    self._prewarm_task.cancel()
+                    await asyncio.gather(self._prewarm_task, return_exceptions=True)
                 if self._view.generation == generation:
                     logger.warning('Explorer load failed after {} row(s): {}', len(self._view.rows), error)
-                    self._view = replace(self._view, state='failed', error=str(error))
+                    self._view = replace(self._view, state='failed', error=str(error), trajectory_warming=False)
                 return
             if self._view.generation == generation:
                 self._view = replace(self._view, rows=rows)
-                if warm_trajectories:
-                    if prewarm_task is None:
-                        await prewarm(rows[:PAGE_ROWS])
-                    else:
-                        await prewarm_task
-                if self._view.generation == generation:
-                    self._view = replace(self._view, state='loaded')
+                start_prewarm(rows)
+                self._view = replace(self._view, state='loaded')
 
         self._task = asyncio.create_task(run())
         if wait:
@@ -420,7 +419,10 @@ class ExplorerStore:
         self._records.clear()
 
     async def _cancel(self) -> None:
-        task, self._task = self._task, None
-        if task is not None and not task.done():
+        tasks = [task for task in (self._task, self._prewarm_task) if task is not None and not task.done()]
+        self._task = None
+        self._prewarm_task = None
+        for task in tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
