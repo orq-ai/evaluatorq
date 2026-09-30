@@ -926,9 +926,14 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         except Exception as error:  # noqa: BLE001 - the conversation drawer remains usable if span lookup fails
             logger.warning('Find span lookup failed for trace {}: {}', trace_id, error)
             return _html('<p class="finder-empty" role="status">Could not load spans. Try again.</p>', status_code=200)
+        try:
+            error_message = await store.explorer.first_error_message(trace_id, spans)
+        except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
+            logger.warning('Find span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
+            error_message = None
         from evaluatorq.dashboard.trace_finder.views import span_tree
 
-        return _html(span_tree(trace_id, spans))
+        return _html(span_tree(trace_id, spans, first_error_message=error_message))
 
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:
@@ -951,7 +956,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 logger.warning('Find drawer could not load messages for explorer trace {}', trace_id)
                 return _html(
                     missing_trace_drawer(
-                        trace_id, reason='The messages could not be loaded for this trace. Open it in Orq instead.'
+                        trace_id,
+                        reason='The messages could not be loaded for this trace. Open it in Orq instead.',
+                        traces_layout=req.query_params.get('surface') == 'traces',
                     )
                 )
         if detail is None:

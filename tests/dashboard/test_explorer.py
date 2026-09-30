@@ -1566,6 +1566,29 @@ def test_span_tree_missing_status_and_unsafe_ids_are_honest() -> None:
     assert 'Open in Orq' not in tree
 
 
+def test_span_tree_renders_lazy_raw_error_message_escaped() -> None:
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    tree = span_tree('trace', [{'span_id': 'failure', 'status': 'error'}], first_error_message='<raw & detail>')
+
+    assert '&lt;raw &amp; detail&gt;' in tree
+    assert '<raw & detail>' not in tree
+
+
+def test_traces_missing_conversation_drawer_keeps_lazy_spans_tab() -> None:
+    from evaluatorq.dashboard.trace_finder.views import missing_trace_drawer
+
+    html = missing_trace_drawer(
+        'trace/with slash',
+        reason='Messages did not hydrate.',
+        traces_layout=True,
+    )
+
+    assert 'No messages available' in html
+    assert 'Spans</button>' in html
+    assert 'hx-get="/find/trace-spans?trace_id=trace%2Fwith%20slash"' in html
+
+
 def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() -> None:
     from evaluatorq.dashboard.trace_finder.views import span_tree
 

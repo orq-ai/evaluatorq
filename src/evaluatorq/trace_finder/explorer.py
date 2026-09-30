@@ -237,10 +237,12 @@ class ExplorerStore:
         search: RowSearch,
         hydrate: RowHydrator,
         load_spans: Callable[[str], Awaitable[list[Any]]] | None = None,
+        load_first_error_message: Callable[[str, Sequence[Any]], Awaitable[str | None]] | None = None,
     ) -> None:
         self._search = search
         self._hydrate = hydrate
         self._load_spans = load_spans
+        self._load_first_error_message = load_first_error_message
         self._view = ExplorerView()
         self._task: asyncio.Task[None] | None = None
         self._records: dict[str, TraceRecord | None] = {}
@@ -251,6 +253,12 @@ class ExplorerStore:
         if self._load_spans is None:
             raise RuntimeError('Span loading is unavailable.')
         return await self._load_spans(trace_id)
+
+    async def first_error_message(self, trace_id: str, spans: Sequence[Any]) -> str | None:
+        """Load status text for the first errored span, if the source supports it."""
+        if self._load_first_error_message is None:
+            return None
+        return await self._load_first_error_message(trace_id, spans)
 
     async def load(  # noqa: C901 — one task owns search, first-page prewarm, and generation state
         self,

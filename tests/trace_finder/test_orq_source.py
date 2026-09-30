@@ -32,10 +32,13 @@ class FakeTraces:
         *,
         spans: dict[str, list[Any]] | None = None,
         details: dict[tuple[str, str], Any] | None = None,
+        raw_details: dict[tuple[str, str], dict[str, Any]] | None = None,
     ) -> None:
         self.pages = pages
         self.spans = spans or {}
         self.details = details or {}
+        self.raw_details = raw_details or {}
+        self.capture_hook: Any | None = None
         self.query_calls: list[dict[str, Any]] = []
         self.list_span_calls: list[dict[str, Any]] = []
         self.get_span_calls: list[dict[str, Any]] = []
@@ -51,6 +54,13 @@ class FakeTraces:
 
     async def get_span_async(self, *, trace_id: str, span_id: str, **kwargs: Any) -> Any:
         self.get_span_calls.append({'trace_id': trace_id, 'span_id': span_id, **kwargs})
+        raw = self.raw_details.get((trace_id, span_id))
+        if raw is not None and self.capture_hook is not None:
+            response = namespace(
+                request=namespace(url=namespace(path=f'/v2/traces/{trace_id}/spans/{span_id}')),
+                json=lambda: raw,
+            )
+            self.capture_hook.after_success(namespace(operation_id='TracesGetSpan'), response)
         return namespace(span=self.details[trace_id, span_id])
 
 
@@ -685,6 +695,31 @@ async def test_raw_response_capture_correlates_interleaved_requests() -> None:
 
     assert first == {'search': {'data': [{'trace_id': 'first'}]}}
     assert second == {'search': {'data': [{'trace_id': 'second'}]}}
+
+
+@pytest.mark.asyncio
+async def test_first_error_message_uses_raw_sdk_status_shape_without_logging_payload() -> None:
+    raw = {
+        'span': {
+            'span_id': 'failed-span',
+            'attributes': {
+                'otlp': {'status': {'message': '<observed error text>'}},
+                'otel': {'status_description': 'fallback text'},
+            },
+        }
+    }
+    traces = FakeTraces({}, details={('trace', 'failed-span'): {}}, raw_details={('trace', 'failed-span'): raw})
+    client = with_hooks(FakeOrq(traces))
+    source = make_source(client)
+    traces.capture_hook = client.sdk_configuration._hooks.after_success_hooks[0]
+
+    message = await source.first_error_message(
+        'trace', [{'span_id': 'failed-span', 'status': 'error'}, {'span_id': 'later', 'status': 'error'}]
+    )
+
+    assert message == '<observed error text>'
+    assert [call['span_id'] for call in traces.get_span_calls] == ['failed-span']
+    assert traces.get_span_calls[0]['timeout_ms'] > 0
 
 
 def test_conversation_messages_accepts_direct_messages() -> None:

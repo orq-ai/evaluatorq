@@ -651,6 +651,43 @@ class OrqTraceSource:
             return []
         return await self._list_spans(trace_id, asyncio.Semaphore(self._hydration_concurrency))
 
+    async def first_error_message(self, trace_id: str, spans: Sequence[Any]) -> str | None:
+        """Fetch the first errored span's status text from its raw SDK response, when present."""
+        if not trace_id or self._registration is None:
+            return None
+        failed_span_id: str | None = None
+        for span in spans:
+            status = _field(span, 'status')
+            if isinstance(status, str) and any(word in status.lower() for word in ('error', 'failed')):
+                failed_span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
+                if failed_span_id:
+                    break
+        if not failed_span_id:
+            return None
+
+        async with asyncio.Semaphore(self._hydration_concurrency):
+            marker = _CAPTURE_REQUEST.set(object())
+            try:
+                await self._client.traces.get_span_async(
+                    trace_id=trace_id,
+                    span_id=failed_span_id,
+                    timeout_ms=SDK_TIMEOUT_MS,
+                )
+                raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{failed_span_id}')
+            finally:
+                _CAPTURE_REQUEST.reset(marker)
+        raw_span = _field(raw_response, 'span') if raw_response else None
+        attributes = _field(raw_span, 'attributes')
+        for path in (('otlp', 'status', 'message'), ('otel', 'status_description')):
+            value = attributes
+            for key in path:
+                value = _field(value, key)
+                if value is None:
+                    break
+            if isinstance(value, str) and value.strip():
+                return value
+        return None
+
 
 def _select_summaries(
     summaries: list[Any],

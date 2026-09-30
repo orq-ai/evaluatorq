@@ -1257,7 +1257,22 @@ def drawer(
     return drawer_shell(title, body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer')
 
 
-def missing_trace_drawer(trace_id: str, *, reason: str | None = None) -> str:
+def missing_trace_drawer(trace_id: str, *, reason: str | None = None, traces_layout: bool = False) -> str:
+    if traces_layout:
+        return drawer_shell(
+            'Trace conversation',
+            '<div class="fd-traces"><div class="fd-no-messages" role="status"><b>No messages available</b>'
+            '<span>This trace has no conversation text to display.</span></div>'
+            '<div class="fd-tabs"><button type="button" class="on" onclick="eqFinderTraceTab(this,\'fd-thread\')">'
+            'Conversation</button><button type="button" hx-get="/find/trace-spans?trace_id='
+            + quote(trace_id, safe='')
+            + '" hx-target="#fd-spans" hx-swap="innerHTML" onclick="eqFinderTraceTab(this,\'fd-spans\')">Spans</button></div>'
+            '<div id="fd-thread" class="fd-panel"><p class="fd-no-messages">Open the Spans tab to inspect this trace.</p></div>'
+            '<div id="fd-spans" class="fd-panel" hidden><p class="finder-empty">Open Spans to load span details.</p></div></div>',
+            '',
+            dismiss_route='/find/dismiss',
+            drawer_id='finder-drawer',
+        )
     body = (
         f'<p class="finder-empty">{esc(reason)}</p>'
         if reason
@@ -1269,7 +1284,13 @@ def missing_trace_drawer(trace_id: str, *, reason: str | None = None) -> str:
     return drawer_shell(f'Trace {esc(trace_id)}', body, '', dismiss_route='/find/dismiss', drawer_id='finder-drawer')
 
 
-def span_tree(trace_id: str, spans: Sequence[object], experiment_url: str | None = None) -> str:  # noqa: C901
+def span_tree(  # noqa: C901
+    trace_id: str,
+    spans: Sequence[object],
+    experiment_url: str | None = None,
+    *,
+    first_error_message: str | None = None,
+) -> str:
     """Render bounded span summaries as a defensive hierarchy, retaining orphan and cyclic entries."""
 
     def value(span: object, key: str) -> object | None:
@@ -1346,6 +1367,8 @@ def span_tree(trace_id: str, spans: Sequence[object], experiment_url: str | None
         message = value(span, 'status_message') or value(span, 'statusMessage') or value(span, 'error_message')
         if not isinstance(message, str) and status_obj is not None and not isinstance(status_obj, str):
             message = value(status_obj, 'message') or value(status_obj, 'description')
+        if span_id == first_error and isinstance(first_error_message, str) and first_error_message.strip():
+            message = first_error_message
         if failed and not isinstance(message, str):
             message = 'No status message available.'
         link = trace_link_button(
