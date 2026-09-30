@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from evaluatorq.formats.atif import AtifObservationResult
 from evaluatorq.signals import compute_signals
 from evaluatorq.signals.config import SignalsConfig
 
@@ -179,3 +180,17 @@ def test_empty_values_and_literals_are_configurable():
     assert defaults.value == 2
     assert customized.value == 2
     assert [item.reason for item in customized.evidence] == ["empty: '(no output)'", "empty: '[]'"]
+
+
+def test_empty_content_list_is_distinct_from_empty_text():
+    trajectory = traj([
+        agent(
+            calls=[call('run', {}, 'empty-list')], results=[AtifObservationResult(content=[], extra={'status': 'ok'})]
+        ),
+        agent(calls=[call('run', {}, 'empty-text')], results=[ok('')]),
+    ])
+    config = SignalsConfig(empty_values=frozenset({'[]'}))
+    empty = _values(trajectory, 'empty_tool_result_count', config=config)['empty_tool_result_count']
+    assert empty.value == 1
+    assert empty.evidence[0].call_id == 'empty-list'
+    assert empty.evidence[0].reason == "empty: '[]'"

@@ -20,3 +20,11 @@ Follow-up validation after the Group B review:
 - `uv run pytest -m 'not integration' tests/signals tests/formats`: passed (`264 passed, 4 skipped in 1.09s`).
 
 The type-check limitation is caused by the required bare whole-repository invocation including the local read-only reference source. The reference directory was not modified. No runtime dependency was added.
+
+Follow-up validation for empty content-list handling:
+
+- `uv run ruff check src`: passed (`All checks passed!`).
+- `uv run ruff format --check src`: passed (`269 files already formatted`).
+- `uv run basedpyright`: reported 30 errors, all in `.context/signals-src`; none pointed at changed files.
+- `uv run pytest tests/signals/test_tools.py -q`: passed (`11 passed in 0.07s`).
+- `uv run pytest -m 'not integration' tests/signals tests/formats`: passed (`265 passed, 4 skipped in 1.11s`).

@@ -414,6 +414,8 @@ def distinct_tool_arg_ratio(ctx: SignalContext) -> SignalResult:
 def _empty_kind(record: CallRecord, ctx: SignalContext) -> str | None:
     if record.result is None:
         return None
+    if isinstance(record.result.content, list) and not record.result.content:
+        return '[]' if '[]' in ctx.config.empty_values else None
     text = result_text(record.result).strip()
     if text in ctx.config.empty_literals:
         return text
