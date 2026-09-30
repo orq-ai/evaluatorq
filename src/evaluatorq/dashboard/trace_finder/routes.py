@@ -303,6 +303,19 @@ async def _warm_catalogue(app: Any, window_days: int) -> None:
         task = asyncio.create_task(_load_catalogue(app, window_days))
         app.state.finder_catalogue_warmup = (generation, window_days, task)
 
+        def finish_warmup(done: asyncio.Task[FacetCatalogue | None]) -> None:
+            current = getattr(app.state, 'finder_catalogue_warmup', None)
+            if current is not None and current[2] is done:
+                app.state.finder_catalogue_warmup = None
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception as exc:  # noqa: BLE001 — background failures must be observed and visible.
+                logger.opt(exception=True).warning('Could not warm the facet catalogue: {}', exc)
+
+        task.add_done_callback(finish_warmup)
+
 
 async def _catalogue_for_window(app: Any, window_days: int) -> FacetCatalogue | None:
     """Share an in-flight warmup with the menu request for the same window."""

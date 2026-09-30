@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
+from types import SimpleNamespace
 from typing import Any, Literal
 
 import pytest
@@ -32,6 +34,23 @@ from evaluatorq.trace_finder import (
     ValueSelection,
 )
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyQuestion, ClassifyResponse
+
+
+def test_failed_facet_warmup_releases_background_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fail_to_load(_app: Any, _window_days: int) -> FacetCatalogue | None:
+        raise RuntimeError('catalogue failed')
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', fail_to_load)
+
+    async def check() -> None:
+        app = SimpleNamespace(state=SimpleNamespace(finder_store_lock=asyncio.Lock(), finder_generation=1))
+        await finder_routes._warm_catalogue(app, 7)
+        task = app.state.finder_catalogue_warmup[2]
+        await asyncio.wait({task})
+        await asyncio.sleep(0)
+        assert app.state.finder_catalogue_warmup is None
+
+    asyncio.run(check())
 
 
 def csrf_data(values: dict[str, str] | None = None) -> dict[str, str]:
