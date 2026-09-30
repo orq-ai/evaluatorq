@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.signals import structure
 from evaluatorq.signals.config import SignalsConfig
 from evaluatorq.signals.models import Group, SignalFn, SignalReport, SignalResult
 from evaluatorq.signals.walk import SignalContext
@@ -35,9 +36,7 @@ def _merge(*tables: SignalTable) -> SignalTable:
     return MappingProxyType(merged)
 
 
-# Later tasks add: `from evaluatorq.signals import structure, tools, autonomy, tags` and
-# `_merge(structure.SIGNALS, tools.SIGNALS, autonomy.SIGNALS, tags.SIGNALS)`.
-SIGNALS: SignalTable = _merge()
+SIGNALS: SignalTable = _merge(structure.SIGNALS)
 SIGNAL_NAMES: tuple[str, ...] = tuple(SIGNALS)
 
 

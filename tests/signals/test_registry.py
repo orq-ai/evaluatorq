@@ -25,9 +25,10 @@ def _table(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry, 'SIGNALS', {'fine': ('A', _fine), 'boom': ('B', _boom)})
 
 
-def test_the_registry_starts_empty_and_reports_the_config_version() -> None:
+def test_the_registry_contains_group_a_and_reports_the_config_version() -> None:
     report = compute_signals(traj([user(), agent()], trajectory_id='t1'))
-    assert report.results == {}
+    assert 'max_depth' in report.results
+    assert report.results['max_depth'].value == 0
     assert report.trajectory_id == 't1'
     assert report.config_version == 'v3-local-cc-2026-09-29'
 
