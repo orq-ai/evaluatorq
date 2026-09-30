@@ -835,6 +835,7 @@ class InsightsLaunchSpec(BaseModel):
     def validated_finder_export_snapshot(self) -> str | None:
         """Return the bounded Finder JSON captured during source validation."""
         return self._finder_export_snapshot
+
     coding_analysis: bool = False
 
     def _validate_snapshot_source(self) -> None:
@@ -931,7 +932,9 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
     run_id = str(uuid.uuid4())
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
     population, finder_snapshot = _population_for_launch_plan(spec)
-    plan = stage_plan(population, [*spec.label_specs(), *(CODING_LABELS if spec.coding_analysis else ())], spec.dimension_names())
+    plan = stage_plan(
+        population, [*spec.label_specs(), *(CODING_LABELS if spec.coding_analysis else ())], spec.dimension_names()
+    )
     writer = start_manifest(
         run_id=run_id,
         surface='insights',
