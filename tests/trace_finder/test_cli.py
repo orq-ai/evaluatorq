@@ -129,6 +129,27 @@ def test_find_exits_nonzero_when_classifications_failed(monkeypatch: Any, tmp_pa
     assert not output.exists()
 
 
+def test_find_prints_plan_warning_when_ask_ai_cannot_answer(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    reason = "Ask AI finds traces; it can't compute totals, averages or rankings. Ranking needs aggregation."
+
+    class CancelledStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            return replace(snapshot, state='cancelled', error=None, plan_warning=reason)
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: CancelledStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'which model costs most?'])
+
+    assert result.exit_code == 1
+    assert "can't compute totals" in result.output
+    assert 'ended in cancelled' not in result.output
+
+
 def test_find_missing_orq_key_exits_two(monkeypatch: Any) -> None:
     from evaluatorq.trace_finder import cli as find_cli
 

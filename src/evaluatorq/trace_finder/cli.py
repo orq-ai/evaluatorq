@@ -363,10 +363,14 @@ def find(
             asyncio.run(_close_clients(resolved, orq))
 
     if snapshot.state != 'completed' or snapshot.failed:
-        detail = snapshot.error or (
-            f'Find run completed with {snapshot.failed} failed classifications.'
-            if snapshot.failed
-            else f'Find run ended in {snapshot.state}.'
+        detail = (
+            snapshot.error
+            or snapshot.plan_warning
+            or (
+                f'Find run completed with {snapshot.failed} failed classifications.'
+                if snapshot.failed
+                else f'Find run ended in {snapshot.state}.'
+            )
         )
         emit_error(detail)
         raise typer.Exit(code=1)
