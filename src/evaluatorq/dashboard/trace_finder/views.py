@@ -1383,7 +1383,7 @@ def span_tree(  # noqa: C901
         )
         return (
             f'<div class="fd-span-row{" fd-span-error" if failed else ""}{" fd-span-first-error" if span_id == first_error else ""}">'
-            f'<span class="fd-span-kind">{esc(kind)}</span><b>{esc(name)}</b>'
+            f'<span class="fd-span-kind" title="{esc(kind)}">{esc(kind)}</span><b title="{esc(name)}">{esc(name)}</b>'
             f'<span class="fd-span-duration"><i style="width:{width}%"></i>{esc(duration_label)}</span>'
             f'<span>{esc(token_label)}</span><span class="fd-span-status">{esc(status)}</span>{link}</div>'
             + (f'<p class="fd-span-message">{esc(str(message))}</p>' if failed else '')

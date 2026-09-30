@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -581,6 +582,18 @@ def results(
     traces_layout: bool = False,
 ) -> str:
     snapshot = _within_snapshot(snapshot)
+    if (
+        snapshot is not None
+        and snapshot.state == 'completed'
+        and snapshot.dimensions
+        and view.quick_view == 'all'
+        and view.sort is None
+    ):
+        # Keep All selected while surfacing positive classifier results first. An explicit
+        # column sort and the chosen table/trajectory mode remain user-controlled.
+        matched = tuple(row for row in view.rows if ai_matched(snapshot.results.get(row.trace_id)))
+        unmatched = tuple(row for row in view.rows if not ai_matched(snapshot.results.get(row.trace_id)))
+        view = replace(view, rows=(*matched, *unmatched))
     oob_attr = ' hx-swap-oob="true"' if oob else ''
     poll = ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="outerHTML"' if view.state == 'loading' else ''
     judged = snapshot.results if snapshot is not None and snapshot.results else None

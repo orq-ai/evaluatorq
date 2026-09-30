@@ -574,6 +574,45 @@ def _judged_snapshot(**kwargs: Any) -> Any:
     )
     return RunSnapshot(state='completed', within_results=True, results=results, dimensions=(dimension,), **kwargs)
 
+
+def test_completed_classifier_matches_lead_all_view_without_overriding_explicit_sort() -> None:
+    unmatched = TraceRow(trace_id='unmatched', tokens_in=900)
+    matched = TraceRow(trace_id='matched', tokens_in=100)
+    snapshot = _judged_snapshot(verdicts={'unmatched': False, 'matched': True})
+
+    default_html = explorer_views.results(
+        ExplorerView(state='loaded', rows=(unmatched, matched)),
+        resolve_columns(['trace', 'tokens_in']),
+        records=None,
+        snapshot=snapshot,
+    )
+    assert default_html.index('data-tv-row="matched"') < default_html.index('data-tv-row="unmatched"')
+    assert 'aria-pressed="true" hx-get="/find/rows?quick_view=all"' in default_html
+
+    sorted_html = explorer_views.results(
+        ExplorerView(state='loaded', rows=(unmatched, matched), sort='tokens_in'),
+        resolve_columns(['trace', 'tokens_in']),
+        records=None,
+        snapshot=snapshot,
+    )
+    assert sorted_html.index('data-tv-row="unmatched"') < sorted_html.index('data-tv-row="matched"')
+
+
+def test_completed_classifier_match_order_keeps_trajectory_view_selected() -> None:
+    rows = (TraceRow(trace_id='unmatched'), TraceRow(trace_id='matched'))
+    snapshot = _judged_snapshot(verdicts={'unmatched': False, 'matched': True})
+    html = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, view='trajectories'),
+        resolve_columns(None),
+        records=None,
+        snapshot=snapshot,
+    )
+
+    assert html.index('data-tv-row="matched"') < html.index('data-tv-row="unmatched"')
+    assert 'class="on" aria-pressed="true"' in html
+    assert '>Trajectories<span class="xr-help"' in html
+
+
 def test_status_line_reports_judged_and_matches_for_current_rows() -> None:
     rows = (TraceRow(trace_id='a'), TraceRow(trace_id='b'), TraceRow(trace_id='c'))
     snapshot = _judged_snapshot(total=2, matched=1, verdicts={'a': True, 'b': False})
@@ -1554,6 +1593,16 @@ def test_traces_drawer_spans_tab_loads_lazy_and_span_tree_handles_errors_orphans
     assert 'onclick="event.stopPropagation()"' in tree
     assert tree.index('</summary><div class="fd-span-children">') < tree.index('tool call')
     assert '<details class="fd-span-node" open>' in tree
+    assert '<span class="fd-span-kind" title="span.agent">span.agent</span><b title="root call">root call</b>' in tree
+
+
+def test_span_tree_escapes_kind_and_name_titles_without_changing_visible_text() -> None:
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    tree = span_tree('trace-1', [{'span_id': 'span-1', 'type': 'span <agent>', 'name': 'model "quoted"'}])
+
+    assert 'title="span &lt;agent&gt;">span &lt;agent&gt;</span>' in tree
+    assert 'title="model &quot;quoted&quot;">model &quot;quoted&quot;</b>' in tree
 
 
 def test_span_tree_missing_status_and_unsafe_ids_are_honest() -> None:
