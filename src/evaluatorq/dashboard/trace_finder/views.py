@@ -1224,7 +1224,11 @@ def drawer(
             '<div class="fd-traces">'
             f'{identity_html}'
             f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
-            f'{mini_html}<div id="fd-thread" class="fd-panel">{trace_thread}</div>'
+            f'{mini_html}<div class="fd-tabs"><button type="button" class="on" onclick="eqFinderTraceTab(this,\'fd-thread\')">Conversation</button>'
+            '<button type="button" hx-get="/find/trace-spans?trace_id='
+            + quote(trace.trace_id, safe='')
+            + '" hx-target="#fd-spans" hx-swap="innerHTML" onclick="eqFinderTraceTab(this,\'fd-spans\')">Spans</button></div>'
+            f'<div id="fd-thread" class="fd-panel">{trace_thread}</div><div id="fd-spans" class="fd-panel" hidden><p class="finder-empty">Open Spans to load span details.</p></div>'
             f'<details class="fd-technical"><summary>Technical details</summary>{technical_html}</details></div>'
         )
         title = 'Trace conversation'
@@ -1250,9 +1254,7 @@ def drawer(
             trace_link_button(trace_span_url(trace.trace_id, trace.span_id, experiment_url), 'Open in Orq ↗')
             + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
         )
-    return drawer_shell(
-        title, body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer'
-    )
+    return drawer_shell(title, body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer')
 
 
 def missing_trace_drawer(trace_id: str, *, reason: str | None = None) -> str:
@@ -1265,6 +1267,132 @@ def missing_trace_drawer(trace_id: str, *, reason: str | None = None) -> str:
         )
     )
     return drawer_shell(f'Trace {esc(trace_id)}', body, '', dismiss_route='/find/dismiss', drawer_id='finder-drawer')
+
+
+def span_tree(trace_id: str, spans: Sequence[object], experiment_url: str | None = None) -> str:  # noqa: C901
+    """Render bounded span summaries as a defensive hierarchy, retaining orphan and cyclic entries."""
+
+    def value(span: object, key: str) -> object | None:
+        if isinstance(span, dict):
+            return span.get(key)
+        return getattr(span, key, None)
+
+    def text(span: object, key: str) -> str:
+        raw = value(span, key)
+        return str(raw) if raw is not None else ''
+
+    def status_text(span: object) -> str:
+        status = value(span, 'status')
+        if isinstance(status, str) and status:
+            return status
+        if status is not None:
+            for key in ('code', 'status_code', 'state', 'name'):
+                detail = value(status, key)
+                if detail:
+                    return str(detail)
+        return text(span, 'status_code') or 'unknown'
+
+    def is_error(span: object) -> bool:
+        lowered = status_text(span).lower()
+        return 'error' in lowered or 'failed' in lowered
+
+    entries: dict[str, object] = {}
+    order: list[str] = []
+    for index, span in enumerate(spans):
+        span_id = text(span, 'span_id') or text(span, 'id') or f'unknown-{index}'
+        entries[span_id] = span
+        order.append(span_id)
+    children: dict[str, list[str]] = {span_id: [] for span_id in order}
+    roots: list[str] = []
+    for span_id in order:
+        parent = text(entries[span_id], 'parent_span_id') or text(entries[span_id], 'parent_id')
+        if parent in children and parent != span_id:
+            children[parent].append(span_id)
+        else:
+            roots.append(span_id)
+    errors = [span_id for span_id in order if is_error(entries[span_id])]
+    first_error = errors[0] if errors else None
+    ancestors: set[str] = set()
+    if first_error is not None:
+        parent_by_child = {child: parent for parent, child_ids in children.items() for child in child_ids}
+        current = first_error
+        while current in parent_by_child and current not in ancestors:
+            current = parent_by_child[current]
+            ancestors.add(current)
+    durations: list[float] = []
+    for span in spans:
+        duration = value(span, 'duration_ms')
+        if isinstance(duration, (int, float)) and duration >= 0:
+            durations.append(float(duration))
+    max_duration = max(durations, default=0.0)
+
+    def row(span_id: str) -> str:
+        span = entries[span_id]
+        status = status_text(span)
+        failed = is_error(span)
+        kind = text(span, 'type') or text(span, 'operation') or 'unknown kind'
+        name = text(span, 'name') or text(span, 'operation') or 'Unnamed span'
+        duration = value(span, 'duration_ms')
+        duration_label = f'{duration:g} ms' if isinstance(duration, (int, float)) else 'duration unknown'
+        width = (
+            max(2, min(100, int(float(duration) / max_duration * 100)))
+            if isinstance(duration, (int, float)) and max_duration
+            else 2
+        )
+        usage = value(span, 'usage')
+        tokens = value(usage, 'total_tokens') if usage is not None else value(span, 'total_tokens')
+        token_label = f'{tokens} tokens' if isinstance(tokens, (int, float)) else 'tokens unknown'
+        status_obj = value(span, 'status')
+        message = value(span, 'status_message') or value(span, 'statusMessage') or value(span, 'error_message')
+        if not isinstance(message, str) and status_obj is not None and not isinstance(status_obj, str):
+            message = value(status_obj, 'message') or value(status_obj, 'description')
+        if failed and not isinstance(message, str):
+            message = 'No status message available.'
+        link = trace_link_button(
+            trace_span_url(trace_id, text(span, 'span_id') or text(span, 'id'), experiment_url),
+            'Orq ↗',
+            onclick='event.stopPropagation()',
+        )
+        return (
+            f'<div class="fd-span-row{" fd-span-error" if failed else ""}{" fd-span-first-error" if span_id == first_error else ""}">'
+            f'<span class="fd-span-kind">{esc(kind)}</span><b>{esc(name)}</b>'
+            f'<span class="fd-span-duration"><i style="width:{width}%"></i>{esc(duration_label)}</span>'
+            f'<span>{esc(token_label)}</span><span class="fd-span-status">{esc(status)}</span>{link}</div>'
+            + (f'<p class="fd-span-message">{esc(str(message))}</p>' if failed else '')
+        )
+
+    if not spans:
+        return '<p class="finder-empty">No spans are available for this trace.</p>'
+    rendered: set[str] = set()
+    output: list[str] = []
+    for start in [*roots, *order]:
+        if start in rendered:
+            continue
+        stack: list[tuple[str, str]] = [('node', start)]
+        while stack:
+            action, span_id = stack.pop()
+            if action == 'close':
+                output.append('</div></details>')
+                continue
+            if span_id in rendered:
+                continue
+            rendered.add(span_id)
+            descendants = [child for child in children[span_id] if child not in rendered]
+            row_html = row(span_id)
+            if descendants:
+                opened = (
+                    ' open'
+                    if span_id in ancestors or span_id == first_error or (first_error is None and span_id in roots)
+                    else ''
+                )
+                output.append(
+                    f'<details class="fd-span-node"{opened}><summary>{row_html}</summary><div class="fd-span-children">'
+                )
+                stack.append(('close', span_id))
+                stack.extend(('node', child) for child in reversed(descendants))
+            else:
+                output.append(f'<div class="fd-span-node">{row_html}</div>')
+    return '<div class="fd-span-tree">' + ''.join(output) + '</div>'
 
 
 def _message_text(message: dict[str, object]) -> str:

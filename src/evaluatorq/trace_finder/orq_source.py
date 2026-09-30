@@ -645,6 +645,12 @@ class OrqTraceSource:
             used_tokens.add(str(next_token))
             page_token = str(next_token)
 
+    async def list_spans(self, trace_id: str) -> list[Any]:
+        """Load every bounded span summary for one trace using the canonical pager."""
+        if not trace_id:
+            return []
+        return await self._list_spans(trace_id, asyncio.Semaphore(self._hydration_concurrency))
+
 
 def _select_summaries(
     summaries: list[Any],

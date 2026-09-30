@@ -353,3 +353,18 @@ def test_longest_conversations_use_maximum_message_count_and_skip_missing_record
     )
 
     assert [row.trace_id for row in view.visible_rows()] == ['a-early', 'a-late']
+
+
+@pytest.mark.asyncio
+async def test_span_loader_is_lazy_and_uses_injected_source() -> None:
+    calls: list[str] = []
+
+    async def load_spans(trace_id: str) -> list[Any]:
+        calls.append(trace_id)
+        return [{'span_id': 's1'}]
+
+    source = FakeSource(())
+    store = ExplorerStore(search=source.search, hydrate=source.hydrate_rows, load_spans=load_spans)
+    assert calls == []
+    assert await store.spans('trace-1') == [{'span_id': 's1'}]
+    assert calls == ['trace-1']

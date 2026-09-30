@@ -913,6 +913,23 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             + (await _explorer_html(req, oob=True) if not is_search(req) else '')
         )
 
+    @app.get('/find/trace-spans')
+    async def find_trace_spans(req: Request) -> Response:
+        trace_id = req.query_params.get('trace_id', '')
+        store = await store_for(req)
+        if store is None or store.explorer is None or not trace_id:
+            return _html('<p class="finder-empty">Span loading is unavailable.</p>', status_code=404)
+        if await store.explorer.row(trace_id) is None:
+            return _html('<p class="finder-empty">This trace is not in the loaded table.</p>', status_code=404)
+        try:
+            spans = await store.explorer.spans(trace_id)
+        except Exception as error:  # noqa: BLE001 - the conversation drawer remains usable if span lookup fails
+            logger.warning('Find span lookup failed for trace {}: {}', trace_id, error)
+            return _html('<p class="finder-empty" role="status">Could not load spans. Try again.</p>', status_code=200)
+        from evaluatorq.dashboard.trace_finder.views import span_tree
+
+        return _html(span_tree(trace_id, spans))
+
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:
         store = await store_for(req)

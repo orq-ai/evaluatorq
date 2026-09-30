@@ -7,7 +7,7 @@ import math
 import operator
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Protocol, get_args
+from typing import TYPE_CHECKING, Any, Literal, Protocol, get_args
 
 from loguru import logger
 
@@ -231,13 +231,26 @@ class ExplorerView:
 class ExplorerStore:
     """One replaceable load; a newer load's generation makes an older one's callbacks no-ops."""
 
-    def __init__(self, *, search: RowSearch, hydrate: RowHydrator) -> None:
+    def __init__(
+        self,
+        *,
+        search: RowSearch,
+        hydrate: RowHydrator,
+        load_spans: Callable[[str], Awaitable[list[Any]]] | None = None,
+    ) -> None:
         self._search = search
         self._hydrate = hydrate
+        self._load_spans = load_spans
         self._view = ExplorerView()
         self._task: asyncio.Task[None] | None = None
         self._records: dict[str, TraceRecord | None] = {}
         self._records_lock = asyncio.Lock()
+
+    async def spans(self, trace_id: str) -> list[Any]:
+        """Fetch the trace's bounded span summaries on demand."""
+        if self._load_spans is None:
+            raise RuntimeError('Span loading is unavailable.')
+        return await self._load_spans(trace_id)
 
     async def load(  # noqa: C901 — one task owns search, first-page prewarm, and generation state
         self,

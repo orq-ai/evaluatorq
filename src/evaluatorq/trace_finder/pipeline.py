@@ -36,7 +36,7 @@ def build_run_store(
 ) -> RunStore:
     """Build the shared trace-finder pipeline for one application runtime."""
     source = OrqTraceSource(orq)
-    explorer = ExplorerStore(search=source.search, hydrate=source.hydrate_rows)
+    explorer = ExplorerStore(search=source.search, hydrate=source.hydrate_rows, load_spans=source.list_spans)
 
     async def close() -> None:
         try:

@@ -1516,3 +1516,67 @@ def test_toolbar_is_split_out_of_the_results_section() -> None:
     assert toolbar.startswith('<div id="explorer-toolbar">')
     assert 'xr-toolbar' in toolbar
     assert 'xr-toolbar' not in section
+
+
+def test_traces_drawer_spans_tab_loads_lazy_and_span_tree_handles_errors_orphans_and_links() -> None:
+    from evaluatorq.dashboard.trace_finder.views import drawer, span_tree
+    from evaluatorq.trace_finder import TraceDetail
+
+    trace = TraceRecord(
+        schema_version=1,
+        trace_id='trace-1',
+        span_id='root',
+        timestamp=datetime(2026, 9, 27, tzinfo=timezone.utc),
+        project='p',
+        model='gpt-5.6-luna',
+        provider='openai',
+        status='ok',
+        product='chat',
+        trace_type='agent',
+        messages=({'role': 'user', 'content': 'hello'},),
+    )
+    html = drawer(TraceDetail(trace=trace, projection=None, classification=None), traces_layout=True)
+    assert 'Spans</button>' in html and 'hx-get="/find/trace-spans?trace_id=trace-1"' in html
+    assert 'Open Spans to load span details.' in html
+
+    tree = span_tree(
+        'trace-1',
+        [
+            {'span_id': 'root', 'name': 'root call', 'type': 'span.agent', 'status': 'ok', 'duration_ms': 80, 'usage': {'total_tokens': 20}},
+            {'span_id': 'bad', 'parent_span_id': 'root', 'name': 'tool call', 'operation': 'search', 'status': 'error', 'status_message': '<failed>', 'duration_ms': 10},
+            {'span_id': 'orphan', 'parent_span_id': 'missing', 'name': 'orphan', 'status': 'unknown'},
+        ],
+        'https://orq.example/workspace/experiments/e',
+    )
+    assert 'fd-span-first-error' in tree and 'fd-span-message' in tree and '&lt;failed&gt;' in tree
+    assert '20 tokens' in tree and '80 ms' in tree and 'orphan' in tree
+    assert 'href="https://orq.example/workspace/traces/(trace:trace-1//span:bad)"' in tree
+    assert 'onclick="event.stopPropagation()"' in tree
+    assert tree.index('</summary><div class="fd-span-children">') < tree.index('tool call')
+    assert '<details class="fd-span-node" open>' in tree
+
+
+def test_span_tree_missing_status_and_unsafe_ids_are_honest() -> None:
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+    from orq_ai_sdk.models.spansummary import SpanSummary
+
+    tree = span_tree('bad/id', [SpanSummary(span_id='span/id', status='error')])
+    assert 'No status message available.' in tree
+    assert 'unknown kind' in tree and 'Unnamed span' in tree and 'duration unknown' in tree and 'tokens unknown' in tree
+    assert 'Open in Orq' not in tree
+
+
+def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() -> None:
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    chain = [
+        {'span_id': f'span-{index}', 'parent_span_id': f'span-{index - 1}' if index else None}
+        for index in range(2000)
+    ]
+    cycle = [
+        {'span_id': 'cycle-a', 'parent_span_id': 'cycle-b'},
+        {'span_id': 'cycle-b', 'parent_span_id': 'cycle-a'},
+    ]
+    tree = span_tree('trace', [*chain, *cycle])
+    assert tree.count('fd-span-row') == 2002
+    assert 'span-1999' in tree and 'cycle-a' in tree and 'cycle-b' in tree

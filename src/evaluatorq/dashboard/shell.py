@@ -42,7 +42,11 @@ _SIDEBAR_TOGGLE_SCRIPT = (
     "var root=el.closest('.rt-drawer');if(!root)return;"
     "root.querySelectorAll('.fd-tabs [data-panel]').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
     "var panels=root.querySelectorAll('.fd-technical .fd-panel');if(!panels.length)panels=root.querySelectorAll('.fd-panel');"
-    "panels.forEach(function(panel){panel.hidden=panel.id!==id;});}"
+    'panels.forEach(function(panel){panel.hidden=panel.id!==id;});}'
+    'function eqFinderTraceTab(el,id){'
+    "var root=el.closest('.fd-traces');if(!root)return;"
+    "root.querySelectorAll('.fd-tabs button').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
+    "root.querySelectorAll(':scope > .fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
     # Non-Mac shows "Ctrl B" instead of the ⌘B glyph on the hotkey hint.
     'if(!/Mac|iPhone|iPad/.test(navigator.platform)){'
     "document.addEventListener('DOMContentLoaded',function(){"

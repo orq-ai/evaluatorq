@@ -3046,6 +3046,20 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .fd-row-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:14px; margin-bottom:4px; }
 .fd-row-meta { font-size:12px; color:var(--text-muted); font-variant-numeric:tabular-nums; margin-bottom:12px; }
 .fd-traces .fd-technical { margin-top:16px; border-top:1px solid var(--border-subtle); padding-top:12px; }
+.fd-traces .fd-span-tree { display:flex; flex-direction:column; gap:5px; max-height:60vh; overflow:auto; }
+.fd-traces .fd-span-node { min-width:0; }
+.fd-traces .fd-span-node > summary { cursor:pointer; list-style:none; }
+.fd-traces .fd-span-node > summary::-webkit-details-marker { display:none; }
+.fd-traces .fd-span-node > summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.fd-traces .fd-span-row { display:grid; grid-template-columns:minmax(60px,.65fr) minmax(90px,1.2fr) minmax(100px,1.1fr) 64px 58px 58px; gap:6px; align-items:center; padding:8px; border:1px solid var(--border-subtle); border-radius:6px; font-size:11px; }
+.fd-traces .fd-span-row .trace-link { padding:5px 6px; white-space:nowrap; }
+.fd-traces .fd-span-kind,.fd-traces .fd-span-duration,.fd-traces .fd-span-status { color:var(--text-muted); }
+.fd-traces .fd-span-duration { display:flex; align-items:center; gap:6px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.fd-traces .fd-span-duration i { height:5px; min-width:2px; border-radius:3px; background:var(--accent); }
+.fd-traces .fd-span-children { margin:5px 0 0 18px; padding-left:10px; border-left:1px solid var(--border-default); display:flex; flex-direction:column; gap:5px; }
+.fd-traces .fd-span-error { border-left:3px solid var(--red-700); }
+.fd-traces .fd-span-first-error { box-shadow:0 0 0 2px color-mix(in srgb,var(--red-700) 22%,transparent); }
+.fd-traces .fd-span-message { margin:4px 8px 6px; color:var(--red-700); font-size:11px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .fd-traces .fd-technical > summary { cursor:pointer; color:var(--text-muted); font-size:12px; font-weight:600; }
 .fd-traces .fd-technical[open] > summary { margin-bottom:12px; color:var(--text-strong); }
 .fd-traces .fd-no-messages { display:flex; flex-direction:column; gap:4px; padding:18px; border:1px dashed var(--border-default); border-radius:8px; color:var(--text-muted); font-size:12px; }
