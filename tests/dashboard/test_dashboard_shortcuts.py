@@ -15,5 +15,7 @@ def test_traces_keyboard_shortcuts_have_accessible_guide_and_guarded_actions() -
     assert "target.closest?.('details, summary')" in js
     assert 'evt.ctrlKey || evt.altKey || evt.metaKey' in js
     assert "finderEditable(target) || finderEditable(active)" in js
+    assert "window.location.pathname === '/traces' && traceShortcutBlocked(evt)" in js
     assert "evt.key === 'j' || evt.key === 'J' || evt.key === 'ArrowDown'" in js
     assert "evt.key === 'k' || evt.key === 'K' || evt.key === 'ArrowUp'" in js
+    assert "['?', 'J', 'K'].includes(evt.key)" in js

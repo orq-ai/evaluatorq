@@ -1016,6 +1016,16 @@
   function finderEditable(el) {
     return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
   }
+  function traceShortcutBlocked(evt) {
+    const target = evt.target;
+    const active = document.activeElement;
+    const details = target.closest?.('details, summary') || active?.closest?.('details, summary');
+    const otherModal = Array.from(document.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]'))
+      .some((modal) => modal !== finderDialog() && modal !== shortcutGuide());
+    const shiftedShortcut = ['?', 'J', 'K'].includes(evt.key) && evt.shiftKey && !evt.ctrlKey && !evt.altKey && !evt.metaKey;
+    return evt.ctrlKey || evt.altKey || evt.metaKey || (evt.shiftKey && !shiftedShortcut) ||
+      finderEditable(target) || finderEditable(active) || details || otherModal;
+  }
   function ensureShortcutGuide() {
     let guide = shortcutGuide();
     if (guide) return guide;
@@ -1041,14 +1051,7 @@
   }
   function handleTraceShortcut(evt) {
     if (window.location.pathname !== '/traces') return false;
-    const target = evt.target;
-    const active = document.activeElement;
-    const details = target.closest?.('details, summary') || active?.closest?.('details, summary');
-    const otherModal = Array.from(document.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]'))
-      .some((modal) => modal !== finderDialog() && modal !== shortcutGuide());
-    const shiftedQuestion = evt.key === '?' && evt.shiftKey && !evt.ctrlKey && !evt.altKey && !evt.metaKey;
-    if (evt.ctrlKey || evt.altKey || evt.metaKey || (evt.shiftKey && !shiftedQuestion) ||
-        finderEditable(target) || finderEditable(active) || details || otherModal) return false;
+    if (traceShortcutBlocked(evt)) return false;
     if (evt.key === '/') {
       const input = document.querySelector('.finder-command-textarea, .finder-command textarea[name="query"], #finder-query-form textarea[name="query"]');
       if (!input || input.disabled) return false;
@@ -1134,7 +1137,7 @@
       return;
     }
     if (evt.metaKey || evt.ctrlKey || evt.altKey || finderEditable(document.activeElement)) return;
-    if (evt.target.closest?.('details, summary')) return;
+    if (window.location.pathname === '/traces' && traceShortcutBlocked(evt)) return;
     if (evt.key === 'j' || evt.key === 'J' || evt.key === 'ArrowDown') {
       evt.preventDefault();
       finderStep(1);
