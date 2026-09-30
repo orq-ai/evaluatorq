@@ -225,7 +225,7 @@
   document.body.addEventListener('htmx:afterSettle', function (evt) {
     const target = evt.detail?.target;
     if (!pendingExplorerControl || target?.id !== 'explorer-results') return;
-    const loadFailed = target.matches('.finder-form-error') || !!target.querySelector('.finder-form-error');
+    const loadFailed = !!document.querySelector('#explorer-results .finder-form-error');
     if (loadFailed) {
       pendingExplorerControl = null;
       return;

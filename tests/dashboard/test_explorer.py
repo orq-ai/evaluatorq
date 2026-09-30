@@ -1430,7 +1430,7 @@ def test_dashboard_js_keeps_facet_search_and_rows_controls_sequenced() -> None:
     assert "control = evt.target.closest('[hx-get][hx-target=\"#explorer-results\"]')" in js
     assert 'pendingExplorerControl = url;' in js
     assert "window.htmx.ajax('GET', url, { target: '#explorer-results', swap: 'outerHTML' })" in js
-    assert "target.querySelector('.finder-form-error')" in js
+    assert "document.querySelector('#explorer-results .finder-form-error')" in js
     assert 'if (loadFailed) {' in js
     assert 'pendingExplorerControl = null;' in js
     assert 'if (loadFailed) {\n      pendingExplorerControl = null;\n      return;' in js
