@@ -1012,7 +1012,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                     current,
                     settings,
                     error='There is no plan waiting for review.',
-                    **_catalogue_kwargs(req.app, current),
+                    **await _current_fragment_kwargs(req, current),
                 ),
                 status_code=409,
             )
@@ -1082,7 +1082,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         snapshot = await store.reset() if store is not None else RunSnapshot()
         if store is not None and store.explorer is not None:
             await store.explorer.restore_narrowed()
-            await store.explorer.set_view(quick_view='all')
+            await store.explorer.clear_ai_view_state()
         return _html(
             render_fragment(
                 req,

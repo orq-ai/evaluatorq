@@ -913,6 +913,37 @@ def test_reset_restores_within_narrowed_rows_filters_and_clears_ai_table_state(e
     assert 'tokens_min' in response.text
 
 
+def test_reset_clears_ai_table_state_when_within_keeps_every_row(explorer_client) -> None:
+    from evaluatorq.trace_finder.columns import MATCH
+
+    store, _, client = explorer_client
+    _load(client)
+    explorer = store.explorer
+    asyncio.run(explorer.set_view(sort=MATCH, matched_only=True, quick_view='matches'))
+
+    response = client.post('/find/reset', data=csrf_data())
+    view = asyncio.run(explorer.view())
+
+    assert response.status_code == 200
+    assert view.sort is None
+    assert view.matched_only is False
+    assert view.quick_view == 'all'
+    assert 'hx-get="/find/rows?quick_view=all"' in response.text
+
+
+def test_stale_review_start_renders_current_explorer_filters(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client, facet_model='kept-model', tokens_min='100')
+
+    response = client.post('/find/start', data=csrf_data({'instructions': 'stale'}))
+
+    assert response.status_code == 409
+    assert 'There is no plan waiting for review.' in response.text
+    assert 'kept-model' in response.text
+    assert 'tokens_min' in response.text
+    assert store.started is False
+
+
 def test_within_empty_and_422_renders_keep_current_explorer_filters(explorer_client) -> None:
     store, _, client = explorer_client
     _load(client, facet_model='kept-model', tokens_min='100')

@@ -448,6 +448,22 @@ class ExplorerStore:
         self._view = updated if updated == self._view else replace(updated, version=next(_SEQUENCE))
         return self._view
 
+    async def clear_ai_view_state(self) -> ExplorerView:
+        """Clear table controls that only make sense while AI results are active."""
+        current = self._view
+        updated = replace(
+            current,
+            sort=None if current.sort == MATCH else current.sort,
+            descending=True if current.sort == MATCH else current.descending,
+            matched_only=False,
+            quick_view='all',
+            page=0,
+        )
+        if updated != current:
+            updated = replace(updated, version=next(_SEQUENCE))
+        self._view = updated
+        return self._view
+
     async def records(self, trace_ids: Sequence[str]) -> dict[str, TraceRecord | None]:
         """Hydrate requested rows; successful records and empty traces are cached until the next load."""
         async with self._records_lock:
