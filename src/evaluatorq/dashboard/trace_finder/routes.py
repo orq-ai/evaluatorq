@@ -707,7 +707,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         visible_by_id = {row.trace_id: row for row in view.visible_rows(results)}
         if any(trace_id not in visible_by_id for trace_id in selected):
             return _html(
-                comparison_feedback('One or both traces are hidden by the current filters. Choose visible traces again.')
+                comparison_feedback(
+                    'One or both traces are hidden by the current filters. Choose visible traces again.'
+                )
             )
         return _html(comparison_panel(visible_by_id[selected[0]], visible_by_id[selected[1]]))
 
