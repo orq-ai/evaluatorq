@@ -1042,6 +1042,68 @@ async def test_search_warns_when_raw_summary_capture_is_unavailable(monkeypatch:
     assert any('SDK-model fallback' in warning and 'optional explorer fields' in warning for warning in warnings)
 
 
+class SpanLookupFailingTraces(FakeTraces):
+    def __init__(self, *args: Any, failing: set[str], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.failing = failing
+
+    async def list_spans_async(self, *, trace_id: str, **kwargs: Any) -> Any:
+        if trace_id in self.failing:
+            raise RuntimeError('span API down')
+        return await super().list_spans_async(trace_id=trace_id, **kwargs)
+
+
+def with_output_tokens(trace: Any) -> Any:
+    trace.usage = namespace(prompt_tokens=10, completion_tokens=5)
+    return trace
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_keeps_summary_messages_when_the_span_lookup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    trace = with_output_tokens(summary('partial', messages=user_messages('short question')))
+    source = make_source(FakeOrq(SpanLookupFailingTraces({None: ([trace], False, None)}, failing={'partial'})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records['partial'] is not None
+    assert records['partial'].messages == ({'role': 'user', 'content': 'short question'},)
+    assert sum('span lookup failed' in warning for warning in warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_returns_none_when_the_span_lookup_raises_and_summary_is_unusable() -> None:
+    trace = with_output_tokens(summary('empty', messages=[]))
+    source = make_source(FakeOrq(SpanLookupFailingTraces({None: ([trace], False, None)}, failing={'empty'})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records == {'empty': None}
+
+
+@pytest.mark.asyncio
+async def test_one_failing_span_lookup_does_not_fail_the_rest_of_the_batch() -> None:
+    bad = with_output_tokens(summary('bad', minute=1, messages=user_messages('bad question')))
+    good = summary('good', minute=0, messages=user_messages('good question'))
+    traces = SpanLookupFailingTraces({None: ([bad, good], False, None)}, failing={'bad'})
+    source = make_source(FakeOrq(traces))
+
+    rows = await source.search(START, END, 5, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records['good'] is not None
+    assert records['bad'] is not None
+    assert records['bad'].messages == ({'role': 'user', 'content': 'bad question'},)
+
+
 @pytest.mark.asyncio
 async def test_hydrate_rows_returns_none_for_a_failed_trace() -> None:
     ok = summary('ok', messages=user_messages('hello'))

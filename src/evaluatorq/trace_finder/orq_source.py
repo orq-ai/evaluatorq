@@ -74,6 +74,7 @@ class _HydrationIssues:
 
     system_prompt_errors: list[str] = dc_field(default_factory=list)
     missing_reply: list[str] = dc_field(default_factory=list)
+    span_errors: list[str] = dc_field(default_factory=list)
 
     def log(self, total: int) -> None:
         if self.system_prompt_errors:
@@ -82,6 +83,13 @@ class _HydrationIssues:
                 len(self.system_prompt_errors),
                 total,
                 self.system_prompt_errors[0],
+            )
+        if self.span_errors:
+            logger.warning(
+                'span lookup failed for {} of {} trace(s); kept summary messages where usable; first error: {}',
+                len(self.span_errors),
+                total,
+                self.span_errors[0],
             )
         if self.missing_reply:
             logger.warning(
@@ -545,38 +553,45 @@ class OrqTraceSource:
         trace_id = str(_field(summary, 'trace_id') or _field(summary, 'id') or '')
         if not trace_id:
             return None, fallback_count
-        spans = await self._list_spans(trace_id, semaphore)
         fallback: TraceRecord | None = None
-        for span in _eligible_spans(spans):
-            span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
-            if not span_id:
-                continue
-            async with semaphore:
-                marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
-                try:
-                    response = await self._client.traces.get_span_async(
-                        trace_id=trace_id,
-                        span_id=span_id,
-                        timeout_ms=SDK_TIMEOUT_MS,
-                    )
-                    raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
-                finally:
-                    if marker is not None:
-                        _CAPTURE_REQUEST.reset(marker)
-            detail = _field(response, 'span') or response
-            raw_detail = _field(raw_response, 'span') if raw_response else None
-            detail_fallback = raw_detail is None
-            if detail_fallback:
-                raw_detail = _plain(detail)
-            fallback_count += int(detail_fallback)
-            detail_messages = _conversation_messages(raw_detail)
-            if _usable(detail_messages):
-                record = _record(summary, raw_summary, detail, raw_detail, detail_messages, project_names)
-                if not missing_reply or _has_reply(detail_messages):
-                    return record, fallback_count
-                if fallback is None:
-                    fallback = record
-        if missing_reply:
+        span_lookup_failed = False
+        try:
+            spans = await self._list_spans(trace_id, semaphore)
+            for span in _eligible_spans(spans):
+                span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
+                if not span_id:
+                    continue
+                async with semaphore:
+                    marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
+                    try:
+                        response = await self._client.traces.get_span_async(
+                            trace_id=trace_id,
+                            span_id=span_id,
+                            timeout_ms=SDK_TIMEOUT_MS,
+                        )
+                        raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
+                    finally:
+                        if marker is not None:
+                            _CAPTURE_REQUEST.reset(marker)
+                detail = _field(response, 'span') or response
+                raw_detail = _field(raw_response, 'span') if raw_response else None
+                detail_fallback = raw_detail is None
+                if detail_fallback:
+                    raw_detail = _plain(detail)
+                fallback_count += int(detail_fallback)
+                detail_messages = _conversation_messages(raw_detail)
+                if _usable(detail_messages):
+                    record = _record(summary, raw_summary, detail, raw_detail, detail_messages, project_names)
+                    if not missing_reply or _has_reply(detail_messages):
+                        return record, fallback_count
+                    if fallback is None:
+                        fallback = record
+        except Exception as exc:  # noqa: BLE001 - the summary messages may still be usable; logged once per batch
+            if fallback is None and not _usable(messages):
+                raise  # nothing to show: keep the load failure visible instead of an empty trace
+            span_lookup_failed = True
+            issues.span_errors.append(f'{trace_id}: {type(exc).__name__}: {exc}')
+        if missing_reply and not span_lookup_failed:
             issues.missing_reply.append(trace_id)
         if fallback is not None:
             return fallback, fallback_count
