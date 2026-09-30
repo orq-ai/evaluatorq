@@ -30,14 +30,14 @@ def _traj(**overrides: Any) -> dict[str, Any]:
 @pytest.mark.parametrize('name', sorted(p.name for p in FIXTURES.glob('*.json')))
 def test_fixtures_load_and_reserialise(name: str) -> None:
     raw = (FIXTURES / name).read_text()
-    traj = AtifTrajectory.model_validate_json(raw)
-    again = AtifTrajectory.model_validate_json(traj.to_json())
+    traj = AtifTrajectory.from_json(raw)
+    again = AtifTrajectory.from_json(traj.to_json())
     assert again == traj
     assert json.loads(traj.to_json())['schema_version'] == json.loads(raw)['schema_version']
 
 
 def test_embedded_subagents_fixture_has_subagent() -> None:
-    traj = AtifTrajectory.model_validate_json((FIXTURES / 'phoenix_v17_embedded_subagents.json').read_text())
+    traj = AtifTrajectory.from_json((FIXTURES / 'phoenix_v17_embedded_subagents.json').read_text())
     assert traj.subagent_trajectories
     assert traj.steps[1].llm_call_count == 0
 
@@ -48,11 +48,46 @@ def test_unsupported_version_names_the_version(version: str) -> None:
         AtifTrajectory.model_validate(_traj(schema_version=version))
 
 
-def test_missing_schema_version_raises() -> None:
+@pytest.mark.parametrize('as_text', [True, False])
+def test_from_json_requires_schema_version_at_the_root(as_text: bool) -> None:
     data = _traj()
     del data['schema_version']
-    with pytest.raises(ValidationError, match='schema_version'):
-        AtifTrajectory.model_validate(data)
+    with pytest.raises(ValueError, match='schema_version is required'):
+        AtifTrajectory.from_json(json.dumps(data) if as_text else data)
+
+
+def test_from_json_rejects_an_unsupported_version() -> None:
+    with pytest.raises(ValidationError, match='ATIF-v1.6'):
+        AtifTrajectory.from_json(json.dumps(_traj(schema_version='ATIF-v1.6')).encode())
+
+
+def test_from_json_rejects_a_non_object_document() -> None:
+    with pytest.raises(ValueError, match='JSON object'):
+        AtifTrajectory.from_json('[1, 2]')
+
+
+def test_built_in_code_without_schema_version_defaults_to_1_7() -> None:
+    data = _traj()
+    del data['schema_version']
+    sub = _traj(trajectory_id='sub')
+    del sub['schema_version']
+    traj = AtifTrajectory.model_validate({**data, 'subagent_trajectories': [sub]})
+    assert traj.schema_version == 'ATIF-v1.7'
+    assert traj.subagent_trajectories is not None
+    assert traj.subagent_trajectories[0].schema_version == 'ATIF-v1.7'
+
+
+def test_embedded_subagent_without_version_reads_from_json() -> None:
+    sub = _traj(trajectory_id='sub')
+    del sub['schema_version']
+    traj = AtifTrajectory.from_json(json.dumps(_traj(subagent_trajectories=[sub])))
+    assert json.loads(traj.to_json())['subagent_trajectories'][0]['schema_version'] == 'ATIF-v1.7'
+
+
+def test_nanosecond_timestamp_is_accepted() -> None:
+    steps = [{'step_id': 1, 'source': 'user', 'message': 'a', 'timestamp': '2026-04-20T10:00:00.123456789Z'}]
+    traj = AtifTrajectory.model_validate(_traj(steps=steps))
+    assert traj.steps[0].timestamp == '2026-04-20T10:00:00.123456789Z'
 
 
 def test_step_ids_must_be_sequential() -> None:

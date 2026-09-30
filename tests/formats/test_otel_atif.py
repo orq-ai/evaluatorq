@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
+from evaluatorq.contracts import Message
 from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifToolCall, AtifTrajectory
+from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.otel import OtelTrace
 
 FIX = Path(__file__).parent / 'fixtures'
@@ -63,7 +65,7 @@ def test_parent_usage_is_not_summed_into_final_metrics() -> None:
 
 
 def test_atif_to_otel_tree_shape() -> None:
-    traj = AtifTrajectory.model_validate_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
+    traj = AtifTrajectory.from_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
     trace = traj.to_otel()
     ops = [s.operation for s in trace.spans]
     assert ops.count('invoke_agent') == 2
@@ -75,12 +77,12 @@ def test_atif_to_otel_tree_shape() -> None:
 
 
 def test_conversion_is_deterministic() -> None:
-    traj = AtifTrajectory.model_validate_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
+    traj = AtifTrajectory.from_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
     assert traj.to_otel().model_dump_json() == traj.to_otel().model_dump_json()
 
 
 def test_subagent_ids_differ_from_parent() -> None:
-    traj = AtifTrajectory.model_validate_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
+    traj = AtifTrajectory.from_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
     ids = [s.span_id for s in traj.to_otel().spans]
     assert len(ids) == len(set(ids))
 
@@ -277,3 +279,60 @@ def test_image_result_content_becomes_a_warned_marker(caplog: pytest.LogCaptureF
     tool = next(s for s in traj.to_otel().spans if s.operation == 'execute_tool')
     assert tool.attributes['gen_ai.tool.call.result'] == 'see [image: p.png]'
     assert caplog.text.count('p.png') == 1
+
+
+# --- user and system steps the OTel trace has to carry ---
+
+
+def _steps(*specs: tuple[Literal['system', 'user', 'agent'], str]) -> AtifTrajectory:
+    return AtifTrajectory(
+        session_id='s',
+        agent=AtifAgent(name='a', version='1'),
+        steps=[AtifStep(step_id=n + 1, source=source, message=text) for n, (source, text) in enumerate(specs)],
+    )
+
+
+def _sig(traj: AtifTrajectory) -> list[tuple[str, Any]]:
+    return [(s.source, s.message) for s in traj.steps]
+
+
+def test_steps_after_the_last_agent_step_round_trip() -> None:
+    traj = _steps(('user', 'q'), ('agent', 'a'), ('user', 'thanks'), ('system', 'wrap up'))
+    trace = traj.to_otel()
+    tail = [s for s in trace.spans if s.operation == 'chat'][-1]
+    assert tail.output_messages is None
+    assert _sig(trace.to_atif()) == _sig(traj)
+
+
+def test_system_step_after_the_first_agent_step_keeps_its_place() -> None:
+    traj = _steps(('system', 'be brief'), ('user', 'q'), ('agent', 'a'), ('system', 'now be formal'),
+                  ('user', 'q2'), ('agent', 'a2'))
+    assert _sig(traj.to_otel().to_atif()) == _sig(traj)
+
+
+def test_conversation_with_no_agent_turn_round_trips() -> None:
+    chat = ChatConversation(messages=[Message(role='system', content='be kind'), Message(role='user', content='hi')])
+    trace = chat.to_otel()
+    assert [s.operation for s in trace.spans] == ['invoke_agent', 'chat']
+    assert _sig(trace.to_atif()) == [('system', 'be kind'), ('user', 'hi')]
+
+
+def test_developer_step_and_empty_message_round_trip() -> None:
+    traj = AtifTrajectory(
+        agent=AtifAgent(name='a', version='1'),
+        steps=[
+            AtifStep(step_id=1, source='system', message='dev', extra={'original_role': 'developer'}),
+            AtifStep(step_id=2, source='user', message=''),
+            AtifStep(step_id=3, source='agent', message='ok'),
+        ],
+    )
+    back = traj.to_otel().to_atif()
+    assert _sig(back) == _sig(traj)
+    assert back.steps[0].extra == {'original_role': 'developer'}
+
+
+def test_multi_part_messages_join_with_newlines_in_every_role() -> None:
+    parts = [{'type': 'text', 'content': 'a'}, {'type': 'text', 'content': 'b'}]
+    span = _chat('c', [{'role': 'user', 'parts': parts}], [{'role': 'assistant', 'parts': parts}])
+    span['attributes']['gen_ai.system_instructions'] = parts
+    assert _sig(OtelTrace.from_orq([span]).to_atif()) == [('system', 'a\nb'), ('user', 'a\nb'), ('agent', 'a\nb')]

@@ -107,3 +107,20 @@ def test_unknown_item_type_warns_and_is_skipped(caplog: pytest.LogCaptureFixture
     conv = ResponsesConversation(items=[{'type': 'web_search_call', 'id': 'ws'}])
     assert conv.to_chat().messages == []
     assert 'web_search_call' in caplog.text
+
+
+def test_dict_arguments_are_kept_as_json() -> None:
+    items: list[dict[str, Any]] = [{'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': {'x': 1}}]
+    [message] = ResponsesConversation(items=items).to_chat().messages
+    assert message.tool_calls is not None and message.tool_calls[0].function.arguments == '{"x":1}'
+
+
+def test_unencodable_arguments_warn_instead_of_failing(caplog: pytest.LogCaptureFixture) -> None:
+    items: list[dict[str, Any]] = [{'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': {'x': {1, 2}}}]
+    [message] = ResponsesConversation(items=items).to_chat().messages
+    assert message.tool_calls is not None and message.tool_calls[0].function.arguments == '{"x":"{1, 2}"}'
+    assert 'not JSON-encodable' in caplog.text
+
+
+def test_chat_to_atif_takes_a_session_id() -> None:
+    assert ChatConversation(messages=[Message(role='user', content='hi')]).to_atif(session_id='mine').session_id == 'mine'

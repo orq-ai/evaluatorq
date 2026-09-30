@@ -8,7 +8,9 @@ step that issued the call. Nested `invoke_agent` spans become `subagent_trajecto
 spans only: `invoke_agent` spans carry inclusive totals that would double-count.
 
 ATIF -> OTel emits the GenAI semconv layout: one `invoke_agent` span, and under it one `chat` span per agent step
-plus one `execute_tool` span per tool call as siblings. Ids are SHA-256 of the session and trajectory ids.
+plus one `execute_tool` span per tool call as siblings. User and system steps after the last agent step go into
+one final `chat` span that has input and no output, which OTel -> ATIF reads back as those steps and no agent
+step. Ids are SHA-256 of the session and trajectory ids.
 """
 
 from __future__ import annotations
@@ -18,9 +20,9 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
 
-from evaluatorq.contracts import InputTextContent, content_to_text, tool_result_to_text
+from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.formats._ids import content_seed, stable_hex
-from evaluatorq.formats._shared import arguments_text, atif_content_text, final_metrics, tool_arguments
+from evaluatorq.formats._shared import arguments_text, atif_content_text, final_metrics, join_text, tool_arguments
 from evaluatorq.formats.atif import (
     AtifAgent,
     AtifContentPart,
@@ -176,7 +178,6 @@ def _build(
         for index, draft in enumerate(drafts)
     ]
     return AtifTrajectory(
-        schema_version='ATIF-v1.7',
         session_id=session_id,
         trajectory_id=trajectory_id,
         agent=agent,
@@ -223,7 +224,7 @@ def _system_instruction_steps(chat: OtelSpan) -> list[_Draft]:
     if not chat.system_instructions:
         return []
     texts, rest = _split_text(chat.system_instructions, chat.span_id)
-    return [_Draft(fields={'source': 'system', 'message': '\n'.join(texts), 'extra': rest})]
+    return [_Draft(fields={'source': 'system', 'message': join_text(texts), 'extra': rest})]
 
 
 def _history(messages: list[OtelMessage], *, first: bool) -> list[_Draft]:
@@ -246,7 +247,7 @@ def _history(messages: list[OtelMessage], *, first: bool) -> list[_Draft]:
 
 def _message_step(message: OtelMessage) -> _Draft:
     texts, extra = _split_text(message.parts, message.role)
-    text = content_to_text([InputTextContent(type='input_text', text=t) for t in texts])
+    text = join_text(texts)
     if message.role == 'developer':
         extra = {**(extra or {}), 'original_role': 'developer'}
     source = 'user' if message.role == 'user' else 'system'
@@ -293,7 +294,7 @@ def _agent_step(chat: OtelSpan, by_id: dict[str, OtelSpan]) -> _Draft | None:
     extra.update(_split_text(other, f'chat span {chat.span_id} output')[1] or {})
     fields: dict[str, Any] = {
         'source': 'agent',
-        'message': '\n'.join(texts),
+        'message': join_text(texts),
         'reasoning_content': '\n\n'.join(reasoning) or None,
         'tool_calls': calls or None,
         'model_name': _attribute(chat, 'gen_ai.response.model') or _attribute(chat, 'gen_ai.request.model'),
@@ -392,7 +393,7 @@ def _attach_results(
                 (n for n, (at, part) in enumerate(responses) if at > issued_at and part.id == call.tool_call_id), None
             )
             part = responses[found][1] if found is not None else None
-            result = _result(call.tool_call_id, span, part)
+            result = _result(call_id=call.tool_call_id, span=span, part=part)
             if result is not None:
                 draft.results.append(result)
             if span is not None:
@@ -425,12 +426,12 @@ def _attach_orphans(
         return
     for span in spans:
         call_id = span.attributes.get('gen_ai.tool.call.id')
-        result = _result(call_id if isinstance(call_id, str) else None, span, None, orphan=True)
+        result = _result(call_id=call_id if isinstance(call_id, str) else None, span=span, part=None, orphan=True)
         if result is not None:
             _agent_started_before(agents, span.start_time).results.append(result)
     for at, part in parts:
         before = [d for d in agents if d.span is not None and position[d.span.span_id] < at]
-        result = _result(part.id, None, part, orphan=True)
+        result = _result(call_id=part.id, span=None, part=part, orphan=True)
         if result is not None:
             (before[-1] if before else agents[0]).results.append(result)
 
@@ -442,7 +443,7 @@ def _agent_started_before(agents: list[_Draft], started: datetime | None) -> _Dr
 
 
 def _result(
-    call_id: str | None, span: OtelSpan | None, part: OtelToolCallResponsePart | None, *, orphan: bool = False
+    *, call_id: str | None, span: OtelSpan | None, part: OtelToolCallResponsePart | None, orphan: bool = False
 ) -> AtifObservationResult | None:
     """The result of one call, or None when nothing reports one (no empty result is made up).
 
@@ -514,15 +515,18 @@ def _reference(ref: AtifSubagentRef, span: OtelSpan, drafts: list[_Draft], by_id
 def atif_to_otel(traj: AtifTrajectory) -> OtelTrace:
     """Render an ATIF trajectory as one OTel trace in the GenAI semconv layout; see the module docstring.
 
-    Chat span input is the running history (user messages, assistant turns and tool results); system steps
-    become `system_instructions` of every later chat span. Embedded subagents are emitted under the
+    Chat span input is the running history (user and system messages, assistant turns and tool results). A
+    system step that opens the trajectory becomes `system_instructions` of every chat span; any later one is a
+    `system` (or `developer`) input message, so steps keep their order. User and system steps after the last
+    agent step go into a final chat span with no output. Embedded subagents are emitted under the
     `execute_tool` span of the call whose result references them, else under the root span, and share the
     root's trace id.
 
     Lost, with a warning per kind: observation results with no `source_call_id` (no tool message or span
     holds them), results on user and system steps, and subagent refs that are not embedded. Lost silently:
-    `llm_call_count`, `is_copied_context`, and step `extra` keys other than `invocation`, `finish_reasons`,
-    `error_type` and `requested_model`.
+    the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`, `agent.tool_definitions`,
+    user and system step timestamps, `llm_call_count`, `is_copied_context`, and step `extra` keys other than
+    `invocation`, `finish_reasons`, `error_type`, `requested_model` and `original_role`.
     """
     trace_id = stable_hex(_seed(traj), 'trace', length=32)
     return OtelTrace(spans=_emit_agent(traj, None, trace_id))
@@ -542,13 +546,20 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     call_spans: dict[str, str] = {}
     history: list[OtelMessage] = []
     system: list[OtelPart] = []
-    for step in traj.steps:
-        if step.source == 'system':
-            system.extend(_otel_parts(step.message))
-        elif step.source == 'user':
-            history.append(OtelMessage(role='user', parts=_otel_parts(step.message)))
-        else:
+    uncarried = False  # a user or system step no chat span has put into its input yet
+    for index, step in enumerate(traj.steps):
+        if step.source == 'agent':
             spans.extend(_emit_step(step, seed, trace_id, agent_span_id, history, system, call_spans))
+            uncarried = False
+            continue
+        role = _input_role(step)
+        if index == 0 and role == 'system':
+            system.extend(_input_parts(step.message))
+        else:
+            history.append(OtelMessage(role=role, parts=_input_parts(step.message)))
+        uncarried = True
+    if uncarried:
+        spans.append(_input_only_chat(seed, trace_id, agent_span_id, history, system))
     attributes: dict[str, Any] = {
         'gen_ai.operation.name': 'invoke_agent',
         'gen_ai.agent.name': traj.agent.name,
@@ -593,6 +604,33 @@ def _warn_dropped(traj: AtifTrajectory) -> None:
         logger.warning('Trajectory {}: dropping {} observation results on user or system steps', name, on_non_agent)
     if external:
         logger.warning('Trajectory {}: dropping {} references to subagents that are not embedded', name, external)
+
+
+def _input_role(step: AtifStep) -> str:
+    if step.source == 'user':
+        return 'user'
+    return 'developer' if (step.extra or {}).get('original_role') == 'developer' else 'system'
+
+
+def _input_parts(message: str | list[AtifContentPart]) -> list[OtelPart]:
+    """Parts of a user or system input message; an empty message keeps one empty text part so it still reads back."""
+    return _otel_parts(message) or [OtelTextPart(type='text', content='')]
+
+
+def _input_only_chat(
+    seed: str, trace_id: str, parent_span_id: str, history: list[OtelMessage], system: list[OtelPart]
+) -> OtelSpan:
+    """The chat span carrying user and system steps after the last agent step: input only, no output."""
+    return OtelSpan(
+        trace_id=trace_id,
+        span_id=stable_hex(seed, 'chat', 'input_only', length=16),
+        parent_span_id=parent_span_id,
+        name='chat',
+        operation='chat',
+        input_messages=list(history) or None,
+        system_instructions=list(system) or None,
+        attributes={'gen_ai.operation.name': 'chat'},
+    )
 
 
 def _ref_calls(traj: AtifTrajectory) -> dict[str, str]:
@@ -646,7 +684,16 @@ def _emit_step(
     for index, call in enumerate(step.tool_calls or []):
         span_id = stable_hex(seed, 'execute_tool', f'{step.step_id}.{index}', length=16)
         result = results.get(call.tool_call_id)
-        spans.append(_tool_span(call, result, texts.get(call.tool_call_id), trace_id, span_id, parent_span_id))
+        spans.append(
+            _tool_span(
+                call,
+                result,
+                texts.get(call.tool_call_id),
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+            )
+        )
         call_spans.setdefault(call.tool_call_id, span_id)
     history.append(output)
     for call_id, text in texts.items():
@@ -695,6 +742,7 @@ def _tool_span(
     call: AtifToolCall,
     result: AtifObservationResult | None,
     text: str | None,
+    *,
     trace_id: str,
     span_id: str,
     parent_span_id: str,

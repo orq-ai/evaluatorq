@@ -29,7 +29,14 @@ from evaluatorq.contracts import (
     tool_result_to_text,
 )
 from evaluatorq.formats._ids import content_seed, stable_hex
-from evaluatorq.formats._shared import arguments_text, final_metrics, media_marker, tool_arguments
+from evaluatorq.formats._shared import (
+    arguments_text,
+    final_metrics,
+    join_text,
+    media_marker,
+    parse_iso,
+    tool_arguments,
+)
 from evaluatorq.formats.atif import (
     AtifAgent,
     AtifContentPart,
@@ -57,6 +64,9 @@ _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'i
 }
 _RESPONSE_STATUSES: frozenset[str] = frozenset(get_args(ResponseStatus))
 _NO_STEPS = 'ResponsesConversation has no items; ATIF needs at least one step'
+# Response.metadata key listing the ATIF token counts that were unset (Responses usage has no null counts).
+UNSET_USAGE_KEY = 'atif_unset_usage'
+_UNMAPPED_METRICS = ('cost_usd', 'prompt_token_ids', 'completion_token_ids', 'logprobs')
 
 
 @dataclass
@@ -106,7 +116,6 @@ def responses_to_atif(
         else:
             steps.append(_user_step(draft, index + 1))
     return AtifTrajectory(
-        schema_version='ATIF-v1.7',
         session_id=session_id or stable_hex(content_seed(conv.items), length=16),
         agent=AtifAgent(name=agent_name, version=agent_version),
         steps=steps,
@@ -185,16 +194,16 @@ def _assistant_text(content: Any) -> str:
     if not isinstance(content, list):
         logger.warning('Assistant message content is {}; dropping it.', type(content).__name__)
         return ''
-    parts: list[ContentPart] = []
+    texts: list[str] = []
     for part in content:
         part_type = part.get('type') if isinstance(part, dict) else None
         if part_type in _TEXT_PART_TYPES:
-            parts.append(InputTextContent(type='input_text', text=str(part.get('text') or '')))
+            texts.append(str(part.get('text') or ''))
         elif part_type == 'refusal':
-            parts.append(InputTextContent(type='input_text', text=str(part.get('refusal') or '')))
+            texts.append(str(part.get('refusal') or ''))
         else:
             logger.warning('Dropping assistant content part of type {!r}: ATIF agent messages are text.', part_type)
-    return content_to_text(parts)
+    return join_text(texts)
 
 
 def _user_step(draft: _Draft, step_id: int) -> AtifStep:
@@ -212,7 +221,7 @@ def _user_content(content: Any) -> str | list[AtifContentPart]:
         return ''
     parts = [_user_part(part) for part in content]
     if all(p.type == 'text' for p in parts):
-        return '\n'.join(p.text or '' for p in parts)
+        return join_text(p.text or '' for p in parts)
     return parts
 
 
@@ -259,21 +268,23 @@ def _agent_step(draft: _Draft, step_id: int, response: Response | None) -> AtifS
     results = [AtifObservationResult(**result) for result in draft.results]
     fields: dict[str, Any] = {}
     if response is not None:
-        extra.update(_response_extra(response))
-        fields = {
-            'model_name': response.model or None,
-            'timestamp': (
-                datetime.fromtimestamp(response.created_at, tz=timezone.utc).isoformat()
-                if response.created_at
-                else None
-            ),
-            'metrics': _metrics_from_usage(response.usage),
-            'llm_call_count': 1,
-        }
+        placeholder = _is_placeholder(response)
+        extra.update(_response_extra(response, placeholder=placeholder))
+        if not placeholder:
+            fields = {
+                'model_name': response.model or None,
+                'timestamp': (
+                    datetime.fromtimestamp(response.created_at, tz=timezone.utc).isoformat()
+                    if response.created_at
+                    else None
+                ),
+                'metrics': _metrics_from_usage(response.usage, _unset_usage(response)),
+                'llm_call_count': 1,
+            }
     return AtifStep(
         step_id=step_id,
         source='agent',
-        message='\n'.join(draft.texts),
+        message=join_text(draft.texts),
         reasoning_content='\n'.join(reasoning_texts) or None,
         tool_calls=tool_calls or None,
         observation=AtifObservation(results=results) if results else None,
@@ -290,8 +301,19 @@ def _tool_call(call: dict[str, Any]) -> AtifToolCall:
     )
 
 
-def _response_extra(response: Response) -> dict[str, Any]:
-    extra: dict[str, Any] = {'response_id': response.id}
+def _is_placeholder(response: Response) -> bool:
+    """True for the stand-in `atif_to_responses` writes for a step with no model, usage or timestamp."""
+    return response.model == '' and response.usage is None and not response.created_at
+
+
+def _unset_usage(response: Response) -> frozenset[str]:
+    names = (response.metadata or {}).get(UNSET_USAGE_KEY) or ''
+    return frozenset(name for name in names.split(',') if name)
+
+
+def _response_extra(response: Response, *, placeholder: bool) -> dict[str, Any]:
+    """Response fields kept in step `extra`; a placeholder's made-up id is not one of them."""
+    extra: dict[str, Any] = {} if placeholder else {'response_id': response.id}
     if response.status is not None and response.status != 'completed':
         extra['status'] = response.status
     if response.error is not None:
@@ -301,15 +323,25 @@ def _response_extra(response: Response) -> dict[str, Any]:
     return extra
 
 
-def _metrics_from_usage(usage: ResponseUsage | None) -> AtifMetrics | None:
+def _metrics_from_usage(usage: ResponseUsage | None, unset: frozenset[str]) -> AtifMetrics | None:
+    """Step metrics from a Response's usage; counts named in `unset` were written as 0 for an unset ATIF value."""
     if usage is None:
         return None
-    return AtifMetrics(
-        prompt_tokens=usage.input_tokens,
-        completion_tokens=usage.output_tokens,
-        cached_tokens=usage.input_tokens_details.cached_tokens,
-        extra={'reasoning_tokens': usage.output_tokens_details.reasoning_tokens, 'total_tokens': usage.total_tokens},
+
+    def count(name: str, value: int) -> int | None:
+        return None if name in unset else value
+
+    extra = {
+        'reasoning_tokens': count('reasoning_tokens', usage.output_tokens_details.reasoning_tokens),
+        'total_tokens': count('total_tokens', usage.total_tokens),
+    }
+    metrics = AtifMetrics(
+        prompt_tokens=count('prompt_tokens', usage.input_tokens),
+        completion_tokens=count('completion_tokens', usage.output_tokens),
+        cached_tokens=count('cached_tokens', usage.input_tokens_details.cached_tokens),
+        extra={key: value for key, value in extra.items() if value is not None} or None,
     )
+    return None if metrics == AtifMetrics() else metrics
 
 
 # ATIF -> Responses
@@ -319,25 +351,35 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
     """Render an ATIF trajectory as Responses items plus exactly one `Response` per agent step.
 
     A step without model, metrics or timestamp gets a placeholder (`model=''`, `usage=None`, `created_at=0.0`),
-    which `responses_to_atif` reads back as absent.
+    which `responses_to_atif` reads back as absent. Responses usage has no unset token count, so an unset ATIF
+    count is written as 0 and named in `Response.metadata['atif_unset_usage']`, which reads back as unset.
 
     Lost: embedded and referenced subagent trajectories (warned), results with no `source_call_id`
-    (warned), non-text parts in agent messages, and audio or file-path images in user messages
-    (rendered as `[audio: path]` / `[image: path]` text markers).
+    (warned), metrics `cost_usd`, `prompt_token_ids`, `completion_token_ids` and `logprobs` (warned),
+    `reasoning_effort`, `llm_call_count` (read back as 1 for a step with a `Response` that is not a
+    placeholder), `extra.response_id` of a step with no model, metrics or timestamp, non-text parts in agent
+    messages, and audio or file-path images in user messages (rendered as `[audio: path]` / `[image: path]`
+    text markers).
     """
     seed = traj.session_id or traj.trajectory_id or content_seed(traj.model_dump(mode='json'))
     for sub in traj.subagent_trajectories or []:
         logger.warning('subagent {} not representable in Responses', sub.trajectory_id)
     items: list[dict[str, Any]] = []
     responses: list[Response] = []
+    unmapped: dict[str, int] = {}
     for step in traj.steps:
         if step.source == 'agent':
             items.extend(_agent_items(step, seed))
             responses.append(_response(step, seed))
+            for name in _UNMAPPED_METRICS:
+                if step.metrics is not None and getattr(step.metrics, name) is not None:
+                    unmapped[name] = unmapped.get(name, 0) + 1
         else:
             role = 'developer' if (step.extra or {}).get('original_role') == 'developer' else step.source
             content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
             items.extend(messages_to_responses_input([Message(role=role, content=content)]))
+    if unmapped:
+        logger.warning('Responses usage has no slot for step metrics {} (steps per metric); dropping them.', unmapped)
     for item in items:
         if 'role' in item:
             item.setdefault('type', 'message')
@@ -410,17 +452,27 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
 def _response(step: AtifStep, seed: str) -> Response:
     extra = step.extra or {}
     usage: dict[str, Any] | None = None
+    metadata: dict[str, str] | None = None
     if step.metrics is not None:
         metrics = step.metrics
-        prompt = metrics.prompt_tokens or 0
-        completion = metrics.completion_tokens or 0
+        counts = {
+            'prompt_tokens': metrics.prompt_tokens,
+            'completion_tokens': metrics.completion_tokens,
+            'cached_tokens': metrics.cached_tokens,
+            'reasoning_tokens': _extra_int(metrics.extra, 'reasoning_tokens', step.step_id),
+            'total_tokens': _extra_int(metrics.extra, 'total_tokens', step.step_id),
+        }
+        prompt = counts['prompt_tokens'] or 0
+        completion = counts['completion_tokens'] or 0
         usage = {
             'input_tokens': prompt,
             'output_tokens': completion,
-            'total_tokens': _extra_int(metrics.extra, 'total_tokens', step.step_id) or prompt + completion,
-            'input_tokens_details': {'cached_tokens': metrics.cached_tokens or 0},
-            'output_tokens_details': {'reasoning_tokens': _extra_int(metrics.extra, 'reasoning_tokens', step.step_id)},
+            'total_tokens': counts['total_tokens'] if counts['total_tokens'] is not None else prompt + completion,
+            'input_tokens_details': {'cached_tokens': counts['cached_tokens'] or 0},
+            'output_tokens_details': {'reasoning_tokens': counts['reasoning_tokens'] or 0},
         }
+        unset = [name for name, value in counts.items() if value is None]
+        metadata = {UNSET_USAGE_KEY: ','.join(unset)} if unset else None
     response_id = extra.get('response_id')
     if response_id is not None and not isinstance(response_id, str):
         _warn_foreign('response_id', step.step_id, response_id)
@@ -442,6 +494,7 @@ def _response(step: AtifStep, seed: str) -> Response:
         'error': _extra_model(extra, 'error', ResponseError, step.step_id),
         'incomplete_details': _extra_model(extra, 'incomplete_details', IncompleteDetails, step.step_id),
         'usage': usage,
+        'metadata': metadata,
     })
 
 
@@ -451,14 +504,14 @@ def _warn_foreign(key: str, step_id: int, value: object) -> None:
     )
 
 
-def _extra_int(extra: dict[str, Any] | None, key: str, step_id: int) -> int:
+def _extra_int(extra: dict[str, Any] | None, key: str, step_id: int) -> int | None:
     value = (extra or {}).get(key)
     if value is None:
-        return 0
+        return None
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     _warn_foreign(key, step_id, value)
-    return 0
+    return None
 
 
 def _extra_model(extra: dict[str, Any], key: str, model: type[BaseModel], step_id: int) -> dict[str, Any] | None:
@@ -479,7 +532,7 @@ def _extra_model(extra: dict[str, Any], key: str, model: type[BaseModel], step_i
 def _epoch(timestamp: str | None) -> float:
     if timestamp is None:
         return 0.0
-    moment = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+    moment = parse_iso(timestamp)
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.timestamp()

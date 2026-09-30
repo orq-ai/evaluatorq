@@ -44,8 +44,12 @@ class ResponsesConversation(BaseModel):
 
         return convert_chat_responses.responses_to_chat(self)
 
-    def to_atif(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> AtifTrajectory:
+    def to_atif(
+        self, *, agent_name: str = 'unknown', agent_version: str = 'unknown', session_id: str | None = None
+    ) -> AtifTrajectory:
         """Convert to an ATIF trajectory: user/system messages become steps, assistant output becomes agent steps.
+
+        `session_id` defaults to a hash of the items, so converting the same items twice gives the same id.
 
         A tool result closes its agent step; `responses` enrich agent steps only when there is exactly one per
         agent step (otherwise they are ignored with a warning). Kept in free-form slots: reasoning tokens and
@@ -56,7 +60,9 @@ class ResponsesConversation(BaseModel):
         """
         from evaluatorq.formats import convert_responses_atif
 
-        return convert_responses_atif.responses_to_atif(self, agent_name=agent_name, agent_version=agent_version)
+        return convert_responses_atif.responses_to_atif(
+            self, agent_name=agent_name, agent_version=agent_version, session_id=session_id
+        )
 
     def to_otel(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> OtelTrace:
         """Convert to one OTel trace through ATIF.

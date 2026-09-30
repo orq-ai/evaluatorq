@@ -30,15 +30,17 @@ class ChatConversation(BaseModel):
 
         return convert_chat_responses.chat_to_responses(self)
 
-    def to_atif(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> AtifTrajectory:
-        """Convert to an ATIF trajectory through Responses.
+    def to_atif(
+        self, *, agent_name: str = 'unknown', agent_version: str = 'unknown', session_id: str | None = None
+    ) -> AtifTrajectory:
+        """Convert to an ATIF trajectory through Responses. `session_id` defaults to a hash of the messages.
 
         Lost: everything lost by `ChatConversation.to_responses` and `ResponsesConversation.to_atif`
         (unlinked tool results, non-text assistant parts, `Message.name` on non-tool rows, non-`fc_` item ids,
         file parts as markers). Consecutive assistant turns with no tool result between them merge into one
         agent step.
         """
-        return self.to_responses().to_atif(agent_name=agent_name, agent_version=agent_version)
+        return self.to_responses().to_atif(agent_name=agent_name, agent_version=agent_version, session_id=session_id)
 
     def to_otel(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> OtelTrace:
         """Convert to one OTel trace through Responses and ATIF.

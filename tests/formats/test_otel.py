@@ -254,3 +254,32 @@ def test_chat_completions_message_with_json_string_arguments() -> None:
     result = tool.parts[0]
     assert isinstance(result, OtelToolCallResponsePart)
     assert (result.id, result.response) == ('c1', 'sunny')
+
+
+@pytest.mark.parametrize('kind', [{'a': 1}, ['x'], 3])
+def test_unhashable_or_non_string_part_type_is_kept_generic(kind: Any, caplog: pytest.LogCaptureFixture) -> None:
+    span = {'span_id': 's', 'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': [
+        {'role': 'user', 'parts': [{'type': kind}, {'type': 'text', 'content': 'hi'}]}]}}
+    [parsed] = OtelTrace.from_orq([span]).spans
+    assert parsed.input_messages is not None
+    parts = parsed.input_messages[0].parts
+    assert isinstance(parts[0], OtelGenericPart) and parts[0].type == str(kind)
+    assert isinstance(parts[1], OtelTextPart)
+    assert 'Unknown OTel message part type' in caplog.text
+
+
+def test_non_dict_part_is_kept_generic() -> None:
+    part = parse_part('loose text')
+    assert isinstance(part, OtelGenericPart)
+    assert part.model_dump() == {'type': 'unknown', 'value': 'loose text'}
+
+
+def test_nanosecond_iso_time_parses() -> None:
+    parsed = parse_time('2026-04-20T10:00:00.123456789Z')
+    assert parsed is not None and parsed.microsecond == 123456 and parsed.tzinfo is not None
+
+
+@pytest.mark.parametrize('value', [1e20, float('nan')])
+def test_out_of_range_epoch_is_unset_with_warning(value: float, caplog: pytest.LogCaptureFixture) -> None:
+    assert parse_time(value) is None
+    assert 'out of range' in caplog.text

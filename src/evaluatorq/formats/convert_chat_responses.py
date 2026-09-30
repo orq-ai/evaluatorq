@@ -16,6 +16,7 @@ from evaluatorq.contracts import (
     StrategyToolCall,
     tool_result_to_text,
 )
+from evaluatorq.formats._shared import arguments_text, join_text, tool_arguments
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.responses import ResponsesConversation
 from evaluatorq.openresponses.input_items import messages_to_responses_input, responses_function_call_item_id
@@ -96,7 +97,7 @@ def _content(raw: Any) -> str | list[ContentPart] | None:
         return None
     parts = [_part(p) for p in raw]
     if all(isinstance(p, InputTextContent) for p in parts):
-        return '\n'.join(cast('InputTextContent', p).text for p in parts)
+        return join_text(cast('InputTextContent', p).text for p in parts)
     return parts
 
 
@@ -120,9 +121,11 @@ def _call_item(item: dict[str, Any], state: _State) -> None:
         logger.warning('Responses function_call {!r} has no call_id; skipping it.', name)
         return
     arguments = item.get('arguments')
+    if not isinstance(arguments, str):
+        arguments = arguments_text(tool_arguments(arguments, name))
     call = StrategyToolCall(
         id=call_id,
-        function=FunctionCall(name=str(name or ''), arguments=arguments if isinstance(arguments, str) else '{}'),
+        function=FunctionCall(name=str(name or ''), arguments=arguments),
         item_id=responses_function_call_item_id(item.get('id') if isinstance(item.get('id'), str) else None),
     )
     state.call_names[call_id] = call.function.name

@@ -33,7 +33,7 @@ def _chat() -> ChatConversation:
 def _all_formats() -> dict[str, Format]:
     chat = _chat()
     otel = OtelTrace.from_orq(json.loads((FIX / 'otel' / 'orq_agent_subagent.json').read_text()))
-    atif = AtifTrajectory.model_validate_json((FIX / 'atif' / 'harbor_atif2otel_pass_v17.json').read_text())
+    atif = AtifTrajectory.from_json((FIX / 'atif' / 'harbor_atif2otel_pass_v17.json').read_text())
     return {'chat': chat, 'responses': chat.to_responses(), 'otel': otel, 'atif': atif}
 
 
@@ -67,7 +67,7 @@ def _step_sig(t: AtifTrajectory) -> list[Any]:
 
 
 def test_atif_responses_atif_keeps_messages_calls_reasoning_metrics() -> None:
-    src = AtifTrajectory.model_validate_json((FIX / 'atif' / 'harbor_atif2otel_pass_v17.json').read_text())
+    src = AtifTrajectory.from_json((FIX / 'atif' / 'harbor_atif2otel_pass_v17.json').read_text())
     back = src.to_responses().to_atif()
     assert _step_sig(back) == _step_sig(src)
     assert [s.message for s in back.steps] == [s.message for s in src.steps]
@@ -80,7 +80,7 @@ def test_atif_responses_atif_keeps_messages_calls_reasoning_metrics() -> None:
 def test_atif_responses_atif_merges_steps_whose_results_have_no_call_id() -> None:
     # Documented loss: a result with no source_call_id is dropped (warned), so the agent steps it separated merge,
     # and the per-step responses no longer line up one to one, so their metrics are ignored (warned).
-    src = AtifTrajectory.model_validate_json((FIX / 'atif' / 'harbor_invalid_json_v18.json').read_text())
+    src = AtifTrajectory.from_json((FIX / 'atif' / 'harbor_invalid_json_v18.json').read_text())
     back = src.to_responses().to_atif()
     assert [s.source for s in back.steps] == ['user', 'agent', 'agent']
     calls = [c.tool_call_id for s in back.steps for c in s.tool_calls or []]

@@ -14,6 +14,7 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from evaluatorq.common.trace_input import parent_span_id_of, span_id_of
+from evaluatorq.formats._shared import parse_iso
 
 if TYPE_CHECKING:
     from evaluatorq.formats.atif import AtifTrajectory
@@ -131,7 +132,11 @@ _PART_CLASSES = (*_PART_MODELS.values(), OtelGenericPart)
 
 
 def parse_part(raw: Any) -> OtelPart:
-    """Parse one part dict. Unknown `type` becomes OtelGenericPart (warning, except Orq refusal/data)."""
+    """Parse one part dict. Unknown `type` becomes OtelGenericPart (warning, except Orq refusal/data).
+
+    A `type` that is not a string is kept as its `str()`, and a part that is not a dict as `{"type": "unknown",
+    "value": part}`, so the generic fallback never raises.
+    """
     if isinstance(raw, _PART_CLASSES):
         return cast('OtelPart', raw)
     if isinstance(raw, dict) and 'type' not in raw and 'kind' in raw:
@@ -140,9 +145,12 @@ def parse_part(raw: Any) -> OtelPart:
     model = _PART_MODELS.get(kind) if isinstance(kind, str) else None
     if model is not None:
         return cast('OtelPart', model.model_validate(raw))
-    if kind not in _ORQ_PARTS:
+    if not (isinstance(kind, str) and kind in _ORQ_PARTS):
         logger.warning('Unknown OTel message part type {!r}; keeping it as a generic part', kind)
-    return OtelGenericPart.model_validate(raw if isinstance(raw, dict) else {'type': str(kind)})
+    if not isinstance(raw, dict):
+        return OtelGenericPart.model_validate({'type': 'unknown', 'value': raw})
+    generic = {**cast('dict[str, Any]', raw), 'type': kind if isinstance(kind, str) else str(kind)}
+    return OtelGenericPart.model_validate(generic)
 
 
 def _a2a_part(raw: dict[str, Any]) -> dict[str, Any]:
@@ -301,10 +309,14 @@ def parse_time(value: object) -> datetime | None:
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         seconds = value / 1000 if value > 10_000_000_000 else value
-        return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        try:
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError) as exc:
+            logger.warning('Span time {!r} is out of range ({}); leaving it unset', value, exc)
+            return None
     if isinstance(value, str):
         try:
-            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            parsed = parse_iso(value)
         except ValueError:
             pass
         else:

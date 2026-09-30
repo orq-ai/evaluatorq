@@ -1,16 +1,41 @@
-"""Helpers shared by the ATIF converters: tool-call arguments, final metrics and ATIF content flattening."""
+"""Helpers shared by the format converters: text joining, ISO times, tool-call arguments, final metrics, media."""
 
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+import re
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
 from evaluatorq.contracts import InputTextContent, content_to_text
-from evaluatorq.formats.atif import AtifContentPart, AtifFinalMetrics, AtifStep
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from evaluatorq.formats.atif import AtifContentPart, AtifFinalMetrics, AtifStep
 
 RAW_ARGUMENTS_KEY = '_raw'
+_FRACTION = re.compile(r'(?<=\d{2}:\d{2}:\d{2})\.(\d+)')
+
+
+def join_text(texts: Iterable[str]) -> str:
+    """Join the text parts of one message with newlines, skipping empty parts (the one rule for every converter)."""
+    return '\n'.join(text for text in texts if text)
+
+
+def parse_iso(value: str) -> datetime:
+    """Parse an ISO 8601 string on any supported Python: `Z` suffix, and fractions of any length (cut to 6 digits).
+
+    Raises:
+        ValueError: `value` is not an ISO 8601 date or time.
+    """
+    text = value.strip()
+    if text[-1:] in ('Z', 'z'):
+        text = text[:-1] + '+00:00'
+    text = _FRACTION.sub(lambda match: '.' + match.group(1)[:6].ljust(6, '0'), text, count=1)
+    return datetime.fromisoformat(text)
 
 
 def tool_arguments(raw: Any, name: object) -> dict[str, Any]:
@@ -30,15 +55,24 @@ def tool_arguments(raw: Any, name: object) -> dict[str, Any]:
 
 
 def arguments_text(arguments: dict[str, Any]) -> str:
-    """Render ATIF arguments as a JSON string; `{"_raw": s}` is written back as `s`."""
+    """Render ATIF arguments as a JSON string; `{"_raw": s}` is written back as `s`.
+
+    A value JSON cannot encode is written as its `str()` (warned) rather than failing the conversion.
+    """
     raw = arguments.get(RAW_ARGUMENTS_KEY)
     if len(arguments) == 1 and isinstance(raw, str):
         return raw
-    return json.dumps(arguments, separators=(',', ':'), sort_keys=True)
+    try:
+        return json.dumps(arguments, separators=(',', ':'), sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        logger.warning('Tool call arguments are not JSON-encodable ({}); writing unencodable values as text.', exc)
+        return json.dumps(arguments, separators=(',', ':'), sort_keys=True, default=str)
 
 
 def final_metrics(steps: list[AtifStep]) -> AtifFinalMetrics | None:
     """Sum the steps' own metrics (never any span or response total), or None when no step is measured."""
+    from evaluatorq.formats.atif import AtifFinalMetrics  # atif imports this module for parse_iso
+
     measured = [step.metrics for step in steps if step.metrics is not None]
     if not measured:
         return None
@@ -67,5 +101,5 @@ def atif_content_text(content: str | list[AtifContentPart], target: str) -> str:
     """Flatten ATIF content to text; image and audio parts become warned `[type: path]` markers."""
     if isinstance(content, str):
         return content
-    texts = [part.text or '' if part.type == 'text' else media_marker(part, target) for part in content]
+    texts = [(part.text or '') if part.type == 'text' else media_marker(part, target) for part in content]
     return content_to_text([InputTextContent(type='input_text', text=text) for text in texts])

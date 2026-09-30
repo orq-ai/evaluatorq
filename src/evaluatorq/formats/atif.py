@@ -7,10 +7,11 @@ differ only by the `audio` content part, so one model set serves both.
 from __future__ import annotations
 
 import json
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from evaluatorq.formats._shared import parse_iso
 
 if TYPE_CHECKING:
     from evaluatorq.formats.chat import ChatConversation
@@ -203,7 +204,7 @@ class AtifStep(BaseModel):
     def _check_timestamp(cls, value: str | None) -> str | None:
         if value is not None:
             try:
-                datetime.fromisoformat(value.replace('Z', '+00:00'))
+                parse_iso(value)
             except ValueError as exc:
                 msg = f'Invalid ISO 8601 timestamp: {exc}'
                 raise ValueError(msg) from exc
@@ -231,9 +232,10 @@ def _parts_have_audio(content: str | list[AtifContentPart] | None) -> bool:
 class AtifTrajectory(BaseModel):
     """An agent run as an ATIF-v1.7 or v1.8 trajectory.
 
-    Reading accepts `ATIF-v1.7` and `ATIF-v1.8` only. `to_json` keeps the trajectory's own
-    `schema_version` (v1.7 for one built by a converter), upgrading to v1.8 when any content
-    part in the document (embedded subagents included) is audio.
+    Reading accepts `ATIF-v1.7` and `ATIF-v1.8` only. `from_json` requires `schema_version` at the document
+    root; built in code (or embedded as a subagent) the field defaults to `ATIF-v1.7`. `to_json` keeps the
+    trajectory's own `schema_version`, upgrading to v1.8 when any content part in the document (embedded
+    subagents included) is audio.
     """
 
     model_config = _FROZEN
@@ -251,11 +253,8 @@ class AtifTrajectory(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def _check_version(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            version = data.get('schema_version')
-            if version is None:
-                msg = 'schema_version is required (supported: ATIF-v1.7, ATIF-v1.8)'
-                raise ValueError(msg)
+        if isinstance(data, dict) and 'schema_version' in data:
+            version = cast('dict[str, Any]', data)['schema_version']
             if version not in SUPPORTED_VERSIONS:
                 msg = f'Unsupported ATIF schema_version {version!r}; supported: {", ".join(SUPPORTED_VERSIONS)}'
                 raise ValueError(msg)
@@ -287,6 +286,24 @@ class AtifTrajectory(BaseModel):
                 raise ValueError(msg)
             seen.add(sub.trajectory_id)
         return self
+
+    @classmethod
+    def from_json(cls, data: str | bytes | dict[str, Any]) -> AtifTrajectory:
+        """Read an ATIF JSON document (text, bytes or an already-parsed dict).
+
+        Unlike `model_validate`, the document root must carry `schema_version`, as the ATIF spec requires.
+
+        Raises:
+            ValueError: The document is not a JSON object, has no `schema_version`, or does not validate.
+        """
+        doc: Any = json.loads(data) if isinstance(data, (str, bytes)) else data
+        if not isinstance(doc, dict):
+            msg = f'An ATIF document must be a JSON object, got {type(doc).__name__}'
+            raise ValueError(msg)  # noqa: TRY004 - a malformed document, reported as ValueError like the rest
+        if 'schema_version' not in doc:
+            msg = 'schema_version is required (supported: ATIF-v1.7, ATIF-v1.8)'
+            raise ValueError(msg)
+        return cls.model_validate(doc)
 
     def has_audio(self) -> bool:
         """Return True if any content part in this trajectory or an embedded subagent is audio."""

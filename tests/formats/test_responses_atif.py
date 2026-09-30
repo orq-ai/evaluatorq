@@ -136,7 +136,7 @@ def test_responses_atif_responses_roundtrip_preserves_transcript() -> None:
 
 
 def test_fixture_trajectory_converts_to_responses_and_back() -> None:
-    traj = AtifTrajectory.model_validate_json((FIXTURES / 'harbor_invalid_json_v18.json').read_text())
+    traj = AtifTrajectory.from_json((FIXTURES / 'harbor_invalid_json_v18.json').read_text())
     again = traj.to_responses().to_atif()
     assert len(again.steps) >= 1
 
@@ -180,7 +180,7 @@ def test_developer_role_survives_the_round_trip() -> None:
 
 
 def test_embedded_subagent_is_warned_as_lost(caplog: pytest.LogCaptureFixture) -> None:
-    traj = AtifTrajectory.model_validate_json((FIXTURES / 'phoenix_v17_embedded_subagents.json').read_text())
+    traj = AtifTrajectory.from_json((FIXTURES / 'phoenix_v17_embedded_subagents.json').read_text())
     traj.to_responses()
     assert 'not representable in Responses' in caplog.text
 
@@ -248,3 +248,71 @@ def test_valid_status_error_and_incomplete_details_pass_through() -> None:
     assert response.status == 'failed'
     assert response.error is not None and response.error.model_dump() == error
     assert response.incomplete_details is not None and response.incomplete_details.model_dump() == incomplete
+
+
+# --- ATIF -> Responses -> ATIF does not invent data ---
+
+
+def _agent_traj(**step: Any) -> AtifTrajectory:
+    return AtifTrajectory.model_validate({
+        'agent': {'name': 'a', 'version': '1'}, 'session_id': 's',
+        'steps': [{'step_id': 1, 'source': 'user', 'message': 'q'},
+                  {'step_id': 2, 'source': 'agent', 'message': 'x', **step}]})
+
+
+def test_placeholder_response_reads_back_as_absent() -> None:
+    traj = _agent_traj(llm_call_count=0)
+    back = traj.to_responses().to_atif().steps[1]
+    assert (back.llm_call_count, back.model_name, back.timestamp, back.metrics, back.extra) == (None,) * 5
+
+
+def test_unset_token_counts_stay_unset() -> None:
+    traj = _agent_traj(model_name='gpt-x', metrics={'prompt_tokens': 10})
+    responses = traj.to_responses().responses
+    assert responses is not None and responses[0].metadata is not None
+    back = traj.to_responses().to_atif().steps[1].metrics
+    assert back is not None
+    assert (back.prompt_tokens, back.completion_tokens, back.cached_tokens, back.extra) == (10, None, None, None)
+
+
+def test_known_token_counts_including_zero_survive() -> None:
+    metrics = {'prompt_tokens': 0, 'completion_tokens': 3, 'cached_tokens': 0,
+               'extra': {'reasoning_tokens': 0, 'total_tokens': 3}}
+    traj = _agent_traj(model_name='gpt-x', metrics=metrics)
+    responses = traj.to_responses().responses
+    assert responses is not None and responses[0].metadata is None
+    back = traj.to_responses().to_atif().steps[1].metrics
+    assert back is not None and back.model_dump(exclude_none=True) == metrics
+
+
+def test_cost_and_token_ids_are_dropped_with_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    traj = _agent_traj(model_name='gpt-x', metrics={'prompt_tokens': 1, 'completion_tokens': 1, 'cost_usd': 0.5,
+                                                    'logprobs': [-0.1]})
+    back = traj.to_responses().to_atif().steps[1].metrics
+    assert back is not None and back.cost_usd is None and back.logprobs is None
+    assert "'cost_usd': 1" in caplog.text and "'logprobs': 1" in caplog.text
+
+
+def test_nanosecond_timestamp_converts_to_created_at() -> None:
+    traj = _agent_traj(model_name='gpt-x', timestamp='2026-04-20T10:00:00.123456789Z')
+    responses = traj.to_responses().responses
+    assert responses is not None and responses[0].created_at == pytest.approx(1_776_679_200.123456)
+
+
+def test_session_id_is_passed_through() -> None:
+    assert ResponsesConversation(items=_ITEMS).to_atif(session_id='mine').session_id == 'mine'
+
+
+# --- one text-joining rule on every route ---
+
+
+def test_multi_part_messages_agree_across_routes() -> None:
+    parts = [{'type': 'output_text', 'text': 'a'}, {'type': 'output_text', 'text': ''},
+             {'type': 'output_text', 'text': 'b'}]
+    conv = ResponsesConversation(items=[
+        {'type': 'message', 'role': 'user', 'content': [{**p, 'type': 'input_text'} for p in parts]},
+        {'type': 'message', 'role': 'assistant', 'content': parts},
+    ])
+    direct = [(m.role, m.content) for m in conv.to_chat().messages]
+    assert direct == [('user', 'a\nb'), ('assistant', 'a\nb')]
+    assert [(m.role, m.content) for m in conv.to_atif().to_chat().messages] == direct
