@@ -1278,8 +1278,9 @@ def test_completed_empty_run_keeps_clear_without_download() -> None:
 def test_run_controls_are_preserved_across_polls_per_form(setup_finder) -> None:
     store, client = setup_finder
     run = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'})).text
-    for name in ('window_days', 'limit', 'parallelism'):
+    for name in ('window_days', 'parallelism'):
         assert f'id="finder-{name}-finder-query-form" hx-preserve' in run
+    assert 'id="finder-limit-query"' in run
     assert 'hx-target="#finder-run-status" hx-swap="outerHTML"' in run
     poll = client.get('/find/poll')
     assert poll.status_code == 200
@@ -1296,8 +1297,8 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
     assert 'data-finder-example=' in html
     assert 'placeholder="Ask a question, e.g. Did any customers get frustrated?"' in html
     assert 'Search in' in html
-    assert '<span>Loaded traces</span>' in html
-    assert '<span>All traces</span>' in html
+    assert '<span>Within results</span>' in html
+    assert '<span>New search</span>' in html
     assert 'answered by an AI model' in html
     assert 'Ask AI' in html
     assert '>Search<' in html

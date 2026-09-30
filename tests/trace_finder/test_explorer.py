@@ -68,12 +68,12 @@ async def test_failed_hydration_is_retried_and_can_succeed() -> None:
     rows = (TraceRow(trace_id='retry-me'),)
     calls = 0
 
-    async def hydrate(requested: Any) -> dict[str, TraceRecord | None]:
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
         nonlocal calls
         calls += 1
         if calls == 1:
             return {}
-        return {row.trace_id: record(row.trace_id) for row in requested}
+        return {row.trace_id: record(row.trace_id) for row in rows}
 
     store = ExplorerStore(search=FakeSource(rows).search, hydrate=hydrate)
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
