@@ -1677,6 +1677,7 @@ def test_traces_duration_bar_uses_visible_set_scale_and_inclusive_p95_across_pag
 
     page_one = explorer_views.table(view, columns, None, traces_layout=True)
     assert 'role="img" aria-label="Duration magnitude: 1ms; 1% of the longest visible trace"' in page_one
+    assert '<col style="width:16ch">' in page_one
     assert 'xr-duration-p95' not in page_one
 
     page_two = explorer_views.table(replace(view, page=1), columns, None, traces_layout=True)
@@ -1697,7 +1698,8 @@ def test_traces_duration_keeps_unknown_text_and_find_has_no_bar() -> None:
 
     assert '<span>—</span>' in traces
     assert 'xr-duration-p95' not in traces
-    assert 'xr-duration-bar' in traces
+    assert 'xr-duration-bar' not in traces
+    assert 'role="img"' not in traces
     assert 'xr-duration-bar' not in find
 
 

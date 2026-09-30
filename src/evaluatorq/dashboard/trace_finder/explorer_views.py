@@ -278,16 +278,20 @@ def table(
         )
     if not columns:
         return _empty('No columns selected.', 'Choose at least one column from Columns to show trace details.')
+    rendered_keys = [
+        c.key for c in columns for _ in (_match_names(snapshot, c.label) if c.key == MATCH else (c.label,))
+    ]
     widths = _header_widths(columns, view.rows, snapshot)
+    if traces_layout:
+        widths = tuple(
+            max(width, 16) if key == 'duration' else width for key, width in zip(rendered_keys, widths, strict=True)
+        )
     duration_rows = view.visible_rows(results) if traces_layout else ()
     duration_totals = totals(duration_rows) if traces_layout else None
     duration_scale = max((row.duration_ms or 0 for row in duration_rows), default=0)
     duration_p95 = duration_totals.p95_ms if duration_totals is not None else None
     # One text column takes no fixed width so it absorbs the card's spare room; the table's
     # min-width keeps every column at least as wide as its measured content.
-    rendered_keys = [
-        c.key for c in columns for _ in (_match_names(snapshot, c.label) if c.key == MATCH else (c.label,))
-    ]
     flex_key = next((key for key in ('trace', 'name', 'agent') if key in rendered_keys), None)
     colgroup = ''.join(
         '<col>' if key == flex_key else f'<col style="width:{width}ch">'
@@ -335,13 +339,15 @@ def table(
 def _duration_cell(value: int | None, scale: int, p95: int | None) -> str:
     """Render numeric duration plus an accessible magnitude cue and visible-set p95 tint."""
     label = fmt_duration(value)
-    width = min(100, max(0, round(value / scale * 100))) if value is not None and scale else 0
+    if value is None:
+        return f'<td class="num xr-duration"><span>{esc(label)}</span></td>'
+    width = min(100, max(0, round(value / scale * 100))) if scale else 0
     magnitude = (
         f'<span class="xr-duration-bar" role="img" aria-label="Duration magnitude: {esc(label)}; '
         f'{width}% of the longest visible trace" title="{esc(label)} relative to the longest visible trace">'
         f'<span style="width:{width}%"></span></span>'
     )
-    at_p95 = value is not None and p95 is not None and value >= p95
+    at_p95 = p95 is not None and value >= p95
     p95_class = ' xr-duration-p95' if at_p95 else ''
     p95_title = f' title="At or above visible-set p95 ({esc(fmt_duration(p95))})"' if at_p95 else ''
     return f'<td class="num xr-duration{p95_class}"{p95_title}><span>{esc(label)}</span>{magnitude}</td>'
