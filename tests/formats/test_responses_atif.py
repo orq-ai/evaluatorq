@@ -316,3 +316,26 @@ def test_multi_part_messages_agree_across_routes() -> None:
     direct = [(m.role, m.content) for m in conv.to_chat().messages]
     assert direct == [('user', 'a\nb'), ('assistant', 'a\nb')]
     assert [(m.role, m.content) for m in conv.to_atif().to_chat().messages] == direct
+
+
+def test_multi_part_text_tool_result_joins_with_newlines() -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'},
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': '', 'tool_calls': [
+            {'tool_call_id': 'c', 'function_name': 'f', 'arguments': {}}],
+            'observation': {'results': [{'source_call_id': 'c', 'content': [
+                {'type': 'text', 'text': 'a'}, {'type': 'text', 'text': 'b'}]}]}}]})
+    output = next(i for i in traj.to_responses().items if i.get('type') == 'function_call_output')
+    assert output['output'] == 'a\nb'
+
+
+def test_malformed_assistant_text_part_is_warned_not_repr_ed(caplog: pytest.LogCaptureFixture) -> None:
+    conv = ResponsesConversation(items=[
+        {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': {'bad': 1}}]},
+        {'type': 'message', 'role': 'assistant', 'content': [
+            {'type': 'output_text', 'text': 'ok'}, {'type': 'output_text', 'text': ['bad']}]},
+    ])
+    traj = conv.to_atif()
+    assert traj.steps[0].message == ''
+    assert traj.steps[1].message == 'ok'
+    assert caplog.text.count('carries no text') == 2

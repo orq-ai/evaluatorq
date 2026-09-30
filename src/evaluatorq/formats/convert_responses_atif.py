@@ -31,10 +31,12 @@ from evaluatorq.contracts import (
 from evaluatorq.formats._ids import content_seed, stable_hex
 from evaluatorq.formats._shared import (
     arguments_text,
+    atif_content_text,
     final_metrics,
     join_text,
     media_marker,
     parse_iso,
+    part_text,
     tool_arguments,
 )
 from evaluatorq.formats.atif import (
@@ -197,10 +199,8 @@ def _assistant_text(content: Any) -> str:
     texts: list[str] = []
     for part in content:
         part_type = part.get('type') if isinstance(part, dict) else None
-        if part_type in _TEXT_PART_TYPES:
-            texts.append(str(part.get('text') or ''))
-        elif part_type == 'refusal':
-            texts.append(str(part.get('refusal') or ''))
+        if part_type in _TEXT_PART_TYPES or part_type == 'refusal':
+            texts.append(part_text(part, 'Assistant message'))
         else:
             logger.warning('Dropping assistant content part of type {!r}: ATIF agent messages are text.', part_type)
     return join_text(texts)
@@ -228,7 +228,7 @@ def _user_content(content: Any) -> str | list[AtifContentPart]:
 def _user_part(part: Any) -> AtifContentPart:
     part_type = part.get('type') if isinstance(part, dict) else type(part).__name__
     if isinstance(part, dict) and part_type in _TEXT_PART_TYPES:
-        return AtifContentPart(type='text', text=str(part.get('text') or ''))
+        return AtifContentPart(type='text', text=part_text(part, 'Message'))
     if isinstance(part, dict) and part_type == 'input_image' and isinstance(part.get('image_url'), str):
         url: str = part['image_url']
         return AtifContentPart(type='image', source=AtifImageSource(media_type=_image_media_type(url), path=url))
@@ -434,9 +434,12 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
                 step.step_id,
             )
             continue
-        result_content = (
-            result.content if isinstance(result.content, str) or result.content is None else _atif_parts(result.content)
-        )
+        if isinstance(result.content, list) and all(part.type == 'text' for part in result.content):
+            result_content = atif_content_text(result.content, 'Responses')
+        elif isinstance(result.content, list):
+            result_content = _atif_parts(result.content)
+        else:
+            result_content = result.content
         messages.append(
             Message(
                 role='tool',

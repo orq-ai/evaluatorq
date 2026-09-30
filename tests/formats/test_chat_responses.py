@@ -124,3 +124,12 @@ def test_unencodable_arguments_warn_instead_of_failing(caplog: pytest.LogCapture
 
 def test_chat_to_atif_takes_a_session_id() -> None:
     assert ChatConversation(messages=[Message(role='user', content='hi')]).to_atif(session_id='mine').session_id == 'mine'
+
+
+def test_malformed_text_part_is_warned_not_repr_ed(caplog: pytest.LogCaptureFixture) -> None:
+    conv = ResponsesConversation(items=[
+        {'type': 'message', 'role': 'user', 'content': [
+            {'type': 'input_text', 'text': 'hi'}, {'type': 'input_text', 'text': {'bad': 1}}]},
+    ])
+    assert conv.to_chat().messages[0].content == 'hi'
+    assert 'carries no text' in caplog.text

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from loguru import logger
 
-from evaluatorq.contracts import InputTextContent, content_to_text
+from evaluatorq.common.messages import content_part_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -23,6 +23,16 @@ _FRACTION = re.compile(r'(?<=\d{2}:\d{2}:\d{2})\.(\d+)')
 def join_text(texts: Iterable[str]) -> str:
     """Join the text parts of one message with newlines, skipping empty parts (the one rule for every converter)."""
     return '\n'.join(text for text in texts if text)
+
+
+def part_text(part: Any, where: str) -> str:
+    """The text of a Responses text part, read by `content_part_text`; a part with no string text is warned, not repr-ed."""
+    text = content_part_text(part)
+    if text is None or (not text and not any(isinstance(part.get(key), str) for key in ('text', 'refusal', 'content'))):
+        kind = part.get('type') if isinstance(part, dict) else type(part).__name__
+        logger.warning('{} content part of type {!r} carries no text; dropping it.', where, kind)
+        return ''
+    return text
 
 
 def parse_iso(value: str) -> datetime:
@@ -98,8 +108,7 @@ def media_marker(part: AtifContentPart, target: str) -> str:
 
 
 def atif_content_text(content: str | list[AtifContentPart], target: str) -> str:
-    """Flatten ATIF content to text; image and audio parts become warned `[type: path]` markers."""
+    """Flatten ATIF content to text with `join_text`; image and audio parts become warned `[type: path]` markers."""
     if isinstance(content, str):
         return content
-    texts = [(part.text or '') if part.type == 'text' else media_marker(part, target) for part in content]
-    return content_to_text([InputTextContent(type='input_text', text=text) for text in texts])
+    return join_text((part.text or '') if part.type == 'text' else media_marker(part, target) for part in content)

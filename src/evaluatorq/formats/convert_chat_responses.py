@@ -16,7 +16,7 @@ from evaluatorq.contracts import (
     StrategyToolCall,
     tool_result_to_text,
 )
-from evaluatorq.formats._shared import arguments_text, join_text, tool_arguments
+from evaluatorq.formats._shared import arguments_text, join_text, part_text, tool_arguments
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.responses import ResponsesConversation
 from evaluatorq.openresponses.input_items import messages_to_responses_input, responses_function_call_item_id
@@ -67,7 +67,7 @@ def _part(part: Any) -> ContentPart:
         return InputTextContent(type='input_text', text=f'[{type(part).__name__}]')
     part_type = part.get('type')
     if part_type in _TEXT_PART_TYPES:
-        return InputTextContent(type='input_text', text=str(part.get('text') or part.get('refusal') or ''))
+        return InputTextContent(type='input_text', text=part_text(part, 'Responses'))
     if part_type == 'input_image':
         image_url = part.get('image_url')
         return InputImageContent(
