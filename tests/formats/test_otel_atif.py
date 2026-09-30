@@ -387,6 +387,44 @@ def test_duplicate_call_id_parents_subagents_by_call_occurrence() -> None:
     ] == ['sub1', 'sub2']
 
 
+def test_duplicate_call_id_additional_result_keeps_subagent_reference() -> None:
+    sub = AtifTrajectory(
+        trajectory_id='sub', agent=AtifAgent(name='sub', version='1'),
+        steps=[AtifStep(step_id=1, source='agent', message='child')],
+    )
+    traj = AtifTrajectory(
+        agent=AtifAgent(name='a', version='1'),
+        steps=[AtifStep(
+            step_id=1,
+            source='agent',
+            message='',
+            tool_calls=[
+                AtifToolCall(tool_call_id='same', function_name='f', arguments={}),
+                AtifToolCall(tool_call_id='same', function_name='f', arguments={}),
+            ],
+            observation=AtifObservation(results=[
+                AtifObservationResult(source_call_id='same', content='first'),
+                AtifObservationResult(source_call_id='same', content='second'),
+                AtifObservationResult(
+                    source_call_id='same',
+                    content='third',
+                    subagent_trajectory_ref=[AtifSubagentRef(trajectory_id='sub')],
+                ),
+            ]),
+        )],
+        subagent_trajectories=[sub],
+    )
+    round_trip = traj.to_otel().to_atif()
+    agent_step = next(step for step in round_trip.steps if step.source == 'agent')
+    assert agent_step.observation is not None
+    refs = [result.subagent_trajectory_ref or [] for result in agent_step.observation.results]
+    assert [len(result_refs) for result_refs in refs] == [0, 0, 1]
+    assert refs[2][0].trajectory_id != 'sub'
+    assert round_trip.subagent_trajectories is not None
+    names_by_id = {child.trajectory_id: child.agent.name for child in round_trip.subagent_trajectories}
+    assert names_by_id[refs[2][0].trajectory_id] == 'sub'
+
+
 def test_atif_to_otel_preserves_observation_result_order() -> None:
     traj = AtifTrajectory(
         agent=AtifAgent(name='a', version='1'),

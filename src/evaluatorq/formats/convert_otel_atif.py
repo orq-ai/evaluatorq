@@ -78,6 +78,8 @@ _COMPACTION = 'compaction'
 # ATIF data OTel has no attribute for, carried as JSON strings so OTel -> ATIF can restore it.
 _STEP_EXTRA = 'evaluatorq.atif.step.extra'
 _TRAJECTORY_EXTRA = 'evaluatorq.atif.trajectory.extra'
+_SUBAGENT_RESULT_OFFSET = 'evaluatorq.atif.subagent_result_offset'
+_SUBAGENT_SOURCE_TRAJECTORY_ID = 'evaluatorq.atif.subagent_source_trajectory_id'
 _FINAL_METRICS = 'evaluatorq.atif.final_metrics'
 _TOOL_CALL_EXTRA = 'evaluatorq.atif.tool_call.extra'
 _RESULT_EXTRA = 'evaluatorq.atif.result.extra'
@@ -102,6 +104,7 @@ class _Draft:
     results: list[AtifObservationResult] = field(default_factory=list)
     tool_span_ids: set[str] = field(default_factory=set)
     tool_span_result_indices: dict[str, int] = field(default_factory=dict)
+    tool_span_result_groups: dict[str, list[int]] = field(default_factory=dict)
 
 
 # OTel -> ATIF
@@ -607,7 +610,7 @@ def _attach_results(
                 result_order += 1
                 additional = _additional_results(span)
                 for item in additional:
-                    pending_results.append((response_order, result_order, item, None))
+                    pending_results.append((response_order, result_order, item, span.span_id if span else None))
                     result_order += 1
             if span is not None:
                 used_spans.add(span.span_id)
@@ -617,7 +620,8 @@ def _attach_results(
             index = len(draft.results)
             draft.results.append(result)
             if span_id is not None:
-                draft.tool_span_result_indices[span_id] = index
+                draft.tool_span_result_groups.setdefault(span_id, []).append(index)
+                draft.tool_span_result_indices.setdefault(span_id, index)
     orphan_spans = [span for span in tool_spans if span.span_id not in used_spans]
     orphan_parts = [entry for n, entry in enumerate(responses) if n not in used_parts]
     _attach_orphans(drafts, position, orphan_spans, orphan_parts)
@@ -742,11 +746,23 @@ def _reference(ref: AtifSubagentRef, span: OtelSpan, drafts: list[_Draft], by_id
     )
     candidates = [owning_draft] if owning_draft is not None else drafts
     if owning_draft is not None and parent is not None:
-        result_index = owning_draft.tool_span_result_indices.get(parent.span_id)
+        result_offset = span.attributes.get(_SUBAGENT_RESULT_OFFSET)
+        result_group = owning_draft.tool_span_result_groups.get(parent.span_id, [])
+        result_index = (
+            result_group[result_offset]
+            if isinstance(result_offset, int) and 0 <= result_offset < len(result_group)
+            else owning_draft.tool_span_result_indices.get(parent.span_id)
+        )
         if result_index is not None:
             result = owning_draft.results[result_index]
             if result.source_call_id == call_id:
-                refs = [*(result.subagent_trajectory_ref or []), ref]
+                source_id = span.attributes.get(_SUBAGENT_SOURCE_TRAJECTORY_ID)
+                refs = [
+                    existing
+                    for existing in result.subagent_trajectory_ref or []
+                    if source_id is None or existing.trajectory_id != source_id
+                ]
+                refs.append(ref)
                 owning_draft.results[result_index] = result.model_copy(update={'subagent_trajectory_ref': refs})
                 return
     matching = [
@@ -849,8 +865,13 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     refs = _ref_calls(traj)
     for sub in traj.subagent_trajectories or []:
         ref = refs.get(sub.trajectory_id or '')
-        parent = call_spans.get(ref, agent_span_id) if ref is not None else agent_span_id
-        spans.extend(_emit_agent(sub, parent, trace_id))
+        call_ref = ref[:3] if ref is not None else None
+        parent = call_spans.get(call_ref, agent_span_id) if call_ref is not None else agent_span_id
+        child_spans = _emit_agent(sub, parent, trace_id)
+        if ref is not None and call_ref is not None:
+            child_spans[0].attributes[_SUBAGENT_RESULT_OFFSET] = ref[3]
+            child_spans[0].attributes[_SUBAGENT_SOURCE_TRAJECTORY_ID] = sub.trajectory_id
+        spans.extend(child_spans)
     return [root, *spans]
 
 
@@ -903,9 +924,9 @@ def _input_only_chat(
     )
 
 
-def _ref_calls(traj: AtifTrajectory) -> dict[str, tuple[int, str, int]]:
-    """Map each referenced subagent to its issuing step, call id, and call occurrence."""
-    refs: dict[str, tuple[int, str, int]] = {}
+def _ref_calls(traj: AtifTrajectory) -> dict[str, tuple[int, str, int, int]]:
+    """Map each subagent to its issuing call occurrence and result offset within that call."""
+    refs: dict[str, tuple[int, str, int, int]] = {}
     for step in traj.steps:
         call_counts: dict[str, int] = {}
         for call in step.tool_calls or []:
@@ -920,10 +941,11 @@ def _ref_calls(traj: AtifTrajectory) -> dict[str, tuple[int, str, int]]:
             call_count = call_counts.get(call_id, 0)
             if call_count == 0:
                 continue
-            occurrence = min(occurrence, call_count - 1)
+            call_occurrence = min(occurrence, call_count - 1)
+            result_offset = occurrence - call_occurrence
             for ref in result.subagent_trajectory_ref or []:
                 if ref.trajectory_id is not None:
-                    refs.setdefault(ref.trajectory_id, (step.step_id, call_id, occurrence))
+                    refs.setdefault(ref.trajectory_id, (step.step_id, call_id, call_occurrence, result_offset))
     return refs
 
 
