@@ -199,6 +199,8 @@ class ExplorerView:
     end: datetime | None = None
     facets: FacetSelection = field(default_factory=FacetSelection)
     message_counts: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
+    message_counting: bool = False
+    message_count_error: str | None = None
     numeric: NumericFilters = field(default_factory=NumericFilters)
     error: str | None = None
     sort: str | None = None
@@ -269,6 +271,7 @@ class ExplorerStore:
         self._view = ExplorerView()
         self._task: asyncio.Task[None] | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
+        self._message_count_task: asyncio.Task[None] | None = None
         self._records: dict[str, TraceRecord | None] = {}
         self._records_lock = asyncio.Lock()
         self._hydrations: dict[tuple[str, ...], asyncio.Task[dict[str, TraceRecord | None]]] = {}
@@ -399,6 +402,9 @@ class ExplorerStore:
             else current.show_tool_definitions,
             matched_only=matched_only if matched_only is not None else current.matched_only,
             quick_view=quick_view if quick_view is not None else current.quick_view,
+            message_count_error=None
+            if switching_quick_view and quick_view == 'conv_longest'
+            else current.message_count_error,
         )
         display = ('sort', 'descending', 'page', 'view', 'matched_only', 'quick_view')
         if any(getattr(updated, name) != getattr(current, name) for name in display):
@@ -540,6 +546,44 @@ class ExplorerStore:
             )
         return self._view
 
+    async def start_message_counting(self) -> ExplorerView:
+        """Count loaded-row messages in the background, scoped to the current load generation."""
+        if (
+            self._view.message_counts
+            or self._view.message_counting
+            or self._view.message_count_error
+            or not self._view.rows
+        ):
+            return self._view
+        generation = self._view.generation
+        self._view = replace(self._view, message_counting=True, message_count_error=None, version=next(_SEQUENCE))
+
+        async def count() -> None:
+            try:
+                counted = await self.message_counts()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 — counting should leave the loaded table usable
+                if self._view.generation == generation:
+                    logger.warning('Counting conversation messages failed: {}', error)
+                    self._view = replace(
+                        self._view,
+                        message_counting=False,
+                        message_count_error=str(error),
+                        version=next(_SEQUENCE),
+                    )
+                return
+            if self._view.generation == generation and counted.generation == generation:
+                self._view = replace(
+                    self._view,
+                    message_counting=False,
+                    message_count_error=None,
+                    version=next(_SEQUENCE),
+                )
+
+        self._message_count_task = asyncio.create_task(count())
+        return self._view
+
     async def row(self, trace_id: str) -> TraceRow | None:
         return next((row for row in self._view.rows if row.trace_id == trace_id), None)
 
@@ -553,9 +597,14 @@ class ExplorerStore:
         self._records.clear()
 
     async def _cancel(self) -> None:
-        tasks = [task for task in (self._task, self._prewarm_task) if task is not None and not task.done()]
+        tasks = [
+            task
+            for task in (self._task, self._prewarm_task, self._message_count_task)
+            if task is not None and not task.done()
+        ]
         self._task = None
         self._prewarm_task = None
+        self._message_count_task = None
         for task in tasks:
             task.cancel()
         if tasks:

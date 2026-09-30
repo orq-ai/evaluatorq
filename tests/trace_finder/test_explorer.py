@@ -435,6 +435,87 @@ async def test_message_counts_fill_from_hydrated_records() -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_message_counting_returns_pending_then_completes() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        entered.set()
+        await release.wait()
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    store = ExplorerStore(search=FakeSource((TraceRow(trace_id='one'),)).search, hydrate=hydrate)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
+
+    pending = await store.start_message_counting()
+    assert pending.message_counting
+    assert pending.message_counts == {}
+    await entered.wait()
+    await store.set_view(quick_view='all', sort='started', descending=False)
+    release.set()
+    assert store._message_count_task is not None  # pyright: ignore[reportPrivateUsage]
+    await store._message_count_task  # pyright: ignore[reportPrivateUsage]
+
+    completed = await store.view()
+    assert not completed.message_counting
+    assert completed.quick_view == 'all'
+    assert completed.sort == 'started'
+    assert not completed.descending
+    assert completed.message_counts == {'one': len(record('one').messages)}
+
+
+@pytest.mark.asyncio
+async def test_background_message_counting_is_cancelled_by_new_load() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        entered.set()
+        await release.wait()
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    old = FakeSource((TraceRow(trace_id='old'),))
+    store = ExplorerStore(search=old.search, hydrate=hydrate)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
+    await store.start_message_counting()
+    await entered.wait()
+
+    new = FakeSource((TraceRow(trace_id='new'),))
+    store._search = new.search  # pyright: ignore[reportPrivateUsage]
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
+    release.set()
+
+    current = await store.view()
+    assert current.rows[0].trace_id == 'new'
+    assert current.message_counts == {}
+    assert not current.message_counting
+
+
+@pytest.mark.asyncio
+async def test_background_message_counting_reports_hydration_error() -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        entered.set()
+        await release.wait()
+        raise RuntimeError('hydrator offline')
+
+    store = ExplorerStore(search=FakeSource((TraceRow(trace_id='one'),)).search, hydrate=hydrate)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
+    await store.start_message_counting()
+    await entered.wait()
+    release.set()
+    assert store._message_count_task is not None  # pyright: ignore[reportPrivateUsage]
+    await store._message_count_task  # pyright: ignore[reportPrivateUsage]
+
+    failed = await store.view()
+    assert not failed.message_counting
+    assert failed.message_counts == {}
+    assert failed.message_count_error == 'hydrator offline'
+
+
+@pytest.mark.asyncio
 async def test_concurrent_records_requests_share_hydration() -> None:
     entered = asyncio.Event()
     release = asyncio.Event()

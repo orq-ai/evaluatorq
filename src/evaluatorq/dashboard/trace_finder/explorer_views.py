@@ -809,7 +809,7 @@ def results(
     # The self-poll swaps nothing itself: /find/rows answers it with out-of-band renders.
     poll_attrs = (
         ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="none"'
-        if view.state == 'loading' or view.trajectory_warming
+        if view.state == 'loading' or view.trajectory_warming or view.message_counting
         else ''
     )
     judged = snapshot.results if snapshot is not None and snapshot.results else None
@@ -864,6 +864,10 @@ def results(
     status = (
         f'<div class="xr-status" role="status">Loading traces · {len(view.rows)} / {view.limit}</div>'
         if view.state == 'loading'
+        else '<div class="xr-status" role="status">Counting messages…</div>'
+        if view.quick_view == 'conv_longest' and view.message_counting
+        else f'<div class="xr-status" role="status">Could not count messages: {esc(view.message_count_error)}</div>'
+        if view.quick_view == 'conv_longest' and view.message_count_error
         else f'<div class="xr-status" role="status">{counts["matches"]} AI matches</div>'
         if view.quick_view == 'matches' and 'matches' in counts
         else f'<div class="xr-status" role="status">Top 10% by {TOP_METRICS[view.quick_view][0]} · '
@@ -912,7 +916,14 @@ def results(
             if view.view == 'trajectories'
             else f'<div class="xr-table-wrap">{table(view, columns, snapshot, traces_layout=traces_layout)}</div>'
         )
-        if not visible_rows:
+        if view.quick_view == 'conv_longest' and (view.message_counting or view.message_count_error):
+            body = _empty(
+                'Counting messages…' if view.message_counting else 'Message counts unavailable.',
+                'The loaded traces are still available. Choose another view or retry this view to count again.'
+                if view.message_count_error
+                else 'Message counts will appear here when loading finishes.',
+            )
+        elif not visible_rows:
             label = (
                 f'No loaded traces report {TOP_METRICS[view.quick_view][0]}.'
                 if view.quick_view in TOP_METRICS

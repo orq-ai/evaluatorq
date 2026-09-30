@@ -1117,6 +1117,70 @@ def test_rows_route_hydrates_longest_conversation_view_and_shows_message_status(
     assert 'Top 10% of conversations by messages' in html
 
 
+@pytest.mark.asyncio
+async def test_rows_route_returns_while_message_counts_hydrate_and_polls_completion(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, source, client = explorer_client
+    release = threading.Event()
+    source.rows = tuple(row.model_copy(update={'thread_id': 'thread'}) for row in source.rows)
+
+    async def slow_hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        await asyncio.to_thread(release.wait, 2)
+        return {
+            row.trace_id: TraceRecord(
+                schema_version=1,
+                trace_id=row.trace_id,
+                span_id='s',
+                timestamp=datetime.now(timezone.utc),
+                messages=({'role': 'user', 'content': 'hello'},) * 2,
+                project='project',
+                model='model',
+                provider='provider',
+                status='ok',
+                product='product',
+                trace_type='span.chat_completion',
+            )
+            for row in rows
+        }
+
+    store.explorer._hydrate = slow_hydrate
+
+    async def warm_catalogue(_app: Any, _window_days: int) -> None:
+        return None
+
+    monkeypatch.setattr(finder_routes, '_warm_catalogue', warm_catalogue)
+    async with AsyncClient(transport=ASGITransport(app=client.app), base_url='http://testserver') as http:
+        await http.post(
+            '/find/load',
+            data=csrf_data({
+                'from': '2026-09-27',
+                'from_time': '10:00:00',
+                'to': '2026-09-27',
+                'to_time': '11:00:00',
+                'tz_offset': '0',
+                'rows': '250',
+            }),
+        )
+        for _ in range(20):
+            if (await store.explorer.view()).state == 'loaded':
+                break
+            await asyncio.sleep(0.01)
+        response = await http.get('/find/rows?quick_view=conv_longest')
+        assert response.status_code == 200
+        assert 'Counting messages…' in response.text
+        assert 'Could not count messages' not in response.text
+
+        release.set()
+        for _ in range(100):
+            response = await http.get('/find/rows?quick_view=conv_longest', headers={'HX-Trigger': 'explorer-results'})
+            if 'Counting messages…' not in response.text:
+                break
+            await asyncio.sleep(0.01)
+        assert 'Counting messages…' not in response.text
+        assert 'Top 10% of conversations by messages' in response.text
+
+
 def test_rows_route_reports_message_count_hydration_failure(explorer_client) -> None:
     store, _, client = explorer_client
 
@@ -1126,6 +1190,8 @@ def test_rows_route_reports_message_count_hydration_failure(explorer_client) -> 
     store.explorer._hydrate = fail
     _load(client)
     response = client.get('/find/rows?quick_view=conv_longest')
+    if 'Could not count messages: hydrator offline' not in response.text:
+        response = client.get('/find/rows?quick_view=conv_longest')
 
     assert response.status_code == 200
     assert 'Could not count messages: hydrator offline' in response.text

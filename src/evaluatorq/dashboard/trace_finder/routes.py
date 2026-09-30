@@ -958,11 +958,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             )
             view = await explorer.view()
             if view.state == 'loaded' and view.quick_view == 'conv_longest' and view.rows:
-                try:
-                    await explorer.message_counts()
-                except Exception as exc:  # noqa: BLE001 - hydration must not jam the table
-                    logger.warning('Counting conversation messages failed: {}', exc)
-                    return _html(await _explorer_html(req, error=f'Could not count messages: {exc}'))
+                await explorer.start_message_counting()
         # The section's own timer swaps nothing itself (hx-swap="none"), so its render arrives out of band.
         polling = req.headers.get('HX-Trigger') == 'explorer-results'
         body = await _explorer_html(req, oob=polling, poll=polling)
