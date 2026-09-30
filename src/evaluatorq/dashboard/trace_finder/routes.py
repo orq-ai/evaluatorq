@@ -31,6 +31,7 @@ from evaluatorq.dashboard.trace_finder.views import (
     fragment,
     missing_trace_drawer,
     page_html,
+    run_status,
     scope_toggle,
 )
 from evaluatorq.trace_finder import (
@@ -581,7 +582,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             )
         return fragment(snapshot, settings, **kwargs)
 
-    async def _explorer_html(req: Request, *, oob: bool = False, error: str | None = None) -> str:
+    async def _explorer_html(req: Request, *, oob: bool = False, error: str | None = None, poll: bool = False) -> str:
         store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
@@ -594,6 +595,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 error=error,
                 window_days=_settings(req.app).window_days,
                 traces_layout=not is_search(req),
+                poll=poll,
             )
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
@@ -601,9 +603,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         page_ids = [row.trace_id for row in view.page_rows(results)]
         records = None
         if view.view == 'trajectories' and view.rows:
+            # A poll never fetches messages: it would wait on the hydration lock a run can hold for minutes.
             records = (
                 explorer.cached_records(page_ids)
-                if view.state == 'loading' or view.trajectory_warming
+                if poll or view.state == 'loading' or view.trajectory_warming
                 else await explorer.records(page_ids)
             )
         return explorer_views.results(
@@ -615,6 +618,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             error=error,
             window_days=_settings(req.app).window_days,
             traces_layout=not is_search(req),
+            poll=poll,
         )
 
     @app.get('/find')
@@ -788,6 +792,16 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             )
         return _html(render_fragment(req, snapshot, settings, **_catalogue_kwargs(req.app, snapshot)))
 
+    # How /traces polls without redrawing its controls. Two timers run: the Ask AI band polls
+    # /find/poll while a run is compiling or classifying, and #explorer-results polls /find/rows
+    # (HX-Trigger: explorer-results) while rows load or trajectories warm. Neither re-renders
+    # #finder-controls, so the filter menu, its unsaved ticks and filtersDirty survive. /find/poll
+    # swaps only #finder-run-status and answers 286 (htmx: stop polling) once the run settles; a
+    # state that needs other controls (review, idle) retargets #finder-body instead. Explorer
+    # renders from either timer are out of band and marked data-poll, and every explorer render
+    # carries data-view-version (ExplorerView.version, bumped by each load and each visible view
+    # change) and data-render-key. dashboard.js drops a poll render older than the table on screen
+    # or identical to it, and after a real swap restores open menus, scroll, .sel and focus.
     @app.get('/find/poll')
     async def find_poll(req: Request) -> Response:
         settings = _settings(req.app)
@@ -798,6 +812,17 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             snapshot = await store.snapshot() if store is not None else RunSnapshot()
         explorer = getattr(store, 'explorer', None) if not is_search(req) else None
         explorer_view = await explorer.view() if explorer is not None else None
+        explorer_oob = ''
+        if explorer is not None and explorer_view is not None:
+            # A within-results run may narrow the table to zero rows, so it still needs the refresh.
+            if (explorer_view.rows or snapshot.within_results) and (
+                snapshot.state in {'classifying', 'completed'} or snapshot.results
+            ):
+                explorer_oob = await _explorer_html(req, oob=True, poll=True)
+        if not is_search(req) and store is not None and snapshot.state not in {'idle', 'awaiting_review'}:
+            running = snapshot.state in {'compiling', 'classifying'}
+            status = run_status(snapshot, settings, has_explorer=explorer_view is not None)
+            return _html(status + explorer_oob, status_code=200 if running else 286)
         fragment_kwargs = _catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view)
         if explorer_view is not None:
             fragment_kwargs['explorer_view'] = explorer_view
@@ -809,13 +834,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             error=_unavailable_reason(req.app) if store is None else None,
             **fragment_kwargs,
         )
-        if explorer is not None and explorer_view is not None:
-            # A within-results run may narrow the table to zero rows, so it still needs the refresh.
-            if (explorer_view.rows or snapshot.within_results) and (
-                snapshot.state in {'classifying', 'completed'} or snapshot.results
-            ):
-                body += await _explorer_html(req, oob=True)
-        return _html(body)
+        response = _html(body + explorer_oob)
+        if not is_search(req):
+            response.headers['HX-Retarget'] = '#finder-body'
+            response.headers['HX-Reswap'] = 'innerHTML'
+        return response
 
     @app.post('/find/load')
     async def find_load(req: Request) -> Response:
@@ -881,7 +904,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 except Exception as exc:  # noqa: BLE001 - hydration must not jam the table
                     logger.warning('Counting conversation messages failed: {}', exc)
                     return _html(await _explorer_html(req, error=f'Could not count messages: {exc}'))
-        body = await _explorer_html(req)
+        # The section's own timer swaps nothing itself (hx-swap="none"), so its render arrives out of band.
+        polling = req.headers.get('HX-Trigger') == 'explorer-results'
+        body = await _explorer_html(req, oob=polling, poll=polling)
         if explorer is not None:
             body += f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows), selected=req.query_params.get("scope"))}</div>'
         return _html(body)

@@ -1059,6 +1059,11 @@ def body(
         explorer_numeric=explorer_numeric,
         explorer_view=explorer_view,
     )
+    return f'{controls_html}{run_status(snapshot, settings, has_explorer=explorer_view is not None)}'
+
+
+def run_status(snapshot: RunSnapshot, settings: DashboardSettings, *, has_explorer: bool) -> str:
+    """The part of a run's body that changes while it runs; the 1s poll swaps only this, never the controls."""
     details = (
         task_panel(snapshot.dimensions, editable=False)
         if snapshot.dimensions is not None and not _cannot_answer(snapshot)
@@ -1066,7 +1071,15 @@ def body(
     )
     # The progress line under Ask AI names the running step, so the corner badge would repeat it.
     running = snapshot.state in {'compiling', 'classifying'}
-    return f'{"" if running else indicator}{controls_html}{progress(snapshot, classifier_model=settings.classifier_model, show_only_url="/find/rows?quick_view=matches" if explorer_view is not None else None)}{details}'
+    indicator = '' if running else status_indicator(snapshot)
+    show_only_url = '/find/rows?quick_view=matches' if has_explorer else None
+    return (
+        f'<div id="{RUN_STATUS_ID}">{indicator}'
+        f'{progress(snapshot, classifier_model=settings.classifier_model, show_only_url=show_only_url)}{details}</div>'
+    )
+
+
+RUN_STATUS_ID = 'finder-run-status'
 
 
 def page_html(
@@ -1115,7 +1128,7 @@ def fragment(
 ) -> str:
     attrs = ''
     if snapshot.state in {'compiling', 'classifying'}:
-        attrs = ' hx-get="/find/poll" hx-trigger="every 1s" hx-target="#finder-body" hx-swap="innerHTML"'
+        attrs = f' hx-get="/find/poll" hx-trigger="every 1s" hx-target="#{RUN_STATUS_ID}" hx-swap="outerHTML"'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}</div>'
 

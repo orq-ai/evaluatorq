@@ -425,3 +425,22 @@ async def test_span_loader_is_lazy_and_uses_injected_source() -> None:
     assert calls == []
     assert await store.spans('trace-1') == [{'span_id': 's1'}]
     assert calls == ['trace-1']
+
+
+@pytest.mark.asyncio
+async def test_view_version_grows_only_on_visible_changes_and_generations_are_unique_per_load() -> None:
+    rows = tuple(TraceRow(trace_id=f't{i}') for i in range(3))
+    first = store_for(FakeSource(rows))
+    second = store_for(FakeSource(rows))
+    loaded = await first.load(START, END, 3, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    other = await second.load(START, END, 3, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    # Two sessions' stores never share a generation, so per-load caches cannot collide.
+    assert loaded.generation != other.generation
+    assert loaded.version == loaded.generation
+
+    # A poll calls set_view with nothing to change; that must not look like a newer view.
+    assert (await first.set_view()).version == loaded.version
+    sorted_view = await first.set_view(sort='tokens_in')
+    assert sorted_view.version > loaded.version
+    assert (await first.set_view(sort='tokens_in')).version == sorted_view.version
+    assert (await first.set_view(quick_view='errors')).version > sorted_view.version

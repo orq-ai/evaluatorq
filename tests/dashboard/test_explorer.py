@@ -1098,11 +1098,16 @@ def test_poll_appends_explorer_results_during_classification(explorer_client) ->
     store, _, client = explorer_client
     _load(client, facet_model='poll-model')
     store.snapshot_value = replace(store.snapshot_value, state='classifying')
-    html = client.get('/find/poll').text
+    response = client.get('/find/poll')
+    html = response.text
+    assert response.status_code == 200
     assert 'id="explorer-results"' in html
     assert 'hx-swap-oob="true"' in html
-    assert html.count('id="finder-controls"') == 1
-    assert 'name="facet_model" value="poll-model"' in html
+    # The poll swaps the run status and marks its explorer renders; it never redraws the filter row.
+    assert html.startswith('<div id="finder-run-status">')
+    assert html.count('data-poll') == 2
+    assert 'id="finder-controls"' not in html
+    assert 'name="facet_model" value="poll-model"' not in html
 
 
 def test_traces_filters_button_opens_the_facet_menu_directly(explorer_client) -> None:
@@ -1950,7 +1955,8 @@ def test_toolbar_is_split_out_of_the_results_section() -> None:
     html = explorer_views.results(ExplorerView(state='loaded'), resolve_columns(None), records=None, snapshot=None)
     assert 'id="explorer-toolbar" hx-swap-oob="true"' in html
     toolbar, section = explorer_views.split_toolbar(html)
-    assert toolbar.startswith('<div id="explorer-toolbar">')
+    assert toolbar.startswith('<div id="explorer-toolbar" ')
+    assert 'hx-swap-oob' not in toolbar.split('>', 1)[0]
     assert 'xr-toolbar' in toolbar
     assert 'xr-toolbar' not in section
 
@@ -2178,3 +2184,113 @@ def test_failed_prewarm_logs_and_trajectories_request_retries(explorer_client, m
     finally:
         release_failure.set()
         logger.remove(handler_id)
+
+
+def test_results_self_poll_answers_out_of_band_and_marks_the_render(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+    polled = client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text
+    section = re.search(r'<section id="explorer-results"[^>]*>', polled)
+    assert section is not None
+    assert 'hx-swap-oob="true"' in section.group(0)
+    assert 'data-poll' in section.group(0)
+    clicked = client.get('/find/rows?page=1').text
+    clicked_section = re.search(r'<section id="explorer-results"[^>]*>', clicked)
+    assert clicked_section is not None
+    assert 'data-poll' not in clicked_section.group(0)
+    assert 'hx-swap-oob' not in clicked_section.group(0)
+
+
+def test_loading_section_poll_swaps_nothing_itself() -> None:
+    html = explorer_views.results(
+        ExplorerView(state='loading', limit=10, rows=_rows(2)), resolve_columns(None), records=None, snapshot=None
+    )
+    assert 'hx-get="/find/rows" hx-trigger="every 1s" hx-swap="none"' in html
+
+
+def test_user_view_change_outranks_an_earlier_poll_render(explorer_client) -> None:
+    _, _, client = explorer_client
+
+    def version(html: str) -> int:
+        match = re.search(r'id="explorer-results"[^>]*data-view-version="(\d+)"', html)
+        assert match is not None
+        return int(match.group(1))
+
+    loaded = version(_load(client).text)
+    before_sort = version(client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text)
+    assert before_sort == loaded
+    sorted_html = client.get('/find/rows?sort=tokens_in&dir=asc').text
+    # dashboard.js drops a poll render whose version is below the one on screen.
+    assert version(sorted_html) > before_sort
+    assert version(client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text) == version(sorted_html)
+    toolbar = re.search(r'<div id="explorer-toolbar"[^>]*>', sorted_html)
+    assert toolbar is not None
+    assert f'data-view-version="{version(sorted_html)}"' in toolbar.group(0)
+
+
+def test_render_key_is_stable_for_an_unchanged_poll(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+
+    def keys(html: str) -> list[str]:
+        return re.findall(r'data-render-key="([0-9a-f]+)"', html)
+
+    first = keys(client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text)
+    second = keys(client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text)
+    assert len(first) == 2
+    assert first == second
+    assert keys(client.get('/find/rows?sort=tokens_in&dir=asc').text) != first
+
+
+def test_poll_in_trajectories_view_never_fetches_messages(explorer_client) -> None:
+    from evaluatorq.trace_finder import TraceClassification
+
+    store, source, client = explorer_client
+    _load(client)
+    asyncio.run(store.explorer.set_view(view='trajectories', page=1))
+    store.snapshot_value = replace(
+        store.snapshot_value,
+        state='classifying',
+        results={'trace-0000': TraceClassification(trace_id='trace-0000', span_id='s', matched=True, raw_result={})},
+        within_results=True,
+    )
+    before = list(source.hydrate_calls)
+    html = client.get('/find/poll').text
+    assert 'data-poll' in html
+    assert source.hydrate_calls == before
+
+
+def test_header_widths_measure_unescaped_text() -> None:
+    columns = resolve_columns(['name'])
+    amps = (TraceRow(trace_id='a', name='&' * 20),)
+    letters = (TraceRow(trace_id='b', name='a' * 20),)
+    widths = explorer_views._header_widths  # pyright: ignore[reportPrivateUsage]
+    assert widths(columns, amps, None) == widths(columns, letters, None)
+
+
+def test_header_widths_measure_each_row_once_per_load_and_only_grow() -> None:
+    from evaluatorq.trace_finder.columns import Column
+
+    rendered: list[str] = []
+
+    def render(row: TraceRow) -> str:
+        rendered.append(row.trace_id)
+        return row.name or ''
+
+    columns = (Column('name', 'Name', lambda row: row.name, render),)
+    widths = explorer_views._header_widths  # pyright: ignore[reportPrivateUsage]
+    generation = 10**9
+    long_rows = tuple(TraceRow(trace_id=f'long-{i}', name='x' * 30) for i in range(3))
+    first = widths(columns, long_rows, None, generation=generation)
+    assert rendered == ['long-0', 'long-1', 'long-2']
+
+    rendered.clear()
+    assert widths(columns, long_rows, None, generation=generation) == first
+    assert rendered == []
+
+    # Rows streaming in are measured once each, and a shorter row never narrows the column.
+    short = (TraceRow(trace_id='short', name='x'),)
+    assert widths(columns, long_rows + short, None, generation=generation) == first
+    assert rendered == ['short']
+    wider = (TraceRow(trace_id='wide', name='x' * 40),)
+    assert widths(columns, long_rows + short + wider, None, generation=generation) > first

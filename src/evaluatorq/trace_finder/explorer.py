@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import math
 import operator
 from dataclasses import dataclass, field, replace
@@ -164,6 +165,9 @@ def totals(rows: Sequence[TraceRow]) -> Totals:
 
 ExplorerState = Literal['idle', 'loading', 'loaded', 'failed']
 PAGE_ROWS = 100
+# One process-wide sequence, so a load's generation is unique across sessions and a view version
+# only ever grows. Each load takes a new generation; each visible view change takes a new version.
+_SEQUENCE = itertools.count(1)
 
 
 class RowSearch(Protocol):
@@ -186,6 +190,7 @@ class RowHydrator(Protocol):
 @dataclass(frozen=True)
 class ExplorerView:
     generation: int = 0
+    version: int = 0
     state: ExplorerState = 'idle'
     trajectory_warming: bool = False
     rows: tuple[TraceRow, ...] = ()
@@ -291,9 +296,10 @@ class ExplorerStore:
     ) -> ExplorerView:
         await self._cancel()
         self._records.clear()
-        generation = self._view.generation + 1
+        generation = next(_SEQUENCE)
         self._view = ExplorerView(
             generation=generation,
+            version=generation,
             state='loading',
             limit=limit,
             start=start,
@@ -364,7 +370,7 @@ class ExplorerStore:
         """Change display state; ``page`` is clamped when rendered because matches affect row count."""
         current = self._view
         switching_quick_view = quick_view is not None and quick_view != current.quick_view
-        self._view = replace(
+        updated = replace(
             current,
             sort=None if switching_quick_view and sort is None else sort if sort is not None else current.sort,
             descending=descending if descending is not None else current.descending,
@@ -373,6 +379,10 @@ class ExplorerStore:
             matched_only=matched_only if matched_only is not None else current.matched_only,
             quick_view=quick_view if quick_view is not None else current.quick_view,
         )
+        display = ('sort', 'descending', 'page', 'view', 'matched_only', 'quick_view')
+        if any(getattr(updated, name) != getattr(current, name) for name in display):
+            updated = replace(updated, version=next(_SEQUENCE))
+        self._view = updated
         return self._view
 
     async def narrow(
@@ -381,14 +391,16 @@ class ExplorerStore:
         """Show only ``keep`` under the given filters, unless a newer load replaced the rows."""
         if self._view.generation != generation:
             return
-        self._view = replace(
-            self._view,
+        current = self._view
+        updated = replace(
+            current,
             narrowed_from=self._view.narrowed_from if self._view.narrowed_from is not None else len(self._view.rows),
             rows=tuple(row for row in self._view.rows if row.trace_id in keep),
             facets=facets,
             numeric=numeric,
             page=0,
         )
+        self._view = updated if updated == current else replace(updated, version=next(_SEQUENCE))
 
     async def records(self, trace_ids: Sequence[str]) -> dict[str, TraceRecord | None]:
         """Hydrate requested rows; successes and failures are cached until the next load."""

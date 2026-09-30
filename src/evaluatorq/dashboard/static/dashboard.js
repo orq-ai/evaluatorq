@@ -178,6 +178,17 @@
   document.body.addEventListener('change', function (evt) {
     if (evt.target.closest('.finder-facets') && document.querySelector('[data-explorer-filters]')) filtersDirty = true;
   });
+  // A swap of the whole filter row (Load, Clear, a new run) replaces the menu and its unsaved ticks with it.
+  function filterRowReplaced(evt) {
+    const id = evt.detail && evt.detail.target && evt.detail.target.id;
+    if (id !== 'finder-body' && id !== 'finder-controls') return;
+    filtersDirty = false;
+    if (!document.querySelector('.finder-facets.open')) {
+      document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
+    }
+  }
+  document.body.addEventListener('htmx:afterSwap', filterRowReplaced);
+  document.body.addEventListener('htmx:oobAfterSwap', filterRowReplaced);
 
   function showFacet(item) {
     const menu = item.closest('.finder-facets');
@@ -765,7 +776,8 @@
     });
     const custom = document.querySelector('.xr-exact');
     if (custom) {
-      custom.open = exact;
+      // Runs after every swap, polls included: open the exact-range panel, never close one the user opened.
+      if (exact) custom.open = true;
       custom.querySelector('summary')?.toggleAttribute('data-active', exact);
     }
     const tz = document.querySelector('[data-explorer-tz-label]');
@@ -922,6 +934,80 @@
   document.addEventListener('click', function (evt) {
     const menu = document.getElementById('explorer-cols');
     if (menu?.open && !menu.contains(evt.target)) menu.open = false;
+  });
+
+  // Poll renders (data-poll) of #explorer-results and #explorer-toolbar: drop one older than the
+  // table on screen or identical to it; otherwise keep what the user had open, scrolled, selected
+  // and focused. The server half is described above find_poll in dashboard/trace_finder/routes.py.
+  const pollKept = {};
+  function pollState(root) {
+    const details = {};
+    root.querySelectorAll('details').forEach(function (d) {
+      const key = d.className;
+      details[key] = details[key] || [];
+      details[key].push(d.open);
+    });
+    const scroll = {};
+    root.querySelectorAll('.xr-table-wrap, .tv-rows').forEach(function (el) {
+      scroll[el.className] = [el.scrollLeft, el.scrollTop];
+    });
+    const active = document.activeElement;
+    let focus = null;
+    if (active && root.contains(active)) {
+      focus = active.id ? '#' + CSS.escape(active.id)
+        : active.hasAttribute('data-tv-row') ? '[data-tv-row="' + CSS.escape(active.getAttribute('data-tv-row')) + '"]'
+        : active.hasAttribute('data-xr-sort') ? '[data-xr-sort="' + CSS.escape(active.getAttribute('data-xr-sort')) + '"]'
+        : active.name ? '[name="' + CSS.escape(active.name) + '"][value="' + CSS.escape(active.value) + '"]'
+        : null;
+    }
+    const sel = root.querySelector('[data-tv-row].sel');
+    return { details: details, scroll: scroll, focus: focus, sel: sel ? sel.getAttribute('data-tv-row') : null };
+  }
+  function pollRestore(root, state) {
+    const seen = {};
+    root.querySelectorAll('details').forEach(function (d) {
+      const key = d.className;
+      const index = seen[key] = (seen[key] || 0) + 1;
+      const was = state.details[key];
+      if (was && index <= was.length) d.open = was[index - 1];
+    });
+    root.querySelectorAll('.xr-table-wrap, .tv-rows').forEach(function (el) {
+      const at = state.scroll[el.className];
+      if (at) { el.scrollLeft = at[0]; el.scrollTop = at[1]; }
+    });
+    if (state.sel) root.querySelector('[data-tv-row="' + CSS.escape(state.sel) + '"]')?.classList.add('sel');
+    if (state.focus) root.querySelector(state.focus)?.focus({ preventScroll: true });
+  }
+  document.body.addEventListener('htmx:oobBeforeSwap', function (evt) {
+    const target = evt.detail.target;
+    const incoming = evt.detail.fragment && evt.detail.fragment.firstElementChild;
+    if (!target || !incoming || !incoming.hasAttribute('data-poll')) return;
+    const shown = Number(document.getElementById('explorer-results')?.getAttribute('data-view-version') || 0);
+    const version = Number(incoming.getAttribute('data-view-version') || 0);
+    if (version < shown) { evt.detail.shouldSwap = false; return; }
+    if (incoming.getAttribute('data-render-key') === target.getAttribute('data-render-key')) {
+      target.setAttribute('data-view-version', String(version));
+      evt.detail.shouldSwap = false;
+      return;
+    }
+    pollKept[target.id] = pollState(target);
+  });
+  function pollAfterSwap(id) {
+    const state = pollKept[id];
+    delete pollKept[id];
+    const root = document.getElementById(id);
+    if (state && root) pollRestore(root, state);
+  }
+  document.body.addEventListener('htmx:oobAfterSwap', function (evt) {
+    const id = evt.detail.target && evt.detail.target.id;
+    if (id && pollKept[id]) pollAfterSwap(id);
+  });
+  // The run-status slot is the Ask AI poll's main target; keep its open criteria cards across ticks.
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id === 'finder-run-status') pollKept['finder-run-status'] = pollState(evt.detail.target);
+  });
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail.target?.id === 'finder-run-status') pollAfterSwap('finder-run-status');
   });
 
   // Trajectories: one tooltip, positioned from the hovered segment's data-* attributes.

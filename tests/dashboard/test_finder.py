@@ -762,10 +762,24 @@ def test_find_run_passes_numeric_filter_and_renders_chip(setup_finder) -> None:
     assert 'name="tokens_min"' in response.text
 
     store.complete()
-    poll = client.get('/find/poll').text
-    assert 'class="chip is-editable" data-chip-name="tokens_min"' in poll
-    assert 'data-chip-open="tokens"' in poll
-    assert 'data-finder-remove="tokens_min"' in poll
+    # The last poll only swaps the run status; the filter row is never redrawn by a poll.
+    poll = client.get('/find/poll')
+    assert poll.status_code == 286
+    assert 'id="finder-controls"' not in poll.text
+    page = client.get('/traces').text
+    assert 'class="chip is-editable" data-chip-name="tokens_min"' in page
+    assert 'data-chip-open="tokens"' in page
+    assert 'data-finder-remove="tokens_min"' in page
+
+
+def test_poll_that_reaches_review_redraws_the_whole_body(setup_finder) -> None:
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'review'}))
+    poll = client.get('/find/poll')
+    # Review needs its own controls, so this poll swaps #finder-body instead of the run status.
+    assert poll.headers['HX-Retarget'] == '#finder-body'
+    assert poll.headers['HX-Reswap'] == 'innerHTML'
+    assert 'id="finder-controls"' in poll.text
 
 
 def test_find_review_start_transitions_to_classification(setup_finder) -> None:
@@ -838,7 +852,8 @@ def test_find_failed_snapshot_renders_escaped_error(setup_finder) -> None:
     store, client = setup_finder
     store.snapshot_value = RunSnapshot(state='failed', error='<compiler failed>')
     response = client.get('/find/poll')
-    assert response.status_code == 200
+    # 286 tells htmx to stop polling a run that has settled.
+    assert response.status_code == 286
     assert '&lt;compiler failed&gt;' in response.text
     assert '<compiler failed>' not in response.text
 
@@ -1262,10 +1277,14 @@ def test_completed_empty_run_keeps_clear_without_download() -> None:
 
 def test_run_controls_are_preserved_across_polls_per_form(setup_finder) -> None:
     store, client = setup_finder
-    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
-    poll = client.get('/find/poll').text
+    run = client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'})).text
     for name in ('window_days', 'limit', 'parallelism'):
-        assert f'id="finder-{name}-finder-query-form" hx-preserve' in poll
+        assert f'id="finder-{name}-finder-query-form" hx-preserve' in run
+    assert 'hx-target="#finder-run-status" hx-swap="outerHTML"' in run
+    poll = client.get('/find/poll')
+    assert poll.status_code == 200
+    assert poll.text.startswith('<div id="finder-run-status">')
+    assert 'id="finder-controls"' not in poll.text
 
 
 def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_finder) -> None:

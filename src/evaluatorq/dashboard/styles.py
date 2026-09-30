@@ -2884,6 +2884,8 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .finder-examples button:hover,.finder-examples button:focus-visible { background:var(--surface-sunken); color:var(--text-strong); padding-left:14px; outline:0; }
 @media (prefers-reduced-motion:reduce) { .finder-examples,.finder-examples button { transition:none; } .finder-examples { transform:none; } .finder-examples button:hover,.finder-examples button:focus-visible { padding-left:10px; } }
 #finder-body,.finder-body-fragment { display:flex; flex-direction:column; gap:12px; }
+/* The poll's swap slot for the run's progress; it adds no box, so its children lay out as the body's own. */
+#finder-run-status { display:contents; }
 .finder-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; font-size:12px; color:var(--text-body); padding:0 4px; }
 /* /traces keeps the filter menu in #finder-controls (the Ask AI form reads it) but opens it from the toolbar's
    Filters button: the row collapses to an invisible anchor, and active filters show as toolbar chips. */

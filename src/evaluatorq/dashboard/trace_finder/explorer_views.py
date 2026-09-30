@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import math
 import re
+import zlib
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from html import unescape
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -214,35 +217,75 @@ def _visible_chars(cell_html: str) -> int:
     treated as its own line so it doesn't just add to the first line's width.
     """
     lines = _SMALL_SPLIT_RE.split(cell_html)
-    return max((len(_TAG_RE.sub('', line)) for line in lines), default=0)
+    return max((len(unescape(_TAG_RE.sub('', line))) for line in lines), default=0)
 
 
 def _clamp_ch(chars: float) -> int:
     return max(_MIN_COL_CH, min(_MAX_COL_CH, round(chars)))
 
 
+@dataclass
+class _Measured:
+    """The widest cell seen so far for one column of one load; it only grows, so widths never jitter."""
+
+    seen: set[str] = field(default_factory=set)
+    chars: list[int] = field(default_factory=list)
+    key: tuple[object, ...] = ()
+
+
+_MEASURED: dict[tuple[int, str], _Measured] = {}
+_MEASURED_LOADS = 32
+
+
+def _measured(generation: int, column_key: str) -> _Measured:
+    # Generation 0 is a view that was never loaded (tests, empty states): measure it fresh every time.
+    if not generation:
+        return _Measured()
+    entry = _MEASURED.get((generation, column_key))
+    if entry is None:
+        entry = _MEASURED[generation, column_key] = _Measured()
+        live = sorted({load for load, _ in _MEASURED})
+        for stale in [key for key in _MEASURED if key[0] in live[:-_MEASURED_LOADS]]:
+            del _MEASURED[stale]
+    return entry
+
+
 def _header_widths(
-    columns: Sequence[Column], rows: Sequence[TraceRow], snapshot: RunSnapshot | None
+    columns: Sequence[Column], rows: Sequence[TraceRow], snapshot: RunSnapshot | None, *, generation: int = 0
 ) -> tuple[int, ...]:
     """A fixed width in ``ch`` per rendered header (MATCH can expand into several).
 
-    Widths are computed from every loaded row (``rows``, not just the current page) so paging
-    never changes them, and are clamped to a sane range so one long value can't blow up the table.
+    Widths come from every loaded row (``rows``, not just the current page) so paging never changes
+    them, and are clamped to a sane range so one long value can't blow up the table. Per load
+    (``generation``) each row is measured once and a width only grows, so polls stay cheap and the
+    columns hold still while rows stream in.
     """
     widths: list[int] = []
     for column in columns:
         labels = _match_names(snapshot, column.label) if column.key == MATCH else (column.label,)
+        measured = _measured(generation, column.key)
         if column.key == MATCH:
-            per_label_chars = [0] * len(labels)
-            for row in rows:
-                cells = [cell for cell in _match_cells(row, snapshot).split('</td>') if cell.strip()]
-                for index in range(len(labels)):
-                    cell = cells[index] if index < len(cells) else (cells[-1] if cells else '')
-                    per_label_chars[index] = max(per_label_chars[index], _visible_chars(cell))
-            cell_chars = per_label_chars
+            # AI answers arrive for rows already seen, so MATCH re-measures when the answers change.
+            key = (labels, len(rows), len(snapshot.results) if snapshot is not None else 0)
+            if key != measured.key:
+                per_label = [0] * len(labels)
+                for row in rows:
+                    cells = [cell for cell in _match_cells(row, snapshot).split('</td>') if cell.strip()]
+                    for index in range(len(labels)):
+                        cell = cells[index] if index < len(cells) else (cells[-1] if cells else '')
+                        per_label[index] = max(per_label[index], _visible_chars(cell))
+                grow = bool(measured.key) and measured.key[0] == labels
+                measured.chars = (
+                    [max(pair) for pair in zip(per_label, measured.chars, strict=True)] if grow else per_label
+                )
+                measured.key = key
+            cell_chars = measured.chars
         else:
-            max_chars = max((_visible_chars(column.render(row)) for row in rows), default=0)
-            cell_chars = [max_chars] * len(labels)
+            fresh = [row for row in rows if row.trace_id not in measured.seen]
+            widest = max((_visible_chars(column.render(row)) for row in fresh), default=0)
+            measured.chars = [max([widest, *measured.chars])]
+            measured.seen.update(row.trace_id for row in fresh)
+            cell_chars = measured.chars * len(labels)
         for label, chars in zip(labels, cell_chars, strict=True):
             header_chars = len(label) * _HEADER_CHAR_FACTOR + _HEADER_ARROW_CH
             widths.append(_clamp_ch(max(header_chars, chars + _CELL_PAD_CH)))
@@ -281,7 +324,7 @@ def table(
     rendered_keys = [
         c.key for c in columns for _ in (_match_names(snapshot, c.label) if c.key == MATCH else (c.label,))
     ]
-    widths = _header_widths(columns, view.rows, snapshot)
+    widths = _header_widths(columns, view.rows, snapshot, generation=view.generation)
     if traces_layout:
         widths = tuple(
             max(width, 16) if key == 'duration' else width for key, width in zip(rendered_keys, widths, strict=True)
@@ -705,14 +748,21 @@ def results(
     error: str | None = None,
     window_days: int = 7,
     traces_layout: bool = False,
+    poll: bool = False,
 ) -> str:
+    """Render the results section plus its out-of-band toolbar; ``poll`` marks a timer-driven render.
+
+    Both elements carry ``data-view-version`` and ``data-render-key`` so dashboard.js can drop a poll
+    render that is older than the table on screen or identical to it (see ``find_poll`` in routes).
+    """
     snapshot = _within_snapshot(snapshot)
     # Keep All selected while surfacing positive classifier results first. An explicit
     # column sort and the chosen table/trajectory mode remain user-controlled.
     view = matches_first_view(view, snapshot)
     oob_attr = ' hx-swap-oob="true"' if oob else ''
-    poll = (
-        ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="outerHTML"'
+    # The self-poll swaps nothing itself: /find/rows answers it with out-of-band renders.
+    poll_attrs = (
+        ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="none"'
         if view.state == 'loading' or view.trajectory_warming
         else ''
     )
@@ -854,11 +904,18 @@ def results(
     )
     inner = f'{status}{totals_strip}{inner}'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
+    section_body = f'{error_html}{inner}'
+    marks = f' data-view-version="{view.version}"' + (' data-poll' if poll else '')
     # The toolbar travels beside the section, out of band, so the page can keep it ahead of the Ask AI band in the DOM.
     return (
-        f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll}>{error_html}{inner}</section>'
-        f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true">{toolbar}</div>'
+        f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll_attrs}'
+        f'{marks} data-render-key="{_render_key(poll_attrs + section_body)}">{section_body}</section>'
+        f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true"{marks} data-render-key="{_render_key(toolbar)}">{toolbar}</div>'
     )
+
+
+def _render_key(markup: str) -> str:
+    return format(zlib.crc32(markup.encode()), '08x')
 
 
 TOOLBAR_SLOT_ID = 'explorer-toolbar'
@@ -866,8 +923,8 @@ TOOLBAR_SLOT_ID = 'explorer-toolbar'
 
 def split_toolbar(html: str) -> tuple[str, str]:
     """Split ``results()`` output into the toolbar slot (in place, no OOB attribute) and the results section."""
-    marker = f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true">'
+    marker = f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true"'
     head, sep, tail = html.partition(marker)
     if not sep:
         return '', html
-    return marker.replace(' hx-swap-oob="true"', '') + tail, head
+    return f'<div id="{TOOLBAR_SLOT_ID}"' + tail, head
