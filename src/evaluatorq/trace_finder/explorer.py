@@ -538,6 +538,12 @@ class ExplorerStore:
         """Return only trajectory records this load has already hydrated."""
         return {trace_id: self._records[trace_id] for trace_id in trace_ids if trace_id in self._records}
 
+    async def retain_records(self, trace_ids: Collection[str]) -> None:
+        """Drop hydrated records outside the active classification set."""
+        keep = set(trace_ids)
+        async with self._records_lock:
+            self._records = {trace_id: record for trace_id, record in self._records.items() if trace_id in keep}
+
     async def message_counts(self) -> ExplorerView:
         generation = self._view.generation
         records = await self.records([row.trace_id for row in self._view.rows])

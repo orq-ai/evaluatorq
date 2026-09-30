@@ -85,6 +85,18 @@ async def test_failed_hydration_is_retried_and_can_succeed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retain_records_releases_hydrated_rows_outside_the_active_set() -> None:
+    rows = (TraceRow(trace_id='keep'), TraceRow(trace_id='drop'))
+    store = store_for(FakeSource(rows))
+    await store.load(START, END, 2, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.records(['keep', 'drop'])
+
+    await store.retain_records({'keep'})
+
+    assert store.cached_records(['keep', 'drop']) == {'keep': record('keep')}
+
+
+@pytest.mark.asyncio
 async def test_load_then_page_and_sort() -> None:
     rows = tuple(TraceRow(trace_id=f't{i}', tokens_in=i) for i in range(250))
     store = store_for(FakeSource(rows))

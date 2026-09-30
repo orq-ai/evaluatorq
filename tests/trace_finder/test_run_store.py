@@ -804,6 +804,57 @@ async def test_within_results_compile_narrows_explorer_for_kept_and_empty_result
     assert view.numeric.tokens_min == 1_000
 
 
+@pytest.mark.asyncio
+async def test_within_results_filters_past_ai_limit_and_keeps_all_table_matches() -> None:
+    rows = tuple(TraceRow(trace_id=f'trace-{index}') for index in range(1, 31))
+
+    async def search(*args: Any, **kwargs: Any) -> tuple[TraceRow, ...]:
+        del args
+        kwargs['on_page'](rows)
+        return rows
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        return {
+            row.trace_id: (
+                trace(int(row.trace_id.removeprefix('trace-'))).model_copy(update={'model': 'gpt-4'})
+                if row.trace_id in {'trace-29', 'trace-30'}
+                else trace(int(row.trace_id.removeprefix('trace-')))
+            )
+            for row in rows
+        }
+
+    explorer = ExplorerStore(search=search, hydrate=hydrate)
+    await explorer.load(
+        datetime(2026, 9, 20, tzinfo=timezone.utc),
+        datetime(2026, 9, 21, tzinfo=timezone.utc),
+        len(rows),
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        wait=True,
+    )
+    loaded = await explorer.records([row.trace_id for row in rows])
+    planner = _unbounded_planner()
+    store, _, _, _, _ = make_store(planner=planner, filters=FacetSelection(model=frozenset({'gpt-4'})))
+    store.explorer = explorer
+
+    snapshot = await store.compile(
+        request(
+            mode='review',
+            population=PopulationRequest(limit=1),
+        ),
+        traces=lambda: _records_from_loaded(loaded),
+    )
+
+    view = await explorer.view()
+    assert snapshot.trace_ids == ('trace-29',)
+    assert [row.trace_id for row in view.rows] == ['trace-29', 'trace-30']
+    assert set(explorer.cached_records([row.trace_id for row in rows])) == {'trace-29'}
+
+
+async def _records_from_loaded(records: dict[str, TraceRecord | None]) -> tuple[TraceRecord, ...]:
+    return tuple(record for record in records.values() if record is not None)
+
+
 async def _loaded_traces() -> tuple[TraceRecord, ...]:
     return (
         trace(1).model_copy(update={'total_tokens': 50, 'duration_ms': 500}),

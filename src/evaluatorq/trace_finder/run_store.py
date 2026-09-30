@@ -344,6 +344,8 @@ class RunStore:
                             numeric=_merge_numeric(request.population.numeric, generated_numeric),
                         )
                     staged_traces = staged_traces[: request.population.limit]
+                    if traces is not None and self.explorer is not None:
+                        await self.explorer.retain_records([trace.trace_id for trace in staged_traces])
                     if loaded_traces and not staged_traces:
                         async with self._lock:
                             if generation == self._generation and self._snapshot.state == 'compiling':
