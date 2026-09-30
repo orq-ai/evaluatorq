@@ -509,11 +509,14 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     ]
     names = {call.tool_call_id: call.function_name for call in step.tool_calls or []}
     content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
+    extra = step.extra or {}
+    has_non_message_output = bool(step.reasoning_content or extra.get(_UNMAPPED_OUTPUTS_KEY))
+    has_tool_results = bool(extra.get(_UNMAPPED_RESULTS_KEY)) or bool(
+        step.observation is not None and step.observation.results
+    )
     messages = (
         [Message(role='assistant', content=content or None, tool_calls=calls or None)]
-        if content
-        or calls
-        or not any((step.extra or {}).get(key) for key in (_UNMAPPED_OUTPUTS_KEY, _UNMAPPED_RESULTS_KEY))
+        if content or calls or not (has_non_message_output or has_tool_results)
         else []
     )
     for result in step.observation.results if step.observation else []:

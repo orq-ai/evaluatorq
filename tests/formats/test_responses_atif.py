@@ -115,6 +115,25 @@ def test_agent_step_with_only_unmapped_result_does_not_emit_empty_assistant_turn
     assert conversation.responses is None
 
 
+def test_agent_step_with_only_orphan_function_result_does_not_emit_empty_assistant_turn() -> None:
+    items = [{'type': 'function_call_output', 'call_id': 'orphan', 'output': 'result'}]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.items == []
+    assert conversation.responses is None
+
+
+def test_reasoning_only_agent_step_does_not_emit_empty_assistant_turn() -> None:
+    trajectory = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7',
+        'agent': {'name': 'a', 'version': '1'},
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': '', 'reasoning_content': 'think'}],
+    })
+    conversation = trajectory.to_responses()
+    assert [item['type'] for item in conversation.items] == ['reasoning']
+    assert conversation.responses is not None
+    assert [item.type for item in conversation.responses[0].output] == ['reasoning']
+
+
 def test_custom_and_function_results_keep_their_shared_order() -> None:
     items = [
         {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
