@@ -521,7 +521,7 @@ def _drawer_reason(answer: DimensionAnswer) -> str:
     if reason:
         return f'<p class="fd-reason"><b>Reason</b> {esc(reason)}</p>'
     if answer.confidence is not None and not answer.error:
-        verdict = {True: 'yes', False: 'no'}.get(answer.value, _value_text(answer.value))  # type: ignore[call-overload]
+        verdict = 'yes' if answer.value is True else 'no' if answer.value is False else _value_text(answer.value)
         return f'<p class="fd-reason">{esc(verdict)} · {answer.confidence:.0%} confident</p>'
     return ''
 

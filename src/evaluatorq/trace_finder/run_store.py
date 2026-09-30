@@ -240,6 +240,7 @@ class RunStore:
             (await self.explorer.view()).generation if traces is not None and self.explorer is not None else None
         )
         try:
+            unsupported_reason: str | None = None
             if compile_query:
                 plan_task = asyncio.create_task(self._plan(request.query, request.population))
                 async with self._lock:
@@ -249,6 +250,7 @@ class RunStore:
                         return self._view()
                     self._task = plan_task
                 plan, filter_result = await plan_task
+                unsupported_reason = plan.unsupported_reason
                 generated_filters = filter_result.selection
                 generated_numeric = plan.numeric.model_copy(deep=True)
                 dimensions = _revalidated(plan.dimensions)
@@ -278,7 +280,7 @@ class RunStore:
 
             if (
                 compile_query
-                and plan.unsupported_reason is not None
+                and unsupported_reason is not None
                 and not dimensions
                 and generated_filters == FacetSelection()
                 and generated_numeric == NumericFilters()

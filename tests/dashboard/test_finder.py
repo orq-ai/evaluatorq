@@ -965,7 +965,9 @@ def test_unsupported_question_reads_as_cannot_answer_not_error() -> None:
     assert 'role="alert"' not in html
     assert 'compute totals or rankings' not in html
     assert 'Can&#x27;t answer' in status_indicator(snapshot)
-    assert 'Filters answer this question' not in finder_views.fragment(snapshot, DashboardSettings())
+    assert 'Filters answer this question' not in finder_views.fragment(
+        snapshot, DashboardSettings(window_days=7, limit=500, parallelism=100)
+    )
     assert 'Cancelled' in status_indicator(RunSnapshot(state='cancelled'))
 
 

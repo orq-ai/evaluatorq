@@ -246,7 +246,9 @@ def _header_widths(
     return tuple(widths)
 
 
-def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None, *, traces_layout: bool = False) -> str:
+def table(
+    view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None, *, traces_layout: bool = False
+) -> str:
     snapshot = _within_snapshot(snapshot)
     columns = _visible_columns(columns, snapshot)
     results = snapshot.results if snapshot is not None and snapshot.results else None
