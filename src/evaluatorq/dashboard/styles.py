@@ -67,6 +67,7 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-duration-bar > span { display:block; height:100%; border-radius:inherit; background:#559b91; }
 .finder:has(> .finder-command) .xr-table td.xr-duration-p95 { background:#fff1e9; color:#8a3d20; }
 .finder:has(> .finder-command) .xr-table tbody tr:hover td.xr-duration-p95 { background:#ffe8dc; }
+.finder:has(> .finder-command) .xr-duration-accessible { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .finder:has(> .finder-command) .xr-table tbody tr:hover { background:#f8faf8; }
 .finder:has(> .finder-command) .xr-status ~ .xr-empty { margin:0 12px 12px; }
 /* Square pass: every header control shares one height, square corners, centred labels and the card's 16px gutter. */

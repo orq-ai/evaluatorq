@@ -1682,6 +1682,7 @@ def test_traces_duration_bar_uses_visible_set_scale_and_inclusive_p95_across_pag
 
     page_two = explorer_views.table(replace(view, page=1), columns, None, traces_layout=True)
     assert page_two.count('class="num xr-duration xr-duration-p95"') == 7
+    assert page_two.count('class="xr-duration-accessible">At or above p95</span>') == 7
     assert 'At or above visible-set p95 (114ms)' in page_two
 
     filtered = explorer_views.table(
@@ -1699,6 +1700,7 @@ def test_traces_duration_keeps_unknown_text_and_find_has_no_bar() -> None:
     assert '<span>—</span>' in traces
     assert 'xr-duration-p95' not in traces
     assert 'xr-duration-bar' not in traces
+    assert 'xr-duration-accessible' not in traces
     assert 'role="img"' not in traces
     assert 'xr-duration-bar' not in find
 

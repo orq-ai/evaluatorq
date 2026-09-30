@@ -350,7 +350,8 @@ def _duration_cell(value: int | None, scale: int, p95: int | None) -> str:
     at_p95 = p95 is not None and value >= p95
     p95_class = ' xr-duration-p95' if at_p95 else ''
     p95_title = f' title="At or above visible-set p95 ({esc(fmt_duration(p95))})"' if at_p95 else ''
-    return f'<td class="num xr-duration{p95_class}"{p95_title}><span>{esc(label)}</span>{magnitude}</td>'
+    p95_cue = '<span class="xr-duration-accessible">At or above p95</span>' if at_p95 else ''
+    return f'<td class="num xr-duration{p95_class}"{p95_title}><span>{esc(label)}</span>{p95_cue}{magnitude}</td>'
 
 
 def _tip_attrs(segment: Segment, position: int, count: int) -> str:
