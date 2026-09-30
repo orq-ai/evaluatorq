@@ -3045,11 +3045,11 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .fd-meta dt { color:var(--text-faint); }.fd-meta dd { margin:0; color:var(--text-strong); font-family:var(--font-mono); font-size:11.5px; }
 .fd-row-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:14px; margin-bottom:4px; }
 .fd-row-meta { font-size:12px; color:var(--text-muted); font-variant-numeric:tabular-nums; margin-bottom:12px; }
-.fd-technical { margin-top:16px; border-top:1px solid var(--border-subtle); padding-top:12px; }
-.fd-technical > summary { cursor:pointer; color:var(--text-muted); font-size:12px; font-weight:600; }
-.fd-technical[open] > summary { margin-bottom:12px; color:var(--text-strong); }
-.fd-no-messages { display:flex; flex-direction:column; gap:4px; padding:18px; border:1px dashed var(--border-default); border-radius:8px; color:var(--text-muted); font-size:12px; }
-.fd-no-messages b { color:var(--text-strong); font-size:13px; }
+.fd-traces .fd-technical { margin-top:16px; border-top:1px solid var(--border-subtle); padding-top:12px; }
+.fd-traces .fd-technical > summary { cursor:pointer; color:var(--text-muted); font-size:12px; font-weight:600; }
+.fd-traces .fd-technical[open] > summary { margin-bottom:12px; color:var(--text-strong); }
+.fd-traces .fd-no-messages { display:flex; flex-direction:column; gap:4px; padding:18px; border:1px dashed var(--border-default); border-radius:8px; color:var(--text-muted); font-size:12px; }
+.fd-traces .fd-no-messages b { color:var(--text-strong); font-size:13px; }
 .fd-msg summary .fd-msg-meta { white-space:nowrap; color:var(--text-muted); background:var(--surface-sunken); border-radius:4px; padding:1px 4px; }
 .fd-verdict { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:8px; background:var(--surface-sunken); margin-bottom:14px; font-size:13px; }
 .fd-verdict .sw { width:12px; height:12px; border-radius:3px; }.fd-tabs { display:flex; border-bottom:1px solid var(--border-subtle); margin-bottom:12px; }.fd-tabs button { padding:8px 12px; font:inherit; font-size:13px; color:var(--text-muted); border:0; border-bottom:2px solid transparent; background:transparent; cursor:pointer; }.fd-tabs button.on { color:var(--text-strong); border-color:var(--accent); }

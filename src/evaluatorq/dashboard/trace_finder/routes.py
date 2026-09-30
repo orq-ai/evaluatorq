@@ -545,6 +545,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 oob=oob,
                 error=error,
                 window_days=_settings(req.app).window_days,
+                traces_layout=not is_search(req),
             )
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
@@ -561,6 +562,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             oob=oob,
             error=error,
             window_days=_settings(req.app).window_days,
+            traces_layout=not is_search(req),
         )
 
     @app.get('/find')
@@ -939,7 +941,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
             logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)
             return _html(missing_trace_drawer(trace_id))
-        return _html(drawer(detail, msg=msg, row=row))
+        return _html(drawer(detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'))
 
     @app.get('/find/export.json')
     async def find_export(req: Request) -> Response:

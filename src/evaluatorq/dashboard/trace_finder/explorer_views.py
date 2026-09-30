@@ -183,8 +183,13 @@ def _visible_columns(columns: Sequence[Column], snapshot: RunSnapshot | None) ->
     return tuple(column for column in columns if column.key != MATCH)
 
 
-def _drawer_attrs(trace_id: str, msg: int | None = None) -> str:
-    query = f'?msg={msg}' if msg is not None else ''
+def _drawer_attrs(trace_id: str, msg: int | None = None, *, traces_layout: bool = False) -> str:
+    params = []
+    if msg is not None:
+        params.append(f'msg={msg}')
+    if traces_layout:
+        params.append('surface=traces')
+    query = f'?{"&".join(params)}' if params else ''
     return f'hx-get="/find/trace/{quote(trace_id, safe="")}{query}" hx-target="#finder-drawer" hx-swap="innerHTML" hx-indicator="#finder-drawer-loading"'
 
 
@@ -241,7 +246,7 @@ def _header_widths(
     return tuple(widths)
 
 
-def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None) -> str:
+def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None, *, traces_layout: bool = False) -> str:
     snapshot = _within_snapshot(snapshot)
     columns = _visible_columns(columns, snapshot)
     results = snapshot.results if snapshot is not None and snapshot.results else None
@@ -295,7 +300,7 @@ def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot |
         )
         row_class = f' class="{" ".join(row_classes)}"' if row_classes else ''
         body += (
-            f'<tr data-tv-row="{esc(row.trace_id)}"{marker}{row_class} tabindex="0" {_drawer_attrs(row.trace_id)}>'
+            f'<tr data-tv-row="{esc(row.trace_id)}"{marker}{row_class} tabindex="0" {_drawer_attrs(row.trace_id, traces_layout=traces_layout)}>'
             + ''.join(
                 _match_cells(row, snapshot)
                 if c.key == MATCH
@@ -370,6 +375,7 @@ def trajectories(
     snapshot: RunSnapshot | None,
     *,
     loading: bool = False,
+    traces_layout: bool = False,
 ) -> str:
     snapshot = _within_snapshot(snapshot)
     page = view.page_rows(snapshot.results if snapshot is not None and snapshot.results else None)
@@ -411,7 +417,7 @@ def trajectories(
             message_count = 'Loading messages…' if loading and row.trace_id not in records else 'No messages available'
         row_summary = f'{message_count} · {fmt_duration(row.duration_ms)}'
         rows_html += (
-            f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0" {_drawer_attrs(row.trace_id)}>'
+            f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0" {_drawer_attrs(row.trace_id, traces_layout=traces_layout)}>'
             f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-plot"><div class="tv-track"></div>{bar}</div>'
             f'<span class="tv-end">{row_summary}</span></div>{_metrics(row)}</div>'
         )
@@ -570,6 +576,7 @@ def results(
     oob: bool = False,
     error: str | None = None,
     window_days: int = 7,
+    traces_layout: bool = False,
 ) -> str:
     snapshot = _within_snapshot(snapshot)
     oob_attr = ' hx-swap-oob="true"' if oob else ''
@@ -662,9 +669,9 @@ def results(
         results = snapshot.results if snapshot is not None and snapshot.within_results else None
         visible_rows = view.visible_rows(results)
         body = (
-            trajectories(view, records or {}, snapshot, loading=view.state == 'loading')
+            trajectories(view, records or {}, snapshot, loading=view.state == 'loading', traces_layout=traces_layout)
             if view.view == 'trajectories'
-            else f'<div class="xr-table-wrap">{table(view, columns, snapshot)}</div>'
+            else f'<div class="xr-table-wrap">{table(view, columns, snapshot, traces_layout=traces_layout)}</div>'
         )
         if not visible_rows:
             label = (

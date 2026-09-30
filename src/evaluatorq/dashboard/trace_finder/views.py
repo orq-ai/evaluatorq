@@ -1142,7 +1142,12 @@ def scope_toggle(*, has_rows: bool, selected: str | None = None) -> str:
 
 
 def drawer(
-    detail: TraceDetail, *, experiment_url: str | None = None, msg: int | None = None, row: TraceRow | None = None
+    detail: TraceDetail,
+    *,
+    experiment_url: str | None = None,
+    msg: int | None = None,
+    row: TraceRow | None = None,
+    traces_layout: bool = False,
 ) -> str:
     trace = detail.trace
     result = detail.classification
@@ -1180,11 +1185,7 @@ def drawer(
     payload = json.dumps(detail.projection.payload if detail.projection else {}, indent=2, ensure_ascii=False)
     raw = json.dumps(result.raw_result if result else {}, indent=2, ensure_ascii=False)
     has_conversation = any(segment.preview.strip() or segment.label for segment in segs)
-    thread_html = (
-        messages
-        if has_conversation
-        else '<div class="fd-no-messages" role="status"><b>No messages available</b><span>This trace has no conversation text to display.</span></div>'
-    )
+    thread_html = messages or '<p class="finder-empty">No messages.</p>'
     row_header = ''
     if row is not None:
         models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
@@ -1206,15 +1207,51 @@ def drawer(
         f'<div id="fd-input" class="fd-panel" hidden><div class="fd-panel-title">Classifier input</div><pre>{esc(payload)}</pre></div>'
         f'<div id="fd-raw" class="fd-panel" hidden><div class="fd-panel-title">Raw result</div><pre>{esc(raw)}</pre></div>'
     )
-    body_html = (
-        f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
-        f'{mini_html}<div id="fd-thread" class="fd-panel"><div class="fd-panel-title">Full thread</div>{thread_html}</div>'
-        f'<details class="fd-technical"><summary>Technical details</summary>{technical_html}</details>'
-    )
-    url = trace_span_url(trace.trace_id, trace.span_id, experiment_url)
-    footer = trace_link_button(url, 'Open in Orq ↗')
+    if traces_layout:
+        identity_html = ''
+        if row is not None:
+            models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
+            identity_html = (
+                f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
+                f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
+            )
+        trace_thread = (
+            messages
+            if has_conversation
+            else '<div class="fd-no-messages" role="status"><b>No messages available</b><span>This trace has no conversation text to display.</span></div>'
+        )
+        body_html = (
+            '<div class="fd-traces">'
+            f'{identity_html}'
+            f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
+            f'{mini_html}<div id="fd-thread" class="fd-panel">{trace_thread}</div>'
+            f'<details class="fd-technical"><summary>Technical details</summary>{technical_html}</details></div>'
+        )
+        title = 'Trace conversation'
+        footer = (
+            trace_link_button(trace_span_url(trace.trace_id, trace.span_id, experiment_url), 'Open in Orq ↗')
+            + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
+        )
+    else:
+        body_html = (
+            f'{row_header}{mini_html}'
+            f'<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
+            f'<dt>project</dt><dd>{esc(trace.project)}</dd><dt>model</dt><dd>{esc(trace.model)}</dd><dt>time</dt><dd>{esc(trace.timestamp.isoformat())}</dd></dl>'
+            f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
+            '<div class="fd-tabs"><button type="button" class="on" data-panel="fd-thread" onclick="eqFinderTab(this,\'fd-thread\')">Full thread</button>'
+            '<button type="button" data-panel="fd-input" onclick="eqFinderTab(this,\'fd-input\')">Classifier input</button>'
+            '<button type="button" data-panel="fd-raw" onclick="eqFinderTab(this,\'fd-raw\')">Raw result</button></div>'
+            f'<div id="fd-thread" class="fd-panel"><div class="fd-panel-title">Full thread</div>{thread_html}</div>'
+            f'<div id="fd-input" class="fd-panel" hidden><div class="fd-panel-title">Classifier input</div><pre>{esc(payload)}</pre></div>'
+            f'<div id="fd-raw" class="fd-panel" hidden><div class="fd-panel-title">Raw result</div><pre>{esc(raw)}</pre></div>'
+        )
+        title = f'Trace {esc(trace.trace_id)}'
+        footer = (
+            trace_link_button(trace_span_url(trace.trace_id, trace.span_id, experiment_url), 'Open in Orq ↗')
+            + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
+        )
     return drawer_shell(
-        'Trace conversation', body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer'
+        title, body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer'
     )
 
 
