@@ -234,7 +234,12 @@ class OtelTrace(BaseModel):
         return sorted(spans, key=lambda s: (s.start_time is None, s.start_time.timestamp() if s.start_time else 0.0))
 
     def to_atif(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> AtifTrajectory:
-        """Convert to an ATIF trajectory (subagent `invoke_agent` subtrees become subagent trajectories)."""
+        """Convert to an ATIF trajectory (subagent `invoke_agent` subtrees become subagent trajectories).
+
+        Lost: see `convert_otel_atif.otel_to_atif` for the mapping. Chat input before the first chat span
+        (prior history, warned), extra output choices (warned), span attributes other than model, usage,
+        finish reasons and error type, and spans that are not `chat`, `execute_tool` or `invoke_agent`.
+        """
         from evaluatorq.formats import convert_otel_atif
 
         return convert_otel_atif.otel_to_atif(self, agent_name=agent_name, agent_version=agent_version)

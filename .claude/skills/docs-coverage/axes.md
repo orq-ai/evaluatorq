@@ -10,7 +10,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 
 | Axis | Where values come from | Notes |
 |---|---|---|
-| **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()`, `eq find`, dashboard Find route (`/find`) |
+| **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` + `evaluatorq.formats.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()`, `eq find`, dashboard Find route (`/find`), format converters (`ChatConversation` / `ResponsesConversation` / `OtelTrace` / `AtifTrajectory` `.to_*()`, Python-only) |
 | **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard`) · trace finder (`/find`, `eq find`) |
 | **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget`, `CodingAgentTarget` (claude / codex / opencode × direct / orq launcher × host / container) |
 | **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
