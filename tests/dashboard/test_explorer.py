@@ -2175,6 +2175,61 @@ def test_ai_matches_chip_shows_once_the_classifier_has_judged_rows() -> None:
     assert 'AI matches' in html
 
 
+def test_match_column_appears_with_pending_classification_and_has_pre_run_empty_state() -> None:
+    from evaluatorq.trace_finder import RunSnapshot
+
+    row = TraceRow(trace_id='pending')
+    pending = RunSnapshot(state='classifying', within_results=True)
+    html = explorer_views.table(ExplorerView(state='loaded', rows=(row,)), resolve_columns(['match']), pending)
+    assert 'AI match' in html
+    assert 'xr-pending' in html
+    assert 'Waiting for the AI' in html
+
+    before_run = explorer_views.table(
+        ExplorerView(state='loaded', rows=(row,)), resolve_columns(['match']), None
+    )
+    assert 'AI columns are not ready yet.' in before_run
+    assert 'No columns selected.' not in before_run
+
+
+def test_match_sort_marker_and_aria_sort_appear_on_one_question_header() -> None:
+    from evaluatorq.trace_finder import RunSnapshot
+
+    dimensions = _judged_snapshot(verdicts={}).dimensions
+    dimensions = (
+        dimensions[0].model_copy(update={'name': 'First question'}),
+        dimensions[0].model_copy(update={'name': 'Second question'}),
+    )
+    snapshot = RunSnapshot(state='classifying', within_results=True, dimensions=dimensions)
+    html = explorer_views.table(
+        ExplorerView(state='loaded', rows=(TraceRow(trace_id='pending'),), sort='match', descending=True),
+        resolve_columns(['match']),
+        snapshot,
+    )
+    assert html.count('aria-sort="descending"') == 1
+    assert html.count('xr-sort-arrow') == 1
+
+
+def test_views_menu_does_not_repeat_the_all_quick_tab_and_matched_only_empty_state_is_honest() -> None:
+    html = explorer_views._toolbar(ExplorerView(), resolve_columns(None), has_results=False)
+    assert 'All traces</button>' not in html
+    assert html.count('hx-get="/find/rows?quick_view=all"') == 1
+
+    rows = (TraceRow(trace_id='unmatched'),)
+    snapshot = _judged_snapshot(verdicts={'unmatched': False})
+    empty = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, matched_only=True), resolve_columns(None), records=None, snapshot=snapshot
+    )
+    assert 'No loaded traces match this filter.' in empty
+    assert 'Turn off Matches only' not in empty
+
+
+def test_drawer_rejects_responses_from_older_trace_selections() -> None:
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert "if (evt.detail.target?.id === 'finder-drawer') latestFinderDrawerXhr = evt.detail.xhr;" in js
+    assert "evt.detail.xhr !== latestFinderDrawerXhr" in js
+
+
 def test_totals_sum_rows_and_use_inclusive_cache_share() -> None:
     from evaluatorq.trace_finder.explorer import totals
     from evaluatorq.trace_finder.rows import TraceRow

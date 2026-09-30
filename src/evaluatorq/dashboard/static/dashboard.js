@@ -1176,6 +1176,15 @@
   }, true);
 
   // Drawer: scroll the thread (not the page) to the selected message, and move the selection locally.
+  let latestFinderDrawerXhr = null;
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    if (evt.detail.target?.id === 'finder-drawer') latestFinderDrawerXhr = evt.detail.xhr;
+  });
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id === 'finder-drawer' && evt.detail.xhr !== latestFinderDrawerXhr) {
+      evt.preventDefault();
+    }
+  });
   function drawerMarkSelected(root, index) {
     root.querySelectorAll('.fd-msg').forEach((el) => {
       const on = el.getAttribute('data-msg') === String(index);

@@ -185,7 +185,9 @@ def _within_snapshot(snapshot: RunSnapshot | None) -> RunSnapshot | None:
 
 
 def _ai_has_run(snapshot: RunSnapshot | None) -> bool:
-    return snapshot is not None and snapshot.within_results and bool(snapshot.results)
+    return (
+        snapshot is not None and snapshot.within_results and (bool(snapshot.results) or snapshot.state == 'classifying')
+    )
 
 
 def _classified(snapshot: RunSnapshot | None) -> bool:
@@ -306,6 +308,7 @@ def table(
     view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None, *, traces_layout: bool = False
 ) -> str:
     snapshot = _within_snapshot(snapshot)
+    requested_columns = columns
     columns = _visible_columns(columns, snapshot)
     results = snapshot.results if snapshot is not None and snapshot.results else None
     heads = ''
@@ -323,12 +326,14 @@ def table(
         help_text = COLUMN_HELP.get(column.key)
         title = f' title="{esc(help_text)}"' if help_text else ''
         heads += ''.join(
-            f'<th class="{"num" if column.numeric else ""}"{aria_sort}><button type="button" class="link" data-xr-sort="{column.key}"{title} '
+            f'<th class="{"num" if column.numeric else ""}"{aria_sort if index == 0 else ""}><button type="button" class="link" data-xr-sort="{column.key}"{title} '
             f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">'
-            f'{sparkle}{esc(label)}{arrow}</button></th>'
-            for label in labels
+            f'{sparkle}{esc(label)}{arrow if index == 0 else ""}</button></th>'
+            for index, label in enumerate(labels)
         )
     if not columns:
+        if any(column.key == MATCH for column in requested_columns) and not _ai_has_run(snapshot):
+            return _empty('AI columns are not ready yet.', 'AI match columns appear after an AI classification starts.')
         return _empty('No columns selected.', 'Choose at least one column from Columns to show trace details.')
     rendered_keys = [
         c.key for c in columns for _ in (_match_names(snapshot, c.label) if c.key == MATCH else (c.label,))
@@ -628,7 +633,6 @@ def _toolbar(
         + '">'
         + (TOP_QUICK_VIEW_LABELS.get(view.quick_view, 'Views') + ' ▾')
         + '</summary><div class="xr-top-list" role="group" aria-label="Views">'
-        + f'<button type="button" class="{"on" if view.quick_view == "all" else ""}" aria-pressed="{str(view.quick_view == "all").lower()}" hx-get="/find/rows?quick_view=all" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">All traces</button>'
         + '<span class="xr-top-head">Traces</span>'
         + ''.join(
             f'<button type="button" class="{"on" if view.quick_view == key else ""}" aria-pressed="{str(view.quick_view == key).lower()}" title="Top 10% of loaded traces by {TOP_METRICS[key][0]}" hx-get="/find/rows?quick_view={key}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{TOP_QUICK_VIEW_LABELS[key]}</button>'
@@ -935,9 +939,7 @@ def results(
                     else 'Choose All to return to the full loaded trace population.',
                 )
         if results and view.matched_only and not view.visible_rows(results):
-            body = _empty(
-                'No matches yet.', 'None of the loaded traces match so far. Turn off Matches only to see every row.'
-            )
+            body = _empty('No matches.', 'No loaded traces match this filter.')
         inner = f'{banner}{body}{_pager(view, results)}'
     totals_strip = (
         _totals_strip(view.visible_rows(judged), traces_layout=traces_layout)
