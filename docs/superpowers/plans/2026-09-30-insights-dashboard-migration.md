@@ -31,7 +31,7 @@
 | New-run sheet | `template.html:1166-1223` | Reuse `/insights/new`, preview, `/insights/runs`, CSRF, validation, and `insights-wizard.js`; adapt the form layout to the mock. |
 | Shell and styles | `shell.py:198`, `styles.py:2803`, `theme.py` | Keep shared shell and tokens; add an Insights-only shell variant and stylesheet so other surfaces do not change. |
 
-The mock is a single HTML/CSS/JavaScript file, while the current production review is Python-rendered. Reuse the mock's visual code and the production data/services directly. The adapter and scoped shell are the boundary between them; do not recreate the same cards and charts separately in Python or embed the mock as an iframe. The mock's `Open in Trace search` button is a placeholder: Finder cannot load exact saved Insights members, and snapshot runs do not retain source messages. The recommended production action is `View matching traces` inside Insights, using the saved trace list; this is the one intentional copy difference pending review.
+The mock is a single HTML/CSS/JavaScript file, while the current production review is Python-rendered. Reuse the mock's visual code and the production data/services directly. The adapter and scoped shell are the boundary between them; do not recreate the same cards and charts separately in Python or embed the mock as an iframe. The mock's `Open in Trace search` button is a placeholder: Finder cannot load exact saved Insights members, and snapshot runs do not retain source messages. The approved production action is `View matching traces` inside Insights, using the saved trace list; this is the one intentional copy difference.
 
 ## Task 1: Freeze the reference and build the review data adapter
 
