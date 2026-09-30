@@ -472,7 +472,10 @@ class ExplorerStore:
                 # A load may replace rows while hydration is in progress. Its cache belongs
                 # to that load only, so late results from the previous generation are discarded.
                 if self._view.generation == generation:
-                    self._records.update(hydrated)
+                    for trace_id, record in hydrated.items():
+                        cached = self._records.get(trace_id)
+                        if trace_id not in self._records or (cached is None and record is not None):
+                            self._records[trace_id] = record
                     return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
                 return {trace_id: hydrated.get(trace_id) for trace_id in trace_ids}
         async with self._records_lock:

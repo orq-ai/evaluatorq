@@ -261,6 +261,32 @@ async def test_drawer_hydration_is_not_blocked_by_first_page_prewarm() -> None:
 
 
 @pytest.mark.asyncio
+async def test_successful_drawer_hydration_wins_over_late_missing_prewarm_result() -> None:
+    rows = tuple(TraceRow(trace_id=f't{i}') for i in range(100))
+    prewarm_entered = asyncio.Event()
+    release_prewarm = asyncio.Event()
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        if len(rows) == 100:
+            prewarm_entered.set()
+            await release_prewarm.wait()
+            return {row.trace_id: None for row in rows}
+        return {row.trace_id: record(row.trace_id) for row in rows}
+
+    store = ExplorerStore(search=FakeSource(rows).search, hydrate=hydrate)
+    await store.load(START, END, 100, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await prewarm_entered.wait()
+
+    assert await store.records(['t0']) == {'t0': record('t0')}
+    release_prewarm.set()
+    prewarm = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    assert prewarm is not None
+    await prewarm
+
+    assert store.cached_records(['t0']) == {'t0': record('t0')}
+
+
+@pytest.mark.asyncio
 async def test_matched_only_filters_with_results_and_is_ignored_without() -> None:
     rows = tuple(TraceRow(trace_id=f't{i}') for i in range(3))
     store = store_for(FakeSource(rows))
