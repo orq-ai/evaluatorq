@@ -279,6 +279,10 @@ def table(
     if not columns:
         return _empty('No columns selected.', 'Choose at least one column from Columns to show trace details.')
     widths = _header_widths(columns, view.rows, snapshot)
+    duration_rows = view.visible_rows(results) if traces_layout else ()
+    duration_totals = totals(duration_rows) if traces_layout else None
+    duration_scale = max((row.duration_ms or 0 for row in duration_rows), default=0)
+    duration_p95 = duration_totals.p95_ms if duration_totals is not None else None
     # One text column takes no fixed width so it absorbs the card's spare room; the table's
     # min-width keeps every column at least as wide as its measured content.
     rendered_keys = [
@@ -309,6 +313,8 @@ def table(
             + ''.join(
                 _match_cells(row, snapshot)
                 if c.key == MATCH
+                else _duration_cell(row.duration_ms, duration_scale, duration_p95)
+                if traces_layout and c.key == 'duration'
                 else f'<td class="{"num" if c.numeric else ""}">{c.render(row)}</td>'
                 for c in columns
             )
@@ -324,6 +330,21 @@ def table(
         f'<table class="finder-table xr-table" style="min-width:{sum(widths)}ch"><colgroup>{colgroup}</colgroup>'
         f'<thead><tr>{heads}</tr></thead><tbody>{body}</tbody></table>'
     )
+
+
+def _duration_cell(value: int | None, scale: int, p95: int | None) -> str:
+    """Render numeric duration plus an accessible magnitude cue and visible-set p95 tint."""
+    label = fmt_duration(value)
+    width = min(100, max(0, round(value / scale * 100))) if value is not None and scale else 0
+    magnitude = (
+        f'<span class="xr-duration-bar" role="img" aria-label="Duration magnitude: {esc(label)}; '
+        f'{width}% of the longest visible trace" title="{esc(label)} relative to the longest visible trace">'
+        f'<span style="width:{width}%"></span></span>'
+    )
+    at_p95 = value is not None and p95 is not None and value >= p95
+    p95_class = ' xr-duration-p95' if at_p95 else ''
+    p95_title = f' title="At or above visible-set p95 ({esc(fmt_duration(p95))})"' if at_p95 else ''
+    return f'<td class="num xr-duration{p95_class}"{p95_title}><span>{esc(label)}</span>{magnitude}</td>'
 
 
 def _tip_attrs(segment: Segment, position: int, count: int) -> str:

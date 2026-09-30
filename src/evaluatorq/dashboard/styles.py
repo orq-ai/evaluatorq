@@ -62,6 +62,11 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-table th { padding:9px 11px; border-bottom:1px solid #dfe1e5; background:#f8f9fa; color:#686a74; font-size:10px; letter-spacing:.055em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .finder:has(> .finder-command) .xr-ai-sparkle { margin-right:4px; color:#a66124; font-size:12px; }
 .finder:has(> .finder-command) .xr-table td { padding:7px 11px; border-bottom:1px solid #e8e9ec; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.finder:has(> .finder-command) .xr-table td.xr-duration { min-width:82px; }
+.finder:has(> .finder-command) .xr-duration-bar { display:inline-block; width:36px; height:5px; margin-left:6px; overflow:hidden; vertical-align:middle; border-radius:3px; background:#e8ecec; }
+.finder:has(> .finder-command) .xr-duration-bar > span { display:block; height:100%; border-radius:inherit; background:#559b91; }
+.finder:has(> .finder-command) .xr-table td.xr-duration-p95 { background:#fff1e9; color:#8a3d20; }
+.finder:has(> .finder-command) .xr-table tbody tr:hover td.xr-duration-p95 { background:#ffe8dc; }
 .finder:has(> .finder-command) .xr-table tbody tr:hover { background:#f8faf8; }
 .finder:has(> .finder-command) .xr-status ~ .xr-empty { margin:0 12px 12px; }
 /* Square pass: every header control shares one height, square corners, centred labels and the card's 16px gutter. */

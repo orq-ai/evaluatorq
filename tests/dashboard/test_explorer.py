@@ -1663,6 +1663,44 @@ def test_totals_of_no_rows_do_not_divide_by_zero() -> None:
     assert (t.traces, t.cost, t.cache_share, t.p50_ms) == (0, None, None, None)
 
 
+def test_traces_duration_bar_uses_visible_set_scale_and_inclusive_p95_across_pages() -> None:
+    rows = tuple(
+        TraceRow(
+            trace_id=f'trace-{i:03d}',
+            status='error' if i >= 113 else 'ok',
+            duration_ms=114 if i >= 113 else i + 1,
+        )
+        for i in range(120)
+    )
+    view = ExplorerView(state='loaded', rows=rows, page=0)
+    columns = resolve_columns(['duration'])
+
+    page_one = explorer_views.table(view, columns, None, traces_layout=True)
+    assert 'role="img" aria-label="Duration magnitude: 1ms; 1% of the longest visible trace"' in page_one
+    assert 'xr-duration-p95' not in page_one
+
+    page_two = explorer_views.table(replace(view, page=1), columns, None, traces_layout=True)
+    assert page_two.count('class="num xr-duration xr-duration-p95"') == 7
+    assert 'At or above visible-set p95 (114ms)' in page_two
+
+    filtered = explorer_views.table(
+        replace(view, quick_view='errors', page=0), columns, None, traces_layout=True
+    )
+    assert filtered.count('class="num xr-duration xr-duration-p95"') == 7
+
+
+def test_traces_duration_keeps_unknown_text_and_find_has_no_bar() -> None:
+    view = ExplorerView(state='loaded', rows=(TraceRow(trace_id='unknown', duration_ms=None),))
+
+    traces = explorer_views.table(view, resolve_columns(['duration']), None, traces_layout=True)
+    find = explorer_views.table(view, resolve_columns(['duration']), None)
+
+    assert '<span>—</span>' in traces
+    assert 'xr-duration-p95' not in traces
+    assert 'xr-duration-bar' in traces
+    assert 'xr-duration-bar' not in find
+
+
 def test_model_summary_groups_trace_counts_and_only_sums_known_same_currency_costs() -> None:
     rows = (
         TraceRow(trace_id='a', models=('gpt-5.6-luna',), cost_total=0.5, currency='USD'),

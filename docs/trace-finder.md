@@ -30,6 +30,8 @@ The default columns are Time, Trace / agent, Status, Model, Tokens in, Tokens ou
 
 Results page at 100 rows per page; the pager below the table shows `Page X of Y`.
 
+On **Traces**, each known duration keeps its numeric value and adds a small bar scaled to the longest trace in the current filtered and sorted set. Durations at or above that set's nearest-rank p95 receive a warm tint, including ties; both the scale and threshold stay the same as you move between pages. Unknown durations remain `—`, and no p95 tint appears when the set has no known durations.
+
 ## Sorting
 
 Click a column header to sort by it; clicking again flips the direction. Sorting only reorders the rows already loaded — it never triggers a new fetch. Rows missing a value for the sorted column sink to the bottom regardless of sort direction, so switching from ascending to descending never surfaces an unset value at the top.
