@@ -487,7 +487,7 @@ def trajectories(
         )
     return (
         f'<div class="tv"><div class="tv-lg">{legend}<span class="tv-legend-unattributed"><i></i>unattributed</span><span class="tv-note" title="{esc(TRAJECTORIES_HELP)}">Estimated captured message tokens (text length ÷ 4); tool definitions are omitted. Unattributed is the difference from provider input and may include hidden configuration, formatting differences, missing content, or other spans. It does not identify a specific source.</span></div>'
-        f'<div class="tv-hd"><span>Trace</span><div class="ax"><div class="tv-scale" title="{esc(scale_title)}">{ticks}</div><span>Estimated message tokens</span></div>'
+        f'<div class="tv-hd"><span>Trace</span><div class="ax"><div class="tv-scale" title="{esc(scale_title)}">{ticks}</div><span>Reconciled input total</span></div>'
         f'<div class="tv-mh"><span title="{esc(COLUMN_HELP["tokens_in"])}; and tokens the model wrote back">Input / output</span>'
         f'<span title="{esc(COLUMN_HELP["cache_pct"])}">Cache reads</span><span>Cost</span></div></div>'
         f'<div class="tv-rows">{rows_html}</div><div class="tv-tip" role="tooltip" hidden></div></div>'

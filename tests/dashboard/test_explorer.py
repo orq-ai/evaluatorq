@@ -225,7 +225,7 @@ def test_trajectory_reconciles_captured_estimates_to_provider_input() -> None:
     assert html.count('class="tv-unattributed"') == 1
     assert 'flex-grow:97' in html
     assert 'provider-reported trace input and estimated captured messages' in html
-    assert 'Estimated message tokens' in html
+    assert 'Reconciled input total' in html
 
 
 def test_trajectory_omits_remainder_when_input_is_unknown_and_ignores_tool_definitions() -> None:
