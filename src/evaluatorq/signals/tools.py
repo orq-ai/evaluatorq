@@ -369,11 +369,15 @@ def _episodes(ctx: SignalContext) -> list[tuple[str, list[CallRecord]]]:
 
 def _episode_evidence(kind: str, run: list[CallRecord], ctx: SignalContext) -> Evidence:
     first = run[0]
+    first_label = _shell_family(first, ctx) or first.call.function_name
     if kind == 'identical retry':
-        label = _shell_family(first, ctx) or first.call.function_name
-        reason = f'{len(run)}x identical {label}'
+        reason = f'{len(run)}x identical {first_label}'
     else:
-        reason = f'{len(run)}-call oscillation: {run[0].call.function_name} ↔ {run[1].call.function_name}'
+        second_label = _shell_family(run[1], ctx) or run[1].call.function_name
+        pair = (
+            f'{first_label} ↔ {second_label}' if first_label != second_label else f'{first_label} (two argument sets)'
+        )
+        reason = f'{len(run)}-call oscillation: {pair}'
     return _call_ev(first, reason).model_copy(
         update={
             'related': [_related(record)[0] for record in run[1:]],

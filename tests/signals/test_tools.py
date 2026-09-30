@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from evaluatorq.signals import compute_signals
+from evaluatorq.signals.config import SignalsConfig
 
-from tests.signals.conftest import agent, call, failed, ok, traj
+from tests.signals.conftest import agent, bare, call, failed, ok, traj
 
 
-def _values(trajectory, *names):
-    return compute_signals(trajectory, only=names).results
+def _values(trajectory, *names, config=None):
+    return compute_signals(trajectory, config=config, only=names).results
 
 
 def test_error_retry_and_success_evidence():
@@ -106,3 +107,75 @@ def test_command_family_runs_and_oscillation():
     assert values['consecutive_command_family_max'].value == 1
     assert values['tool_oscillation_count'].value == 1
     assert values['tool_loop_count'].value == 1
+    assert values['tool_oscillation_count'].evidence[0].reason == '4-call oscillation: git status ↔ orq traces'
+
+
+def test_oscillation_of_same_tool_with_different_arguments_is_labeled():
+    trajectory = traj([
+        agent(calls=[call('lookup', {'q': 'a'}, 'a1')], results=[ok()]),
+        agent(calls=[call('lookup', {'q': 'b'}, 'b1')], results=[ok()]),
+        agent(calls=[call('lookup', {'q': 'a'}, 'a2')], results=[ok()]),
+        agent(calls=[call('lookup', {'q': 'b'}, 'b2')], results=[ok()]),
+    ])
+    oscillation = _values(trajectory, 'tool_oscillation_count')['tool_oscillation_count']
+    assert oscillation.value == 1
+    assert oscillation.evidence[0].reason == '4-call oscillation: lookup (two argument sets)'
+
+
+def test_alternate_retry_definition_and_window():
+    trajectory = traj([
+        agent(calls=[call('fetch', {'q': 1}, 'failed')], results=[failed()]),
+        agent(calls=[call('other', {}, 'other')], results=[ok()]),
+        agent(calls=[call('fetch', {'q': 1}, 'retry')], results=[ok()]),
+    ])
+    within_two = SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=2)
+    within_one = SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=1)
+
+    wide = _values(trajectory, 'tool_retry_count', 'tool_succeeded_after_retry_count', config=within_two)
+    narrow = _values(trajectory, 'tool_retry_count', config=within_one)
+    assert wide['tool_retry_count'].value == 1
+    assert wide['tool_retry_count'].evidence[0].reason == ''
+    assert wide['tool_succeeded_after_retry_count'].value == 1
+    assert narrow['tool_retry_count'].value == 0
+
+
+def test_exact_canonicalisation_preserves_argument_key_order():
+    trajectory = traj([
+        agent(calls=[call('lookup', {'a': 1, 'b': 2}, 'first')], results=[ok()]),
+        agent(calls=[call('lookup', {'b': 2, 'a': 1}, 'second')], results=[ok()]),
+    ])
+    sorted_result = _values(trajectory, 'duplicate_tool_call_count')['duplicate_tool_call_count']
+    exact_config = SignalsConfig(canonicalisation='exact')
+    exact_result = _values(trajectory, 'duplicate_tool_call_count', config=exact_config)['duplicate_tool_call_count']
+    assert sorted_result.value == 1
+    assert exact_result.value == 0
+
+
+def test_status_and_content_detection_and_unknown_status_basis():
+    trajectory = traj([agent(calls=[call('run', {})], results=[bare('Traceback: failed')])])
+    status_only = _values(trajectory, 'tool_error_count')['tool_error_count']
+    sniff = _values(
+        trajectory,
+        'tool_error_count',
+        config=SignalsConfig(error_detection='status_and_content'),
+    )['tool_error_count']
+    assert status_only.value is None
+    assert status_only.no_basis == 'explicit error status: 0 of 1 tool results carry an error status'
+    assert sniff.value == 1
+    assert sniff.evidence[0].reason == "matched 'Traceback'"
+    assert sniff.preconditions[0].met is False
+    assert sniff.preconditions[0].required is False
+
+
+def test_empty_values_and_literals_are_configurable():
+    trajectory = traj([
+        agent(calls=[call('run', {}, 'blank')], results=[ok('')]),
+        agent(calls=[call('run', {}, 'literal')], results=[ok('(no output)')]),
+        agent(calls=[call('run', {}, 'array')], results=[ok('[]')]),
+    ])
+    defaults = _values(trajectory, 'empty_tool_result_count')['empty_tool_result_count']
+    config = SignalsConfig(empty_values=frozenset({'[]'}), empty_literals=('(no output)',))
+    customized = _values(trajectory, 'empty_tool_result_count', config=config)['empty_tool_result_count']
+    assert defaults.value == 2
+    assert customized.value == 2
+    assert [item.reason for item in customized.evidence] == ["empty: '(no output)'", "empty: '[]'"]
