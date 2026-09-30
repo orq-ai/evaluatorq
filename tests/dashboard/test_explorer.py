@@ -1268,6 +1268,7 @@ async def test_clicking_active_longest_view_retries_failed_message_count(
         assert (await store.explorer.view()).message_counting
 
         retry_release.set()
+        completed = await store.explorer.view()
         for _ in range(100):
             completed = await store.explorer.view()
             if completed.message_counts:
@@ -1587,7 +1588,10 @@ def test_apply_filters_only_refreshes_relative_range_before_htmx_load() -> None:
     from evaluatorq.trace_finder import DashboardSettings, RunSnapshot
 
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
-    html = finder_views.body(RunSnapshot(state='awaiting_review', dimensions=()), DashboardSettings())
+    html = finder_views.body(
+        RunSnapshot(state='awaiting_review', dimensions=()),
+        DashboardSettings(window_days=7, limit=200, parallelism=100),
+    )
     assert 'hx-post="/find/load"' in html
     assert "evt.target.closest('[hx-post=\"/find/load\"]')" in js
     assert 'explorerRefreshRelativeRange();' in js
