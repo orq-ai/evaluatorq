@@ -112,6 +112,56 @@ def top_share(rows: Sequence[TraceRow], metric: Callable[[TraceRow], float | Non
     return tuple(valued[: math.ceil(len(valued) * TOP_SHARE)])
 
 
+@dataclass(frozen=True)
+class Totals:
+    """Sums over one set of rows; ``None`` means no row reported the figure."""
+
+    traces: int
+    errors: int
+    cost: float | None
+    currency: str | None
+    tokens_in: int | None
+    tokens_out: int | None
+    cache_share: float | None
+    p50_ms: int | None
+    p95_ms: int | None
+
+
+def _sum_known(values: Sequence[int | float | None]) -> int | float | None:
+    known = [value for value in values if value is not None]
+    return sum(known) if known else None
+
+
+def _nearest_rank(sorted_values: Sequence[int], quantile: float) -> int | None:
+    if not sorted_values:
+        return None
+    return sorted_values[max(0, math.ceil(quantile * len(sorted_values)) - 1)]
+
+
+def totals(rows: Sequence[TraceRow]) -> Totals:
+    """Total the *rows* the table currently shows.
+
+    Cache share is cache-read over input tokens, taken only from rows that report both: Orq's
+    prompt tokens already include the cached ones. Cost is left unset when currencies are mixed.
+    """
+    currencies = {row.currency for row in rows if row.cost_total is not None}
+    cost = _sum_known([row.cost_total for row in rows]) if len(currencies) <= 1 else None
+    cached_rows = [row for row in rows if row.tokens_in and row.cached_tokens is not None]
+    cached_input = sum(row.tokens_in or 0 for row in cached_rows)
+    durations = sorted(row.duration_ms for row in rows if row.duration_ms is not None)
+    return Totals(
+        traces=len(rows),
+        errors=sum(row.is_error for row in rows),
+        cost=float(cost) if cost is not None else None,
+        currency=next(iter(currencies)) if len(currencies) == 1 else None,
+        tokens_in=int(v) if (v := _sum_known([row.tokens_in for row in rows])) is not None else None,
+        tokens_out=int(v) if (v := _sum_known([row.tokens_out for row in rows])) is not None else None,
+        cache_share=sum(row.cached_tokens or 0 for row in cached_rows) / cached_input if cached_input else None,
+        p50_ms=_nearest_rank(durations, 0.5),
+        p95_ms=_nearest_rank(durations, 0.95),
+    )
+
+
 ExplorerState = Literal['idle', 'loading', 'loaded', 'failed']
 PAGE_ROWS = 100
 

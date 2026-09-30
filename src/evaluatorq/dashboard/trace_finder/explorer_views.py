@@ -10,13 +10,14 @@ from urllib.parse import quote
 from loguru import logger
 
 from evaluatorq.common.reports import esc
-from evaluatorq.trace_finder.columns import COLUMNS, MATCH, Column, fmt_cost, fmt_time, fmt_tokens
+from evaluatorq.trace_finder.columns import COLUMNS, MATCH, Column, fmt_cost, fmt_duration, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.explorer import (
     CONVERSATION_METRICS,
     PAGE_ROWS,
     TOP_METRICS,
     ai_matched,
     conversation_key,
+    totals,
 )
 from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, segments
@@ -482,6 +483,26 @@ def _pager(view: ExplorerView, results: Mapping[str, TraceClassification] | None
     return f'<div class="xr-pager">{prev}<span>Page {page + 1} of {pages} · {PAGE_ROWS} per page</span>{nxt}</div>'
 
 
+def _totals_strip(rows: Sequence[TraceRow]) -> str:
+    """One line of sums over the rows the table shows, so a filter visibly moves the numbers."""
+    t = totals(rows)
+    share = f'{t.cache_share:.0%}' if t.cache_share is not None else fmt_tokens(None)
+    parts = (
+        ('traces', f'{t.traces:,}'),
+        ('errors', f'{t.errors:,}'),
+        ('cost', fmt_cost(t.cost, t.currency)),
+        ('in', fmt_tokens(t.tokens_in)),
+        ('out', fmt_tokens(t.tokens_out)),
+        ('cache read', share),
+        ('p50', fmt_duration(t.p50_ms)),
+        ('p95', fmt_duration(t.p95_ms)),
+    )
+    cells = ''.join(
+        f'<span class="xr-total"><span class="xr-total-label">{label}</span> {value}</span>' for label, value in parts
+    )
+    return f'<div class="xr-totals" aria-label="Totals for the traces shown">{cells}</div>'
+
+
 def results(
     view: ExplorerView,
     columns: Sequence[Column],
@@ -609,6 +630,7 @@ def results(
                 'No matches yet.', 'None of the loaded traces match so far. Turn off Matches only to see every row.'
             )
         inner = f'{banner}{body}{_pager(view, results)}'
-    inner = f'{status}{toolbar}{inner}'
+    totals_strip = _totals_strip(view.visible_rows(judged)) if view.rows or view.state == 'loaded' else ''
+    inner = f'{status}{totals_strip}{toolbar}{inner}'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     return f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll}>{error_html}{inner}</section>'

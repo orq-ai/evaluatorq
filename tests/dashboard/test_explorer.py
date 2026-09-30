@@ -1296,3 +1296,25 @@ def test_ai_matches_chip_shows_once_the_classifier_has_judged_rows() -> None:
         snapshot=snapshot,
     )
     assert 'AI matches' in html
+
+
+def test_totals_sum_rows_and_use_inclusive_cache_share() -> None:
+    from evaluatorq.trace_finder.explorer import totals
+    from evaluatorq.trace_finder.rows import TraceRow
+
+    rows = [
+        TraceRow(trace_id='a', status='ok', tokens_in=100, tokens_out=10, cached_tokens=50, cost_total=0.5, duration_ms=100),
+        TraceRow(trace_id='b', status='error', tokens_in=300, tokens_out=20, cached_tokens=0, cost_total=1.0, duration_ms=900),
+        TraceRow(trace_id='c', tokens_in=None, tokens_out=None, cost_total=None, duration_ms=None),
+    ]
+    t = totals(rows)
+    assert (t.traces, t.errors, t.cost, t.tokens_in, t.tokens_out) == (3, 1, 1.5, 400, 30)
+    assert t.cache_share == 50 / 400
+    assert (t.p50_ms, t.p95_ms) == (100, 900)
+
+
+def test_totals_of_no_rows_do_not_divide_by_zero() -> None:
+    from evaluatorq.trace_finder.explorer import totals
+
+    t = totals([])
+    assert (t.traces, t.cost, t.cache_share, t.p50_ms) == (0, None, None, None)
