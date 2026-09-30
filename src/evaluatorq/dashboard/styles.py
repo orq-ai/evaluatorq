@@ -240,12 +240,10 @@ body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder
 .finder:has(> .finder-command) .finder-seg input:checked + span,
 .finder:has(> .finder-command) .xr-switch button.on { background:#fff; color:#25232e; font-weight:600; box-shadow:0 0 0 1px #d5d8df, 0 1px 2px rgba(20,20,30,.12); }
 .finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:150px 80px 90px 57px 170px; }
-/* The toolbar sits directly under the question box and never moves: the Ask AI result band, its criteria and the run progress
-   render under the toolbar (order 2) instead of pushing it down when a run finishes. */
-.finder:has(> .finder-command) :is(#finder-body, .finder-body-fragment, #explorer-results-slot, .xr) { display:contents; }
-.finder:has(> .finder-command) .xr > .xr-toolbar { order:1; }
-.finder:has(> .finder-command) .finder-body-fragment > * { order:2; }
-.finder:has(> .finder-command) .xr > :not(.xr-toolbar) { order:3; }
+/* The toolbar sits directly under the question box and never moves. The page puts it ahead of the Ask AI band in the DOM, so the
+   band, its criteria and the run progress render under it without CSS reordering, and Tab follows what the eye sees. */
+.finder:has(> .finder-command) :is(#explorer-toolbar, #finder-body, .finder-body-fragment, #explorer-results-slot, .xr) { display:contents; }
+.finder:has(> .finder-command) #explorer-toolbar > .xr-toolbar { order:0; }
 /* An empty chip slot would still cost one flex gap. */
 .finder:has(> .finder-command) .xr-chips:empty { display:none; }
 /* Active filter chips get their own row under the controls, so adding a filter never pushes the controls onto another line. */

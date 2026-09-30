@@ -779,6 +779,29 @@ def test_traces_filters_button_opens_the_facet_menu_directly(explorer_client) ->
     assert 'if (filtersDirty) { filtersDirty = false; loadExplorer(); }' in js
 
 
+def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue(model=('gpt-5.6-luna',))
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    _, source, client = explorer_client
+    source.rows = _rows(2)
+    _load(client)
+
+    html = client.get('/traces').text
+
+    assert 'Counts are of the 2 rows currently loaded' in html
+    assert 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' in html
+    assert '<span class="facet-n" title="Loaded traces">2</span>' in html
+    assert 'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls"' in html
+
+    refreshed_menu = client.get('/find/facets?form_id=explorer-load-form&counts=loaded').text
+    assert 'Counts are of the 2 rows currently loaded' in refreshed_menu
+    assert '<span class="facet-n" title="Loaded traces">2</span>' in refreshed_menu
+
+
 def test_toolbar_shows_removable_filter_chips_and_count(explorer_client) -> None:
     _, _, client = explorer_client
     html = _load(client, facet_model='gpt-x', tokens_min='100').text
@@ -1332,10 +1355,34 @@ def test_facet_menu_counts_values_from_loaded_rows_only() -> None:
 
     html = facet_menu(catalogue, loaded_rows=rows)
 
-    assert 'Counts are of the 3 loaded traces.' in html
+    assert 'Counts are of the 3 rows currently loaded' in html
     # Most common value first, zero for a catalogue value no loaded row carries.
     assert html.index('gpt-6-luna') < html.index('claude-x') < html.index('unused')
     assert '<span class="facet-n" title="Loaded traces">2</span>' in html
     assert '<span class="facet-n" title="Loaded traces">0</span>' in html
     # Without rows the menu is unchanged (the /find surface).
     assert 'class="facet-n"' not in facet_menu(catalogue)
+
+
+def test_failed_load_offers_retry_and_plain_words_for_an_orq_outage() -> None:
+    outage = explorer_views.results(
+        ExplorerView(state='failed', error='503: no healthy upstream'), resolve_columns(None), records=None, snapshot=None
+    )
+    assert 'Orq is temporarily unavailable. Try again.' in outage
+    assert '503: no healthy upstream' in outage
+    assert 'form="explorer-load-form">Retry</button>' in outage
+
+    other = explorer_views.results(
+        ExplorerView(state='failed', error='bad range'), resolve_columns(None), records=None, snapshot=None
+    )
+    assert 'Load failed: bad range' in other
+    assert 'Retry</button>' in other
+
+
+def test_toolbar_is_split_out_of_the_results_section() -> None:
+    html = explorer_views.results(ExplorerView(state='loaded'), resolve_columns(None), records=None, snapshot=None)
+    assert 'id="explorer-toolbar" hx-swap-oob="true"' in html
+    toolbar, section = explorer_views.split_toolbar(html)
+    assert toolbar.startswith('<div id="explorer-toolbar">')
+    assert 'xr-toolbar' in toolbar
+    assert 'xr-toolbar' not in section

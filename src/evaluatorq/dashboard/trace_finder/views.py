@@ -242,7 +242,7 @@ def facet_menu(
                     else ''
                 )
                 loaded_note = (
-                    f'<p class="facet-scope">Counts are of the {len(loaded_rows):,} loaded traces.</p>'
+                    f'<p class="facet-scope">Counts are of the {len(loaded_rows):,} rows currently loaded, so they change as you filter.</p>'
                     if tally is not None and loaded_rows is not None
                     else ''
                 )
@@ -359,7 +359,12 @@ def controls(
     selection = population.facets if population is not None else None
     facets = selection or _empty_facets()
     review = snapshot.state == 'awaiting_review'
-    form_id = 'finder-start-form' if review else 'finder-query-form'
+    # On /traces the same facet menu is opened from the table toolbar and
+    # closing it reloads the table. Keep its controls associated with that
+    # form; hx-include still carries them into an Ask AI submission.
+    form_id = (
+        'finder-start-form' if review else 'explorer-load-form' if explorer_view is not None else 'finder-query-form'
+    )
     window_days = settings.window_days
     if population is not None and population.start is not None and population.end is not None:
         window_days = max(1, round((population.end - population.start).total_seconds() / 86400))
@@ -1087,7 +1092,8 @@ def page_html(
         from evaluatorq.trace_finder.explorer import ExplorerView
 
         explorer_html = explorer_views.results(ExplorerView(), resolve_columns(None), records=None, snapshot=None)
-    html = f'<div class="finder">{traces_command_strip(query, api_available=api_available, error=error, has_rows=has_rows, mode=settings.ask_ai_mode)}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
+    toolbar_html, explorer_html = explorer_views.split_toolbar(explorer_html)
+    html = f'<div class="finder">{traces_command_strip(query, api_available=api_available, error=error, has_rows=has_rows, mode=settings.ask_ai_mode)}{toolbar_html}<div id="finder-body">{body_html}</div><div id="explorer-results-slot">{explorer_html}</div><div id="finder-drawer"></div><div id="finder-drawer-loading" role="status">Loading trace…</div></div>'
     return page('Traces', html, active_nav='traces')
 
 

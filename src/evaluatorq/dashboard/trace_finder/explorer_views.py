@@ -93,6 +93,21 @@ def range_inputs(start: datetime | None, end: datetime | None, window_days: int,
     return controls + load
 
 
+_UNAVAILABLE_MARKERS = ('503', 'no healthy upstream', 'service unavailable')
+
+
+def _load_failed(error: str | None) -> str:
+    """The failed-load panel: plain words for an Orq outage, the raw detail kept, and a Retry that re-submits the Load form."""
+    raw = error or 'unknown error'
+    unavailable = any(marker in raw.lower() for marker in _UNAVAILABLE_MARKERS)
+    message = 'Orq is temporarily unavailable. Try again.' if unavailable else f'Load failed: {raw}'
+    detail = f'<small class="finder-error-detail">{esc(raw)}</small>' if unavailable else ''
+    return (
+        f'<div class="finder-review finder-form-error" role="alert" title="{esc(raw)}">{esc(message)} {detail}'
+        '<button class="btn-secondary xr-retry" type="submit" form="explorer-load-form">Retry</button></div>'
+    )
+
+
 def _empty(title: str, body: str) -> str:
     paragraph = f'<p>{esc(body)}</p>' if body else ''
     return f'<div class="xr-empty"><h4>{esc(title)}</h4>{paragraph}</div>'
@@ -612,7 +627,7 @@ def results(
             )
         )
     elif not view.rows and view.state == 'failed':
-        inner = f'<div class="finder-review finder-form-error" role="alert">Load failed: {esc(view.error or "unknown error")}</div>'
+        inner = _load_failed(view.error)
     else:
         banner = (
             f'<div class="finder-review finder-form-error" role="alert">Load stopped: {esc(view.error or "unknown error")}. {len(view.rows)} rows loaded.</div>'
@@ -658,6 +673,22 @@ def results(
             )
         inner = f'{banner}{body}{_pager(view, results)}'
     totals_strip = _totals_strip(view.visible_rows(judged)) if view.rows or view.state == 'loaded' else ''
-    inner = f'{status}{totals_strip}{toolbar}{inner}'
+    inner = f'{status}{totals_strip}{inner}'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
-    return f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll}>{error_html}{inner}</section>'
+    # The toolbar travels beside the section, out of band, so the page can keep it ahead of the Ask AI band in the DOM.
+    return (
+        f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll}>{error_html}{inner}</section>'
+        f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true">{toolbar}</div>'
+    )
+
+
+TOOLBAR_SLOT_ID = 'explorer-toolbar'
+
+
+def split_toolbar(html: str) -> tuple[str, str]:
+    """Split ``results()`` output into the toolbar slot (in place, no OOB attribute) and the results section."""
+    marker = f'<div id="{TOOLBAR_SLOT_ID}" hx-swap-oob="true">'
+    head, sep, tail = html.partition(marker)
+    if not sep:
+        return '', html
+    return marker.replace(' hx-swap-oob="true"', '') + tail, head
