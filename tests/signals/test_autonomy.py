@@ -117,7 +117,7 @@ def test_wall_and_segment_timing_track_exact_bounds_and_iso_extrema_separately()
     assert values['active_time_ms'].approximate is False
     duration = values['max_autonomous_duration_ms']
     assert duration.value == 7000
-    assert duration.approximate is False
+    assert duration.approximate is True
     assert duration.evidence[0].related_call_ids == ['tool-call']
 
 

@@ -431,6 +431,7 @@ def max_autonomous_duration_ms(ctx: SignalContext) -> SignalResult:
             *(interval[4] for interval in timed_intervals if interval[4] is not None),
         ])
     )
+    # The segment starts at an ISO user-step timestamp, which is approximate under the ATIF timing map.
     return result(
         'max_autonomous_duration_ms',
         'C',
@@ -444,7 +445,7 @@ def max_autonomous_duration_ms(ctx: SignalContext) -> SignalResult:
             )
         ],
         pcs,
-        approximate=any(interval[5] for interval in timed_intervals),
+        approximate=True,
     )
 
 
