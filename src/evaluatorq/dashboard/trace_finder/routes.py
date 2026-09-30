@@ -958,7 +958,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             )
             view = await explorer.view()
             if view.state == 'loaded' and view.quick_view == 'conv_longest' and view.rows:
-                await explorer.start_message_counting()
+                await explorer.start_message_counting(retry=params.get('quick_view') == 'conv_longest')
         # The section's own timer swaps nothing itself (hx-swap="none"), so its render arrives out of band.
         polling = req.headers.get('HX-Trigger') == 'explorer-results'
         body = await _explorer_html(req, oob=polling, poll=polling)

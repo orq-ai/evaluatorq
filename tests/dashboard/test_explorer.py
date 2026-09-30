@@ -1191,10 +1191,90 @@ def test_rows_route_reports_message_count_hydration_failure(explorer_client) -> 
     _load(client)
     response = client.get('/find/rows?quick_view=conv_longest')
     if 'Could not count messages: hydrator offline' not in response.text:
-        response = client.get('/find/rows?quick_view=conv_longest')
+        response = client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'})
 
     assert response.status_code == 200
     assert 'Could not count messages: hydrator offline' in response.text
+
+
+@pytest.mark.asyncio
+async def test_clicking_active_longest_view_retries_failed_message_count(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, source, client = explorer_client
+    source.rows = tuple(row.model_copy(update={'thread_id': 'thread'}) for row in source.rows)
+    calls = 0
+    retry_entered = asyncio.Event()
+    retry_release = asyncio.Event()
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        nonlocal calls
+        calls += 1
+        if calls <= 2:
+            raise RuntimeError('hydrator offline')
+        retry_entered.set()
+        await retry_release.wait()
+        return {
+            row.trace_id: TraceRecord(
+                schema_version=1,
+                trace_id=row.trace_id,
+                span_id='s',
+                timestamp=datetime.now(timezone.utc),
+                messages=({'role': 'user', 'content': 'hello'},),
+                project='project',
+                model='model',
+                provider='provider',
+                status='ok',
+                product='product',
+                trace_type='span.chat_completion',
+            )
+            for row in rows
+        }
+
+    store.explorer._hydrate = hydrate
+
+    async def warm_catalogue(_app: Any, _window_days: int) -> None:
+        return None
+
+    monkeypatch.setattr(finder_routes, '_warm_catalogue', warm_catalogue)
+    async with AsyncClient(transport=ASGITransport(app=client.app), base_url='http://testserver') as http:
+        await http.post(
+            '/find/load',
+            data=csrf_data({
+                'from': '2026-09-27',
+                'from_time': '10:00:00',
+                'to': '2026-09-27',
+                'to_time': '11:00:00',
+                'tz_offset': '0',
+                'rows': '250',
+            }),
+        )
+        for _ in range(20):
+            if (await store.explorer.view()).state == 'loaded':
+                break
+            await asyncio.sleep(0.01)
+        await http.get('/find/rows?quick_view=conv_longest')
+        for _ in range(20):
+            if (await store.explorer.view()).message_count_error:
+                break
+            await asyncio.sleep(0.01)
+        assert (await store.explorer.view()).message_count_error == 'hydrator offline'
+        assert calls == 2  # first-page prewarm and the initial count both failed
+
+        retried = await http.get('/find/rows?quick_view=conv_longest')
+        assert retried.status_code == 200
+        await retry_entered.wait()
+        assert calls == 3
+        assert (await store.explorer.view()).message_counting
+
+        retry_release.set()
+        for _ in range(100):
+            completed = await store.explorer.view()
+            if completed.message_counts:
+                break
+            await asyncio.sleep(0.01)
+        assert completed.message_counts
+        assert completed.message_count_error is None
 
 
 def test_table_omits_conversation_markers_when_sorted() -> None:

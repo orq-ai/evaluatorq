@@ -546,8 +546,10 @@ class ExplorerStore:
             )
         return self._view
 
-    async def start_message_counting(self) -> ExplorerView:
+    async def start_message_counting(self, *, retry: bool = False) -> ExplorerView:
         """Count loaded-row messages in the background, scoped to the current load generation."""
+        if retry and self._view.message_count_error:
+            self._view = replace(self._view, message_count_error=None)
         if (
             self._view.message_counts
             or self._view.message_counting
