@@ -278,6 +278,41 @@ async def test_populates_summary_metadata_without_listing_spans() -> None:
 
 
 @pytest.mark.asyncio
+async def test_captures_tool_definition_size_from_selected_span() -> None:
+    trace = summary('with-tools', messages=[])
+    hydrated = detail('completion', 'find the order', minute=1)
+    raw = {
+        'span': {
+            'attributes': {
+                'gen_ai': {
+                    'input': {'messages': user_messages('find the order')},
+                    'tool': {'definitions': [
+                        {'type': 'function', 'function': {'name': 'lookup_order', 'parameters': {'type': 'object'}}},
+                        {'type': 'function', 'function': {'name': 'refund_order', 'parameters': {'type': 'object'}}},
+                    ]},
+                },
+            },
+        },
+    }
+    traces = FakeTraces(
+        {None: ([trace], False, None)},
+        spans={'with-tools': [span('completion', minute=1)]},
+        details={('with-tools', 'completion'): hydrated},
+        raw_details={('with-tools', 'completion'): raw},
+    )
+    source = make_source(with_hooks(FakeOrq(traces)))
+    traces.capture_hook = source._capture  # pyright: ignore[reportPrivateUsage]
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+    record = records['with-tools']
+
+    assert record is not None
+    assert record.tool_definition_count == 2
+    assert record.tool_definition_tokens > 0
+
+
+@pytest.mark.asyncio
 async def test_uses_raw_query_payload_for_fields_dropped_by_sdk_models() -> None:
     trace = summary('raw-fields', messages=[])
     traces = FakeTraces({None: ([trace], False, None)})

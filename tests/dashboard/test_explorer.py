@@ -215,8 +215,9 @@ def test_trajectory_rows_show_duration_status_and_label_missing_messages() -> No
     assert 'No messages available' in html
     assert '1.0s' in html
     assert 'tv-status err">Error' in html
-    assert html.count('class="tv-unattributed"') == 1
-    assert 'no captured message content is available' in html
+    assert '<span>Status</span>' in html
+    assert 'tv-nomsg' in html
+    assert 'tv-unattributed' not in html
     cancelled = explorer_views.trajectories(
         ExplorerView(state='loaded', rows=(_rows(1)[0].model_copy(update={'status': 'cancelled'}),)), {}, None
     )
@@ -227,7 +228,7 @@ def test_trajectory_rows_show_duration_status_and_label_missing_messages() -> No
     assert 'tv-status other">Unknown' in unknown
 
 
-def test_trajectory_reconciles_captured_estimates_to_provider_input() -> None:
+def test_trajectory_bar_contains_only_captured_messages() -> None:
     row = _rows(1)[0].model_copy(update={'tokens_in': 100})
     record = _trajectory_record(
         row.trace_id,
@@ -238,13 +239,65 @@ def test_trajectory_reconciles_captured_estimates_to_provider_input() -> None:
     html = explorer_views.trajectories(ExplorerView(state='loaded', rows=(row,)), {row.trace_id: record}, None)
 
     assert html.count('data-tv-kind="System"') == 1
-    assert html.count('class="tv-unattributed"') == 1
-    assert 'flex-grow:97' in html
-    assert 'provider-reported trace input and estimated captured messages' in html
-    assert 'Reconciled input total' in html
+    assert 'tv-unattributed' not in html
+    assert 'flex-grow:2' in html and 'flex-grow:1' in html
+    assert 'style="width:100.00%"' in html
+    assert 'aria-description="Estimated captured messages: 3 tokens."' in html
+    assert 'Captured messages' in html
+    assert '<b>100</b><small>in</small>' in html
 
 
-def test_trajectory_omits_remainder_when_input_is_unknown_and_ignores_tool_definitions() -> None:
+def test_trajectory_uses_model_or_agent_as_identity_and_keeps_status_separate() -> None:
+    model_row = _rows(1)[0].model_copy(update={
+        'name': 'messages.anthropic',
+        'agent_name': None,
+        'models': ('claude-sonnet-4',),
+        'started_at': datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc),
+    })
+    agent_row = _rows(1)[0].model_copy(update={
+        'trace_id': 'other-trace',
+        'name': 'responses.openai',
+        'agent_name': 'support-agent',
+        'status': 'failed',
+    })
+
+    html = explorer_views.trajectories(ExplorerView(state='loaded', rows=(model_row, agent_row)), {}, None)
+
+    assert '<div class="a" title="claude-sonnet-4">claude-sonnet-4</div>' in html
+    assert '<div class="a" title="support-agent">support-agent</div>' in html
+    assert '<span class="tv-model">gpt-5.6-luna</span>' in html
+    assert 'messages.anthropic' not in html
+    assert 'responses.openai' not in html
+    assert '<div class="s mono">2026-09-30 12:00:00</div>' in html
+    assert '<span class="tv-status err">Error</span>' in html
+    assert '<span class="tv-status ok">Success</span>' in html
+    assert 'trace-00' not in html.split('class="s mono"')[1].split('</div>')[0]
+
+
+def test_embedding_trajectory_has_no_context_visualization() -> None:
+    embedding = _rows(1)[0].model_copy(update={
+        'name': 'embeddings.openai',
+        'product': 'embeddings',
+        'tokens_in': 1200,
+    })
+    record = _trajectory_record(embedding.trace_id, {'role': 'user', 'content': 'Text to embed'}).model_copy(update={
+        'tool_definition_count': 1,
+        'tool_definition_tokens': 50,
+    })
+
+    html = explorer_views.trajectories(
+        ExplorerView(state='loaded', rows=(embedding,), show_tool_definitions=True), {embedding.trace_id: record}, None
+    )
+
+    assert '<div class="tv-bar tv-embedding">Embedding call</div>' in html
+    assert 'class="tv-plot"' not in html
+    assert 'class="tv-segs' not in html
+    assert 'class="tv-track"' not in html
+    assert 'data-tv-tools=' not in html
+    assert 'user <em>100%</em>' not in html
+
+
+def test_trajectory_ignores_tool_definitions_when_input_is_unknown() -> None:
     row = _rows(1)[0].model_copy(update={'tokens_in': None})
     record = _trajectory_record(
         row.trace_id,
@@ -255,27 +308,49 @@ def test_trajectory_omits_remainder_when_input_is_unknown_and_ignores_tool_defin
 
     assert 'tv-unattributed' not in html
     assert 'hidden_schema' not in html
-    assert 'Provider input unavailable; captured message estimate 1.' in html
-    assert 'estimated message bars use a fixed 1,000-token scale' in html
+    assert 'Estimated captured messages: 1 token.' in html
+    assert 'Scale: p95 of captured message estimates on this page (1 tokens)' in html
 
 
-def test_trajectory_keeps_estimate_when_it_exceeds_reported_input() -> None:
+def test_tool_definitions_toggle_adds_one_block_and_rescales_the_bar() -> None:
+    row = _rows(1)[0]
+    record = _trajectory_record(row.trace_id, {'role': 'user', 'content': 'hello'}).model_copy(update={
+        'tool_definition_count': 2,
+        'tool_definition_tokens': 120,
+    })
+    off = explorer_views.trajectories(ExplorerView(state='loaded', rows=(row,)), {row.trace_id: record}, None)
+    on = explorer_views.trajectories(
+        ExplorerView(state='loaded', rows=(row,), show_tool_definitions=True), {row.trace_id: record}, None
+    )
+
+    assert 'aria-pressed="false"' in off
+    assert 'data-tv-tools=' not in off
+    assert 'Scale: p95 of captured message estimates on this page (2 tokens)' in off
+    assert 'aria-pressed="true"' in on
+    assert on.count('data-tv-tools=') == 1
+    assert 'data-tv-n="2 definitions"' in on
+    assert 'Scale: p95 of captured messages and tool definitions on this page (122 tokens)' in on
+    assert 'tv-unattributed' not in on
+
+
+def test_trajectory_bar_does_not_use_provider_input_for_its_scale() -> None:
     row = _rows(1)[0].model_copy(update={'tokens_in': 10})
     record = _trajectory_record(row.trace_id, {'role': 'user', 'content': 'x' * 400})
 
     html = explorer_views.trajectories(ExplorerView(state='loaded', rows=(row,)), {row.trace_id: record}, None)
 
     assert 'tv-unattributed' not in html
-    assert 'Estimated captured messages 100 exceed provider-reported trace input 10 by 90.' in html
-    assert 'Bar exceeds scale' in html
+    assert 'style="width:100.00%"' in html
+    assert 'Scale: p95 of captured message estimates on this page (100 tokens)' in html
+    assert 'provider-reported trace input' not in html
 
 
-def test_trajectory_scale_is_loaded_population_p95_across_pages() -> None:
+def test_trajectory_scale_uses_captured_messages_on_each_page() -> None:
     rows = tuple(row.model_copy(update={'tokens_in': index + 1}) for index, row in enumerate(_rows(PAGE_ROWS + 1)))
     rows = (*rows[:-1], rows[-1].model_copy(update={'tokens_in': 10_000}))
     records = {
         rows[0].trace_id: _trajectory_record(rows[0].trace_id, {'role': 'user', 'content': 'text'}),
-        rows[-1].trace_id: _trajectory_record(rows[-1].trace_id, {'role': 'user', 'content': 'text'}),
+        rows[-1].trace_id: _trajectory_record(rows[-1].trace_id, {'role': 'user', 'content': 'x' * 400}),
     }
     page_one = explorer_views.trajectories(ExplorerView(state='loaded', rows=rows, page=0), records, None)
     page_two = explorer_views.trajectories(ExplorerView(state='loaded', rows=rows, page=1), records, None)
@@ -285,10 +360,10 @@ def test_trajectory_scale_is_loaded_population_p95_across_pages() -> None:
     assert ticks_one_match is not None and ticks_two_match is not None
     ticks_one = ticks_one_match.group(1)
     ticks_two = ticks_two_match.group(1)
-    assert ticks_one == ticks_two
-    assert 'title="Scale: p95 of provider-reported input across all loaded rows (96 tokens)"' in page_one
-    assert 'title="Scale: p95 of provider-reported input across all loaded rows (96 tokens)"' in page_two
-    assert 'Bar exceeds scale' in page_two
+    assert ticks_one != ticks_two
+    assert 'title="Scale: p95 of captured message estimates on this page (1 tokens)"' in page_one
+    assert 'title="Scale: p95 of captured message estimates on this page (100 tokens)"' in page_two
+    assert 'Bar exceeds scale' not in page_two
 
 
 def test_table_column_widths_are_fixed_per_header_and_stable_across_pages() -> None:
@@ -387,8 +462,8 @@ def test_trajectories_draws_a_row_for_a_failed_hydration() -> None:
     assert 'tv-nomsg' in html
     assert 'data-tv-msg="1"' in html
     assert '2 msgs' in html
-    assert '<span class="tv-end">2 msgs · —</span>' in html
-    assert '<span class="tv-end">No messages available · —</span>' in html
+    assert '<span class="tv-end"><span>2 msgs</span><span>—</span></span>' in html
+    assert '<span class="tv-end"><span>No messages available</span><span>—</span></span>' in html
     assert 'Cache reads' in html
     assert '<small>in</small>' in html
     assert '<small>out</small>' in html
@@ -1070,6 +1145,128 @@ def test_trajectories_view_hydrates_only_the_visible_page(explorer_client) -> No
     assert html.count('data-tv-row=') == 100
 
 
+def test_tool_definitions_toggle_persists_across_row_requests(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+
+    off = client.get('/find/rows?view=trajectories').text
+    on = client.get('/find/rows?show_tool_definitions=1').text
+    refreshed = client.get('/find/rows').text
+    again_off = client.get('/find/rows?show_tool_definitions=0').text
+
+    assert 'class="tv-tool-toggle" aria-pressed="false"' in off
+    assert 'class="tv-tool-toggle" aria-pressed="true"' in on
+    assert 'class="tv-tool-toggle" aria-pressed="true"' in refreshed
+    assert 'class="tv-tool-toggle" aria-pressed="false"' in again_off
+
+
+def test_summary_status_and_trajectory_polling_are_independent_during_prewarm(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store, source, client = explorer_client
+    entered = threading.Event()
+    release = threading.Event()
+
+    async def gated_hydrate(rows: Any) -> dict[str, TraceRecord]:
+        source.hydrate_calls.append(tuple(row.trace_id for row in rows))
+        entered.set()
+        await asyncio.to_thread(release.wait)
+        return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'hello'}) for row in rows}
+
+    store.explorer._hydrate = gated_hydrate  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(store, 'close', store.explorer.close, raising=False)
+
+    async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    with client:
+        try:
+            _load(client)
+            assert entered.wait(timeout=2)
+
+            table_html = client.get('/find/rows').text
+            assert 'Showing 250 of 250 loaded traces' in table_html
+            assert 'Loading traces' not in table_html
+            assert 'class="xr-skeleton"' not in table_html
+            assert 'hx-trigger="every 1s"' in table_html
+
+            trajectory_html = client.get('/find/rows?view=trajectories').text
+            assert 'Loading messages…' in trajectory_html
+            assert 'tv-skeleton' not in trajectory_html
+            assert 'hx-trigger="every 1s"' in trajectory_html
+            assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows[:100])]
+        finally:
+            release.set()
+
+        for _ in range(20):
+            trajectory_html = client.get('/find/rows?view=trajectories').text
+            if 'hx-trigger="every 1s"' not in trajectory_html:
+                break
+            threading.Event().wait(0.01)
+    assert 'tv-segs' in trajectory_html
+    assert 'hx-trigger="every 1s"' not in trajectory_html
+    assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows[:100])]
+
+
+def test_failed_prewarm_logs_and_trajectories_request_retries(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    from loguru import logger
+
+    store, source, client = explorer_client
+    entered = threading.Event()
+    release_failure = threading.Event()
+    calls = 0
+    warnings: list[str] = []
+
+    async def flaky_hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        nonlocal calls
+        calls += 1
+        source.hydrate_calls.append(tuple(row.trace_id for row in rows))
+        if calls == 1:
+            entered.set()
+            await asyncio.to_thread(release_failure.wait)
+            raise RuntimeError('trajectory store unavailable')
+        return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'retried'}) for row in rows}
+
+    store.explorer._hydrate = flaky_hydrate  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(store, 'close', store.explorer.close, raising=False)
+
+    async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    handler_id = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+    try:
+        with client:
+            _load(client)
+            assert entered.wait(timeout=2)
+
+            table_html = client.get('/find/rows').text
+            assert 'Showing 250 of 250 loaded traces' in table_html
+            assert 'hx-trigger="every 1s"' in table_html
+
+            release_failure.set()
+            for _ in range(20):
+                table_html = client.get('/find/rows').text
+                if 'hx-trigger="every 1s"' not in table_html:
+                    break
+                threading.Event().wait(0.01)
+
+            assert 'Showing 250 of 250 loaded traces' in table_html
+            assert 'hx-trigger="every 1s"' not in table_html
+            assert any('Explorer trajectory prewarm failed: trajectory store unavailable' in line for line in warnings)
+
+            trajectory_html = client.get('/find/rows?view=trajectories').text
+            assert 'Showing 250 of 250 loaded traces' in trajectory_html
+            assert 'Loading messages…' not in trajectory_html
+            assert 'tv-segs' in trajectory_html
+            assert calls == 2
+            assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows[:100])] * 2
+    finally:
+        release_failure.set()
+        logger.remove(handler_id)
+
+
 def test_new_search_results_do_not_change_trajectory_hydration_page(explorer_client) -> None:
     from evaluatorq.trace_finder import TraceClassification
 
@@ -1308,7 +1505,8 @@ def test_shared_toolbar_keeps_columns_before_load_and_view_switch_in_both_modes(
         html = explorer_views.results(
             ExplorerView(state='loaded', rows=_rows(1), view=mode), columns, records=None, snapshot=None
         )
-        assert html.index('Filters') < html.index('All') < html.index('Errors')
+        toolbar = html[html.index('<div class="xr-toolbar"') :]
+        assert toolbar.index('data-explorer-filters') < toolbar.index('quick_view=all') < toolbar.index('quick_view=errors')
         assert 'AI matches' not in html
         assert html.index(context) < html.index('form="explorer-load-form">Load') < html.index('aria-label="View"')
 

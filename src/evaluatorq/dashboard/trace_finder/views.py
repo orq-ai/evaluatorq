@@ -43,7 +43,6 @@ SAMPLES = (
     'Responses from the docs agent that make unsupported claims.',
 )
 COMMAND_LEDE = 'Recent traces from your agents, newest first: ask a question in plain words, or filter the list below.'
-COMMAND_PLACEHOLDER = 'Ask a question, e.g. Did any customers get frustrated?'
 COMMAND_EXAMPLES = (
     'Did any customers get frustrated?',
     'Which conversations mention refunds?',
@@ -132,12 +131,13 @@ def traces_command_strip(
         '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
-        f'<div class="col"><textarea class="finder-command-textarea" name="query" rows="1" placeholder="{esc(COMMAND_PLACEHOLDER)}" required{disabled}>'
+        f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question, e.g. {esc(COMMAND_EXAMPLES[0])}" '
+        f'data-finder-placeholders="{esc(json.dumps(COMMAND_EXAMPLES))}" required{disabled}>'
         f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="{esc(mode)}">'
         '<span class="finder-scope-label" id="finder-scope-label">Search in</span>'
         '<div id="finder-scope" class="finder-seg" role="radiogroup" aria-labelledby="finder-scope-label">'
         f'{scope_toggle(has_rows=has_rows)}</div><a href="/settings" title="Choose the models Ask AI uses" '
-        'class="finder-command-gear"><span aria-hidden="true">⚙</span> AI settings</a>'
+        'class="finder-command-gear" aria-label="AI settings"><span aria-hidden="true">⚙</span></a>'
         f'<button class="finder-go finder-command-search" type="submit"{disabled}><span class="finder-go-idle">Search</span>'
         '<span class="finder-go-working" role="status">Searching…</span></button>'
         '</form>'
@@ -1196,7 +1196,7 @@ def drawer(
     thread_html = messages or '<p class="finder-empty">No messages.</p>'
     row_header = ''
     if row is not None:
-        models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
+        models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.display_models)
         reasoning = f' ({esc(fmt_tokens(row.reasoning_tokens))} reasoning)' if row.reasoning_tokens else ''
         row_header = (
             f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
@@ -1218,7 +1218,7 @@ def drawer(
     if traces_layout:
         identity_html = ''
         if row is not None:
-            models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
+            models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.display_models)
             identity_html = (
                 f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
                 f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'

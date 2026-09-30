@@ -69,6 +69,44 @@ def test_row_from_raw_summary_reads_every_table_field() -> None:
     assert row.raw['session_id'] == 's1'
 
 
+def test_response_model_leads_display_without_changing_filter_model() -> None:
+    raw = {
+        'trace_id': 'served-model',
+        'models': ['gpt-5.6-terra'],
+        'attributes': {'gen_ai': {
+            'request': {'model': 'gpt-5.6-terra'},
+            'response': {'model': 'openai/gpt-5.6-terra'},
+        }},
+    }
+    row = row_from_summary(None, raw)
+
+    assert row is not None
+    assert row.models == ('gpt-5.6-terra',)
+    assert row.display_models == ('openai/gpt-5.6-terra',)
+
+    flat = row_from_summary(None, {
+        'trace_id': 'flat-response',
+        'models': ['gpt-5.6-terra'],
+        'attributes': {'gen_ai.response.model': 'openai/gpt-5.6-terra'},
+    })
+    assert flat is not None
+    assert flat.display_models == ('openai/gpt-5.6-terra',)
+
+
+def test_provider_display_recovers_anthropic_from_response_model() -> None:
+    row = row_from_summary(None, {
+        'trace_id': 'anthropic-response',
+        'providers': [],
+        'models': [],
+        'attributes': {'gen_ai': {'response': {'model': 'anthropic/claude-sonnet-5'}}},
+    })
+
+    assert row is not None
+    assert row.providers == ()
+    assert row.display_models == ('anthropic/claude-sonnet-5',)
+    assert row.display_providers == ('anthropic',)
+
+
 def test_row_without_usage_or_cost_has_unknown_values() -> None:
     row = row_from_summary(None, {'trace_id': 't', 'started_at': '2026-09-27T10:00:00Z'})
     assert row is not None

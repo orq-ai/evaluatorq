@@ -1302,7 +1302,7 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
     assert 'Ask AI' in html
     assert '>Search<' in html
     assert 'href="/settings" title="Choose the models Ask AI uses" class="finder-command-gear"' in html
-    assert 'AI settings</a>' in html
+    assert 'aria-label="AI settings"' in html
     assert html.index('id="finder-scope"') < html.index('class="finder-command-gear"') < html.index('finder-command-search')
     assert 'value="within" form="finder-query-form"' in html
     assert 'value="new" form="finder-query-form"' in html

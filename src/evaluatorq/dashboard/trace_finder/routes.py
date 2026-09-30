@@ -609,6 +609,25 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 if poll or view.state == 'loading' or view.trajectory_warming
                 else await explorer.records(page_ids)
             )
+        elif view.state == 'loaded' and not view.trajectory_warming:
+            # Agent root spans often have no model of their own; the model is on a child
+            # chat-completion span. Hydrate only visible agent rows missing that summary field.
+            page_rows = view.page_rows(results)
+            missing_agent_models = [
+                row.trace_id
+                for row in page_rows
+                if not row.models
+                and not row.is_error
+                and (
+                    row.agent_name
+                    or 'agent' in (row.name or '').casefold()
+                    or 'agent' in (row.operation or '').casefold()
+                    or (row.product or '').casefold() == 'agents'
+                )
+            ]
+            if missing_agent_models:
+                await explorer.records(missing_agent_models)
+                view = await explorer.view()
         return explorer_views.results(
             view,
             resolve_columns(_settings(req.app).explorer_columns),
@@ -894,6 +913,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 descending=None if direction not in {'asc', 'desc'} else direction == 'desc',
                 page=int(page) if page and page.isdigit() else (0 if params.get('sort') else None),
                 view=params.get('view') if params.get('view') in {'table', 'trajectories'} else None,
+                show_tool_definitions={'1': True, '0': False}.get(params.get('show_tool_definitions') or ''),
                 matched_only={'1': True, '0': False}.get(params.get('matched_only') or ''),
                 quick_view=params.get('quick_view') if params.get('quick_view') in QUICK_VIEWS else None,
             )

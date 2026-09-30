@@ -1,49 +1,21 @@
-# Task 3: Dense trace table
+# Task 3 report: Traces page filters
 
-## Result
+Status: complete.
 
-Implemented the approved trace table ordering and cell presentation in commit `83b17719` (`feat: densify trace explorer table`). The default table now shows Time, Trace / agent, Status, Model, input tokens, output tokens, cache, cost, duration, and AI match in that order. Status is visible as Success or Error, trace and agent details share one escaped cell, match values remain escaped and visible when classification results exist, and numeric columns use the existing right-aligned tabular-number styling.
+## Changes
 
-The existing toolbar and trajectory renderer were preserved. The only `explorer_views.py` behavior change is the AI match cell label and styling; pre-existing trajectory edits were excluded from the commit.
+- Changed the numeric token facet label from `tokens` to `total tokens`. The Filters menu item and its panel heading render labels verbatim, so both now match the existing chip wording.
+- Prevented progress-row actions from wrapping and allowed the warning/error message to shrink and wrap within the row.
+- Added a missing-conversation count to the narrowed explorer status when a completed within-results run hydrated fewer traces than the explorer originally loaded. The run store's `_report_loaded` records `done`, and the within-results table loader calls it with the number of hydrated trace records before narrowing. Missing rows can therefore be described as having no conversation without changing hydration or the empty-state text.
+- Added tests for the menu and panel label and for the missing-conversation status suffix.
 
-## Test-driven implementation
+## Checks
 
-Red command: `uv run pytest tests/dashboard/test_explorer.py tests/trace_finder/test_columns.py -q`.
+- `uv run ruff check src` — passed (`All checks passed!`).
+- `uv run ruff format --check src` — passed (`258 files already formatted`).
+- `uv run basedpyright` — failed with 17 errors and 2 warnings. Errors are outside `.superpowers/sdd/pre/`: `src/evaluatorq/dashboard/trace_finder/routes.py` (9 errors) and `tests/dashboard/test_explorer.py` (8 errors). The latter includes two diagnostics on existing parametrized `view`/`state` arguments; the remaining diagnostics cover existing route typing and fixture assignments. Two warnings are in `tests/trace_finder/test_classifier.py`.
+- `uv run pytest tests/trace_finder tests/dashboard -q` — passed (`1171 passed in 42.77s`).
 
-Red result: 2 failed and 65 passed. The default-column order assertion failed because the registry still used the old order, and the combined trace-cell assertion failed because the `trace` column did not exist.
+## Worktree note
 
-Green command: `uv run pytest tests/dashboard/test_explorer.py tests/trace_finder/test_columns.py -q`.
-
-Green result: 68 passed in 1.75s. The suite covers default order, combined and escaped trace / agent text, visible status, visible escaped AI match text, and numeric cell alignment.
-
-Lint command: `uv run ruff check src/evaluatorq/dashboard/trace_finder src/evaluatorq/trace_finder/columns.py`.
-
-Lint result: all checks passed.
-
-## Files and commit
-
-Commit `83b17719` changes `src/evaluatorq/trace_finder/columns.py`, `src/evaluatorq/dashboard/trace_finder/explorer_views.py`, `src/evaluatorq/dashboard/styles.py`, `tests/trace_finder/test_columns.py`, and `tests/dashboard/test_explorer.py`.
-
-Patch staging was used. The cached diff was checked before committing and contained only the Task 3 hunks. Other sessions' dirty trajectory, cache-label, row-model, docs, launcher, and test changes were left in the working tree.
-
-## Self-review and risks
-
-The time cell formats the existing UTC timestamp as a time and date on separate lines. Trace and agent text use the shared HTML escaping helper, and AI result labels continue to use the shared result color and value formatting helpers.
-
-The compact status mapping treats `ok` and `success` as Success and `error` and `failed` as Error; any other source status remains visible verbatim and escaped. No integration or live trace tests were run because this task changes only table presentation.
-
-## Review follow-up: keep AI match visible before classification
-
-The header is now `AI match`, and the default column stays in the table before classification with an em dash in each row. Removing the result-dependent column filter leaves explicit column selection unchanged; match sorting still preserves input order when no results exist and uses classification results when they do.
-
-Red command: `uv run pytest tests/dashboard/test_explorer.py::test_ai_match_column_is_visible_before_results_and_can_be_hidden -q`.
-
-Red result: 1 failed because the initial table omitted the `AI match` header.
-
-Green command: `uv run pytest tests/dashboard/test_explorer.py tests/trace_finder/test_columns.py -q`.
-
-Green result: 68 passed in 1.49s.
-
-Lint command: `uv run ruff check src/evaluatorq/dashboard/trace_finder src/evaluatorq/trace_finder/columns.py`.
-
-Lint result: all checks passed.
+The worktree contained concurrent uncommitted changes before this task, including changes in the same implementation and test files. Those changes were preserved. No commit was created.

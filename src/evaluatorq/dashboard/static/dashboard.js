@@ -86,6 +86,27 @@
   });
 
   // Delegated so the finder handlers survive HTMX fragment swaps.
+  document.body.addEventListener('focusin', function (evt) {
+    const query = evt.target.closest('.finder-command-textarea[data-finder-placeholders]');
+    if (!query) return;
+    query.dataset.finderPlaceholderDismissed = 'true';
+    query.placeholder = '';
+  });
+  window.setInterval(function () {
+    document.querySelectorAll('.finder-command-textarea[data-finder-placeholders]').forEach(function (query) {
+      if (query.dataset.finderPlaceholderDismissed === 'true' || query.value || document.activeElement === query) return;
+      try {
+        const placeholders = JSON.parse(query.dataset.finderPlaceholders || '[]');
+        if (!Array.isArray(placeholders) || placeholders.length < 2) return;
+        const index = (Number(query.dataset.finderPlaceholderIndex || 0) + 1) % placeholders.length;
+        query.dataset.finderPlaceholderIndex = String(index);
+        query.placeholder = placeholders[index];
+      } catch (_error) {
+        query.dataset.finderPlaceholderDismissed = 'true';
+      }
+    });
+  }, 4000);
+
   document.body.addEventListener('click', function (evt) {
     const example = evt.target.closest('[data-finder-example]');
     if (example) {
@@ -1041,7 +1062,7 @@
 
   // Trajectories: one tooltip, positioned from the hovered segment's data-* attributes.
   document.addEventListener('mouseover', function (evt) {
-    const seg = evt.target.closest('.tv-segs i[data-tv-msg]');
+    const seg = evt.target.closest('.tv-segs i[data-tv-msg], .tv-segs i[data-tv-tools]');
     const tv = evt.target.closest('.tv');
     const tip = tv && tv.querySelector('.tv-tip');
     if (!tip) return;
@@ -1057,7 +1078,7 @@
     if (d.tvTool) { const t = document.createElement('span'); t.className = 'tool'; t.textContent = d.tvTool; sub.append(t); }
     const tk = document.createElement('span'); tk.className = 'tk'; tk.textContent = d.tvTok; sub.append(tk);
     const pre = document.createElement('pre'); pre.textContent = d.tvP;
-    const foot = document.createElement('div'); foot.className = 'c'; foot.textContent = 'Click to open this message ↗';
+    const foot = document.createElement('div'); foot.className = 'c'; foot.textContent = d.tvTools ? 'Captured tool schemas are shown as one block.' : 'Click to open this message ↗';
     tip.append(h, sub, pre, foot);
     tip.hidden = false;
     const box = tv.getBoundingClientRect(); const r = seg.getBoundingClientRect();

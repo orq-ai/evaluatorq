@@ -55,6 +55,8 @@ class TraceRecord(BaseModel):
     trace_type: str
     agent_name: str = ''
     tool_names: tuple[str, ...] = ()
+    tool_definition_count: int = Field(default=0, ge=0)
+    tool_definition_tokens: int = Field(default=0, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     duration_ms: int | None = Field(default=None, ge=0)
     capture_metadata: dict[str, Any] = Field(default_factory=dict)

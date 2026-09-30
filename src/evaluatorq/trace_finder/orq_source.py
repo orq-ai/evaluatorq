@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import weakref
 from collections import defaultdict, deque
@@ -21,7 +22,7 @@ from loguru import logger
 from .facets import _project_names, project_labels
 from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
 from .progress import report_load_progress
-from .rows import TraceRow, row_from_summary
+from .rows import TraceRow, _models, _response_models, row_from_summary
 from .rows import parse_time as _parse_time
 from .span_status import is_error_span
 
@@ -552,7 +553,10 @@ class OrqTraceSource:
             and output_tokens > 0
             and not _has_reply(messages)
         )
-        if _usable(messages) and not missing_reply:
+        # A trace-level agent span can contain a transcript but no model; the model
+        # belongs to its child chat-completion span. In that case keep scanning spans
+        # so the hydrated record can supply the model as well as the transcript.
+        if _usable(messages) and not missing_reply and _models(summary, raw_summary):
             messages = await self._with_system_prompt(summary, raw_summary, messages, semaphore, issues)
             return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
 
@@ -561,8 +565,10 @@ class OrqTraceSource:
             return None, fallback_count
         fallback: TraceRecord | None = None
         span_lookup_failed = False
+        span_models: tuple[str, ...] = ()
         try:
             spans = await self._list_spans(trace_id, semaphore)
+            span_models = tuple(dict.fromkeys(model for span in spans for model in _models(span, _plain(span))))
             for span in _eligible_spans(spans):
                 span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
                 if not span_id:
@@ -576,7 +582,9 @@ class OrqTraceSource:
                 fallback_count += int(detail_fallback)
                 detail_messages = _conversation_messages(raw_detail)
                 if _usable(detail_messages):
-                    record = _record(summary, raw_summary, detail, raw_detail, detail_messages, project_names)
+                    record = _with_span_models(
+                        _record(summary, raw_summary, detail, raw_detail, detail_messages, project_names), span_models
+                    )
                     if not missing_reply or _has_reply(detail_messages):
                         return record, fallback_count
                     if fallback is None:
@@ -592,7 +600,9 @@ class OrqTraceSource:
             return fallback, fallback_count
         if _usable(messages):
             messages = await self._with_system_prompt(summary, raw_summary, messages, semaphore, issues)
-            return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
+            return _with_span_models(
+                _record(summary, raw_summary, summary, raw_summary, messages, project_names), span_models
+            ), fallback_count
         return None, fallback_count
 
     async def _get_span(self, trace_id: str, span_id: str, semaphore: asyncio.Semaphore) -> tuple[Any, Any]:
@@ -808,6 +818,12 @@ def _eligible_spans(spans: list[Any]) -> list[Any]:
     return eligible
 
 
+def _with_span_models(record: TraceRecord | None, span_models: tuple[str, ...]) -> TraceRecord | None:
+    if record is None or not span_models or record.model not in {'', 'unknown'}:
+        return record
+    return record.model_copy(update={'model': ', '.join(span_models)})
+
+
 def _record(
     trace_summary: Any,
     raw_trace: Any,
@@ -830,8 +846,13 @@ def _record(
     timestamp = _first_time(trace_summary, raw_trace) or _first_time(selected_summary, raw_selected)
     if timestamp is None:
         return None
-    model = _metadata_label(
-        _metadata_value(selected_summary, raw_selected, 'model') or _first_list_value(trace_summary, 'models')
+    response_models = _response_models(selected_summary, raw_selected) or _response_models(trace_summary, raw_trace)
+    model = (
+        response_models[0]
+        if response_models
+        else _metadata_label(
+            _metadata_value(selected_summary, raw_selected, 'model') or _first_list_value(trace_summary, 'models')
+        )
     )
     provider = _metadata_label(
         _metadata_value(selected_summary, raw_selected, 'provider') or _first_list_value(trace_summary, 'providers')
@@ -845,6 +866,9 @@ def _record(
     )
     total_tokens = _numeric_metadata(trace_summary, raw_trace, selected_summary, raw_selected, name='total_tokens')
     duration_ms = _numeric_metadata(trace_summary, raw_trace, selected_summary, raw_selected, name='duration_ms')
+    tool_definition_count, tool_definition_tokens = _tool_definition_size(
+        raw_selected, selected, raw_trace, trace_summary
+    )
     return TraceRecord(
         schema_version=1,
         trace_id=trace_id,
@@ -859,6 +883,8 @@ def _record(
         trace_type=str(trace_type or 'unknown'),
         agent_name=str(agent_name or ''),
         tool_names=_tool_names(trace_summary, raw_trace, selected_summary, raw_selected),
+        tool_definition_count=tool_definition_count,
+        tool_definition_tokens=tool_definition_tokens,
         total_tokens=total_tokens,
         duration_ms=duration_ms,
         capture_metadata={'source': 'orq-oql', 'project_id': str(project_id or '')},
@@ -1059,6 +1085,17 @@ def _tool_names(*sources: Any) -> tuple[str, ...]:
                         if isinstance(candidate, str) and candidate and candidate not in values:
                             values.append(candidate)
     return tuple(values)
+
+
+def _tool_definition_size(*sources: Any) -> tuple[int, int]:
+    for source in sources:
+        attributes = _mapping(_field(source, 'attributes'))
+        gen_ai = _mapping(attributes.get('gen_ai'))
+        definitions = _mapping(gen_ai.get('tool')).get('definitions') or attributes.get('gen_ai.tool.definitions')
+        if isinstance(definitions, list) and definitions:
+            serialized = json.dumps(definitions, ensure_ascii=False, separators=(',', ':'), default=str)
+            return len(definitions), math.ceil(len(serialized) / 4)
+    return 0, 0
 
 
 def _leading_span_type(typed: Any, raw: Any) -> Any:

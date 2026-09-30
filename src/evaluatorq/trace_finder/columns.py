@@ -111,7 +111,13 @@ _ENTRIES = (
     Column('error_message', 'Error details', lambda _r: None, _error_message),
     Column('name', 'Name', lambda r: r.name, lambda r: _text(r.name)),
     Column('agent', 'Agent', lambda r: r.agent_name, lambda r: _text(r.agent_name)),
-    Column('model', 'Model', lambda r: ', '.join(r.models) or None, lambda r: _text(', '.join(r.models)), default=True),
+    Column(
+        'model',
+        'Model',
+        lambda r: ', '.join(r.display_models) or None,
+        lambda r: _text(', '.join(r.display_models)),
+        default=True,
+    ),
     Column(
         'tokens_in', 'Tokens in', lambda r: r.tokens_in, lambda r: fmt_tokens(r.tokens_in), numeric=True, default=True
     ),
@@ -135,7 +141,12 @@ _ENTRIES = (
         numeric=True,
         default=True,
     ),
-    Column('provider', 'Provider', lambda r: ', '.join(r.providers) or None, lambda r: _text(', '.join(r.providers))),
+    Column(
+        'provider',
+        'Provider',
+        lambda r: ', '.join(r.display_providers) or None,
+        lambda r: _text(', '.join(r.display_providers)),
+    ),
     Column('product', 'Product', lambda r: r.product, lambda r: _text(r.product)),
     Column('operation', 'Operation', lambda r: r.operation, lambda r: _text(r.operation)),
     Column(

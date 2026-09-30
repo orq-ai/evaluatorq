@@ -42,6 +42,51 @@ def _strs(value: Any) -> tuple[str, ...]:
     return tuple(str(item) for item in value if item) if isinstance(value, (list, tuple)) else ()
 
 
+def _models(summary: Any, raw: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Read model names from trace summaries and their OpenTelemetry attributes."""
+    sources = (raw, summary)
+    for source in sources:
+        models = _strs(_get(source, 'models'))
+        if models:
+            return models
+
+    for source in sources:
+        model = _get(source, 'model')
+        if model not in (None, ''):
+            values = _strs(model) or (_str(model),)
+            return tuple(value for value in values if value)
+
+        attributes = _get(source, 'attributes')
+        gen_ai = _get(attributes, 'gen_ai')
+        request = _get(gen_ai, 'request')
+        response = _get(gen_ai, 'response')
+        for model in (
+            _get(request, 'model'),
+            _get(response, 'model'),
+            _get(gen_ai, 'model'),
+            _get(attributes, 'gen_ai.request.model'),
+            _get(attributes, 'gen_ai.response.model'),
+            _get(attributes, 'model'),
+        ):
+            if model not in (None, ''):
+                values = _strs(model) or (_str(model),)
+                return tuple(value for value in values if value)
+    return ()
+
+
+def _response_models(summary: Any, raw: Mapping[str, Any] | None) -> tuple[str, ...]:
+    """Read the model actually served, when the response attributes report it."""
+    for source in (raw, summary):
+        attributes = _get(source, 'attributes')
+        gen_ai = _get(attributes, 'gen_ai')
+        response = _get(gen_ai, 'response')
+        for model in (_get(response, 'model'), _get(attributes, 'gen_ai.response.model')):
+            if model not in (None, ''):
+                values = _strs(model) or (_str(model),)
+                return tuple(value for value in values if value)
+    return ()
+
+
 def parse_time(value: Any) -> datetime | None:
     """Parse an Orq timestamp (datetime, ISO string, or epoch s/ms) to an aware UTC datetime."""
     if isinstance(value, datetime):
@@ -103,6 +148,7 @@ class TraceRow(BaseModel):
     product: str | None = None
     providers: tuple[str, ...] = ()
     models: tuple[str, ...] = ()
+    response_models: tuple[str, ...] = ()
     agent_name: str | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None
@@ -114,6 +160,25 @@ class TraceRow(BaseModel):
     cost_total: float | None = None
     currency: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict, repr=False)
+
+    @property
+    def display_models(self) -> tuple[str, ...]:
+        """Lead with served model ids while retaining distinct summary models."""
+        return (
+            *self.response_models,
+            *(
+                model
+                for model in self.models
+                if not any(served == model or served.endswith(f'/{model}') for served in self.response_models)
+            ),
+        )
+
+    @property
+    def display_providers(self) -> tuple[str, ...]:
+        """Use a model's provider prefix when the trace summary omits providers."""
+        if self.providers:
+            return self.providers
+        return tuple(dict.fromkeys(model.split('/', 1)[0] for model in self.display_models if '/' in model))
 
     @property
     def cache_pct(self) -> float | None:
@@ -162,7 +227,8 @@ def row_from_summary(summary: Any, raw: Mapping[str, Any] | None) -> TraceRow | 
         thread_id=_str(pick('thread_id')),
         product=_str(pick('product')),
         providers=_strs(pick('providers')),
-        models=_strs(pick('models')),
+        models=_models(summary, raw),
+        response_models=_response_models(summary, raw),
         agent_name=_str(_get(agent, 'name')) if agent is not None else _str(pick('agent_name')),
         tokens_in=usage.tokens_in,
         tokens_out=usage.tokens_out,

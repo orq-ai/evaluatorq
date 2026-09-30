@@ -29,6 +29,29 @@ def test_trace_column_combines_name_and_agent_and_escapes_text() -> None:
     assert '<small>support<&</small>' not in rendered
 
 
+def test_model_column_shows_served_model_before_summary_model() -> None:
+    row = TraceRow(
+        trace_id='served', models=('gpt-5.6-terra',), response_models=('openai/gpt-5.6-terra',)
+    )
+    column = COLUMNS['model']
+
+    assert column.render(row) == 'openai/gpt-5.6-terra'
+    assert column.value(row) == 'openai/gpt-5.6-terra'
+    assert row.models == ('gpt-5.6-terra',)
+
+
+def test_provider_column_uses_model_prefix_when_summary_omits_provider() -> None:
+    row = TraceRow(trace_id='anthropic', models=('anthropic/claude-sonnet-5',))
+    column = COLUMNS['provider']
+
+    assert column.render(row) == 'anthropic'
+    assert column.value(row) == 'anthropic'
+    assert row.providers == ()
+
+    explicit = row.model_copy(update={'providers': ('router',)})
+    assert column.render(explicit) == 'router'
+
+
 def test_every_column_renders_on_a_sparse_row() -> None:
     row = TraceRow(trace_id='t')
     for column in COLUMNS.values():

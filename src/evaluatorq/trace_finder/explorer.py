@@ -205,6 +205,7 @@ class ExplorerView:
     descending: bool = True
     page: int = 0
     view: ViewMode = 'table'
+    show_tool_definitions: bool = False
     matched_only: bool = False
     quick_view: QuickView = 'all'
     narrowed_from: int | None = None
@@ -317,6 +318,7 @@ class ExplorerStore:
             quick_view=previous.quick_view,
             sort=kept_sort,
             descending=previous.descending if kept_sort is not None else True,
+            show_tool_definitions=previous.show_tool_definitions,
         )
 
         async def prewarm(rows: Sequence[TraceRow]) -> None:
@@ -376,6 +378,7 @@ class ExplorerStore:
         descending: bool | None = None,
         page: int | None = None,
         view: ViewMode | None = None,
+        show_tool_definitions: bool | None = None,
         matched_only: bool | None = None,
         quick_view: QuickView | None = None,
     ) -> ExplorerView:
@@ -391,6 +394,9 @@ class ExplorerStore:
             descending=descending if descending is not None else current.descending,
             page=max(0, page) if page is not None else 0 if switching_quick_view else current.page,
             view=view if view is not None else current.view,
+            show_tool_definitions=show_tool_definitions
+            if show_tool_definitions is not None
+            else current.show_tool_definitions,
             matched_only=matched_only if matched_only is not None else current.matched_only,
             quick_view=quick_view if quick_view is not None else current.quick_view,
         )
@@ -476,6 +482,27 @@ class ExplorerStore:
                         cached = self._records.get(trace_id)
                         if trace_id not in self._records or (cached is None and record is not None):
                             self._records[trace_id] = record
+                    models = {
+                        trace_id: record.model
+                        for trace_id in hydrated
+                        if (record := self._records.get(trace_id)) is not None
+                        if record.model not in {'', 'unknown'}
+                    }
+                    if models:
+                        rows = tuple(
+                            row.model_copy(
+                                update={
+                                    'models': tuple(
+                                        model.strip() for model in models[row.trace_id].split(',') if model.strip()
+                                    )
+                                }
+                            )
+                            if not row.models and row.trace_id in models
+                            else row
+                            for row in self._view.rows
+                        )
+                        if rows != self._view.rows:
+                            self._view = replace(self._view, rows=rows, version=next(_SEQUENCE))
                     return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
                 return {trace_id: hydrated.get(trace_id) for trace_id in trace_ids}
         async with self._records_lock:

@@ -38,13 +38,13 @@ if TYPE_CHECKING:
 
 DEFAULT_EXPLORER_ROWS = 200
 TRAJECTORY_FALLBACK_SCALE = 1_000
-TRAJECTORIES_HELP = 'Shows each trace as a bar of its messages, sized by estimated tokens'
 COLUMN_HELP = {
     'cache_pct': 'Share of input tokens the provider reused from an earlier request, which is cheaper and faster.',
     'tokens_in': 'Tokens sent to the model, including any served from the cache',
     'tokens_out': 'Tokens the model wrote back',
 }
 TOTAL_HELP = {
+    'cost': 'Unavailable when cost is missing or the shown traces use different currencies.',
     'in': COLUMN_HELP['tokens_in'],
     'out': COLUMN_HELP['tokens_out'],
     'cache read': COLUMN_HELP['cache_pct'],
@@ -312,11 +312,10 @@ def table(
         sparkle = '<span class="xr-ai-sparkle" aria-hidden="true">✦</span>' if column.key == MATCH else ''
         help_text = COLUMN_HELP.get(column.key)
         title = f' title="{esc(help_text)}"' if help_text else ''
-        help_mark = '<span class="xr-help" aria-hidden="true">?</span>' if help_text else ''
         heads += ''.join(
             f'<th class="{"num" if column.numeric else ""}"{aria_sort}><button type="button" class="link" data-xr-sort="{column.key}"{title} '
             f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">'
-            f'{sparkle}{esc(label)}{help_mark}{arrow}</button></th>'
+            f'{sparkle}{esc(label)}{arrow}</button></th>'
             for label in labels
         )
     if not columns:
@@ -415,7 +414,9 @@ def _identity(row: TraceRow, snapshot: RunSnapshot | None) -> str:
         if status == 'ok'
         else (row.status or 'Unknown').replace('_', ' ').title()
     )
-    model = f'<span class="pill">{esc(row.models[0])}</span>' if row.models else ''
+    display_models = row.display_models
+    primary = row.agent_name or (display_models[0] if display_models else None) or row.name or row.operation or '—'
+    model = f'<span class="tv-model">{esc(display_models[0])}</span>' if row.agent_name and display_models else ''
     tick = ''
     result = snapshot.results.get(row.trace_id) if snapshot is not None else None
     if result is not None:
@@ -424,9 +425,18 @@ def _identity(row: TraceRow, snapshot: RunSnapshot | None) -> str:
         tick = f'<span class="tv-tick" style="background:{esc(_result_color(result, snapshot.dimensions if snapshot else None))}"></span>'
     return (
         f'<div class="tv-id"><span class="dot {status}"></span>{tick}<div class="t">'
-        f'<div class="a">{esc(row.agent_name or row.name or "—")}{model}'
-        f'<span class="tv-status {status}">{esc(status_label)}</span></div>'
-        f'<div class="s mono">{esc(fmt_time(row.started_at))} · {esc(row.trace_id[:8])}</div></div></div>'
+        f'<div class="a" title="{esc(primary)}">{esc(primary)}</div>{model}'
+        f'<div class="s mono">{esc(fmt_time(row.started_at))}</div></div></div>'
+        f'<span class="tv-status {status}">{esc(status_label)}</span>'
+    )
+
+
+def _is_embedding(row: TraceRow) -> bool:
+    """Embedding requests have no conversation to visualize."""
+    return any(
+        value.casefold().split('.', 1)[0] in {'embedding', 'embeddings'}
+        for value in (row.product, row.operation, row.name)
+        if value
     )
 
 
@@ -458,33 +468,60 @@ def trajectories(
         summary_loading = loading
     snapshot = _within_snapshot(snapshot)
     page = view.page_rows(snapshot.results if snapshot is not None and snapshot.results else None)
-    bars = {row.trace_id: segments(record.messages) if (record := records.get(row.trace_id)) else None for row in page}
+    bars = {
+        row.trace_id: segments(record.messages)
+        if not _is_embedding(row) and (record := records.get(row.trace_id))
+        else None
+        for row in page
+    }
     other = sum(1 for segs in bars.values() if segs for s in segs if s.kind == 'other')
     if other:
         logger.warning('Trajectory view drew {} message part(s) of unknown type as "other"', other)
-    # Input usage is available for every loaded summary row, even when message
-    # hydration is limited to the current page. Use its nearest-rank p95 so the
-    # axis does not jump as the user pages through the loaded population.
-    loaded_inputs = sorted(row.tokens_in for row in view.rows if row.tokens_in is not None)
+    tool_sizes = {
+        row.trace_id: record.tool_definition_tokens
+        if view.show_tool_definitions and not _is_embedding(row) and (record := records.get(row.trace_id))
+        else 0
+        for row in page
+    }
+    captured_estimates = sorted(
+        sum(segment.tokens for segment in bars[row.trace_id] or ()) + tool_sizes[row.trace_id]
+        for row in page
+        if bars[row.trace_id] or tool_sizes[row.trace_id]
+    )
     scale = (
-        loaded_inputs[max(0, math.ceil(len(loaded_inputs) * 0.95) - 1)] if loaded_inputs else TRAJECTORY_FALLBACK_SCALE
+        captured_estimates[max(0, math.ceil(len(captured_estimates) * 0.95) - 1)]
+        if captured_estimates
+        else TRAJECTORY_FALLBACK_SCALE
     )
     scale = max(scale, 1)
     totals: dict[str, int] = {}
     for segs in bars.values():
         for s in segs or ():
             totals[s.kind] = totals.get(s.kind, 0) + s.tokens
-    grand = sum(totals.values()) or 1
+    tool_total = sum(tool_sizes.values())
+    grand = sum(totals.values()) + tool_total or 1
     legend = ''.join(
         f'<span><i class="k-{kind}"></i>{esc(label.lower())} <em>{totals.get(kind, 0) * 100 // grand}%</em></span>'
         for kind, label in KIND_LABELS.items()
         if kind in totals
     )
-    scale_title = (
-        f'Scale: p95 of provider-reported input across all loaded rows ({scale:,} tokens)'
-        if loaded_inputs
-        else f'No loaded rows report provider input; estimated message bars use a fixed {scale:,}-token scale'
+    if tool_total:
+        legend += f'<span><i class="k-tools"></i>tool definitions <em>{tool_total * 100 // grand}%</em></span>'
+    toggle = (
+        f'<button type="button" class="tv-tool-toggle" aria-pressed="{str(view.show_tool_definitions).lower()}" '
+        f'hx-get="/find/rows?show_tool_definitions={0 if view.show_tool_definitions else 1}" '
+        'hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">'
+        'Tool definitions</button>'
     )
+    if captured_estimates:
+        source_label = (
+            'captured messages and tool definitions' if view.show_tool_definitions else 'captured message estimates'
+        )
+        scale_title = f'Scale: p95 of {source_label} on this page ({scale:,} tokens)'
+    else:
+        source_label = 'captured messages or tool definitions' if view.show_tool_definitions else 'captured messages'
+        scale_title = f'No {source_label} on this page; fixed {scale:,}-token scale'
+    context_label = 'Captured context' if view.show_tool_definitions else 'Captured messages'
     ticks = ''.join(f'<b style="left:{q * 25}%">{fmt_tokens(scale * q // 4) if q else "0"}</b>' for q in range(5))
     classified = _classified(snapshot) and snapshot is not None and bool(snapshot.results)
     rows_html = ''
@@ -493,63 +530,50 @@ def trajectories(
         result = snapshot.results.get(row.trace_id) if classified and snapshot is not None else None
         dim = (' hit' if ai_matched(result) else ' nomatch') if result is not None else ''
         dim += ' row-err' if row.is_error else ''
+        if _is_embedding(row):
+            rows_html += (
+                f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0" '
+                f'{_drawer_attrs(row.trace_id, traces_layout=traces_layout)}>'
+                f'{_identity(row, snapshot)}<div class="tv-bar tv-embedding">Embedding call</div>{_metrics(row)}</div>'
+            )
+            continue
         has_conversation = bool(segs) and any(segment.preview.strip() or segment.label for segment in segs or ())
-        if has_conversation and segs:
-            estimated = sum(s.tokens for s in segs)
-            reported = row.tokens_in
-            unattributed = max(0, reported - estimated) if reported is not None else 0
-            total = max(estimated, reported or 0)
-            width = min(total / scale * 100, 100)
+        tool_tokens = tool_sizes[row.trace_id]
+        if has_conversation or tool_tokens:
+            estimated = sum(s.tokens for s in segs or ()) + tool_tokens
+            width = min(estimated / scale * 100, 100)
+            record = records.get(row.trace_id)
+            tool_block = (
+                f'<i class="k-tools" style="flex-grow:{tool_tokens}" data-tv-tools="1" '
+                f'data-tv-kind="Tool definitions" data-tv-n="{record.tool_definition_count:,} definitions" '
+                f'data-tv-tok="~{tool_tokens:,} tokens" data-tv-p="Estimated from captured tool schema JSON." '
+                f'role="img" aria-label="{record.tool_definition_count:,} tool definitions, about {tool_tokens:,} tokens"></i>'
+                if tool_tokens and record is not None
+                else ''
+            )
             inner = ''.join(
                 f'<i class="k-{s.kind}" style="flex-grow:{s.tokens}" {_tip_attrs(s, n, len(segs))}></i>'
-                for n, s in enumerate(segs, start=1)
+                for n, s in enumerate(segs or (), start=1)
             )
-            if unattributed:
-                inner += (
-                    f'<i class="tv-unattributed" style="flex-grow:{unattributed}" '
-                    f'title="Unattributed: {unattributed:,} tokens, the difference between provider-reported trace input and estimated captured messages; may include other spans, hidden configuration, or formatting differences"></i>'
-                )
-            accounting = (
-                f'Provider input {reported:,}; estimated captured messages {estimated:,}; '
-                f'unattributed difference {unattributed:,}.'
-                if reported is not None and estimated <= reported
-                else f'Estimated captured messages {estimated:,} exceed provider-reported trace input {reported:,} by {estimated - reported:,}.'
-                if reported is not None
-                else f'Provider input unavailable; captured message estimate {estimated:,}.'
-            )
-            overflow = total > scale
+            message_tokens = estimated - tool_tokens
+            accounting = f'Estimated captured messages: {message_tokens:,} token{"s" if message_tokens != 1 else ""}.'
+            if tool_tokens:
+                accounting += f' Tool definitions: {tool_tokens:,} estimated tokens.'
+            overflow = estimated > scale
             overflow_marker = (
-                f'<span class="tv-overflow" title="Total {total:,} tokens exceeds the loaded-population p95 scale of {scale:,}" aria-label="Bar exceeds scale">!</span>'
+                f'<span class="tv-overflow" title="Captured messages exceed the page p95 scale of {scale:,} tokens" aria-label="Bar exceeds scale">!</span>'
                 if overflow
                 else ''
             )
-            count = len({s.index for s in segs})
-            bar = f'<div class="tv-segs" title="{esc(accounting)}" style="width:{width:.2f}%">{inner}{overflow_marker}</div>'
-            row_title = f' title="{esc(accounting)}"'
-            message_count = f'{count} msgs'
+            count = len({s.index for s in segs or ()})
+            bar = f'<div class="tv-segs" style="width:{width:.2f}%">{tool_block}{inner}{overflow_marker}</div>'
+            row_title = f' aria-description="{esc(accounting)}"'
+            message_count = f'{count} msgs' if count else 'No messages available'
         else:
-            if row.tokens_in is not None and row.tokens_in > 0:
-                width = min(row.tokens_in / scale * 100, 100)
-                overflow = row.tokens_in > scale
-                accounting = (
-                    f'Provider input {row.tokens_in:,}; no captured message content is available, '
-                    f'so all {row.tokens_in:,} input tokens are unattributed in this view.'
-                )
-                overflow_marker = (
-                    f'<span class="tv-overflow" title="Total {row.tokens_in:,} tokens exceeds the loaded-population p95 scale of {scale:,}" aria-label="Bar exceeds scale">!</span>'
-                    if overflow
-                    else ''
-                )
-                bar = (
-                    f'<div class="tv-segs tv-nomsg" title="{esc(accounting)}" style="width:{width:.2f}%">'
-                    f'<i class="tv-unattributed" style="flex-grow:{row.tokens_in}" title="Unattributed: {row.tokens_in:,} provider-reported input tokens; captured messages are unavailable"></i>{overflow_marker}</div>'
-                )
-                row_title = f' title="{esc(accounting)}"'
-            else:
-                bar = '<div class="tv-segs tv-nomsg" style="width:100%"></div>'
-                row_title = ''
+            bar = '<div class="tv-segs tv-nomsg" style="width:100%"></div>'
+            row_title = ''
             message_count = 'Loading messages…' if loading and row.trace_id not in records else 'No messages available'
-        row_summary = f'{message_count} · {fmt_duration(row.duration_ms)}'
+        row_summary = f'<span>{esc(message_count)}</span><span>{esc(fmt_duration(row.duration_ms))}</span>'
         rows_html += (
             f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0"{row_title} {_drawer_attrs(row.trace_id, traces_layout=traces_layout)}>'
             f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-plot"><div class="tv-track"></div>{bar}</div>'
@@ -557,11 +581,11 @@ def trajectories(
         )
     if summary_loading:
         rows_html += ''.join(
-            '<div class="tv-r tv-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>' for _ in range(4)
+            '<div class="tv-r tv-skeleton" aria-hidden="true"><i></i><i></i><i></i><i></i></div>' for _ in range(4)
         )
     return (
-        f'<div class="tv"><div class="tv-lg">{legend}<span class="tv-legend-unattributed"><i></i>unattributed</span><span class="tv-note" title="{esc(TRAJECTORIES_HELP)}">Estimated captured message tokens (text length ÷ 4); tool definitions are omitted. Unattributed is the difference from provider input and may include hidden configuration, formatting differences, missing content, or other spans. It does not identify a specific source.</span></div>'
-        f'<div class="tv-hd"><span>Trace</span><div class="ax"><div class="tv-scale" title="{esc(scale_title)}">{ticks}</div><span>Reconciled input total</span></div>'
+        f'<div class="tv"><div class="tv-lg">{legend}{toggle}</div>'
+        f'<div class="tv-hd"><span>Model / agent</span><span>Status</span><div class="ax"><div class="tv-scale" title="{esc(scale_title)}">{ticks}</div><span>{context_label}</span></div>'
         f'<div class="tv-mh"><span title="{esc(COLUMN_HELP["tokens_in"])}; and tokens the model wrote back">Input / output</span>'
         f'<span title="{esc(COLUMN_HELP["cache_pct"])}">Cache reads</span><span>Cost</span></div></div>'
         f'<div class="tv-rows">{rows_html}</div><div class="tv-tip" role="tooltip" hidden></div></div>'
@@ -621,15 +645,17 @@ def _toolbar(
         f'<span class="xr-view-icon" aria-hidden="true">{icon}</span><span>{label}</span></button>'
         for mode, label, icon in view_options
     )
+    sort_options = (('started', 'Time'), ('tokens_in', 'Input tokens'))
+    if has_results:
+        sort_options += (('match', 'Match'),)
     sort = (
-        '<details class="xr-sort"><summary>Sort</summary><button type="button" class="link" hx-get="/find/rows?sort=started&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">time</button>'
-        ' · <button type="button" class="link" hx-get="/find/rows?sort=tokens_in&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">tokens in</button>'
-        + (
-            ' · <button type="button" class="link" hx-get="/find/rows?sort=match&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">match</button>'
-            if has_results
-            else ''
+        '<details class="xr-sort"><summary>Sort ▾</summary><div class="xr-sort-options" role="group" aria-label="Sort trajectories">'
+        + ''.join(
+            f'<button type="button" hx-get="/find/rows?sort={key}&dir=desc" hx-target="#explorer-results" '
+            f'hx-swap="outerHTML" hx-sync="#explorer-results:replace">{label}</button>'
+            for key, label in sort_options
         )
-        + '</details>'
+        + '</div></details>'
         if view.view == 'trajectories'
         else ''
     )
@@ -656,7 +682,7 @@ def _toolbar(
         f'<div class="xr-toolbar"><button type="button" class="xr-filter" data-explorer-filters aria-haspopup="true" aria-expanded="false">{label}</button>'
         f'<span class="xr-chips">{chips}</span>'
         f'<span class="xr-quickviews" role="group" aria-label="Quick views">{quick_views}</span>'
-        f'<span class="spacer"></span><span class="xr-toolbar-right">{date_and_rows}{context_menu}{export}{load}'
+        f'<span class="spacer"></span><span class="xr-toolbar-right">{export}{date_and_rows}{context_menu}{load}'
         f'<span class="finder-seg xr-switch" role="group" aria-label="View">{switch}</span></span></div>'
     )
 
@@ -720,19 +746,23 @@ def _totals_strip(rows: Sequence[TraceRow], *, traces_layout: bool = False) -> s
     t = totals(rows)
     share = f'{t.cache_share:.0%}' if t.cache_share is not None else fmt_tokens(None)
     parts = (
-        ('traces', f'{t.traces:,}'),
-        ('errors', f'{t.errors:,}'),
-        ('cost', fmt_cost(t.cost, t.currency)),
-        ('in', fmt_tokens(t.tokens_in)),
-        ('out', fmt_tokens(t.tokens_out)),
-        ('cache read', share),
-        ('p50', fmt_duration(t.p50_ms)),
-        ('p95', fmt_duration(t.p95_ms)),
+        ('traces', 'Traces', '▦', f'{t.traces:,}', True),
+        ('errors', 'Errors', '!', f'{t.errors:,}', True),
+        ('cost', 'Cost', '$', fmt_cost(t.cost, t.currency), t.cost is not None),
+        ('in', 'Input', '↓', fmt_tokens(t.tokens_in), t.tokens_in is not None),
+        ('out', 'Output', '↑', fmt_tokens(t.tokens_out), t.tokens_out is not None),
+        ('cache read', 'Cache read', '↻', share, t.cache_share is not None),
+        ('p50', 'P50', '◷', fmt_duration(t.p50_ms), t.p50_ms is not None),
+        ('p95', 'P95', '◷', fmt_duration(t.p95_ms), t.p95_ms is not None),
     )
     cells = ''.join(
-        f'<span class="xr-total"{f" title={chr(34)}{esc(TOTAL_HELP[label])}{chr(34)}" if label in TOTAL_HELP else ""}>'
-        f'<span class="xr-total-label">{label}</span> {value}</span>'
-        for label, value in parts
+        f'<span class="xr-total xr-total-{label.replace(" ", "-")}'
+        f'{" has-errors" if label == "errors" and t.errors else ""}{" unavailable" if not available else ""}"'
+        f'{f" title={chr(34)}{esc(TOTAL_HELP[label])}{chr(34)}" if label in TOTAL_HELP else ""}>'
+        f'<span class="xr-total-mark" aria-hidden="true">{icon}</span>'
+        f'<span class="xr-total-copy"><span class="xr-total-label">{display}</span>'
+        f'<b class="xr-total-value">{value if available else "Unavailable"}</b></span></span>'
+        for label, display, icon, value, available in parts
     )
     grouped = _model_totals(rows) if traces_layout else ''
     return f'<div class="xr-totals" aria-label="Totals for the traces shown">{cells}</div>{grouped}'
