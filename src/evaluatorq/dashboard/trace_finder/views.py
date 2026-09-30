@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -404,6 +405,40 @@ def _answers_text(result: TraceClassification, dimensions: tuple[CompiledQuery, 
     )
 
 
+_SCORE_TEXT_RE = re.compile(r'^\s*(?:noul|choice|score)\s*=')
+_QUESTION_CAP = 80
+
+
+def _reason_text(answer: DimensionAnswer) -> str | None:
+    """The classifier's prose explanation, or None when it only returned score text.
+
+    JEV returns a distribution and no rationale; ``run_classify`` synthesises ``noul=0.93 (threshold 0.5)``
+    from the numbers. That is a score, not a reason, so it is never shown as one.
+    """
+    text = (answer.summary or '').strip()
+    return None if not text or _SCORE_TEXT_RE.match(text) else text
+
+
+def _reason_line(answer: DimensionAnswer) -> str:
+    reason = _reason_text(answer) if answer.matched else None
+    return f'<div class="xr-reason" title="{esc(reason)}">{esc(reason)}</div>' if reason else ''
+
+
+def _capped(question: str, limit: int = _QUESTION_CAP) -> str:
+    return question if len(question) <= limit else question[: limit - 1].rstrip() + '…'
+
+
+def _drawer_reason(answer: DimensionAnswer) -> str:
+    """A labelled prose reason, or a compact confidence when the classifier gave only numbers."""
+    reason = _reason_text(answer)
+    if reason:
+        return f'<p class="fd-reason"><b>Reason</b> {esc(reason)}</p>'
+    if answer.confidence is not None and not answer.error:
+        verdict = {True: 'yes', False: 'no'}.get(answer.value, _value_text(answer.value))  # type: ignore[call-overload]
+        return f'<p class="fd-reason">{esc(verdict)} · {answer.confidence:.0%} confident</p>'
+    return ''
+
+
 def _answer_cells(result: TraceClassification, dimensions: tuple[CompiledQuery, ...]) -> str:
     """One verdict cell per dimension, each coloured by that dimension's legend."""
 
@@ -415,11 +450,7 @@ def _answer_cells(result: TraceClassification, dimensions: tuple[CompiledQuery, 
             continue
         label = 'Judgment failed' if answer.error else _value_text(answer.value)
         confidence = f' <span class="conf">{answer.confidence:.2f}</span>' if answer.confidence is not None else ''
-        reason = (
-            f'<div class="xr-reason" title="{esc(answer.summary)}">{esc(answer.summary)}</div>'
-            if answer.summary and answer.matched
-            else ''
-        )
+        reason = _reason_line(answer)
         cells.append(
             f'<td><span class="verdict"><span class="sw" style="background:{esc(_answer_color(answer, dimension))}"></span>'
             f'{esc(label)}</span>{confidence}{reason}</td>'
@@ -574,7 +605,11 @@ def _judging_text(
     """
     done = snapshot.state == 'completed'
     question = snapshot.request.query if snapshot.request is not None else ''
-    quoted = f' “{esc(question)}”' if question else ''
+    quoted = (
+        f' <span class="finder-progress-q" title="{esc(question)}">“{esc(_capped(question))}”</span>'
+        if question
+        else ''
+    )
     show_only = (
         f'<button type="button" class="btn-secondary finder-show-only" hx-get="{esc(show_only_url)}" '
         'hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">Show only these</button>'
@@ -589,10 +624,14 @@ def _judging_text(
     ]
     if snapshot.failed:
         parts.append(f'<span class="finder-progress-failed"><b>{snapshot.failed}</b> failed</span>')
-    parts.append('<span>within the loaded rows</span>' if snapshot.within_results else '<span>new search</span>')
+    parts.append(
+        '<span class="nw">within the loaded rows</span>'
+        if snapshot.within_results
+        else '<span class="nw">new search</span>'
+    )
     if classifier_model:
         parts.append(
-            f'<span style="white-space:nowrap" title="Ask AI reads each trace with this model">Uses {esc(classifier_model)}</span>'
+            f'<span class="nw" title="Ask AI reads each trace with this model">Uses {esc(classifier_model)}</span>'
         )
     if not done:
         parts.append(f'<span>{snapshot.rate:.1f}/s</span>')
@@ -1024,7 +1063,7 @@ def drawer(
         if result is None
         else (
             f'<p><b>{"Not included" if not result.matched else "Included" if result.answers else "Kept by filters"}</b> · {esc(_answers_text(result, detail.dimensions))}</p>'
-            + ''.join(f'<p class="fd-reason">{esc(answer.summary)}</p>' for answer in result.answers if answer.summary)
+            + ''.join(_drawer_reason(answer) for answer in result.answers)
             if not result.error
             else f'<p role="alert">Failed: {esc(result.error)}</p>'
         )

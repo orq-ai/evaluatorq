@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.trace_finder import RunSnapshot
     from evaluatorq.trace_finder.explorer import ExplorerView
-    from evaluatorq.trace_finder.models import TraceClassification, TraceRecord
+    from evaluatorq.trace_finder.models import DimensionAnswer, TraceClassification, TraceRecord
     from evaluatorq.trace_finder.rows import TraceRow
     from evaluatorq.trace_finder.trajectory import Segment
 
@@ -104,13 +104,7 @@ def _match_cells(row: TraceRow, snapshot: RunSnapshot | None) -> str:
         return '<td class="muted">—</td>' * max(1, len(dimensions))
     if not result.error and dimensions and all(d.task.kind == 'noul' for d in dimensions):
         return ''.join(
-            '<td>—</td>'
-            if index >= len(result.answers)
-            else '<td><span class="verdict xr-yn failed">Judgment failed</span></td>'
-            if result.answers[index].error
-            else f'<td><span class="verdict xr-yn {"yes" if result.answers[index].matched else "no"}"'
-            f'{f" title={chr(34)}AI confidence {result.answers[index].confidence:.0%}{chr(34)}" if result.answers[index].confidence is not None else ""}>'
-            f'{"yes" if result.answers[index].value is True else "no" if result.answers[index].value is False else esc(str(result.answers[index].value))}</span></td>'
+            _yes_no_cell(result.answers[index] if index < len(result.answers) else None)
             for index in range(len(dimensions))
         )
     if result.error or not dimensions:
@@ -126,6 +120,19 @@ def _match_cells(row: TraceRow, snapshot: RunSnapshot | None) -> str:
         cell = f'<td><span class="verdict xr-match"><span class="sw" style="background:{esc(_result_color(result, dimensions))}"></span>{esc(label)}</span></td>'
         return cell * max(1, len(dimensions))
     return _answer_cells(result, dimensions)
+
+
+def _yes_no_cell(answer: DimensionAnswer | None) -> str:
+    """A compact yes/no verdict; a match carries the classifier's reason when it gave prose."""
+    from evaluatorq.dashboard.trace_finder.views import _reason_line
+
+    if answer is None:
+        return '<td>—</td>'
+    if answer.error:
+        return '<td><span class="verdict xr-yn failed">Judgment failed</span></td>'
+    title = f' title="AI confidence {answer.confidence:.0%}"' if answer.confidence is not None else ''
+    text = 'yes' if answer.value is True else 'no' if answer.value is False else esc(str(answer.value))
+    return f'<td><span class="verdict xr-yn {"yes" if answer.matched else "no"}"{title}>{text}</span>{_reason_line(answer)}</td>'
 
 
 def _within_snapshot(snapshot: RunSnapshot | None) -> RunSnapshot | None:

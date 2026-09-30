@@ -940,7 +940,8 @@ def test_completed_answer_sentence_offers_show_only_and_names_model() -> None:
     request = RunRequest(query='angry customer', mode='immediate', population=PopulationRequest())
     snapshot = RunSnapshot(state='completed', request=request, total=5, matched=2)
     html = progress(snapshot, classifier_model='acme/judge', show_only_url='/find/rows?quick_view=matches')
-    assert '<b>2</b> of 5 traces match “angry customer”' in html
+    assert '<b>2</b> of 5 traces match' in html
+    assert '“angry customer”' in html
     assert 'Show only these' in html
     assert 'Uses acme/judge' in html
     assert 'Show only these' not in progress(replace(snapshot, matched=0), show_only_url='/x')
@@ -978,6 +979,70 @@ def test_matched_answer_shows_its_reason_line() -> None:
 
     assert 'The customer repeats the request.' in _answer_cells(result(True), (tone,))
     assert 'The customer repeats the request.' not in _answer_cells(result(False), (tone,))
+
+
+def _yes_no_snapshot(summary: str | None, confidence: float | None = 0.93):
+    dimension = CompiledQuery(
+        task=ClassifyQuestion(kind='noul', instructions='Is it about traces?', noul_threshold=0.5, state={}),
+        selection=ValueSelection(kind='values', values=(True,)),
+    )
+    answer = DimensionAnswer(value=True, matched=True, confidence=confidence, summary=summary)
+    result = TraceClassification(trace_id='t', span_id='s', answers=(answer,), matched=True, raw_result={})
+    snapshot = RunSnapshot(state='completed', results={'t': result}, dimensions=(dimension,), within_results=True)
+    return dimension, result, snapshot
+
+
+def test_yes_no_cell_renders_prose_reason_through_match_cells() -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.trace_finder.explorer_views import _match_cells
+
+    _, _, snapshot = _yes_no_snapshot('The user asks how to filter traces.')
+    html = _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
+
+    assert 'xr-yn yes' in html
+    assert 'class="xr-reason"' in html
+    assert 'The user asks how to filter traces.' in html
+
+
+def test_score_only_summary_is_never_rendered_as_a_reason() -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.trace_finder.explorer_views import _match_cells
+    from evaluatorq.dashboard.trace_finder.views import _answer_cells, _drawer_reason
+
+    score_text = 'noul=0.93 (threshold 0.5)'
+    dimension, result, snapshot = _yes_no_snapshot(score_text)
+
+    assert 'xr-reason' not in _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
+    assert 'xr-reason' not in _answer_cells(result, (dimension,))
+    drawer = _drawer_reason(result.answers[0])
+    assert score_text not in drawer
+    assert 'fd-reason' in drawer
+    assert 'yes · 93% confident' in drawer
+    assert 'Reason' not in drawer
+
+
+def test_drawer_labels_a_real_reason() -> None:
+    from evaluatorq.dashboard.trace_finder.views import _drawer_reason
+
+    _, result, _ = _yes_no_snapshot('The user asks how to filter traces.')
+
+    assert '<b>Reason</b> The user asks how to filter traces.' in _drawer_reason(result.answers[0])
+
+
+def test_long_question_is_capped_in_the_result_line_with_full_text_in_title() -> None:
+    from evaluatorq.dashboard.trace_finder.views import _judging_text
+
+    question = 'Is the conversation about ' + 'searching and filtering traces ' * 8
+    from evaluatorq.trace_finder import PopulationRequest, RunRequest
+
+    request = RunRequest(query=question, mode='immediate', population=PopulationRequest())
+    html = _judging_text(RunSnapshot(state='completed', total=10, matched=3, request=request, within_results=True))
+
+    assert f'title="{question}"' in html
+    assert question not in html.replace(f'title="{question}"', '')
+    assert '…”' in html
 
 
 def test_completed_empty_run_keeps_clear_without_download() -> None:

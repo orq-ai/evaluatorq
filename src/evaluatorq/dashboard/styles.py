@@ -166,9 +166,11 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-preset:focus-visible,
 .finder:has(> .finder-command) .xr-exact > summary:focus-visible { outline:2px solid #025558; outline-offset:-2px; }
 /* Ask AI results: the answer leads, actions look like buttons, yes/no stays neutral (a match is not an error). */
-.finder:has(> .finder-command) .finder-progress { gap:10px; padding:0 16px; min-height:44px; font-family:var(--font-sans); font-size:12px; }
+.finder:has(> .finder-command) .finder-progress { gap:4px 10px; padding:6px 16px; min-height:44px; flex-wrap:wrap; font-family:var(--font-sans); font-size:12px; }
 .finder:has(> .finder-command) .finder-progress .state { font-size:10.5px; }
-.finder:has(> .finder-command) .finder-progress-answer { color:var(--text-strong); font-size:13px; }
+.finder:has(> .finder-command) .finder-progress-answer { flex:1 1 auto; min-width:0; color:var(--text-strong); font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.finder:has(> .finder-command) .finder-progress-q { display:inline-block; max-width:min(60ch,100%); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.finder:has(> .finder-command) .finder-progress .nw { white-space:nowrap; }
 .finder:has(> .finder-command) .finder-progress-answer b { font-weight:700; }
 .finder:has(> .finder-command) .finder-show-only { padding:3px 10px; font-size:12px; }
 .finder:has(> .finder-command) .xr-reason { max-width:34ch; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted, #6b6b78); font-size:11px; }
