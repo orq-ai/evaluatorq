@@ -15,7 +15,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.trace_finder.columns import resolve_columns
-from evaluatorq.trace_finder.explorer import ExplorerView
+from evaluatorq.trace_finder.explorer import PAGE_ROWS, ExplorerView
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection, PopulationRequest, TraceRecord
 from evaluatorq.trace_finder.rows import TraceRow
 
@@ -92,6 +92,22 @@ def _rows(n: int) -> tuple[TraceRow, ...]:
             models=('gpt-5.6-luna',),
         )
         for i in range(n)
+    )
+
+
+def _trajectory_record(trace_id: str, *messages: dict[str, Any]) -> TraceRecord:
+    return TraceRecord(
+        schema_version=1,
+        trace_id=trace_id,
+        span_id='span',
+        timestamp=datetime(2026, 9, 27, tzinfo=timezone.utc),
+        project='project',
+        model='gpt-5.6-luna',
+        provider='openai',
+        status='ok',
+        product='chat',
+        trace_type='agent',
+        messages=messages,
     )
 
 
@@ -191,6 +207,76 @@ def test_trajectory_rows_show_duration_status_and_label_missing_messages() -> No
     )
     assert 'tv-status other">Cancelled' in cancelled
     assert 'tv-status other">Unknown' in unknown
+
+
+def test_trajectory_reconciles_captured_estimates_to_provider_input() -> None:
+    row = _rows(1)[0].model_copy(update={'tokens_in': 100})
+    record = _trajectory_record(
+        row.trace_id,
+        {'role': 'system', 'content': '12345678'},
+        {'role': 'user', 'content': 'hi'},
+    )
+
+    html = explorer_views.trajectories(ExplorerView(state='loaded', rows=(row,)), {row.trace_id: record}, None)
+
+    assert html.count('data-tv-kind="System"') == 1
+    assert html.count('class="tv-unattributed"') == 1
+    assert 'flex-grow:97' in html
+    assert 'provider-reported trace input and estimated captured messages' in html
+    assert 'Estimated message tokens' in html
+
+
+def test_trajectory_omits_remainder_when_input_is_unknown_and_ignores_tool_definitions() -> None:
+    row = _rows(1)[0].model_copy(update={'tokens_in': None})
+    record = _trajectory_record(
+        row.trace_id,
+        {'role': 'user', 'content': 'text', 'tool_definitions': [{'name': 'hidden_schema'}]},
+    )
+
+    html = explorer_views.trajectories(ExplorerView(state='loaded', rows=(row,)), {row.trace_id: record}, None)
+
+    assert 'tv-unattributed' not in html
+    assert 'hidden_schema' not in html
+    assert 'Provider input unavailable; captured message estimate 1.' in html
+
+
+def test_trajectory_keeps_estimate_when_it_exceeds_reported_input() -> None:
+    row = _rows(1)[0].model_copy(update={'tokens_in': 10})
+    record = _trajectory_record(row.trace_id, {'role': 'user', 'content': 'x' * 400})
+
+    html = explorer_views.trajectories(ExplorerView(state='loaded', rows=(row,)), {row.trace_id: record}, None)
+
+    assert 'tv-unattributed' not in html
+    assert 'Estimated captured messages 100 exceed provider-reported trace input 10 by 90.' in html
+    assert 'Bar exceeds scale' in html
+
+
+def test_trajectory_scale_is_loaded_population_p95_across_pages() -> None:
+    rows = tuple(
+        row.model_copy(update={'tokens_in': index + 1})
+        for index, row in enumerate(_rows(PAGE_ROWS + 1))
+    )
+    rows = (*rows[:-1], rows[-1].model_copy(update={'tokens_in': 10_000}))
+    records = {
+        rows[0].trace_id: _trajectory_record(rows[0].trace_id, {'role': 'user', 'content': 'text'}),
+        rows[-1].trace_id: _trajectory_record(rows[-1].trace_id, {'role': 'user', 'content': 'text'}),
+    }
+    page_one = explorer_views.trajectories(
+        ExplorerView(state='loaded', rows=rows, page=0), records, None
+    )
+    page_two = explorer_views.trajectories(
+        ExplorerView(state='loaded', rows=rows, page=1), records, None
+    )
+
+    ticks_one_match = re.search(r'<div class="tv-scale"[^>]*>(.*?)</div>', page_one)
+    ticks_two_match = re.search(r'<div class="tv-scale"[^>]*>(.*?)</div>', page_two)
+    assert ticks_one_match is not None and ticks_two_match is not None
+    ticks_one = ticks_one_match.group(1)
+    ticks_two = ticks_two_match.group(1)
+    assert ticks_one == ticks_two
+    assert 'title="Scale: p95 of provider-reported input across all loaded rows (96 tokens)"' in page_one
+    assert 'title="Scale: p95 of provider-reported input across all loaded rows (96 tokens)"' in page_two
+    assert 'Bar exceeds scale' in page_two
 
 
 

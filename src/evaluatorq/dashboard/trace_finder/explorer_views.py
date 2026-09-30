@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -386,7 +387,12 @@ def trajectories(
     other = sum(1 for segs in bars.values() if segs for s in segs if s.kind == 'other')
     if other:
         logger.warning('Trajectory view drew {} message part(s) of unknown type as "other"', other)
-    widest = max((sum(s.tokens for s in segs) for segs in bars.values() if segs), default=1)
+    # Input usage is available for every loaded summary row, even when message
+    # hydration is limited to the current page. Use its nearest-rank p95 so the
+    # axis does not jump as the user pages through the loaded population.
+    loaded_inputs = sorted(row.tokens_in for row in view.rows if row.tokens_in is not None)
+    scale = loaded_inputs[max(0, math.ceil(len(loaded_inputs) * 0.95) - 1)] if loaded_inputs else 1
+    scale = max(scale, 1)
     totals: dict[str, int] = {}
     for segs in bars.values():
         for s in segs or ():
@@ -397,7 +403,12 @@ def trajectories(
         for kind, label in KIND_LABELS.items()
         if kind in totals
     )
-    ticks = ''.join(f'<b style="left:{q * 25}%">{fmt_tokens(widest * q // 4) if q else "0"}</b>' for q in range(5))
+    scale_title = (
+        f'Scale: p95 of provider-reported input across all loaded rows ({scale:,} tokens)'
+        if loaded_inputs
+        else 'No loaded rows report provider input; bars use a 1-token fallback scale'
+    )
+    ticks = ''.join(f'<b style="left:{q * 25}%">{fmt_tokens(scale * q // 4) if q else "0"}</b>' for q in range(5))
     classified = _classified(snapshot) and snapshot is not None and bool(snapshot.results)
     rows_html = ''
     for row in page:
@@ -407,20 +418,45 @@ def trajectories(
         dim += ' row-err' if row.is_error else ''
         has_conversation = bool(segs) and any(segment.preview.strip() or segment.label for segment in segs or ())
         if has_conversation and segs:
-            width = sum(s.tokens for s in segs) / widest * 100
+            estimated = sum(s.tokens for s in segs)
+            reported = row.tokens_in
+            unattributed = max(0, reported - estimated) if reported is not None else 0
+            total = max(estimated, reported or 0)
+            width = min(total / scale * 100, 100)
             inner = ''.join(
                 f'<i class="k-{s.kind}" style="flex-grow:{s.tokens}" {_tip_attrs(s, n, len(segs))}></i>'
                 for n, s in enumerate(segs, start=1)
             )
+            if unattributed:
+                inner += (
+                    f'<i class="tv-unattributed" style="flex-grow:{unattributed}" '
+                    f'title="Unattributed: {unattributed:,} tokens, the difference between provider-reported trace input and estimated captured messages; may include other spans, hidden configuration, or formatting differences"></i>'
+                )
+            accounting = (
+                f'Provider input {reported:,}; estimated captured messages {estimated:,}; '
+                f'unattributed difference {unattributed:,}.'
+                if reported is not None and estimated <= reported
+                else f'Estimated captured messages {estimated:,} exceed provider-reported trace input {reported:,} by {estimated - reported:,}.'
+                if reported is not None
+                else f'Provider input unavailable; captured message estimate {estimated:,}.'
+            )
+            overflow = total > scale
+            overflow_marker = (
+                f'<span class="tv-overflow" title="Total {total:,} tokens exceeds the loaded-population p95 scale of {scale:,}" aria-label="Bar exceeds scale">!</span>'
+                if overflow
+                else ''
+            )
             count = len({s.index for s in segs})
-            bar = f'<div class="tv-segs" style="width:{width:.2f}%">{inner}</div>'
+            bar = f'<div class="tv-segs" title="{esc(accounting)}" style="width:{width:.2f}%">{inner}{overflow_marker}</div>'
+            row_title = f' title="{esc(accounting)}"'
             message_count = f'{count} msgs'
         else:
             bar = '<div class="tv-segs tv-nomsg" style="width:100%"></div>'
+            row_title = ''
             message_count = 'Loading messages…' if loading and row.trace_id not in records else 'No messages available'
         row_summary = f'{message_count} · {fmt_duration(row.duration_ms)}'
         rows_html += (
-            f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0" {_drawer_attrs(row.trace_id, traces_layout=traces_layout)}>'
+            f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0"{row_title} {_drawer_attrs(row.trace_id, traces_layout=traces_layout)}>'
             f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-plot"><div class="tv-track"></div>{bar}</div>'
             f'<span class="tv-end">{row_summary}</span></div>{_metrics(row)}</div>'
         )
@@ -429,8 +465,8 @@ def trajectories(
             '<div class="tv-r tv-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>' for _ in range(4)
         )
     return (
-        f'<div class="tv"><div class="tv-lg">{legend}<span class="tv-note" title="{esc(TRAJECTORIES_HELP)}">Bar sizes are estimates (text length ÷ 4), not exact token counts.</span></div>'
-        f'<div class="tv-hd"><span>Trace</span><div class="ax"><div class="tv-scale">{ticks}</div><span>Messages</span></div>'
+        f'<div class="tv"><div class="tv-lg">{legend}<span class="tv-legend-unattributed"><i></i>unattributed</span><span class="tv-note" title="{esc(TRAJECTORIES_HELP)}">Estimated captured message tokens (text length ÷ 4); tool definitions are omitted. Unattributed is the difference from provider input and may include hidden configuration, formatting differences, missing content, or other spans. It does not identify a specific source.</span></div>'
+        f'<div class="tv-hd"><span>Trace</span><div class="ax"><div class="tv-scale" title="{esc(scale_title)}">{ticks}</div><span>Estimated message tokens</span></div>'
         f'<div class="tv-mh"><span title="{esc(COLUMN_HELP["tokens_in"])}; and tokens the model wrote back">Input / output</span>'
         f'<span title="{esc(COLUMN_HELP["cache_pct"])}">Cache reads</span><span>Cost</span></div></div>'
         f'<div class="tv-rows">{rows_html}</div><div class="tv-tip" role="tooltip" hidden></div></div>'
