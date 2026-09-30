@@ -462,7 +462,7 @@ def _response(step: AtifStep, seed: str) -> Response:
         _warn_foreign('response_id', step.step_id, response_id)
         response_id = None
     status = extra.get('status')
-    if status is not None and status not in _RESPONSE_STATUSES:
+    if status is not None and not (isinstance(status, str) and status in _RESPONSE_STATUSES):
         _warn_foreign('status', step.step_id, status)
         status = None
     return Response.model_validate({

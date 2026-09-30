@@ -224,3 +224,27 @@ def test_foreign_step_extra_values_are_dropped_not_crashing(caplog: pytest.LogCa
     assert 'id' not in next(i for i in conv.items if i['type'] == 'function_call')
     for key in ('error', 'status', 'incomplete_details', 'response_id', 'fc_item_ids', 'total_tokens', 'reasoning_tokens'):
         assert f'extra.{key}' in caplog.text
+
+
+def _agent_step_with_extra(extra: dict[str, Any]) -> AtifTrajectory:
+    return AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'}, 'session_id': 's',
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': 'x', 'model_name': 'gpt-x', 'extra': extra}]})
+
+
+def test_unhashable_status_is_dropped_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    responses = _agent_step_with_extra({'status': ['x']}).to_responses().responses
+    assert responses is not None and responses[0].status == 'completed'
+    assert 'extra.status' in caplog.text
+
+
+def test_valid_status_error_and_incomplete_details_pass_through() -> None:
+    error = {'code': 'server_error', 'message': 'boom'}
+    incomplete = {'reason': 'max_output_tokens'}
+    traj = _agent_step_with_extra({'status': 'failed', 'error': error, 'incomplete_details': incomplete})
+    responses = traj.to_responses().responses
+    assert responses is not None
+    response = responses[0]
+    assert response.status == 'failed'
+    assert response.error is not None and response.error.model_dump() == error
+    assert response.incomplete_details is not None and response.incomplete_details.model_dump() == incomplete
