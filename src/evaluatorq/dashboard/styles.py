@@ -3102,11 +3102,11 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .tv-end { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
 .tv-nomsg { display:flex; align-items:center; justify-content:center; border:1px dashed #c9c8c2; background:#faf9f6; }
 .tv-nomsg::after { content:"No conversation"; color:var(--text-muted); font:11px ui-sans-serif,system-ui; }
-.tv-skeleton { height:58px; }
-.tv-skeleton i { display:block; height:10px; border-radius:5px; background:linear-gradient(90deg,#f0f1f3 25%,#e5e7eb 40%,#f0f1f3 65%); background-size:300% 100%; animation:xr-shimmer 1.3s ease infinite; }
-.tv-skeleton i:first-child { width:70%; }.tv-skeleton i:nth-child(2) { width:100%; }.tv-skeleton i:last-child { width:60%; }
+.finder:has(> .finder-command) .tv-skeleton { height:58px; }
+.finder:has(> .finder-command) .tv-skeleton i { display:block; height:10px; border-radius:5px; background:linear-gradient(90deg,#f0f1f3 25%,#e5e7eb 40%,#f0f1f3 65%); background-size:300% 100%; animation:xr-shimmer 1.3s ease infinite; }
+.finder:has(> .finder-command) .tv-skeleton i:first-child { width:70%; }.finder:has(> .finder-command) .tv-skeleton i:nth-child(2) { width:100%; }.finder:has(> .finder-command) .tv-skeleton i:last-child { width:60%; }
 @keyframes xr-shimmer { to { background-position:-150% 0; } }
-@media (prefers-reduced-motion:reduce) { .finder:has(> .finder-command) .xr-skeleton td i,.tv-skeleton i { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .finder:has(> .finder-command) .xr-skeleton td i,.finder:has(> .finder-command) .tv-skeleton i { animation:none; } }
 .cachebar { display:inline-block; width:34px; height:4px; background:#ece9e4; border-radius:2px; margin-right:6px; vertical-align:middle; }
 .cachebar i { display:block; height:4px; border-radius:2px; background:var(--traj-assistant); }
 .xr-pager { display:flex; gap:14px; justify-content:center; font-size:12px; color:var(--text-muted); }

@@ -199,6 +199,8 @@ def test_trajectory_rows_show_duration_status_and_label_missing_messages() -> No
     assert 'No messages available' in html
     assert '1.0s' in html
     assert 'tv-status err">Error' in html
+    assert html.count('class="tv-unattributed"') == 1
+    assert 'no captured message content is available' in html
     cancelled = explorer_views.trajectories(
         ExplorerView(state='loaded', rows=(_rows(1)[0].model_copy(update={'status': 'cancelled'}),)), {}, None
     )
@@ -238,6 +240,7 @@ def test_trajectory_omits_remainder_when_input_is_unknown_and_ignores_tool_defin
     assert 'tv-unattributed' not in html
     assert 'hidden_schema' not in html
     assert 'Provider input unavailable; captured message estimate 1.' in html
+    assert 'estimated message bars use a fixed 1,000-token scale' in html
 
 
 def test_trajectory_keeps_estimate_when_it_exceeds_reported_input() -> None:

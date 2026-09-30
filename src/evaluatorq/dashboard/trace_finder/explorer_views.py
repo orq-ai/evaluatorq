@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     from evaluatorq.trace_finder.trajectory import Segment
 
 DEFAULT_EXPLORER_ROWS = 200
+TRAJECTORY_FALLBACK_SCALE = 1_000
 TRAJECTORIES_HELP = 'Shows each trace as a bar of its messages, sized by estimated tokens'
 COLUMN_HELP = {
     'cache_pct': 'Share of input tokens the provider reused from an earlier request, which is cheaper and faster.',
@@ -391,7 +392,9 @@ def trajectories(
     # hydration is limited to the current page. Use its nearest-rank p95 so the
     # axis does not jump as the user pages through the loaded population.
     loaded_inputs = sorted(row.tokens_in for row in view.rows if row.tokens_in is not None)
-    scale = loaded_inputs[max(0, math.ceil(len(loaded_inputs) * 0.95) - 1)] if loaded_inputs else 1
+    scale = (
+        loaded_inputs[max(0, math.ceil(len(loaded_inputs) * 0.95) - 1)] if loaded_inputs else TRAJECTORY_FALLBACK_SCALE
+    )
     scale = max(scale, 1)
     totals: dict[str, int] = {}
     for segs in bars.values():
@@ -406,7 +409,7 @@ def trajectories(
     scale_title = (
         f'Scale: p95 of provider-reported input across all loaded rows ({scale:,} tokens)'
         if loaded_inputs
-        else 'No loaded rows report provider input; bars use a 1-token fallback scale'
+        else f'No loaded rows report provider input; estimated message bars use a fixed {scale:,}-token scale'
     )
     ticks = ''.join(f'<b style="left:{q * 25}%">{fmt_tokens(scale * q // 4) if q else "0"}</b>' for q in range(5))
     classified = _classified(snapshot) and snapshot is not None and bool(snapshot.results)
@@ -451,8 +454,26 @@ def trajectories(
             row_title = f' title="{esc(accounting)}"'
             message_count = f'{count} msgs'
         else:
-            bar = '<div class="tv-segs tv-nomsg" style="width:100%"></div>'
-            row_title = ''
+            if row.tokens_in is not None and row.tokens_in > 0:
+                width = min(row.tokens_in / scale * 100, 100)
+                overflow = row.tokens_in > scale
+                accounting = (
+                    f'Provider input {row.tokens_in:,}; no captured message content is available, '
+                    f'so all {row.tokens_in:,} input tokens are unattributed in this view.'
+                )
+                overflow_marker = (
+                    f'<span class="tv-overflow" title="Total {row.tokens_in:,} tokens exceeds the loaded-population p95 scale of {scale:,}" aria-label="Bar exceeds scale">!</span>'
+                    if overflow
+                    else ''
+                )
+                bar = (
+                    f'<div class="tv-segs tv-nomsg" title="{esc(accounting)}" style="width:{width:.2f}%">'
+                    f'<i class="tv-unattributed" style="flex-grow:{row.tokens_in}" title="Unattributed: {row.tokens_in:,} provider-reported input tokens; captured messages are unavailable"></i>{overflow_marker}</div>'
+                )
+                row_title = f' title="{esc(accounting)}"'
+            else:
+                bar = '<div class="tv-segs tv-nomsg" style="width:100%"></div>'
+                row_title = ''
             message_count = 'Loading messages…' if loading and row.trace_id not in records else 'No messages available'
         row_summary = f'{message_count} · {fmt_duration(row.duration_ms)}'
         rows_html += (
