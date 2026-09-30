@@ -47,6 +47,19 @@ def test_cache_column_names_and_displays_cache_reads() -> None:
     assert 'width:25%' in COLUMNS['cache_pct'].render(row)
 
 
+def test_optional_error_message_column_is_honest_without_summary_message() -> None:
+    assert 'error_message' not in DEFAULT_COLUMNS
+    error = TraceRow(trace_id='failed', status='error')
+    success = TraceRow(trace_id='ok', status='ok')
+
+    assert COLUMNS['error_message'].label == 'Error message'
+    assert COLUMNS['error_message'].render(error) == (
+        '<span title="Open this trace, then choose Spans">Open Spans for details</span>'
+    )
+    assert COLUMNS['error_message'].render(success) == '—'
+    assert COLUMNS['error_message'].value(error) is None
+
+
 def test_resolve_drops_unknown_keys() -> None:
     assert [column.key for column in resolve_columns(['model', 'nope'])] == ['model']
     assert [column.key for column in resolve_columns(None)] == list(DEFAULT_COLUMNS)

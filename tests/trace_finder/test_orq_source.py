@@ -714,7 +714,7 @@ async def test_first_error_message_uses_raw_sdk_status_shape_without_logging_pay
     traces.capture_hook = client.sdk_configuration._hooks.after_success_hooks[0]
 
     message = await source.first_error_message(
-        'trace', [{'span_id': 'failed-span', 'status': 'error'}, {'span_id': 'later', 'status': 'error'}]
+        'trace', [{'span_id': 'failed-span', 'status_code': 'ERROR'}, {'span_id': 'later', 'status': 'error'}]
     )
 
     assert message == '<observed error text>'

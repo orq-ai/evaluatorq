@@ -85,6 +85,12 @@ def _cache(row: TraceRow) -> str:
     )
 
 
+def _error_message(row: TraceRow) -> str:
+    if not row.is_error:
+        return DASH
+    return '<span title="Open this trace, then choose Spans">Open Spans for details</span>'
+
+
 @dataclass(frozen=True)
 class Column:
     key: str
@@ -101,6 +107,7 @@ _ENTRIES = (
     Column('started', 'Time', lambda r: r.started_at, _time, default=True),
     Column('trace', 'Trace / agent', lambda r: r.name or r.trace_id, _trace, default=True),
     Column('status', 'Status', lambda r: r.status, _status, default=True),
+    Column('error_message', 'Error message', lambda _r: None, _error_message),
     Column('name', 'Name', lambda r: r.name, lambda r: _text(r.name)),
     Column('agent', 'Agent', lambda r: r.agent_name, lambda r: _text(r.agent_name)),
     Column('model', 'Model', lambda r: ', '.join(r.models) or None, lambda r: _text(', '.join(r.models)), default=True),

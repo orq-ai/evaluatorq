@@ -14,8 +14,9 @@ from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
-from evaluatorq.trace_finder.columns import fmt_cost, fmt_time, fmt_tokens
+from evaluatorq.trace_finder.columns import fmt_cost, fmt_duration, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
+from evaluatorq.trace_finder.span_status import is_error_span
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, Kind, Segment, segments
 
 if TYPE_CHECKING:
@@ -1195,6 +1196,7 @@ def drawer(
             f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
             f'<div class="fd-row-meta">Started {esc(fmt_time(row.started_at))} · {esc(fmt_tokens(row.tokens_in))} in → '
             f'{esc(fmt_tokens(row.tokens_out))} out{reasoning} · {esc(fmt_tokens(row.cached_tokens))} cache · '
+            f'Duration {esc(fmt_duration(row.duration_ms))} · '
             f'{fmt_cost(row.cost_total, row.currency)}</div>'
         )
     technical_html = (
@@ -1318,10 +1320,6 @@ def span_tree(  # noqa: C901
                     return str(detail)
         return text(span, 'status_code') or 'unknown'
 
-    def is_error(span: object) -> bool:
-        lowered = status_text(span).lower()
-        return 'error' in lowered or 'failed' in lowered
-
     entries: dict[str, object] = {}
     order: list[str] = []
     for index, span in enumerate(spans):
@@ -1336,7 +1334,12 @@ def span_tree(  # noqa: C901
             children[parent].append(span_id)
         else:
             roots.append(span_id)
-    errors = [span_id for span_id in order if is_error(entries[span_id])]
+    error_ids = {
+        text(span, 'span_id') or text(span, 'id')
+        for span in spans
+        if is_error_span(span) and (text(span, 'span_id') or text(span, 'id'))
+    }
+    errors = [span_id for span_id in order if span_id in error_ids]
     first_error = errors[0] if errors else None
     ancestors: set[str] = set()
     if first_error is not None:
@@ -1355,7 +1358,7 @@ def span_tree(  # noqa: C901
     def row(span_id: str) -> str:
         span = entries[span_id]
         status = status_text(span)
-        failed = is_error(span)
+        failed = is_error_span(span)
         kind = text(span, 'type') or text(span, 'operation') or 'unknown kind'
         name = text(span, 'name') or text(span, 'operation') or 'Unnamed span'
         duration = value(span, 'duration_ms')

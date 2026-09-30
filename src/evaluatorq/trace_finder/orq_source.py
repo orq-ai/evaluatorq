@@ -23,6 +23,7 @@ from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
 from .progress import report_load_progress
 from .rows import TraceRow, row_from_summary
 from .rows import parse_time as _parse_time
+from .span_status import is_error_span
 
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
@@ -657,8 +658,7 @@ class OrqTraceSource:
             return None
         failed_span_id: str | None = None
         for span in spans:
-            status = _field(span, 'status')
-            if isinstance(status, str) and any(word in status.lower() for word in ('error', 'failed')):
+            if is_error_span(span):
                 failed_span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
                 if failed_span_id:
                     break
