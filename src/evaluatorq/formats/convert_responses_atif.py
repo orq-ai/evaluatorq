@@ -406,9 +406,10 @@ def _metrics_from_usage(usage: ResponseUsage | None, unset: frozenset[str]) -> A
 
 
 def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
-    """Render an ATIF trajectory as Responses items plus exactly one `Response` per agent step.
+    """Render an ATIF trajectory as Responses items plus one `Response` per agent step with output items.
 
     Each `Response.output` holds the output items of its step (assistant message, reasoning, function calls).
+    A step containing only tool results has no model output and therefore gets no `Response`.
 
     A step without model, metrics or timestamp gets a placeholder (`model=''`, `usage=None`, `created_at=0.0`),
     which `responses_to_atif` reads back as absent. Responses usage has no unset token count, so an unset ATIF
@@ -431,7 +432,9 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
         if step.source == 'agent':
             step_items = _agent_items(step, seed)
             items.extend(step_items)
-            responses.append(_response(step, seed, [output_item(i) for i in step_items if is_output_item(i)]))
+            output = [output_item(i) for i in step_items if is_output_item(i)]
+            if output:
+                responses.append(_response(step, seed, output))
             for name in _UNMAPPED_METRICS:
                 if step.metrics is not None and getattr(step.metrics, name) is not None:
                     unmapped[name] = unmapped.get(name, 0) + 1
@@ -508,7 +511,9 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
     messages = (
         [Message(role='assistant', content=content or None, tool_calls=calls or None)]
-        if content or calls or not (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
+        if content
+        or calls
+        or not any((step.extra or {}).get(key) for key in (_UNMAPPED_OUTPUTS_KEY, _UNMAPPED_RESULTS_KEY))
         else []
     )
     for result in step.observation.results if step.observation else []:

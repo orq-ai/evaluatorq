@@ -104,9 +104,15 @@ def test_orphan_custom_result_after_malformed_call_roundtrips() -> None:
         {'type': 'custom_tool_call_output', 'call_id': 'c1', 'output': 'result'},
     ]
     conversation = ResponsesConversation(items=items).to_atif().to_responses()
-    assert conversation.items[-1] == items[-1]
-    assert conversation.responses is not None and len(conversation.responses) == 1
-    assert len(conversation.responses[0].output) == 1
+    assert conversation.items == [items[-1]]
+    assert conversation.responses is None
+
+
+def test_agent_step_with_only_unmapped_result_does_not_emit_empty_assistant_turn() -> None:
+    items = [{'type': 'custom_tool_call_output', 'call_id': 'orphan', 'output': 'result'}]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.items == items
+    assert conversation.responses is None
 
 
 def test_custom_and_function_results_keep_their_shared_order() -> None:
