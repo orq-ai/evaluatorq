@@ -14,6 +14,7 @@ from loguru import logger
 
 from evaluatorq.signals.config import SignalsConfig
 from evaluatorq.signals.models import Group, SignalFn, SignalReport, SignalResult
+from evaluatorq.signals.walk import SignalContext
 
 if TYPE_CHECKING:
     from evaluatorq.formats.atif import AtifTrajectory
@@ -45,7 +46,8 @@ def compute_signals(
     """Run the signals on a trajectory, in registry order.
 
     A signal that raises is reported as no-basis with the exception type and message (and logged), so one broken
-    rule does not hide the others.
+    rule does not hide the others. The trajectory is walked once into a `SignalContext` that every signal shares;
+    `ctx.results` fills in registry order as signals finish.
 
     Args:
         trajectory: The trajectory to measure.
@@ -56,6 +58,7 @@ def compute_signals(
         ValueError: `only` names a signal that is not registered.
     """
     config = config or SignalsConfig()
+    ctx = SignalContext.build(trajectory, config)
     wanted = None if only is None else set(only)
     if wanted is not None and (unknown := sorted(wanted - set(SIGNALS))):
         msg = f'Unknown signal names: {", ".join(unknown)}'
@@ -65,8 +68,9 @@ def compute_signals(
         if wanted is not None and name not in wanted:
             continue
         try:
-            results[name] = fn(trajectory, config)
+            results[name] = fn(ctx)
         except Exception as exc:  # noqa: BLE001 - failure isolation: one broken signal must not hide the others
             logger.warning('Signal {} failed: {}: {}', name, type(exc).__name__, exc)
             results[name] = SignalResult(name=name, group=group, no_basis=f'signal raised {type(exc).__name__}: {exc}')
+        ctx.results[name] = results[name]
     return SignalReport(trajectory_id=trajectory.trajectory_id, results=results, config_version=config.version)

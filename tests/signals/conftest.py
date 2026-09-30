@@ -16,6 +16,8 @@ from evaluatorq.formats.atif import (
     AtifTrajectory,
 )
 from evaluatorq.formats._shared import compaction_extra
+from evaluatorq.signals.config import SignalsConfig
+from evaluatorq.signals.walk import SignalContext
 
 
 @dataclass
@@ -117,3 +119,7 @@ def traj(
         steps=built,
         subagent_trajectories=subagents or None,
     )
+
+
+def context(trajectory: AtifTrajectory, config: SignalsConfig | None = None) -> SignalContext:
+    return SignalContext.build(trajectory, config or SignalsConfig())

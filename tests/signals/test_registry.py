@@ -9,14 +9,14 @@ from evaluatorq.signals import registry
 from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult, result
 from evaluatorq.signals.registry import compute_signals
 
-from .conftest import agent, traj, user
+from .conftest import agent, call, ok, traj, user
 
 
-def _fine(trajectory, config):
+def _fine(ctx):
     return result('fine', 'A', 3)
 
 
-def _boom(trajectory, config):
+def _boom(ctx):
     msg = 'bad rule'
     raise RuntimeError(msg)
 
@@ -86,3 +86,23 @@ def test_report_values_omit_no_basis_but_keep_zero() -> None:
         config_version='v',
     )
     assert report.values() == {'zero': 0}
+
+
+def test_every_signal_shares_one_context_and_sees_earlier_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = []
+
+    def first(ctx):
+        seen.append(ctx)
+        return result('first', 'A', 1)
+
+    def second(ctx):
+        seen.append(ctx)
+        return result('second', 'D', ctx.results['first'].value + 1)
+
+    monkeypatch.setattr(registry, 'SIGNALS', {'first': ('A', first), 'second': ('D', second)})
+    root = traj([user(), agent(calls=[call('A')], results=[ok()])])
+    report = compute_signals(root)
+    assert report.values() == {'first': 1, 'second': 2}
+    assert seen[0] is seen[1]
+    assert seen[0].trajectory is root
+    assert len(seen[0].walked) == 2 and len(seen[0].calls) == 1

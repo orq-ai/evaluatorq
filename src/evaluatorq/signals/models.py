@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
-    from evaluatorq.formats.atif import AtifTrajectory
-    from evaluatorq.signals.config import SignalsConfig
+    from evaluatorq.signals.walk import SignalContext
 
 Group = Literal['A', 'B', 'C', 'D']
 """ADR-25 groups: A structure (BOPS-1207), B tools (BOPS-1208), C autonomy (BOPS-1261), D tags (BOPS-1262)."""
@@ -97,8 +96,8 @@ class SignalReport(BaseModel):
         return {name: result.value for name, result in self.results.items() if result.no_basis is None}
 
 
-SignalFn = Callable[['AtifTrajectory', 'SignalsConfig'], SignalResult]
-"""A signal: a pure function of the trajectory and the config."""
+SignalFn = Callable[['SignalContext'], SignalResult]
+"""A signal: a pure function of the per-report context (trajectory, config, walked steps, paired calls)."""
 
 
 def result(

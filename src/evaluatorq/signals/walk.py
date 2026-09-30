@@ -6,7 +6,7 @@ compaction steps and copied context, which are bookkeeping, not agent behaviour.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timezone
 from typing import TYPE_CHECKING, Any
 
@@ -20,6 +20,8 @@ if TYPE_CHECKING:
         AtifToolCall,
         AtifTrajectory,
     )
+    from evaluatorq.signals.config import SignalsConfig
+    from evaluatorq.signals.models import SignalResult
 
 _PROVIDER_PREFIXES: tuple[tuple[str, str], ...] = (
     ('claude', 'anthropic'),
@@ -110,7 +112,9 @@ def walk(trajectory: AtifTrajectory) -> list[WalkedStep]:
     A subagent's steps are placed right after the step whose observation references it (by
     `subagent_trajectory_ref[].trajectory_id`), in the order the step references them. A subagent is placed once,
     and a reference to a trajectory that is not embedded (a `trajectory_path` alone) is ignored. Embedded
-    subagents that nothing references are appended at the end at depth 1 with `unlinked=True`.
+    subagents that nothing references are appended at the end at depth 1 with `unlinked=True`. A subagent
+    referenced only from a skipped step (compaction or copied context) counts as unreferenced, so it is
+    unlinked too.
     """
     registry: dict[str, AtifTrajectory] = {}
     _collect(trajectory, registry)
@@ -246,3 +250,30 @@ def tool_schemas(trajectory: AtifTrajectory) -> dict[str, dict[str, Any]]:
         if isinstance(name, str):
             schemas[name] = body
     return schemas
+
+
+@dataclass(frozen=True)
+class SignalContext:
+    """Everything a signal reads, built once per report by `compute_signals` and shared by every signal.
+
+    Attributes:
+        trajectory: The root trajectory.
+        config: The rule knobs.
+        walked: `walk(trajectory)`.
+        calls: `calls(walked)`.
+        results: Signals already computed in this report, by name, filled by `compute_signals` as it goes in
+            registry order. The dict is mutable though the context is frozen, so a signal must only read it. Group
+            D (tags) reads the metrics it thresholds from here, and relies on groups A to C being registered first.
+    """
+
+    trajectory: AtifTrajectory
+    config: SignalsConfig
+    walked: list[WalkedStep]
+    calls: list[CallRecord]
+    results: dict[str, SignalResult] = field(default_factory=dict)
+
+    @classmethod
+    def build(cls, trajectory: AtifTrajectory, config: SignalsConfig) -> SignalContext:
+        """Walk the trajectory and pair its calls, once."""
+        walked = walk(trajectory)
+        return cls(trajectory, config, walked, calls(walked))

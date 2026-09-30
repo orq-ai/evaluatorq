@@ -7,12 +7,13 @@ Each check returns a `Precondition`. Signals list the checks they depend on; the
 from __future__ import annotations
 
 from collections import Counter
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from evaluatorq.formats._shared import RAW_ARGUMENTS_KEY
 from evaluatorq.signals.models import Precondition
 from evaluatorq.signals.walk import (
     CallRecord,
+    SignalContext,
     WalkedStep,
     finish_reasons,
     infer_provider,
@@ -21,10 +22,6 @@ from evaluatorq.signals.walk import (
     step_model,
     tool_schemas,
 )
-
-if TYPE_CHECKING:
-    from evaluatorq.formats.atif import AtifTrajectory
-    from evaluatorq.signals.config import SignalsConfig
 
 _MAX_LISTED = 8
 TRUNCATED_EXTRA_KEY = 'content_truncated'
@@ -58,19 +55,22 @@ def _coverage(name: str, have: int, total: int, detail: str, *, required: bool, 
     return Precondition(name=name, met=met, detail=text, required=required)
 
 
-def has_tool_calls(calls: list[CallRecord]) -> Precondition:
+def has_tool_calls(ctx: SignalContext) -> Precondition:
     """At least one tool call (rates and ratios are undefined otherwise)."""
+    calls = ctx.calls
     return Precondition(name='has tool calls', met=bool(calls), detail=f'{len(calls)} tool calls')
 
 
-def has_tool_results(calls: list[CallRecord]) -> Precondition:
+def has_tool_results(ctx: SignalContext) -> Precondition:
     """At least one tool call has a result to measure."""
+    calls = ctx.calls
     n = sum(r.result is not None for r in calls)
     return Precondition(name='has tool results', met=n > 0, detail=f'{n} tool results')
 
 
-def results_matched(calls: list[CallRecord]) -> Precondition:
+def results_matched(ctx: SignalContext) -> Precondition:
     """Every tool call has a matching result. Orphans are listed and can never count as failed."""
+    calls = ctx.calls
     if not calls:
         return Precondition(name='calls matched to results', met=True, detail='no tool calls', required=False)
     orphans = [r for r in calls if r.result is None]
@@ -84,11 +84,12 @@ def results_matched(calls: list[CallRecord]) -> Precondition:
     )
 
 
-def explicit_error_status(calls: list[CallRecord], config: SignalsConfig) -> Precondition:
+def explicit_error_status(ctx: SignalContext) -> Precondition:
     """Tool results carry an explicit error status (vs. only content sniffing possible).
 
     Required only when error detection is status-only: without statuses, nothing can fail.
     """
+    calls, config = ctx.calls, ctx.config
     results = [r for r in calls if r.result is not None]
     required = config.error_detection == 'status'
     if not results:
@@ -102,8 +103,9 @@ def explicit_error_status(calls: list[CallRecord], config: SignalsConfig) -> Pre
     return pc
 
 
-def args_parseable(calls: list[CallRecord]) -> Precondition:
+def args_parseable(ctx: SignalContext) -> Precondition:
     """Arguments parse as a JSON object; unparseable ones (`{'_raw': text}`) are compared as raw strings."""
+    calls = ctx.calls
     if not calls:
         return Precondition(name='arguments parse as JSON', met=True, detail='no tool calls', required=False)
     bad = [r for r in calls if set(r.call.arguments) == {RAW_ARGUMENTS_KEY}]
@@ -117,8 +119,9 @@ def args_parseable(calls: list[CallRecord]) -> Precondition:
     )
 
 
-def result_content_available(calls: list[CallRecord]) -> Precondition:
+def result_content_available(ctx: SignalContext) -> Precondition:
     """Result content is complete (not a truncated preview)."""
+    calls = ctx.calls
     results = [r for r in calls if r.result is not None]
     if not results:
         return Precondition(name='result content available', met=True, detail='no tool results', required=False)
@@ -133,11 +136,12 @@ def result_content_available(calls: list[CallRecord]) -> Precondition:
     )
 
 
-def tool_schemas_coverage(trajectory: AtifTrajectory, calls: list[CallRecord]) -> list[Precondition]:
+def tool_schemas_coverage(ctx: SignalContext) -> list[Precondition]:
     """Tool schemas exist, and how many calls have one. A schema is active for the whole trajectory.
 
     A call is covered by its own trajectory's `tool_definitions`, else the root's.
     """
+    trajectory, calls = ctx.trajectory, ctx.calls
     root = tool_schemas(trajectory)
     own = {id(r.step.trajectory): tool_schemas(r.step.trajectory) for r in calls}
     if not root and not any(own.values()):
@@ -146,7 +150,12 @@ def tool_schemas_coverage(trajectory: AtifTrajectory, calls: list[CallRecord]) -
     present = Precondition(name='tool schemas present', met=True, detail=f'schemas for {len(known)} tools')
     if not calls:
         return [present]
-    uncovered = [r for r in calls if r.call.function_name not in own[id(r.step.trajectory)] | root.keys()]
+
+    def covered(record: CallRecord) -> bool:
+        name = record.call.function_name
+        return name in own[id(record.step.trajectory)] or name in root
+
+    uncovered = [r for r in calls if not covered(r)]
     coverage = _coverage(
         'schema active at call time',
         len(calls) - len(uncovered),
@@ -158,15 +167,17 @@ def tool_schemas_coverage(trajectory: AtifTrajectory, calls: list[CallRecord]) -
     return [present, coverage]
 
 
-def model_present(walked: list[WalkedStep]) -> Precondition:
+def model_present(ctx: SignalContext) -> Precondition:
     """LLM steps carry a model name (their own, or their trajectory's agent)."""
+    walked = ctx.walked
     llm = [w for w in walked if is_llm_step(w)]
     have = sum(bool(step_model(w)) for w in llm)
     return _coverage('model on LLM steps', have, len(llm), 'agent steps carry a model', required=True)
 
 
-def token_usage_complete(walked: list[WalkedStep]) -> Precondition:
+def token_usage_complete(ctx: SignalContext) -> Precondition:
     """Session totals need prompt and completion tokens on every LLM step: all or nothing."""
+    walked = ctx.walked
     llm = [w for w in walked if is_llm_step(w)]
     have = sum(
         w.step.metrics is not None
@@ -182,8 +193,9 @@ def token_usage_complete(walked: list[WalkedStep]) -> Precondition:
     )
 
 
-def provider_derivable(walked: list[WalkedStep]) -> Precondition:
+def provider_derivable(ctx: SignalContext) -> Precondition:
     """Provider comes from the model name: a `provider/` prefix is read, a known name prefix is inferred (flagged)."""
+    walked = ctx.walked
     llm = [w for w in walked if is_llm_step(w)]
     models = [step_model(w) for w in llm]
     have = sum(infer_provider(m) is not None for m in models)
@@ -195,15 +207,17 @@ def provider_derivable(walked: list[WalkedStep]) -> Precondition:
     return pc
 
 
-def finish_reason_present(walked: list[WalkedStep]) -> Precondition:
+def finish_reason_present(ctx: SignalContext) -> Precondition:
     """LLM steps carry a finish reason."""
+    walked = ctx.walked
     llm = [w for w in walked if is_llm_step(w)]
     have = sum(bool(finish_reasons(w.step)) for w in llm)
     return _coverage('finish_reason present', have, len(llm), 'agent steps have a finish_reason', required=True)
 
 
-def subagent_linkage(walked: list[WalkedStep], calls: list[CallRecord], config: SignalsConfig) -> Precondition:
+def subagent_linkage(ctx: SignalContext) -> Precondition:
     """Subagent-spawning calls (by tool role, or any call whose result references a subagent) are linked to one."""
+    walked, calls, config = ctx.walked, ctx.calls, ctx.config
 
     def linked(record: CallRecord) -> bool:
         return bool(record.result is not None and record.result.subagent_trajectory_ref)
@@ -230,18 +244,20 @@ def subagent_linkage(walked: list[WalkedStep], calls: list[CallRecord], config: 
     return pc
 
 
-def has_subagents(walked: list[WalkedStep]) -> Precondition:
+def has_subagents(ctx: SignalContext) -> Precondition:
     """At least one subagent invocation (averages are undefined otherwise)."""
+    walked = ctx.walked
     n = len({w.agent_path for w in walked if w.agent_path})
     return Precondition(name='has subagent invocations', met=n > 0, detail=f'{n} subagent invocations')
 
 
-def timestamps(walked: list[WalkedStep]) -> Precondition:
+def timestamps(ctx: SignalContext) -> Precondition:
     """LLM steps carry timestamps (timing metrics are omitted without them).
 
     Invocation start and end timestamps meet the check. A step with only an ISO `timestamp` counts as
     `'partial'`: it gives a start but no end, so durations from it are approximate.
     """
+    walked = ctx.walked
     llm = [w for w in walked if is_llm_step(w)]
     times = [llm_times(w) for w in llm]
     exact = sum(t.start is not None and t.end is not None for t in times)
