@@ -25,7 +25,14 @@ from loguru import logger
 from evaluatorq.common.fields import get_field
 from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.formats._ids import content_seed, stable_hex
-from evaluatorq.formats._shared import arguments_text, atif_content_text, final_metrics, join_text, tool_arguments
+from evaluatorq.formats._shared import (
+    RAW_ARGUMENTS_EXTRA_KEY,
+    atif_content_text,
+    atif_tool_arguments,
+    final_metrics,
+    join_text,
+    json_arguments_text,
+)
 from evaluatorq.formats.atif import (
     AtifAgent,
     AtifContentPart,
@@ -85,6 +92,7 @@ class _Draft:
     fields: dict[str, Any]
     span: OtelSpan | None = None
     results: list[AtifObservationResult] = field(default_factory=list)
+    tool_span_ids: set[str] = field(default_factory=set)
 
 
 # OTel -> ATIF
@@ -250,9 +258,12 @@ def _chat_steps(chats: list[OtelSpan], by_id: dict[str, OtelSpan]) -> tuple[list
     """Cut steps from chat spans; also return each span's new input (empty for the first, whose input is history)."""
     drafts: list[_Draft] = []
     new_inputs: list[list[OtelMessage]] = []
+    last_system: list[OtelPart] | None = None
     for index, chat in enumerate(chats):
-        if index == 0:
+        if chat.system_instructions and chat.system_instructions != last_system:
             drafts.extend(_system_instruction_steps(chat))
+            last_system = chat.system_instructions
+        if index == 0:
             drafts.extend(_history(chat.input_messages or [], first=True))
             new_inputs.append([])
         else:
@@ -266,17 +277,19 @@ def _chat_steps(chats: list[OtelSpan], by_id: dict[str, OtelSpan]) -> tuple[list
 
 
 def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
-    seen = len(prev.input_messages or []) + len(prev.output_messages or [])
     messages = chat.input_messages or []
-    if len(messages) < seen:
-        logger.warning(
-            'Chat span {} has {} input messages, fewer than the {} its predecessor saw; reading no new input from it',
-            chat.span_id,
-            len(messages),
-            seen,
-        )
-        return []
-    return messages[seen:]
+    prior_input = prev.input_messages or []
+    prior_output = prev.output_messages or []
+    previous = [*prior_input, *prior_output]
+    if previous and messages[: len(previous)] == previous:
+        return messages[len(previous) :]
+    if prior_input and len(messages) > len(prior_input) and messages[: len(prior_input)] == prior_input:
+        return messages[len(prior_input) :]
+    if not prior_input and prior_output and messages[: len(prior_output)] == prior_output:
+        return messages[len(prior_output) :]
+    # Some exporters send only the current turn. In that shape, the predecessor's
+    # message count says nothing about how much of this span's input is new.
+    return messages
 
 
 def _system_instruction_steps(chat: OtelSpan) -> list[_Draft]:
@@ -368,8 +381,13 @@ def _agent_step(chat: OtelSpan, by_id: dict[str, OtelSpan]) -> _Draft | None:
 
 def _tool_call(part: OtelToolCallPart, span_id: str, index: int) -> AtifToolCall:
     call_id = part.id or 'call_' + stable_hex(span_id, part.name, str(index), length=16)
-    arguments = {} if part.arguments is None else tool_arguments(part.arguments, part.name)
-    return AtifToolCall(tool_call_id=call_id, function_name=part.name, arguments=arguments)
+    arguments, raw_arguments = ({}, None) if part.arguments is None else atif_tool_arguments(part.arguments, part.name)
+    return AtifToolCall(
+        tool_call_id=call_id,
+        function_name=part.name,
+        arguments=arguments,
+        extra={RAW_ARGUMENTS_EXTRA_KEY: raw_arguments} if raw_arguments is not None else None,
+    )
 
 
 def _step_extra(chat: OtelSpan, by_id: dict[str, OtelSpan]) -> dict[str, Any]:
@@ -455,9 +473,10 @@ def _attach_results(
             span = spans[span_index] if span_index < len(spans) else None
             if span is not None:
                 next_span_by_call[call.tool_call_id] = span_index + 1
+                draft.tool_span_ids.add(span.span_id)
             call_extra = _carried(span, _TOOL_CALL_EXTRA)
             if call_extra is not None:
-                calls[n] = call.model_copy(update={'extra': call_extra})
+                calls[n] = call.model_copy(update={'extra': {**(call.extra or {}), **call_extra}})
             found = next(
                 (n for n, (at, part) in enumerate(responses) if at > issued_at and part.id == call.tool_call_id), None
             )
@@ -465,6 +484,20 @@ def _attach_results(
             result = _result(call_id=call.tool_call_id, span=span, part=part)
             if result is not None:
                 draft.results.append(result)
+                raw_additional = span.attributes.get('evaluatorq.atif.additional_results') if span else None
+                if raw_additional is not None:
+                    try:
+                        additional = json.loads(raw_additional) if isinstance(raw_additional, str) else raw_additional
+                        if isinstance(additional, list):
+                            draft.results.extend(AtifObservationResult.model_validate(item) for item in additional)
+                        else:
+                            raise TypeError('expected a list')
+                    except (ValueError, TypeError) as exc:
+                        logger.warning(
+                            'Tool span {} has unreadable additional ATIF results ({}); ignoring them',
+                            span.span_id if span else '',
+                            exc,
+                        )
             if span is not None:
                 used_spans.add(span.span_id)
             if found is not None:
@@ -564,12 +597,26 @@ def _reference(ref: AtifSubagentRef, span: OtelSpan, drafts: list[_Draft], by_id
     """Put `ref` on the result of the call whose `execute_tool` span holds the subagent, else on an extra result."""
     parent = by_id.get(span.parent_span_id) if span.parent_span_id else None
     call_id = parent.attributes.get('gen_ai.tool.call.id') if parent and parent.operation == 'execute_tool' else None
-    for draft in drafts:
-        for index, result in enumerate(draft.results):
-            if call_id is not None and result.source_call_id == call_id:
-                refs = [*(result.subagent_trajectory_ref or []), ref]
-                draft.results[index] = result.model_copy(update={'subagent_trajectory_ref': refs})
-                return
+    owning_draft = next(
+        (
+            draft
+            for draft in drafts
+            if parent is not None and (draft.span is parent or parent.span_id in draft.tool_span_ids)
+        ),
+        None,
+    )
+    candidates = [owning_draft] if owning_draft is not None else drafts
+    matching = [
+        (draft, index, result)
+        for draft in candidates
+        for index, result in enumerate(draft.results)
+        if call_id is not None and result.source_call_id == call_id
+    ]
+    if len(matching) == 1:
+        draft, index, result = matching[0]
+        refs = [*(result.subagent_trajectory_ref or []), ref]
+        draft.results[index] = result.model_copy(update={'subagent_trajectory_ref': refs})
+        return
     agents = [draft for draft in drafts if draft.span is not None]
     if not agents:
         logger.warning('Subagent span {} has no agent step to reference it; leaving it unreferenced', span.span_id)
@@ -619,7 +666,7 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     agent_span_id = stable_hex(seed, 'invoke_agent', '0', length=16)
     _warn_dropped(traj)
     spans: list[OtelSpan] = []
-    call_spans: dict[str, str] = {}
+    call_spans: dict[tuple[int, str], str] = {}
     history: list[OtelMessage] = []
     system: list[OtelPart] = []
     uncarried = False  # a user or system step no chat span has put into its input yet
@@ -658,7 +705,8 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     )
     refs = _ref_calls(traj)
     for sub in traj.subagent_trajectories or []:
-        parent = call_spans.get(refs.get(sub.trajectory_id or '', ''), agent_span_id)
+        ref = refs.get(sub.trajectory_id or '')
+        parent = call_spans.get(ref, agent_span_id) if ref is not None else agent_span_id
         spans.extend(_emit_agent(sub, parent, trace_id))
     return [root, *spans]
 
@@ -712,14 +760,14 @@ def _input_only_chat(
     )
 
 
-def _ref_calls(traj: AtifTrajectory) -> dict[str, str]:
-    """Map each referenced subagent trajectory id to the call id of the result that references it."""
-    refs: dict[str, str] = {}
+def _ref_calls(traj: AtifTrajectory) -> dict[str, tuple[int, str]]:
+    """Map each referenced subagent to its issuing step and call id."""
+    refs: dict[str, tuple[int, str]] = {}
     for step in traj.steps:
         for result in step.observation.results if step.observation else []:
             for ref in result.subagent_trajectory_ref or []:
                 if ref.trajectory_id is not None and result.source_call_id is not None:
-                    refs.setdefault(ref.trajectory_id, result.source_call_id)
+                    refs.setdefault(ref.trajectory_id, (step.step_id, result.source_call_id))
     return refs
 
 
@@ -730,7 +778,7 @@ def _emit_step(
     parent_span_id: str,
     history: list[OtelMessage],
     system: list[OtelPart],
-    call_spans: dict[str, str],
+    call_spans: dict[tuple[int, str], str],
 ) -> list[OtelSpan]:
     """Emit one agent step's chat span and tool spans, then extend `history` with its turn and results."""
     output = OtelMessage(role='assistant', parts=_assistant_parts(step))
@@ -751,32 +799,36 @@ def _emit_step(
         system_instructions=list(system) or None,
         attributes=_chat_attributes(step, error_type),
     )
-    results: dict[str, AtifObservationResult] = {}
+    results: dict[str, list[AtifObservationResult]] = {}
     for result in step.observation.results if step.observation else []:
         if result.source_call_id is not None:
-            results.setdefault(result.source_call_id, result)
+            results.setdefault(result.source_call_id, []).append(result)
     texts = {
-        call_id: atif_content_text(result.content, 'OTel') if result.content is not None else None
-        for call_id, result in results.items()
+        call_id: atif_content_text(call_results[0].content, 'OTel') if call_results[0].content is not None else None
+        for call_id, call_results in results.items()
     }
     spans = [chat]
     for index, call in enumerate(step.tool_calls or []):
         span_id = stable_hex(seed, 'execute_tool', f'{step.step_id}.{index}', length=16)
-        result = results.get(call.tool_call_id)
-        spans.append(
-            _tool_span(
-                call,
-                result,
-                texts.get(call.tool_call_id),
-                trace_id=trace_id,
-                span_id=span_id,
-                parent_span_id=parent_span_id,
-            )
+        call_results = results.get(call.tool_call_id, [])
+        primary = call_results[0] if call_results else None
+        tool_span = _tool_span(
+            call,
+            primary,
+            texts.get(call.tool_call_id),
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
         )
-        call_spans.setdefault(call.tool_call_id, span_id)
+        if len(call_results) > 1:
+            tool_span.attributes['evaluatorq.atif.additional_results'] = json.dumps(
+                [r.model_dump(mode='json', exclude_none=True) for r in call_results[1:]], separators=(',', ':')
+            )
+        spans.append(tool_span)
+        call_spans.setdefault((step.step_id, call.tool_call_id), span_id)
     history.append(output)
-    for call_id, text in texts.items():
-        part = OtelToolCallResponsePart(type='tool_call_response', id=call_id, response=text)
+    for call_id in results:
+        part = OtelToolCallResponsePart(type='tool_call_response', id=call_id, response=texts.get(call_id))
         history.append(OtelMessage(role='tool', parts=[part]))
     return spans
 
@@ -838,7 +890,11 @@ def _tool_span(
         'gen_ai.operation.name': 'execute_tool',
         'gen_ai.tool.name': call.function_name,
         'gen_ai.tool.call.id': call.tool_call_id,
-        'gen_ai.tool.call.arguments': arguments_text(call.arguments),
+        'gen_ai.tool.call.arguments': (
+            call.extra[RAW_ARGUMENTS_EXTRA_KEY]
+            if isinstance(call.extra, dict) and isinstance(call.extra.get(RAW_ARGUMENTS_EXTRA_KEY), str)
+            else json_arguments_text(call.arguments)
+        ),
     }
     _put_json(attributes, _TOOL_CALL_EXTRA, call.extra)
     error_type = None

@@ -70,6 +70,28 @@ def test_orphan_function_call_output_keeps_tool_message_without_name() -> None:
     assert (msg.role, msg.tool_call_id, msg.name) == ('tool', 'zz', None)
 
 
+def test_function_call_output_keeps_typed_content_parts() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call_output', 'call_id': 'c', 'output': [
+            {'type': 'input_text', 'text': 'found'},
+            {'type': 'input_image', 'image_url': 'https://x/image.png'},
+            {'type': 'input_file', 'file_id': 'file_1'},
+        ]},
+    ]
+    content = ResponsesConversation(items=items).to_chat().messages[0].content
+    assert isinstance(content, list)
+    assert [part.type for part in content] == ['input_text', 'input_image', 'input_file']
+
+
+def test_function_call_keeps_nested_raw_key_json_arguments_verbatim() -> None:
+    raw_arguments = '{"_raw":{"evaluatorq_raw_value":"literal"}}'
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': raw_arguments},
+    ]
+    call = ResponsesConversation(items=items).to_chat().messages[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    assert call.function.arguments == raw_arguments
+
+
 def test_function_call_without_call_id_is_skipped(caplog: pytest.LogCaptureFixture) -> None:
     items: list[dict[str, Any]] = [{'type': 'function_call', 'name': 'f', 'arguments': '{}'}]
     assert ResponsesConversation(items=items).to_chat().messages == []

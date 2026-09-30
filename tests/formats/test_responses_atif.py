@@ -100,9 +100,45 @@ def test_non_json_arguments_survive_via_raw_wrapper(caplog: pytest.LogCaptureFix
         {'type': 'function_call_output', 'call_id': 'c', 'output': 'r'},
     ]
     traj = ResponsesConversation(items=items).to_atif()
-    assert traj.steps[0].tool_calls is not None and traj.steps[0].tool_calls[0].arguments == {'_raw': 'not json'}
+    assert traj.steps[0].tool_calls is not None
+    assert traj.steps[0].tool_calls[0].arguments == {}
+    assert traj.steps[0].tool_calls[0].extra == {'evaluatorq.raw_arguments': 'not json'}
     back = traj.to_responses()
     assert next(i for i in back.items if i['type'] == 'function_call')['arguments'] == 'not json'
+
+
+def test_json_raw_key_arguments_and_typed_tool_output_survive() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': '{"_raw":"literal"}'},
+        {'type': 'function_call_output', 'call_id': 'c', 'output': [
+            {'type': 'input_text', 'text': 'found'},
+            {'type': 'input_image', 'image_url': 'https://x/image.png'},
+            {'type': 'input_file', 'file_id': 'file_1'},
+        ]},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    call = trajectory.steps[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    assert call.arguments == {'_raw': 'literal'}
+    result = trajectory.steps[0].observation.results[0]  # pyright: ignore[reportOptionalMemberAccess]
+    assert isinstance(result.content, list)
+    assert [part.type for part in result.content] == ['text', 'image', 'text']
+    back = trajectory.to_responses()
+    call_item = next(item for item in back.items if item['type'] == 'function_call')
+    assert call_item['arguments'] == '{"_raw":"literal"}'
+
+
+def test_nested_raw_sentinel_shaped_json_arguments_do_not_collide() -> None:
+    raw_arguments = '{"_raw":{"evaluatorq_raw_value":"literal"}}'
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': raw_arguments},
+        {'type': 'function_call_output', 'call_id': 'c', 'output': 'done'},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    call = trajectory.steps[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    assert call.arguments == {'_raw': {'evaluatorq_raw_value': 'literal'}}
+    assert call.extra is None
+    back = trajectory.to_responses()
+    assert next(item for item in back.items if item['type'] == 'function_call')['arguments'] == raw_arguments
 
 
 def test_data_url_image_survives_as_path() -> None:

@@ -101,6 +101,31 @@ def test_json_string_messages_are_parsed() -> None:
     assert trace.spans[0].input_messages is not None
 
 
+def test_invalid_instruction_parts_are_skipped_and_valid_instruction_reaches_atif(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    trace = OtelTrace.from_orq([
+        {'span_id': 'root', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        {
+            'span_id': 'chat',
+            'parent_span_id': 'root',
+            'attributes': {
+                'gen_ai.operation.name': 'chat',
+                'gen_ai.system_instructions': [
+                    {'type': 'text', 'content': 'keep this instruction'},
+                    {'type': 'text', 'content': 7},
+                ],
+            },
+        },
+    ])
+
+    instructions = trace.spans[1].system_instructions
+    assert instructions is not None
+    assert len(instructions) == 1
+    assert trace.to_atif().steps[0].message == 'keep this instruction'
+    assert 'Could not parse OTel part 1' in caplog.text
+
+
 def test_invalid_messages_are_skipped_without_losing_valid_messages(caplog: pytest.LogCaptureFixture) -> None:
     valid = {'role': 'user', 'parts': [{'type': 'text', 'content': 'keep me'}]}
     invalid = {'role': 3, 'parts': [{'type': 'text', 'content': 'bad'}]}

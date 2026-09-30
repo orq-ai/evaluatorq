@@ -30,14 +30,15 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.formats._ids import content_seed, stable_hex
 from evaluatorq.formats._shared import (
-    arguments_text,
+    RAW_ARGUMENTS_EXTRA_KEY,
     atif_content_text,
+    atif_tool_arguments,
     final_metrics,
     join_text,
+    json_arguments_text,
     media_marker,
     parse_iso,
     part_text,
-    tool_arguments,
 )
 from evaluatorq.formats.atif import (
     AtifAgent,
@@ -164,7 +165,7 @@ def _segment(items: list[dict[str, Any]]) -> list[_Draft]:
 def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
     call_id = item.get('call_id')
     output = item.get('output')
-    content = output if isinstance(output, str) else tool_result_to_text(output)
+    content = _tool_output_content(output)
     for draft in reversed(drafts):
         if draft.source != 'agent':
             break
@@ -189,6 +190,18 @@ def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
         )
     last.results.append({'source_call_id': None, 'content': content, 'extra': {'orphan_call_id': call_id}})
     last.seen_result = True
+
+
+def _tool_output_content(output: Any) -> str | list[AtifContentPart] | None:
+    """Keep typed Responses tool output as ATIF text/image parts where its schema allows it."""
+    if isinstance(output, str) or output is None:
+        return output
+    if not isinstance(output, list):
+        return tool_result_to_text(output)
+    parts = [_user_part(part) for part in output]
+    if all(part.type == 'text' for part in parts):
+        return join_text(part.text or '' for part in parts)
+    return parts
 
 
 def _assistant_text(content: Any) -> str:
@@ -296,10 +309,12 @@ def _agent_step(draft: _Draft, step_id: int, response: Response | None) -> AtifS
 
 
 def _tool_call(call: dict[str, Any]) -> AtifToolCall:
+    arguments, raw_arguments = atif_tool_arguments(call.get('arguments'), call.get('name'))
     return AtifToolCall(
         tool_call_id=call['call_id'],
         function_name=str(call.get('name') or ''),
-        arguments=tool_arguments(call.get('arguments'), call.get('name')),
+        arguments=arguments,
+        extra={RAW_ARGUMENTS_EXTRA_KEY: raw_arguments} if raw_arguments is not None else None,
     )
 
 
@@ -418,7 +433,14 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     calls = [
         StrategyToolCall(
             id=call.tool_call_id,
-            function=FunctionCall(name=call.function_name, arguments=arguments_text(call.arguments)),
+            function=FunctionCall(
+                name=call.function_name,
+                arguments=(
+                    call.extra[RAW_ARGUMENTS_EXTRA_KEY]
+                    if isinstance(call.extra, dict) and isinstance(call.extra.get(RAW_ARGUMENTS_EXTRA_KEY), str)
+                    else json_arguments_text(call.arguments)
+                ),
+            ),
             item_id=item_id if isinstance(item_id := fc_item_ids.get(call.tool_call_id), str) else None,
         )
         for call in step.tool_calls or []

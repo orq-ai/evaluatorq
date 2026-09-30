@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.formats.atif import AtifContentPart, AtifFinalMetrics, AtifStep
 
-RAW_ARGUMENTS_KEY = '_raw'
+RAW_ARGUMENTS_EXTRA_KEY = 'evaluatorq.raw_arguments'
 _FRACTION = re.compile(r'(?<=\d{2}:\d{2}:\d{2})\.(\d+)')
 
 
@@ -48,30 +48,25 @@ def parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(text)
 
 
-def tool_arguments(raw: Any, name: object) -> dict[str, Any]:
-    """Read tool-call arguments as an ATIF dict; anything but a JSON object is kept as `{"_raw": text}` (warned)."""
+def atif_tool_arguments(raw: Any, name: object) -> tuple[dict[str, Any], str | None]:
+    """Return ATIF arguments and separate raw provenance, avoiding collisions with user JSON objects."""
     if isinstance(raw, dict):
-        return cast('dict[str, Any]', raw)
-    decoded: Any = None
+        return cast('dict[str, Any]', raw), None
     if isinstance(raw, str):
         try:
             decoded = json.loads(raw)
         except json.JSONDecodeError:
             decoded = None
-    if isinstance(decoded, dict):
-        return cast('dict[str, Any]', decoded)
-    logger.warning('Tool call {!r} arguments are not a JSON object; keeping them as {{"_raw": ...}}.', name)
-    return {RAW_ARGUMENTS_KEY: raw if isinstance(raw, str) else json.dumps(raw, default=str)}
+        if isinstance(decoded, dict):
+            return cast('dict[str, Any]', decoded), None
+    logger.warning(
+        'Tool call {!r} arguments are not a JSON object; preserving their original text in ATIF extra.', name
+    )
+    return {}, raw if isinstance(raw, str) else json.dumps(raw, default=str)
 
 
-def arguments_text(arguments: dict[str, Any]) -> str:
-    """Render ATIF arguments as a JSON string; `{"_raw": s}` is written back as `s`.
-
-    A value JSON cannot encode is written as its `str()` (warned) rather than failing the conversion.
-    """
-    raw = arguments.get(RAW_ARGUMENTS_KEY)
-    if len(arguments) == 1 and isinstance(raw, str):
-        return raw
+def json_arguments_text(arguments: dict[str, Any]) -> str:
+    """Serialize an ATIF JSON argument object without interpreting any keys as raw-text sentinels."""
     try:
         return json.dumps(arguments, separators=(',', ':'), sort_keys=True)
     except (TypeError, ValueError) as exc:

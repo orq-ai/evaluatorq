@@ -11,7 +11,16 @@ from typing import Any, Literal
 import pytest
 
 from evaluatorq.contracts import Message
-from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifToolCall, AtifTrajectory
+from evaluatorq.formats.atif import (
+    AtifAgent,
+    AtifObservation,
+    AtifObservationResult,
+    AtifStep,
+    AtifSubagentRef,
+    AtifToolCall,
+    AtifTrajectory,
+)
+from evaluatorq.formats._shared import RAW_ARGUMENTS_EXTRA_KEY
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.otel import OtelTrace
 
@@ -115,6 +124,41 @@ def test_chat_span_without_output_gives_no_agent_step() -> None:
     assert [s.source for s in traj.steps] == ['user']
 
 
+def test_per_turn_chat_inputs_are_not_dropped() -> None:
+    raw = [
+        _chat('c1', [_text('user', 'first')], [_text('assistant', 'answer one')]),
+        _chat('c2', [_text('user', 'second')], [_text('assistant', 'answer two')]),
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [
+        ('user', 'first'), ('agent', 'answer one'), ('user', 'second'), ('agent', 'answer two')
+    ]
+
+
+def test_cumulative_chat_input_without_prior_output_keeps_new_turn() -> None:
+    raw = [
+        _chat('c1', [_text('user', 'first')], [_text('assistant', 'answer one')]),
+        _chat('c2', [_text('user', 'first'), _text('user', 'second')], [_text('assistant', 'answer two')]),
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [
+        ('user', 'first'), ('agent', 'answer one'), ('user', 'second'), ('agent', 'answer two')
+    ]
+
+
+def test_changed_system_instructions_become_a_later_system_step() -> None:
+    first = _chat('c1', [_text('user', 'first')], [_text('assistant', 'answer one')])
+    second = _chat('c2', [_text('user', 'second')], [_text('assistant', 'answer two')])
+    first['attributes']['gen_ai.system_instructions'] = [{'type': 'text', 'content': 'rule one'}]
+    second['attributes']['gen_ai.system_instructions'] = [{'type': 'text', 'content': 'rule two'}]
+    raw = [first, second]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [
+        ('system', 'rule one'), ('user', 'first'), ('agent', 'answer one'),
+        ('system', 'rule two'), ('user', 'second'), ('agent', 'answer two'),
+    ]
+
+
 def test_error_tool_span_records_error_type() -> None:
     raw = json.loads((FIX / 'otel' / 'orq_agent_subagent.json').read_text())
     raw[2]['status'] = 'error'
@@ -199,7 +243,8 @@ def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:
     step = first.steps[1]
     assert step.tool_calls is not None
     assert step.tool_calls[0].tool_call_id.startswith('call_') and len(step.tool_calls[0].tool_call_id) == 21
-    assert step.tool_calls[0].arguments == {'_raw': 'not json'}
+    assert step.tool_calls[0].arguments == {}
+    assert step.tool_calls[0].extra == {RAW_ARGUMENTS_EXTRA_KEY: 'not json'}
     assert step.observation is None
     assert OtelTrace.from_orq(raw).to_atif() == first
 
@@ -210,13 +255,90 @@ def test_raw_arguments_are_written_back_as_the_string() -> None:
         agent=AtifAgent(name='a', version='1'),
         steps=[
             AtifStep(step_id=1, source='user', message='hi'),
-            AtifStep(step_id=2, source='agent', message='', tool_calls=[
-                AtifToolCall(tool_call_id='c1', function_name='f', arguments={'_raw': 'not json'})]),
+                AtifStep(step_id=2, source='agent', message='', tool_calls=[
+                    AtifToolCall(tool_call_id='c1', function_name='f', arguments={},
+                                 extra={RAW_ARGUMENTS_EXTRA_KEY: 'not json'})]),
         ],
     )
     tool = next(s for s in traj.to_otel().spans if s.operation == 'execute_tool')
     assert tool.attributes['gen_ai.tool.call.arguments'] == 'not json'
     assert 'gen_ai.tool.call.result' not in tool.attributes
+
+
+def test_valid_arguments_matching_legacy_raw_sentinel_round_trip() -> None:
+    arguments = {'_raw': {'evaluatorq_raw_value': 'literal'}}
+    raw = [_chat('c', [_text('user', 'a')], [{
+        'role': 'assistant',
+        'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'f', 'arguments': arguments}],
+    }])]
+    round_trip = OtelTrace.from_orq(raw).to_atif().to_otel().to_atif()
+    assert round_trip.steps[1].tool_calls is not None
+    call = round_trip.steps[1].tool_calls[0]
+    assert call.arguments == arguments
+    assert call.extra is None
+
+
+def test_multiple_results_for_one_call_round_trip() -> None:
+    traj = AtifTrajectory(
+        agent=AtifAgent(name='a', version='1'),
+        steps=[
+            AtifStep(step_id=1, source='user', message='go'),
+            AtifStep(
+                step_id=2,
+                source='agent',
+                message='',
+                tool_calls=[AtifToolCall(tool_call_id='c1', function_name='f', arguments={})],
+                observation=AtifObservation(results=[
+                    AtifObservationResult(source_call_id='c1', content='first'),
+                    AtifObservationResult(source_call_id='c1', content='second', extra={'part': 2}),
+                ]),
+            ),
+        ],
+    )
+    round_trip = traj.to_otel().to_atif()
+    assert round_trip.steps[1].observation is not None
+    assert traj.steps[1].observation is not None
+    assert round_trip.steps[1].observation.results == traj.steps[1].observation.results
+
+
+def test_reused_call_id_keeps_subagent_under_referencing_step() -> None:
+    subagents = [
+        AtifTrajectory(trajectory_id='sub1', agent=AtifAgent(name='sub1', version='1'),
+                       steps=[AtifStep(step_id=1, source='agent', message='one')]),
+        AtifTrajectory(trajectory_id='sub2', agent=AtifAgent(name='sub2', version='1'),
+                       steps=[AtifStep(step_id=1, source='agent', message='two')]),
+    ]
+    traj = AtifTrajectory(
+        agent=AtifAgent(name='a', version='1'),
+        steps=[
+            AtifStep(step_id=1, source='user', message='go'),
+            AtifStep(step_id=2, source='agent', message='',
+                     tool_calls=[AtifToolCall(tool_call_id='same', function_name='f', arguments={})],
+                     observation=AtifObservation(results=[AtifObservationResult(
+                         source_call_id='same', subagent_trajectory_ref=[AtifSubagentRef(trajectory_id='sub1')]
+                     )])),
+            AtifStep(step_id=3, source='agent', message='',
+                     tool_calls=[AtifToolCall(tool_call_id='same', function_name='f', arguments={})],
+                     observation=AtifObservation(results=[AtifObservationResult(
+                         source_call_id='same', subagent_trajectory_ref=[AtifSubagentRef(trajectory_id='sub2')]
+                     )])),
+        ],
+        subagent_trajectories=subagents,
+    )
+    trace = traj.to_otel()
+    tools = [span for span in trace.spans if span.operation == 'execute_tool']
+    subs = [span for span in trace.spans if span.operation == 'invoke_agent' and span.attributes.get('gen_ai.agent.name') != 'a']
+    assert len(subs) == 2
+    assert [span.parent_span_id for span in subs] == [span.span_id for span in tools]
+
+    round_trip = trace.to_atif()
+    assert round_trip.subagent_trajectories is not None
+    names_by_id = {sub.trajectory_id: sub.agent.name for sub in round_trip.subagent_trajectories}
+    step_refs = []
+    for step in round_trip.steps:
+        refs = step.observation.results[0].subagent_trajectory_ref if step.observation else None
+        step_refs.append(names_by_id[refs[0].trajectory_id] if refs else None)
+    assert step_refs == [None, 'sub1', 'sub2']
 
 
 def test_atif_to_otel_keeps_history_usage_and_times() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, cast
 
 from loguru import logger
@@ -17,7 +18,7 @@ from evaluatorq.contracts import (
     StrategyToolCall,
     tool_result_to_text,
 )
-from evaluatorq.formats._shared import arguments_text, join_text, part_text, tool_arguments
+from evaluatorq.formats._shared import join_text, json_arguments_text, part_text
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.responses import ResponsesConversation
 from evaluatorq.openresponses.input_items import messages_to_responses_input, responses_function_call_item_id
@@ -131,7 +132,19 @@ def _call_item(item: dict[str, Any], state: _State) -> None:
         return
     arguments = item.get('arguments')
     if not isinstance(arguments, str):
-        arguments = arguments_text(tool_arguments(arguments, name))
+        if isinstance(arguments, dict):
+            arguments = json_arguments_text(arguments)
+        else:
+            logger.warning(
+                'Responses function_call {!r} has non-string, non-object arguments; serializing them as JSON.', name
+            )
+            try:
+                arguments = json.dumps(arguments, separators=(',', ':'), default=str)
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    'Responses function_call {!r} arguments cannot be JSON-encoded ({}); using text.', name, exc
+                )
+                arguments = str(arguments)
     call = StrategyToolCall(
         id=call_id,
         function=FunctionCall(name=str(name or ''), arguments=arguments),
@@ -148,7 +161,15 @@ def _call_item(item: dict[str, Any], state: _State) -> None:
 def _output_item(item: dict[str, Any], state: _State) -> None:
     call_id = item.get('call_id')
     output = item.get('output')
-    content = output if isinstance(output, str) else tool_result_to_text(output)
+    if isinstance(output, list):
+        content = _content(output)
+        if content is None:
+            logger.warning(
+                'Responses function_call_output for {!r} has unsupported content; rendering it as text.', call_id
+            )
+            content = tool_result_to_text(output)
+    else:
+        content = output if isinstance(output, str) else tool_result_to_text(output)
     state.messages.append(
         Message(
             role='tool',

@@ -469,11 +469,26 @@ def _parts_from_attribute(attributes: dict[str, Any], key: str) -> list[OtelPart
     if not isinstance(value, list):
         logger.warning('Span attribute {} is not a part list ({}); keeping the raw value', key, type(value).__name__)
         return None
-    try:
-        return [parse_part(part) for part in cast('list[Any]', value)]
-    except ValidationError as exc:
-        logger.warning('Could not parse span attribute {} as OTel parts ({}); keeping the raw value', key, exc)
+    parts: list[OtelPart] = []
+    invalid = 0
+    for index, part in enumerate(cast('list[Any]', value)):
+        parsed, error = _parse_part(part)
+        if parsed is None:
+            invalid += 1
+            logger.warning('Could not parse OTel part {} from span attribute {} ({}); skipping it', index, key, error)
+        else:
+            parts.append(parsed)
+    if invalid and not parts:
+        logger.warning('No valid OTel parts in span attribute {}; keeping the raw value', key)
         return None
+    return parts
+
+
+def _parse_part(part: Any) -> tuple[OtelPart | None, ValidationError | None]:
+    try:
+        return parse_part(part), None
+    except ValidationError as exc:
+        return None, exc
 
 
 def _otel_message(message: Any) -> Any:
