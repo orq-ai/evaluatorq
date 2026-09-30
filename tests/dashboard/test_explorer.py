@@ -2080,3 +2080,61 @@ def test_summary_status_and_trajectory_polling_are_independent_during_prewarm(
     assert 'tv-segs' in trajectory_html
     assert 'hx-trigger="every 1s"' not in trajectory_html
     assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows[:100])]
+
+
+def test_failed_prewarm_logs_and_trajectories_request_retries(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    from loguru import logger
+
+    store, source, client = explorer_client
+    entered = threading.Event()
+    release_failure = threading.Event()
+    calls = 0
+    warnings: list[str] = []
+
+    async def flaky_hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        nonlocal calls
+        calls += 1
+        source.hydrate_calls.append(tuple(row.trace_id for row in rows))
+        if calls == 1:
+            entered.set()
+            await asyncio.to_thread(release_failure.wait)
+            raise RuntimeError('trajectory store unavailable')
+        return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'retried'}) for row in rows}
+
+    store.explorer._hydrate = flaky_hydrate  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setattr(store, 'close', store.explorer.close, raising=False)
+
+    async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    handler_id = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+    try:
+        with client:
+            _load(client)
+            assert entered.wait(timeout=2)
+
+            table_html = client.get('/find/rows').text
+            assert 'Showing 250 of 250 loaded traces' in table_html
+            assert 'hx-trigger="every 1s"' in table_html
+
+            release_failure.set()
+            for _ in range(20):
+                table_html = client.get('/find/rows').text
+                if 'hx-trigger="every 1s"' not in table_html:
+                    break
+                threading.Event().wait(0.01)
+
+            assert 'Showing 250 of 250 loaded traces' in table_html
+            assert 'hx-trigger="every 1s"' not in table_html
+            assert any('Explorer trajectory prewarm failed: trajectory store unavailable' in line for line in warnings)
+
+            trajectory_html = client.get('/find/rows?view=trajectories').text
+            assert 'Showing 250 of 250 loaded traces' in trajectory_html
+            assert 'Loading messages…' not in trajectory_html
+            assert 'tv-segs' in trajectory_html
+            assert calls == 2
+            assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows[:100])] * 2
+    finally:
+        release_failure.set()
+        logger.remove(handler_id)
