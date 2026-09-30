@@ -587,9 +587,16 @@ def _attach_results(
             if call_extra is not None:
                 calls[n] = call.model_copy(update={'extra': {**(call.extra or {}), **call_extra}})
             found = next(
-                (n for n, (at, part) in enumerate(responses) if at > issued_at and part.id == call.tool_call_id), None
+                (
+                    index
+                    for index, (at, part) in enumerate(responses)
+                    if index not in used_parts and at > issued_at and part.id == call.tool_call_id
+                ),
+                None,
             )
             part = responses[found][1] if found is not None else None
+            if found is not None:
+                used_parts.add(found)
             result = _result(call_id=call.tool_call_id, span=span, part=part)
             if result is not None:
                 draft.results.append(result)
@@ -912,19 +919,36 @@ def _emit_step(
     for result in step.observation.results if step.observation else []:
         if result.source_call_id is not None:
             results.setdefault(result.source_call_id, []).append(result)
-    texts = {
-        call_id: atif_content_text(call_results[0].content, 'OTel') if call_results[0].content is not None else None
-        for call_id, call_results in results.items()
-    }
     spans = [chat]
-    for index, call in enumerate(step.tool_calls or []):
-        span_id = stable_hex(seed, 'execute_tool', f'{step.step_id}.{index}', length=16)
+    calls = step.tool_calls or []
+    occurrences: dict[str, int] = {}
+    assigned_results: dict[int, list[AtifObservationResult]] = {}
+    response_texts: dict[int, str | None] = {}
+    for index, call in enumerate(calls):
         call_results = results.get(call.tool_call_id, [])
+        occurrence = occurrences.get(call.tool_call_id, 0)
+        occurrences[call.tool_call_id] = occurrence + 1
+        if occurrence < len(call_results):
+            assigned_results[index] = [call_results[occurrence]]
+    # Any additional results for a reused id belong to its final occurrence, matching the
+    # existing additional_results representation on an execute_tool span.
+    for call_id, call_results in results.items():
+        matching = [index for index, call in enumerate(calls) if call.tool_call_id == call_id]
+        if matching and len(call_results) > len(matching):
+            assigned_results[matching[-1]].extend(call_results[len(matching) :])
+
+    for index, call in enumerate(calls):
+        span_id = stable_hex(seed, 'execute_tool', f'{step.step_id}.{index}', length=16)
+        call_results = assigned_results.get(index, [])
         primary = call_results[0] if call_results else None
+        text = (
+            atif_content_text(primary.content, 'OTel') if primary is not None and primary.content is not None else None
+        )
+        response_texts[index] = text
         tool_span = _tool_span(
             call,
             primary,
-            texts.get(call.tool_call_id),
+            text,
             trace_id=trace_id,
             span_id=span_id,
             parent_span_id=parent_span_id,
@@ -936,9 +960,35 @@ def _emit_step(
         spans.append(tool_span)
         call_spans.setdefault((step.step_id, call.tool_call_id), span_id)
     history.append(output)
-    for call_id in results:
-        part = OtelToolCallResponsePart(type='tool_call_response', id=call_id, response=texts.get(call_id))
+    for index, call in enumerate(calls):
+        call_results = assigned_results.get(index, [])
+        if not call_results:
+            continue
+        primary = call_results[0]
+        part = OtelToolCallResponsePart(type='tool_call_response', id=call.tool_call_id, response=response_texts[index])
         history.append(OtelMessage(role='tool', parts=[part]))
+    unmatched = [
+        result for call_id, call_results in results.items() if call_id not in occurrences for result in call_results
+    ]
+    if unmatched:
+        logger.warning(
+            'ATIF step {} has {} results whose source_call_id matches no tool call; preserving them as tool messages',
+            step.step_id,
+            len(unmatched),
+        )
+        history.extend(
+            OtelMessage(
+                role='tool',
+                parts=[
+                    OtelToolCallResponsePart(
+                        type='tool_call_response',
+                        id=result.source_call_id or '',
+                        response=atif_content_text(result.content, 'OTel') if result.content is not None else None,
+                    )
+                ],
+            )
+            for result in unmatched
+        )
     return spans
 
 

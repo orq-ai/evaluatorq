@@ -22,7 +22,7 @@ from evaluatorq.formats.atif import (
 )
 from evaluatorq.formats._shared import RAW_ARGUMENTS_EXTRA_KEY
 from evaluatorq.formats.chat import ChatConversation
-from evaluatorq.formats.otel import OtelTrace
+from evaluatorq.formats.otel import OtelToolCallResponsePart, OtelTrace
 
 FIX = Path(__file__).parent / 'fixtures'
 
@@ -389,6 +389,84 @@ def test_reused_tool_call_id_consumes_execute_spans_in_order() -> None:
     agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent']
     assert [step.observation.results[0].content for step in agents if step.observation] == [
         'first result', 'second result']
+
+
+def test_reused_tool_call_id_consumes_later_chat_responses_in_order() -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'same', 'name': 'f', 'arguments': {}}]}
+
+    def response(text: str) -> dict[str, Any]:
+        return {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'same', 'response': text}]}
+
+    raw = [
+        {'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        _chat('c1', [_text('user', 'first')], [call], parent_span_id='a', started_at=1),
+        _chat('c2', [_text('user', 'second'), call, response('first result')], [call],
+              parent_span_id='a', started_at=2),
+        _chat('c3', [_text('user', 'third'), call, response('second result')], [_text('assistant', 'done')],
+              parent_span_id='a', started_at=3),
+    ]
+    agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent']
+    assert [step.observation.results[0].content for step in agents if step.observation] == [
+        'first result', 'second result']
+
+
+def test_atif_to_otel_assigns_duplicate_call_id_results_by_occurrence() -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'trajectory_id': 't', 'agent': {'name': 'a', 'version': '1'},
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': '', 'tool_calls': [
+            {'tool_call_id': 'same', 'function_name': 'f', 'arguments': {}},
+            {'tool_call_id': 'same', 'function_name': 'f', 'arguments': {}}],
+            'observation': {'results': [
+                {'source_call_id': 'same', 'content': 'first result'},
+                {'source_call_id': 'same', 'content': 'second result'},
+                {'source_call_id': 'same', 'content': 'additional result', 'extra': {'part': 3}}]}},
+            {'step_id': 2, 'source': 'user', 'message': 'next'}]})
+    trace = traj.to_otel()
+    tools = sorted((span for span in trace.spans if span.operation == 'execute_tool'), key=lambda span: span.name)
+    assert [span.attributes['gen_ai.tool.call.result'] for span in tools] == ['first result', 'second result']
+    assert 'additional result' in tools[1].attributes['evaluatorq.atif.additional_results']
+    chat = next(span for span in trace.spans if span.operation == 'chat' and span.input_messages is not None)
+    assert chat.input_messages is not None
+    tool_responses = [
+        part
+        for message in chat.input_messages
+        if message.role == 'tool'
+        for part in message.parts
+        if isinstance(part, OtelToolCallResponsePart)
+    ]
+    assert [part.response for part in tool_responses] == [
+        'first result', 'second result']
+    round_trip = trace.to_atif()
+    agent_step = next(step for step in round_trip.steps if step.source == 'agent')
+    assert agent_step.observation is not None
+    assert [(result.content, result.extra) for result in agent_step.observation.results] == [
+        ('first result', None), ('second result', None), ('additional result', {'part': 3})]
+
+
+def test_atif_to_otel_preserves_unmatched_result_as_tool_message(caplog: pytest.LogCaptureFixture) -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'},
+        'steps': [
+            {'step_id': 1, 'source': 'agent', 'message': '', 'tool_calls': [
+                {'tool_call_id': 'known', 'function_name': 'f', 'arguments': {}}],
+             'observation': {'results': [{'content': 'kept'}]}},
+            {'step_id': 2, 'source': 'user', 'message': 'next'},
+        ]})
+    observation = traj.steps[0].observation
+    assert observation is not None
+    object.__setattr__(observation.results[0], 'source_call_id', 'unknown')
+    trace = traj.to_otel()
+    chat = next(span for span in trace.spans if span.operation == 'chat' and span.input_messages is not None)
+    assert chat.input_messages is not None
+    orphan = [
+        part
+        for message in chat.input_messages
+        if message.role == 'tool'
+        for part in message.parts
+        if isinstance(part, OtelToolCallResponsePart)
+    ]
+    assert [(part.id, part.response) for part in orphan] == [('unknown', 'kept')]
+    assert 'source_call_id matches no tool call; preserving them as tool messages' in caplog.text
 
 
 def test_atif_to_otel_warns_about_dropped_results(caplog: pytest.LogCaptureFixture) -> None:

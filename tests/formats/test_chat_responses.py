@@ -4,11 +4,12 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
 
-from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
+from evaluatorq.contracts import FunctionCall, InputFileContent, InputImageContent, InputTextContent, Message, StrategyToolCall
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.responses import ResponsesConversation
 
@@ -83,6 +84,15 @@ def test_function_call_output_keeps_typed_content_parts() -> None:
     assert [part.type for part in content] == ['input_text', 'input_image', 'input_file']
 
 
+@pytest.mark.parametrize('output', [[], [{'temperature': 12}, {'unit': 'C'}]])
+def test_function_call_output_serializes_arbitrary_lists_as_json(output: list[dict[str, Any]]) -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call_output', 'call_id': 'c', 'output': output},
+    ]
+    content = ResponsesConversation(items=items).to_chat().messages[0].content
+    assert content == json.dumps(output)
+
+
 def test_function_call_keeps_nested_raw_key_json_arguments_verbatim() -> None:
     raw_arguments = '{"_raw":{"evaluatorq_raw_value":"literal"}}'
     items: list[dict[str, Any]] = [
@@ -127,13 +137,38 @@ def test_multimodal_user_content_keeps_image_part() -> None:
 
 def test_invalid_media_parts_degrade_to_markers(caplog: pytest.LogCaptureFixture) -> None:
     items: list[dict[str, Any]] = [{'type': 'message', 'role': 'user', 'content': [
-        {'type': 'input_image', 'image_url': 'https://x/y.png', 'detail': 'invalid'},
+        {'type': 'input_image', 'image_url': 'https://x/y.png', 'detail': {'bad': 1}},
         {'type': 'input_file', 'file_id': 42},
         {'type': 'input_text', 'text': 'still here'},
     ]}]
     content = ResponsesConversation(items=items).to_chat().messages[0].content
-    assert content == '[input_image]\n[input_file]\nstill here'
-    assert 'Invalid input_image' in caplog.text and 'Invalid input_file' in caplog.text
+    assert isinstance(content, list)
+    assert isinstance(content[0], InputImageContent)
+    assert content[0].image_url == 'https://x/y.png'
+    assert isinstance(content[1], InputTextContent)
+    assert content[1].text == '[input_file]'
+    assert isinstance(content[2], InputTextContent)
+    assert content[2].text == 'still here'
+    assert 'Invalid input_image detail' in caplog.text
+    assert 'Invalid input_file' in caplog.text
+
+
+def test_malformed_optional_media_fields_do_not_drop_valid_sources(caplog: pytest.LogCaptureFixture) -> None:
+    conv = ResponsesConversation(items=[{'type': 'message', 'role': 'user', 'content': [
+        {'type': 'input_image', 'image_url': 'https://x/y.png', 'detail': 'invalid'},
+        {'type': 'input_file', 'file_data': 'encoded-file', 'file_id': {'bad': 1}, 'filename': 42},
+    ]}])
+    content = conv.to_chat().messages[0].content
+    assert isinstance(content, list)
+    assert isinstance(content[0], InputImageContent)
+    assert isinstance(content[1], InputFileContent)
+    assert content[0].image_url == 'https://x/y.png'
+    assert content[0].detail == 'auto'
+    assert content[1].file_data == 'encoded-file'
+    assert content[1].file_id is None
+    assert content[1].filename is None
+    assert 'Invalid input_image detail' in caplog.text
+    assert 'Invalid input_file file_id' in caplog.text and 'Invalid input_file filename' in caplog.text
 
 
 def test_unknown_item_type_warns_and_is_skipped(caplog: pytest.LogCaptureFixture) -> None:

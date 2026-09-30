@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from loguru import logger
 from pydantic import ValidationError
@@ -24,6 +24,7 @@ from evaluatorq.formats.responses import ResponsesConversation, walk_items
 from evaluatorq.openresponses.input_items import messages_to_responses_input, responses_function_call_item_id
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text', 'summary_text', 'refusal'})
+_CONTENT_PART_TYPES = _TEXT_PART_TYPES | {'input_image', 'input_file'}
 _ROLES = frozenset({'user', 'assistant', 'system', 'developer', 'tool'})
 
 
@@ -71,26 +72,35 @@ def _part(part: Any) -> ContentPart:
         return InputTextContent(type='input_text', text=part_text(part, 'Responses'))
     if part_type == 'input_image':
         image_url = part.get('image_url')
+        file_id = part.get('file_id')
+        detail = part.get('detail', 'auto')
+        if not isinstance(image_url, str) and image_url is not None:
+            logger.warning('Invalid input_image image_url; dropping that field.')
+            image_url = None
+        if not isinstance(file_id, str) and file_id is not None:
+            logger.warning('Invalid input_image file_id; dropping that field.')
+            file_id = None
+        if not isinstance(detail, str) or detail not in {'auto', 'low', 'high'}:
+            logger.warning('Invalid input_image detail; using auto.')
+            detail = 'auto'
+        detail = cast("Literal['auto', 'low', 'high']", detail)
         try:
-            return InputImageContent(
-                type='input_image',
-                image_url=image_url if isinstance(image_url, str) else None,
-                file_id=part.get('file_id'),
-                detail=part.get('detail') or 'auto',
-            )
+            return InputImageContent(type='input_image', image_url=image_url, file_id=file_id, detail=detail)
         except ValidationError:
             logger.warning('Invalid input_image part; rendering a marker.')
             return InputTextContent(type='input_text', text='[input_image]')
     if part_type == 'input_file':
+        fields = ('file_id', 'file_data', 'file_url', 'filename', 'mime_type')
+        values = {field: part.get(field) for field in fields}
+        for field, value in values.items():
+            if not isinstance(value, str) and value is not None:
+                logger.warning('Invalid input_file {}; dropping that field.', field)
+                values[field] = None
+        if not any(values[field] for field in ('file_id', 'file_data', 'file_url')):
+            logger.warning('Invalid input_file part; rendering a marker.')
+            return InputTextContent(type='input_text', text='[input_file]')
         try:
-            return InputFileContent(
-                type='input_file',
-                file_id=part.get('file_id'),
-                file_data=part.get('file_data'),
-                file_url=part.get('file_url'),
-                filename=part.get('filename'),
-                mime_type=part.get('mime_type'),
-            )
+            return InputFileContent(type='input_file', **values)
         except ValidationError:
             logger.warning('Invalid input_file part; rendering a marker.')
             return InputTextContent(type='input_text', text='[input_file]')
@@ -160,7 +170,11 @@ def _call_item(item: dict[str, Any], state: _State) -> None:
 def _output_item(item: dict[str, Any], state: _State) -> None:
     call_id = item.get('call_id')
     output = item.get('output')
-    if isinstance(output, list):
+    if (
+        isinstance(output, list)
+        and output
+        and all(isinstance(part, dict) and part.get('type') in _CONTENT_PART_TYPES for part in output)
+    ):
         content = _content(output)
         if content is None:
             logger.warning(

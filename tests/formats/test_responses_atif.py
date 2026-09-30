@@ -87,6 +87,47 @@ def test_orphan_function_call_output_warns_and_attaches(caplog: pytest.LogCaptur
     assert 'ghost' in caplog.text
 
 
+def test_custom_tool_call_without_call_id_is_skipped_and_roundtrips(caplog: pytest.LogCaptureFixture) -> None:
+    items = [
+        {'type': 'custom_tool_call', 'name': 'lookup', 'input': '{}'},
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'done'}]},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    assert trajectory.steps[0].extra is None
+    assert 'custom_tool_call' in caplog.text and 'no call_id' in caplog.text
+    assert trajectory.to_responses().items[0]['type'] == 'message'
+
+
+def test_custom_and_function_results_keep_their_shared_order() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'custom', 'input': '{}'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'first'},
+        {'type': 'function_call_output', 'call_id': 'f', 'output': 'second'},
+    ]
+    roundtrip = ResponsesConversation(items=items).to_atif().to_responses()
+    results = [item for item in roundtrip.items if item['type'] in ('custom_tool_call_output', 'function_call_output')]
+    assert [(item['type'], item.get('output')) for item in results] == [
+        ('custom_tool_call_output', 'first'), ('function_call_output', 'second')
+    ]
+
+
+def test_custom_call_stays_before_function_result_in_response_output() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'custom', 'input': '{}'},
+        {'type': 'function_call_output', 'call_id': 'f', 'output': 'done'},
+    ]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.responses is not None
+    assert [item.type for item in conversation.responses[0].output] == [
+        'function_call', 'custom_tool_call'
+    ]
+    assert [item['type'] for item in conversation.items] == [
+        'function_call', 'custom_tool_call', 'function_call_output'
+    ]
+
+
 def test_tool_output_after_intervening_user_is_orphaned() -> None:
     items: list[dict[str, Any]] = [
         {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': '{}'},

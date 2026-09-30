@@ -68,6 +68,7 @@ if TYPE_CHECKING:
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text'})
 _UNMAPPED_OUTPUTS_KEY = 'evaluatorq.responses_output_items'
 _UNMAPPED_RESULTS_KEY = 'evaluatorq.responses_result_items'
+_RESULT_ORDER_KEY = 'evaluatorq.responses_result_order'
 _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']] = {
     'image/jpeg': 'image/jpeg',
     'image/png': 'image/png',
@@ -92,6 +93,7 @@ class _Draft:
     results: list[dict[str, Any]] = field(default_factory=list)
     unmapped_outputs: list[dict[str, Any]] = field(default_factory=list)
     unmapped_results: list[dict[str, Any]] = field(default_factory=list)
+    result_order: list[dict[str, int | str]] = field(default_factory=list)
     seen_result: bool = False
     item: dict[str, Any] | None = None  # the message item of a user/system step
     response: Response | None = None  # the model call that produced an agent step
@@ -150,11 +152,17 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         else:
             logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
 
+    def custom_call(index: int, item: dict[str, Any]) -> None:
+        if isinstance(item.get('call_id'), str) and item['call_id']:
+            current_agent(index).unmapped_outputs.append(item)
+        else:
+            logger.warning('Responses custom_tool_call {!r} has no call_id; skipping it.', item.get('name'))
+
     handlers = {
         'message': message,
         'reasoning': lambda index, item: current_agent(index).reasoning.append(item),
         'function_call': call,
-        'custom_tool_call': lambda index, item: current_agent(index).unmapped_outputs.append(item),
+        'custom_tool_call': custom_call,
         'mcp_call': lambda index, item: current_agent(index).unmapped_outputs.append(item),
         'function_call_output': lambda _, item: _attach_output(item, drafts),
         'custom_tool_call_output': lambda _, item: _attach_custom_output(item, drafts),
@@ -171,6 +179,7 @@ def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
             break
         if any(call.get('call_id') == call_id for call in draft.unmapped_outputs):
             draft.unmapped_results.append(item)
+            draft.result_order.append({'type': 'custom', 'index': len(draft.unmapped_results) - 1})
             draft.seen_result = True
             return
     logger.warning('custom_tool_call_output for call_id {!r} matches no custom_tool_call; preserving it.', call_id)
@@ -178,6 +187,7 @@ def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
     if not drafts or last is not drafts[-1]:
         drafts.append(last)
     last.unmapped_results.append(item)
+    last.result_order.append({'type': 'custom', 'index': len(last.unmapped_results) - 1})
     last.seen_result = True
 
 
@@ -190,6 +200,7 @@ def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
             break
         if any(c.get('call_id') == call_id for c in draft.calls):
             draft.results.append({'source_call_id': call_id, 'content': content})
+            draft.result_order.append({'type': 'function', 'index': len(draft.results) - 1})
             draft.seen_result = True
             return
     last = drafts[-1] if drafts else None
@@ -208,6 +219,7 @@ def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
             call_id,
         )
     last.results.append({'source_call_id': None, 'content': content, 'extra': {'orphan_call_id': call_id}})
+    last.result_order.append({'type': 'function', 'index': len(last.results) - 1})
     last.seen_result = True
 
 
@@ -306,6 +318,9 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
         extra[_UNMAPPED_OUTPUTS_KEY] = draft.unmapped_outputs
     if draft.unmapped_results:
         extra[_UNMAPPED_RESULTS_KEY] = draft.unmapped_results
+    result_types = {entry['type'] for entry in draft.result_order}
+    if len(result_types) > 1:
+        extra[_RESULT_ORDER_KEY] = draft.result_order
     results = [AtifObservationResult(**result) for result in draft.results]
     fields: dict[str, Any] = {}
     if response is not None:
@@ -523,6 +538,7 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
             )
         )
     items.extend(messages_to_responses_input(messages))
+    outputs: list[dict[str, Any]] = []
     unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
     if isinstance(unmapped, list):
         outputs = [item for item in unmapped if isinstance(item, dict) and is_output_item(item)]
@@ -532,6 +548,7 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
             (index for index, item in enumerate(items) if item.get('type') == 'function_call_output'), len(items)
         )
         items[insertion:insertion] = outputs
+    results: list[dict[str, Any]] = []
     raw_results = (step.extra or {}).get(_UNMAPPED_RESULTS_KEY)
     if isinstance(raw_results, list):
         results = [
@@ -539,8 +556,28 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
         ]
         if len(results) != len(raw_results):
             logger.warning('Step {} has malformed Responses custom tool results; dropping them.', step.step_id)
-        items.extend(results)
+    _order_result_items(items, results, (step.extra or {}).get(_RESULT_ORDER_KEY))
     return items
+
+
+def _order_result_items(items: list[dict[str, Any]], custom_results: list[dict[str, Any]], order: Any) -> None:
+    ordinary = [item for item in items if item.get('type') == 'function_call_output']
+    if not isinstance(order, list):
+        items.extend(custom_results)
+        return
+    combined: list[dict[str, Any]] = []
+    for entry in order:
+        if not isinstance(entry, dict) or not isinstance(entry.get('index'), int):
+            continue
+        index = entry['index']
+        if entry.get('type') == 'function' and 0 <= index < len(ordinary):
+            combined.append(ordinary[index])
+        elif entry.get('type') == 'custom' and 0 <= index < len(custom_results):
+            combined.append(custom_results[index])
+    if len(combined) != len(ordinary) + len(custom_results):
+        combined = [*ordinary, *custom_results]
+    items[:] = [item for item in items if item.get('type') != 'function_call_output']
+    items.extend(combined)
 
 
 def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Response:
