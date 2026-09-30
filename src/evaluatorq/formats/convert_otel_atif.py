@@ -428,11 +428,11 @@ def _attach_results(
     whose id no call has) are warned and kept as `source_call_id=None` results on the nearest earlier agent step.
     """
     tool_spans = [span for span in _by_start(members) if span.operation == 'execute_tool']
-    by_call: dict[str, OtelSpan] = {}
+    by_call: dict[str, list[OtelSpan]] = {}
     for span in tool_spans:
         call_id = span.attributes.get('gen_ai.tool.call.id')
         if isinstance(call_id, str):
-            by_call.setdefault(call_id, span)
+            by_call.setdefault(call_id, []).append(span)
     responses = [
         (index, part)
         for index, messages in enumerate(new_inputs)
@@ -443,13 +443,18 @@ def _attach_results(
     position = {chat.span_id: index for index, chat in enumerate(chats)}
     used_spans: set[str] = set()
     used_parts: set[int] = set()
+    next_span_by_call: dict[str, int] = {}
     for draft in drafts:
         if draft.span is None:
             continue
         issued_at = position[draft.span.span_id]
         calls: list[AtifToolCall] = draft.fields['tool_calls'] or []
         for n, call in enumerate(calls):
-            span = by_call.get(call.tool_call_id)
+            spans = by_call.get(call.tool_call_id, [])
+            span_index = next_span_by_call.get(call.tool_call_id, 0)
+            span = spans[span_index] if span_index < len(spans) else None
+            if span is not None:
+                next_span_by_call[call.tool_call_id] = span_index + 1
             call_extra = _carried(span, _TOOL_CALL_EXTRA)
             if call_extra is not None:
                 calls[n] = call.model_copy(update={'extra': call_extra})

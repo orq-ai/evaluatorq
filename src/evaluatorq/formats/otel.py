@@ -435,11 +435,28 @@ def _messages_from_attribute(attributes: dict[str, Any], key: str) -> list[OtelM
     if not isinstance(value, list):
         logger.warning('Span attribute {} is not a message list ({}); keeping the raw value', key, type(value).__name__)
         return None
-    try:
-        return [OtelMessage.model_validate(_otel_message(message)) for message in cast('list[Any]', value)]
-    except ValidationError as exc:
-        logger.warning('Could not parse span attribute {} as OTel messages ({}); keeping the raw value', key, exc)
+    messages: list[OtelMessage] = []
+    invalid = 0
+    for index, message in enumerate(cast('list[Any]', value)):
+        parsed, error = _parse_message(message)
+        if parsed is None:
+            invalid += 1
+            logger.warning(
+                'Could not parse OTel message {} from span attribute {} ({}); skipping it', index, key, error
+            )
+        else:
+            messages.append(parsed)
+    if invalid and not messages:
+        logger.warning('No valid OTel messages in span attribute {}; keeping the raw value', key)
         return None
+    return messages
+
+
+def _parse_message(message: Any) -> tuple[OtelMessage | None, ValidationError | None]:
+    try:
+        return OtelMessage.model_validate(_otel_message(message)), None
+    except ValidationError as exc:
+        return None, exc
 
 
 def _parts_from_attribute(attributes: dict[str, Any], key: str) -> list[OtelPart] | None:

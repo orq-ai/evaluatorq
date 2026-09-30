@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from loguru import logger
+from pydantic import ValidationError
 
 from evaluatorq.contracts import (
     ContentPart,
@@ -70,21 +71,29 @@ def _part(part: Any) -> ContentPart:
         return InputTextContent(type='input_text', text=part_text(part, 'Responses'))
     if part_type == 'input_image':
         image_url = part.get('image_url')
-        return InputImageContent(
-            type='input_image',
-            image_url=image_url if isinstance(image_url, str) else None,
-            file_id=part.get('file_id'),
-            detail=part.get('detail') or 'auto',
-        )
+        try:
+            return InputImageContent(
+                type='input_image',
+                image_url=image_url if isinstance(image_url, str) else None,
+                file_id=part.get('file_id'),
+                detail=part.get('detail') or 'auto',
+            )
+        except ValidationError:
+            logger.warning('Invalid input_image part; rendering a marker.')
+            return InputTextContent(type='input_text', text='[input_image]')
     if part_type == 'input_file':
-        return InputFileContent(
-            type='input_file',
-            file_id=part.get('file_id'),
-            file_data=part.get('file_data'),
-            file_url=part.get('file_url'),
-            filename=part.get('filename'),
-            mime_type=part.get('mime_type'),
-        )
+        try:
+            return InputFileContent(
+                type='input_file',
+                file_id=part.get('file_id'),
+                file_data=part.get('file_data'),
+                file_url=part.get('file_url'),
+                filename=part.get('filename'),
+                mime_type=part.get('mime_type'),
+            )
+        except ValidationError:
+            logger.warning('Invalid input_file part; rendering a marker.')
+            return InputTextContent(type='input_text', text='[input_file]')
     logger.warning('Responses content part type {!r} has no chat equivalent; rendering a marker.', part_type)
     return InputTextContent(type='input_text', text=f'[{part_type}]')
 

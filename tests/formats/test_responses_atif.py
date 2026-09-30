@@ -69,6 +69,20 @@ def test_orphan_function_call_output_warns_and_attaches(caplog: pytest.LogCaptur
     assert 'ghost' in caplog.text
 
 
+def test_tool_output_after_intervening_user_is_orphaned() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': '{}'},
+        {'type': 'message', 'role': 'user', 'content': 'new question'},
+        {'type': 'function_call_output', 'call_id': 'c', 'output': 'late result'},
+    ]
+    traj = ResponsesConversation(items=items).to_atif()
+    assert [step.source for step in traj.steps] == ['agent', 'user', 'agent']
+    assert traj.steps[0].observation is None
+    assert traj.steps[2].observation is not None
+    result = traj.steps[2].observation.results[0]
+    assert result.source_call_id is None and result.extra == {'orphan_call_id': 'c'}
+
+
 def test_empty_items_raise_value_error() -> None:
     with pytest.raises(ValueError, match='no items'):
         ResponsesConversation(items=[]).to_atif()

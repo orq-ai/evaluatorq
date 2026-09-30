@@ -103,6 +103,17 @@ def test_multimodal_user_content_keeps_image_part() -> None:
     assert isinstance(content, list) and [p.type for p in content] == ['input_text', 'input_image']
 
 
+def test_invalid_media_parts_degrade_to_markers(caplog: pytest.LogCaptureFixture) -> None:
+    items: list[dict[str, Any]] = [{'type': 'message', 'role': 'user', 'content': [
+        {'type': 'input_image', 'image_url': 'https://x/y.png', 'detail': 'invalid'},
+        {'type': 'input_file', 'file_id': 42},
+        {'type': 'input_text', 'text': 'still here'},
+    ]}]
+    content = ResponsesConversation(items=items).to_chat().messages[0].content
+    assert content == '[input_image]\n[input_file]\nstill here'
+    assert 'Invalid input_image' in caplog.text and 'Invalid input_file' in caplog.text
+
+
 def test_unknown_item_type_warns_and_is_skipped(caplog: pytest.LogCaptureFixture) -> None:
     conv = ResponsesConversation(items=[{'type': 'web_search_call', 'id': 'ws'}])
     assert conv.to_chat().messages == []

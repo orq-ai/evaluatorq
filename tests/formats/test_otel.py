@@ -101,6 +101,23 @@ def test_json_string_messages_are_parsed() -> None:
     assert trace.spans[0].input_messages is not None
 
 
+def test_invalid_messages_are_skipped_without_losing_valid_messages(caplog: pytest.LogCaptureFixture) -> None:
+    valid = {'role': 'user', 'parts': [{'type': 'text', 'content': 'keep me'}]}
+    invalid = {'role': 3, 'parts': [{'type': 'text', 'content': 'bad'}]}
+    trace = OtelTrace.from_orq([{'span_id': 's', 'attributes': {
+        'gen_ai.input.messages': [valid, invalid, valid]}}])
+    parsed = trace.spans[0].input_messages
+    assert parsed is not None and [getattr(m.parts[0], 'content', None) for m in parsed] == ['keep me', 'keep me']
+    assert 'skipping it' in caplog.text
+
+
+def test_all_invalid_messages_keep_raw_attribute(caplog: pytest.LogCaptureFixture) -> None:
+    trace = OtelTrace.from_orq([{'span_id': 's', 'attributes': {
+        'gen_ai.input.messages': [{'role': 3, 'parts': []}]}}])
+    assert trace.spans[0].input_messages is None
+    assert 'No valid OTel messages' in caplog.text
+
+
 def test_usage_reads_dotted_keys_and_legacy_names() -> None:
     trace = OtelTrace.from_orq(_raw())
     usage = span_usage(next(s for s in trace.spans if s.span_id == 'c1'))

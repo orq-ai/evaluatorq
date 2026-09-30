@@ -166,7 +166,9 @@ def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
     output = item.get('output')
     content = output if isinstance(output, str) else tool_result_to_text(output)
     for draft in reversed(drafts):
-        if draft.source == 'agent' and any(c.get('call_id') == call_id for c in draft.calls):
+        if draft.source != 'agent':
+            break
+        if any(c.get('call_id') == call_id for c in draft.calls):
             draft.results.append({'source_call_id': call_id, 'content': content})
             draft.seen_result = True
             return

@@ -253,6 +253,22 @@ def test_unmatched_tool_results_are_warned_and_kept(caplog: pytest.LogCaptureFix
     assert '2 tool results match no tool call' in caplog.text
 
 
+def test_reused_tool_call_id_consumes_execute_spans_in_order() -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'same', 'name': 'f', 'arguments': {}}]}
+    raw = [
+        {'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        _chat('c1', [_text('user', 'first')], [call], parent_span_id='a', started_at=1),
+        {'span_id': 't1', 'parent_span_id': 'a', 'started_at': 2, 'attributes': {
+            'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.id': 'same', 'gen_ai.tool.call.result': 'first result'}},
+        _chat('c2', [_text('user', 'second')], [call], parent_span_id='a', started_at=3),
+        {'span_id': 't2', 'parent_span_id': 'a', 'started_at': 4, 'attributes': {
+            'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.id': 'same', 'gen_ai.tool.call.result': 'second result'}},
+    ]
+    agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent']
+    assert [step.observation.results[0].content for step in agents if step.observation] == [
+        'first result', 'second result']
+
+
 def test_atif_to_otel_warns_about_dropped_results(caplog: pytest.LogCaptureFixture) -> None:
     traj = AtifTrajectory.model_validate({
         'schema_version': 'ATIF-v1.7', 'trajectory_id': 't', 'agent': {'name': 'a', 'version': '1'},
