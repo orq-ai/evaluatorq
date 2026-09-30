@@ -1010,10 +1010,77 @@
   // and j/k (or ArrowDown/ArrowUp) step to the next/previous trace like the simulation drawer.
   let finderOpenId = null;
   const finderDialog = () => document.querySelector('#finder-drawer [role="dialog"]');
+  const shortcutGuide = () => document.querySelector('#finder-shortcut-guide');
   const finderRows = () => Array.from(document.querySelectorAll('#explorer-results [data-tv-row]'));
   const finderRow = (id) => finderRows().find((row) => row.getAttribute('data-tv-row') === id) || null;
   function finderEditable(el) {
     return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  }
+  function ensureShortcutGuide() {
+    let guide = shortcutGuide();
+    if (guide) return guide;
+    guide = document.createElement('dialog');
+    guide.id = 'finder-shortcut-guide';
+    guide.setAttribute('aria-labelledby', 'finder-shortcut-title');
+    guide.style.cssText = 'border:1px solid var(--line,#d7dce2);border-radius:14px;padding:22px;max-width:440px;width:calc(100% - 40px);color:var(--ink,#18202a);background:var(--surface,#fff);box-shadow:0 24px 80px #0004';
+    guide.innerHTML = '<h2 id="finder-shortcut-title">Keyboard shortcuts</h2>' +
+      '<dl style="display:grid;grid-template-columns:140px 1fr;gap:8px 12px;margin:18px 0">' +
+      '<dt><kbd>/</kbd></dt><dd style="margin:0">Ask AI about traces</dd>' +
+      '<dt><kbd>?</kbd></dt><dd style="margin:0">Show this guide</dd>' +
+      '<dt><kbd>j</kbd> / <kbd>k</kbd> or arrows</dt><dd style="margin:0">Next or previous trace</dd>' +
+      '<dt><kbd>o</kbd></dt><dd style="margin:0">Open this trace in Orq</dd>' +
+      '<dt><kbd>c</kbd></dt><dd style="margin:0">Copy this trace ID</dd>' +
+      '<dt><kbd>Esc</kbd></dt><dd style="margin:0">Close the guide or trace</dd></dl>' +
+      '<button type="button" class="btn-secondary" data-shortcut-guide-close>Close</button>';
+    guide.addEventListener('click', function (evt) {
+      if (evt.target === guide) guide.close();
+    });
+    guide.querySelector('[data-shortcut-guide-close]').addEventListener('click', () => guide.close());
+    document.body.appendChild(guide);
+    return guide;
+  }
+  function handleTraceShortcut(evt) {
+    if (window.location.pathname !== '/traces') return false;
+    const target = evt.target;
+    const active = document.activeElement;
+    const details = target.closest?.('details, summary') || active?.closest?.('details, summary');
+    const otherModal = Array.from(document.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]'))
+      .some((modal) => modal !== finderDialog() && modal !== shortcutGuide());
+    const shiftedQuestion = evt.key === '?' && evt.shiftKey && !evt.ctrlKey && !evt.altKey && !evt.metaKey;
+    if (evt.ctrlKey || evt.altKey || evt.metaKey || (evt.shiftKey && !shiftedQuestion) ||
+        finderEditable(target) || finderEditable(active) || details || otherModal) return false;
+    if (evt.key === '/') {
+      const input = document.querySelector('.finder-command-textarea, .finder-command textarea[name="query"], #finder-query-form textarea[name="query"]');
+      if (!input || input.disabled) return false;
+      evt.preventDefault();
+      input.focus();
+      input.select();
+      return true;
+    }
+    if (evt.key === '?') {
+      evt.preventDefault();
+      const guide = ensureShortcutGuide();
+      if (!guide.open) guide.showModal();
+      guide.querySelector('[data-shortcut-guide-close]').focus();
+      return true;
+    }
+    if (evt.key === 'o' && finderDialog() && finderOpenId) {
+      const link = Array.from(finderDialog().querySelectorAll('a[href]'))
+        .find((anchor) => anchor.textContent.includes('Open in Orq'));
+      if (!link) return false;
+      evt.preventDefault();
+      link.click();
+      return true;
+    }
+    if (evt.key === 'c' && finderDialog() && finderOpenId) {
+      const button = Array.from(finderDialog().querySelectorAll('.rt-drawer-footer button[data-trace-id]'))
+        .find((candidate) => candidate.getAttribute('data-trace-id') === finderOpenId);
+      if (!button) return false;
+      evt.preventDefault();
+      button.click();
+      return true;
+    }
+    return false;
   }
   function finderStep(delta) {
     const rows = finderRows();
@@ -1028,6 +1095,14 @@
     if (row) finderOpenId = row.getAttribute('data-tv-row');
   }, true);
   document.addEventListener('keydown', function (evt) {
+    const guide = shortcutGuide();
+    if (evt.key === 'Escape' && guide?.open) {
+      evt.preventDefault();
+      guide.close();
+      return;
+    }
+    if (guide?.open) return;
+    if (handleTraceShortcut(evt)) return;
     const dialog = finderDialog();
     if (!dialog) {
       const row = evt.target.closest?.('#explorer-results [data-tv-row]');
@@ -1059,6 +1134,7 @@
       return;
     }
     if (evt.metaKey || evt.ctrlKey || evt.altKey || finderEditable(document.activeElement)) return;
+    if (evt.target.closest?.('details, summary')) return;
     if (evt.key === 'j' || evt.key === 'J' || evt.key === 'ArrowDown') {
       evt.preventDefault();
       finderStep(1);
