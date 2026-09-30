@@ -8,7 +8,6 @@ into one step when the items are read back, so their `Response` list no longer l
 
 from __future__ import annotations
 
-import json
 import mimetypes
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,10 +29,10 @@ from evaluatorq.contracts import (
     tool_result_to_text,
 )
 from evaluatorq.formats._ids import content_seed, stable_hex
+from evaluatorq.formats._shared import arguments_text, final_metrics, media_marker, tool_arguments
 from evaluatorq.formats.atif import (
     AtifAgent,
     AtifContentPart,
-    AtifFinalMetrics,
     AtifImageSource,
     AtifMetrics,
     AtifObservation,
@@ -56,7 +55,6 @@ _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'i
     'image/gif': 'image/gif',
     'image/webp': 'image/webp',
 }
-_RAW_ARGUMENTS_KEY = '_raw'
 _RESPONSE_STATUSES: frozenset[str] = frozenset(get_args(ResponseStatus))
 _NO_STEPS = 'ResponsesConversation has no items; ATIF needs at least one step'
 
@@ -112,7 +110,7 @@ def responses_to_atif(
         session_id=session_id or stable_hex(content_seed(conv.items), length=16),
         agent=AtifAgent(name=agent_name, version=agent_version),
         steps=steps,
-        final_metrics=_final_metrics(steps),
+        final_metrics=final_metrics(steps),
     )
 
 
@@ -285,20 +283,11 @@ def _agent_step(draft: _Draft, step_id: int, response: Response | None) -> AtifS
 
 
 def _tool_call(call: dict[str, Any]) -> AtifToolCall:
-    raw = call.get('arguments')
-    arguments: dict[str, Any]
-    try:
-        decoded = json.loads(raw) if isinstance(raw, str) else raw
-    except json.JSONDecodeError:
-        decoded = None
-    if isinstance(decoded, dict):
-        arguments = decoded
-    else:
-        logger.warning(
-            'function_call {!r} arguments are not a JSON object; keeping them as {{"_raw": ...}}.', call.get('name')
-        )
-        arguments = {_RAW_ARGUMENTS_KEY: raw if isinstance(raw, str) else json.dumps(raw)}
-    return AtifToolCall(tool_call_id=call['call_id'], function_name=str(call.get('name') or ''), arguments=arguments)
+    return AtifToolCall(
+        tool_call_id=call['call_id'],
+        function_name=str(call.get('name') or ''),
+        arguments=tool_arguments(call.get('arguments'), call.get('name')),
+    )
 
 
 def _response_extra(response: Response) -> dict[str, Any]:
@@ -320,23 +309,6 @@ def _metrics_from_usage(usage: ResponseUsage | None) -> AtifMetrics | None:
         completion_tokens=usage.output_tokens,
         cached_tokens=usage.input_tokens_details.cached_tokens,
         extra={'reasoning_tokens': usage.output_tokens_details.reasoning_tokens, 'total_tokens': usage.total_tokens},
-    )
-
-
-def _final_metrics(steps: list[AtifStep]) -> AtifFinalMetrics | None:
-    measured = [s.metrics for s in steps if s.metrics is not None]
-    if not measured:
-        return None
-
-    def total(values: list[int | None]) -> int | None:
-        present = [v for v in values if v is not None]
-        return sum(present) if present else None
-
-    return AtifFinalMetrics(
-        total_prompt_tokens=total([m.prompt_tokens for m in measured]),
-        total_completion_tokens=total([m.completion_tokens for m in measured]),
-        total_cached_tokens=total([m.cached_tokens for m in measured]),
-        total_steps=len(steps),
     )
 
 
@@ -382,8 +354,7 @@ def _atif_parts(parts: list[AtifContentPart]) -> list[ContentPart]:
         if part.type == 'image' and path.startswith(('http://', 'https://', 'data:')):
             out.append(InputImageContent(type='input_image', image_url=path))
             continue
-        logger.warning('ATIF {} part at {!r} cannot be sent as Responses input; rendering a marker.', part.type, path)
-        out.append(InputTextContent(type='input_text', text=f'[{part.type}: {path}]'))
+        out.append(InputTextContent(type='input_text', text=media_marker(part, 'Responses input')))
     return out
 
 
@@ -403,7 +374,7 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     calls = [
         StrategyToolCall(
             id=call.tool_call_id,
-            function=FunctionCall(name=call.function_name, arguments=_arguments_text(call.arguments)),
+            function=FunctionCall(name=call.function_name, arguments=arguments_text(call.arguments)),
             item_id=item_id if isinstance(item_id := fc_item_ids.get(call.tool_call_id), str) else None,
         )
         for call in step.tool_calls or []
@@ -434,13 +405,6 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
         )
     items.extend(messages_to_responses_input(messages))
     return items
-
-
-def _arguments_text(arguments: dict[str, Any]) -> str:
-    raw = arguments.get(_RAW_ARGUMENTS_KEY)
-    if len(arguments) == 1 and isinstance(raw, str):
-        return raw
-    return json.dumps(arguments, separators=(',', ':'), sort_keys=True)
 
 
 def _response(step: AtifStep, seed: str) -> Response:

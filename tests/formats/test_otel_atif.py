@@ -230,3 +230,50 @@ def test_atif_to_otel_keeps_history_usage_and_times() -> None:
     assert chats[0].start_time is not None and chats[0].end_time is not None
     assert chats[0].output_messages is not None
     assert [p.type for p in chats[0].output_messages[0].parts] == ['reasoning', 'tool_call']
+
+
+def test_unmatched_tool_results_are_warned_and_kept(caplog: pytest.LogCaptureFixture) -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'f', 'arguments': {}}]}
+    first_in = [_text('user', 'a')]
+    orphan = {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'nope', 'response': 'R'}]}
+    matched = {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'c1', 'response': 'ok'}]}
+    raw = [
+        {'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        _chat('c', first_in, [call], parent_span_id='a', started_at=1),
+        {'span_id': 't', 'parent_span_id': 'a', 'started_at': 2, 'attributes': {
+            'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.result': 'lost'}},
+        _chat('d', [*first_in, call, matched, orphan], [_text('assistant', 'done')], parent_span_id='a', started_at=3),
+    ]
+    step = OtelTrace.from_orq(raw).to_atif().steps[1]
+    assert step.observation is not None
+    results = [(r.source_call_id, r.content, r.extra) for r in step.observation.results]
+    assert results == [('c1', 'ok', None), (None, 'lost', None), (None, 'R', {'orphan_call_id': 'nope'})]
+    assert '2 tool results match no tool call' in caplog.text
+
+
+def test_atif_to_otel_warns_about_dropped_results(caplog: pytest.LogCaptureFixture) -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'trajectory_id': 't', 'agent': {'name': 'a', 'version': '1'},
+        'steps': [
+            {'step_id': 1, 'source': 'system', 'message': 's', 'observation': {'results': [{'content': 'x'}]}},
+            {'step_id': 2, 'source': 'agent', 'message': 'm', 'observation': {'results': [
+                {'content': 'y'}, {'content': 'z'},
+                {'subagent_trajectory_ref': [{'trajectory_path': 'elsewhere.json'}]}]}},
+        ]})
+    traj.to_otel()
+    assert 'dropping 2 observation results with no source_call_id' in caplog.text
+    assert 'dropping 1 observation results on user or system steps' in caplog.text
+    assert 'dropping 1 references to subagents that are not embedded' in caplog.text
+
+
+def test_image_result_content_becomes_a_warned_marker(caplog: pytest.LogCaptureFixture) -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'},
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': '', 'tool_calls': [
+            {'tool_call_id': 'c', 'function_name': 'f', 'arguments': {}}],
+            'observation': {'results': [{'source_call_id': 'c', 'content': [
+                {'type': 'text', 'text': 'see '},
+                {'type': 'image', 'source': {'media_type': 'image/png', 'path': 'p.png'}}]}]}}]})
+    tool = next(s for s in traj.to_otel().spans if s.operation == 'execute_tool')
+    assert tool.attributes['gen_ai.tool.call.result'] == 'see [image: p.png]'
+    assert caplog.text.count('p.png') == 1
