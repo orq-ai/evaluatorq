@@ -16,6 +16,7 @@ from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.dashboard.trace_links import trace_span_url
 from evaluatorq.trace_finder import (
     CompiledQuery,
+    DashboardSettings,
     DimensionAnswer,
     FacetCatalogue,
     FacetSelection,
@@ -926,9 +927,57 @@ def test_completed_within_progress_reports_run_counts() -> None:
         state='completed', within_results=True, results={'trace-1': matched, 'trace-2': missed}, total=2, matched=1
     )
     html = progress(snapshot)
-    assert '<b>1</b> of 2 judged traces match' in html
+    assert '<b>1</b> of 2 traces match' in html
     assert 'judged traces in view' not in html
     assert 'when asked' not in html
+
+
+def test_completed_answer_sentence_offers_show_only_and_names_model() -> None:
+    from evaluatorq.dashboard.trace_finder.views import progress
+
+    from evaluatorq.trace_finder import PopulationRequest, RunRequest
+
+    request = RunRequest(query='angry customer', mode='immediate', population=PopulationRequest())
+    snapshot = RunSnapshot(state='completed', request=request, total=5, matched=2)
+    html = progress(snapshot, classifier_model='acme/judge', show_only_url='/find/rows?quick_view=matches')
+    assert '<b>2</b> of 5 traces match “angry customer”' in html
+    assert 'Show only these' in html
+    assert 'Uses acme/judge' in html
+    assert 'Show only these' not in progress(replace(snapshot, matched=0), show_only_url='/x')
+    assert 'Reading <b>3</b> of 5' in progress(replace(snapshot, state='classifying', completed=3))
+
+
+def test_unsupported_question_reads_as_cannot_answer_not_error() -> None:
+    from evaluatorq.dashboard.trace_finder.views import progress, status_indicator
+
+    warning = 'Ask AI finds traces; it cannot compute totals, averages or rankings. Costs are sums.'
+    snapshot = RunSnapshot(state='cancelled', plan_warning=warning, dimensions=())
+    html = progress(snapshot)
+    assert warning in html
+    assert 'role="alert"' not in html
+    assert 'compute totals or rankings' not in html
+    assert 'Can&#x27;t answer' in status_indicator(snapshot)
+    assert 'Filters answer this question' not in finder_views.fragment(snapshot, DashboardSettings())
+    assert 'Cancelled' in status_indicator(RunSnapshot(state='cancelled'))
+
+
+def test_matched_answer_shows_its_reason_line() -> None:
+    from evaluatorq.dashboard.trace_finder.views import _answer_cells
+
+    tone = CompiledQuery(
+        name='Tone',
+        task=ClassifyQuestion(
+            kind='choice', instructions='Tone?', criteria={'frustrated': 'Annoyed.', 'neutral': 'Calm.'}, state={}
+        ),
+        selection=ValueSelection(kind='values', values=('frustrated',)),
+    )
+
+    def result(matched: bool) -> TraceClassification:
+        answer = DimensionAnswer(value='frustrated', matched=matched, summary='The customer repeats the request.')
+        return TraceClassification(trace_id='t', span_id='s', answers=(answer,), matched=matched, raw_result={})
+
+    assert 'The customer repeats the request.' in _answer_cells(result(True), (tone,))
+    assert 'The customer repeats the request.' not in _answer_cells(result(False), (tone,))
 
 
 def test_completed_empty_run_keeps_clear_without_download() -> None:

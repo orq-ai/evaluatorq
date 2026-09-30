@@ -170,6 +170,9 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .finder-progress .state { font-size:10.5px; }
 .finder:has(> .finder-command) .finder-progress-answer { color:var(--text-strong); font-size:13px; }
 .finder:has(> .finder-command) .finder-progress-answer b { font-weight:700; }
+.finder:has(> .finder-command) .finder-show-only { padding:3px 10px; font-size:12px; }
+.finder:has(> .finder-command) .xr-reason { max-width:34ch; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted, #6b6b78); font-size:11px; }
+.finder:has(> .finder-command) .fd-reason { margin:2px 0 0; color:var(--text-muted, #6b6b78); font-size:12.5px; }
 .finder:has(> .finder-command) .finder-progress-failed b { color:#bd5548; }
 .finder:has(> .finder-command) .finder-progress .btn-secondary,
 .finder:has(> .finder-command) .finder-progress-action .btn-secondary { display:inline-flex; align-items:center; height:30px; margin-left:0; padding:0 10px; border:1px solid #d5d8df; border-radius:0; background:#fff; color:#25232e; font-family:var(--font-sans); font-size:12px; font-weight:500; text-decoration:none; white-space:nowrap; flex-shrink:0; }

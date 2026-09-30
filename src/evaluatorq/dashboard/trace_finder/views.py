@@ -415,9 +415,14 @@ def _answer_cells(result: TraceClassification, dimensions: tuple[CompiledQuery, 
             continue
         label = 'Judgment failed' if answer.error else _value_text(answer.value)
         confidence = f' <span class="conf">{answer.confidence:.2f}</span>' if answer.confidence is not None else ''
+        reason = (
+            f'<div class="xr-reason" title="{esc(answer.summary)}">{esc(answer.summary)}</div>'
+            if answer.summary and answer.matched
+            else ''
+        )
         cells.append(
             f'<td><span class="verdict"><span class="sw" style="background:{esc(_answer_color(answer, dimension))}"></span>'
-            f'{esc(label)}</span>{confidence}</td>'
+            f'{esc(label)}</span>{confidence}{reason}</td>'
         )
     return ''.join(cells)
 
@@ -477,17 +482,25 @@ def legend(snapshot: RunSnapshot) -> str:
     )
 
 
+def _cannot_answer(snapshot: RunSnapshot) -> bool:
+    """True when Ask AI stopped early because the question is not one it can answer (not a user cancel)."""
+    return snapshot.state == 'cancelled' and snapshot.error is None and bool(snapshot.plan_warning)
+
+
 def progress(
     snapshot: RunSnapshot,
     *,
     export_url: str = '/find/export.json',
+    classifier_model: str | None = None,
+    show_only_url: str | None = None,
 ) -> str:
+    cannot_answer = _cannot_answer(snapshot)
     running = snapshot.state in {'compiling', 'classifying'}
     state = {
         'planning': 'planning search',
         'loading_traces': 'loading traces',
         'starting_classification': 'starting classification',
-    }.get(snapshot.phase or '', snapshot.state.replace('_', ' '))
+    }.get(snapshot.phase or '', "can't answer" if cannot_answer else snapshot.state.replace('_', ' '))
     reset = (
         f'<form class="finder-progress-action" hx-post="/find/reset" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">{csrf_field()}<button class="btn-secondary" type="submit">Clear AI results</button><span role="status">Clearing…</span></form>'
         if snapshot.state != 'idle'
@@ -511,24 +524,28 @@ def progress(
     error_html = (
         f'<span class="finder-progress-error finder-review" role="alert">{esc(snapshot.error)}</span>'
         if snapshot.error
+        else f'<span class="sep">·</span><span class="finder-progress-answer" role="status">{esc(snapshot.plan_warning)}</span>'
+        if cannot_answer
         else f'<span class="finder-progress-error finder-progress-warning finder-review" role="status">{esc(snapshot.plan_warning)}</span>'
         if snapshot.plan_warning
         else ''
     )
     counts = (
-        '<span class="sep">·</span><span>' + _compiling_text(snapshot) + '</span>'
+        ''
+        if cannot_answer
+        else '<span class="sep">·</span><span>' + _compiling_text(snapshot) + '</span>'
         if snapshot.state == 'compiling'
         else f'<span class="sep">·</span><span><b>{snapshot.loaded}</b> traces loaded, none kept</span>'
         if snapshot.total == 0 and snapshot.loaded
         else '<span class="sep">·</span><span>Stopped before traces were loaded</span>'
         if snapshot.total == 0
         else '<span class="sep">·</span><span class="finder-progress-answer">This question did not map to any filter or AI check. '
-        "Ask AI finds traces; it can't compute totals or rankings. Try asking which traces show something.</span>"
+        'Try asking which traces show something.</span>'
         if snapshot.dimensions == () and not _question_added_filters(snapshot)
         else f'<span class="sep">·</span><span><b>{snapshot.matched}</b> kept by filters</span>'
         '<span class="sep">·</span><span>no AI classification needed</span>'
         if snapshot.dimensions == ()
-        else _judging_text(snapshot)
+        else _judging_text(snapshot, classifier_model=classifier_model, show_only_url=show_only_url)
     )
     elapsed_html = (
         f'<span class="sep">·</span><span>{snapshot.elapsed:.1f}s</span>'
@@ -548,18 +565,35 @@ def _question_added_filters(snapshot: RunSnapshot) -> bool:
     return facets or numeric
 
 
-def _judging_text(snapshot: RunSnapshot) -> str:
-    """Lead with the answer (how many match), then the work done; zero failures stay silent."""
+def _judging_text(
+    snapshot: RunSnapshot, *, classifier_model: str | None = None, show_only_url: str | None = None
+) -> str:
+    """Lead with the answer as a sentence, then the work done; zero failures stay silent.
+
+    The run keeps no usage or cost figure, so the model is named instead of a price.
+    """
     done = snapshot.state == 'completed'
+    question = snapshot.request.query if snapshot.request is not None else ''
+    quoted = f' “{esc(question)}”' if question else ''
+    show_only = (
+        f'<button type="button" class="btn-secondary finder-show-only" hx-get="{esc(show_only_url)}" '
+        'hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">Show only these</button>'
+        if show_only_url and snapshot.matched
+        else ''
+    )
     parts = [
-        f'<span class="finder-progress-answer"><b>{snapshot.matched}</b> of {snapshot.total} judged traces match</span>'
+        f'<span class="finder-progress-answer"><b>{snapshot.matched}</b> of {snapshot.total} traces match{quoted}</span>{show_only}'
         if done
-        else f'<span><b>{snapshot.matched}</b> matching so far</span><span class="sep">·</span>'
-        f'<span>{snapshot.completed} / {snapshot.total} judged</span>'
+        else f'<span>Reading <b>{snapshot.completed}</b> of {snapshot.total}</span><span class="sep">·</span>'
+        f'<span><b>{snapshot.matched}</b> matching so far</span>'
     ]
     if snapshot.failed:
         parts.append(f'<span class="finder-progress-failed"><b>{snapshot.failed}</b> failed</span>')
     parts.append('<span>within the loaded rows</span>' if snapshot.within_results else '<span>new search</span>')
+    if classifier_model:
+        parts.append(
+            f'<span style="white-space:nowrap" title="Ask AI reads each trace with this model">Uses {esc(classifier_model)}</span>'
+        )
     if not done:
         parts.append(f'<span>{snapshot.rate:.1f}/s</span>')
     return ''.join(f'<span class="sep">·</span>{part}' for part in parts)
@@ -861,7 +895,7 @@ def status_indicator(snapshot: RunSnapshot) -> str:
             'awaiting_review': ('paused', 'Waiting for review'),
             'completed': ('done', 'Done'),
             'failed': ('failed', 'Failed'),
-            'cancelled': ('idle', 'Cancelled'),
+            'cancelled': ('idle', "Can't answer" if _cannot_answer(snapshot) else 'Cancelled'),
         }[state]
     icon = {'busy': '<span class="spin"></span>', 'done': '✓', 'failed': '✕', 'paused': '⏸'}.get(kind, '')
     return (
@@ -904,10 +938,14 @@ def body(
         explorer_numeric=explorer_numeric,
         explorer_view=explorer_view,
     )
-    details = task_panel(snapshot.dimensions, editable=False) if snapshot.dimensions is not None else ''
+    details = (
+        task_panel(snapshot.dimensions, editable=False)
+        if snapshot.dimensions is not None and not _cannot_answer(snapshot)
+        else ''
+    )
     # The progress line under Ask AI names the running step, so the corner badge would repeat it.
     running = snapshot.state in {'compiling', 'classifying'}
-    return f'{"" if running else indicator}{controls_html}{progress(snapshot)}{details}'
+    return f'{"" if running else indicator}{controls_html}{progress(snapshot, classifier_model=settings.classifier_model, show_only_url="/find/rows?quick_view=matches" if explorer_view is not None else None)}{details}'
 
 
 def page_html(
@@ -986,6 +1024,7 @@ def drawer(
         if result is None
         else (
             f'<p><b>{"Not included" if not result.matched else "Included" if result.answers else "Kept by filters"}</b> · {esc(_answers_text(result, detail.dimensions))}</p>'
+            + ''.join(f'<p class="fd-reason">{esc(answer.summary)}</p>' for answer in result.answers if answer.summary)
             if not result.error
             else f'<p role="alert">Failed: {esc(result.error)}</p>'
         )
