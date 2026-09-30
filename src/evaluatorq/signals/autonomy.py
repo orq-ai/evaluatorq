@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timezone
+from math import isclose
 from operator import itemgetter
 from typing import Any
 
@@ -223,7 +224,7 @@ def max_parallel_tool_calls(ctx: SignalContext) -> SignalResult:
     return result('max_parallel_tool_calls', 'C', maximum, evidence)
 
 
-Interval = tuple[float, float, WalkedStep, str, str | None]
+Interval = tuple[float, float, WalkedStep, str, str | None, bool]
 
 
 def _step_epoch(entry: WalkedStep) -> float | None:
@@ -238,23 +239,25 @@ def _step_epoch(entry: WalkedStep) -> float | None:
     return moment.timestamp()
 
 
-def _llm_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], bool]:
+def _llm_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], list[float]]:
     llm: list[Interval] = []
-    stamps: list[float] = []
-    approximate = False
+    exact_stamps: list[float] = []
+    iso_stamps: list[float] = []
     prior: dict[tuple[str, ...], float] = {}
     for entry in ctx.walked:
         current = _step_epoch(entry)
-        start, end = llm_times(entry).start, llm_times(entry).end
-        if start is not None:
-            stamps.append(start)
-        if end is not None:
-            stamps.append(end)
+        times = llm_times(entry)
+        start, end = times.start, times.end
+        invocation_data = invocation(entry.step)
+        if start is not None and not times.approximate and invocation_data.get('start_timestamp') is not None:
+            exact_stamps.append(start)
+        if end is not None and not times.approximate and invocation_data.get('end_timestamp') is not None:
+            exact_stamps.append(end)
         if current is not None:
-            stamps.append(current)
+            iso_stamps.append(current)
         if entry.step.source == 'agent' and entry.step.llm_call_count != 0:
             if start is not None and end is not None and end >= start:
-                llm.append((start, end, entry, 'llm', None))
+                llm.append((start, end, entry, 'llm', None, False))
             elif (
                 invocation(entry.step).get('start_timestamp') is None
                 and invocation(entry.step).get('end_timestamp') is None
@@ -262,17 +265,15 @@ def _llm_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], boo
                 and prior.get(entry.agent_path) is not None
                 and current >= prior[entry.agent_path]
             ):
-                llm.append((prior[entry.agent_path], current, entry, 'llm', None))
-                approximate = True
+                llm.append((prior[entry.agent_path], current, entry, 'llm', None, True))
         if current is not None:
             prior[entry.agent_path] = current
-    return llm, stamps, approximate
+    return llm, exact_stamps, iso_stamps
 
 
-def _tool_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], bool]:
+def _tool_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float]]:
     tool: list[Interval] = []
     stamps: list[float] = []
-    approximate = False
     for index, entry in enumerate(ctx.walked):
         following = next((item for item in ctx.walked[index + 1 :] if item.agent_path == entry.agent_path), None)
         next_time = _step_epoch(following) if following else None
@@ -285,24 +286,23 @@ def _tool_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], bo
             if end is not None:
                 stamps.append(end)
             if start is not None and end is not None and end >= start:
-                tool.append((start, end, entry, 'tool', record.call.tool_call_id))
+                tool.append((start, end, entry, 'tool', record.call.tool_call_id, False))
             elif start is None and end is None:
                 call_time = _step_epoch(entry)
                 if call_time is not None and next_time is not None and next_time >= call_time:
-                    tool.append((call_time, next_time, entry, 'tool', record.call.tool_call_id))
-                    approximate = True
-    return tool, stamps, approximate
+                    tool.append((call_time, next_time, entry, 'tool', record.call.tool_call_id, True))
+    return tool, stamps
 
 
-def _intervals(ctx: SignalContext) -> tuple[list[Interval], list[Interval], list[float], bool]:
-    llm, llm_stamps, llm_approximate = _llm_intervals(ctx)
-    tool, tool_stamps, tool_approximate = _tool_intervals(ctx)
-    return llm, tool, [*llm_stamps, *tool_stamps], llm_approximate or tool_approximate
+def _intervals(ctx: SignalContext) -> tuple[list[Interval], list[Interval], list[float], list[float]]:
+    llm, llm_exact_stamps, iso_stamps = _llm_intervals(ctx)
+    tool, tool_stamps = _tool_intervals(ctx)
+    return llm, tool, [*llm_exact_stamps, *tool_stamps], iso_stamps
 
 
 def _union(intervals: list[Interval]) -> list[tuple[float, float]]:
     merged: list[tuple[float, float]] = []
-    for start, end, _, _, _ in sorted(intervals, key=itemgetter(0, 1)):
+    for start, end, _, _, _, _ in sorted(intervals, key=itemgetter(0, 1)):
         if merged and start <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], end))
         else:
@@ -329,16 +329,21 @@ def _minus(intervals: list[tuple[float, float]], cuts: list[tuple[float, float]]
     return out
 
 
-def _timing(ctx: SignalContext) -> tuple[dict[str, Any], list[Precondition], bool]:
-    llm, tool, stamps, approximate = _intervals(ctx)
+def _timing(ctx: SignalContext) -> tuple[dict[str, Any], list[Precondition]]:
+    llm, tool, exact_stamps, iso_stamps = _intervals(ctx)
+    stamps = [*exact_stamps, *iso_stamps]
     pcs = [Precondition(name='timestamps', met=bool(stamps), detail=f'{len(stamps)} usable timestamps')]
     if not stamps or (not llm and not tool):
         pcs.append(Precondition(name='activity intervals', met=False, detail='no LLM or tool interval could be timed'))
-        return {}, pcs, approximate
+        return {}, pcs
     llm_union = _union(llm)
+    earliest, latest = min(stamps), max(stamps)
+    exact_earliest = any(isclose(earliest, stamp, abs_tol=0.000001) for stamp in exact_stamps)
+    exact_latest = any(isclose(latest, stamp, abs_tol=0.000001) for stamp in exact_stamps)
     return (
         {
-            'wall': max(stamps) - min(stamps),
+            'wall': latest - earliest,
+            'wall_approximate': not exact_earliest or not exact_latest,
             'active': _length(_union(llm + tool)),
             'llm': _length(llm_union),
             'tool': _length(_minus(_union(tool), llm_union)),
@@ -346,18 +351,22 @@ def _timing(ctx: SignalContext) -> tuple[dict[str, Any], list[Precondition], boo
             'tool_intervals': tool,
         },
         pcs,
-        approximate,
     )
 
 
 def _time_signal(name: str, ctx: SignalContext, key: str, kinds: tuple[str, ...]) -> SignalResult:
-    timing, pcs, approximate = _timing(ctx)
+    timing, pcs = _timing(ctx)
+    approximate = (
+        timing.get('wall_approximate', False)
+        if key == 'wall'
+        else any(interval[5] for kind in kinds for interval in timing.get(f'{kind}_intervals', []))
+    )
     if not timing:
         return result(name, 'C', None, preconditions=pcs, approximate=approximate)
     evidence = [
         _evidence(entry, reason=f'{round((end - start) * 1000)} ms', call_id=call_id)
         for kind in kinds
-        for start, end, entry, _, call_id in timing[f'{kind}_intervals']
+        for start, end, entry, _, call_id, _ in timing[f'{kind}_intervals']
     ]
     return result(name, 'C', round(timing[key] * 1000), evidence, pcs, approximate=approximate)
 
@@ -407,13 +416,35 @@ def max_autonomous_duration_ms(ctx: SignalContext) -> SignalResult:
         pcs.append(Precondition(name='timed segments', met=False, detail='no autonomous segment has usable timestamps'))
         return result('max_autonomous_duration_ms', 'C', None, preconditions=pcs)
     duration, start, entries = max(candidates, key=itemgetter(0))
+    entry_ids = {id(entry) for entry in entries}
+    llm, tool, _, _ = _intervals(ctx)
+    timed_intervals = [interval for interval in llm + tool if id(interval[2]) in entry_ids]
+    calls_with_timestamps = [
+        record.call.tool_call_id
+        for entry in entries
+        for record in _calls_at(ctx, entry)
+        if record.result is not None and any(value is not None for value in tool_times(record.result))
+    ]
+    related_call_ids = list(
+        dict.fromkeys([
+            *calls_with_timestamps,
+            *(interval[4] for interval in timed_intervals if interval[4] is not None),
+        ])
+    )
     return result(
         'max_autonomous_duration_ms',
         'C',
         round(duration * 1000),
-        [_evidence(start, reason=f'{round(duration * 1000)} ms', related=entries)],
+        [
+            _evidence(
+                start,
+                reason=f'{round(duration * 1000)} ms',
+                related=entries,
+                related_call_ids=related_call_ids,
+            )
+        ],
         pcs,
-        approximate=True,
+        approximate=any(interval[5] for interval in timed_intervals),
     )
 
 

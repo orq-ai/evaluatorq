@@ -94,6 +94,33 @@ def test_real_orq_fixture_provides_exact_timing() -> None:
     assert values['tool_time_ms'].evidence[0].call_id == 'call_1'
 
 
+def test_wall_and_segment_timing_track_exact_bounds_and_iso_extrema_separately() -> None:
+    start = 1767225600.0
+    trajectory = traj([
+        _timed_user('2026-01-01T00:00:00Z'),
+        agent(
+            calls=[call('tool', call_id='tool-call')],
+            results=[ok(start_timestamp=start + 3, end_timestamp=start + 5)],
+            timestamp='2026-01-01T00:00:02Z',
+            extra={'invocation': {'start_timestamp': start + 2, 'end_timestamp': start + 3}},
+        ),
+        agent(
+            'answer',
+            timestamp='2026-01-01T00:00:06Z',
+            extra={'invocation': {'start_timestamp': start + 6, 'end_timestamp': start + 7}},
+        ),
+    ])
+    values = _run(trajectory, 'wall_time_ms', 'active_time_ms', 'max_autonomous_duration_ms')
+    assert values['wall_time_ms'].value == 7000
+    assert values['wall_time_ms'].approximate is True
+    assert values['active_time_ms'].value == 4000
+    assert values['active_time_ms'].approximate is False
+    duration = values['max_autonomous_duration_ms']
+    assert duration.value == 7000
+    assert duration.approximate is False
+    assert duration.evidence[0].related_call_ids == ['tool-call']
+
+
 def test_iso_timestamps_use_approximate_fallback_intervals() -> None:
     trajectory = traj([
         _timed_user('2026-01-01T00:00:00Z'),
