@@ -37,16 +37,17 @@ Chat and Responses also convert directly to each other. Every other pair compose
 | **OTel** | `to_chat()` | `to_responses()` | none | `to_atif()` |
 | **ATIF** | `to_chat()` | `to_responses()` | `to_otel()` | none |
 
-`to_atif()` and `to_otel()` on a non-ATIF source take `agent_name` and `agent_version`, which fill `AtifTrajectory.agent`. `OtelTrace.to_atif()` falls back to the `gen_ai.agent.name` and `gen_ai.agent.version` attributes of the root `invoke_agent` span when you leave them unset. Both default to `'unknown'` otherwise.
+`to_atif()` and `to_otel()` on a non-ATIF source take `agent_name` and `agent_version`, which fill `AtifTrajectory.agent`. `OtelTrace.to_atif()` falls back to the `gen_ai.agent.name` and `gen_ai.agent.version` attributes of the root `invoke_agent` span when you leave them unset. Both default to `'unknown'` otherwise. `ChatConversation.to_atif()` and `ResponsesConversation.to_atif()` also take `session_id`; left unset, it is a hash of the conversation, so the same input always gets the same id.
 
 ## What each conversion loses
 
-Every conversion is lossy in some direction. The loss is never silent for structure: a dropped tool result, subagent or history block logs a `loguru` warning.
+Every conversion is lossy in some direction. The loss is never silent for structure: a dropped tool result, message, subagent or history block logs a `loguru` warning. What is dropped without a warning is metadata that has no slot in the target, and each method's `Lost:` list names it.
 
 - **Chat drops reasoning.** `ResponsesConversation.to_chat()` and `AtifTrajectory.to_chat()` count the reasoning items they discard and warn once. Keep the Responses or ATIF object if you need the reasoning.
 - **Responses items merge consecutive agent steps.** Converting to ATIF closes an agent step at a tool result. Two assistant turns with no tool result between them become one step.
-- **ATIF to Responses emits one `Response` per agent step.** Per-call metadata (model, usage, timing) comes from that step; a step without any gets a placeholder that reads back as absent.
-- **ATIF to OTel drops results without a call id and unembedded subagents.** An observation result with no `source_call_id` has no tool message or `execute_tool` span to sit in, and a subagent reference whose trajectory is not embedded has nothing to render. Each logs a warning.
+- **ATIF to Responses emits one `Response` per agent step.** Per-call metadata (model, usage, timing) comes from that step; a step without any gets a placeholder that reads back as absent. Responses usage has no unset token count, so an unset one is written as 0 and listed in `Response.metadata['atif_unset_usage']`, which reads back as unset. Step cost, token ids and logprobs have no Responses slot and are dropped with a warning.
+- **ATIF to OTel drops results without a call id and unembedded subagents.** An observation result with no `source_call_id` has no tool message or `execute_tool` span to sit in, and a subagent reference whose trajectory is not embedded has nothing to render. Each logs a warning. User and system steps are all kept: a system step that opens the trajectory becomes the chat spans' `system_instructions`, a later one is a `system` input message, and steps after the last agent turn go into a final `chat` span that has input and no output. A trajectory with no agent step at all, such as a system prompt and one user message, converts the same way.
+- **Multi-part text joins with newlines.** When one message has several text parts and the target holds a single string, every route joins them with `\n` and skips empty parts, so `to_chat()` and `to_atif().to_chat()` give the same text.
 - **OTel to ATIF drops history and non-agent spans.** Chat input before the first chat span is not a step (warned), and so are extra output choices. Spans that are not `chat`, `execute_tool` or `invoke_agent` are ignored.
 - **Chat to OTel to chat loses `fc_` item ids.** OpenAI Responses function-call item ids survive chat, Responses and ATIF (in step `extra`) but not the trip through OTel spans.
 - **Tool results with no `tool_call_id` are unlinked.** Chat to Responses warns and cannot attach them.
@@ -59,7 +60,7 @@ When a source field has no typed home in the target, the converters keep it in t
 
 ## ATIF versions
 
-Reading accepts `ATIF-v1.7` and `ATIF-v1.8`. Any other `schema_version`, or a missing one, raises `ValueError` at validation. The two versions differ only by the `audio` content part.
+Read an ATIF document with `AtifTrajectory.from_json(text)`, which takes a string, bytes or an already-parsed dict. It accepts `ATIF-v1.7` and `ATIF-v1.8`; any other `schema_version`, or none at the document root, raises `ValueError`. A trajectory built in code, and a subagent embedded in a document, may leave `schema_version` out and get `ATIF-v1.7`. The two versions differ only by the `audio` content part.
 
 Writing keeps the trajectory's own `schema_version`, which is `ATIF-v1.7` for one built by a converter. `to_json()` upgrades to `ATIF-v1.8` when any content part in the document, embedded subagents included, is audio. Pass `version='1.7'` or `version='1.8'` to force one. Forcing `1.7` on a trajectory that holds audio raises `ValueError` instead of writing a document that older readers would reject. The chosen version is stamped on the whole document, embedded subagents included.
 
@@ -109,7 +110,7 @@ print(json.loads(trajectory.to_json())['schema_version'])  # ATIF-v1.7
 ```python
 from evaluatorq.formats import AtifTrajectory
 
-trajectory = AtifTrajectory.model_validate_json(open('trajectory.json').read())
+trajectory = AtifTrajectory.from_json(open('trajectory.json').read())
 chat = trajectory.to_chat()
 print([message.role for message in chat.messages])
 ```
