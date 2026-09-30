@@ -101,6 +101,7 @@ class _Draft:
     span: OtelSpan | None = None
     results: list[AtifObservationResult] = field(default_factory=list)
     tool_span_ids: set[str] = field(default_factory=set)
+    tool_span_result_indices: dict[str, int] = field(default_factory=dict)
 
 
 # OTel -> ATIF
@@ -576,6 +577,8 @@ def _attach_results(
             continue
         issued_at = position[draft.span.span_id]
         calls: list[AtifToolCall] = draft.fields['tool_calls'] or []
+        pending_results: list[tuple[int, int, AtifObservationResult, str | None]] = []
+        result_order = 0
         for n, call in enumerate(calls):
             spans = by_call.get(call.tool_call_id, [])
             span_index = next_span_by_call.get(call.tool_call_id, 0)
@@ -599,28 +602,44 @@ def _attach_results(
                 used_parts.add(found)
             result = _result(call_id=call.tool_call_id, span=span, part=part)
             if result is not None:
-                draft.results.append(result)
-                raw_additional = span.attributes.get('evaluatorq.atif.additional_results') if span else None
-                if raw_additional is not None:
-                    try:
-                        additional = json.loads(raw_additional) if isinstance(raw_additional, str) else raw_additional
-                        if isinstance(additional, list):
-                            draft.results.extend(AtifObservationResult.model_validate(item) for item in additional)
-                        else:
-                            raise TypeError('expected a list')
-                    except (ValueError, TypeError) as exc:
-                        logger.warning(
-                            'Tool span {} has unreadable additional ATIF results ({}); ignoring them',
-                            span.span_id if span else '',
-                            exc,
-                        )
+                response_order = found if found is not None else len(responses) + n
+                pending_results.append((response_order, result_order, result, span.span_id if span else None))
+                result_order += 1
+                additional = _additional_results(span)
+                for item in additional:
+                    pending_results.append((response_order, result_order, item, None))
+                    result_order += 1
             if span is not None:
                 used_spans.add(span.span_id)
             if found is not None:
                 used_parts.add(found)
+        for _, _, result, span_id in sorted(pending_results):
+            index = len(draft.results)
+            draft.results.append(result)
+            if span_id is not None:
+                draft.tool_span_result_indices[span_id] = index
     orphan_spans = [span for span in tool_spans if span.span_id not in used_spans]
     orphan_parts = [entry for n, entry in enumerate(responses) if n not in used_parts]
     _attach_orphans(drafts, position, orphan_spans, orphan_parts)
+
+
+def _additional_results(span: OtelSpan | None) -> list[AtifObservationResult]:
+    """Read extra serialized ATIF results from a tool span, warning and ignoring unreadable data."""
+    raw = span.attributes.get('evaluatorq.atif.additional_results') if span is not None else None
+    if raw is None:
+        return []
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(value, list):
+            raise TypeError('expected a list')
+        return [AtifObservationResult.model_validate(item) for item in value]
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            'Tool span {} has unreadable additional ATIF results ({}); ignoring them',
+            span.span_id if span is not None else '',
+            exc,
+        )
+        return []
 
 
 def _attach_orphans(
@@ -722,6 +741,14 @@ def _reference(ref: AtifSubagentRef, span: OtelSpan, drafts: list[_Draft], by_id
         None,
     )
     candidates = [owning_draft] if owning_draft is not None else drafts
+    if owning_draft is not None and parent is not None:
+        result_index = owning_draft.tool_span_result_indices.get(parent.span_id)
+        if result_index is not None:
+            result = owning_draft.results[result_index]
+            if result.source_call_id == call_id:
+                refs = [*(result.subagent_trajectory_ref or []), ref]
+                owning_draft.results[result_index] = result.model_copy(update={'subagent_trajectory_ref': refs})
+                return
     matching = [
         (draft, index, result)
         for draft in candidates
@@ -782,7 +809,7 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     agent_span_id = stable_hex(seed, 'invoke_agent', '0', length=16)
     _warn_dropped(traj)
     spans: list[OtelSpan] = []
-    call_spans: dict[tuple[int, str], str] = {}
+    call_spans: dict[tuple[int, str, int], str] = {}
     history: list[OtelMessage] = []
     system: list[OtelPart] = []
     uncarried = False  # a user or system step no chat span has put into its input yet
@@ -876,14 +903,27 @@ def _input_only_chat(
     )
 
 
-def _ref_calls(traj: AtifTrajectory) -> dict[str, tuple[int, str]]:
-    """Map each referenced subagent to its issuing step and call id."""
-    refs: dict[str, tuple[int, str]] = {}
+def _ref_calls(traj: AtifTrajectory) -> dict[str, tuple[int, str, int]]:
+    """Map each referenced subagent to its issuing step, call id, and call occurrence."""
+    refs: dict[str, tuple[int, str, int]] = {}
     for step in traj.steps:
+        call_counts: dict[str, int] = {}
+        for call in step.tool_calls or []:
+            call_counts[call.tool_call_id] = call_counts.get(call.tool_call_id, 0) + 1
+        result_occurrences: dict[str, int] = {}
         for result in step.observation.results if step.observation else []:
+            call_id = result.source_call_id
+            if call_id is None:
+                continue
+            occurrence = result_occurrences.get(call_id, 0)
+            result_occurrences[call_id] = occurrence + 1
+            call_count = call_counts.get(call_id, 0)
+            if call_count == 0:
+                continue
+            occurrence = min(occurrence, call_count - 1)
             for ref in result.subagent_trajectory_ref or []:
-                if ref.trajectory_id is not None and result.source_call_id is not None:
-                    refs.setdefault(ref.trajectory_id, (step.step_id, result.source_call_id))
+                if ref.trajectory_id is not None:
+                    refs.setdefault(ref.trajectory_id, (step.step_id, call_id, occurrence))
     return refs
 
 
@@ -894,7 +934,7 @@ def _emit_step(
     parent_span_id: str,
     history: list[OtelMessage],
     system: list[OtelPart],
-    call_spans: dict[tuple[int, str], str],
+    call_spans: dict[tuple[int, str, int], str],
 ) -> list[OtelSpan]:
     """Emit one agent step's chat span and tool spans, then extend `history` with its turn and results."""
     output = OtelMessage(role='assistant', parts=_assistant_parts(step))
@@ -924,6 +964,7 @@ def _emit_step(
     occurrences: dict[str, int] = {}
     assigned_results: dict[int, list[AtifObservationResult]] = {}
     response_texts: dict[int, str | None] = {}
+    call_occurrences: dict[str, int] = {}
     for index, call in enumerate(calls):
         call_results = results.get(call.tool_call_id, [])
         occurrence = occurrences.get(call.tool_call_id, 0)
@@ -958,15 +999,13 @@ def _emit_step(
                 [r.model_dump(mode='json', exclude_none=True) for r in call_results[1:]], separators=(',', ':')
             )
         spans.append(tool_span)
-        call_spans.setdefault((step.step_id, call.tool_call_id), span_id)
+        occurrence = call_occurrences.get(call.tool_call_id, 0)
+        call_occurrences[call.tool_call_id] = occurrence + 1
+        call_spans.setdefault((step.step_id, call.tool_call_id, occurrence), span_id)
     history.append(output)
-    for index, call in enumerate(calls):
-        call_results = assigned_results.get(index, [])
-        if not call_results:
-            continue
-        primary = call_results[0]
-        part = OtelToolCallResponsePart(type='tool_call_response', id=call.tool_call_id, response=response_texts[index])
-        history.append(OtelMessage(role='tool', parts=[part]))
+    primary_result_call = {
+        id(call_results[0]): index for index, call_results in assigned_results.items() if call_results
+    }
     unmatched = [
         result for call_id, call_results in results.items() if call_id not in occurrences for result in call_results
     ]
@@ -976,19 +1015,19 @@ def _emit_step(
             step.step_id,
             len(unmatched),
         )
-        history.extend(
-            OtelMessage(
-                role='tool',
-                parts=[
-                    OtelToolCallResponsePart(
-                        type='tool_call_response',
-                        id=result.source_call_id or '',
-                        response=atif_content_text(result.content, 'OTel') if result.content is not None else None,
-                    )
-                ],
-            )
-            for result in unmatched
-        )
+    unmatched_ids = {id(result) for result in unmatched}
+    for result in step.observation.results if step.observation else []:
+        index = primary_result_call.get(id(result))
+        if index is not None:
+            call_id = calls[index].tool_call_id
+            response = response_texts[index]
+        elif id(result) in unmatched_ids:
+            call_id = result.source_call_id or ''
+            response = atif_content_text(result.content, 'OTel') if result.content is not None else None
+        else:
+            continue
+        part = OtelToolCallResponsePart(type='tool_call_response', id=call_id, response=response)
+        history.append(OtelMessage(role='tool', parts=[part]))
     return spans
 
 

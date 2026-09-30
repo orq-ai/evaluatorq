@@ -98,6 +98,17 @@ def test_custom_tool_call_without_call_id_is_skipped_and_roundtrips(caplog: pyte
     assert trajectory.to_responses().items[0]['type'] == 'message'
 
 
+def test_orphan_custom_result_after_malformed_call_roundtrips() -> None:
+    items = [
+        {'type': 'custom_tool_call', 'name': 'lookup', 'input': '{}'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c1', 'output': 'result'},
+    ]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.items[-1] == items[-1]
+    assert conversation.responses is not None and len(conversation.responses) == 1
+    assert len(conversation.responses[0].output) == 1
+
+
 def test_custom_and_function_results_keep_their_shared_order() -> None:
     items = [
         {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
@@ -110,6 +121,24 @@ def test_custom_and_function_results_keep_their_shared_order() -> None:
     assert [(item['type'], item.get('output')) for item in results] == [
         ('custom_tool_call_output', 'first'), ('function_call_output', 'second')
     ]
+
+
+def test_duplicate_result_order_metadata_warns_and_keeps_all_results(caplog: pytest.LogCaptureFixture) -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'custom', 'input': '{}'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'custom'},
+        {'type': 'function_call_output', 'call_id': 'f', 'output': 'function'},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    assert trajectory.steps[0].extra is not None
+    trajectory.steps[0].extra['evaluatorq.responses_result_order'] = [
+        {'type': 'function', 'index': 0}, {'type': 'function', 'index': 0}
+    ]
+    roundtrip = trajectory.to_responses()
+    results = [item for item in roundtrip.items if item['type'] in ('custom_tool_call_output', 'function_call_output')]
+    assert [item['type'] for item in results] == ['function_call_output', 'custom_tool_call_output']
+    assert 'Malformed Responses result order metadata' in caplog.text
 
 
 def test_custom_call_stays_before_function_result_in_response_output() -> None:

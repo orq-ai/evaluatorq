@@ -341,6 +341,84 @@ def test_reused_call_id_keeps_subagent_under_referencing_step() -> None:
     assert step_refs == [None, 'sub1', 'sub2']
 
 
+def test_duplicate_call_id_parents_subagents_by_call_occurrence() -> None:
+    subagents = [
+        AtifTrajectory(trajectory_id='sub1', agent=AtifAgent(name='sub1', version='1'),
+                       steps=[AtifStep(step_id=1, source='agent', message='one')]),
+        AtifTrajectory(trajectory_id='sub2', agent=AtifAgent(name='sub2', version='1'),
+                       steps=[AtifStep(step_id=1, source='agent', message='two')]),
+    ]
+    traj = AtifTrajectory(
+        agent=AtifAgent(name='a', version='1'),
+        steps=[AtifStep(
+            step_id=1,
+            source='agent',
+            message='',
+            tool_calls=[
+                AtifToolCall(tool_call_id='same', function_name='f', arguments={}),
+                AtifToolCall(tool_call_id='same', function_name='f', arguments={}),
+            ],
+            observation=AtifObservation(results=[
+                AtifObservationResult(source_call_id='same', subagent_trajectory_ref=[
+                    AtifSubagentRef(trajectory_id='sub1')]),
+                AtifObservationResult(source_call_id='same', subagent_trajectory_ref=[
+                    AtifSubagentRef(trajectory_id='sub2')]),
+            ]),
+        )],
+        subagent_trajectories=subagents,
+    )
+    trace = traj.to_otel()
+    tools = [span for span in trace.spans if span.operation == 'execute_tool']
+    subs = [
+        span for span in trace.spans
+        if span.operation == 'invoke_agent' and span.attributes.get('gen_ai.agent.name') != 'a'
+    ]
+    assert len(tools) == len(subs) == 2
+    assert [span.parent_span_id for span in subs] == [span.span_id for span in tools]
+    round_trip = trace.to_atif()
+    agent_step = next(step for step in round_trip.steps if step.source == 'agent')
+    assert agent_step.observation is not None
+    assert round_trip.subagent_trajectories is not None
+    names_by_id = {sub.trajectory_id: sub.agent.name for sub in round_trip.subagent_trajectories}
+    assert [
+        names_by_id[result.subagent_trajectory_ref[0].trajectory_id]
+        for result in agent_step.observation.results
+        if result.subagent_trajectory_ref
+    ] == ['sub1', 'sub2']
+
+
+def test_atif_to_otel_preserves_observation_result_order() -> None:
+    traj = AtifTrajectory(
+        agent=AtifAgent(name='a', version='1'),
+        steps=[
+            AtifStep(step_id=1, source='agent', message='', tool_calls=[
+                AtifToolCall(tool_call_id='a', function_name='f', arguments={}),
+                AtifToolCall(tool_call_id='b', function_name='f', arguments={}),
+            ], observation=AtifObservation(results=[
+                AtifObservationResult(source_call_id='b', content='B first'),
+                AtifObservationResult(source_call_id='a', content='A second'),
+            ])),
+            AtifStep(step_id=2, source='user', message='next'),
+        ],
+    )
+    trace = traj.to_otel()
+    chat = next(span for span in trace.spans if span.operation == 'chat' and span.input_messages is not None)
+    assert chat.input_messages is not None
+    tool_results = [
+        part.response
+        for message in chat.input_messages
+        if message.role == 'tool'
+        for part in message.parts
+        if isinstance(part, OtelToolCallResponsePart)
+    ]
+    assert tool_results == ['B first', 'A second']
+    round_trip = trace.to_atif()
+    agent_step = next(step for step in round_trip.steps if step.source == 'agent')
+    assert agent_step.observation is not None
+    assert [(result.source_call_id, result.content) for result in agent_step.observation.results] == [
+        ('b', 'B first'), ('a', 'A second')]
+
+
 def test_atif_to_otel_keeps_history_usage_and_times() -> None:
     traj = _trace().to_atif()
     trace = traj.to_otel()
@@ -419,12 +497,14 @@ def test_atif_to_otel_assigns_duplicate_call_id_results_by_occurrence() -> None:
             'observation': {'results': [
                 {'source_call_id': 'same', 'content': 'first result'},
                 {'source_call_id': 'same', 'content': 'second result'},
-                {'source_call_id': 'same', 'content': 'additional result', 'extra': {'part': 3}}]}},
+                {'source_call_id': 'same', 'content': 'additional result', 'extra': {'part': 3}},
+                {'source_call_id': 'same', 'content': 'fourth result', 'extra': {'part': 4}}]}},
             {'step_id': 2, 'source': 'user', 'message': 'next'}]})
     trace = traj.to_otel()
     tools = sorted((span for span in trace.spans if span.operation == 'execute_tool'), key=lambda span: span.name)
     assert [span.attributes['gen_ai.tool.call.result'] for span in tools] == ['first result', 'second result']
     assert 'additional result' in tools[1].attributes['evaluatorq.atif.additional_results']
+    assert 'fourth result' in tools[1].attributes['evaluatorq.atif.additional_results']
     chat = next(span for span in trace.spans if span.operation == 'chat' and span.input_messages is not None)
     assert chat.input_messages is not None
     tool_responses = [
@@ -440,7 +520,8 @@ def test_atif_to_otel_assigns_duplicate_call_id_results_by_occurrence() -> None:
     agent_step = next(step for step in round_trip.steps if step.source == 'agent')
     assert agent_step.observation is not None
     assert [(result.content, result.extra) for result in agent_step.observation.results] == [
-        ('first result', None), ('second result', None), ('additional result', {'part': 3})]
+        ('first result', None), ('second result', None), ('additional result', {'part': 3}),
+        ('fourth result', {'part': 4})]
 
 
 def test_atif_to_otel_preserves_unmatched_result_as_tool_message(caplog: pytest.LogCaptureFixture) -> None:

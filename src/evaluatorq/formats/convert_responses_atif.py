@@ -508,9 +508,7 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
     messages = (
         [Message(role='assistant', content=content or None, tool_calls=calls or None)]
-        if content
-        or calls
-        or not any((step.extra or {}).get(key) for key in (_UNMAPPED_OUTPUTS_KEY, _UNMAPPED_RESULTS_KEY))
+        if content or calls or not (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
         else []
     )
     for result in step.observation.results if step.observation else []:
@@ -564,6 +562,28 @@ def _order_result_items(items: list[dict[str, Any]], custom_results: list[dict[s
     ordinary = [item for item in items if item.get('type') == 'function_call_output']
     if not isinstance(order, list):
         items.extend(custom_results)
+        return
+    expected = {('function', index) for index in range(len(ordinary))} | {
+        ('custom', index) for index in range(len(custom_results))
+    }
+    observed: list[tuple[str, int]] = []
+    for entry in order:
+        if (
+            not isinstance(entry, dict)
+            or entry.get('type') not in ('function', 'custom')
+            or not isinstance(entry.get('index'), int)
+            or isinstance(entry.get('index'), bool)
+        ):
+            observed = []
+            break
+        observed.append((entry['type'], entry['index']))
+    if len(observed) != len(expected) or set(observed) != expected:
+        logger.warning('Malformed Responses result order metadata; restoring function results before custom results.')
+        items[:] = [item for item in items if item.get('type') != 'function_call_output']
+        insertion = next(
+            (index for index, item in enumerate(items) if item.get('type') == 'custom_tool_call_output'), len(items)
+        )
+        items[insertion:insertion] = [*ordinary, *custom_results]
         return
     combined: list[dict[str, Any]] = []
     for entry in order:
