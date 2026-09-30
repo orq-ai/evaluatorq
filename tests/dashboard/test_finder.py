@@ -391,6 +391,17 @@ def test_search_reset_does_not_clear_traces_state(monkeypatch: pytest.MonkeyPatc
         return store
 
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
+
+    async def load_facet_catalogue(
+        _orq: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, 'load_facet_catalogue', load_facet_catalogue)
     app = build_app(roots=[tmp_path])
     client = TestClient(app, raise_server_exceptions=True)
     assert client.get('/traces').status_code == 200
@@ -455,6 +466,17 @@ def test_traces_state_is_isolated_between_browser_sessions(monkeypatch: pytest.M
         return store
 
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
+
+    async def load_facet_catalogue(
+        _orq: Any,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, 'load_facet_catalogue', load_facet_catalogue)
     app = build_app(roots=[tmp_path])
     first = TestClient(app, raise_server_exceptions=True)
     second = TestClient(app, raise_server_exceptions=True)
