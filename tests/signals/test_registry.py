@@ -106,3 +106,23 @@ def test_every_signal_shares_one_context_and_sees_earlier_results(monkeypatch: p
     assert seen[0] is seen[1]
     assert seen[0].trajectory is root
     assert len(seen[0].walked) == 2 and len(seen[0].calls) == 1
+
+
+def test_a_failing_walk_still_returns_a_report_with_every_signal_no_basis(monkeypatch: pytest.MonkeyPatch) -> None:
+    _table(monkeypatch)
+
+    def broken(trajectory, config):
+        msg = 'cannot walk'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(registry.SignalContext, 'build', broken)
+    report = compute_signals(traj([user()], trajectory_id='t9'))
+    assert report.trajectory_id == 't9'
+    assert {n: r.no_basis for n, r in report.results.items()} == {
+        'fine': 'walk failed: RuntimeError: cannot walk',
+        'boom': 'walk failed: RuntimeError: cannot walk',
+    }
+    assert [r.group for r in report.results.values()] == ['A', 'B']
+    assert list(compute_signals(traj([user()]), only=['fine']).results) == ['fine']
+    with pytest.raises(ValueError, match='nope'):
+        compute_signals(traj([user()]), only=['nope'])

@@ -7,6 +7,7 @@ Adding a group is one import and one entry in the `_merge(...)` call below; ther
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -58,19 +59,24 @@ def compute_signals(
         ValueError: `only` names a signal that is not registered.
     """
     config = config or SignalsConfig()
-    ctx = SignalContext.build(trajectory, config)
     wanted = None if only is None else set(only)
     if wanted is not None and (unknown := sorted(wanted - set(SIGNALS))):
         msg = f'Unknown signal names: {", ".join(unknown)}'
         raise ValueError(msg)
+    selected = {name: entry for name, entry in SIGNALS.items() if wanted is None or name in wanted}
+    report = partial(SignalReport, trajectory_id=trajectory.trajectory_id, config_version=config.version)
     results: dict[str, SignalResult] = {}
-    for name, (group, fn) in SIGNALS.items():
-        if wanted is not None and name not in wanted:
-            continue
+    try:
+        ctx = SignalContext.build(trajectory, config)
+    except Exception as exc:  # noqa: BLE001 - failure isolation: a walk that fails must still yield a report
+        logger.warning('Walking the trajectory failed: {}: {}', type(exc).__name__, exc)
+        why = f'walk failed: {type(exc).__name__}: {exc}'
+        return report(results={n: SignalResult(name=n, group=g, no_basis=why) for n, (g, _) in selected.items()})
+    for name, (group, fn) in selected.items():
         try:
             results[name] = fn(ctx)
         except Exception as exc:  # noqa: BLE001 - failure isolation: one broken signal must not hide the others
             logger.warning('Signal {} failed: {}: {}', name, type(exc).__name__, exc)
             results[name] = SignalResult(name=name, group=group, no_basis=f'signal raised {type(exc).__name__}: {exc}')
         ctx.results[name] = results[name]
-    return SignalReport(trajectory_id=trajectory.trajectory_id, results=results, config_version=config.version)
+    return report(results=results)
