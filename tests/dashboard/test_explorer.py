@@ -2149,9 +2149,12 @@ def test_ask_within_results_keeps_filters_and_uses_loaded_rows(explorer_client) 
     _load(client, facet_model='gpt-5.6-luna')
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+    async def compile(
+        request: Any, *, wait: bool = True, traces: Any = None, traces_limited: Any = None, table: Any = None
+    ) -> Any:
         captured['request'] = request
         captured['traces'] = traces
+        captured['traces_limited'] = traces_limited
         return store.snapshot_value
 
     store.compile = compile
@@ -2169,6 +2172,7 @@ def test_ask_within_results_keeps_filters_and_uses_loaded_rows(explorer_client) 
 
     assert response.status_code == 200
     assert captured['traces'] is not None
+    assert captured['traces_limited'] is not None
     view = asyncio.run(store.explorer.view())
     population = captured['request'].population
     assert (population.start, population.end) == (view.start, view.end)
@@ -2305,7 +2309,9 @@ def test_large_within_run_is_forced_through_review(explorer_client) -> None:
     _load(client, rows='600')
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+    async def compile(
+        request: Any, *, wait: bool = True, traces: Any = None, traces_limited: Any = None, table: Any = None
+    ) -> Any:
         captured['request'] = request
         return store.snapshot_value
 
