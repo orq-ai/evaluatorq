@@ -32,6 +32,7 @@ from evaluatorq.formats._ids import content_seed, stable_hex
 from evaluatorq.formats._shared import (
     arguments_text,
     atif_content_text,
+    compaction_extra,
     final_metrics,
     join_text,
     media_marker,
@@ -156,6 +157,8 @@ def _segment(items: list[dict[str, Any]]) -> list[_Draft]:
                 logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
         elif item_type == 'function_call_output':
             _attach_output(item, drafts)
+        elif item_type == 'compaction':
+            drafts.append(_Draft(source='system', item=item))
         else:
             logger.warning('Skipping Responses item of type {!r}: ATIF has no equivalent.', item_type)
     return drafts
@@ -208,6 +211,8 @@ def _assistant_text(content: Any) -> str:
 
 def _user_step(draft: _Draft, step_id: int) -> AtifStep:
     item = draft.item or {}
+    if item.get('type') == 'compaction':
+        return AtifStep(step_id=step_id, source='system', message='', extra=compaction_extra([item]))
     extra = {'original_role': 'developer'} if item.get('role') == 'developer' else None
     return AtifStep(step_id=step_id, source=draft.source, message=_user_content(item.get('content')), extra=extra)
 

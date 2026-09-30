@@ -339,3 +339,13 @@ def test_malformed_assistant_text_part_is_warned_not_repr_ed(caplog: pytest.LogC
     assert traj.steps[0].message == ''
     assert traj.steps[1].message == 'ok'
     assert caplog.text.count('carries no text') == 2
+
+
+def test_compaction_item_becomes_a_marked_system_step(caplog: pytest.LogCaptureFixture) -> None:
+    compaction = {'type': 'compaction', 'id': 'cmp_1', 'encrypted_content': 'gAAA'}
+    traj = ResponsesConversation(items=[*_ITEMS, compaction]).to_atif()
+    step = traj.steps[-1]
+    assert (step.source, step.message) == ('system', '')
+    assert step.extra == {'context_management': {'type': 'compaction', 'boundary': 'replace'},
+                          'evaluatorq.compaction': [compaction]}
+    assert 'compaction' not in caplog.text

@@ -2,7 +2,9 @@
 
 OTel -> ATIF reads one agent run per `invoke_agent` scope: `chat` spans become steps in start-time order, and
 the conversation comes from each chat span's *new* input (the part the previous chat span had not seen), so a
-trace whose chat spans replay the full history (Orq does) is not duplicated. Tool results come from
+trace whose chat spans replay the full history (Orq does) is not duplicated. The replayed prefix is checked
+against what the previous span saw; a span whose history was rewritten is read by content instead (see
+`_new_input`), and a compaction in the input becomes a system step. Tool results come from
 `execute_tool` spans or, failing those, from `tool_call_response` parts in later chat inputs, and attach to the
 step that issued the call. Nested `invoke_agent` spans become `subagent_trajectories`. Usage is read from chat
 spans only: `invoke_agent` spans carry inclusive totals that would double-count.
@@ -17,6 +19,7 @@ step. Ids are SHA-256 of the session and trajectory ids. ATIF `extra` data with 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -25,7 +28,14 @@ from loguru import logger
 from evaluatorq.common.fields import get_field
 from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.formats._ids import content_seed, stable_hex
-from evaluatorq.formats._shared import arguments_text, atif_content_text, final_metrics, join_text, tool_arguments
+from evaluatorq.formats._shared import (
+    arguments_text,
+    atif_content_text,
+    compaction_extra,
+    final_metrics,
+    join_text,
+    tool_arguments,
+)
 from evaluatorq.formats.atif import (
     AtifAgent,
     AtifContentPart,
@@ -39,6 +49,8 @@ from evaluatorq.formats.atif import (
     AtifTrajectory,
 )
 from evaluatorq.formats.otel import (
+    OtelCompactionPart,
+    OtelGenericPart,
     OtelMessage,
     OtelPart,
     OtelReasoningPart,
@@ -59,6 +71,8 @@ _NO_STEPS = 'OtelTrace has no chat spans; ATIF needs at least one step'
 _UNKNOWN = 'unknown'
 _OTHER_ERROR = '_OTHER'  # the semconv `error.type` fallback when a failed span names no error
 _STATUSES = frozenset({'ok', 'error', 'unset'})
+_WHITESPACE = re.compile(r'\s+')
+_COMPACTION = 'compaction'
 
 # ATIF data OTel has no attribute for, carried as JSON strings so OTel -> ATIF can restore it.
 _STEP_EXTRA = 'evaluatorq.atif.step.extra'
@@ -98,6 +112,11 @@ def otel_to_atif(trace: OtelTrace, *, agent_name: str = _UNKNOWN, agent_version:
 
     `evaluatorq.atif.*` attributes written by `atif_to_otel` are merged back into the matching `extra` and
     `final_metrics`; a key the trace itself yields keeps the trace's value (a differing carried value is warned).
+
+    A compaction part in a chat input (an `OtelCompactionPart`, or a Responses `compaction` item wrapped in a
+    `data` part) becomes a system step with `extra.context_management = {"type": "compaction", "boundary":
+    "replace"}`, the compaction parts under `extra["evaluatorq.compaction"]`, and any plain-text summary as the
+    message.
 
     Lost: chat input messages before the first chat span (prior history, warned), extra output choices
     (warned), span attributes other than model, usage, finish reasons, error type and `evaluatorq.atif.*`, and
@@ -266,17 +285,76 @@ def _chat_steps(chats: list[OtelSpan], by_id: dict[str, OtelSpan]) -> tuple[list
 
 
 def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
-    seen = len(prev.input_messages or []) + len(prev.output_messages or [])
+    """The messages of `chat`'s input that `prev` had not seen (its input plus its output).
+
+    The usual case is a replay: the input starts with exactly what `prev` saw, compared by `_signature`, and
+    the rest is new. Otherwise the history was rewritten (truncated, summarised or edited) and the new input is
+    read by content: the messages after the last one `prev` saw, so a rewritten prefix neither repeats old turns
+    nor hides new ones. A message that repeats one `prev` saw word for word counts as seen. When the input holds
+    a compaction `prev` did not see, the rewrite is intended and logged at info level: the last such compaction
+    message is kept (it becomes a system step) and the content rule applies to what follows it. Any other
+    rewrite logs one warning naming the span.
+    """
+    seen = [*(prev.input_messages or []), *(prev.output_messages or [])]
     messages = chat.input_messages or []
-    if len(messages) < seen:
+    signatures = [_signature(message) for message in seen]
+    if len(messages) >= len(seen) and [_signature(m) for m in messages[: len(seen)]] == signatures:
+        return messages[len(seen) :]
+    compacted = next(
+        (n for n in range(len(messages) - 1, -1, -1) if _is_compaction(messages[n]) and messages[n] not in seen),
+        None,
+    )
+    if compacted is None:
         logger.warning(
-            'Chat span {} has {} input messages, fewer than the {} its predecessor saw; reading no new input from it',
+            'Chat span {} does not replay the history its predecessor saw; reading the messages after the last one '
+            'already seen as its new input',
             chat.span_id,
-            len(messages),
-            seen,
         )
-        return []
-    return messages[seen:]
+        head: list[OtelMessage] = []
+        tail = messages
+    else:
+        logger.info(
+            'Chat span {} input starts from a compaction; reading the history after it as rewritten', chat.span_id
+        )
+        head = [messages[compacted]]
+        tail = messages[compacted + 1 :]
+    known = set(signatures)
+    last_seen = next((n for n in range(len(tail) - 1, -1, -1) if _signature(tail[n]) in known), -1)
+    return [*head, *tail[last_seen + 1 :]]
+
+
+def _signature(message: OtelMessage) -> tuple[str, str, tuple[str | None, ...]]:
+    """What a replayed message must keep: role (developer as system), whitespace-normalised text, and call ids.
+
+    Reasoning and other non-text parts are left out, since chat spans commonly replay a turn without them.
+    """
+    role = 'system' if message.role == 'developer' else message.role
+    text = _WHITESPACE.sub(' ', join_text(p.content for p in message.parts if isinstance(p, OtelTextPart))).strip()
+    ids = tuple(p.id for p in message.parts if isinstance(p, (OtelToolCallPart, OtelToolCallResponsePart)))
+    return role, text, ids
+
+
+def _compaction_part(part: OtelPart) -> bool:
+    """An OTel compaction part, or a Responses `compaction` item Orq wraps in a `data` part."""
+    if isinstance(part, OtelCompactionPart):
+        return True
+    content = getattr(part, 'content', None) if isinstance(part, OtelGenericPart) and part.type == 'data' else None
+    return isinstance(content, dict) and cast('dict[str, Any]', content).get('type') == _COMPACTION
+
+
+def _is_compaction(message: OtelMessage) -> bool:
+    return any(_compaction_part(part) for part in message.parts)
+
+
+def _compaction_step(message: OtelMessage) -> _Draft:
+    """A system step marking a context compaction, in the ATIF `extra.context_management` convention."""
+    compactions = [part for part in message.parts if _compaction_part(part)]
+    texts, extra = _split_text([part for part in message.parts if not _compaction_part(part)], message.role)
+    texts.extend(
+        part.content for part in compactions if isinstance(part, OtelCompactionPart) and isinstance(part.content, str)
+    )
+    extra = {**(extra or {}), **compaction_extra([part.model_dump(mode='json') for part in compactions])}
+    return _Draft(fields={'source': 'system', 'message': join_text(texts), 'extra': extra})
 
 
 def _system_instruction_steps(chat: OtelSpan) -> list[_Draft]:
@@ -291,7 +369,9 @@ def _history(messages: list[OtelMessage], *, first: bool) -> list[_Draft]:
     drafts: list[_Draft] = []
     history = 0
     for message in messages:
-        if message.role in ('system', 'developer', 'user'):
+        if _is_compaction(message):
+            drafts.append(_compaction_step(message))
+        elif message.role in ('system', 'developer', 'user'):
             drafts.append(_message_step(message))
         elif first and message.role in ('assistant', 'tool'):
             history += 1

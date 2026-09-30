@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from evaluatorq.formats.chat import ChatConversation
     from evaluatorq.formats.otel import OtelTrace
 
-_KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message'}
+_KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message', 'compaction'}
 
 
 class ResponsesConversation(BaseModel):
@@ -55,7 +55,8 @@ class ResponsesConversation(BaseModel):
         agent step (otherwise they are ignored with a warning). Kept in free-form slots: reasoning tokens and
         total tokens in `metrics.extra`; `status`, `error` and `incomplete_details` (non-default only), the
         response id, `fc_` item ids and encrypted-only reasoning in step `extra`; the developer role in
-        `extra.original_role` of a system step. Lost: encrypted reasoning content, non-text assistant parts,
+        `extra.original_role` of a system step. A `compaction` item becomes a system step whose `extra` holds
+        `context_management` and the item under `evaluatorq.compaction`. Lost: encrypted reasoning content, non-text assistant parts,
         file parts (rendered as `[file: name]` markers), and item types ATIF has no step for (warned).
         """
         from evaluatorq.formats import convert_responses_atif
