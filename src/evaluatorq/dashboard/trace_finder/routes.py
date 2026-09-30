@@ -596,6 +596,20 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             )
         return fragment(snapshot, settings, **kwargs)
 
+    async def _current_fragment_kwargs(req: Request, snapshot: RunSnapshot) -> dict[str, Any]:
+        """Carry the active table filters into every /traces controls render."""
+        if is_search(req):
+            return _catalogue_kwargs(req.app, snapshot)
+        store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
+        explorer = store.explorer if store is not None else None
+        explorer_view = await explorer.view() if explorer is not None else None
+        return {
+            **_catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view),
+            'explorer_view': explorer_view,
+            'explorer_facets': explorer_view.facets if explorer_view is not None else None,
+            'explorer_numeric': explorer_view.numeric if explorer_view is not None else None,
+        }
+
     async def _explorer_html(req: Request, *, oob: bool = False, error: str | None = None, poll: bool = False) -> str:
         store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
         explorer = store.explorer if store is not None else None
@@ -765,13 +779,14 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 explorer = store.explorer
                 explorer_view = await explorer.view() if explorer is not None else None
                 if explorer is None or explorer_view is None or not explorer_view.rows:
+                    current_snapshot = await store.snapshot()
                     return _html(
                         render_fragment(
                             req,
-                            await store.snapshot(),
+                            current_snapshot,
                             settings,
                             error='Load traces first, then ask within the results.',
-                            **_catalogue_kwargs(req.app),
+                            **await _current_fragment_kwargs(req, current_snapshot),
                         )
                     )
                 base = _run_request(form, settings)
@@ -819,11 +834,21 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
 
                 snapshot = await store.compile(request, wait=False, table=load_table if explorer is not None else None)
         except (ValidationError, ValueError, TypeError) as exc:
+            current_snapshot = await store.snapshot()
             return _html(
-                render_fragment(req, RunSnapshot(), settings, **_catalogue_kwargs(req.app), error=str(exc)),
+                render_fragment(
+                    req,
+                    current_snapshot,
+                    settings,
+                    **await _current_fragment_kwargs(req, current_snapshot),
+                    error=str(exc),
+                ),
                 status_code=422,
             )
-        return _html(render_fragment(req, snapshot, settings, **_catalogue_kwargs(req.app, snapshot)))
+        return _html(
+            render_fragment(req, snapshot, settings, **await _current_fragment_kwargs(req, snapshot))
+            + (await _explorer_html(req, oob=True) if not is_search(req) else '')
+        )
 
     # How /traces polls without redrawing its controls. Two timers run: the Ask AI band polls
     # /find/poll while a run is compiling or classifying, and #explorer-results polls /find/rows
@@ -1002,10 +1027,19 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             snapshot = await store.start(request, dimensions, wait=False)
         except (ValidationError, ValueError, TypeError) as exc:
             return _html(
-                render_fragment(req, current, settings, error=str(exc), **_catalogue_kwargs(req.app, current)),
+                render_fragment(
+                    req,
+                    current,
+                    settings,
+                    error=str(exc),
+                    **await _current_fragment_kwargs(req, current),
+                ),
                 status_code=422,
             )
-        return _html(render_fragment(req, snapshot, settings, **_catalogue_kwargs(req.app, snapshot)))
+        return _html(
+            render_fragment(req, snapshot, settings, **await _current_fragment_kwargs(req, snapshot))
+            + (await _explorer_html(req, oob=True) if not is_search(req) else '')
+        )
 
     @app.post('/find/cancel')
     async def find_cancel(req: Request) -> Response:
@@ -1023,8 +1057,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         snapshot = await store.cancel() if store is not None else RunSnapshot()
         return _html(
             render_fragment(
-                req, snapshot, settings, api_available=store is not None, **_catalogue_kwargs(req.app, snapshot)
+                req,
+                snapshot,
+                settings,
+                api_available=store is not None,
+                **await _current_fragment_kwargs(req, snapshot),
             )
+            + (await _explorer_html(req, oob=True) if not is_search(req) else '')
         )
 
     @app.post('/find/reset')
@@ -1042,10 +1081,15 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         store = await store_for(req)
         snapshot = await store.reset() if store is not None else RunSnapshot()
         if store is not None and store.explorer is not None:
+            await store.explorer.restore_narrowed()
             await store.explorer.set_view(quick_view='all')
         return _html(
             render_fragment(
-                req, snapshot, settings, api_available=store is not None, **_catalogue_kwargs(req.app, snapshot)
+                req,
+                snapshot,
+                settings,
+                api_available=store is not None,
+                **await _current_fragment_kwargs(req, snapshot),
             )
             + (await _explorer_html(req, oob=True) if not is_search(req) else '')
         )

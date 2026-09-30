@@ -880,6 +880,76 @@ def test_reset_refreshes_explorer_results_out_of_band(explorer_client) -> None:
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=all"' in response.text
 
 
+def test_reset_restores_within_narrowed_rows_filters_and_clears_ai_table_state(explorer_client) -> None:
+    from evaluatorq.trace_finder import FacetSelection, NumericFilters
+    from evaluatorq.trace_finder.columns import MATCH
+
+    store, _, client = explorer_client
+    _load(client, facet_model='original-model', tokens_min='120')
+    explorer = store.explorer
+    before = asyncio.run(explorer.view())
+    asyncio.run(
+        explorer.narrow(
+            before.generation,
+            {before.rows[0].trace_id},
+            facets=FacetSelection(model=frozenset({'ai-filter'})),
+            numeric=NumericFilters(tokens_min=900),
+        )
+    )
+    asyncio.run(explorer.set_view(sort=MATCH, quick_view='matches'))
+
+    response = client.post('/find/reset', data=csrf_data())
+    restored = asyncio.run(explorer.view())
+
+    assert response.status_code == 200
+    assert restored.rows == before.rows
+    assert restored.facets == before.facets
+    assert restored.facets.model == frozenset({'original-model'})
+    assert restored.numeric == NumericFilters(tokens_min=120)
+    assert restored.quick_view == 'all'
+    assert restored.sort is None
+    assert 'ai-filter' not in response.text
+    assert 'original-model' in response.text
+    assert 'tokens_min' in response.text
+
+
+def test_within_empty_and_422_renders_keep_current_explorer_filters(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client, facet_model='kept-model', tokens_min='100')
+    view = asyncio.run(store.explorer.view())
+    asyncio.run(store.explorer.narrow(view.generation, set(), facets=view.facets, numeric=view.numeric))
+
+    no_rows = client.post(
+        '/find/run',
+        data=csrf_data({'query': 'x', 'scope': 'within', 'mode': 'review', 'window_days': '7', 'limit': '200', 'parallelism': '10'}),
+    )
+    invalid = client.post(
+        '/find/run',
+        data=csrf_data({'query': 'x', 'scope': 'within', 'mode': 'review', 'window_days': 'bad', 'limit': '200', 'parallelism': '10'}),
+    )
+
+    assert 'kept-model' in no_rows.text
+    assert 'tokens_min' in no_rows.text
+    assert 'kept-model' in invalid.text
+    assert 'tokens_min' in invalid.text
+    assert asyncio.run(store.explorer.view()).facets.model == frozenset({'kept-model'})
+
+
+def test_cancel_refreshes_ai_waiting_cells(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    store.snapshot_value = replace(
+        _judged_snapshot(matched=1, verdicts={}), state='classifying', results={}, within_results=True
+    )
+
+    response = client.post('/find/cancel', data=csrf_data())
+
+    assert response.status_code == 200
+    assert 'hx-swap-oob="true"' in response.text
+    assert 'xr-pending' not in response.text
+    assert 'Waiting for the AI' not in response.text
+
+
 def _judged_snapshot(**kwargs: Any) -> Any:
     """A completed within-results run whose classifier judged the given trace ids (a: match, b: no match)."""
     from evaluatorq.common.judge import ClassifyQuestion
