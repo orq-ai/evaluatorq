@@ -714,6 +714,25 @@ def test_traces_csv_hides_dimension_columns_before_first_classifier_result(explo
     assert all(dimension.name not in headers for dimension in store.snapshot_value.dimensions or ())
 
 
+def test_traces_csv_keeps_completed_match_first_table_order(explorer_client) -> None:
+    store, _, client = explorer_client
+    store.snapshot_value = _judged_snapshot(verdicts={'trace-0249': True, 'trace-0000': False})
+    _load(client)
+
+    rendered = client.get('/find/rows')
+    exported = client.get('/traces/export.csv')
+    table = list(csv.reader(io.StringIO(exported.text, newline='')))
+    visible_ids = re.findall(r'data-tv-row="([^"]+)"', rendered.text)
+    trace_column = table[0].index('Trace / agent')
+    exported_ids = [row[trace_column] for row in table[1:]]
+
+    assert rendered.status_code == exported.status_code == 200
+    assert len(visible_ids) == PAGE_ROWS
+    assert len(exported_ids) == 250
+    assert exported_ids[0] == visible_ids[0] == 'trace-0249'
+    assert exported_ids[:PAGE_ROWS] == visible_ids
+
+
 def test_traces_toolbar_offers_csv_download(explorer_client) -> None:
     _, _, client = explorer_client
 

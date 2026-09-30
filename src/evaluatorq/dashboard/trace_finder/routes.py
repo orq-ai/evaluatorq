@@ -51,7 +51,7 @@ from evaluatorq.trace_finder import (
 if TYPE_CHECKING:
     from evaluatorq.trace_finder import FacetCatalogue
 from evaluatorq.trace_finder.columns import COLUMNS, resolve_columns
-from evaluatorq.trace_finder.explorer import QUICK_VIEWS, ExplorerView
+from evaluatorq.trace_finder.explorer import QUICK_VIEWS, ExplorerView, matches_first_view
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES, TraceRecord
 from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
 from evaluatorq.trace_finder.settings import (
@@ -670,7 +670,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             else ()
         )
         content = export_table_csv(
-            view.visible_rows(results),
+            matches_first_view(view, active_snapshot).visible_rows(results),
             _settings(req.app).explorer_columns,
             dimensions=dimensions,
             results=results,

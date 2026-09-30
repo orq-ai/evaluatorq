@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -19,6 +18,7 @@ from evaluatorq.trace_finder.explorer import (
     TOP_METRICS,
     ai_matched,
     conversation_key,
+    matches_first_view,
     totals,
 )
 from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
@@ -707,18 +707,9 @@ def results(
     traces_layout: bool = False,
 ) -> str:
     snapshot = _within_snapshot(snapshot)
-    if (
-        snapshot is not None
-        and snapshot.state == 'completed'
-        and snapshot.dimensions
-        and view.quick_view == 'all'
-        and view.sort is None
-    ):
-        # Keep All selected while surfacing positive classifier results first. An explicit
-        # column sort and the chosen table/trajectory mode remain user-controlled.
-        matched = tuple(row for row in view.rows if ai_matched(snapshot.results.get(row.trace_id)))
-        unmatched = tuple(row for row in view.rows if not ai_matched(snapshot.results.get(row.trace_id)))
-        view = replace(view, rows=(*matched, *unmatched))
+    # Keep All selected while surfacing positive classifier results first. An explicit
+    # column sort and the chosen table/trajectory mode remain user-controlled.
+    view = matches_first_view(view, snapshot)
     oob_attr = ' hx-swap-oob="true"' if oob else ''
     poll = (
         ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="outerHTML"'

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
     from datetime import datetime
 
-    from .models import TraceClassification, TraceRecord
+    from .models import RunSnapshot, TraceClassification, TraceRecord
     from .rows import TraceRow
 
 ViewMode = Literal['table', 'trajectories']
@@ -227,6 +227,22 @@ class ExplorerView:
         visible = self.visible_rows(results)
         start = min(self.page, max(1, -(-len(visible) // PAGE_ROWS)) - 1) * PAGE_ROWS
         return visible[start : start + PAGE_ROWS]
+
+
+def matches_first_view(view: ExplorerView, snapshot: RunSnapshot | None) -> ExplorerView:
+    """Put completed AI matches first when All has no explicit sort, for both table and export."""
+    if (
+        snapshot is not None
+        and snapshot.within_results
+        and snapshot.state == 'completed'
+        and snapshot.dimensions
+        and view.quick_view == 'all'
+        and view.sort is None
+    ):
+        matched = tuple(row for row in view.rows if ai_matched(snapshot.results.get(row.trace_id)))
+        unmatched = tuple(row for row in view.rows if not ai_matched(snapshot.results.get(row.trace_id)))
+        return replace(view, rows=(*matched, *unmatched))
+    return view
 
 
 class ExplorerStore:
