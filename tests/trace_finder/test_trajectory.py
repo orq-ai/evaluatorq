@@ -44,6 +44,18 @@ def test_responses_summary_and_refusal_parts_render_as_text() -> None:
     assert 'I cannot help with that.' in result[1].preview
 
 
+def test_orq_native_summary_and_refusal_parts_render_as_text() -> None:
+    result = segments([
+        {'role': 'assistant', 'parts': [
+            {'kind': 'summary_text', 'text': 'Orq reasoning summary'},
+            {'kind': 'refusal', 'refusal': 'Orq refusal text'},
+        ]},
+    ])
+    assert [segment.kind for segment in result] == ['assistant', 'assistant']
+    assert 'Orq reasoning summary' in result[0].preview
+    assert 'Orq refusal text' in result[1].preview
+
+
 def test_unknown_part_becomes_other() -> None:
     result = segments([{'role': 'assistant', 'parts': [{'type': 'hologram', 'content': 'zzz'}]}])
     assert [s.kind for s in result] == ['other']
