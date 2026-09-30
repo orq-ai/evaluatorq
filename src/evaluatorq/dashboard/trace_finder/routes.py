@@ -453,8 +453,22 @@ def _run_request(
     if anchor is not None and anchor.end is not None:
         end = anchor.end
         start = anchor.start if anchor.start is not None else end - timedelta(days=parsed.window_days)
-    elif form.get('from') and form.get('to'):
-        start, end = parse_range(*_range_values(form), str(form.get('tz_offset') or '0'))
+    elif (form.get('new_from') and form.get('new_to')) or (form.get('from') and form.get('to')):
+        if form.get('new_from') and form.get('new_to'):
+            start, end = parse_range(
+                str(form.get('new_from')),
+                str(form.get('new_to')),
+                '0',
+                str(form.get('new_from_tz_offset') or '0'),
+                str(form.get('new_to_tz_offset') or '0'),
+            )
+        else:
+            start, end = parse_range(
+                *_range_values(form),
+                str(form.get('tz_offset') or '0'),
+                str(form.get('from_tz_offset') or '') or None,
+                str(form.get('to_tz_offset') or '') or None,
+            )
     else:
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=parsed.window_days)
@@ -896,7 +910,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         body_oob = (
             f'<div id="finder-body" hx-swap-oob="innerHTML">'
             f'{render_fragment(req, snapshot, settings, **load_kwargs)}</div>'
-            f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows), selected=str(form.get("scope") or ""))}</div>'
+            f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=True, selected="within")}</div>'
         )
         return _html(await _explorer_html(req) + body_oob)
 
@@ -927,8 +941,6 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         # The section's own timer swaps nothing itself (hx-swap="none"), so its render arrives out of band.
         polling = req.headers.get('HX-Trigger') == 'explorer-results'
         body = await _explorer_html(req, oob=polling, poll=polling)
-        if explorer is not None:
-            body += f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows), selected=req.query_params.get("scope"))}</div>'
         return _html(body)
 
     @app.post('/find/columns')

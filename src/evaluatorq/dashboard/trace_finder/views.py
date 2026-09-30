@@ -48,8 +48,8 @@ COMMAND_EXAMPLES = (
     'Which conversations mention refunds?',
     'Where did the agent fail to help someone?',
 )
-SCOPE_HELP_WITHIN = 'Loaded traces: Ask AI reads only the traces already loaded below, up to the row limit.'
-SCOPE_HELP_NEW = 'All traces: Ask AI searches every trace in the chosen time range, then loads the matches.'
+SCOPE_HELP_WITHIN = 'Within results reads every loaded trace, including rows outside the current tab or page.'
+SCOPE_HELP_NEW = 'New search searches the chosen time range up to the Rows limit, then loads the matches.'
 ASK_AI_COST_NOTE = 'Each question is answered by an AI model, so it takes a few seconds and costs a little.'
 FACET_LABELS = (
     ('project', 'project'),
@@ -102,7 +102,7 @@ def hero(query: str, mode: str, *, api_available: bool, error: str | None = None
         f'<label><input type="radio" name="scope" value="within" form="finder-query-form"{" checked" if has_rows else ""}{"" if has_rows else " disabled"}><span>Within results</span></label>'
         f'<label><input type="radio" name="scope" value="new" form="finder-query-form"{"" if has_rows else " checked"}><span>New search</span></label></div>'
         '<div class="finder-below">'
-        '<p class="finder-hint-line">Within results classifies all loaded traces.</p>'
+        '<p class="finder-hint-line">Within results reads all loaded traces, even when a tab or page hides some rows.</p>'
         '<div class="finder-seg" role="radiogroup" aria-label="Mode">'
         f'<label><input type="radio" name="mode" value="immediate" form="finder-query-form"{checked_immediate} '
         'hx-post="/find/reset" hx-trigger="change[document.getElementById(\'finder-start-form\')]" '
@@ -381,13 +381,15 @@ def controls(
         window_days = max(1, round((explorer_view.end - explorer_view.start).total_seconds() / 86400))
     values = {
         'window_days': window_days,
-        'limit': population.limit if population is not None else settings.limit,
+        'limit': population.limit
+        if population is not None
+        else (explorer_view.limit if explorer_view is not None and explorer_view.limit else settings.limit),
         'parallelism': request.parallelism if request is not None else settings.parallelism,
     }
     numeric = population.numeric if population is not None else None
     # The 1s poll re-renders this row; hx-preserve keeps the live inputs so a value typed for the next run
     # survives. The id carries the form so a review-form input is never carried into the query form.
-    keep = {name: f'id="finder-{name}-{form_id}" hx-preserve' for name in values}
+    keep = {name: f'id="finder-{name}-{form_id}" hx-preserve' for name in ('window_days', 'parallelism')}
     # A reviewed start reuses the whole population, classifier picks included. A fresh query only carries
     # the filters the user set themselves; the classifier's picks for the last question are not sticky.
     carried_facets = (
@@ -437,9 +439,17 @@ def controls(
         f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending, loaded_rows=explorer_view.rows if explorer_view is not None else None)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
-        f'<input {keep["limit"]} type="hidden" form="{form_id}" name="limit" value="{values["limit"]}">'
+        f'<input id="finder-limit-query" type="hidden" form="{form_id}" name="limit" value="{values["limit"]}">'
         f'<input {keep["parallelism"]} type="hidden" form="{form_id}" name="parallelism" value="{values["parallelism"]}">'
-        f'{count_html}</div>'
+        + (
+            '<input type="hidden" data-new-range name="new_from" value="">'
+            '<input type="hidden" data-new-range name="new_to" value="">'
+            '<input type="hidden" data-new-range name="new_from_tz_offset" value="0">'
+            '<input type="hidden" data-new-range name="new_to_tz_offset" value="0">'
+            if explorer_view is not None
+            else ''
+        )
+        + f'{count_html}</div>'
     )
 
 
@@ -1142,10 +1152,10 @@ def scope_toggle(*, has_rows: bool, selected: str | None = None) -> str:
         '<label><input type="radio" name="scope" value="within" form="finder-query-form"'
         + (' checked' if selected == 'within' else '')
         + within
-        + '><span>Loaded traces</span></label>'
+        + '><span>Within results</span></label>'
         + '<label><input type="radio" name="scope" value="new" form="finder-query-form"'
         + (' checked' if selected == 'new' else '')
-        + '><span>All traces</span></label>'
+        + '><span>New search</span></label>'
     )
 
 

@@ -861,6 +861,37 @@
     });
     explorerUpdateOffsets();
   }, true);
+  document.addEventListener('submit', function (evt) {
+    const form = evt.target;
+    if (!form || form.id !== 'finder-query-form') return;
+    const rows = document.getElementById('explorer-rows');
+    const limit = document.getElementById('finder-limit-query');
+    if (rows && limit) limit.value = rows.value;
+    const dateTime = (name) => {
+      const date = document.getElementById('explorer-' + name)?.value;
+      const time = document.getElementById('explorer-' + name + '-time')?.value;
+      return date && time ? date + 'T' + time : '';
+    };
+    const start = dateTime('from'), end = dateTime('to');
+    const endTime = document.getElementById('explorer-to-time');
+    if (!start || !end || start >= end) {
+      if (endTime) {
+        endTime.setCustomValidity(!start || !end ? 'Enter both ends of the time range' : 'End must be after start');
+        endTime.reportValidity();
+      }
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+      return;
+    }
+    if (endTime) endTime.setCustomValidity('');
+    const startDate = new Date(start), endDate = new Date(end);
+    document.querySelectorAll('#finder-controls [data-new-range]').forEach((field) => {
+      if (field.name === 'new_from') field.value = start;
+      else if (field.name === 'new_to') field.value = end;
+      else if (field.name === 'new_from_tz_offset') field.value = String(startDate.getTimezoneOffset());
+      else if (field.name === 'new_to_tz_offset') field.value = String(endDate.getTimezoneOffset());
+    });
+  }, true);
   document.addEventListener('DOMContentLoaded', explorerInit);
   document.body.addEventListener('htmx:afterSettle', explorerInit);
   document.body.addEventListener('change', function (evt) {

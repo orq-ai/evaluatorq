@@ -74,26 +74,36 @@ def _local_value(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
 
 
-def range_inputs(start: datetime | None, end: datetime | None, window_days: int, *, include_load: bool = True) -> str:
+def range_inputs(
+    start: datetime | None,
+    end: datetime | None,
+    window_days: int,
+    *,
+    include_load: bool = True,
+    row_limit: int = DEFAULT_EXPLORER_ROWS,
+) -> str:
     end = end or datetime.now(timezone.utc)
     start = start or end - timedelta(days=window_days)
+    range_seconds = max(1, int((end - start).total_seconds()))
+    preset_seconds = {int(span.total_seconds()) for _, span in PRESETS}
+    range_mode = 'relative' if range_seconds in preset_seconds else 'exact'
     presets = ''.join(
         f'<button type="button" class="xr-preset" data-explorer-preset="{int(span.total_seconds())}" '
-        f'aria-pressed="{str(span == timedelta(days=window_days)).lower()}">{label}</button>'
+        f'aria-pressed="{str(int(span.total_seconds()) == range_seconds).lower()}">{label}</button>'
         for label, span in PRESETS
     )
     controls = (
         f'<form id="explorer-load-form" hidden hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace" hx-include="#finder-controls, #finder-scope">{_csrf()}</form>'
-        '<input id="explorer-range-mode" type="hidden" name="range_mode" value="relative" form="explorer-load-form" hx-preserve data-explorer-range-mode>'
-        f'<input id="explorer-range-seconds" type="hidden" name="range_seconds" value="{window_days * 86400}" form="explorer-load-form" hx-preserve data-explorer-range-seconds>'
+        f'<input id="explorer-range-mode" type="hidden" name="range_mode" value="{range_mode}" form="explorer-load-form" hx-preserve data-explorer-range-mode>'
+        f'<input id="explorer-range-seconds" type="hidden" name="range_seconds" value="{range_seconds}" form="explorer-load-form" hx-preserve data-explorer-range-seconds>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
-        f'<details class="xr-time-menu"><summary><span class="xr-time-label" data-explorer-range-label>Last {window_days} days</span></summary><div class="xr-time-options"><span class="xr-presets" role="group" aria-label="Relative range">{presets}</span>'
+        f'<details class="xr-time-menu"><summary><span class="xr-time-label" data-explorer-range-label>Custom range</span></summary><div class="xr-time-options"><span class="xr-presets" role="group" aria-label="Relative range">{presets}</span>'
         '<details class="xr-exact"><summary>Custom range</summary>'
         f'<span class="xr-range"><b>From</b><input id="explorer-from" class="xr-date" aria-label="From date" hx-preserve form="explorer-load-form" name="from" type="date" required data-utc="{_local_value(start)}" value="{_local_value(start)[:10]}"><input id="explorer-from-time" class="xr-time" aria-label="From time" hx-preserve form="explorer-load-form" name="from_time" type="time" step="1" required data-utc="{_local_value(start)}" value="{_local_value(start)[11:]}"></span>'
         f'<span class="xr-range"><b>To</b><input id="explorer-to" class="xr-date" aria-label="To date" hx-preserve form="explorer-load-form" name="to" type="date" required data-utc="{_local_value(end)}" value="{_local_value(end)[:10]}"><input id="explorer-to-time" class="xr-time" aria-label="To time" hx-preserve form="explorer-load-form" name="to_time" type="time" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)[11:]}"></span>'
         '<small class="xr-tz" data-explorer-tz-label>Local time</small>'
         '<button type="button" class="xr-apply" data-explorer-apply>Apply range</button></details></div></details>'
-        f'<span class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="{MAX_LIVE_TRACES}" value="{DEFAULT_EXPLORER_ROWS}" style="width:72px"></span>'
+        f'<label class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="{MAX_LIVE_TRACES}" value="{row_limit}" style="width:72px"></label>'
     )
     load = '<button class="btn-secondary" type="submit" form="explorer-load-form">Load</button>' if include_load else ''
     return controls + load
@@ -670,7 +680,9 @@ def _toolbar(
         if traces_layout and view.view == 'table'
         else ''
     )
-    date_and_rows = range_inputs(view.start, view.end, window_days, include_load=False)
+    date_and_rows = range_inputs(
+        view.start, view.end, window_days, include_load=False, row_limit=view.limit or DEFAULT_EXPLORER_ROWS
+    )
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary xr-load" type="submit" form="explorer-load-form">Load</button>'
     from evaluatorq.dashboard.trace_finder.views import _facet_chips  # pyright: ignore[reportPrivateUsage]

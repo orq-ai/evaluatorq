@@ -1407,8 +1407,9 @@ def test_load_keeps_filter_values_and_enables_within_scope(explorer_client) -> N
     assert 'name="tokens_min"' in response.text
     assert 'gpt-x' in response.text
     assert 'id="finder-scope" hx-swap-oob="innerHTML"' in response.text
+    assert 'name="scope" value="within" form="finder-query-form" checked' in response.text
     poll = client.get('/find/rows').text
-    assert 'name="scope" value="within" form="finder-query-form" checked' in poll
+    assert 'id="finder-scope" hx-swap-oob="innerHTML"' not in poll
 
 
 def test_error_responses_swap_as_html(explorer_client) -> None:
@@ -1434,23 +1435,37 @@ def test_load_preserves_exact_review_range() -> None:
     assert request.population.end == end
 
 
-def test_rows_controls_share_sync_and_scope_oob(explorer_client) -> None:
+def test_rows_controls_share_sync_without_rerendering_scope(explorer_client) -> None:
     _, _, client = explorer_client
     _load(client)
     html = client.get('/find/rows?view=trajectories').text
     assert 'hx-sync="#explorer-results:replace"' in html
-    assert 'id="finder-scope" hx-swap-oob="innerHTML"' in html
+    assert 'id="finder-scope" hx-swap-oob="innerHTML"' not in html
     assert 'hx-include="#finder-scope"' in html
 
 
-def test_loading_traces_preserves_new_search_scope(explorer_client) -> None:
+def test_successful_load_defaults_to_within_even_if_new_was_selected(explorer_client) -> None:
     _, _, client = explorer_client
     loaded = _load(client, scope='new').text
-    assert 'name="scope" value="new" form="finder-query-form" checked' in loaded
+    assert 'name="scope" value="within" form="finder-query-form" checked' in loaded
 
-    polled = client.get('/find/rows?scope=new').text
-    assert 'name="scope" value="new" form="finder-query-form" checked' in polled
-    assert 'name="scope" value="within" form="finder-query-form" checked' not in polled
+
+def test_range_controls_reflect_loaded_range_and_row_cap() -> None:
+    from datetime import timedelta
+
+    from evaluatorq.dashboard.trace_finder.explorer_views import range_inputs
+
+    end = datetime(2026, 9, 30, 12, tzinfo=timezone.utc)
+    html = range_inputs(end - timedelta(minutes=15), end, 7, row_limit=37)
+    assert 'name="range_seconds" value="900"' in html
+    assert 'name="range_mode" value="relative"' in html
+    assert 'aria-pressed="true">15m</button>' in html
+    assert 'id="explorer-rows" hx-preserve form="explorer-load-form" name="rows"' in html
+    assert 'value="37" style="width:72px"' in html
+
+    custom = range_inputs(end - timedelta(hours=2, minutes=5), end, 7, row_limit=41)
+    assert 'name="range_mode" value="exact"' in custom
+    assert 'data-utc="2026-09-30T09:55:00"' in custom
 
 
 def test_new_search_results_do_not_dim_unclassified_explorer_rows() -> None:
@@ -1870,6 +1885,37 @@ def test_ask_new_search_uses_calendar_range(explorer_client) -> None:
     assert response.status_code == 200
     assert captured['request'].population.start == datetime(2026, 9, 27, 8, 0, 5, tzinfo=timezone.utc)
     assert captured['request'].population.end == datetime(2026, 9, 27, 9, 30, 9, tzinfo=timezone.utc)
+
+
+def test_ask_new_search_uses_toolbar_range_and_rows_cap(explorer_client) -> None:
+    store, _, client = explorer_client
+    captured: dict[str, Any] = {}
+
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+        captured['request'] = request
+        return store.snapshot_value
+
+    store.compile = compile
+    response = client.post(
+        '/find/run',
+        data=csrf_data({
+            'query': 'recent traces',
+            'scope': 'new',
+            'new_from': '2026-09-30T10:15:00',
+            'new_to': '2026-09-30T11:45:30',
+            'new_from_tz_offset': '-120',
+            'new_to_tz_offset': '-120',
+            'window_days': '7',
+            'limit': '43',
+            'parallelism': '10',
+        }),
+    )
+
+    assert response.status_code == 200
+    population = captured['request'].population
+    assert population.start == datetime(2026, 9, 30, 8, 15, tzinfo=timezone.utc)
+    assert population.end == datetime(2026, 9, 30, 9, 45, 30, tzinfo=timezone.utc)
+    assert population.limit == 43
 
 
 def test_ask_within_results_without_rows_explains(explorer_client) -> None:
