@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -493,34 +492,17 @@ def _answers_text(result: TraceClassification, dimensions: tuple[CompiledQuery, 
     )
 
 
-_SCORE_TEXT_RE = re.compile(r'^\s*(?:noul|choice|score)\s*=')
 _QUESTION_CAP = 80
 
 
-def _reason_text(answer: DimensionAnswer) -> str | None:
-    """The classifier's prose explanation, or None when it only returned score text.
-
-    JEV returns a distribution and no rationale; ``run_classify`` synthesises ``noul=0.93 (threshold 0.5)``
-    from the numbers. That is a score, not a reason, so it is never shown as one.
-    """
-    text = (answer.summary or '').strip()
-    return None if not text or _SCORE_TEXT_RE.match(text) else text
-
-
 def _reason_line(answer: DimensionAnswer) -> str:
-    if answer.error or not answer.matched:
+    if answer.error or not answer.matched or answer.confidence is None:
         return ''
-    reason = _reason_text(answer)
-    if reason:
-        return f'<div class="xr-reason" title="{esc(reason)}">{esc(reason)}</div>'
-    fallback = _no_explanation_text(answer)
-    return f'<div class="xr-reason">{esc(fallback)}</div>'
+    return f'<div class="xr-reason">Classifier score {answer.confidence:.0%}</div>'
 
 
-def _no_explanation_text(answer: DimensionAnswer) -> str:
-    if answer.confidence is None:
-        return 'No explanation returned'
-    return f'No explanation returned · classifier score {answer.confidence:.0%}'
+def _classifier_score_text(answer: DimensionAnswer) -> str | None:
+    return f'Classifier score {answer.confidence:.0%}' if answer.confidence is not None else None
 
 
 def _capped(question: str, limit: int = _QUESTION_CAP) -> str:
@@ -528,15 +510,11 @@ def _capped(question: str, limit: int = _QUESTION_CAP) -> str:
 
 
 def _drawer_reason(answer: DimensionAnswer) -> str:
-    """A labelled prose reason, or an honest notice when the classifier gave only numbers."""
-    if answer.error:
+    """Show only a classifier score for a successful matched answer."""
+    if answer.error or not answer.matched:
         return ''
-    reason = _reason_text(answer)
-    if reason:
-        return f'<p class="fd-reason"><b>Reason</b> {esc(reason)}</p>'
-    if not answer.matched:
-        return ''
-    return f'<p class="fd-reason">{esc(_no_explanation_text(answer))}</p>'
+    score = _classifier_score_text(answer)
+    return f'<p class="fd-reason">{esc(score)}</p>' if score else ''
 
 
 def _answer_cells(result: TraceClassification, dimensions: tuple[CompiledQuery, ...]) -> str:
@@ -549,7 +527,11 @@ def _answer_cells(result: TraceClassification, dimensions: tuple[CompiledQuery, 
             cells.append('<td>—</td>')
             continue
         label = 'Judgment failed' if answer.error else _value_text(answer.value)
-        confidence = f' <span class="conf">{answer.confidence:.2f}</span>' if answer.confidence is not None else ''
+        confidence = (
+            f' <span class="conf">{answer.confidence:.2f}</span>'
+            if answer.confidence is not None and not answer.matched and not answer.error
+            else ''
+        )
         reason = _reason_line(answer)
         cells.append(
             f'<td><span class="verdict"><span class="sw" style="background:{esc(_answer_color(answer, dimension))}"></span>'

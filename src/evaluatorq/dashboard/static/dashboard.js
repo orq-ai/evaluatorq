@@ -951,6 +951,20 @@
     tip.style.top = (r.bottom - box.top + 10) + 'px';
   });
 
+  // Comparison controls live inside trace rows, but their clicks select a row instead of opening its drawer.
+  document.addEventListener('click', function (evt) {
+    if (evt.target.closest?.('[data-trace-compare-control]')) evt.stopPropagation();
+  }, true);
+  document.body.addEventListener('change', function (evt) {
+    if (!evt.target.matches?.('#explorer-results input[name="trace_ids"][form="trace-compare-form"]')) return;
+    const form = document.getElementById('trace-compare-form');
+    const button = form?.querySelector('button[type="submit"]');
+    if (!button) return;
+    const count = document.querySelectorAll('#explorer-results input[name="trace_ids"][form="trace-compare-form"]:checked').length;
+    button.disabled = count !== 2;
+    button.textContent = 'Compare (' + count + '/2)';
+  });
+
   // Segment click opens the drawer at that message; the row's own hx-get handles every other click.
   document.addEventListener('click', function (evt) {
     const seg = evt.target.closest('.tv-segs i[data-tv-msg]');

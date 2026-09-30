@@ -184,6 +184,46 @@ def test_table_renders_one_row_per_page_row_with_drawer_links() -> None:
     assert 'data-conv=' in conversation_view
 
 
+def test_traces_table_has_compare_selection_and_a_disabled_action(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+    html = client.get('/traces').text
+
+    assert 'id="trace-compare-form"' in html and 'hx-post="/traces/compare"' in html
+    assert 'Compare (0/2)</button>' in html
+    assert 'name="trace_ids" value="trace-0000" form="trace-compare-form"' in html
+    assert 'id="trace-comparison"' in html
+
+
+def test_trace_compare_validates_exactly_two_distinct_current_visible_rows(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+
+    def compare(*trace_ids: str):
+        data = {'csrf': csrf_data()['csrf'], 'trace_ids': list(trace_ids)}
+        return client.post('/traces/compare', data=data)
+
+    assert 'Choose two traces to compare.' in compare().text
+    assert 'Choose one more trace' in compare('trace-0000').text
+    assert 'exactly two traces' in compare('trace-0000', 'trace-0001', 'trace-0002').text
+    assert 'two different traces' in compare('trace-0000', 'trace-0000').text
+    assert 'no longer loaded' in compare('trace-0000', 'removed-trace').text
+
+    filtered = client.get('/find/rows?quick_view=errors')
+    assert filtered.status_code == 200
+    assert 'hidden by the current filters' in compare('trace-0000', 'trace-0001').text
+
+    client.get('/find/rows?quick_view=all')
+    response = compare('trace-0000', 'trace-0001')
+    assert response.status_code == 200
+    assert 'Trace comparison' in response.text
+    assert 'trace-0000' in response.text and 'trace-0001' in response.text
+    assert 'Status / error' in response.text
+    assert 'Cache reads' in response.text
+    assert 'Open trace-0000 drawer' in response.text
+    assert 'Open trace-0001 drawer' in response.text
+
+
 def test_loading_rows_show_skeletons_and_explain_a_reached_fetch_cap() -> None:
     loading_html = explorer_views.results(
         ExplorerView(state='loading', rows=_rows(2), limit=2), resolve_columns(None), records=None, snapshot=None
