@@ -23,7 +23,6 @@ from evaluatorq.common.orq_client import (
 )
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder import explorer_views
-from evaluatorq.dashboard.trace_finder.compare_views import comparison_feedback, comparison_panel
 from evaluatorq.dashboard.trace_finder.search_views import search_fragment, search_page_html
 from evaluatorq.dashboard.trace_finder.sessions import TraceSessionRegistry
 from evaluatorq.dashboard.trace_finder.views import (
@@ -681,43 +680,6 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             media_type='text/csv',
             headers={'Content-Disposition': 'attachment; filename="traces.csv"'},
         )
-
-    @app.post('/traces/compare')
-    async def traces_compare(req: Request) -> Response:
-        """Compare two trace IDs only while both remain in the current visible population."""
-        form = await req.form()
-        rejected = request_rejected(req, form)
-        if rejected:
-            return _html(comparison_feedback(rejected), status_code=403)
-        store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
-        explorer = store.explorer if store is not None else None
-        if store is None or explorer is None:
-            return _html(comparison_feedback('Load traces first, then choose two traces to compare.'))
-
-        selected = [value if isinstance(value, str) else '' for value in form.getlist('trace_ids')]
-        if not selected:
-            return _html(comparison_feedback('Choose two traces to compare.'))
-        if len(selected) == 1:
-            return _html(comparison_feedback('Choose one more trace. Compare requires exactly two distinct traces.'))
-        if len(selected) != 2:
-            return _html(comparison_feedback('Choose exactly two traces. Uncheck any extra selections.'))
-        if selected[0] == selected[1]:
-            return _html(comparison_feedback('Choose two different traces. The same trace cannot be compared twice.'))
-
-        view = await explorer.view()
-        snapshot = await store.snapshot_for_render()
-        results = snapshot.results if snapshot.within_results else None
-        loaded_by_id = {row.trace_id: row for row in view.rows}
-        if any(trace_id not in loaded_by_id for trace_id in selected):
-            return _html(comparison_feedback('One or both traces are no longer loaded. Choose traces again.'))
-        visible_by_id = {row.trace_id: row for row in view.visible_rows(results)}
-        if any(trace_id not in visible_by_id for trace_id in selected):
-            return _html(
-                comparison_feedback(
-                    'One or both traces are hidden by the current filters. Choose visible traces again.'
-                )
-            )
-        return _html(comparison_panel(visible_by_id[selected[0]], visible_by_id[selected[1]]))
 
     @app.post('/find/run')
     async def find_run(req: Request) -> Response:

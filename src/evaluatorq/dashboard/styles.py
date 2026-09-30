@@ -215,19 +215,6 @@ _TRACES_DENSITY_CSS = """
 body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder-status.idle { display:none; }
 /* Table fills its card; the flex column absorbs the spare width and the inline min-width keeps the rest legible. */
 .finder:has(> .finder-command) .xr-table { width:100%; }
-.finder:has(> .finder-command) .xr-compare-head,.finder:has(> .finder-command) .xr-compare-cell { width:9ch; white-space:nowrap; }
-.finder:has(> .finder-command) .xr-compare-cell label { display:flex; align-items:center; gap:5px; cursor:pointer; }
-.finder:has(> .finder-command) .xr-compare-cell input { accent-color:#025558; }
-.finder:has(> .finder-command) .xr-compare-action { align-self:center; white-space:nowrap; }
-.finder:has(> .finder-command) .xr-compare-action:disabled { opacity:.52; cursor:not-allowed; }
-.finder:has(> .finder-command) .tv-compare { overflow:auto; padding:14px 16px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-card); }
-.finder:has(> .finder-command) .tv-compare h3 { margin:0 0 10px; font-size:14px; }
-.finder:has(> .finder-command) .tv-compare table { width:100%; border-collapse:collapse; font-size:12px; font-variant-numeric:tabular-nums; }
-.finder:has(> .finder-command) .tv-compare th,.finder:has(> .finder-command) .tv-compare td { padding:7px 10px; border-bottom:1px solid var(--border-subtle); text-align:left; vertical-align:top; }
-.finder:has(> .finder-command) .tv-compare tbody th { color:var(--text-muted); font-weight:500; }
-.finder:has(> .finder-command) .tv-compare thead th { color:var(--text-strong); font-weight:600; }
-.finder:has(> .finder-command) .tv-compare-open { color:var(--accent); text-decoration:underline; text-underline-offset:2px; }
-.finder:has(> .finder-command) .tv-compare-feedback { margin:0; padding:9px 12px; border:1px solid var(--border-subtle); border-radius:6px; color:var(--text-muted); font-size:12px; }
 /* Errors stay loud: a red bar on the row, status text at 4.5:1 or better, and a shape that survives without colour. */
 .finder:has(> .finder-command) .xr-table .status-label.ok { color:#1a6a3c; }
 .finder:has(> .finder-command) .xr-table .status-label.err { color:#b3261e; }
@@ -264,8 +251,6 @@ body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder
 .finder:has(> .finder-command) .finder-seg input:checked + span,
 .finder:has(> .finder-command) .xr-switch button.on { background:#fff; color:#25232e; font-weight:600; box-shadow:0 0 0 1px #d5d8df, 0 1px 2px rgba(20,20,30,.12); }
 .finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:minmax(150px,1fr) 80px 90px 64px 64px 200px 148px; }
-.finder:has(> .finder-command) .xr-compare-form { display:flex; min-width:0; margin:0; }
-.finder:has(> .finder-command) .xr-compare-action { width:100%; }
 /* The toolbar sits directly under the question box and never moves. The page puts it ahead of the Ask AI band in the DOM, so the
    band, its criteria and the run progress render under it without CSS reordering, and Tab follows what the eye sees. */
 .finder:has(> .finder-command) :is(#explorer-toolbar, #finder-body, .finder-body-fragment, #explorer-results-slot, .xr) { display:contents; }
@@ -302,7 +287,6 @@ body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder
   .finder:has(> .finder-command) .xr-cols, .finder:has(> .finder-command) .xr-sort { flex:0 0 94px; }
   .finder:has(> .finder-command) .xr-toolbar-right .btn-secondary { flex:0 0 57px; }
   .finder:has(> .finder-command) .xr-toolbar-right .xr-export { flex-basis:64px; }
-  .finder:has(> .finder-command) .xr-toolbar-right .xr-compare-form { flex:0 0 140px; }
 }
 """
 
