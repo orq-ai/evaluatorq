@@ -973,7 +973,12 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             )
         catalogue = await _catalogue_for_window(req.app, parsed.window_days)
         form_id = params.get('form_id')
-        if form_id not in {'finder-query-form', 'finder-start-form'}:
+        allowed_form_ids = {'finder-query-form', 'finder-start-form'}
+        if params.get('counts') == 'loaded':
+            # Only the Traces surface requests row-scoped counts, and its
+            # toolbar checkboxes must submit with the table reload form.
+            allowed_form_ids.add('explorer-load-form')
+        if form_id not in allowed_form_ids:
             form_id = 'finder-query-form'
         selection = FacetSelection(**{name: frozenset(_form_values(params, f'facet_{name}')) for name in FACET_NAMES})
         numeric_values: dict[str, int | None] = {}

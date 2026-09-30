@@ -799,7 +799,16 @@ def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
 
     refreshed_menu = client.get('/find/facets?form_id=explorer-load-form&counts=loaded').text
     assert 'Counts are of the 2 rows currently loaded' in refreshed_menu
+    refreshed_checkbox = 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"'
+    assert refreshed_checkbox in refreshed_menu
     assert '<span class="facet-n" title="Loaded traces">2</span>' in refreshed_menu
+    assert 'form="finder-query-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' not in refreshed_menu
+
+    unscoped_menu = client.get('/find/facets?form_id=explorer-load-form').text
+    assert 'form="finder-query-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' in unscoped_menu
+
+    _load(client, facet_model='gpt-5.6-luna')
+    assert source.calls[-1]['facets'].model == frozenset({'gpt-5.6-luna'})
 
 
 def test_toolbar_shows_removable_filter_chips_and_count(explorer_client) -> None:
