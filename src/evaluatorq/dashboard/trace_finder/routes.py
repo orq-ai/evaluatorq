@@ -662,7 +662,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         active_snapshot = snapshot if snapshot.within_results else None
         results = active_snapshot.results if active_snapshot is not None else None
         dimensions = (
-            tuple(dimension.name for dimension in (active_snapshot.dimensions or ())) if active_snapshot else ()
+            tuple(dimension.name for dimension in (active_snapshot.dimensions or ()))
+            if active_snapshot is not None and active_snapshot.results
+            else ()
         )
         content = export_table_csv(
             view.visible_rows(results),

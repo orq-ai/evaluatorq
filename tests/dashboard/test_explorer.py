@@ -727,6 +727,22 @@ def test_traces_csv_matches_rendered_matched_only_rows_across_pages(explorer_cli
     assert exported_ids[:PAGE_ROWS] == visible_ids
 
 
+def test_traces_csv_hides_dimension_columns_before_first_classifier_result(explorer_client) -> None:
+    store, _, client = explorer_client
+    store.snapshot_value = _judged_snapshot(verdicts={})
+    _load(client)
+
+    rendered = client.get('/find/rows')
+    response = client.get('/traces/export.csv')
+    headers = next(csv.reader(io.StringIO(response.text, newline='')))
+
+    assert rendered.status_code == response.status_code == 200
+    thead = re.search(r'<thead.*?</thead>', rendered.text, re.DOTALL)
+    assert thead is not None and 'AI match' not in thead.group()
+    assert 'AI match' not in headers
+    assert all(dimension.name not in headers for dimension in store.snapshot_value.dimensions or ())
+
+
 def test_traces_toolbar_offers_csv_download(explorer_client) -> None:
     _, _, client = explorer_client
 
