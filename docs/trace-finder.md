@@ -22,6 +22,8 @@ When the dashboard starts, the backend begins loading up to 200 trace summaries 
 
 The initial trace request returns summaries for the table (status, timing, tokens, cost, and models). While traces load, the dashboard warms trajectory data for the first page of up to 100 rows, so the Trajectories view is ready when loading finishes. Later pages load trajectory data when you open them, and message content for the drawer loads when you open a row.
 
+On **Traces**, the totals strip and the compact **By model** summary use the rows currently shown, so errors, AI matches, facets, and within-results narrowing update both. A trace with more than one model counts under each model, but its trace-level cost is left unknown because the total cannot be attributed to one model. Costs also show as unknown when a trace has no cost or when currencies are missing or mixed.
+
 ## The table and the Columns menu
 
 The default columns are Time, Trace / agent, Status, Model, Tokens in, Tokens out, Cache read %, Cost, Duration, and AI match. The **AI match** column stays in the table when there are no judgments and shows `—` until a result is available. When an Ask AI run judges the loaded rows, it splits into one column per classifier dimension, each headed by the dimension's name. The **Columns ▾** menu in the toolbar lists every available column — also Name, Provider, Product, Operation, Reasoning tokens, Cache writes, Session, Thread, and Trace ID — and your choice is saved immediately to the dashboard settings file as `explorer_columns`, so it persists across reloads and processes.

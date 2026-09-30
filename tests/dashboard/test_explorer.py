@@ -1512,6 +1512,38 @@ def test_totals_of_no_rows_do_not_divide_by_zero() -> None:
     assert (t.traces, t.cost, t.cache_share, t.p50_ms) == (0, None, None, None)
 
 
+def test_model_summary_groups_trace_counts_and_only_sums_known_same_currency_costs() -> None:
+    rows = (
+        TraceRow(trace_id='a', models=('gpt-5.6-luna',), cost_total=0.5, currency='USD'),
+        TraceRow(trace_id='b', models=('gpt-5.6-luna',), cost_total=0.25, currency='USD'),
+        TraceRow(trace_id='c', models=('claude-x',), cost_total=1.0, currency='EUR'),
+        TraceRow(trace_id='d', models=('claude-x',), cost_total=2.0, currency='USD'),
+        TraceRow(trace_id='e', models=(), cost_total=0.2, currency='USD'),
+        TraceRow(trace_id='f', models=('gpt-5.6-luna',), cost_total=None, currency=None),
+    )
+
+    html = explorer_views._model_totals(rows)  # pyright: ignore[reportPrivateUsage]
+
+    assert '<span class="xr-model-name">gpt-5.6-luna</span> <span>3 traces</span> <span>—</span>' in html
+    assert '<span class="xr-model-name">claude-x</span> <span>2 traces</span> <span>—</span>' in html
+    assert '<span class="xr-model-name">Unknown model</span> <span>1 trace</span> <span>—</span>' in html
+
+
+def test_model_summary_uses_only_visible_rows_and_is_traces_scoped() -> None:
+    rows = (
+        TraceRow(trace_id='a', models=('gpt-5.6-luna',), cost_total=0.5, currency='USD'),
+        TraceRow(trace_id='b', models=('claude-x',), status='error', cost_total=0.25, currency='USD'),
+    )
+    view = ExplorerView(state='loaded', rows=rows, quick_view='errors')
+
+    traces_html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=None, traces_layout=True)
+    find_html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=None)
+
+    assert '<span class="xr-model-name">claude-x</span> <span>1 trace</span> <span>$0.2500</span>' in traces_html
+    assert 'gpt-5.6-luna' not in traces_html
+    assert 'xr-model-groups' not in find_html
+
+
 def test_facet_menu_counts_values_from_loaded_rows_only() -> None:
     from evaluatorq.dashboard.trace_finder.views import facet_menu
 
