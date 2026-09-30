@@ -530,6 +530,7 @@ def _toolbar(
     ai_has_run: bool = False,
     window_days: int = 7,
     counts: Mapping[str, int] | None = None,
+    traces_layout: bool = False,
 ) -> str:
     chosen = {c.key for c in columns}
     counts = counts or {}
@@ -565,14 +566,14 @@ def _toolbar(
         f'<input type="checkbox" name="columns" value="{c.key}"{" checked" if c.key in chosen else ""}>{esc(c.label)}</label>'
         for c in COLUMNS.values()
     )
+    table_icon = '<svg viewBox="0 0 16 16" focusable="false"><rect x="1.5" y="2" width="13" height="12" rx="1"/><path d="M1.5 6h13M6 2v12"/></svg>'
+    trajectories_icon = '<svg viewBox="0 0 16 16" focusable="false"><path d="M2 3h12M2 8h12M2 13h12"/><circle cx="5" cy="3" r="1.5"/><circle cx="10" cy="8" r="1.5"/><circle cx="7" cy="13" r="1.5"/></svg>'
+    view_options = (('table', 'Table', table_icon), ('trajectories', 'Trajectories', trajectories_icon))
     switch = ''.join(
         f'<button type="button" class="{"on" if view.view == mode else ""}" aria-pressed="{str(view.view == mode).lower()}" '
-        f'hx-get="/find/rows?view={mode}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{label}</button>'
-        for mode, label in (('table', 'Table'), ('trajectories', 'Trajectories'))
-    )
-    switch = switch.replace(
-        '>Trajectories</button>',
-        f' title="{esc(TRAJECTORIES_HELP)}">Trajectories<span class="xr-help" aria-hidden="true">?</span></button>',
+        f'hx-get="/find/rows?view={mode}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">'
+        f'<span class="xr-view-icon" aria-hidden="true">{icon}</span><span>{label}</span></button>'
+        for mode, label, icon in view_options
     )
     sort = (
         '<details class="xr-sort"><summary>Sort</summary><button type="button" class="link" hx-get="/find/rows?sort=started&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">time</button>'
@@ -592,9 +593,14 @@ def _toolbar(
         if view.view == 'table'
         else ''
     )
+    export = (
+        '<a class="btn-secondary xr-export" href="/traces/export.csv">Export</a>'
+        if traces_layout and view.view == 'table'
+        else ''
+    )
     date_and_rows = range_inputs(view.start, view.end, window_days, include_load=False)
     context_menu = sort if view.view == 'trajectories' else columns_menu
-    load = '<button class="btn-secondary" type="submit" form="explorer-load-form">Load</button>'
+    load = '<button class="btn-secondary xr-load" type="submit" form="explorer-load-form">Load</button>'
     from evaluatorq.dashboard.trace_finder.views import _facet_chips  # pyright: ignore[reportPrivateUsage]
 
     chips = _facet_chips(view.facets, view.numeric, removable=True)
@@ -604,7 +610,7 @@ def _toolbar(
         f'<div class="xr-toolbar"><button type="button" class="xr-filter" data-explorer-filters aria-haspopup="true" aria-expanded="false">{label}</button>'
         f'<span class="xr-chips">{chips}</span>'
         f'<span class="xr-quickviews" role="group" aria-label="Quick views">{quick_views}</span>'
-        f'<span class="spacer"></span><span class="xr-toolbar-right">{date_and_rows}{context_menu}{load}'
+        f'<span class="spacer"></span><span class="xr-toolbar-right">{date_and_rows}{context_menu}{export}{load}'
         f'<span class="finder-seg xr-switch" role="group" aria-label="View">{switch}</span></span></div>'
     )
 
@@ -724,6 +730,7 @@ def results(
         ai_has_run=_ai_has_run(snapshot),
         window_days=window_days,
         counts=counts,
+        traces_layout=traces_layout,
     )
     judged_count = sum(1 for row in view.rows if row.trace_id in judged) if judged else 0
     judged_in_view = judged_count

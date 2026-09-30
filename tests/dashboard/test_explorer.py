@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 from dataclasses import replace
 import json
+import io
 import re
 import threading
 from datetime import datetime, timedelta, timezone
@@ -34,9 +36,7 @@ def test_parse_range_applies_browser_offset() -> None:
 def test_parse_range_uses_each_endpoint_offset_across_dst() -> None:
     # Amsterdam leaves summer time on 25 October 2026: getTimezoneOffset is
     # -120 before the change and -60 after it.
-    start, end = finder_routes.parse_range(
-        '2026-10-24T22:00', '2026-10-25T04:00', '-120', '-120', '-60'
-    )
+    start, end = finder_routes.parse_range('2026-10-24T22:00', '2026-10-25T04:00', '-120', '-120', '-60')
     assert start == datetime(2026, 10, 24, 20, 0, tzinfo=timezone.utc)
     assert end == datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc)
 
@@ -75,7 +75,12 @@ def test_calendar_date_and_time_values_keep_seconds_and_timezone() -> None:
 
 
 def test_calendar_range_rejects_missing_time() -> None:
-    values = finder_routes._range_values({'from': '2026-09-27', 'from_time': '', 'to': '2026-09-27', 'to_time': '11:00:00'})
+    values = finder_routes._range_values({
+        'from': '2026-09-27',
+        'from_time': '',
+        'to': '2026-09-27',
+        'to_time': '11:00:00',
+    })
     with pytest.raises(ValueError, match='full dates and times'):
         finder_routes.parse_range(*values, '0')
 
@@ -255,21 +260,14 @@ def test_trajectory_keeps_estimate_when_it_exceeds_reported_input() -> None:
 
 
 def test_trajectory_scale_is_loaded_population_p95_across_pages() -> None:
-    rows = tuple(
-        row.model_copy(update={'tokens_in': index + 1})
-        for index, row in enumerate(_rows(PAGE_ROWS + 1))
-    )
+    rows = tuple(row.model_copy(update={'tokens_in': index + 1}) for index, row in enumerate(_rows(PAGE_ROWS + 1)))
     rows = (*rows[:-1], rows[-1].model_copy(update={'tokens_in': 10_000}))
     records = {
         rows[0].trace_id: _trajectory_record(rows[0].trace_id, {'role': 'user', 'content': 'text'}),
         rows[-1].trace_id: _trajectory_record(rows[-1].trace_id, {'role': 'user', 'content': 'text'}),
     }
-    page_one = explorer_views.trajectories(
-        ExplorerView(state='loaded', rows=rows, page=0), records, None
-    )
-    page_two = explorer_views.trajectories(
-        ExplorerView(state='loaded', rows=rows, page=1), records, None
-    )
+    page_one = explorer_views.trajectories(ExplorerView(state='loaded', rows=rows, page=0), records, None)
+    page_two = explorer_views.trajectories(ExplorerView(state='loaded', rows=rows, page=1), records, None)
 
     ticks_one_match = re.search(r'<div class="tv-scale"[^>]*>(.*?)</div>', page_one)
     ticks_two_match = re.search(r'<div class="tv-scale"[^>]*>(.*?)</div>', page_two)
@@ -280,7 +278,6 @@ def test_trajectory_scale_is_loaded_population_p95_across_pages() -> None:
     assert 'title="Scale: p95 of provider-reported input across all loaded rows (96 tokens)"' in page_one
     assert 'title="Scale: p95 of provider-reported input across all loaded rows (96 tokens)"' in page_two
     assert 'Bar exceeds scale' in page_two
-
 
 
 def test_table_column_widths_are_fixed_per_header_and_stable_across_pages() -> None:
@@ -328,7 +325,9 @@ def test_table_shows_escaped_ai_match_text_and_aligns_numeric_columns() -> None:
         raw_result={},
     )
     html = explorer_views.results(
-        ExplorerView(state='loaded', rows=(row,)), resolve_columns(None), records=None,
+        ExplorerView(state='loaded', rows=(row,)),
+        resolve_columns(None),
+        records=None,
         snapshot=RunSnapshot(results={row.trace_id: result}, within_results=True, dimensions=(dimension,)),
     )
     assert 'refund&lt;&amp;' in html
@@ -514,6 +513,7 @@ async def test_initial_trace_warmups_fetch_concurrently_across_sessions(
     stores: dict[str, Any] = {}
 
     for session_id in started:
+
         async def search(
             _start: datetime,
             _end: datetime,
@@ -551,9 +551,7 @@ async def test_initial_trace_warmups_fetch_concurrently_across_sessions(
     monkeypatch.setattr(finder_routes, '_warm_catalogue', warm_catalogue)
 
     try:
-        await asyncio.gather(
-            *(finder_routes.warm_initial_finder(app, session_id, {}) for session_id in started)
-        )
+        await asyncio.gather(*(finder_routes.warm_initial_finder(app, session_id, {}) for session_id in started))
         await asyncio.wait_for(asyncio.gather(*(event.wait() for event in started.values())), timeout=2)
         assert all(event.is_set() for event in started.values())
     finally:
@@ -563,7 +561,9 @@ async def test_initial_trace_warmups_fetch_concurrently_across_sessions(
 
 
 @pytest.mark.asyncio
-async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_find_page_warms_facets_without_waiting_or_fetching_twice(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, _, client = explorer_client
     app = client.app
     app.state.finder_settings = app.state.finder_settings.model_copy(update={'window_days': 14})
@@ -577,7 +577,9 @@ async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer
         await release.wait()
         catalogue = FacetCatalogue(project=('warmed-project',))
         runtime.state.finder_catalogue_cache = (
-            datetime.now(timezone.utc) + timedelta(minutes=5), window_days, catalogue
+            datetime.now(timezone.utc) + timedelta(minutes=5),
+            window_days,
+            catalogue,
         )
         return catalogue
 
@@ -602,14 +604,17 @@ async def test_find_page_warms_facets_without_waiting_or_fetching_twice(explorer
         assert 'warmed-project' in menu.text
         assert calls == [7]
 
-        loaded = await http.post('/find/load', data=csrf_data({
-            'from': '2026-09-13',
-            'from_time': '10:00:00',
-            'to': '2026-09-27',
-            'to_time': '10:00:00',
-            'tz_offset': '0',
-            'rows': '10',
-        }))
+        loaded = await http.post(
+            '/find/load',
+            data=csrf_data({
+                'from': '2026-09-13',
+                'from_time': '10:00:00',
+                'to': '2026-09-27',
+                'to_time': '10:00:00',
+                'tz_offset': '0',
+                'rows': '10',
+            }),
+        )
         await asyncio.sleep(0)
         assert loaded.status_code == 200
         assert 'name="window_days" value="14"' in loaded.text
@@ -640,6 +645,56 @@ def test_load_then_rows_then_sort_then_page(explorer_client) -> None:
     assert 'Page 3 of 3' in html
 
 
+def test_traces_csv_exports_filtered_sorted_visible_rows_across_pages(explorer_client) -> None:
+    _, source, client = explorer_client
+    client.get('/traces')
+    source.rows = tuple(
+        row.model_copy(update={'status': 'error' if int(row.trace_id[-4:]) < 5 else 'ok'}) for row in source.rows
+    )
+    _load(client)
+
+    page = client.get('/find/rows?quick_view=errors&sort=tokens_in&dir=desc&page=1')
+    response = client.get('/traces/export.csv')
+    table = list(csv.reader(io.StringIO(response.text, newline='')))
+
+    assert page.status_code == 200
+    assert response.status_code == 200
+    assert response.headers['content-type'].startswith('text/csv')
+    assert response.headers['content-disposition'] == 'attachment; filename="traces.csv"'
+    assert len(table) == 6
+    assert table[0][1] == 'Trace / agent'
+    assert table[1][1] == 'trace-0004'
+    assert table[-1][1] == 'trace-0000'
+
+
+def test_traces_csv_matches_rendered_matched_only_rows_across_pages(explorer_client) -> None:
+    store, _, client = explorer_client
+    verdicts = {f'trace-{i:04d}': i % 2 == 0 for i in range(250)}
+    store.snapshot_value = _judged_snapshot(verdicts=verdicts)
+    _load(client)
+
+    rendered = client.get('/find/rows?matched_only=1&sort=tokens_in&dir=desc&page=0')
+    exported = client.get('/traces/export.csv')
+    table = list(csv.reader(io.StringIO(exported.text, newline='')))
+    visible_ids = re.findall(r'data-tv-row="([^"]+)"', rendered.text)
+    trace_column = table[0].index('Trace / agent')
+    exported_ids = [row[trace_column] for row in table[1:]]
+
+    assert rendered.status_code == exported.status_code == 200
+    assert len(visible_ids) == PAGE_ROWS
+    assert len(exported_ids) == 125
+    assert exported_ids == [f'trace-{i:04d}' for i in range(248, -1, -2)]
+    assert exported_ids[:PAGE_ROWS] == visible_ids
+
+
+def test_traces_toolbar_offers_csv_download(explorer_client) -> None:
+    _, _, client = explorer_client
+
+    response = client.get('/traces')
+
+    assert 'href="/traces/export.csv"' in response.text
+
+
 def test_load_keeps_ai_results_and_renders_answers_for_loaded_rows(explorer_client) -> None:
     from evaluatorq.common.judge import ClassifyQuestion
     from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
@@ -658,10 +713,12 @@ def test_load_keeps_ai_results_and_renders_answers_for_loaded_rows(explorer_clie
         completed=1,
         matched=1,
         within_results=True,
-        dimensions=(CompiledQuery(
-            task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
-            selection=ValueSelection(kind='values', values=(True,)),
-        ),),
+        dimensions=(
+            CompiledQuery(
+                task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+                selection=ValueSelection(kind='values', values=(True,)),
+            ),
+        ),
     )
 
     response = _load(client)
@@ -695,8 +752,12 @@ def test_reset_refreshes_explorer_results_out_of_band(explorer_client) -> None:
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=matches"' in matches
     response = client.post('/find/reset', data=csrf_data())
     assert response.status_code == 200
-    assert '<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope" hx-swap-oob="true"' in response.text
+    assert (
+        '<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope" hx-swap-oob="true"'
+        in response.text
+    )
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=all"' in response.text
+
 
 def _judged_snapshot(**kwargs: Any) -> Any:
     """A completed within-results run whose classifier judged the given trace ids (a: match, b: no match)."""
@@ -761,7 +822,7 @@ def test_completed_classifier_match_order_keeps_trajectory_view_selected() -> No
 
     assert html.index('data-tv-row="matched"') < html.index('data-tv-row="unmatched"')
     assert 'class="on" aria-pressed="true"' in html
-    assert '>Trajectories<span class="xr-help"' in html
+    assert '<span class="xr-view-icon" aria-hidden="true"><svg' in html
 
 
 def test_status_line_reports_judged_and_matches_for_current_rows() -> None:
@@ -788,7 +849,9 @@ def test_filter_only_run_does_not_report_judged_or_ai_matches() -> None:
         within_results=True,
         total=2,
         matched=2,
-        results={r.trace_id: TraceClassification(trace_id=r.trace_id, span_id='s', matched=True, raw_result={}) for r in rows},
+        results={
+            r.trace_id: TraceClassification(trace_id=r.trace_id, span_id='s', matched=True, raw_result={}) for r in rows
+        },
     )
     view = ExplorerView(state='loaded', rows=rows)
     html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=snapshot)
@@ -849,8 +912,16 @@ def test_rows_route_reports_message_count_hydration_failure(explorer_client) -> 
 def test_table_omits_conversation_markers_when_sorted() -> None:
     rows = tuple(row.model_copy(update={'thread_id': 'thread-1'}) for row in _rows(2))
     html = explorer_views.results(
-        ExplorerView(state='loaded', rows=rows, quick_view='conv_longest', sort='tokens_in', message_counts={r.trace_id: 1 for r in rows}),
-        resolve_columns(None), records=None, snapshot=None,
+        ExplorerView(
+            state='loaded',
+            rows=rows,
+            quick_view='conv_longest',
+            sort='tokens_in',
+            message_counts={r.trace_id: 1 for r in rows},
+        ),
+        resolve_columns(None),
+        records=None,
+        snapshot=None,
     )
     assert 'data-conv=' not in html
 
@@ -923,10 +994,12 @@ def test_match_column_choice_survives_a_columns_edit_made_before_any_ai_run(expl
         completed=1,
         matched=1,
         within_results=True,
-        dimensions=(CompiledQuery(
-            task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
-            selection=ValueSelection(kind='values', values=(True,)),
-        ),),
+        dimensions=(
+            CompiledQuery(
+                task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+                selection=ValueSelection(kind='values', values=(True,)),
+            ),
+        ),
     )
 
     rows_html = client.get('/find/rows').text
@@ -1019,7 +1092,10 @@ def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
     assert 'Loading facet values…' not in html
     assert 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' in html
     assert '<span class="facet-n" title="Loaded traces">2</span>' in html
-    assert 'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls"' in html
+    assert (
+        'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls"'
+        in html
+    )
 
     refreshed_menu = client.get('/find/facets?form_id=explorer-load-form&counts=loaded').text
     assert 'Counts are of the 2 rows currently loaded' in refreshed_menu
@@ -1069,7 +1145,10 @@ def test_toolbar_shows_removable_filter_chips_and_count(explorer_client) -> None
     html = _load(client, facet_model='gpt-x', tokens_min='100').text
     toolbar = html[html.index('class="xr-toolbar"') :]
     assert '>Filters · 2</button>' in toolbar
-    assert 'class="xr-chips"><span class="chip is-editable" data-chip-name="facet_model" data-finder-value="gpt-x">' in toolbar
+    assert (
+        'class="xr-chips"><span class="chip is-editable" data-chip-name="facet_model" data-finder-value="gpt-x">'
+        in toolbar
+    )
     assert 'data-finder-remove="tokens_min"' in toolbar
 
 
@@ -1271,7 +1350,6 @@ def test_drawer_opens_at_the_requested_message() -> None:
     assert 'Copy trace id' in html
 
 
-
 def test_find_drawer_keeps_legacy_layout() -> None:
     from evaluatorq.dashboard.trace_finder.views import drawer
     from evaluatorq.trace_finder import TraceDetail
@@ -1320,8 +1398,6 @@ def test_drawer_labels_empty_conversation_state() -> None:
     assert '<b>No messages available</b>' in html
 
 
-
-
 def test_missing_trace_reason_is_escaped_and_wrapped() -> None:
     from evaluatorq.dashboard.trace_finder.views import missing_trace_drawer
 
@@ -1332,7 +1408,7 @@ def test_missing_trace_reason_is_escaped_and_wrapped() -> None:
 def test_drawer_message_meta_and_segment_click_browser_fixes() -> None:
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     styles = Path('src/evaluatorq/dashboard/styles.py').read_text()
-    assert "if (tip) tip.hidden = true;" in js
+    assert 'if (tip) tip.hidden = true;' in js
     assert '.fd-msg summary .fd-msg-meta { white-space:nowrap;' in styles
     assert 'background:var(--surface-sunken)' in styles
 
@@ -1461,7 +1537,10 @@ def test_ask_new_search_reloads_the_table_with_the_searched_population(explorer_
         return store.snapshot_value
 
     store.compile = compile
-    client.post('/find/run', data=csrf_data({'query': 'jev traces', 'scope': 'new', 'window_days': '7', 'limit': '20', 'parallelism': '10'}))
+    client.post(
+        '/find/run',
+        data=csrf_data({'query': 'jev traces', 'scope': 'new', 'window_days': '7', 'limit': '20', 'parallelism': '10'}),
+    )
 
     assert captured['table'] is not None
     population = PopulationRequest(facets=FacetSelection(model=frozenset({'jev-latest'})), limit=20)
@@ -1610,7 +1689,10 @@ def test_narrowed_empty_state_and_status_explain_loaded_row_scope() -> None:
     html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=None)
     assert '0 of 200 loaded traces match the filters' in html
     assert 'No loaded traces match.' in html
-    assert 'None of the 200 loaded traces meet the filters. Remove a filter, or use New search to look beyond the loaded rows.' in html
+    assert (
+        'None of the 200 loaded traces meet the filters. Remove a filter, or use New search to look beyond the loaded rows.'
+        in html
+    )
 
 
 def test_facet_menu_calls_numeric_token_bound_total_tokens() -> None:
@@ -1646,8 +1728,12 @@ def test_totals_sum_rows_and_use_inclusive_cache_share() -> None:
     from evaluatorq.trace_finder.rows import TraceRow
 
     rows = [
-        TraceRow(trace_id='a', status='ok', tokens_in=100, tokens_out=10, cached_tokens=50, cost_total=0.5, duration_ms=100),
-        TraceRow(trace_id='b', status='error', tokens_in=300, tokens_out=20, cached_tokens=0, cost_total=1.0, duration_ms=900),
+        TraceRow(
+            trace_id='a', status='ok', tokens_in=100, tokens_out=10, cached_tokens=50, cost_total=0.5, duration_ms=100
+        ),
+        TraceRow(
+            trace_id='b', status='error', tokens_in=300, tokens_out=20, cached_tokens=0, cost_total=1.0, duration_ms=900
+        ),
         TraceRow(trace_id='c', tokens_in=None, tokens_out=None, cost_total=None, duration_ms=None),
     ]
     t = totals(rows)
@@ -1685,9 +1771,7 @@ def test_traces_duration_bar_uses_visible_set_scale_and_inclusive_p95_across_pag
     assert page_two.count('class="xr-duration-accessible">At or above p95</span>') == 7
     assert 'At or above visible-set p95 (114ms)' in page_two
 
-    filtered = explorer_views.table(
-        replace(view, quick_view='errors', page=0), columns, None, traces_layout=True
-    )
+    filtered = explorer_views.table(replace(view, quick_view='errors', page=0), columns, None, traces_layout=True)
     assert filtered.count('class="num xr-duration xr-duration-p95"') == 7
 
 
@@ -1760,7 +1844,10 @@ def test_facet_menu_counts_values_from_loaded_rows_only() -> None:
 
 def test_failed_load_offers_retry_and_plain_words_for_an_orq_outage() -> None:
     outage = explorer_views.results(
-        ExplorerView(state='failed', error='503: no healthy upstream'), resolve_columns(None), records=None, snapshot=None
+        ExplorerView(state='failed', error='503: no healthy upstream'),
+        resolve_columns(None),
+        records=None,
+        snapshot=None,
     )
     assert 'Orq is temporarily unavailable. Try again.' in outage
     assert '503: no healthy upstream' in outage
@@ -1806,8 +1893,23 @@ def test_traces_drawer_spans_tab_loads_lazy_and_span_tree_handles_errors_orphans
     tree = span_tree(
         'trace-1',
         [
-            {'span_id': 'root', 'name': 'root call', 'type': 'span.agent', 'status': 'ok', 'duration_ms': 80, 'usage': {'total_tokens': 20}},
-            {'span_id': 'bad', 'parent_span_id': 'root', 'name': 'tool call', 'operation': 'search', 'status': 'error', 'status_message': '<failed>', 'duration_ms': 10},
+            {
+                'span_id': 'root',
+                'name': 'root call',
+                'type': 'span.agent',
+                'status': 'ok',
+                'duration_ms': 80,
+                'usage': {'total_tokens': 20},
+            },
+            {
+                'span_id': 'bad',
+                'parent_span_id': 'root',
+                'name': 'tool call',
+                'operation': 'search',
+                'status': 'error',
+                'status_message': '<failed>',
+                'duration_ms': 10,
+            },
             {'span_id': 'orphan', 'parent_span_id': 'missing', 'name': 'orphan', 'status': 'unknown'},
         ],
         'https://orq.example/workspace/experiments/e',
@@ -1874,8 +1976,7 @@ def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() ->
     from evaluatorq.dashboard.trace_finder.views import span_tree
 
     chain = [
-        {'span_id': f'span-{index}', 'parent_span_id': f'span-{index - 1}' if index else None}
-        for index in range(2000)
+        {'span_id': f'span-{index}', 'parent_span_id': f'span-{index - 1}' if index else None} for index in range(2000)
     ]
     cycle = [
         {'span_id': 'cycle-a', 'parent_span_id': 'cycle-b'},

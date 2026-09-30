@@ -188,7 +188,7 @@ class TraceSessionMiddleware:
             await self.app(scope, receive, send)
             return
         path = scope.get('path', '')
-        if path != '/traces' and path != '/find' and not path.startswith('/find/'):
+        if path != '/traces' and not path.startswith('/traces/') and path != '/find' and not path.startswith('/find/'):
             await self.app(scope, receive, send)
             return
 

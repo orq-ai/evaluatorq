@@ -64,6 +64,7 @@ from evaluatorq.trace_finder.settings import (
     load_settings,
     save_settings,
 )
+from evaluatorq.trace_finder.table_csv import export_table_csv
 
 _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
 CONFIRM_ROWS = 500
@@ -646,6 +647,32 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 has_rows=bool(explorer_view and explorer_view.rows),
                 **_catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view),
             )
+        )
+
+    @app.get('/traces/export.csv')
+    async def traces_export_csv(req: Request) -> Response:
+        """Download every row in the active traces table view, across all pages."""
+        store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
+        explorer = store.explorer if store is not None else None
+        if store is None or explorer is None:
+            return Response('Trace table is unavailable.', status_code=503, media_type='text/plain')
+        view = await explorer.view()
+        snapshot = await store.snapshot_for_render()
+        active_snapshot = snapshot if snapshot.within_results else None
+        results = active_snapshot.results if active_snapshot is not None else None
+        dimensions = (
+            tuple(dimension.name for dimension in (active_snapshot.dimensions or ())) if active_snapshot else ()
+        )
+        content = export_table_csv(
+            view.visible_rows(results),
+            _settings(req.app).explorer_columns,
+            dimensions=dimensions,
+            results=results,
+        )
+        return Response(
+            content,
+            media_type='text/csv',
+            headers={'Content-Disposition': 'attachment; filename="traces.csv"'},
         )
 
     @app.post('/find/run')
