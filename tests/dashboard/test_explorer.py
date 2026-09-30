@@ -2755,11 +2755,16 @@ def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() ->
     from evaluatorq.dashboard.trace_finder.views import span_tree
 
     chain = [
-        {'span_id': f'span-{index}', 'parent_span_id': f'span-{index - 1}' if index else None} for index in range(2000)
+        {
+            'span_id': f'span-{index}',
+            'parent_span_id': f'span-{index - 1}' if index else None,
+            'name': f'span-{index}',
+        }
+        for index in range(2000)
     ]
     cycle = [
-        {'span_id': 'cycle-a', 'parent_span_id': 'cycle-b'},
-        {'span_id': 'cycle-b', 'parent_span_id': 'cycle-a'},
+        {'span_id': 'cycle-a', 'parent_span_id': 'cycle-b', 'name': 'cycle-a'},
+        {'span_id': 'cycle-b', 'parent_span_id': 'cycle-a', 'name': 'cycle-b'},
     ]
     tree = span_tree('trace', [*chain, *cycle])
     assert tree.count('fd-span-row') == 2002
