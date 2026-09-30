@@ -3114,7 +3114,9 @@ body:has(input[name="scope"][value="within"]:checked) .finder-limit-field { disp
 .finder:has(> .finder-command) .tv-skeleton i:first-child { width:70%; }.finder:has(> .finder-command) .tv-skeleton i:nth-child(2) { width:100%; }.finder:has(> .finder-command) .tv-skeleton i:last-child { width:60%; }
 @keyframes xr-shimmer { to { background-position:-150% 0; } }
 @media (prefers-reduced-motion:reduce) { .finder:has(> .finder-command) .xr-skeleton td i,.finder:has(> .finder-command) .tv-skeleton i { animation:none; } }
-.cachebar { display:inline-block; width:34px; height:4px; background:#ece9e4; border-radius:2px; margin-right:6px; vertical-align:middle; }
+.cache-value { display:inline-grid; grid-template-columns:34px 4ch; align-items:center; gap:6px; vertical-align:middle; }
+.cache-percent { text-align:right; }
+.cachebar { display:inline-block; width:34px; height:4px; background:#ece9e4; border-radius:2px; }
 .cachebar i { display:block; height:4px; border-radius:2px; background:var(--traj-assistant); }
 .xr-pager { display:flex; gap:14px; justify-content:center; font-size:12px; color:var(--text-muted); }
 .xr-presets { display:inline-flex; gap:7px; }

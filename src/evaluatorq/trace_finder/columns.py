@@ -80,8 +80,9 @@ def _cache(row: TraceRow) -> str:
     if pct is None:
         return DASH
     return (
-        f'<span title="{row.cached_tokens:,} cache-read tokens / {row.tokens_in:,} input tokens">'
-        f'<span class="cachebar"><i style="width:{pct * 100:.0f}%"></i></span>{pct * 100:.0f}%</span>'
+        f'<span class="cache-value" title="{row.cached_tokens:,} cache-read tokens / {row.tokens_in:,} input tokens">'
+        f'<span class="cachebar"><i style="width:{pct * 100:.0f}%"></i></span>'
+        f'<span class="cache-percent">{pct * 100:.0f}%</span></span>'
     )
 
 
