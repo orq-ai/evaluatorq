@@ -308,8 +308,9 @@ class ExplorerStore:
         generation = next(_SEQUENCE)
         self._pre_narrow_view = None
         previous = self._view
-        # The tab and sort survive a Load; a match sort does not, as the new rows are not judged yet.
-        kept_sort = previous.sort if previous.sort in COLUMNS and previous.sort != MATCH else None
+        # The tab and sort survive a Load, including Match; classification may still be useful
+        # while a new search loads and the user explicitly chose this ordering.
+        kept_sort = previous.sort if previous.sort in COLUMNS else None
         self._view = ExplorerView(
             generation=generation,
             version=generation,
@@ -465,7 +466,7 @@ class ExplorerStore:
             sort=None if current.sort == MATCH else current.sort,
             descending=True if current.sort == MATCH else current.descending,
             matched_only=False,
-            quick_view='all',
+            quick_view='all' if current.quick_view == 'matches' else current.quick_view,
             page=0,
         )
         if updated != current:

@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal, get_args
 
+from evaluatorq.common.messages import content_part_text
+
 Kind = Literal['system', 'user', 'assistant', 'reasoning', 'call', 'result', 'other']
 KIND_LABELS: Mapping[Kind, str] = MappingProxyType({
     'system': 'System',
@@ -33,7 +35,7 @@ _ROLE_KINDS: Mapping[str, Kind] = MappingProxyType({
     'model': 'assistant',
     'tool': 'result',
 })
-_TEXT_TYPES = frozenset({'text', 'input_text', 'output_text'})
+_TEXT_TYPES = frozenset({'text', 'input_text', 'output_text', 'summary_text', 'refusal'})
 _CALL_TYPES = frozenset({'tool_call', 'function_call', 'function', 'tool_use'})
 _RESULT_TYPES = frozenset({'tool_call_response', 'function_call_output', 'tool_result'})
 
@@ -78,13 +80,16 @@ def _part(part: Any, role_kind: Kind, index: int, tool_name: str | None) -> Segm
     function = part.get('function')
     if isinstance(function, Mapping):
         call = function
-    if kind in _TEXT_TYPES:
+    shared_text = content_part_text(part)
+    if shared_text is not None:
         return _segment(
             role_kind,
-            _text(part.get('content') or part.get('text')),
+            shared_text,
             index,
             tool_name if role_kind == 'result' else None,
         )
+    if kind in _TEXT_TYPES:  # Orq-native parts use `kind` instead of `type`.
+        return _segment(role_kind, _text(part.get('content') or part.get('text')), index)
     if kind == 'reasoning':
         return _segment(
             'reasoning',

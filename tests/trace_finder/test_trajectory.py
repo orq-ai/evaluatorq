@@ -32,6 +32,18 @@ def test_otel_parts_shape() -> None:
     assert result[2].label == 'search'
 
 
+def test_responses_summary_and_refusal_parts_render_as_text() -> None:
+    result = segments([
+        {'role': 'assistant', 'content': [
+            {'type': 'summary_text', 'text': 'Reasoning summary'},
+            {'type': 'refusal', 'refusal': 'I cannot help with that.'},
+        ]},
+    ])
+    assert [segment.kind for segment in result] == ['assistant', 'assistant']
+    assert 'Reasoning summary' in result[0].preview
+    assert 'I cannot help with that.' in result[1].preview
+
+
 def test_unknown_part_becomes_other() -> None:
     result = segments([{'role': 'assistant', 'parts': [{'type': 'hologram', 'content': 'zzz'}]}])
     assert [s.kind for s in result] == ['other']

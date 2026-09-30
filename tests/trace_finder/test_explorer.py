@@ -177,14 +177,14 @@ async def test_load_keeps_quick_view_and_sort_and_resets_page() -> None:
 
 
 @pytest.mark.asyncio
-async def test_load_drops_a_match_sort_the_new_rows_cannot_have() -> None:
+async def test_load_keeps_match_sort() -> None:
     store = store_for(FakeSource((TraceRow(trace_id='a'),)))
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
     await store.set_view(sort='match')
 
     view = await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
 
-    assert view.sort is None
+    assert view.sort == 'match'
 
 
 @pytest.mark.asyncio

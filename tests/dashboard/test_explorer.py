@@ -970,6 +970,32 @@ def test_reset_clears_ai_table_state_when_within_keeps_every_row(explorer_client
     assert 'hx-get="/find/rows?quick_view=all"' in response.text
 
 
+def test_reset_preserves_errors_quick_view(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    explorer = store.explorer
+    asyncio.run(explorer.set_view(quick_view='errors', sort='tokens_in', descending=False))
+
+    response = client.post('/find/reset', data=csrf_data())
+    view = asyncio.run(explorer.view())
+
+    assert response.status_code == 200
+    assert view.quick_view == 'errors'
+    assert (view.sort, view.descending) == ('tokens_in', False)
+    assert 'hx-get="/find/rows?quick_view=errors"' in response.text
+
+
+def test_trace_table_wrapper_has_no_perimeter_border() -> None:
+    from evaluatorq.dashboard import styles
+
+    css = styles._TRACES_DENSITY_CSS  # pyright: ignore[reportPrivateUsage]
+    wrapper_rule = re.search(r'\.xr-table-wrap \{[^}]+\}', css)
+    assert wrapper_rule is not None
+    wrapper_rule = wrapper_rule.group(0)
+    assert 'border:0;' in wrapper_rule
+    assert 'border:1px solid' not in wrapper_rule
+
+
 def test_stale_review_start_renders_current_explorer_filters(explorer_client) -> None:
     store, _, client = explorer_client
     _load(client, facet_model='kept-model', tokens_min='100')

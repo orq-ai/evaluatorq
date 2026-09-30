@@ -63,7 +63,7 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) #explorer-rows:focus:not(:focus-visible) { outline:none; box-shadow:none; }
 .finder:has(> .finder-command) .xr-toolbar-right .btn-secondary { min-height:31px; padding:5px 9px; border-radius:6px; background:#25232e; border-color:#25232e; color:#fff; font-size:12px; }
 .finder:has(> .finder-command) .xr-toolbar-right .finder-seg { justify-self:stretch; }
-.finder:has(> .finder-command) .xr-table-wrap { position:relative; display:block; overflow:auto; max-height:calc(100vh - 160px); margin:0; padding:0; border:1px solid #e8e9ec; border-radius:6px; line-height:normal; -webkit-overflow-scrolling:touch; }
+.finder:has(> .finder-command) .xr-table-wrap { position:relative; display:block; overflow:auto; max-height:calc(100vh - 160px); margin:0; padding:0; border:0; border-radius:6px; line-height:normal; -webkit-overflow-scrolling:touch; }
 /* Many columns scroll sideways inside the card while the header stays visible. */
 .finder:has(> .finder-command) .xr-table thead th { position:sticky; top:0; z-index:2; }
 .finder:has(> .finder-command) .xr-table th:first-child, .finder:has(> .finder-command) .xr-table td:first-child { z-index:1; background:#fff; box-shadow:inset -1px 0 0 #e8e9ec; }
