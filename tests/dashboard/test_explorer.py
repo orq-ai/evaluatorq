@@ -1360,6 +1360,39 @@ def test_table_omits_conversation_markers_when_sorted() -> None:
     assert 'data-conv=' not in html
 
 
+def test_message_counting_hydrates_in_bounded_batches_and_keeps_drawer_cache() -> None:
+    rows = _rows(PAGE_ROWS * 3 + 7)
+    batches: list[int] = []
+
+    async def hydrate(batch: list[TraceRow]) -> dict[str, TraceRecord]:
+        batches.append(len(batch))
+        return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'hello'}) for row in batch}
+
+    store = ExplorerStore(search=lambda *_args, **_kwargs: None, hydrate=hydrate)  # type: ignore[arg-type]
+    store._view = ExplorerView(state='loaded', generation=123, rows=rows)
+
+    async def run() -> ExplorerView:
+        await store.records([rows[0].trace_id])
+        return await store.message_counts()
+
+    counted = asyncio.run(run())
+
+    assert counted.message_counts == {row.trace_id: 1 for row in rows}
+    assert max(batches) <= PAGE_ROWS
+    assert len(batches) == 1 + 4  # one drawer fetch, then four bounded scan batches
+    assert set(store._records) == {rows[0].trace_id}
+
+
+def test_show_tool_definitions_advances_display_version() -> None:
+    store = ExplorerStore(search=lambda *_args, **_kwargs: None, hydrate=lambda _rows: None)  # type: ignore[arg-type]
+    before = asyncio.run(store.view())
+
+    updated = asyncio.run(store.set_view(show_tool_definitions=True))
+
+    assert updated.show_tool_definitions
+    assert updated.version > before.version
+
+
 def test_load_rejects_an_inverted_range(explorer_client) -> None:
     _, source, client = explorer_client
     response = client.post(

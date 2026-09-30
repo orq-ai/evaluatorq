@@ -410,7 +410,7 @@ class ExplorerStore:
             if switching_quick_view and quick_view == 'conv_longest'
             else current.message_count_error,
         )
-        display = ('sort', 'descending', 'page', 'view', 'matched_only', 'quick_view')
+        display = ('sort', 'descending', 'page', 'view', 'show_tool_definitions', 'matched_only', 'quick_view')
         if any(getattr(updated, name) != getattr(current, name) for name in display):
             updated = replace(updated, version=next(_SEQUENCE))
         self._view = updated
@@ -571,13 +571,27 @@ class ExplorerStore:
 
     async def message_counts(self) -> ExplorerView:
         generation = self._view.generation
-        records = await self.records([row.trace_id for row in self._view.rows])
+        rows = self._view.rows
+        async with self._records_lock:
+            # Keep records that were already warm for drawers, but don't let a whole
+            # population scan turn the bounded trajectory cache into a transcript store.
+            keep = set(self._records)
+        counts: dict[str, int] = {}
+        for offset in range(0, len(rows), PAGE_ROWS):
+            if self._view.generation != generation:
+                break
+            batch = rows[offset : offset + PAGE_ROWS]
+            records = await self.records([row.trace_id for row in batch])
+            if self._view.generation != generation:
+                break
+            counts.update({
+                trace_id: len(record.messages) for trace_id, record in records.items() if record is not None
+            })
+            await self.retain_records(generation, keep)
         if self._view.generation == generation:
             self._view = replace(
                 self._view,
-                message_counts=MappingProxyType({
-                    trace_id: len(record.messages) for trace_id, record in records.items() if record is not None
-                }),
+                message_counts=MappingProxyType(counts),
             )
         return self._view
 
