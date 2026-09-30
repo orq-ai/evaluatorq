@@ -85,6 +85,10 @@ class FinderRunForm(BaseModel):
     duration_ms_max: int | None = Field(default=None, ge=0)
 
 
+class _FinderSettingsChangedError(Exception):
+    """A session store build raced with the settings generation transition."""
+
+
 def initialize_finder_settings(app: Any) -> None:
     """Resolve the saved profile while constructing the app, outside request handlers."""
     if getattr(app.state, 'finder_settings', None) is not None:
@@ -184,7 +188,33 @@ async def _store(
     if surface == 'traces':
         if session_id is None:
             raise RuntimeError('A verified browser session is required for the Traces store.')
-        return await app.state.trace_sessions.get(session_id, lambda: _build_store(app), request_state=request_state)
+
+        async def build_session_store() -> RunStore | None:
+            async with app.state.finder_store_lock:
+                generation = app.state.finder_generation
+            store = await _build_store(app)
+            async with app.state.finder_store_lock:
+                current_generation = app.state.finder_generation
+            if current_generation != generation:
+                if store is not None:
+                    try:
+                        await store.close()
+                    except Exception as exc:  # noqa: BLE001 — stale stores must never survive a settings change.
+                        logger.opt(exception=True).warning('Could not close a stale Traces store: {}', exc)
+                raise _FinderSettingsChangedError
+            return store
+
+        async def get_session_store() -> tuple[bool, RunStore | None]:
+            try:
+                store = await app.state.trace_sessions.get(session_id, build_session_store, request_state=request_state)
+            except _FinderSettingsChangedError:
+                return False, None
+            return True, store
+
+        while True:
+            is_current, store = await get_session_store()
+            if is_current:
+                return store
 
     state_name = 'finder_search_store'
     store = getattr(app.state, state_name, None)

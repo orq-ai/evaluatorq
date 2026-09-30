@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -256,6 +257,139 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
     assert models[-1] == 'new/compiler'
     assert client.get('/find').status_code == 200
     assert models[-1] == 'new/compiler'
+
+
+@pytest.mark.asyncio
+async def test_trace_store_created_during_settings_save_uses_new_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: ())
+    monkeypatch.setattr(finder_routes, '_api_available', lambda _app: True)
+    app = build_app(roots=[tmp_path])
+    detached = threading.Event()
+    allow_settings_update = threading.Event()
+    stale_build_started = threading.Event()
+    models: list[str] = []
+    stores: list[Any] = []
+
+    class Store:
+        explorer = None
+
+        def __init__(self, model: str) -> None:
+            self.model = model
+            self.closed = False
+
+        async def snapshot(self) -> RunSnapshot:
+            return RunSnapshot()
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def build_store(runtime: Any) -> Store:
+        model = runtime.state.finder_settings.compiler_model
+        models.append(model)
+        if detached.is_set():
+            stale_build_started.set()
+        store = Store(model)
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    original_detach = app.state.trace_sessions.detach_all
+
+    async def pause_after_detach() -> list[Any]:
+        result = await original_detach()
+        detached.set()
+        await asyncio.to_thread(allow_settings_update.wait, 10)
+        return result
+
+    monkeypatch.setattr(app.state.trace_sessions, 'detach_all', pause_after_detach)
+    with TestClient(app, follow_redirects=False) as client:
+        first_page = await asyncio.to_thread(client.get, '/traces')
+        assert first_page.status_code == 200
+        assert models == [app.state.finder_settings.compiler_model]
+
+        save_request = asyncio.create_task(
+            asyncio.to_thread(
+                client.post,
+                '/settings',
+                data=csrf_data({
+                    'compiler_model': 'new/compiler',
+                    'classifier_model': 'classifier/custom',
+                    'apply_model': 'apply/custom',
+                    'window_days': '14',
+                    'limit': '42',
+                    'parallelism': '7',
+                }),
+            )
+        )
+        assert await asyncio.to_thread(detached.wait, 2)
+        traces_request = asyncio.create_task(asyncio.to_thread(client.get, '/traces'))
+        try:
+            await asyncio.sleep(0.05)
+            assert not stale_build_started.is_set()
+        finally:
+            allow_settings_update.set()
+
+        save_response, traces_response = await asyncio.gather(save_request, traces_request)
+        assert save_response.status_code == 303, save_response.text.split('role="status">')[-1].split('</p>')[0]
+        assert traces_response.status_code == 200
+        assert len(models) == 2
+        assert models[0] != 'new/compiler'
+        assert models[1] == 'new/compiler'
+        assert stores[0].closed is True
+        assert stores[1].closed is False
+        assert (await asyncio.to_thread(client.get, '/traces')).status_code == 200
+        assert len(models) == 2
+
+
+@pytest.mark.asyncio
+async def test_closing_finder_stores_continues_after_one_close_fails() -> None:
+    closed: list[str] = []
+
+    class Store:
+        def __init__(self, name: str, *, fail: bool = False) -> None:
+            self.name = name
+            self.fail = fail
+
+        async def close(self) -> None:
+            closed.append(self.name)
+            if self.fail:
+                raise RuntimeError(f'{self.name} close failed')
+
+    await app_module._close_finder_stores(Store('broken', fail=True), Store('healthy'), None)
+
+    assert set(closed) == {'broken', 'healthy'}
+
+
+@pytest.mark.asyncio
+async def test_closing_finder_stores_finishes_cleanup_before_reraising_cancellation() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    closed: list[str] = []
+
+    class Store:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            started.set()
+            await release.wait()
+            closed.append(self.name)
+
+    closing = asyncio.create_task(app_module._close_finder_stores(Store('first'), Store('second')))
+    await started.wait()
+    closing.cancel()
+    await asyncio.sleep(0)
+    assert not closing.done()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+
+    assert set(closed) == {'first', 'second'}
 
 
 def test_dashboard_shutdown_closes_finder_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

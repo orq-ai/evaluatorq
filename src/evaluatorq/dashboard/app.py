@@ -364,9 +364,31 @@ async def _cancel_background_task(task: asyncio.Task[Any] | None) -> None:
 
 
 async def _close_finder_stores(*stores: Any) -> None:
-    for store in stores:
-        if store is not None:
-            await store.close()
+    active_stores = [store for store in stores if store is not None]
+    closing = asyncio.gather(*(store.close() for store in active_stores), return_exceptions=True)
+    try:
+        results = await asyncio.shield(closing)
+    except asyncio.CancelledError:
+        results = await closing
+        _log_finder_store_close_failures(active_stores, results)
+        raise
+    _log_finder_store_close_failures(active_stores, results)
+    cancellation = next((result for result in results if isinstance(result, asyncio.CancelledError)), None)
+    if cancellation is not None:
+        raise cancellation
+    fatal = next(
+        (result for result in results if isinstance(result, BaseException) and not isinstance(result, Exception)), None
+    )
+    if fatal is not None:
+        raise fatal
+
+
+def _log_finder_store_close_failures(stores: list[Any], results: list[Any]) -> None:
+    for store, result in zip(stores, results, strict=True):
+        if isinstance(result, Exception):
+            logger.opt(exception=(type(result), result, result.__traceback__)).warning(
+                'Could not close retired finder store {}: {}', type(store).__name__, result
+            )
 
 
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
