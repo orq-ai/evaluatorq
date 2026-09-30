@@ -160,3 +160,5 @@ print([(step.source, step.message) for step in trajectory.steps])  # [('user', '
 ```
 
 A trace with no chat span that yields a step raises `ValueError` from `to_atif()`, so check the span list is not empty or tool-only before converting.
+
+An `OtelTrace` holds one trace. Spans that carry more than one distinct `trace_id` raise `ValueError` when the trace is built, by `from_orq` or directly, so group spans by trace id first. Spans with no trace id are accepted, and several root spans under one trace id are converted as one run in start-time order.
