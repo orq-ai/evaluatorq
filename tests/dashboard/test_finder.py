@@ -1068,7 +1068,7 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
     assert 'class="finder-title finder-command-title"' not in html
     assert 'class="finder-command-lede"' in html
     assert 'data-finder-example=' in html
-    assert 'placeholder="Ask about these traces, for example: Did any customers get frustrated?"' in html
+    assert 'placeholder="Ask a question, e.g. Did any customers get frustrated?"' in html
     assert 'Search in' in html
     assert '<span>Loaded traces</span>' in html
     assert '<span>All traces</span>' in html

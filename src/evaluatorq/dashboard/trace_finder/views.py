@@ -41,7 +41,7 @@ SAMPLES = (
     'Responses from the docs agent that make unsupported claims.',
 )
 COMMAND_LEDE = 'Recent traces from your agents, newest first: ask a question in plain words, or filter the list below.'
-COMMAND_PLACEHOLDER = 'Ask about these traces, for example: Did any customers get frustrated?'
+COMMAND_PLACEHOLDER = 'Ask a question, e.g. Did any customers get frustrated?'
 COMMAND_EXAMPLES = (
     'Did any customers get frustrated?',
     'Which conversations mention refunds?',
