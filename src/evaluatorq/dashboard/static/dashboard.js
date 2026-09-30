@@ -172,6 +172,7 @@
 
   // On /traces the Filters button opens the facet menu itself; picks apply with one reload when it closes.
   let filtersDirty = false;
+  let pendingExplorerControl = null;
   function loadExplorer() {
     const form = document.getElementById('explorer-load-form');
     if (form && form.requestSubmit) form.requestSubmit();
@@ -197,7 +198,37 @@
     if (filtersDirty) { filtersDirty = false; loadExplorer(); }
   }
   document.body.addEventListener('change', function (evt) {
-    if (evt.target.closest('.finder-facets') && document.querySelector('[data-explorer-filters]')) filtersDirty = true;
+    if (evt.target.closest('.finder-facets') && !evt.target.matches('.facet-search') && document.querySelector('[data-explorer-filters]')) filtersDirty = true;
+  });
+  // A control click applies the pending facet edits first, then repeats the
+  // selected rows request so its choice is applied to the newly loaded rows.
+  document.addEventListener('click', function (evt) {
+    if (!filtersDirty) return;
+    const control = evt.target.closest('[hx-get][hx-target="#explorer-results"]');
+    if (!control) return;
+    const url = control.getAttribute('hx-get');
+    if (!url) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    pendingExplorerControl = url;
+    filtersDirty = false;
+    document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
+    document.querySelectorAll('[data-explorer-filters]').forEach(function (button) { button.setAttribute('aria-expanded', 'false'); });
+    loadExplorer();
+  }, true);
+  function runPendingExplorerControl() {
+    if (!pendingExplorerControl || !window.htmx) return;
+    const url = pendingExplorerControl;
+    pendingExplorerControl = null;
+    window.htmx.ajax('GET', url, { target: '#explorer-results', swap: 'outerHTML' });
+  }
+  document.body.addEventListener('htmx:afterSettle', function (evt) {
+    if (evt.detail?.target?.id === 'explorer-results') runPendingExplorerControl();
+  });
+  ['htmx:sendError', 'htmx:responseError', 'htmx:timeout'].forEach(function (name) {
+    document.body.addEventListener(name, function (evt) {
+      if (evt.detail?.elt?.id === 'explorer-load-form') runPendingExplorerControl();
+    });
   });
   // A swap of the whole filter row (Load, Clear, a new run) replaces the menu and its unsaved ticks with it.
   function filterRowReplaced(evt) {
@@ -811,6 +842,17 @@
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = exact; });
     explorerUpdateOffsets();
   }
+  let customRangeWasOpen = false;
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail?.target?.id !== 'explorer-results') return;
+    customRangeWasOpen = !!document.querySelector('.xr-exact')?.open;
+  });
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail?.target?.id !== 'explorer-results' || !customRangeWasOpen) return;
+    const custom = document.querySelector('.xr-exact');
+    if (custom) custom.open = true;
+    customRangeWasOpen = false;
+  });
   function explorerUpdateRangeLabel(presetLabel) {
     const label = document.querySelector('[data-explorer-range-label]');
     if (!label) return;

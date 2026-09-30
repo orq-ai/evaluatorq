@@ -1323,6 +1323,22 @@ def test_traces_filters_button_opens_the_facet_menu_directly(explorer_client) ->
     assert "window.htmx.trigger(menu, 'refreshFacets')" in js
 
 
+def test_dashboard_js_keeps_facet_search_and_rows_controls_sequenced() -> None:
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert "!evt.target.matches('.facet-search')" in js
+    assert "control = evt.target.closest('[hx-get][hx-target=\"#explorer-results\"]')" in js
+    assert 'pendingExplorerControl = url;' in js
+    assert "window.htmx.ajax('GET', url, { target: '#explorer-results', swap: 'outerHTML' })" in js
+    assert "evt.detail?.target?.id === 'explorer-results') runPendingExplorerControl()" in js
+
+
+def test_dashboard_js_preserves_open_custom_range_across_results_swaps() -> None:
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert 'customRangeWasOpen = !!document.querySelector(\'.xr-exact\')?.open;' in js
+    assert "const custom = document.querySelector('.xr-exact');" in js
+    assert 'if (custom) custom.open = true;' in js
+
+
 def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
     explorer_client, monkeypatch: pytest.MonkeyPatch
 ) -> None:
