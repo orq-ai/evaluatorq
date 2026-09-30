@@ -64,6 +64,27 @@ def store_for(source: FakeSource) -> ExplorerStore:
 
 
 @pytest.mark.asyncio
+async def test_failed_hydration_is_retried_and_can_succeed() -> None:
+    rows = (TraceRow(trace_id='retry-me'),)
+    calls = 0
+
+    async def hydrate(requested: Any) -> dict[str, TraceRecord | None]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {}
+        return {row.trace_id: record(row.trace_id) for row in requested}
+
+    store = ExplorerStore(search=FakeSource(rows).search, hydrate=hydrate)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
+
+    assert await store.records(['retry-me']) == {'retry-me': None}
+    assert not await store.has_cached_record('retry-me')
+    assert await store.records(['retry-me']) == {'retry-me': record('retry-me')}
+    assert calls == 2
+
+
+@pytest.mark.asyncio
 async def test_load_then_page_and_sort() -> None:
     rows = tuple(TraceRow(trace_id=f't{i}', tokens_in=i) for i in range(250))
     store = store_for(FakeSource(rows))

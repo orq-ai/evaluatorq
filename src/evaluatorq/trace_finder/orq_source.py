@@ -459,10 +459,11 @@ class OrqTraceSource:
         return tuple(rows[:limit])
 
     async def hydrate_rows(self, rows: Sequence[TraceRow]) -> dict[str, TraceRecord | None]:
-        """Fetch messages for *rows*; a trace that fails or has none maps to ``None``."""
+        """Fetch messages; successful empty traces map to ``None``, failed traces are omitted."""
         project_names = await _project_names(self._client)
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
         errors: list[str] = []
+        failed_trace_ids: set[str] = set()
         fallbacks: list[str] = []
         issues = _HydrationIssues()
 
@@ -478,6 +479,7 @@ class OrqTraceSource:
                     fallbacks.append(row.trace_id)
             except Exception as error:  # noqa: BLE001 — one trace's failure must not blank the page
                 errors.append(f'{type(error).__name__}: {error}')
+                failed_trace_ids.add(row.trace_id)
                 return None
             finally:
                 done += 1
@@ -495,7 +497,11 @@ class OrqTraceSource:
             )
         if empty:
             logger.warning('{} of {} trace(s) have no usable messages; drawing them as empty bars', empty, len(rows))
-        return {row.trace_id: record for row, record in zip(rows, records, strict=True)}
+        return {
+            row.trace_id: record
+            for row, record in zip(rows, records, strict=True)
+            if row.trace_id not in failed_trace_ids
+        }
 
     async def _hydrate_page(
         self,

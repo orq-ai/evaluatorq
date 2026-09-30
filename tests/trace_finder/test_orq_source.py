@@ -1106,14 +1106,14 @@ async def test_hydrate_rows_keeps_summary_messages_when_span_detail_lookup_raise
 
 
 @pytest.mark.asyncio
-async def test_hydrate_rows_returns_none_when_the_span_lookup_raises_and_summary_is_unusable() -> None:
+async def test_hydrate_rows_omits_failed_trace_when_summary_is_unusable() -> None:
     trace = with_output_tokens(summary('empty', messages=[]))
     source = make_source(FakeOrq(SpanLookupFailingTraces({None: ([trace], False, None)}, failing={'empty'})))
 
     rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
     records = await source.hydrate_rows(rows)
 
-    assert records == {'empty': None}
+    assert records == {}
 
 
 @pytest.mark.asyncio
