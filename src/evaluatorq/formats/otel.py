@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, Union, cast
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from evaluatorq.common.trace_input import parent_span_id_of, span_id_of
 from evaluatorq.formats._shared import parse_iso
@@ -217,10 +217,24 @@ class OtelSpan(BaseModel):
 
 
 class OtelTrace(BaseModel):
-    """A list of spans forming one trace (a forest when parents are missing)."""
+    """A list of spans forming one trace (a forest when parents are missing).
+
+    Every span that names a trace id must name the same one; spans with an empty trace id are accepted.
+
+    Raises:
+        ValueError: The spans carry more than one distinct trace id.
+    """
 
     model_config = ConfigDict(frozen=True)
     spans: list[OtelSpan]
+
+    @model_validator(mode='after')
+    def _one_trace_id(self) -> OtelTrace:
+        trace_ids = sorted({span.trace_id for span in self.spans if span.trace_id})
+        if len(trace_ids) > 1:
+            msg = f'OtelTrace spans carry {len(trace_ids)} trace ids {trace_ids}; split them into one OtelTrace per trace id'
+            raise ValueError(msg)
+        return self
 
     @classmethod
     def from_orq(cls, spans: list[dict[str, Any]]) -> OtelTrace:

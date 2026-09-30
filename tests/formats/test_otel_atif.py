@@ -554,3 +554,71 @@ def test_multi_part_text_result_joins_with_newlines() -> None:
                 {'type': 'text', 'text': 'a'}, {'type': 'text', 'text': 'b'}]}]}}]})
     tool = next(s for s in traj.to_otel().spans if s.operation == 'execute_tool')
     assert tool.attributes['gen_ai.tool.call.result'] == 'a\nb'
+
+
+# --- replayed history: prefix check, rewritten history, compaction ---
+
+
+def _replay_trace(second_input: list[dict[str, Any]]) -> OtelTrace:
+    first_in = [_text('system', 'be brief'), _text('user', 'q1')]
+    return OtelTrace.from_orq([
+        _chat('c1', first_in, [_text('assistant', 'a1')], started_at=1),
+        _chat('c2', second_input, [_text('assistant', 'a2')], started_at=2),
+    ])
+
+
+def test_replayed_prefix_that_matches_reads_only_new_input(caplog: pytest.LogCaptureFixture) -> None:
+    trace = _replay_trace([_text('system', 'be  brief\n'), _text('user', 'q1'), _text('assistant', 'a1'),
+                           _text('user', 'q2')])
+    assert _sig(trace.to_atif()) == [('system', 'be brief'), ('user', 'q1'), ('agent', 'a1'), ('user', 'q2'),
+                                     ('agent', 'a2')]
+    assert 'does not replay' not in caplog.text
+
+
+def test_rewritten_history_is_warned_and_neither_duplicated_nor_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    trace = _replay_trace([_text('user', 'q1'), _text('assistant', 'a1'), _text('user', 'q2'), _text('user', 'q3')])
+    assert _sig(trace.to_atif()) == [('system', 'be brief'), ('user', 'q1'), ('agent', 'a1'), ('user', 'q2'),
+                                     ('user', 'q3'), ('agent', 'a2')]
+    assert caplog.text.count('does not replay') == 1
+    assert 'Chat span c2' in caplog.text
+
+
+def test_rewritten_history_keeps_repeated_new_turn() -> None:
+    trace = _replay_trace([
+        _text('user', 'q1'), _text('assistant', 'a1'),
+        _text('user', 'q1'), _text('assistant', 'a1'), _text('user', 'q2'),
+    ])
+    assert _sig(trace.to_atif()) == [
+        ('system', 'be brief'), ('user', 'q1'), ('agent', 'a1'),
+        ('user', 'q1'), ('agent', 'a1'), ('user', 'q2'), ('agent', 'a2'),
+    ]
+
+
+def test_reissued_tool_call_with_same_id_but_new_arguments_is_new_input() -> None:
+    first_call = {'role': 'assistant', 'parts': [
+        {'type': 'tool_call', 'id': 'same', 'name': 'lookup', 'arguments': {'query': 'first'}}]}
+    second_call = {'role': 'assistant', 'parts': [
+        {'type': 'tool_call', 'id': 'same', 'name': 'lookup', 'arguments': {'query': 'second'}}]}
+    trace = OtelTrace.from_orq([
+        _chat('c1', [_text('user', 'q')], [first_call], started_at=1),
+        _chat('c2', [_text('user', 'q'), second_call], [_text('assistant', 'done')], started_at=2),
+    ])
+    steps = trace.to_atif().steps
+    assert [step.source for step in steps] == ['user', 'agent', 'agent', 'agent']
+    assert steps[1].tool_calls is not None and steps[1].tool_calls[0].arguments == {'query': 'first'}
+    assert steps[2].tool_calls is not None and steps[2].tool_calls[0].arguments == {'query': 'second'}
+
+
+def test_compaction_is_a_system_step_not_a_mismatch(caplog: pytest.LogCaptureFixture) -> None:
+    compaction = {'role': 'assistant', 'parts': [{'type': 'compaction', 'id': 'cmp_1', 'content': 'user asked q1'}]}
+    wrapped = {'role': 'assistant', 'parts': [
+        {'type': 'data', 'content': {'type': 'compaction', 'id': 'cmp_2', 'encrypted_content': 'gAAA'}}]}
+    for message, text in ((compaction, 'user asked q1'), (wrapped, '')):
+        caplog.clear()
+        traj = _replay_trace([_text('system', 'be brief'), message, _text('user', 'q2')]).to_atif()
+        assert _sig(traj) == [('system', 'be brief'), ('user', 'q1'), ('agent', 'a1'), ('system', text),
+                              ('user', 'q2'), ('agent', 'a2')]
+        extra = traj.steps[3].extra
+        assert extra is not None and extra['context_management'] == {'type': 'compaction', 'boundary': 'replace'}
+        assert len(extra['evaluatorq.compaction']) == 1
+        assert 'does not replay' not in caplog.text

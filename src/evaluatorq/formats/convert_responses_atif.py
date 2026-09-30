@@ -1,9 +1,9 @@
 """Convert between Responses transcripts and ATIF trajectories.
 
-`items` are authoritative: steps are cut from them. `responses` only enrich agent steps with model,
-usage, timing and finish status, and only when there is exactly one per agent step. `atif_to_responses`
-emits one `Response` per agent step, but consecutive agent steps with no tool result between them merge
-into one step when the items are read back, so their `Response` list no longer lines up and is ignored.
+`items` are authoritative: steps are cut from them. Each `Response` starts a new agent step at its first
+output item and enriches it with model, usage, timing and finish status. `atif_to_responses` emits one
+`Response` per agent step whose `output` holds that step's output items, so consecutive agent steps with no
+tool result between them come back as separate steps.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from loguru import logger
-from openai.types.responses import Response, ResponseError, ResponseStatus
+from openai.types.responses import Response, ResponseError, ResponseOutputItem, ResponseStatus
 from openai.types.responses.response import IncompleteDetails
 from pydantic import BaseModel, ValidationError
 
@@ -30,9 +30,11 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.formats._ids import content_seed, stable_hex
 from evaluatorq.formats._shared import (
+    COMPACTION_EXTRA_KEY,
     RAW_ARGUMENTS_EXTRA_KEY,
     atif_content_text,
     atif_tool_arguments,
+    compaction_extra,
     final_metrics,
     join_text,
     json_arguments_text,
@@ -51,14 +53,20 @@ from evaluatorq.formats.atif import (
     AtifToolCall,
     AtifTrajectory,
 )
-from evaluatorq.formats.responses import ResponsesConversation
+from evaluatorq.formats.responses import (
+    ResponsesConversation,
+    is_output_item,
+    output_item,
+    response_starts,
+    walk_items,
+)
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 
 if TYPE_CHECKING:
     from openai.types.responses import ResponseUsage
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text'})
-_OUTPUT_ITEM_TYPES = frozenset({'message', 'reasoning', 'function_call'})
+_UNMAPPED_OUTPUTS_KEY = 'evaluatorq.responses_output_items'
 _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']] = {
     'image/jpeg': 'image/jpeg',
     'image/png': 'image/png',
@@ -81,8 +89,10 @@ class _Draft:
     reasoning: list[dict[str, Any]] = field(default_factory=list)
     calls: list[dict[str, Any]] = field(default_factory=list)
     results: list[dict[str, Any]] = field(default_factory=list)
+    unmapped_outputs: list[dict[str, Any]] = field(default_factory=list)
     seen_result: bool = False
     item: dict[str, Any] | None = None  # the message item of a user/system step
+    response: Response | None = None  # the model call that produced an agent step
 
 
 # Responses -> ATIF
@@ -96,28 +106,13 @@ def responses_to_atif(
     session_id: str | None = None,
 ) -> AtifTrajectory:
     """Build an ATIF trajectory from Responses items; see `ResponsesConversation.to_atif` for the mapping."""
-    drafts = _segment(conv.items)
+    drafts = _segment(conv.items, response_starts(conv.items, conv.responses or []))
     if not drafts:
         raise ValueError(_NO_STEPS)
-    agent_count = sum(1 for d in drafts if d.source == 'agent')
-    responses: list[Response | None] = [None] * agent_count
-    if conv.responses is not None:
-        if len(conv.responses) == agent_count:
-            responses = list(conv.responses)
-        else:
-            logger.warning(
-                'Got {} responses for {} agent steps; ignoring all responses (items stay authoritative).',
-                len(conv.responses),
-                agent_count,
-            )
-    steps: list[AtifStep] = []
-    agent_index = 0
-    for index, draft in enumerate(drafts):
-        if draft.source == 'agent':
-            steps.append(_agent_step(draft, index + 1, responses[agent_index]))
-            agent_index += 1
-        else:
-            steps.append(_user_step(draft, index + 1))
+    steps = [
+        _agent_step(draft, index + 1) if draft.source == 'agent' else _user_step(draft, index + 1)
+        for index, draft in enumerate(drafts)
+    ]
     return AtifTrajectory(
         session_id=session_id or stable_hex(content_seed(conv.items), length=16),
         agent=AtifAgent(name=agent_name, version=agent_version),
@@ -126,39 +121,43 @@ def responses_to_atif(
     )
 
 
-def _segment(items: list[dict[str, Any]]) -> list[_Draft]:
-    """Cut Responses items into step drafts (user/system messages, and agent turns closed by tool results)."""
+def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_Draft]:
+    """Cut Responses items into step drafts: user/system messages, and agent turns closed by a tool result or
+    by the first output item of the next `Response` (`starts` maps item indices to responses)."""
     drafts: list[_Draft] = []
 
-    def current_agent() -> _Draft:
+    def current_agent(index: int) -> _Draft:
         last = drafts[-1] if drafts else None
-        if last is None or last.source != 'agent' or last.seen_result:
-            last = _Draft(source='agent')
+        if last is None or last.source != 'agent' or last.seen_result or index in starts:
+            last = _Draft(source='agent', response=starts.get(index))
             drafts.append(last)
         return last
 
-    for item in items:
-        item_type = item.get('type')
-        if item_type is None and 'role' in item:
-            item_type = 'message'
+    def message(index: int, item: dict[str, Any]) -> None:
         role = item.get('role')
-        if item_type == 'message' and role in ('user', 'system', 'developer'):
+        if role in ('user', 'system', 'developer'):
             drafts.append(_Draft(source='user' if role == 'user' else 'system', item=item))
-        elif item_type == 'message' and role == 'assistant':
-            current_agent().texts.append(_assistant_text(item.get('content')))
-        elif item_type == 'message':
-            logger.warning('Skipping Responses message with role {!r}: ATIF has no such step source.', role)
-        elif item_type == 'reasoning':
-            current_agent().reasoning.append(item)
-        elif item_type == 'function_call':
-            if isinstance(item.get('call_id'), str) and item['call_id']:
-                current_agent().calls.append(item)
-            else:
-                logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
-        elif item_type == 'function_call_output':
-            _attach_output(item, drafts)
+        elif role == 'assistant':
+            current_agent(index).texts.append(_assistant_text(item.get('content')))
         else:
-            logger.warning('Skipping Responses item of type {!r}: ATIF has no equivalent.', item_type)
+            logger.warning('Skipping Responses message with role {!r}: ATIF has no such step source.', role)
+
+    def call(index: int, item: dict[str, Any]) -> None:
+        if isinstance(item.get('call_id'), str) and item['call_id']:
+            current_agent(index).calls.append(item)
+        else:
+            logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
+
+    handlers = {
+        'message': message,
+        'reasoning': lambda index, item: current_agent(index).reasoning.append(item),
+        'function_call': call,
+        'custom_tool_call': lambda index, item: current_agent(index).unmapped_outputs.append(item),
+        'mcp_call': lambda index, item: current_agent(index).unmapped_outputs.append(item),
+        'function_call_output': lambda _, item: _attach_output(item, drafts),
+        'compaction': lambda _, item: drafts.append(_Draft(source='system', item=item)),
+    }
+    walk_items(items, handlers, 'ATIF')
     return drafts
 
 
@@ -223,6 +222,8 @@ def _assistant_text(content: Any) -> str:
 
 def _user_step(draft: _Draft, step_id: int) -> AtifStep:
     item = draft.item or {}
+    if item.get('type') == 'compaction':
+        return AtifStep(step_id=step_id, source='system', message='', extra=compaction_extra([item]))
     extra = {'original_role': 'developer'} if item.get('role') == 'developer' else None
     return AtifStep(step_id=step_id, source=draft.source, message=_user_content(item.get('content')), extra=extra)
 
@@ -263,7 +264,8 @@ def _image_media_type(url: str) -> Literal['image/jpeg', 'image/png', 'image/gif
     return 'image/png'
 
 
-def _agent_step(draft: _Draft, step_id: int, response: Response | None) -> AtifStep:
+def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
+    response = draft.response
     extra: dict[str, Any] = {}
     reasoning_texts: list[str] = []
     for item in draft.reasoning:
@@ -280,6 +282,8 @@ def _agent_step(draft: _Draft, step_id: int, response: Response | None) -> AtifS
     fc_item_ids = {c['call_id']: c['id'] for c in draft.calls if isinstance(c.get('id'), str)}
     if fc_item_ids:
         extra['fc_item_ids'] = fc_item_ids
+    if draft.unmapped_outputs:
+        extra[_UNMAPPED_OUTPUTS_KEY] = draft.unmapped_outputs
     results = [AtifObservationResult(**result) for result in draft.results]
     fields: dict[str, Any] = {}
     if response is not None:
@@ -367,6 +371,8 @@ def _metrics_from_usage(usage: ResponseUsage | None, unset: frozenset[str]) -> A
 def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
     """Render an ATIF trajectory as Responses items plus exactly one `Response` per agent step.
 
+    Each `Response.output` holds the output items of its step (assistant message, reasoning, function calls).
+
     A step without model, metrics or timestamp gets a placeholder (`model=''`, `usage=None`, `created_at=0.0`),
     which `responses_to_atif` reads back as absent. Responses usage has no unset token count, so an unset ATIF
     count is written as 0 and named in `Response.metadata['atif_unset_usage']`, which reads back as unset.
@@ -386,12 +392,28 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
     unmapped: dict[str, int] = {}
     for step in traj.steps:
         if step.source == 'agent':
-            items.extend(_agent_items(step, seed))
-            responses.append(_response(step, seed))
+            step_items = _agent_items(step, seed)
+            items.extend(step_items)
+            responses.append(_response(step, seed, [output_item(i) for i in step_items if is_output_item(i)]))
             for name in _UNMAPPED_METRICS:
                 if step.metrics is not None and getattr(step.metrics, name) is not None:
                     unmapped[name] = unmapped.get(name, 0) + 1
         else:
+            extra = step.extra or {}
+            context = extra.get('context_management')
+            compactions = extra.get(COMPACTION_EXTRA_KEY)
+            if isinstance(context, dict) and context.get('type') == 'compaction':
+                restored = (
+                    [item for item in compactions if isinstance(item, dict) and item.get('type') == 'compaction']
+                    if isinstance(compactions, list)
+                    else []
+                )
+                if isinstance(compactions, list) and len(restored) == len(compactions) and restored:
+                    items.extend(restored)
+                    continue
+                logger.warning(
+                    'Compaction step {} has no Responses compaction item; rendering its message.', step.step_id
+                )
             role = 'developer' if (step.extra or {}).get('original_role') == 'developer' else step.source
             content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
             items.extend(messages_to_responses_input([Message(role=role, content=content)]))
@@ -447,7 +469,11 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     ]
     names = {call.tool_call_id: call.function_name for call in step.tool_calls or []}
     content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
-    messages = [Message(role='assistant', content=content or None, tool_calls=calls or None)]
+    messages = (
+        [Message(role='assistant', content=content or None, tool_calls=calls or None)]
+        if content or calls or not (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
+        else []
+    )
     for result in step.observation.results if step.observation else []:
         for ref in result.subagent_trajectory_ref or []:
             logger.warning('subagent {} not representable in Responses', ref.trajectory_id or ref.trajectory_path)
@@ -473,10 +499,19 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
             )
         )
     items.extend(messages_to_responses_input(messages))
+    unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
+    if isinstance(unmapped, list):
+        outputs = [item for item in unmapped if isinstance(item, dict) and is_output_item(item)]
+        if len(outputs) != len(unmapped):
+            logger.warning('Step {} has malformed Responses output items; dropping them.', step.step_id)
+        insertion = next(
+            (index for index, item in enumerate(items) if item.get('type') == 'function_call_output'), len(items)
+        )
+        items[insertion:insertion] = outputs
     return items
 
 
-def _response(step: AtifStep, seed: str) -> Response:
+def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Response:
     extra = step.extra or {}
     usage: dict[str, Any] | None = None
     metadata: dict[str, str] | None = None
@@ -513,7 +548,7 @@ def _response(step: AtifStep, seed: str) -> Response:
         'created_at': _epoch(step.timestamp),
         'model': step.model_name or '',
         'object': 'response',
-        'output': [],
+        'output': output,
         'parallel_tool_calls': False,
         'tool_choice': 'auto',
         'tools': [],

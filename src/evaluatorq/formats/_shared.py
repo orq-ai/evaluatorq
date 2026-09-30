@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from evaluatorq.formats.atif import AtifContentPart, AtifFinalMetrics, AtifStep
 
 RAW_ARGUMENTS_EXTRA_KEY = 'evaluatorq.raw_arguments'
+COMPACTION_EXTRA_KEY = 'evaluatorq.compaction'
 _FRACTION = re.compile(r'(?<=\d{2}:\d{2}:\d{2})\.(\d+)')
 
 
@@ -33,6 +34,11 @@ def part_text(part: Any, where: str) -> str:
         logger.warning('{} content part of type {!r} carries no text; dropping it.', where, kind)
         return ''
     return text
+
+
+def compaction_extra(compactions: list[dict[str, Any]]) -> dict[str, Any]:
+    """Step `extra` of a compaction system step: ATIF's `context_management` marker plus the raw compaction data."""
+    return {'context_management': {'type': 'compaction', 'boundary': 'replace'}, COMPACTION_EXTRA_KEY: compactions}
 
 
 def parse_iso(value: str) -> datetime:

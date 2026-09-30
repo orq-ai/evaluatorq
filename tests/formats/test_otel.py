@@ -325,3 +325,21 @@ def test_nanosecond_iso_time_parses() -> None:
 def test_out_of_range_epoch_is_unset_with_warning(value: float, caplog: pytest.LogCaptureFixture) -> None:
     assert parse_time(value) is None
     assert 'out of range' in caplog.text
+
+
+def test_spans_from_two_trace_ids_are_rejected() -> None:
+    raw = _raw()
+    raw[0]['trace_id'] = 'trace-a'
+    raw[1]['trace_id'] = 'trace-b'
+    with pytest.raises(ValueError, match='2 trace ids'):
+        OtelTrace.from_orq(raw)
+    spans = OtelTrace.from_orq(_raw()).spans
+    with pytest.raises(ValueError, match='2 trace ids'):
+        OtelTrace(spans=[spans[0].model_copy(update={'trace_id': 'x'}), spans[1].model_copy(update={'trace_id': 'y'})])
+
+
+def test_several_roots_in_one_trace_id_are_allowed() -> None:
+    raw = [dict(span, trace_id='t') for span in _raw()]
+    raw.append(dict(raw[4], span_id='c9', parent_span_id=None))
+    raw.append({'span_id': 'no-trace', 'attributes': {}})
+    assert len(OtelTrace.from_orq(raw).roots()) == 3

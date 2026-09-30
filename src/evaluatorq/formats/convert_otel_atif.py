@@ -2,7 +2,9 @@
 
 OTel -> ATIF reads one agent run per `invoke_agent` scope: `chat` spans become steps in start-time order, and
 the conversation comes from each chat span's *new* input (the part the previous chat span had not seen), so a
-trace whose chat spans replay the full history (Orq does) is not duplicated. Tool results come from
+trace whose chat spans replay the full history (Orq does) is not duplicated. The replayed prefix is checked
+against what the previous span saw; a span whose history was rewritten is read by content instead (see
+`_new_input`), and a compaction in the input becomes a system step. Tool results come from
 `execute_tool` spans or, failing those, from `tool_call_response` parts in later chat inputs, and attach to the
 step that issued the call. Nested `invoke_agent` spans become `subagent_trajectories`. Usage is read from chat
 spans only: `invoke_agent` spans carry inclusive totals that would double-count.
@@ -17,6 +19,7 @@ step. Ids are SHA-256 of the session and trajectory ids. ATIF `extra` data with 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -29,6 +32,7 @@ from evaluatorq.formats._shared import (
     RAW_ARGUMENTS_EXTRA_KEY,
     atif_content_text,
     atif_tool_arguments,
+    compaction_extra,
     final_metrics,
     join_text,
     json_arguments_text,
@@ -46,6 +50,8 @@ from evaluatorq.formats.atif import (
     AtifTrajectory,
 )
 from evaluatorq.formats.otel import (
+    OtelCompactionPart,
+    OtelGenericPart,
     OtelMessage,
     OtelPart,
     OtelReasoningPart,
@@ -66,6 +72,8 @@ _NO_STEPS = 'OtelTrace has no chat spans; ATIF needs at least one step'
 _UNKNOWN = 'unknown'
 _OTHER_ERROR = '_OTHER'  # the semconv `error.type` fallback when a failed span names no error
 _STATUSES = frozenset({'ok', 'error', 'unset'})
+_WHITESPACE = re.compile(r'\s+')
+_COMPACTION = 'compaction'
 
 # ATIF data OTel has no attribute for, carried as JSON strings so OTel -> ATIF can restore it.
 _STEP_EXTRA = 'evaluatorq.atif.step.extra'
@@ -106,6 +114,11 @@ def otel_to_atif(trace: OtelTrace, *, agent_name: str = _UNKNOWN, agent_version:
 
     `evaluatorq.atif.*` attributes written by `atif_to_otel` are merged back into the matching `extra` and
     `final_metrics`; a key the trace itself yields keeps the trace's value (a differing carried value is warned).
+
+    A compaction part in a chat input (an `OtelCompactionPart`, or a Responses `compaction` item wrapped in a
+    `data` part) becomes a system step with `extra.context_management = {"type": "compaction", "boundary":
+    "replace"}`, the compaction parts under `extra["evaluatorq.compaction"]`, and any plain-text summary as the
+    message.
 
     Lost: chat input messages before the first chat span (prior history, warned), extra output choices
     (warned), span attributes other than model, usage, finish reasons, error type and `evaluatorq.atif.*`, and
@@ -277,19 +290,86 @@ def _chat_steps(chats: list[OtelSpan], by_id: dict[str, OtelSpan]) -> tuple[list
 
 
 def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
+    """Return new input from a cumulative, partial, or per-turn chat span.
+
+    Compare complete message occurrences in order. A rewritten history may overlap the previous one; the
+    earliest longest overlap keeps a repeated turn that follows it. A compaction starts a new context and is
+    carried as a step.
+    """
+    seen = [*(prev.input_messages or []), *(prev.output_messages or [])]
     messages = chat.input_messages or []
-    prior_input = prev.input_messages or []
-    prior_output = prev.output_messages or []
-    previous = [*prior_input, *prior_output]
-    if previous and messages[: len(previous)] == previous:
-        return messages[len(previous) :]
-    if prior_input and len(messages) > len(prior_input) and messages[: len(prior_input)] == prior_input:
+    signatures = [_signature(message) for message in seen]
+    current = [_signature(message) for message in messages]
+    if signatures and current[: len(signatures)] == signatures:
+        return messages[len(signatures) :]
+    prior_input = [_signature(message) for message in prev.input_messages or []]
+    if prior_input and len(current) > len(prior_input) and current[: len(prior_input)] == prior_input:
         return messages[len(prior_input) :]
-    if not prior_input and prior_output and messages[: len(prior_output)] == prior_output:
-        return messages[len(prior_output) :]
-    # Some exporters send only the current turn. In that shape, the predecessor's
-    # message count says nothing about how much of this span's input is new.
-    return messages
+    compacted = next(
+        (
+            index
+            for index in range(len(messages) - 1, -1, -1)
+            if _is_compaction(messages[index]) and messages[index] not in seen
+        ),
+        None,
+    )
+    if compacted is None:
+        logger.warning(
+            'Chat span {} does not replay the history its predecessor saw; aligning repeated messages in order',
+            chat.span_id,
+        )
+        head: list[OtelMessage] = []
+        tail = messages
+    else:
+        logger.info(
+            'Chat span {} input starts from a compaction; reading the history after it as rewritten', chat.span_id
+        )
+        head = [messages[compacted]]
+        tail = messages[compacted + 1 :]
+    tail_signatures = [_signature(message) for message in tail]
+    for length in range(min(len(signatures), len(tail_signatures)), 0, -1):
+        suffix = signatures[-length:]
+        for index in range(len(tail_signatures) - length + 1):
+            if tail_signatures[index : index + length] == suffix:
+                return [*head, *tail[index + length :]]
+    return [*head, *tail]
+
+
+def _signature(message: OtelMessage) -> tuple[str, str, tuple[str, ...]]:
+    """Compare message role, normalised text, and every non-reasoning part's semantic payload."""
+    role = 'system' if message.role == 'developer' else message.role
+    text = _WHITESPACE.sub(
+        ' ', join_text(part.content for part in message.parts if isinstance(part, OtelTextPart))
+    ).strip()
+    payloads = tuple(
+        json.dumps(part.model_dump(mode='json', exclude_none=True), sort_keys=True, default=str)
+        for part in message.parts
+        if not isinstance(part, (OtelTextPart, OtelReasoningPart))
+    )
+    return role, text, payloads
+
+
+def _compaction_part(part: OtelPart) -> bool:
+    """An OTel compaction part, or a Responses `compaction` item Orq wraps in a `data` part."""
+    if isinstance(part, OtelCompactionPart):
+        return True
+    content = getattr(part, 'content', None) if isinstance(part, OtelGenericPart) and part.type == 'data' else None
+    return isinstance(content, dict) and cast('dict[str, Any]', content).get('type') == _COMPACTION
+
+
+def _is_compaction(message: OtelMessage) -> bool:
+    return any(_compaction_part(part) for part in message.parts)
+
+
+def _compaction_step(message: OtelMessage) -> _Draft:
+    """A system step marking a context compaction, in the ATIF `extra.context_management` convention."""
+    compactions = [part for part in message.parts if _compaction_part(part)]
+    texts, extra = _split_text([part for part in message.parts if not _compaction_part(part)], message.role)
+    texts.extend(
+        part.content for part in compactions if isinstance(part, OtelCompactionPart) and isinstance(part.content, str)
+    )
+    extra = {**(extra or {}), **compaction_extra([part.model_dump(mode='json') for part in compactions])}
+    return _Draft(fields={'source': 'system', 'message': join_text(texts), 'extra': extra})
 
 
 def _system_instruction_steps(chat: OtelSpan) -> list[_Draft]:
@@ -300,21 +380,50 @@ def _system_instruction_steps(chat: OtelSpan) -> list[_Draft]:
 
 
 def _history(messages: list[OtelMessage], *, first: bool) -> list[_Draft]:
-    """Turn system and user input messages into steps. Tool messages are read as results elsewhere."""
+    """Turn new input messages into steps. Tool messages are read as results elsewhere."""
     drafts: list[_Draft] = []
     history = 0
     for message in messages:
-        if message.role in ('system', 'developer', 'user'):
+        if _is_compaction(message):
+            drafts.append(_compaction_step(message))
+        elif message.role in ('system', 'developer', 'user'):
             drafts.append(_message_step(message))
         elif first and message.role in ('assistant', 'tool'):
             history += 1
         elif message.role == 'assistant':
-            logger.warning('Chat input has an assistant message the previous chat span did not output; skipping it')
+            drafts.append(_input_agent_step(message))
         elif message.role != 'tool':
             logger.warning('Skipping chat input message with role {!r}: ATIF has no such step source', message.role)
     if history:
         logger.warning('history of {} messages before the first chat span is not converted', history)
     return drafts
+
+
+def _input_agent_step(message: OtelMessage) -> _Draft:
+    """Keep an assistant turn found only in a later chat input after replay alignment."""
+    texts: list[str] = []
+    reasoning: list[str] = []
+    calls: list[AtifToolCall] = []
+    other: list[OtelPart] = []
+    for part in message.parts:
+        if isinstance(part, OtelTextPart):
+            texts.append(part.content)
+        elif isinstance(part, OtelReasoningPart):
+            reasoning.append(part.content)
+        elif isinstance(part, OtelToolCallPart):
+            calls.append(_tool_call(part, 'input', len(calls)))
+        else:
+            other.append(part)
+    extra = _split_text(other, 'chat input assistant message')[1]
+    return _Draft(
+        fields={
+            'source': 'agent',
+            'message': join_text(texts),
+            'reasoning_content': '\n\n'.join(reasoning) or None,
+            'tool_calls': calls or None,
+            'extra': extra,
+        }
+    )
 
 
 def _message_step(message: OtelMessage) -> _Draft:
