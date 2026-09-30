@@ -337,16 +337,23 @@ async def test_prepends_system_prompt_from_span_detail_when_summary_lacks_it() -
 
 
 @pytest.mark.asyncio
-async def test_keeps_summary_messages_when_system_prompt_lookup_fails() -> None:
+async def test_keeps_summary_messages_when_system_prompt_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     trace = summary('trace', messages=user_messages('hello'))
     trace.span_id = 'leading'
     traces = FakeTraces({None: ([trace], False, None)})
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
 
     snapshot = await make_source(FakeOrq(traces)).load_async(
         START, END, 1, facets=FacetSelection(), numeric=NumericFilters()
     )
 
     assert snapshot.traces[0].messages == ({'role': 'user', 'content': 'hello'},)
+    lookups = [w for w in warnings if 'system prompt lookup failed for 1 of 1 trace(s); first error:' in w]
+    assert len(lookups) == 1
 
 
 @pytest.mark.asyncio
@@ -900,7 +907,7 @@ async def test_hydrate_rows_warns_and_keeps_summary_if_reported_reply_is_unavail
 
     assert records['partial'] is not None
     assert records['partial'].messages == ({'role': 'user', 'content': 'short question'},)
-    assert any('reports output tokens but its hydrated spans contain no visible reply' in warning for warning in warnings)
+    assert any('report output tokens but their hydrated spans contain no visible reply' in warning for warning in warnings)
 
 
 @pytest.mark.asyncio

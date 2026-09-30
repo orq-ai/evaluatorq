@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
+from dataclasses import field as dc_field
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -64,6 +65,30 @@ class _Scan:
 
     scanned: int = 0
     wrong_project: int = 0
+
+
+@dataclass
+class _HydrationIssues:
+    """Per-batch failures a hydration pass reports as one warning each, not one per trace."""
+
+    system_prompt_errors: list[str] = dc_field(default_factory=list)
+    missing_reply: list[str] = dc_field(default_factory=list)
+
+    def log(self, total: int) -> None:
+        if self.system_prompt_errors:
+            logger.warning(
+                'system prompt lookup failed for {} of {} trace(s); first error: {}',
+                len(self.system_prompt_errors),
+                total,
+                self.system_prompt_errors[0],
+            )
+        if self.missing_reply:
+            logger.warning(
+                '{} of {} trace(s) report output tokens but their hydrated spans contain no visible reply; first: {}',
+                len(self.missing_reply),
+                total,
+                self.missing_reply[0],
+            )
 
 
 _API_VERSION = re.compile(r'^/v\d+(?=/)')
@@ -264,7 +289,9 @@ class OrqTraceSource:
         async for selected in self._pages(
             start, end, oql, facets.project_id, limit, lambda: limit - len(records), scan
         ):
-            hydrated = await self._hydrate_page(selected, project_names, semaphore)
+            issues = _HydrationIssues()
+            hydrated = await self._hydrate_page(selected, project_names, semaphore, issues)
+            issues.log(len(selected))
             fallback_count += sum(result[1] for result in hydrated)
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
@@ -428,6 +455,7 @@ class OrqTraceSource:
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
         errors: list[str] = []
         fallbacks: list[str] = []
+        issues = _HydrationIssues()
 
         done = 0
 
@@ -435,7 +463,7 @@ class OrqTraceSource:
             nonlocal done
             try:
                 record, fallback_count = await self._hydrate_trace(
-                    row.raw, row.raw, project_names, semaphore, raw_capture_fallback=False
+                    row.raw, row.raw, project_names, semaphore, issues, raw_capture_fallback=False
                 )
                 if fallback_count:
                     fallbacks.append(row.trace_id)
@@ -448,6 +476,7 @@ class OrqTraceSource:
             return record
 
         records = await asyncio.gather(*(one(row) for row in rows))
+        issues.log(len(rows))
         if fallbacks:
             logger.warning('used SDK-model fallback for span details of {} trace(s)', len(fallbacks))
         empty = sum(record is None for record in records) - len(errors)
@@ -464,6 +493,7 @@ class OrqTraceSource:
         summaries: list[tuple[Any, Any, bool]],
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
+        issues: _HydrationIssues,
     ) -> list[tuple[TraceRecord | None, int]]:
         tasks = [
             asyncio.create_task(
@@ -472,6 +502,7 @@ class OrqTraceSource:
                     raw_summary,
                     project_names,
                     semaphore,
+                    issues,
                     raw_capture_fallback=raw_capture_fallback,
                 )
             )
@@ -491,6 +522,7 @@ class OrqTraceSource:
         raw_summary: Any,
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
+        issues: _HydrationIssues,
         *,
         raw_capture_fallback: bool,
     ) -> tuple[TraceRecord | None, int]:
@@ -506,7 +538,7 @@ class OrqTraceSource:
             and not _has_reply(messages)
         )
         if _usable(messages) and not missing_reply:
-            messages = await self._with_system_prompt(summary, raw_summary, messages, semaphore)
+            messages = await self._with_system_prompt(summary, raw_summary, messages, semaphore, issues)
             return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
 
         trace_id = str(_field(summary, 'trace_id') or _field(summary, 'id') or '')
@@ -544,10 +576,11 @@ class OrqTraceSource:
                 if fallback is None:
                     fallback = record
         if missing_reply:
-            logger.warning('trace {} reports output tokens but its hydrated spans contain no visible reply', trace_id)
+            issues.missing_reply.append(trace_id)
         if fallback is not None:
             return fallback, fallback_count
         if _usable(messages):
+            messages = await self._with_system_prompt(summary, raw_summary, messages, semaphore, issues)
             return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
         return None, fallback_count
 
@@ -557,11 +590,13 @@ class OrqTraceSource:
         raw_summary: Any,
         messages: list[dict[str, Any]],
         semaphore: asyncio.Semaphore,
+        issues: _HydrationIssues,
     ) -> list[dict[str, Any]]:
         """Prepend the system prompt, which Orq keeps only on the span detail.
 
         The trace summary's ``gen_ai.input`` is just the last user turn; the full
         ``gen_ai.input.messages`` (system message first) is served by ``get_span``.
+        Costs one extra ``get_span`` per trace whose summary lacks a system message, bounded by the hydration semaphore.
         """
         if any(message.get('role') == 'system' for message in messages):
             return messages
@@ -577,7 +612,7 @@ class OrqTraceSource:
                     timeout_ms=SDK_TIMEOUT_MS,
                 )
         except Exception as exc:  # noqa: BLE001 - enrichment is best-effort and logged
-            logger.warning('trace {} system prompt lookup failed: {}', trace_id, exc)
+            issues.system_prompt_errors.append(f'{type(exc).__name__}: {exc}')
             return messages
         detail = _plain(_field(response, 'span') or response)
         system = [m for m in _conversation_messages(detail) if m.get('role') == 'system' and _message_has_content(m)]
