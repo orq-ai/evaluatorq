@@ -1,0 +1,109 @@
+"""chat <-> Responses conversion."""
+
+# ruff: noqa: S101
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from evaluatorq.contracts import FunctionCall, Message, StrategyToolCall
+from evaluatorq.formats.chat import ChatConversation
+from evaluatorq.formats.responses import ResponsesConversation
+
+
+def _tool_chat() -> ChatConversation:
+    return ChatConversation(
+        messages=[
+            Message(role='system', content='be brief'),
+            Message(role='user', content='weather?'),
+            Message(
+                role='assistant',
+                content='checking',
+                tool_calls=[StrategyToolCall(id='c1', function=FunctionCall(name='w', arguments='{"city":"Berlin"}'), item_id='fc_1')],
+            ),
+            Message(role='tool', tool_call_id='c1', name='w', content='12C'),
+            Message(role='assistant', content='12C in Berlin'),
+        ]
+    )
+
+
+def test_chat_to_responses_uses_output_text_for_assistant() -> None:
+    items = _tool_chat().to_responses().items
+    assistant = [i for i in items if i.get('role') == 'assistant']
+    assert assistant[0]['content'][0]['type'] == 'output_text'
+    assert [i['type'] for i in items if i.get('type') in ('function_call', 'function_call_output')] == [
+        'function_call', 'function_call_output',
+    ]
+
+
+def test_chat_roundtrip_is_exact_for_tool_transcript() -> None:
+    chat = _tool_chat()
+    back = chat.to_responses().to_chat()
+    assert [m.model_dump(exclude_none=True) for m in back.messages] == [m.model_dump(exclude_none=True) for m in chat.messages]
+
+
+def test_empty_chat_to_responses_is_empty() -> None:
+    assert ChatConversation(messages=[]).to_responses().items == []
+
+
+def test_developer_role_maps_to_system_with_warning(caplog: pytest.LogCaptureFixture) -> None:
+    conv = ResponsesConversation(items=[{'type': 'message', 'role': 'developer', 'content': 'rules'}])
+    assert conv.to_chat().messages[0].role == 'system'
+    assert 'developer' in caplog.text
+
+
+def test_reasoning_dropped_with_one_warning(caplog: pytest.LogCaptureFixture) -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'reasoning', 'id': 'rs_1', 'summary': []},
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'hi'}]},
+    ]
+    chat = ResponsesConversation(items=items).to_chat()
+    assert [m.role for m in chat.messages] == ['assistant']
+    assert caplog.text.count('dropped 1 reasoning items') == 1
+
+
+def test_orphan_function_call_output_keeps_tool_message_without_name() -> None:
+    items: list[dict[str, Any]] = [{'type': 'function_call_output', 'call_id': 'zz', 'output': 'r'}]
+    msg = ResponsesConversation(items=items).to_chat().messages[0]
+    assert (msg.role, msg.tool_call_id, msg.name) == ('tool', 'zz', None)
+
+
+def test_function_call_without_call_id_is_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    items: list[dict[str, Any]] = [{'type': 'function_call', 'name': 'f', 'arguments': '{}'}]
+    assert ResponsesConversation(items=items).to_chat().messages == []
+    assert 'call_id' in caplog.text
+
+
+def test_consecutive_calls_share_one_assistant_message() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'f', 'arguments': '{}'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'g', 'arguments': '{}'},
+    ]
+    msgs = ResponsesConversation(items=items).to_chat().messages
+    assert len(msgs) == 1 and msgs[0].tool_calls is not None and len(msgs[0].tool_calls) == 2
+
+
+def test_fc_item_id_preserved_and_other_ids_dropped() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'id': 'fc_9', 'call_id': 'a', 'name': 'f', 'arguments': '{}'},
+        {'type': 'function_call', 'id': 'toolu_1', 'call_id': 'b', 'name': 'g', 'arguments': '{}'},
+    ]
+    calls = ResponsesConversation(items=items).to_chat().messages[0].tool_calls
+    assert calls is not None and [c.item_id for c in calls] == ['fc_9', None]
+
+
+def test_multimodal_user_content_keeps_image_part() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'message', 'role': 'user', 'content': [
+            {'type': 'input_text', 'text': 'look'}, {'type': 'input_image', 'image_url': 'https://x/y.png'}]},
+    ]
+    content = ResponsesConversation(items=items).to_chat().messages[0].content
+    assert isinstance(content, list) and [p.type for p in content] == ['input_text', 'input_image']
+
+
+def test_unknown_item_type_warns_and_is_skipped(caplog: pytest.LogCaptureFixture) -> None:
+    conv = ResponsesConversation(items=[{'type': 'web_search_call', 'id': 'ws'}])
+    assert conv.to_chat().messages == []
+    assert 'web_search_call' in caplog.text
