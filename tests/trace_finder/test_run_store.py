@@ -914,19 +914,44 @@ async def test_numeric_only_plan_warns_when_the_question_says_more_than_numbers(
 
 
 @pytest.mark.asyncio
-async def test_aggregate_plan_warns_that_ask_ai_cannot_compute_totals() -> None:
-    # "which model is costing us the most?" once completed as "no AI classification needed", claiming
-    # success while answering nothing.
+async def test_aggregate_plan_with_a_filter_keeps_running_and_warns() -> None:
     planner = Planner()
     planner.plan = CompiledPlan(dimensions=(), numeric=NumericFilters(), unsupported_reason='Cost per model is a total.')
-    store, _, _, _, _ = make_store(planner=planner, filters=FacetSelection())
-    aggregate = request(mode='review').model_copy(update={'query': 'which model is costing us the most?'})
+    store, _, _, _, _ = make_store(planner=planner)
+    aggregate = request(mode='review').model_copy(update={'query': 'which openai model is costing us the most?'})
 
     snapshot = await store.compile(aggregate, traces=lambda: _loaded_traces())
 
+    assert snapshot.state != 'cancelled'
     assert snapshot.plan_warning == (
         "Ask AI finds traces; it can't compute totals, averages or rankings. Cost per model is a total."
     )
+
+
+@pytest.mark.asyncio
+async def test_aggregate_plan_with_nothing_to_search_stops_before_loading_the_population() -> None:
+    # "which model is costing us the most?" once completed as a green "Done" with every trace a match.
+    planner = Planner()
+    planner.plan = CompiledPlan(dimensions=(), numeric=NumericFilters(), unsupported_reason='Cost per model is a total.')
+    store, _, loader, _, _ = make_store(planner=planner, filters=FacetSelection())
+    loaded: list[str] = []
+
+    async def load_rows() -> tuple[TraceRecord, ...]:
+        loaded.append('called')
+        return await _loaded_traces()
+
+    aggregate = request(mode='review').model_copy(update={'query': 'which model is costing us the most?'})
+
+    snapshot = await store.compile(aggregate, traces=load_rows)
+
+    assert snapshot.state == 'cancelled'
+    assert snapshot.error is None
+    assert snapshot.plan_warning == (
+        "Ask AI finds traces; it can't compute totals, averages or rankings. Cost per model is a total."
+    )
+    assert loaded == []
+    assert loader.calls == []
+    assert snapshot.trace_ids == ()
 
 
 @pytest.mark.asyncio

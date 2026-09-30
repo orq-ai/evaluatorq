@@ -276,6 +276,31 @@ class RunStore:
                 )
                 plan_warning = self._snapshot.plan_warning
 
+            if (
+                compile_query
+                and plan.unsupported_reason is not None
+                and not dimensions
+                and generated_filters == FacetSelection()
+                and generated_numeric == NumericFilters()
+            ):
+                # Nothing to search for: loading the population would only show every trace as a match.
+                async with self._lock:
+                    if generation != self._generation or self._snapshot.state != 'compiling':
+                        return self._view()
+                    self._snapshot = replace(
+                        self._snapshot,
+                        dimensions=dimensions,
+                        filter_response=filter_result.response.model_copy(deep=True)
+                        if filter_result.response
+                        else None,
+                        filter_selection_error=filter_result.error,
+                        plan_warning=plan_warning,
+                    )
+                    # 'cancelled' is the existing terminal state that is neither success nor a system error.
+                    self._finish('cancelled')
+                    self._task = None
+                    return self._view()
+
             async with self._lock:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
