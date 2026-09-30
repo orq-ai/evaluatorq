@@ -48,6 +48,8 @@ Clicking a trajectory segment or a table row opens the drawer for that trace, sc
 
 On `/traces`, if a trace has no messages, the drawer shows a labelled empty state. If a trace's full messages can't be loaded — for example a loaded-but-not-classified row whose hydration failed — the drawer explains that the messages could not be loaded and suggests opening the trace in Orq instead. Its **Spans** tab remains available and loads the trace's span tree when opened, including status, duration, token totals and Orq links for spans with safe IDs. The optional **Error details** column directs failed rows to **Spans**, and the drawer header shows the trace duration. For the first errored span, the tree also shows the raw Orq status message when that detail is available. Trace IDs, metadata, classifier input and raw result sit under the collapsed **Technical details** section. The `/find` drawer keeps its tabbed layout.
 
+On `/traces`, press `/` to focus and select Ask AI, `?` to open the keyboard shortcut guide, and, while a trace drawer is open, `o` to activate its **Open in Orq** link or `c` to copy its trace ID. **Escape** closes the guide or drawer. Letter shortcuts are ignored while a text field or native details menu has focus, when Ctrl, Alt or Command is held, and while another modal is open.
+
 ## Ask AI: within results or as a new search
 
 Above the table, **Ask AI** plans a natural-language question before it spends a classifier call on each trace, the same way the earlier trace finder did:
