@@ -21,7 +21,7 @@ from evaluatorq.common.judge import (
 )
 from evaluatorq.contracts import LLMCallConfig, Usage
 from evaluatorq.insights.labeling import MATCH_KEY, label_traces
-from evaluatorq.insights.models import LabelSpec
+from evaluatorq.insights.models import LabelAnswer, LabelSpec
 from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord, ValueSelection
 
@@ -312,14 +312,14 @@ async def test_parallelism_must_be_positive(parallelism: int) -> None:
 async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    original_project = labeling_module.project_trace
+    original_view = labeling_module.conversation_view
 
     def sometimes_fail(trace):
         if trace.trace_id == 'bad':
             raise ValueError('malformed trace')
-        return original_project(trace)
+        return original_view(trace)
 
-    monkeypatch.setattr(labeling_module, 'project_trace', sometimes_fail)
+    monkeypatch.setattr(labeling_module, "conversation_view", sometimes_fail)
 
     async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
         return ClassifyOutcome(
@@ -401,3 +401,125 @@ async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypat
     assert answer.error is not None
     assert answer.value is None
     assert any('t1' in message and 'made_errors' in message and 'unreadable' in message for message in messages)
+
+
+def _coding_fake(detect: ClassifyOutcome, calls: list[ClassifyRequest]) -> Any:
+    """A `/classify` fake answering the coding check with `detect` and every other question with a fixed answer."""
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        calls.append(request)
+        if 'coding_agent' in request.questions:
+            return detect
+        answers: dict[str, ClassifyAnswer] = {}
+        for name, question in request.questions.items():
+            if question.kind == 'noul':
+                answers[name] = ClassifyAnswer(type='noul', noul=0.8)
+            elif question.kind == 'score':
+                answers[name] = ClassifyAnswer(type='score', score=1.0)
+            else:
+                assert isinstance(question.criteria, dict)
+                answers[name] = ClassifyAnswer(type='choice', choice=next(iter(question.criteria)))
+        return ClassifyOutcome(response=ClassifyResponse(answers=answers))
+
+    return fake_run_classify
+
+
+@pytest.mark.asyncio
+async def test_coding_agent_gets_coding_labels_in_conversation_and_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+
+    [outcome] = await label_traces(
+        [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev', coding=True
+    )
+
+    asked = [set(request.questions) for request in calls]
+    assert {'coding_agent'} in asked
+    assert {'sentiment', 'task_type', 'outcome', 'verified', 'scope_creep', 'user_corrections'} in asked
+    assert {'unfixed_error', 'risky_action'} in asked
+    assert outcome.answers['coding_agent'].value is True
+    assert outcome.answers['task_type'].value == 'bugfix'
+    assert outcome.answers['risky_action'].value == 'none'
+    assert outcome.error is None
+
+
+@pytest.mark.asyncio
+async def test_non_coding_agent_is_not_asked_coding_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.1)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+
+    [outcome] = await label_traces(
+        [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev', coding=True
+    )
+
+    assert [set(request.questions) for request in calls] == [{'coding_agent'}, {'sentiment'}]
+    assert outcome.answers['coding_agent'].value is False
+    assert 'task_type' not in outcome.answers
+
+
+@pytest.mark.asyncio
+async def test_failed_coding_check_skips_coding_labels_and_warns(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(error_kind=JudgeError.PARSE, error_message='bad reply')
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    messages: list[str] = []
+    sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
+    try:
+        [outcome] = await label_traces(
+            [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev', coding=True
+        )
+    finally:
+        logger.remove(sink)
+
+    assert outcome.answers['coding_agent'].error == 'bad reply'
+    assert 'task_type' not in outcome.answers
+    assert outcome.answers['sentiment'].value == 'positive'
+    assert any('coding labels were not asked' in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_coding_off_makes_one_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(ClassifyOutcome(), calls))
+
+    await label_traces([make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev')
+
+    assert [set(request.questions) for request in calls] == [{'sentiment'}]
+
+
+def _noul(true: float | None, error: str | None = None) -> LabelAnswer:
+    if error is not None:
+        return LabelAnswer(value=None, confidence=None, probabilities=None, error=error)
+    assert true is not None
+    return LabelAnswer(value=true >= 0.5, confidence=None, probabilities={'true': true, 'false': 1 - true}, error=None)
+
+
+def _choice(value: str | None, confidence: float = 0.8, error: str | None = None) -> LabelAnswer:
+    return LabelAnswer(value=value, confidence=None if error else confidence, probabilities=None, error=error)
+
+
+def test_merge_chunks_any_finding_wins_for_risky_action() -> None:
+    from evaluatorq.insights.labeling import _merge_chunks
+
+    assert _merge_chunks('risky_action', [_choice('none'), _choice('deleted', 0.6), _choice('none', 0.9)]).value == 'deleted'
+    assert _merge_chunks('risky_action', [_choice('none', 0.6), _choice('none', 0.9)]).confidence == 0.9
+    # A failed chunk may have held the finding, so with no finding elsewhere the label fails.
+    assert _merge_chunks('risky_action', [_choice('none'), _choice(None, error='boom')]).error == 'boom'
+    assert _merge_chunks('risky_action', [_choice('published'), _choice(None, error='boom')]).value == 'published'
+
+
+def test_merge_chunks_last_chunk_decides_unfixed_error() -> None:
+    from evaluatorq.insights.labeling import _merge_chunks
+
+    assert _merge_chunks('unfixed_error', [_noul(0.9), _noul(0.1)]).value is False
+    assert _merge_chunks('unfixed_error', [_noul(0.1), _noul(None, 'boom')]).error == 'boom'

@@ -28,12 +28,12 @@ from evaluatorq.common.run_manifest import ManifestWriter, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
-from evaluatorq.insights.presets import LABEL_PRESETS
+from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.trace_finder.export import RunExport
-from evaluatorq.trace_finder.models import FacetSelection
+from evaluatorq.trace_finder.models import FacetSelection, Snapshot
 
-Source = Literal['recent', 'query', 'finder']
+Source = Literal['recent', 'query', 'finder', 'snapshot']
 Preset = Literal['sentiment', 'customer_satisfaction']
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'
 _MANIFEST_ENV = 'EVALUATORQ_INSIGHTS_MANIFEST'
@@ -823,6 +823,7 @@ class InsightsLaunchSpec(BaseModel):
     source: Source = 'recent'
     query: str = Field(default='', max_length=500)
     finder_export: str = Field(default='', max_length=4096)
+    snapshot_path: str = Field(default='', max_length=4096)
     window_days: int = Field(default=7, ge=1, le=90)
     limit: int = Field(default=100, ge=1, le=5000)
     facets: FacetSelection = FacetSelection()
@@ -834,6 +835,22 @@ class InsightsLaunchSpec(BaseModel):
     def validated_finder_export_snapshot(self) -> str | None:
         """Return the bounded Finder JSON captured during source validation."""
         return self._finder_export_snapshot
+    coding_analysis: bool = False
+
+    def _validate_snapshot_source(self) -> None:
+        if self.source != 'snapshot':
+            return
+        if self.facets != FacetSelection():
+            raise ValueError('A local trace file already fixes the trace population; remove the facet filters.')
+        if not self.snapshot_path.strip():
+            raise ValueError('Enter the path to a local trace snapshot.')
+        path = Path(self.snapshot_path).expanduser()
+        try:
+            snapshot = Snapshot.model_validate_json(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f'Could not read a valid local trace snapshot: {exc}') from exc
+        if not snapshot.traces:
+            raise ValueError('The local trace snapshot contains no traces.')
 
     @model_validator(mode='after')
     def validate_source(self) -> Self:
@@ -863,7 +880,8 @@ class InsightsLaunchSpec(BaseModel):
             except (OSError, ValueError) as exc:
                 raise ValueError(f'Could not read a valid Finder export: {exc}') from exc
             self.finder_export = str(path)
-        if not self.labels and not self.dimensions:
+        self._validate_snapshot_source()
+        if not self.labels and not self.dimensions and not self.coding_analysis:
             raise ValueError('Select at least one label or dimension.')
         if len(set(self.labels)) != len(self.labels) or len(set(self.dimensions)) != len(self.dimensions):
             raise ValueError('Select each label and dimension once.')
@@ -872,6 +890,8 @@ class InsightsLaunchSpec(BaseModel):
     def population(self) -> InsightsPopulation:
         if self.source == 'finder':
             return InsightsPopulation.from_finder_export(Path(self.finder_export).expanduser())
+        if self.source == 'snapshot':
+            return InsightsPopulation.from_snapshot(Path(self.snapshot_path).expanduser())
         return InsightsPopulation(
             query=self.query.strip() if self.source == 'query' else None,
             facets=self.facets,
@@ -911,7 +931,7 @@ def launch_insights(spec: InsightsLaunchSpec, runs_dir: Path, *, profile: OrqPro
     run_id = str(uuid.uuid4())
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
     population, finder_snapshot = _population_for_launch_plan(spec)
-    plan = stage_plan(population, spec.label_specs(), spec.dimension_names())
+    plan = stage_plan(population, [*spec.label_specs(), *(CODING_LABELS if spec.coding_analysis else ())], spec.dimension_names())
     writer = start_manifest(
         run_id=run_id,
         surface='insights',

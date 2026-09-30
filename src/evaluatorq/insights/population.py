@@ -1,6 +1,6 @@
-"""Resolve an `InsightsPopulation` into traces by reusing `trace_finder` end to end.
+"""Resolve an `InsightsPopulation` into local traces or Orq traces via `trace_finder`.
 
-Three mutually exclusive paths, matching `InsightsPopulation`'s own fields:
+Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
 
 - **Query path** (`pop.query` set): compile the semantic query with `compile_query`
   and select generated facet/numeric filters with `select_filters_with_response`
@@ -12,6 +12,8 @@ Three mutually exclusive paths, matching `InsightsPopulation`'s own fields:
   its merged filters and the pinned matches' timestamp range through `OrqTraceSource`,
   and keep only the traces whose ids are in `matched_trace_ids`. No compile, no match
   question — the export already pins the matched population.
+- **Local snapshot path** (`pop.snapshot_path` set): validate a `Snapshot` JSON and
+  use its embedded trace messages directly. No Orq trace fetch or match question.
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
   compile, no match question.
 
@@ -32,6 +34,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -40,11 +43,14 @@ from evaluatorq.trace_finder.compiler import compile_query
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.filter_selector import select_filters_with_response
-from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+from evaluatorq.trace_finder.models import FacetSelection, NumericFilters, Snapshot
 from evaluatorq.trace_finder.orq_source import OrqTraceSource
+from evaluatorq.trace_finder.projection import MAX_TOKEN_BUDGET, project_trace, serialize_projection
 from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from openai import AsyncOpenAI
     from orq_ai_sdk import Orq
 
@@ -65,6 +71,73 @@ class ResolvedPopulation:
     compiled: CompiledQuery | None
     echo: dict[str, Any]
     n_scanned: int
+
+
+def projection_coverage(traces: Sequence[TraceRecord]) -> dict[str, int]:
+    """Count budget omissions and source-to-projection bytes for loaded traces."""
+    coverage = {
+        'n_traces': len(traces),
+        'n_projection_truncated': 0,
+        'n_source_messages': 0,
+        'n_omitted_messages': 0,
+        'source_bytes': 0,
+        'projected_bytes': 0,
+    }
+    for trace in traces:
+        projection = project_trace(trace)
+        coverage['n_projection_truncated'] += int(projection.omitted_messages > 0 or projection.omitted_bytes > 0)
+        coverage['n_source_messages'] += len(trace.messages)
+        coverage['n_omitted_messages'] += projection.omitted_messages
+        coverage['source_bytes'] += len(
+            serialize_projection({'trace_status': trace.status, 'messages': trace.messages}).encode('utf-8')
+        )
+        coverage['projected_bytes'] += projection.estimated_tokens
+    return coverage
+
+
+def describe_projection_coverage(coverage: dict[str, Any]) -> str:
+    """Explain budget omissions and total compression in one source-neutral sentence."""
+    messages = int(coverage['n_source_messages'])
+    omitted = int(coverage['n_omitted_messages'])
+    traces = int(coverage['n_traces'])
+    trace_phrase = 'trace exceeds' if traces == 1 else 'traces exceed'
+    percentage = 100 * omitted / messages if messages else 0
+    return (
+        f'{int(coverage["n_projection_truncated"]):,} of {traces:,} {trace_phrase} the '
+        f'{MAX_TOKEN_BUDGET:,}-byte budget. {omitted:,} of {messages:,} whole messages omitted '
+        f'({percentage:.1f}%). Serialized source: {int(coverage["source_bytes"]):,} bytes → '
+        f'projected input: {int(coverage["projected_bytes"]):,} bytes.'
+    )
+
+
+def preview_snapshot(raw_path: str) -> dict[str, int]:
+    """Return the same projection counts the run will compute for a local file."""
+    path = Path(raw_path).expanduser()
+    try:
+        snapshot = Snapshot.model_validate_json(path.read_bytes())
+        return projection_coverage(snapshot.traces)
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
+
+
+def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
+    """Read a complete local snapshot; this path makes no Orq or model calls."""
+    assert pop.snapshot_path is not None  # noqa: S101 - guarded by the caller's dispatch
+    try:
+        snapshot = Snapshot.model_validate_json(pop.snapshot_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as error:
+        raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
+    traces = list(snapshot.traces)
+    return ResolvedPopulation(
+        traces=traces,
+        compiled=None,
+        echo={
+            'mode': 'snapshot',
+            'snapshot_path': str(pop.snapshot_path),
+            'limit': len(traces),
+        },
+        n_scanned=len(traces),
+    )
 
 
 def _window(pop: InsightsPopulation) -> tuple[datetime, datetime]:
@@ -289,18 +362,36 @@ async def resolve_population(
     compiler_model: str,
     classifier_model: str,
 ) -> ResolvedPopulation:
-    """Resolve `pop` into traces via the query, finder-export, or filter-only path — see module docstring.
+    """Resolve `pop` into traces via a local file or the Orq-backed paths — see module docstring.
 
     `client` and the models are only used on the query path
     (`compile_query` and `select_filters_with_response`, respectively); the
-    other two paths never call the LLM.
+    other paths never call the LLM during population selection.
     """
-    if pop.finder_export is not None:
-        return await _resolve_from_export(pop, orq=orq)
-    if pop.query is not None:
+    if pop.snapshot_path is not None:
+        resolved = _resolve_from_snapshot(pop)
+    elif pop.finder_export is not None:
+        resolved = await _resolve_from_export(pop, orq=orq)
+    elif pop.query is not None:
         if client is None:
             raise PopulationError('a query population requires an LLM client')
-        return await _resolve_from_query(
+        resolved = await _resolve_from_query(
             pop, orq=orq, client=client, compiler_model=compiler_model, classifier_model=classifier_model
         )
-    return await _resolve_from_filters(pop, orq=orq)
+    else:
+        resolved = await _resolve_from_filters(pop, orq=orq)
+    try:
+        resolved.echo.update(projection_coverage(resolved.traces))
+    except (KeyError, TypeError, ValueError) as error:
+        raise PopulationError(f'projecting loaded traces failed: {error}') from error
+    truncated = resolved.echo['n_projection_truncated']
+    if truncated:
+        trace_noun = 'trace' if len(resolved.traces) == 1 else 'traces'
+        logger.warning(
+            'Insights {} population has {} of {} {} exceeding the projection budget',
+            resolved.echo['mode'],
+            truncated,
+            len(resolved.traces),
+            trace_noun,
+        )
+    return resolved

@@ -122,7 +122,7 @@ async def merge_similar(
     *,
     client: AsyncOpenAI,
     model: str,
-    threshold: float = 0.5,
+    threshold: float = 0.7,
     parallelism: int = 20,
     usage: UsageLedger | None = None,
 ) -> MergeResult:
@@ -158,7 +158,11 @@ async def merge_similar(
             }
             question = ClassifyQuestion(
                 kind='noul',
-                instructions='Do these two clusters describe the same category of user conversation?',
+                instructions=(
+                    'Do these two clusters describe the same specific activity on the same kind of object, so that '
+                    'a reader would lose nothing if they were one cluster? Clusters that share a broad area but differ '
+                    'in what was done (for example writing tickets versus reviewing pull requests) are not the same.'
+                ),
                 state=state,
             )
             request = ClassifyRequest(state=state, questions={_SAME_KEY: question})
@@ -185,7 +189,7 @@ async def merge_similar(
             if answer.noul >= threshold:
                 _union(parent, a, b)
             return True
-        except Exception as exc:  # noqa: BLE001 — isolate an unexpected pair failure; CancelledError is not caught.
+        except Exception as exc:  # noqa: BLE001 — isolate unexpected pair failure; cancellation still propagates.
             logger.warning('Insights merge classify failed for clusters {} vs {}: {}', a, b, exc)
             return False
 

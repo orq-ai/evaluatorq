@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -135,6 +136,85 @@ async def test_filter_only_path_loads_directly_with_no_compile(monkeypatch: pyte
     assert resolved.echo['mode'] == 'filter'
     assert FakeSource.calls[0]['facets'].agent_name == frozenset({'support-bot'})
     assert FakeSource.closed is True
+
+
+@pytest.mark.asyncio
+async def test_local_snapshot_uses_messages_without_orq(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / 'traces.json'
+    path.write_text(Snapshot(traces=(make_trace('local-1'),)).model_dump_json(), encoding='utf-8')
+
+    def unexpected_orq_source(_orq: Any) -> None:
+        raise AssertionError('local snapshots must not fetch Orq traces')
+
+    monkeypatch.setattr(population_module, 'OrqTraceSource', unexpected_orq_source)
+    resolved = await resolve_population(
+        InsightsPopulation.from_snapshot(path),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+
+    assert [trace.trace_id for trace in resolved.traces] == ['local-1']
+    assert resolved.traces[0].messages[0]['content'] == 'hello'
+    assert resolved.echo['mode'] == 'snapshot'
+    assert resolved.echo['n_projection_truncated'] == 0
+    assert resolved.echo['n_source_messages'] == 1
+    assert resolved.echo['n_omitted_messages'] == 0
+
+
+@pytest.mark.asyncio
+async def test_local_snapshot_reports_truncated_projection(tmp_path: Path) -> None:
+    path = tmp_path / 'traces.json'
+    long_trace = make_trace('long').model_copy(
+        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+    )
+    path.write_text(Snapshot(traces=(long_trace,)).model_dump_json(), encoding='utf-8')
+
+    resolved = await resolve_population(
+        InsightsPopulation.from_snapshot(path),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+
+    assert resolved.echo['n_projection_truncated'] == 1
+    assert resolved.echo['n_source_messages'] == 2
+    assert resolved.echo['n_omitted_messages'] == 1
+    assert resolved.echo['source_bytes'] > resolved.echo['projected_bytes']
+
+
+@pytest.mark.asyncio
+async def test_live_population_reports_the_same_projection_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=(
+        make_trace('long').model_copy(
+            update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+        ),
+    ))
+
+    resolved = await resolve_population(
+        InsightsPopulation(), orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+    )
+
+    assert resolved.echo['mode'] == 'filter'
+    assert resolved.echo['n_projection_truncated'] == 1
+    assert resolved.echo['n_omitted_messages'] == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_local_snapshot_reports_population_failure(tmp_path: Path) -> None:
+    path = tmp_path / 'traces.json'
+    path.write_text('{"traces": [{"trace_id": "missing-fields"}]}', encoding='utf-8')
+    with pytest.raises(PopulationError, match='loading local trace snapshot'):
+        await resolve_population(
+            InsightsPopulation.from_snapshot(path),
+            orq=_orq(),
+            client=_client(),
+            compiler_model='compiler',
+            classifier_model='classifier',
+        )
 
 
 @pytest.mark.asyncio

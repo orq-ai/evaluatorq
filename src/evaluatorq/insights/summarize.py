@@ -24,7 +24,7 @@ from evaluatorq.common.structured_output import generate_structured, usage_from_
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.insights.cache import prompt_hash
 from evaluatorq.insights.models import TraceSummary
-from evaluatorq.trace_finder.projection import project_trace
+from evaluatorq.insights.transcript import conversation_view
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -69,12 +69,11 @@ These are examples of CORRECT values for "task"/"request" — they describe what
 
 <fields_to_produce>
 1. summary: A 25-word domain-specific summary of the conversation.
-2. task / request: What the end-user was trying to accomplish — their goal asked of the assistant.
+2. task / request: The one main thing the end-user wanted done, as a concrete activity on a named object (for example "Fix the failing profile-auth tests in the orq CLI" or "Write a Linear ticket for trace export"). At most 15 words. Name the main activity only; leave out follow-up steps such as rebasing, pushing or re-running checks.
 3. topic: The high-level topic of the conversation.
 4. assistant_errors: Any errors, factual, logical, or procedural, that the assistant made. Return an empty list when the assistant made no errors.
 5. sentiment_explanation: One sentence explaining the user's overall sentiment, grounded in specific conversation events.
 6. languages: The languages used in the conversation.
-7. tools_used: Tools or features the assistant used during the conversation.
 </fields_to_produce>
 
 <style>
@@ -87,8 +86,7 @@ Now produce the structured analysis. Remember: the "task" and "request" fields d
 
 
 def _build_prompt(trace: TraceRecord) -> str:
-    projection = project_trace(trace)
-    conversation = delimit(projection.serialized, tag='conversation')
+    conversation = delimit(conversation_view(trace), tag='conversation')
     return render_template(SUMMARY_PROMPT, {'conversation': conversation})
 
 

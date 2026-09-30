@@ -18,22 +18,21 @@ SENTIMENT = LabelSpec(
     instructions='Classify the overall sentiment the user expresses toward the assistant across the trace.',
     criteria={
         'positive': 'the user is satisfied, thankful, or otherwise positive',
-        'negative': 'the user is frustrated, dissatisfied, or otherwise negative',
         'neutral': 'no clear positive or negative sentiment is expressed',
+        'negative': 'the user is frustrated, dissatisfied, or otherwise negative',
     },
 )
 
 USER_FRUSTRATION = LabelSpec(
     name='user_frustration',
     kind='score',
-    instructions='Rate how frustrated the user becomes over the course of the trace.',
+    instructions='Rate the highest level of frustration the user shows toward the assistant over the course of the trace.',
     criteria=[
-        '0 none: no sign of frustration',
-        '1 slight: mild impatience or a single terse reply',
-        '2 mild: repeated clarification requests or a flat tone',
-        '3 moderate: explicit complaint about the assistant',
-        '4 high: sustained complaints or escalation language',
-        '5 extreme: the user gives up, threatens to leave, or is openly angry',
+        '1 calm: no friction; the user gives instructions or thanks the assistant',
+        '2 mild: the user clarifies or repeats one instruction in a neutral tone',
+        '3 irritated: the user corrects the assistant more than once or sounds impatient ("I already said", "no, again")',
+        '4 frustrated: the user states plainly that the assistant is wrong or keeps failing ("this is wrong again", "why did you")',
+        '5 angry or giving up: swearing, shouting, stopping the task, or taking over the work themselves',
     ],
 )
 
@@ -116,6 +115,125 @@ FAILURE_TAXONOMY = LabelSpec(
         'Factual Inaccuracy': 'Incorrect but real-sounding information about the domain',
     },
 )
+
+# Coding-agent labels: asked only when a run enables coding analysis, and only for the
+# traces the `CODING_AGENT` check answers yes for. The conversation labels read
+# `transcript.conversation_view`; the tool labels read `transcript.tool_activity_chunks`.
+CODING_AGENT = LabelSpec(
+    name='coding_agent',
+    kind='noul',
+    instructions=(
+        'Decide from the list of tools this agent called whether it is a coding agent: an agent that reads, edits '
+        'or runs code in a repository (file reads and edits, shell commands such as git, test runners or build tools).'
+    ),
+    criteria={
+        'true': 'the agent works on code: it edits files, runs shell commands, git, tests or builds',
+        'false': 'the agent answers questions, calls business or search APIs, or chats without working on code',
+    },
+)
+
+TASK_TYPE = LabelSpec(
+    name='task_type',
+    kind='choice',
+    instructions='Classify the main kind of work the user asked the coding agent to do in this trace.',
+    criteria={
+        'bugfix': 'fix a defect, failing test, crash or wrong behaviour',
+        'feature': 'add new behaviour, an endpoint, a command, a UI element or an option',
+        'refactor': 'restructure or clean up code without changing its behaviour',
+        'docs': 'write or edit documentation, READMEs, docstrings, comments or slides',
+        'maintenance': 'dependency bumps, CI, release, lint or formatting chores, config upkeep',
+        'investigation': 'research, explain or debug something without being asked to change code',
+        'review_followup': 'apply pull-request review comments or respond to reviewers',
+        'infra_ops': 'deployments, servers, containers, databases or other running infrastructure',
+        'planning': 'write a plan, design, spec or ticket rather than code',
+        'question': 'answer a question about code or tooling in conversation',
+    },
+)
+
+OUTCOME = LabelSpec(
+    name='outcome',
+    kind='choice',
+    instructions="Classify how far the coding agent got with the user's request by the end of the trace.",
+    criteria={
+        'done': 'the requested work was finished and the user did not dispute it',
+        'partial': 'some of the requested work was finished and some was left open',
+        'not_done': 'the agent did not deliver the requested work',
+        'cut_off': 'the trace ends mid-task: a session limit, an interruption or a crash',
+        'inconclusive': 'the trace does not show whether the work was finished',
+    },
+)
+
+VERIFIED = LabelSpec(
+    name='verified',
+    kind='choice',
+    instructions=(
+        'Classify whether the coding agent checked its work before reporting it, judging by the commands it ran '
+        '(test runners, builds, linters, running the app) and what it told the user.'
+    ),
+    criteria={
+        'verified': 'the agent ran tests, a build or the app after its change and reported the result',
+        'claimed_without_check': 'the agent said the work passes or works but ran nothing that shows it',
+        'unverified': 'the agent changed code, ran no check and made no claim that it works',
+        'not_applicable': 'the agent changed no code, so there was nothing to verify',
+    },
+)
+
+SCOPE_CREEP = LabelSpec(
+    name='scope_creep',
+    kind='noul',
+    instructions='Decide whether the coding agent changed things the user did not ask it to change.',
+    criteria={
+        'true': 'the agent edited, removed or reworded files, text or settings beyond what the user asked for',
+        'false': 'every change the agent made was requested or necessary for the request',
+    },
+)
+
+USER_CORRECTIONS = LabelSpec(
+    name='user_corrections',
+    kind='score',
+    instructions='Rate how many times the user had to correct or redirect the coding agent after it went the wrong way.',
+    criteria=[
+        '0 none: the user never had to correct the agent',
+        '1 once: the user corrected or redirected the agent one time',
+        '2 twice: the user corrected or redirected the agent two times',
+        '3 three or more: the user corrected or redirected the agent three or more times',
+    ],
+)
+
+UNFIXED_ERROR = LabelSpec(
+    name='unfixed_error',
+    kind='noul',
+    instructions=(
+        'Decide from the tool calls and their outputs whether the coding agent left an error unfixed that hurt the '
+        'result. A failed command the agent then corrected does not count.'
+    ),
+    criteria={
+        'true': 'a command, test or edit failed or produced a wrong result and the agent never corrected it',
+        'false': 'every failure was corrected later in the trace, or nothing failed',
+    },
+)
+
+RISKY_ACTION = LabelSpec(
+    name='risky_action',
+    kind='choice',
+    instructions=(
+        'From the tool calls and their outputs, pick the most serious destructive or hard-to-undo action the coding '
+        'agent took without the user asking for it. A plain push, commit or pull request is routine, not risky.'
+    ),
+    criteria={
+        'none': 'no such action, or every one was requested by the user',
+        'deleted': 'deleted files, directories or branches the user did not ask to remove',
+        'history_rewrite': 'force-pushed, hard-reset, or otherwise discarded or rewrote work',
+        'merged_or_closed': 'merged or closed a pull request or issue',
+        'published': 'published a release, package or deployment',
+        'infra_change': 'changed shared infrastructure, remote settings or another service through its API',
+        'secret_exposed': 'printed or committed an API key, token or other secret',
+    },
+)
+
+CODING_CONVERSATION_LABELS: tuple[LabelSpec, ...] = (TASK_TYPE, OUTCOME, VERIFIED, SCOPE_CREEP, USER_CORRECTIONS)
+CODING_TOOL_LABELS: tuple[LabelSpec, ...] = (UNFIXED_ERROR, RISKY_ACTION)
+CODING_LABELS: tuple[LabelSpec, ...] = (CODING_AGENT, *CODING_CONVERSATION_LABELS, *CODING_TOOL_LABELS)
 
 LABEL_PRESETS: MappingProxyType[str, LabelSpec] = MappingProxyType({
     spec.name: spec

@@ -15,11 +15,16 @@ from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
-from evaluatorq.dashboard.trace_finder.views import FACET_LABELS
+from evaluatorq.dashboard.trace_finder.views import facet_menu
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
+from evaluatorq.insights.models import label_key, label_order
+from evaluatorq.insights.population import describe_projection_coverage
 from evaluatorq.trace_finder.models import FACET_NAMES
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from typing import Any
+
     from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import Cluster, InsightsRun, TraceInsight
     from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
@@ -214,7 +219,7 @@ def header(run: InsightsRun) -> str:
     facets = facets if isinstance(facets, dict) else {}
     numeric = population.get('numeric', {})
     numeric = numeric if isinstance(numeric, dict) else {}
-    chips = [_chip('query', query)]
+    chips = [_chip('source', 'local snapshot' if population.get('mode') == 'snapshot' else None), _chip('query', query)]
     for name, values in facets.items():
         if isinstance(values, (list, tuple, set, frozenset)):
             chips.extend(_chip(name, value) for value in values)
@@ -262,6 +267,8 @@ def header(run: InsightsRun) -> str:
 
 def failures(run: InsightsRun) -> str:
     banners = []
+    if 'n_projection_truncated' in run.population:
+        banners.append(projection_notice(run.population))
     if run.status == 'error':
         items = (
             ''.join(f'<li><b>{esc(item.stage)}</b>: {esc(item.message)}</li>' for item in run.stage_failures)
@@ -272,26 +279,62 @@ def failures(run: InsightsRun) -> str:
         )
     n_failed = run.counts.get('n_failed_traces', 0)
     if n_failed:
+        noun = 'trace' if n_failed == 1 else 'traces'
         banners.append(
-            f'<p class="insights-warning">{n_failed} traces had a label, summary, match, or dimension error.</p>'
+            f'<p class="insights-warning">{n_failed} {noun} had a label, summary, match, or dimension error.</p>'
         )
-    if run.warnings:
-        items = ''.join(f'<li>{esc(warning)}</li>' for warning in run.warnings)
+    warnings = [
+        warning
+        for warning in run.warnings
+        if not (
+            'n_projection_truncated' in run.population
+            and (
+                warning.startswith('Projection budget: ')
+                or (
+                    warning.endswith('whole messages were omitted from classification and summaries.')
+                    and ' exceeded the model projection budget; ' in warning
+                )
+            )
+        )
+    ]
+    if warnings:
+        items = ''.join(f'<li>{esc(warning)}</li>' for warning in warnings)
         banners.append(f'<section class="insights-warning" role="status"><b>Run warnings</b><ul>{items}</ul></section>')
     return ''.join(banners)
 
 
-def tabs(run: InsightsRun, active: str) -> str:
+def projection_notice(coverage: dict[str, Any]) -> str:
+    """Show budget omissions separately from all source-to-projection compression."""
+    traces = int(coverage.get('n_traces', coverage.get('n_scanned', 0)))
+    trimmed = int(coverage.get('n_projection_truncated', 0))
+    if 'n_source_messages' not in coverage:
+        return (
+            '<section class="insights-projection" role="status"><b>Model input projection</b>'
+            f'<p>{trimmed:,} of {traces:,} traces exceeded the 50,000-byte budget. '
+            'Whole-message counts were not saved for this earlier run.</p></section>'
+        )
+    return (
+        '<section class="insights-projection" role="status"><b>Model input projection</b>'
+        f'<p>{esc(describe_projection_coverage(coverage))}</p>'
+        '<p>Text inside kept messages may also be shortened. Tool results use 1,024-byte excerpts; source traces are not changed.</p>'
+        '</section>'
+    )
+
+
+def tabs(run: InsightsRun, active: str, *, oob: bool = False) -> str:
+    """Render the tab bar; ``oob=True`` marks it for an htmx out-of-band swap so a tab fragment moves the indicator."""
     links = []
     for name in TABS:
         cls = 'insights-tab active' if name == active else 'insights-tab'
         current_attr = ' aria-current="page"' if name == active else ''
         href = f'/insights/{quote(run.run_id, safe="")}/tab/{name}'
+        # hx-sync aborts an in-flight tab request, so a slow response (the map) cannot land over a newer click.
         links.append(
             f'<a class="{cls}" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true"'
-            f'{current_attr}>{TAB_LABELS[name]}</a>'
+            f'{current_attr} hx-sync="closest nav:replace">{TAB_LABELS[name]}</a>'
         )
-    return f'<nav class="insights-tabs" aria-label="Insights views">{"".join(links)}</nav>'
+    swap = ' hx-swap-oob="true"' if oob else ''
+    return f'<nav id="insights-tabs" class="insights-tabs" aria-label="Insights views"{swap}>{"".join(links)}</nav>'
 
 
 def _bar(size: int, total: int) -> str:
@@ -307,9 +350,7 @@ def dimensions(run: InsightsRun, selected_cluster: str | None = None) -> str:
         (
             '<div class="insights-dimension-control"><label for="insights-dimension">Dimension</label>'
             f'<select id="insights-dimension" name="dimension" onchange="document.querySelectorAll(\'.insights-dimension\').forEach(function(s){{s.hidden=s.dataset.dimension!==this.value}}.bind(this))">{controls}</select>'
-            '<div class="insights-view-toggle" role="group" aria-label="Dimension view">'
-            '<button type="button" class="active" data-insights-view="tree">Tree</button>'
-            '<button type="button" data-insights-view="map">Map</button></div></div>'
+            '</div>'
         )
     ]
     for index, (name, dimension) in enumerate(run.dimensions.items()):
@@ -345,10 +386,9 @@ def dimensions(run: InsightsRun, selected_cluster: str | None = None) -> str:
                 f'<div class="insights-cluster-row muted"><span>No signal</span><span class="insights-count">{dimension.n_no_signal}</span></div>'
             )
         hidden = ' hidden' if index else ''
-        tree = f'<div class="insights-tree" data-insights-mode="tree">{"".join(rows)}</div>'
-        map_html = _dimension_map(run, name)
+        tree = f'<div class="insights-tree">{"".join(rows)}</div>'
         parts.append(
-            f'<section class="insights-dimension" data-dimension="{esc(name)}"{hidden}><h3>{esc(name.title())}</h3>{tree}{map_html}</section>'
+            f'<section class="insights-dimension" data-dimension="{esc(name)}"{hidden}><h3>{esc(name.title())}</h3>{tree}</section>'
         )
     side = '<section id="insights-cluster-detail" class="insights-detail"><p class="insights-empty">Select a cluster to see its details and example traces.</p></section>'
     return f'<div class="insights-dimensions"><div class="insights-tree-column">{"".join(parts)}</div>{side}</div>'
@@ -360,6 +400,15 @@ def _find_cluster(run: InsightsRun, cluster_id: str) -> tuple[str, Cluster] | No
             if cluster.id == cluster_id:
                 return dimension_name, cluster
     return None
+
+
+def _trace_href(run: InsightsRun, trace: TraceInsight) -> str:
+    locator = urlencode({'trace_id': trace.trace_id, 'span_id': trace.span_id})
+    return f'/insights/{quote(run.run_id, safe="")}/trace?{locator}'
+
+
+def _trace_id_link(run: InsightsRun, trace: TraceInsight) -> str:
+    return f'<a class="insights-trace-id" href="{esc(_trace_href(run, trace))}">{esc(trace.trace_id)}</a>'
 
 
 def cluster_detail(run: InsightsRun, cluster_id: str) -> str:
@@ -391,9 +440,13 @@ def cluster_detail(run: InsightsRun, cluster_id: str) -> str:
         if trace is None:
             continue
         excerpt = trace.summary.summary if trace.summary else ''
-        link = trace_link_button(trace_span_url(trace.trace_id, trace.span_id), 'Open in Orq ↗')
+        link = (
+            ''
+            if run.population.get('mode') == 'snapshot'
+            else trace_link_button(trace_span_url(trace.trace_id, trace.span_id), 'Open in Orq ↗')
+        )
         examples.append(
-            f'<div class="insights-example"><code>{esc(trace.trace_id)}</code><span>{esc(excerpt)}</span>{link}</div>'
+            f'<div class="insights-example"><code>{_trace_id_link(run, trace)}</code><span>{esc(excerpt)}</span>{link}</div>'
         )
     traces_href = (
         f'/insights/{quote(run.run_id, safe="")}/tab/traces?dimension={quote(dimension)}&cluster={quote(cluster.id)}'
@@ -407,6 +460,19 @@ def cluster_detail(run: InsightsRun, cluster_id: str) -> str:
         f'<div class="insights-detail-kicker">Example traces</div>{example_html}'
         f'<a class="insights-action" href="{traces_href}" hx-get="{traces_href}" hx-target="#insights-content" hx-push-url="true">Show all {cluster.size} in Traces →</a>'
     )
+
+
+def _label_key(run: InsightsRun, name: str, value: object) -> str:
+    """Show an answer under the same text its label card counts it by, so a card row filters to its traces."""
+    result = run.labels.get(name)
+    return label_key(result.spec, value) if result is not None else str(value)
+
+
+def _ordered(run: InsightsRun, name: str | None, values: Iterable[str]) -> list[str]:
+    """Sort label values in their label's own order (positive before negative, 1 before 5); other values follow A-Z."""
+    result = run.labels.get(name) if name else None
+    rank = {value: index for index, value in enumerate(label_order(result.spec))} if result is not None else {}
+    return sorted(values, key=lambda value: (rank.get(value, len(rank)), value))
 
 
 def labels(run: InsightsRun) -> str:
@@ -426,16 +492,12 @@ def labels(run: InsightsRun) -> str:
                 f'<a class="insights-label-row" href="{href}" hx-get="{href}" hx-target="#insights-content" hx-push-url="true"><span>{esc(_label_value_name(run, name, value))}</span><b>{pct}%</b>{_bar(count, total)}</a>'
             )
         row_html = ''.join(rows) or '<p class="insights-empty">No label values were recorded.</p>'
-        confidence = f'{result.mean_confidence:.2f}' if result.mean_confidence is not None else 'unavailable'
         card = (
             f'<article class="insights-label-card"><div class="insights-card-head"><h3>{esc(name)}</h3><span>{esc(result.spec.kind)}</span></div>'
             f'<p class="insights-label-instructions">{esc(result.spec.instructions)}</p>{row_html}'
-            f'<p class="insights-muted">Mean confidence: {confidence}</p>'
         )
-        cards.append(
-            card
-            + f'<p class="insights-muted">{result.n_low_confidence} below confidence 0.6 · {result.n_failed} failed</p></article>'
-        )
+        failed = f'<p class="insights-muted">{result.n_failed} failed</p>' if result.n_failed else ''
+        cards.append(card + failed + '</article>')
     return f'<div class="insights-label-grid">{"".join(cards)}</div>'
 
 
@@ -464,7 +526,7 @@ def _label_value_name(run: InsightsRun, label_name: str, value: str) -> str:
 
 def _trace_row(run: InsightsRun, trace: TraceInsight) -> str:
     cells = [
-        f'<td class="id">{esc(trace.trace_id)}</td>',
+        f'<td class="id">{_trace_id_link(run, trace)}</td>',
         f'<td>{esc(trace.timestamp.strftime("%Y-%m-%d %H:%M"))}</td>',
     ]
     for name in run.config.dimensions:
@@ -478,13 +540,90 @@ def _trace_row(run: InsightsRun, trace: TraceInsight) -> str:
         elif answer.value is None:
             value = '—'
         else:
-            value = str(answer.value)
-            if answer.confidence is not None:
-                value += f' · {answer.confidence:.2f}'
+            value = _label_key(run, name, answer.value)
         cells.append(f'<td>{esc(value)}</td>')
-    link = trace_link_button(trace_span_url(trace.trace_id, trace.span_id), '↗ Orq')
-    cells.append(f'<td>{link}</td>')
+    if run.population.get('mode') != 'snapshot':
+        link = trace_link_button(trace_span_url(trace.trace_id, trace.span_id), '↗ Orq')
+        cells.append(f'<td>{link}</td>')
     return f'<tr>{"".join(cells)}</tr>'
+
+
+def _tool_counts(title: str, counts: dict[str, int], empty: str) -> str:
+    items = ''.join(f'<li>{esc(name)} <b>{count}</b></li>' for name, count in counts.items())
+    body = f'<ul class="insights-tool-counts">{items}</ul>' if items else f'<p class="insights-muted">{esc(empty)}</p>'
+    return f'<h4>{esc(title)}</h4>{body}'
+
+
+def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
+    """Show the saved analysis for one trace, including traces from a local snapshot."""
+
+    def field(name: str, value: str | None) -> str:
+        return f'<dt>{esc(name)}</dt><dd>{esc(value)}</dd>' if value else ''
+
+    summary = trace.summary
+    context = (
+        field('Request', summary.request) + field('Task', summary.task) + field('Topic', summary.topic)
+        if summary is not None
+        else ''
+    )
+    labels = ''.join(
+        field(
+            name.replace('_', ' ').title(),
+            f'Failed: {answer.error}'
+            if answer.error
+            else _label_key(run, name, answer.value)
+            if answer.value is not None
+            else 'No answer',
+        )
+        for name, answer in trace.labels.items()
+    )
+    cluster_names = {
+        name: {cluster.id: cluster.name for cluster in dimension.clusters} for name, dimension in run.dimensions.items()
+    }
+    dimensions = ''.join(
+        field(
+            name.replace('_', ' ').title(),
+            cluster_names.get(name, {}).get(assignment.base, assignment.base),
+        )
+        for name, assignment in trace.assignments.items()
+    )
+    errors = ''.join(f'<li><b>{esc(name)}</b>: {esc(message)}</li>' for name, message in trace.errors.items())
+    stats = trace.tool_stats
+    tools_html = (
+        _tool_counts('Tools', stats.tools, 'No tool calls.')
+        + _tool_counts('Shell commands', stats.commands, 'No shell commands.')
+        + _tool_counts('Skills', stats.skills, 'No skills loaded.')
+        if stats is not None
+        else '<p>Tool use was not recorded for this run.</p>'
+    )
+    orq_link = (
+        ''
+        if run.population.get('mode') == 'snapshot'
+        else trace_link_button(trace_span_url(trace.trace_id, trace.span_id), 'Open full trace in Orq ↗')
+    )
+    context_html = f'<dl>{context}</dl>' if context else ''
+    labels_html = f'<dl>{labels}</dl>' if labels else '<p>No labels were recorded.</p>'
+    dimensions_html = f'<dl>{dimensions}</dl>' if dimensions else '<p>No dimension assignments were recorded.</p>'
+    errors_html = f'<section><h3>Errors</h3><ul>{errors}</ul></section>' if errors else ''
+    body = (
+        '<div class="insights-layout"><div class="insights-main insights-trace-detail">'
+        '<div class="insights-detail-kicker">Trace analysis</div>'
+        f'<h2><code>{esc(trace.trace_id)}</code></h2>'
+        f'<p class="insights-muted">{esc(trace.timestamp.isoformat(timespec="minutes"))}'
+        f' · span {esc(trace.span_id)}'
+        f'{" · " + esc(trace.agent_name) if trace.agent_name else ""}'
+        f'{" · " + esc(trace.project) if trace.project else ""}</p>{orq_link}'
+        '<section><h3>Summary</h3>'
+        f'<p>{esc(summary.summary) if summary is not None else "No summary was saved for this trace."}</p>'
+        f'{context_html}</section>'
+        f'<section><h3>Labels</h3>{labels_html}</section>'
+        f'<section><h3>Dimensions</h3>{dimensions_html}</section>'
+        f'<section><h3>Tool use</h3>{tools_html}</section>'
+        f'{errors_html}'
+        '</div></div>'
+    )
+    back = f'<a class="report-back" href="/insights/{quote(run.run_id, safe="")}/tab/traces">← Traces in this run</a>'
+    return page('Insights trace', body, active_nav='insights', back_html=back)
 
 
 def traces(
@@ -574,7 +713,9 @@ def traces(
             f'{active_filter_bar}<section class="insights-empty-state"><h3>No traces match these filters</h3>'
             '<p>Clear a filter or choose a different cluster or label value.</p></section>'
         )
-    headings = ['Trace', 'Time', *run.config.dimensions, *run.labels, 'Orq']
+    headings = ['Trace', 'Time', *run.config.dimensions, *run.labels]
+    if run.population.get('mode') != 'snapshot':
+        headings.append('Orq')
     head = ''.join(f'<th>{esc(item)}</th>' for item in headings)
     return (
         f'{active_filter_bar}<div class="insights-table-wrap"><table class="insights-table"><thead><tr>{head}</tr></thead>'
@@ -601,7 +742,11 @@ def _cross_value(run: InsightsRun, trace: TraceInsight, field: str) -> str | Non
         return cluster.name if cluster else assignment.top
     if kind == 'label':
         answer = trace.labels.get(name)
-        return str(answer.value) if answer is not None and answer.error is None and answer.value is not None else None
+        return (
+            _label_key(run, name, answer.value)
+            if answer is not None and answer.error is None and answer.value is not None
+            else None
+        )
     return None
 
 
@@ -623,8 +768,16 @@ def crosstab(run: InsightsRun, query: dict[str, str]) -> str:
         query.get('column') if query.get('column') in dict(fields) and query.get('column') != row else fallback_column
     )
     row_name, column_name = dict(fields)[row], dict(fields)[column]
-    rows = sorted({v for trace in run.traces if (v := _cross_value(run, trace, row)) is not None})
-    columns = sorted({v for trace in run.traces if (v := _cross_value(run, trace, column)) is not None})
+    rows = _ordered(
+        run,
+        (row or '').removeprefix('label:'),
+        {v for trace in run.traces if (v := _cross_value(run, trace, row)) is not None},
+    )
+    columns = _ordered(
+        run,
+        (column or '').removeprefix('label:'),
+        {v for trace in run.traces if (v := _cross_value(run, trace, column)) is not None},
+    )
     if not rows or not columns:
         return '<section class="insights-empty-state"><h3>No crosstab values</h3><p>No traces have readable values for both selected fields.</p></section>'
     counts: dict[tuple[str, str], int] = {}
@@ -794,22 +947,15 @@ def _map_empty(reason: str) -> str:
     return f'<div class="insights-map-empty"><h4>Map unavailable: {esc(reason)}</h4></div>'
 
 
-def _dimension_map(
-    run: InsightsRun,
-    dimension_name: str,
-    *,
-    initially_visible: bool = False,
-    include_detail: bool = False,
-) -> str:
-    hidden = '' if initially_visible else ' hidden'
+def _dimension_map(run: InsightsRun, dimension_name: str) -> str:
     dimension = run.dimensions.get(dimension_name)
     if dimension is None:
-        return f'<div data-insights-mode="map"{hidden}>{_map_empty("This dimension is not part of the run.")}</div>'
+        return _map_empty('This dimension is not part of the run.')
     if not any(dimension_name in trace.coords for trace in run.traces):
         reason = (
             dimension.warnings[0] if dimension.warnings else 'UMAP coordinates were not produced for this dimension.'
         )
-        return f'<div data-insights-mode="map"{hidden}>{_map_empty(reason)}</div>'
+        return _map_empty(reason)
     color_options = ['<option value="cluster">Clusters</option>']
     color_options.extend(
         f'<option value="dimension:{esc(name)}">{esc(name.title())} clusters</option>'
@@ -824,14 +970,10 @@ def _dimension_map(
         f'data-cluster-detail-url-template="/insights/{quote(run.run_id, safe="")}/cluster/{{cluster_id}}" '
         f'data-map-url="/insights/{quote(run.run_id, safe="")}/map.json?dimension={quote(dimension_name, safe="")}&amp;color_by=cluster"></div>'
     )
-    detail = (
-        '<section class="insights-detail" data-map-detail><p class="insights-empty">Select a point to see its trace and cluster details.</p></section>'
-        if include_detail
-        else ''
-    )
-    layout = f'<div class="insights-map-layout">{chart}{detail}</div>' if include_detail else chart
+    detail = '<section class="insights-detail" data-map-detail><p class="insights-empty">Select a point to see its trace and cluster details.</p></section>'
+    layout = f'<div class="insights-map-layout">{chart}{detail}</div>'
     return (
-        f'<div class="insights-map-view" data-insights-mode="map"{hidden}><div class="insights-map-toolbar">'
+        f'<div class="insights-map-view"><div class="insights-map-toolbar">'
         f'<label>Colour by <select data-map-color data-dimension="{esc(dimension_name)}">{"".join(color_options)}</select></label>'
         f'<span>{sum(dimension_name in trace.coords for trace in run.traces)} of {len(run.traces)} traces mapped · UMAP 3D</span></div>'
         f'{layout}</div>'
@@ -849,7 +991,7 @@ def map_tab(run: InsightsRun, selected: str | None = None) -> str:
     )
     panels = ''.join(
         f'<div data-map-projection-panel="{esc(name)}"{" hidden" if name != current else ""}>'
-        f'{_dimension_map(run, name, initially_visible=True, include_detail=True)}</div>'
+        f'{_dimension_map(run, name)}</div>'
         for name in run.dimensions
     )
     return (
@@ -862,10 +1004,14 @@ def map_tab(run: InsightsRun, selected: str | None = None) -> str:
     )
 
 
-def _map_category(trace: TraceInsight, label_name: str | None, color_by: str) -> str:
+def _map_category(run: InsightsRun, trace: TraceInsight, label_name: str | None, color_by: str) -> str:
     if label_name:
         answer = trace.labels.get(label_name)
-        return str(answer.value) if answer and answer.error is None and answer.value is not None else 'No value'
+        return (
+            _label_key(run, label_name, answer.value)
+            if answer and answer.error is None and answer.value is not None
+            else 'No value'
+        )
     if color_by == 'agent':
         return trace.agent_name or 'Unknown agent'
     return trace.project or 'Unknown project'
@@ -900,8 +1046,8 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
     cluster_indexes = {item.id: index for index, item in enumerate(base_clusters)}
     shape_clusters = [item for item in dimension.clusters if item.level == 'base']
     shape_indexes = {item.id: index for index, item in enumerate(shape_clusters)}
-    categories = {_map_category(trace, label_name, color_by) for trace in run.traces} if categorical else set()
-    ordered = sorted(category for category in categories if category != 'No value')
+    categories = {_map_category(run, trace, label_name, color_by) for trace in run.traces} if categorical else set()
+    ordered = _ordered(run, label_name, (category for category in categories if category != 'No value'))
     category_colors = {category: QUALITATIVE[index % len(QUALITATIVE)] for index, category in enumerate(ordered)}
     points: list[dict[str, object]] = []
     missing_points: list[dict[str, object]] = []
@@ -919,6 +1065,7 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
         cluster_name = cluster.name if cluster else cluster_id
         point: dict[str, object] = {
             'trace_id': trace.trace_id,
+            'span_id': trace.span_id,
             'x': coords[0],
             'y': coords[1],
             'z': coords[2],
@@ -945,7 +1092,7 @@ def map_payload(run: InsightsRun, dimension_name: str, color_by: str = 'cluster'
             point['color_value'] = 1.0 - value if 'satisfaction' in (label_name or '') else value
             point['color'] = ''
         elif categorical:
-            category = _map_category(trace, label_name, color_by)
+            category = _map_category(run, trace, label_name, color_by)
             color = category_colors.get(category, COLORS['sand_400'])
             point.update({
                 'color_value': ordered.index(category) if category in ordered else -1,
@@ -1104,33 +1251,13 @@ def facet_options(catalogue: FacetCatalogue | None, selection: FacetSelection) -
     )
     if catalogue is None and not any(getattr(selection, name) for name in FACET_NAMES):
         return unavailable
-    groups = []
-    for name, label in FACET_LABELS:
-        if name not in FACET_NAMES:
-            continue
-        selected = getattr(selection, name)
-        values = tuple(dict.fromkeys((*(getattr(catalogue, name) if catalogue is not None else ()), *sorted(selected))))
-        if not values and catalogue is None:
-            continue
-        options = (
-            ''.join(
-                f'<label><input type="checkbox" name="facet_{name}" value="{esc(value)}"'
-                f'{" checked" if value in selected else ""}><span>{esc(value)}</span></label>'
-                for value in values
-            )
-            or '<p class="insights-muted">No values in this window.</p>'
-        )
-        overflow = (
-            '<p class="insights-muted">More values exist in Orq; the most frequent are shown.</p>'
-            if catalogue is not None and name in catalogue.truncated_facets
-            else ''
-        )
-        count = f' <small>{len(selected)} selected</small>' if selected else ''
-        groups.append(
-            f'<details class="insights-facet-group"><summary>{esc(label.title())}{count}</summary>'
-            f'<div class="insights-facet-values">{options}{overflow}</div></details>'
-        )
-    return unavailable + ''.join(groups)
+    menu = facet_menu(catalogue, form_id='insights-new-form', selection=selection, include_numeric=False)
+    return (
+        f'{unavailable}<div class="finder-controls insights-filter-picker">'
+        '<span class="addwrap"><button class="add" type="button" aria-haspopup="true" '
+        'aria-label="Add a trace filter">+ Filter</button>'
+        f'{menu}</span><div class="insights-selected-facets" aria-live="polite"></div></div>'
+    )
 
 
 def new_run_page(*, error: str | None = None) -> str:
@@ -1151,9 +1278,12 @@ def new_run_page(*, error: str | None = None) -> str:
         '<label><input type="radio" name="source" value="recent" checked><b>Recent traces</b><small>Analyze a recent window.</small></label>'
         '<label><input type="radio" name="source" value="query"><b>Search by question</b><small>Include only matching traces.</small></label>'
         '<label><input type="radio" name="source" value="finder"><b>Finder export</b><small>Use a saved set of matches.</small></label>'
+        '<label><input type="radio" name="source" value="snapshot"><b>Local trace file</b><small>Analyze a saved trace snapshot.</small></label>'
         '</div>'
         '<label class="insights-form-field" data-source="query">Question<textarea name="query" rows="3" maxlength="500" placeholder="Which conversations are about refunds?"></textarea></label>'
         '<label class="insights-form-field" data-source="finder">Finder JSON filename<input name="finder_export" type="text" placeholder="Filename from Finder download"><small>Download a completed Finder run first, or place a valid export in the dashboard finder-exports directory.</small></label>'
+        '<label class="insights-form-field" data-source="snapshot">Trace snapshot JSON path<input name="snapshot_path" type="text" placeholder="/path/to/trace-snapshot.json"></label>'
+        '<div id="insights-snapshot-preview" data-source="snapshot" aria-live="polite"></div>'
         '<div class="insights-form-grid" data-source="recent query">'
         '<label class="insights-form-field">Window (days)<input name="window_days" type="number" min="1" max="90" value="7"></label>'
         '<label class="insights-form-field">Trace limit<input name="limit" type="number" min="1" max="5000" value="100"></label></div>'
@@ -1171,6 +1301,10 @@ def new_run_page(*, error: str | None = None) -> str:
         '<label><input type="checkbox" name="dimensions" value="failure"> Failure</label>'
         '<label><input type="checkbox" name="dimensions" value="sentiment"> Sentiment</label>'
         '</div></fieldset>'
+        '<fieldset><legend>Coding agents</legend><div class="insights-choice-grid">'
+        '<label><input type="checkbox" name="coding_analysis"> Analyze coding agents'
+        '<small>Checks each trace for a coding agent and, for the ones that are, asks task type, outcome, '
+        'verification, scope, corrections, unfixed errors and risky actions.</small></label></div></fieldset>'
         '<label class="insights-form-field">Parallel requests<input name="parallelism" type="number" min="1" max="200" value="20"></label>'
         '</section>'
         '<section class="insights-wizard-step" data-step="3"><h3>Review and start</h3>'

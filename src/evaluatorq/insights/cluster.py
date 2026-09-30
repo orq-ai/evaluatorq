@@ -95,6 +95,44 @@ def gap_optimal_k(z: NDArray[Any], n: int, *, k_min: int = 2, k_max: int) -> int
     return best_k
 
 
+WEAK_SILHOUETTE = 0.2
+
+
+def _silhouette(normed: NDArray[Any], labels: NDArray[Any]) -> float:
+    """Mean cosine silhouette of `labels` over L2-normalised rows; 1 is crisp, near 0 is no structure."""
+    from sklearn.metrics import silhouette_score  # installed with umap-learn, which the insights extra requires
+
+    return float(silhouette_score(normed, labels, metric='cosine')) if len(set(labels.tolist())) > 1 else 0.0
+
+
+def _split_lone_children(
+    normed: NDArray[Any], base_labels: NDArray[Any], top_of_base: dict[int, int], min_cluster_size: int
+) -> tuple[NDArray[Any], dict[int, int]]:
+    """Give every top group at least two base clusters: split a lone base cluster in two by Ward linkage.
+
+    A group of fewer than `2 * min_cluster_size` traces, or one whose split leaves a half smaller than
+    `min_cluster_size`, keeps its single cluster.
+    """
+    labels = base_labels.copy()
+    children: dict[int, list[int]] = {}
+    for base, top in top_of_base.items():
+        children.setdefault(top, []).append(base)
+    top_of_base = dict(top_of_base)
+    for top, bases in children.items():
+        if len(bases) != 1:
+            continue
+        rows = np.flatnonzero(labels == bases[0])
+        if len(rows) < 2 * min_cluster_size:
+            continue
+        halves = fcluster(linkage(normed[rows], method='ward'), 2, criterion='maxclust')
+        if min(np.count_nonzero(halves == 1), np.count_nonzero(halves == 2)) < min_cluster_size:
+            continue  # an outlier split off on its own, not a second theme
+        new_base = max(top_of_base) + 1
+        labels[rows[halves == 2]] = new_base
+        top_of_base[new_base] = top
+    return labels, top_of_base
+
+
 def _cosine_sim(a: NDArray[Any], b: NDArray[Any]) -> float:
     denom = float(np.linalg.norm(a) * np.linalg.norm(b))
     if denom == 0.0:
@@ -236,6 +274,13 @@ def cluster_two_level(
     z_base = linkage(normed, method='ward')
     k_max_base = min(max_clusters * max_subclusters, n // min_cluster_size)
     k_base = gap_optimal_k(z_base, n, k_min=2, k_max=k_max_base)
+    # On flat data no cut stands out and the largest-gap rule stops at 2-3 broad groups (silhouette
+    # 0.04-0.08 at every k on 100 coding sessions). When the chosen cut is that weak, cut one base
+    # cluster per `2 * min_cluster_size` traces instead; `merge.py` then joins the ones a classifier
+    # calls the same. Well-separated data keeps its natural cut.
+    floor = min(k_max_base, n // (2 * min_cluster_size))
+    if floor > k_base and _silhouette(normed, fcluster(z_base, k_base, criterion='maxclust')) < WEAK_SILHOUETTE:
+        k_base = floor
     base_labels = fcluster(z_base, k_base, criterion='maxclust') - 1
 
     base_cents = centroids(normed, base_labels)
@@ -280,6 +325,7 @@ def cluster_two_level(
     base_labels = _relabel_contiguous(base_labels)
     old_to_new = {old: new for new, old in enumerate(sorted(top_of_base))}
     top_of_base = {old_to_new[old]: top for old, top in top_of_base.items()}
+    base_labels, top_of_base = _split_lone_children(normed, base_labels, top_of_base, min_cluster_size)
     top_ids_used = sorted({t for t in top_of_base.values()})
     top_remap = {old: new for new, old in enumerate(top_ids_used)}
     top_of_base = {b: top_remap[t] for b, t in top_of_base.items()}

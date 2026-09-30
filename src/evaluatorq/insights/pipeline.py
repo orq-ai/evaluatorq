@@ -32,14 +32,16 @@ from evaluatorq.insights.models import (
     LabelSpec,
     StageFailure,
     TraceInsight,
+    label_key,
     real_assistant_errors,
 )
 from evaluatorq.insights.population import PopulationError, resolve_population
-from evaluatorq.insights.presets import DIMENSION_FIELDS, LABEL_PRESETS, SENTIMENT
+from evaluatorq.insights.presets import CODING_LABELS, DIMENSION_FIELDS, LABEL_PRESETS, SENTIMENT
 from evaluatorq.insights.priority import priority_points
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
+from evaluatorq.insights.transcript import tool_stats
 from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.settings import effective_settings
 
@@ -72,6 +74,8 @@ def _label_specs(labels: Sequence[LabelSpec | str], dimensions: Sequence[Dimensi
     names = [spec.name for spec in resolved]
     if len(names) != len(set(names)):
         raise ValueError('Insights labels must have unique names')
+    if clash := sorted(set(names) & {spec.name for spec in CODING_LABELS}):
+        raise ValueError(f'Insights label names are reserved for coding analysis: {", ".join(clash)}')
     return resolved
 
 
@@ -93,26 +97,26 @@ def _label_results(traces: list[TraceInsight], specs: list[LabelSpec]) -> dict[s
         values: Counter[str] = Counter()
         confidences: list[float] = []
         low = failed = 0
+        not_asked = 0
         for answer in answers:
-            if answer is None or answer.error is not None or answer.value is None:
+            if answer is None:
+                # Not asked: a coding label on a trace the coding-agent check did not answer yes for.
+                not_asked += 1
+                continue
+            if answer.error is not None or answer.value is None:
                 failed += 1
                 continue
             if answer.confidence is not None:
                 confidences.append(answer.confidence)
                 low += answer.confidence < LOW_CONFIDENCE
-            if spec.kind == 'noul':
-                values['yes' if answer.value is True else 'no'] += 1
-            elif spec.kind == 'score':
-                levels = len(spec.criteria) if isinstance(spec.criteria, list) else 0
-                values[str(round(float(answer.value) * max(0, levels - 1)))] += 1
-            else:
-                values[str(answer.value)] += 1
+            values[label_key(spec, answer.value)] += 1
         results[spec.name] = LabelResult(
             spec=spec,
             counts=dict(values),
             mean_confidence=sum(confidences) / len(confidences) if confidences else None,
             n_low_confidence=low,
             n_failed=failed,
+            n_not_asked=not_asked,
         )
     return results
 
@@ -180,7 +184,9 @@ async def _build_dimension(  # noqa: C901
     result = DimensionResult(name=dimension, source_field=source_field, clusters=[], n_no_signal=n_no_signal)
     result.n_failed = _dimension_failed_count(traces, dimension)
     if len(usable) < 5:
-        warning = f'dimension {dimension} skipped: only {len(usable)} traces have signal (need at least 5)'
+        count = len(usable)
+        noun = 'trace has' if count == 1 else 'traces have'
+        warning = f'dimension {dimension} skipped: only {count} {noun} signal (need at least 5)'
         result.warnings.append(warning)
         logger.warning(warning)
         return result
@@ -278,7 +284,14 @@ async def _build_dimension(  # noqa: C901
             )
             result.warnings.append(warning)
             logger.warning(warning)
-        representatives = merge.representatives
+        representatives = dict(merge.representatives)
+        # A merge that folds a whole top group into one cluster undoes the two-subcluster split: keep them apart.
+        by_top: dict[int, list[int]] = {}
+        for base_id in base_ids:
+            by_top.setdefault(tree.top_of_base.get(base_id, base_id), []).append(base_id)
+        for siblings in by_top.values():
+            if len(siblings) > 1 and len({representatives.get(b, b) for b in siblings}) == 1:
+                representatives.update({b: b for b in siblings})
         merged: dict[int, list[int]] = {}
         for base_id in base_ids:
             merged.setdefault(representatives.get(base_id, base_id), []).append(base_id)
@@ -387,6 +400,7 @@ async def insights(  # noqa: C901
     priority_dimension: DimensionName = 'intent',
     parallelism: int = 100,
     cache: bool = True,
+    coding_analysis: bool = False,
     run_name: str | None = None,
     runs_dir: Path | None = None,
     _run_id: str | None = None,
@@ -396,7 +410,11 @@ async def insights(  # noqa: C901
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:
-    """Run trace Insights and persist the partial or complete result with a manifest."""
+    """Run trace Insights and persist the partial or complete result with a manifest.
+
+    `coding_analysis` adds a coding-agent check per trace and, for the traces it
+    answers yes for, the coding labels in `presets.CODING_LABELS`.
+    """
     specs = _label_specs(labels, dimensions)  # resolve unknown presets before client construction or I/O
     for limit_name, limit_value in (
         ('max_clusters', max_clusters),
@@ -424,6 +442,7 @@ async def insights(  # noqa: C901
         parallelism=parallelism,
         priority_dimension=priority_dimension,
         cache=cache,
+        coding_analysis=coding_analysis,
     )
     run = InsightsRun(
         run_id=run_id,
@@ -441,7 +460,12 @@ async def insights(  # noqa: C901
         counts={},
         warnings=[],
     )
-    plan = stage_plan(population, specs, dimensions, priority_dimension=priority_dimension)
+    plan = stage_plan(
+        population,
+        [*specs, *(CODING_LABELS if coding_analysis else ())],
+        dimensions,
+        priority_dimension=priority_dimension,
+    )
     writer = start_manifest(
         run_id=run_id,
         surface='insights',
@@ -502,6 +526,14 @@ async def insights(  # noqa: C901
                 run.population['finder_export'] = str(_finder_export_source)
                 if _finder_export_sha256 is not None:
                     run.population['finder_export_sha256'] = _finder_export_sha256
+            truncated = resolved.echo.get('n_projection_truncated', 0)
+            if truncated:
+                trace_noun = 'trace' if len(resolved.traces) == 1 else 'traces'
+                run.warnings.append(
+                    f'Projection budget: {truncated} of {len(resolved.traces)} {trace_noun} exceeded the model projection budget; '
+                    f'{resolved.echo.get("n_omitted_messages", 0)} of '
+                    f'{resolved.echo.get("n_source_messages", 0)} whole messages were omitted from classification and summaries.'
+                )
             run.traces = [
                 TraceInsight(
                     trace_id=trace.trace_id,
@@ -509,6 +541,7 @@ async def insights(  # noqa: C901
                     timestamp=trace.timestamp,
                     agent_name=trace.agent_name or '',
                     project=trace.project or '',
+                    tool_stats=tool_stats(trace),
                 )
                 for trace in resolved.traces
             ]
@@ -545,6 +578,7 @@ async def insights(  # noqa: C901
                 parallelism=parallelism,
                 usage=ledger,
                 on_progress=lambda done, total: writer.stage_progress('label', done, total),
+                coding=coding_analysis,
             )
             original_by_id = {trace.trace_id: trace for trace in run.traces}
             retained_trace_ids: set[str] = set()
@@ -662,7 +696,7 @@ async def insights(  # noqa: C901
             elif not run.traces:
                 run.warnings.append('population is empty')
                 logger.warning('Insights population is empty after match filtering')
-        run.labels = _label_results(run.traces, specs)
+        run.labels = _label_results(run.traces, [*specs, *(CODING_LABELS if coding_analysis else ())])
         run.counts = {
             'n_traces': len(run.traces),
             'n_failed_traces': sum(bool(trace.errors) for trace in run.traces),

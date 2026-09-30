@@ -33,12 +33,13 @@ from evaluatorq.insights.store import save_run
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
 from evaluatorq.trace_finder.settings import DashboardSettings
 from tests.dashboard.test_insights_page import minimal_run
-from tests.insights.test_population import _run_export
+from tests.insights.test_population import _run_export, make_trace
 
 
 def test_stage_plan_follows_source_labels_and_dimensions() -> None:
     query_plan = dict(stage_plan(InsightsPopulation(query='refunds'), [SENTIMENT], ['intent', 'failure']))
     finder_plan = dict(stage_plan(InsightsPopulation.from_finder_export(Path('finder.json')), [], ['sentiment']))
+    snapshot_plan = dict(stage_plan(InsightsPopulation.from_snapshot(Path('traces.json')), [], ['intent']))
     priority_plan = dict(stage_plan(InsightsPopulation(), [CUSTOMER_SATISFACTION], ['intent']))
 
     assert query_plan['population'] == 'Find matching traces'
@@ -48,6 +49,7 @@ def test_stage_plan_follows_source_labels_and_dimensions() -> None:
     assert 'dimension:sentiment' not in query_plan
     assert finder_plan['population'] == 'Load Finder matches'
     assert finder_plan['label'] == 'Classify traces'
+    assert snapshot_plan['population'] == 'Load local traces'
     assert priority_plan['priority'] == 'Build priority matrix'
 
 
@@ -564,6 +566,80 @@ def test_wizard_validates_source_before_launch() -> None:
         InsightsLaunchSpec(labels=[], dimensions=[])
     with pytest.raises(ValidationError, match='Finder export already fixes'):
         InsightsLaunchSpec(source='finder', facets=FacetSelection(status=frozenset({'error'})))
+    with pytest.raises(ValidationError, match='Enter the path to a local trace snapshot'):
+        InsightsLaunchSpec(source='snapshot')
+
+
+def test_wizard_accepts_local_snapshot_and_rejects_raw_sessions(tmp_path: Path) -> None:
+    from evaluatorq.trace_finder.models import Snapshot
+
+    path = tmp_path / 'traces.json'
+    path.write_text(Snapshot(traces=(make_trace('local'),)).model_dump_json(), encoding='utf-8')
+    spec = InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
+    assert spec.population().snapshot_path == path
+
+    path.write_text(Snapshot(traces=()).model_dump_json(), encoding='utf-8')
+    with pytest.raises(ValidationError, match='contains no traces'):
+        InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
+
+    path.write_text('[{"session_id": "one", "thread": []}]', encoding='utf-8')
+    with pytest.raises(ValidationError, match='valid local trace snapshot'):
+        InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
+
+
+def test_dashboard_starts_local_snapshot_run_without_trace_lookup(tmp_path: Path) -> None:
+    from evaluatorq.trace_finder.models import Snapshot
+
+    path = tmp_path / 'traces.json'
+    path.write_text(Snapshot(traces=(make_trace('local'),)).model_dump_json(), encoding='utf-8')
+    client = TestClient(build_app())
+    page = client.get('/insights/new')
+    assert 'Local trace file' in page.text
+    token = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert token is not None
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.selected_orq_profile', return_value=OrqProfile('environment', 'key', 'https://my.orq.ai', True)),
+        patch('evaluatorq.dashboard.insights_routes.launch_insights', return_value='run-1') as launch,
+    ):
+        response = client.post(
+            '/insights/runs',
+            data={'csrf': token.group(1), 'source': 'snapshot', 'snapshot_path': str(path), 'dimensions': 'intent'},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    assert launch.call_args.args[0].population().snapshot_path == path
+
+
+def test_local_snapshot_preview_reports_omissions_before_start(tmp_path: Path) -> None:
+    from evaluatorq.trace_finder.models import Snapshot
+
+    trace = make_trace('long').model_copy(
+        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+    )
+    path = tmp_path / 'traces.json'
+    path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
+    client = TestClient(build_app())
+    page = client.get('/insights/new')
+    token = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert token is not None
+    assert 'insights-snapshot-preview' in page.text
+
+    preview = client.post('/insights/snapshot-preview', data={'csrf': token.group(1), 'snapshot_path': str(path)})
+
+    assert preview.status_code == 200
+    assert '1 of 1 trace exceeds' in preview.text
+    assert '1 of 2 whole messages omitted (50.0%)' in preview.text
+    assert 'Serialized source:' in preview.text
+    assert client.post('/insights/snapshot-preview', data={'snapshot_path': str(path)}).status_code == 403
+    assert client.post(
+        '/insights/snapshot-preview', data={'csrf': token.group(1), 'snapshot_path': str(tmp_path / 'missing.json')}
+    ).status_code == 422
+    path.write_text(Snapshot(traces=()).model_dump_json(), encoding='utf-8')
+    empty = client.post('/insights/snapshot-preview', data={'csrf': token.group(1), 'snapshot_path': str(path)})
+    assert empty.status_code == 422
+    assert 'contains no traces' in empty.text
 
 
 def test_dashboard_finder_export_must_be_in_approved_directory(
@@ -1832,6 +1908,11 @@ def test_facet_options_use_selected_window_and_keep_values(monkeypatch: pytest.M
     assert response.status_code == cached.status_code == changed.status_code == 200
     assert 'name="facet_status" value="error" checked' in response.text
     assert 'name="facet_status" value="ok"' in response.text
+    assert 'class="finder-facets"' in response.text
+    assert 'class="facet-item" data-facet="status"' in response.text
+    assert 'class="facet-search"' in response.text
+    assert 'form="insights-new-form" type="checkbox" name="facet_status"' in response.text
+    assert 'name="tokens_min"' not in response.text
     assert load.await_count == 2
     first = load.await_args_list[0].kwargs
     assert first['limit'] == 50

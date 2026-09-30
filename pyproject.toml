@@ -191,7 +191,7 @@ src = [ "src" ]
 
 [tool.basedpyright]
 pythonVersion = "3.10"
-exclude = [ "examples", "scripts", ".venv" ]
+exclude = [ "examples", "scripts", ".venv", ".context" ]
 reportIncompatibleVariableOverride = "none"
 reportExplicitAny = "none"
 reportMissingImports = "none"

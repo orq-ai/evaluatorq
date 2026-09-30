@@ -240,3 +240,24 @@ def test_empty_input_returns_empty_tree():
 def test_non_positive_limits_are_rejected(limits):
     with pytest.raises(ValueError, match='must be positive'):
         cluster_two_level(np.ones((10, 3)), **limits)
+
+
+def test_structureless_data_is_cut_finer_for_the_merge_step_to_join() -> None:
+    rng = np.random.default_rng(0)
+    tree = cluster_two_level(rng.normal(size=(100, 32)), min_cluster_size=5)
+
+    assert tree.n_base >= 10  # one per 2 * min_cluster_size, not the 2-3 the largest-gap rule picks
+
+
+def test_every_top_group_large_enough_gets_two_base_clusters() -> None:
+    rng = np.random.default_rng(3)
+    far = np.zeros(32)
+    far[0] = 50.0
+    vectors = np.vstack([rng.normal(size=(40, 32)), far + rng.normal(scale=0.5, size=(12, 32))])
+
+    tree = cluster_two_level(vectors, min_cluster_size=5)
+
+    children: dict[int, int] = {}
+    for top in tree.top_of_base.values():
+        children[top] = children.get(top, 0) + 1
+    assert all(count >= 2 for count in children.values())

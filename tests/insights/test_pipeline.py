@@ -469,6 +469,26 @@ async def test_duplicate_config_selection_fails_before_starting_manifest(
         await pipeline.insights(_population(), runs_dir=tmp_path, **kwargs)
 
     assert list_manifests(tmp_path) == []
+@pytest.mark.asyncio
+async def test_local_projection_omission_is_visible_in_saved_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(1)]
+
+    async def local_population(*args, **kwargs):
+        return ResolvedPopulation(
+            traces=traces,
+            compiled=None,
+            echo={'mode': 'snapshot', 'n_projection_truncated': 1, 'n_source_messages': 2, 'n_omitted_messages': 1},
+            n_scanned=1,
+        )
+
+    monkeypatch.setattr(pipeline, 'resolve_population', local_population)
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert any('1 of 1 trace exceeded' in warning and '1 of 2 whole messages' in warning for warning in run.warnings)
 
 
 @pytest.mark.asyncio
@@ -1135,3 +1155,22 @@ async def test_merge_failures_are_reported_in_dimension(
     if not raises:
         assert result is not None
         assert any('2/4 pair checks failed' in warning for warning in result.warnings)
+
+
+def test_label_results_count_score_levels_by_their_own_number_and_not_asked() -> None:
+    from evaluatorq.insights.models import TraceInsight
+    from evaluatorq.insights.presets import SCOPE_CREEP, USER_FRUSTRATION
+
+    def insight(i: int, labels: dict[str, LabelAnswer]) -> TraceInsight:
+        return TraceInsight(trace_id=f't{i}', span_id='s', timestamp=datetime.now(timezone.utc), labels=labels)
+
+    traces = [
+        insight(0, {'user_frustration': LabelAnswer(value=0.0, confidence=None, probabilities=None, error=None), 'scope_creep': LabelAnswer(value=True, confidence=None, probabilities=None, error=None)}),
+        insight(1, {'user_frustration': LabelAnswer(value=1.0, confidence=None, probabilities=None, error=None)}),
+    ]
+
+    results = pipeline._label_results(traces, [USER_FRUSTRATION, SCOPE_CREEP])
+
+    assert results['user_frustration'].counts == {'1': 1, '5': 1}
+    assert results['scope_creep'].counts == {'yes': 1}
+    assert results['scope_creep'].n_not_asked == 1

@@ -28,6 +28,8 @@ from evaluatorq.trace_finder.export import (
 )
 from evaluatorq.trace_finder import cli as finder_cli
 from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+from evaluatorq.trace_finder.models import Snapshot
+from tests.insights.test_population import make_trace
 
 
 def _app() -> typer.Typer:
@@ -41,7 +43,7 @@ def test_help_lists_population_and_clustering_options() -> None:
 
     assert result.exit_code == 0, result.output
     help_text = unstyle(result.output)
-    for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--max-clusters', '--classifier-model'):
+    for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--from-snapshot', '--preview-input', '--max-clusters', '--classifier-model'):
         assert option in help_text
 
 
@@ -57,6 +59,56 @@ def test_score_preset_display_does_not_repeat_level_index(minimal_run: Any, caps
     description = spec.criteria[0].split(':', 1)[0].removeprefix('0 ')
     assert f'0 · {description}' in output
     assert '0 · 0 ' not in output
+def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / 'traces.json'
+    trace = make_trace('long').model_copy(
+        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+    )
+    path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
+    monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
+    monkeypatch.setattr(cli_module, 'insights', lambda *_args, **_kwargs: pytest.fail('preview must not run models'))
+
+    result = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
+
+    assert result.exit_code == 0, result.output
+    assert '1 of 1 trace exceeds' in result.output
+    assert '1 of 2 whole messages omitted (50.0%)' in result.output
+
+
+def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any) -> None:
+    path = tmp_path / 'traces.json'
+    path.write_text(Snapshot(traces=(make_trace('local'),)).model_dump_json(), encoding='utf-8')
+    captured: dict[str, Any] = {}
+
+    async def fake_insights(population: Any, **_kwargs: Any) -> Any:
+        captured['population'] = population
+        return minimal_run
+
+    monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: None)
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    result = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--dimension', 'intent'])
+
+    assert result.exit_code == 0, result.output
+    assert captured['population'].snapshot_path == path
+    assert result.output.count('Model input projection:') == 1
+
+
+def test_snapshot_cli_rejects_empty_and_conflicting_sources(tmp_path: Path) -> None:
+    empty_path = tmp_path / 'empty.json'
+    empty_path.write_text(Snapshot(traces=()).model_dump_json(), encoding='utf-8')
+    empty = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(empty_path), '--preview-input'])
+    assert empty.exit_code == 2
+    assert 'contains no traces' in empty.output
+
+    conflict = CliRunner().invoke(_app(), ['insights', '--from-snapshot', 'a.json', '--from-finder', 'b.json'])
+    assert conflict.exit_code == 2
+    assert 'cannot be combined' in conflict.output
+
+    missing_source = CliRunner().invoke(_app(), ['insights', '--preview-input'])
+    assert missing_source.exit_code == 2
+    assert 'requires --from-snapshot' in missing_source.output
 
 
 @pytest.mark.parametrize(

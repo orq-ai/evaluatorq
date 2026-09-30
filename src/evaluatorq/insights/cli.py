@@ -25,6 +25,7 @@ from evaluatorq.trace_finder.settings import effective_settings
 
 from . import presets
 from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec
+from .population import PopulationError, describe_projection_coverage, preview_snapshot
 
 _DIMENSIONS: tuple[DimensionName, ...] = ('intent', 'failure', 'sentiment')
 
@@ -94,8 +95,49 @@ def _duplicate_dimensions(names: tuple[str, ...]) -> list[str]:
     return sorted(duplicates)
 
 
-def _print_run(run: InsightsRun, run_path: Path | None) -> None:
+def _validate_population_source(
+    from_finder: Path | None,
+    from_snapshot: Path | None,
+    query: str | None,
+    population_options: tuple[tuple[str, bool], ...],
+    *,
+    preview_input: bool,
+) -> None:
+    """Reject combinations that cannot describe one trace population."""
+    if from_finder is not None and from_snapshot is not None:
+        emit_error('--from-finder and --from-snapshot cannot be combined')
+        raise typer.Exit(code=2)
+    file_source = (
+        '--from-finder' if from_finder is not None else '--from-snapshot' if from_snapshot is not None else None
+    )
+    if file_source is not None and query is not None:
+        emit_error(f'{file_source} cannot be combined with --query')
+        raise typer.Exit(code=2)
+    if preview_input and from_snapshot is None:
+        emit_error('--preview-input requires --from-snapshot')
+        raise typer.Exit(code=2)
+    conflicting = [name for name, used in population_options if used]
+    if file_source is not None and conflicting:
+        emit_error(f'{file_source} cannot be combined with population options: {", ".join(conflicting)}')
+        raise typer.Exit(code=2)
+
+
+def _print_snapshot_preview(path: Path) -> None:
+    try:
+        coverage = preview_snapshot(str(path))
+    except PopulationError as exc:
+        emit_error(exc)
+        raise typer.Exit(code=2) from None
+    if coverage['n_traces'] == 0:
+        emit_error('local trace snapshot contains no traces')
+        raise typer.Exit(code=2)
+    Console().print(f'Model input projection: {describe_projection_coverage(coverage)}')
+
+
+def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_shown: bool = False) -> None:
     console = Console()
+    if 'n_source_messages' in run.population and not projection_already_shown:
+        console.print(f'Model input projection: {describe_projection_coverage(run.population)}')
     for name, dimension in run.dimensions.items():
         table = Table(title=f'{name.title()} clusters (top 5)')
         table.add_column('Cluster')
@@ -130,7 +172,9 @@ def _print_run(run: InsightsRun, run_path: Path | None) -> None:
         console.print(table)
 
     failed = run.counts.get('n_failed_traces', 0)
-    console.print(f'Summary: {len(run.traces):,} traces; {failed:,} failed traces.')
+    trace_count = len(run.traces)
+    trace_noun = 'trace' if trace_count == 1 else 'traces'
+    console.print(f'Summary: {trace_count:,} {trace_noun}; {failed:,} failed traces.')
     if run.stage_failures:
         table = Table(title='Stage failures')
         table.add_column('Stage')
@@ -151,6 +195,14 @@ def insights_cmd(
         Path | None,
         typer.Option('--from-finder', help='Hydrate the population from an eq find JSON export.'),
     ] = None,
+    from_snapshot: Annotated[
+        Path | None,
+        typer.Option('--from-snapshot', help='Use traces and messages from a local snapshot JSON file.'),
+    ] = None,
+    preview_input: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--preview-input', help='Show local snapshot truncation without starting a run.'),
+    ] = False,
     label: Annotated[
         list[str] | None,
         typer.Option('--label', help='Label preset name or path to a JSON LabelSpec (repeatable).'),
@@ -191,6 +243,14 @@ def insights_cmd(
         ),
     ] = None,
     no_cache: Annotated[bool, typer.Option('--no-cache', help='Disable the local Insights cache.')] = False,  # noqa: FBT002
+    coding: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--coding',
+            help='Check each trace for a coding agent and ask the coding labels (task type, outcome, verification, '
+            'scope, corrections, unfixed errors, risky actions) for the ones that are.',
+        ),
+    ] = False,
     json_path: Annotated[
         Path | None, typer.Option('--json', help='Write a copy of the completed run JSON to PATH.')
     ] = None,
@@ -222,11 +282,11 @@ def insights_cmd(
     ] = None,
 ) -> None:
     """Discover trace dimensions and answer fixed label questions."""
-    if from_finder is not None and query is not None:
-        emit_error('--from-finder cannot be combined with --query')
-        raise typer.Exit(code=2)
-    if from_finder is not None:
-        population_options = (
+    _validate_population_source(
+        from_finder,
+        from_snapshot,
+        query,
+        (
             ('--window-days', window_days is not None),
             ('--limit', limit is not None),
             ('--project', bool(project)),
@@ -241,14 +301,16 @@ def insights_cmd(
             ('--tokens-max', tokens_max is not None),
             ('--duration-ms-min', duration_ms_min is not None),
             ('--duration-ms-max', duration_ms_max is not None),
-        )
-        conflicting = [name for name, used in population_options if used]
-        if conflicting:
-            emit_error(f'--from-finder cannot be combined with population options: {", ".join(conflicting)}')
-            raise typer.Exit(code=2)
+        ),
+        preview_input=preview_input,
+    )
     if query is not None and not query.strip():
         emit_error('--query must not be empty')
         raise typer.Exit(code=2)
+    if from_snapshot is not None:
+        _print_snapshot_preview(from_snapshot)
+        if preview_input:
+            return
     raw_dimensions = tuple(dimension or _DIMENSIONS)
     invalid_dimensions = sorted(set(raw_dimensions) - set(_DIMENSIONS))
     if invalid_dimensions:
@@ -276,9 +338,13 @@ def insights_cmd(
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
         selected_profile = resolve_cli_profile(profile if profile is not None else settings.orq_profile)
+        if from_finder is not None:
+            _validate_finder_export(from_finder)
         population = (
             InsightsPopulation.from_finder_export(from_finder, export=_validate_finder_export(from_finder))
             if from_finder is not None
+            else InsightsPopulation.from_snapshot(from_snapshot)
+            if from_snapshot is not None
             else InsightsPopulation(
                 query=query,
                 facets=_facets(
@@ -324,6 +390,7 @@ def insights_cmd(
                 cache=not no_cache,
                 _finder_export_source=from_finder.resolve() if from_finder is not None else None,
                 _on_saved=remember_run_path,
+                coding_analysis=coding,
             )
         )
     except (ImportError, OSError, OpenAIError, RuntimeError, TimeoutError, ValueError, httpx.HTTPError) as exc:
@@ -336,7 +403,7 @@ def insights_cmd(
         except OSError as exc:
             emit_error(f'Could not write JSON export to {json_path}: {exc}')
             raise typer.Exit(code=1) from None
-    _print_run(run, run_path)
+    _print_run(run, run_path, projection_already_shown=from_snapshot is not None)
     if run.status == 'error':
         raise typer.Exit(code=1)
 

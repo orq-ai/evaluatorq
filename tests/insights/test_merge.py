@@ -330,7 +330,7 @@ async def test_request_carries_both_clusters_name_description_and_examples(monke
     assert state['cluster_b']['examples'] == ['ex-b1']
     question = captured[0].questions['same']
     assert question.kind == 'noul'
-    assert 'same category' in question.instructions
+    assert 'same specific activity' in question.instructions
 
 
 @pytest.mark.asyncio

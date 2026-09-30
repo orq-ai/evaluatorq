@@ -11,6 +11,7 @@ import pytest
 from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.orq_source import _conversation_messages
 from evaluatorq.trace_finder.projection import (
+    MAX_TOKEN_BUDGET,
     estimate_tokens,
     project_trace,
 )
@@ -19,6 +20,17 @@ from evaluatorq.trace_finder.projection import (
 def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
     serialized = ''.join('{}[],:;' for _ in range(100))
     assert estimate_tokens(serialized) == len(serialized.encode('utf-8'))
+
+
+def test_default_projection_budget_accepts_more_than_the_previous_limit() -> None:
+    trace = _trace(messages=({'role': 'user', 'content': 'x' * 30_000},))
+
+    projection = project_trace(trace)
+
+    assert MAX_TOKEN_BUDGET == 50_000
+    assert projection.payload['messages'][0]['content'] == 'x' * 30_000
+    assert projection.omitted_bytes == 0
+    assert projection.estimated_tokens <= MAX_TOKEN_BUDGET
 
 
 def test_parts_text_block_with_content_key_is_kept() -> None:

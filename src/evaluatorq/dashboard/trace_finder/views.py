@@ -108,16 +108,20 @@ def facet_menu(
     form_id: str = 'finder-query-form',
     selection: FacetSelection | None = None,
     pending: bool = False,
+    include_numeric: bool = True,
 ) -> str:
     """Two-level filter menu: a category list, and a value popout the client opens per category.
 
     ``pending`` renders the menu without values and has it fetch them itself as soon as it lands
-    on the page, so a page render never waits on the Orq facet call.
+    on the page, so a page render never waits on the Orq facet call. Insights uses
+    ``include_numeric=False`` because its population accepts categorical facets only.
     """
     items: list[str] = []
     subs: list[str] = []
     for name, label in FACET_LABELS:
         numeric_facet = name in NUMERIC_FACET_NAMES
+        if numeric_facet and not include_numeric:
+            continue
         selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
         values = tuple(dict.fromkeys((*_facet_values(catalogue, name), *sorted(selected_values))))
         if numeric_facet:

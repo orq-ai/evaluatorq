@@ -410,6 +410,7 @@ def main() -> int:
                     labels=spec.label_specs(),
                     dimensions=spec.dimension_names(),
                     parallelism=spec.parallelism,
+                    coding_analysis=spec.coding_analysis,
                     run_name=payload.run_name,
                     runs_dir=payload.runs_dir,
                     _run_id=payload.run_id,

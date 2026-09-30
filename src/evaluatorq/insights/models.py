@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -11,6 +12,7 @@ from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion
 from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the runtime model type.
+from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
@@ -51,9 +53,9 @@ class LabelSpec(BaseModel):
 class InsightsPopulation(BaseModel):
     """The traces in an insights run, chosen by filters only — never influenced by labels.
 
-    Either filtered live through `trace_finder` (`query`/`facets`/`numeric`/window/limit) or
-    hydrated from a previously exported finder population (`finder_export`); the two are
-    mutually exclusive because a `finder_export` already pins the matched trace ids.
+    Either filtered live through `trace_finder` (`query`/`facets`/`numeric`/window/limit),
+    hydrated from a finder export, or read from a local `Snapshot` JSON file.
+    File sources fix the population and cannot be combined with live selection.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -66,10 +68,11 @@ class InsightsPopulation(BaseModel):
     window_days: int = Field(default=7, ge=1, le=90)
     limit: int = Field(default=500, ge=1, le=5000)
     finder_export: Path | None = None
+    snapshot_path: Path | None = None
     _finder_export_snapshot: RunExport | None = PrivateAttr(default=None)
 
     @model_validator(mode='after')
-    def _finder_export_excludes_live_selection(self) -> Self:
+    def _file_source_excludes_live_selection(self) -> Self:
         for name in ('start', 'end'):
             value = getattr(self, name)
             if value is not None and (value.tzinfo is None or value.utcoffset() is None):
@@ -77,8 +80,10 @@ class InsightsPopulation(BaseModel):
         if self.start is not None and self.end is not None and self.start > self.end:
             raise ValueError('start must not be later than end')
 
-        if self.finder_export is None:
+        if self.finder_export is None and self.snapshot_path is None:
             return self
+        if self.finder_export is not None and self.snapshot_path is not None:
+            raise ValueError('finder_export and snapshot_path are mutually exclusive')
         live_fields = {
             'query': self.query is not None,
             'facets': self.facets != FacetSelection(),
@@ -91,8 +96,8 @@ class InsightsPopulation(BaseModel):
         conflicting = [name for name, used in live_fields.items() if used]
         if conflicting:
             raise ValueError(
-                'finder_export cannot be combined with live population settings '
-                f'({", ".join(conflicting)}): a finder export already pins the matched traces'
+                'file sources cannot be combined with live population settings '
+                f'({", ".join(conflicting)}): the file already fixes the trace population'
             )
         return self
 
@@ -106,6 +111,37 @@ class InsightsPopulation(BaseModel):
     def finder_export_snapshot(self) -> RunExport | None:
         """Return the validated export supplied by the CLI, if any."""
         return self._finder_export_snapshot
+
+    @classmethod
+    def from_snapshot(cls, path: Path) -> InsightsPopulation:
+        """Build a population from a local `Snapshot` JSON file without querying Orq."""
+        return cls(snapshot_path=path)
+
+
+def label_key(spec: LabelSpec, value: object) -> str:
+    """The text an answer value counts, filters and displays under: `yes`/`no`, a score level's own number, or the choice.
+
+    A score keys by the number its level text starts with ("1 calm: ...") so a 1-5
+    scale does not read as 0-4; a level without a number keys by its 0-based index.
+    """
+    if spec.kind == 'noul':
+        return 'yes' if value is True else 'no'
+    if spec.kind == 'score' and isinstance(value, (int, float)) and not isinstance(value, bool):
+        levels = spec.criteria if isinstance(spec.criteria, list) else []
+        index = round(float(value) * max(0, len(levels) - 1))
+        number = re.match(r'\d+', levels[index]) if index < len(levels) else None
+        return number.group() if number else str(index)
+    return str(value)
+
+
+def label_order(spec: LabelSpec) -> list[str]:
+    """Every value `label_key` can give for `spec`, in the spec's own order: yes before no, score levels low to high, choices as listed."""
+    if spec.kind == 'noul':
+        return ['yes', 'no']
+    if spec.kind == 'score' and isinstance(spec.criteria, list):
+        top = max(1, len(spec.criteria) - 1)
+        return [label_key(spec, index / top) for index in range(len(spec.criteria))]
+    return list(spec.criteria) if isinstance(spec.criteria, dict) else []
 
 
 class LabelAnswer(BaseModel):
@@ -127,7 +163,6 @@ class TraceSummary(BaseModel):
     assistant_errors: list[str] = []
     sentiment_explanation: str | None
     languages: list[str] = []
-    tools_used: list[str] = []
 
 
 _NO_ERROR_SENTINELS = frozenset({'none', 'n/a', 'no errors', 'no errors were made', 'no error'})
@@ -157,6 +192,7 @@ class TraceInsight(BaseModel):
     project: str = ''
     labels: dict[str, LabelAnswer] = {}
     summary: TraceSummary | None = None
+    tool_stats: ToolStats | None = None
     assignments: dict[str, ClusterAssignment] = {}
     coords: dict[str, tuple[FiniteFloat, FiniteFloat, FiniteFloat]] = {}
     errors: dict[str, str] = {}
@@ -196,6 +232,7 @@ class LabelResult(BaseModel):
     mean_confidence: BoundedRatio | None
     n_low_confidence: int
     n_failed: int
+    n_not_asked: int = 0
 
 
 class PriorityPoint(BaseModel):
@@ -232,6 +269,7 @@ class InsightsConfig(BaseModel):
     parallelism: int = Field(default=100, ge=1)
     priority_dimension: DimensionName = 'intent'
     cache: bool = True
+    coding_analysis: bool = False
 
     @model_validator(mode='after')
     def _selections_are_unique(self) -> Self:

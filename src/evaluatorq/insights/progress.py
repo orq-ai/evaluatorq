@@ -30,7 +30,9 @@ def stage_plan(
         or population.limit != 500
     )
     source = (
-        'Load Finder matches'
+        'Load local traces'
+        if population.snapshot_path is not None
+        else 'Load Finder matches'
         if population.finder_export is not None
         else 'Find matching traces'
         if population.query

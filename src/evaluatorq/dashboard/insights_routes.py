@@ -26,13 +26,17 @@ from evaluatorq.dashboard.insights_views import (
     map_payload,
     new_run_page,
     overview_page,
+    projection_notice,
     running_page,
     tab_content,
+    tabs,
+    trace_detail_page,
     unreadable_page,
 )
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder.routes import selected_orq_profile
 from evaluatorq.insights.models import InsightsRun
+from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetSelection
@@ -211,6 +215,23 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         })
         return _html(facet_options(await _catalogue(req.app, window_days), selection))
 
+    @app.post('/insights/snapshot-preview')
+    async def insights_snapshot_preview(req: Request) -> Response:
+        form = await req.form()
+        rejected = request_rejected(req, form)
+        if rejected:
+            return _html(f'<p class="insights-error" role="alert">{rejected}</p>', 403)
+        raw_path = str(form.get('snapshot_path', '')).strip()
+        if not raw_path or len(raw_path) > 4096:
+            return _html('<p class="insights-error" role="alert">Enter a trace snapshot JSON path.</p>', 422)
+        try:
+            coverage = await asyncio.to_thread(preview_snapshot, raw_path)
+        except PopulationError:
+            return _html('<p class="insights-error" role="alert">Could not read a valid local trace snapshot.</p>', 422)
+        if coverage['n_traces'] == 0:
+            return _html('<p class="insights-error" role="alert">This trace snapshot contains no traces.</p>', 422)
+        return _html(projection_notice(coverage))
+
     @app.post('/insights/runs')
     async def insights_start(req: Request) -> Response:
         form = await req.form()
@@ -226,12 +247,14 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                     'source': form.get('source', 'recent'),
                     'query': form.get('query', ''),
                     'finder_export': form.get('finder_export', ''),
+                    'snapshot_path': form.get('snapshot_path', ''),
                     'window_days': form.get('window_days', 7),
                     'limit': form.get('limit', 100),
                     'facets': {name: form.getlist(f'facet_{name}') for name in FACET_NAMES},
                     'parallelism': form.get('parallelism', 20),
                     'labels': form.getlist('labels'),
                     'dimensions': form.getlist('dimensions'),
+                    'coding_analysis': form.get('coding_analysis') == 'on',
                 },
             )
         except ValidationError as exc:
@@ -273,7 +296,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             if req.query_params.get(key)
         }
         if req.headers.get('HX-Request', '').casefold() == 'true':
-            return _html(tab_content(resolved[1], tab, query=query))
+            return _html(tab_content(resolved[1], tab, query=query) + tabs(resolved[1], tab, oob=True))
         return _html(
             full_page(
                 resolved[1],
@@ -292,6 +315,22 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if resolved is None or not isinstance(resolved[1], InsightsRun):
             return _html('<p class="insights-empty">Insights run not found.</p>', 404)
         return _html(cluster_detail(resolved[1], cluster_id))
+
+    @app.get('/insights/{run_id}/trace')
+    def insights_trace(req: Request, run_id: str) -> Response:
+        _, loaded, _ = _entries(get_insights_runs_dir())
+        resolved = _resolve(run_id, loaded)
+        if resolved is None or not isinstance(resolved[1], InsightsRun):
+            return _html('<p class="insights-empty">Insights run not found.</p>', 404)
+        trace_id = req.query_params.get('trace_id')
+        span_id = req.query_params.get('span_id')
+        trace = next(
+            (item for item in resolved[1].traces if item.trace_id == trace_id and item.span_id == span_id),
+            None,
+        )
+        if trace is None:
+            return _html('<p class="insights-empty">Trace not found in this Insights run.</p>', 404)
+        return _html(trace_detail_page(resolved[1], trace))
 
     @app.get('/insights/{run_id}/traces')
     def insights_traces(req: Request, run_id: str) -> Response:

@@ -27,8 +27,9 @@ from evaluatorq.common.judge import (
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.insights.models import LabelAnswer, LabelSpec
+from evaluatorq.insights.presets import CODING_AGENT, CODING_CONVERSATION_LABELS, CODING_TOOL_LABELS
+from evaluatorq.insights.transcript import conversation_view, tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.classifier import matches_selection
-from evaluatorq.trace_finder.projection import project_trace
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -159,6 +160,85 @@ async def _classify_with_retry(
         return holder[-1]
 
 
+async def _ask(
+    trace: TraceRecord,
+    state: str,
+    specs: Sequence[LabelSpec],
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    semaphore: asyncio.Semaphore,
+    usage: UsageLedger | None,
+    what: str,
+) -> tuple[dict[str, LabelAnswer], str | None]:
+    """Ask `specs` about `state` in one `/classify` call; a failed call fails every answer, never raises."""
+    questions = {spec.name: spec.to_question(state) for spec in specs}
+    async with semaphore:
+        outcome = await _classify_with_retry(
+            client=client, model=model, cfg=cfg, request=ClassifyRequest(state=state, questions=questions), usage=usage
+        )
+    if outcome.error_kind is not None or outcome.response is None:
+        message = outcome.error_message or (
+            outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+        )
+        logger.warning('Insights {} classify failed for trace {}: {}', what, trace.trace_id, message)
+        failed = LabelAnswer(value=None, confidence=None, probabilities=None, error=message)
+        return {spec.name: failed for spec in specs}, message
+    return _read_answers(trace, questions, outcome.response.answers), None
+
+
+# ponytail: the two chunked tool labels, named here; move onto LabelSpec if other labels ever chunk.
+# An error counts as unfixed only if it is still broken at the end, so the last chunk decides it;
+# for every other chunked label, a finding (yes, or a choice other than `none`) in any chunk stands.
+_LAST_CHUNK_DECIDES = frozenset({'unfixed_error'})
+_NO_FINDING = (False, 'none')
+
+
+def _merge_chunks(name: str, answers: list[LabelAnswer]) -> LabelAnswer:
+    """Merge one label's answers over consecutive chunks of a trace into one answer."""
+    if len(answers) == 1 or name in _LAST_CHUNK_DECIDES:
+        return answers[-1]
+    answered = [answer for answer in answers if answer.error is None]
+    found = [answer for answer in answered if answer.value not in _NO_FINDING]
+    if found or len(answered) == len(answers):
+        # Most confident finding wins; with none, the most confident clean answer.
+        return max(
+            found or answered,
+            key=lambda answer: answer.confidence or max((answer.probabilities or {}).values(), default=0.0),
+        )
+    # No chunk found anything and one failed: the failed chunk may have held the finding.
+    return next(answer for answer in answers if answer.error is not None)
+
+
+def _read_answers(
+    trace: TraceRecord, questions: dict[str, ClassifyQuestion], answers: dict[str, ClassifyAnswer]
+) -> dict[str, LabelAnswer]:
+    read: dict[str, LabelAnswer] = {}
+    for name, question in questions.items():
+        if name == MATCH_KEY:
+            continue
+        answer = answers.get(name)
+        if answer is None:
+            logger.warning(
+                'Insights label classify reply for trace {} is missing the {!r} answer', trace.trace_id, name
+            )
+            read[name] = LabelAnswer(
+                value=None, confidence=None, probabilities=None, error=f'no answer returned for label {name!r}'
+            )
+            continue
+        mapped = _map_answer(question, answer)
+        if mapped.error is not None:
+            logger.warning(
+                'Insights label classify answer for trace {} label {!r} is unreadable: {}',
+                trace.trace_id,
+                name,
+                mapped.error,
+            )
+        read[name] = mapped
+    return read
+
+
 async def _label_one(
     trace: TraceRecord,
     *,
@@ -169,55 +249,104 @@ async def _label_one(
     cfg: LLMCallConfig,
     semaphore: asyncio.Semaphore,
     usage: UsageLedger | None = None,
+    coding: bool = False,
 ) -> LabelOutcome:
-    state = project_trace(trace).payload
+    """Label one trace.
 
-    questions: dict[str, ClassifyQuestion] = {}
+    With `coding` on, a first call asks `CODING_AGENT` over the trace's tool
+    inventory. When it answers yes, the conversation call also asks the coding
+    conversation labels, and a third call asks the coding tool labels over the
+    tool activity (inputs, statuses, outputs). A coding check that fails leaves
+    the coding labels unasked and says so in a warning; it never guesses yes.
+    """
+    answers: dict[str, LabelAnswer] = {}
+    is_coding = False
+    if coding:
+        detected, _ = await _ask(
+            trace,
+            tool_inventory(trace),
+            [CODING_AGENT],
+            client=client,
+            model=model,
+            cfg=cfg,
+            semaphore=semaphore,
+            usage=usage,
+            what='coding-agent check',
+        )
+        answers.update(detected)
+        verdict = detected[CODING_AGENT.name]
+        is_coding = verdict.error is None and verdict.value is True
+        if verdict.error is not None:
+            logger.warning(
+                'Insights coding-agent check failed for trace {}; coding labels were not asked: {}',
+                trace.trace_id,
+                verdict.error,
+            )
+
+    state = conversation_view(trace)
+    conversation_specs = [*labels, *(CODING_CONVERSATION_LABELS if is_coding else ())]
+    questions: dict[str, ClassifyQuestion] = {spec.name: spec.to_question(state) for spec in conversation_specs}
     if compiled is not None:
         questions[MATCH_KEY] = compiled.task.model_copy(update={'state': state})
-    for label in labels:
-        questions[label.name] = label.to_question(state)
 
-    if not questions:
-        return LabelOutcome(trace=trace, answers={}, matched=None, error=None)
+    async def conversation_call() -> tuple[dict[str, ClassifyAnswer] | None, str | None]:
+        if not questions:
+            return None, None
+        async with semaphore:
+            outcome = await _classify_with_retry(
+                client=client,
+                model=model,
+                cfg=cfg,
+                request=ClassifyRequest(state=state, questions=questions),
+                usage=usage,
+            )
+        if outcome.error_kind is not None or outcome.response is None:
+            return None, outcome.error_message or (
+                outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+            )
+        return outcome.response.answers, None
 
-    request = ClassifyRequest(state=state, questions=questions)
-
-    async with semaphore:
-        outcome = await _classify_with_retry(client=client, model=model, cfg=cfg, request=request, usage=usage)
-
-    if outcome.error_kind is not None or outcome.response is None:
-        message = outcome.error_message or (
-            outcome.error_kind.value if outcome.error_kind else 'classify reply produced no response'
+    async def tool_call() -> dict[str, LabelAnswer]:
+        if not is_coding:
+            return {}
+        chunks = tool_activity_chunks(trace)
+        asked = await asyncio.gather(
+            *(
+                _ask(
+                    trace,
+                    chunk,
+                    CODING_TOOL_LABELS,
+                    client=client,
+                    model=model,
+                    cfg=cfg,
+                    semaphore=semaphore,
+                    usage=usage,
+                    what='coding tool-activity',
+                )
+                for chunk in chunks
+            )
         )
-        logger.warning('Insights label classify failed for trace {}: {}', trace.trace_id, message)
-        failed = LabelAnswer(value=None, confidence=None, probabilities=None, error=message)
-        return LabelOutcome(trace=trace, answers={label.name: failed for label in labels}, matched=None, error=message)
+        return {
+            spec.name: _merge_chunks(spec.name, [answers[spec.name] for answers, _ in asked])
+            for spec in CODING_TOOL_LABELS
+        }
 
-    answers: dict[str, LabelAnswer] = {}
-    for label in labels:
-        answer = outcome.response.answers.get(label.name)
-        if answer is None:
-            logger.warning(
-                'Insights label classify reply for trace {} is missing the {!r} answer', trace.trace_id, label.name
-            )
-            answers[label.name] = LabelAnswer(
-                value=None, confidence=None, probabilities=None, error=f'no answer returned for label {label.name!r}'
-            )
-            continue
-        mapped = _map_answer(questions[label.name], answer)
-        if mapped.error is not None:
-            logger.warning(
-                'Insights label classify answer for trace {} label {!r} is unreadable: {}',
-                trace.trace_id,
-                label.name,
-                mapped.error,
-            )
-        answers[label.name] = mapped
+    (raw, error), tool_answers = await asyncio.gather(conversation_call(), tool_call())
+    answers.update(tool_answers)
+
+    if error is not None:
+        logger.warning('Insights label classify failed for trace {}: {}', trace.trace_id, error)
+        failed = LabelAnswer(value=None, confidence=None, probabilities=None, error=error)
+        answers.update({spec.name: failed for spec in conversation_specs})
+        return LabelOutcome(trace=trace, answers=answers, matched=None, error=error)
+    if raw is None:
+        return LabelOutcome(trace=trace, answers=answers, matched=None, error=None)
+
+    answers.update(_read_answers(trace, questions, raw))
 
     matched: bool | None = None
     if compiled is not None:
-        match_answer = outcome.response.answers.get(MATCH_KEY)
+        match_answer = raw.get(MATCH_KEY)
         if match_answer is None:
             logger.warning(
                 'Insights label classify reply for trace {} is missing the population-match answer', trace.trace_id
@@ -230,7 +359,6 @@ async def _label_one(
                     trace.trace_id,
                     mapped_match.error,
                 )
-                matched = None
             else:
                 matched = matches_selection(mapped_match.value, compiled)
 
@@ -248,12 +376,15 @@ async def label_traces(
     cfg: LLMCallConfig | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     usage: UsageLedger | None = None,
+    coding: bool = False,
 ) -> list[LabelOutcome]:
-    """Label every trace with one `/classify` request each, bounded by `parallelism`.
+    """Label every trace, bounded by `parallelism` concurrent `/classify` calls.
 
-    Per trace: project the trace to its classifier state, ask every label's
-    question plus (when `compiled` is given) the population-match question in
-    a single request, and skip the call entirely when neither is present. A
+    Per trace: render the conversation with `transcript.conversation_view`, ask
+    every label's question plus (when `compiled` is given) the population-match
+    question in a single request, and skip that call when neither is present.
+    With `coding` on, each trace also gets the coding-agent check and, when it
+    answers yes, the coding labels (see `_label_one`). A
     per-trace failure never raises — it comes back as a `LabelOutcome` with
     `error` set and every answer failed, per the "per-trace failures never
     fail a run" house rule.
@@ -278,6 +409,7 @@ async def label_traces(
                 cfg=resolved_cfg,
                 semaphore=semaphore,
                 usage=usage,
+                coding=coding,
             )
         except Exception as exc:  # noqa: BLE001 - an unexpected trace shape must not fail the whole pass
             message = str(exc) or type(exc).__name__

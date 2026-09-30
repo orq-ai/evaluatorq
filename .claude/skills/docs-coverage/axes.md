@@ -14,7 +14,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 | **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard`) · trace finder (`/find`, `eq find`) · Insights review (`/insights`) |
 | **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget`, `CodingAgentTarget` (claude / codex / opencode × direct / orq launcher × host / container) |
 | **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
-| **data source** | `evaluatorq()` / `red_team()` dataset params, `InsightsPopulation`, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run, live trace filters/query, matched traces from a finder export |
+| **data source** | `evaluatorq()` / `red_team()` dataset params, `InsightsPopulation`, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run, live trace filters/query, matched traces from a finder export, local trace snapshot |
 | **trace replay position** | `redteam.datapoints_from_traces(start_from=...)` | `first_user` · `last_assistant` |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types, `evaluatorq.signals.__all__` | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` (including deterministic signal scorers from `signal_evaluator(s)`) |
 | **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls · core-evaluation judge |
@@ -69,7 +69,7 @@ Marked `N/A` in the matrix, never reported as a gap.
 | pairwise jury × target kind | operates on collected outputs, not a live target |
 | `deployment()` / `invoke()` × `mode` | deployment invocation has no red-team mode |
 | `deployment()` / `invoke()` × evaluator kind | it fetches a response; scoring is a separate step |
-| dashboard surfaces other than Insights × data source | those pages read run artifacts from disk; Insights can start a run from recent traces, a semantic query, or a Finder export |
+| dashboard surfaces other than Insights × data source | those pages read run artifacts from disk; Insights can start a run from recent traces, a semantic query, a Finder export, or a local trace snapshot |
 | dashboard × evaluator kind | renders scores, does not choose evaluators |
 | Trace Insights × target kind | it reads trace populations and does not call an agent or target under test |
 | Trace Insights × mode | `--mode` belongs to red teaming; Insights has no pipeline mode |

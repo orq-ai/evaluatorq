@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, StageRecord, Usage
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.insights_views import cluster_detail, header, labels, progress, traces
+from evaluatorq.dashboard.insights_views import TABS, cluster_detail, failures, header, labels, progress, trace_detail_page, traces
 from evaluatorq.insights.models import (
     Cluster,
     ClusterAssignment,
@@ -57,6 +57,83 @@ def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_ru
 
 def test_insights_header_hides_untracked_cost(minimal_run) -> None:
     assert '$' not in header(minimal_run)
+
+
+def test_local_snapshot_run_does_not_offer_orq_trace_links(minimal_run: InsightsRun) -> None:
+    run = minimal_run.model_copy(update={'population': {'mode': 'snapshot', 'limit': 2}})
+
+    assert 'local snapshot' in header(run)
+    assert 'Open in Orq' not in cluster_detail(run, 'base-1')
+    table = traces(run)
+    assert '<th>Orq</th>' not in table
+    assert '↗ Orq' not in table
+    assert 'href="/insights/run-1/trace?trace_id=trace-1&amp;span_id=span-1"' in table
+    detail = trace_detail_page(run, run.traces[0])
+    assert 'A user asked a question.' in detail
+    assert 'General requests' in detail
+    assert 'Open full trace in Orq' not in detail
+
+
+def test_run_page_shows_projection_coverage_for_loaded_traces(minimal_run: InsightsRun) -> None:
+    run = minimal_run.model_copy(update={'population': {
+        'mode': 'filter',
+        'n_traces': 2,
+        'n_projection_truncated': 1,
+        'n_source_messages': 10,
+        'n_omitted_messages': 3,
+        'source_bytes': 120_000,
+        'projected_bytes': 65_000,
+    }})
+
+    notice = failures(run)
+
+    assert '1 of 2 traces exceed' in notice
+    assert '3 of 10 whole messages omitted (30.0%)' in notice
+    assert '120,000 bytes' in notice and '65,000 bytes' in notice
+
+
+def test_projection_warning_is_not_repeated_below_coverage(minimal_run: InsightsRun) -> None:
+    run = minimal_run.model_copy(update={
+        'population': {
+            'n_traces': 1,
+            'n_projection_truncated': 1,
+            'n_source_messages': 2,
+            'n_omitted_messages': 1,
+            'source_bytes': 60_000,
+            'projected_bytes': 30_000,
+        },
+        'warnings': ['Projection budget: 1 of 1 traces exceeded the model projection budget; 1 of 2 whole messages were omitted.'],
+    })
+
+    notice = failures(run)
+
+    assert notice.count('Model input projection') == 1
+    assert 'Run warnings' not in notice
+
+    earlier_run = run.model_copy(update={
+        'warnings': [
+            '1 of 1 traces exceeded the model projection budget; '
+            '1 of 2 whole messages were omitted from classification and summaries.'
+        ]
+    })
+    assert 'Run warnings' not in failures(earlier_run)
+
+
+def test_earlier_run_does_not_invent_missing_projection_counts(minimal_run: InsightsRun) -> None:
+    run = minimal_run.model_copy(update={'population': {
+        'mode': 'snapshot', 'n_scanned': 2, 'n_projection_truncated': 1
+    }})
+
+    notice = failures(run)
+
+    assert '1 of 2 traces exceeded' in notice
+    assert 'Whole-message counts were not saved' in notice
+
+
+def test_single_failed_trace_uses_singular_wording(minimal_run: InsightsRun) -> None:
+    run = minimal_run.model_copy(update={'counts': {'n_failed_traces': 1}})
+
+    assert '1 trace had a label' in failures(run)
 
 
 def test_insights_header_marks_unknown_cost(minimal_run) -> None:
@@ -275,7 +352,7 @@ def test_error_run_shows_failure_stage_and_failed_trace_note(tmp_path, minimal_r
     assert 'Run failed; results may be partial.' in response.text
     assert 'dimension:failure' in response.text
     assert 'embedding service unavailable' in response.text
-    assert '1 traces had a label, summary, match, or dimension error.' in response.text
+    assert '1 trace had a label, summary, match, or dimension error.' in response.text
 
 
 def test_cluster_panel_has_description_and_example_trace_link(tmp_path, minimal_run, monkeypatch):
@@ -289,6 +366,27 @@ def test_cluster_panel_has_description_and_example_trace_link(tmp_path, minimal_
     assert 'Traces about general requests.' in response.text
     assert 'trace-1' in response.text
     assert 'example-workspace/traces?query=' in response.text
+    assert 'href="/insights/run-1/trace?trace_id=trace-1&amp;span_id=span-1"' in response.text
+
+
+def test_trace_id_opens_its_saved_insights_detail(tmp_path, minimal_run, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setenv('ORQ_WORKSPACE', 'example-workspace')
+    _write_run(tmp_path, minimal_run)
+    client = TestClient(build_app())
+
+    table = client.get('/insights/run-1/tab/traces')
+    detail = client.get('/insights/run-1/trace?trace_id=trace-1&span_id=span-1')
+    missing = client.get('/insights/run-1/trace?trace_id=trace-1&span_id=missing')
+
+    assert 'href="/insights/run-1/trace?trace_id=trace-1&amp;span_id=span-1"' in table.text
+    assert detail.status_code == 200
+    assert 'A user asked a question.' in detail.text
+    assert 'What is the refund policy?' in detail.text
+    assert 'General requests' in detail.text
+    assert 'Open full trace in Orq' in detail.text
+    assert 'href="/insights/run-1/tab/traces"' in detail.text
+    assert missing.status_code == 404
 
 
 def test_traces_can_be_filtered_by_cluster(tmp_path, minimal_run, monkeypatch):
@@ -382,6 +480,20 @@ def test_tab_route_serves_full_page_on_navigation_and_fragment_for_htmx(tmp_path
     assert fragment_response.status_code == 200
     assert not fragment_response.text.startswith('<!DOCTYPE html>')
     assert 'insights-label-grid' in fragment_response.text
+
+
+@pytest.mark.parametrize('tab', TABS)
+def test_htmx_tab_fragment_moves_the_active_indicator(tmp_path, minimal_run, monkeypatch, tab):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run)
+    client = TestClient(build_app())
+
+    fragment = client.get(f'/insights/run-1/tab/{tab}', headers={'HX-Request': 'true'}).text
+
+    assert '<nav id="insights-tabs" class="insights-tabs" aria-label="Insights views" hx-swap-oob="true">' in fragment
+    assert fragment.count('insights-tab active') == 1
+    assert f'class="insights-tab active" href="/insights/run-1/tab/{tab}"' in fragment
+    assert fragment.count('hx-sync="closest nav:replace"') == len(TABS)
 
 
 def test_repeated_pages_use_the_validated_model_cache(tmp_path, minimal_run, monkeypatch):

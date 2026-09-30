@@ -102,7 +102,7 @@
         y: payload.points.map(function (p) { return p.y; }),
         z: payload.points.map(function (p) { return p.z; }),
         text: payload.points.map(function (p) { return p.trace_id + ' · ' + p.cluster_name; }),
-        customdata: payload.points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project]; }),
+        customdata: payload.points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
         hovertemplate: '%{text}<extra></extra>',
         marker: { size: 4, color: payload.points.map(function (p) { return p.color_value; }),
           colorscale: payload.color_scale, cmin: 0, cmax: 1, showscale: true,
@@ -114,7 +114,7 @@
           y: payload.missing_points.map(function (p) { return p.y; }),
           z: payload.missing_points.map(function (p) { return p.z; }),
           text: payload.missing_points.map(function (p) { return p.trace_id; }),
-          customdata: payload.missing_points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project]; }),
+          customdata: payload.missing_points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
           hovertemplate: '%{text}<extra>No value</extra>',
           marker: { size: 4, color: '#e4e2df', symbol: 'circle', opacity: .85 } });
       }
@@ -159,7 +159,7 @@
         showlegend: group.showLegend !== false,
         x: points.map(function (p) { return p.x; }), y: points.map(function (p) { return p.y; }),
         z: points.map(function (p) { return p.z; }), text: points.map(function (p) { return p.trace_id; }),
-        customdata: points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project]; }),
+        customdata: points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
         hovertemplate: '%{text}<extra>' + group.name + '</extra>',
         marker: { size: 4, color: group.color, symbol: group.symbol || 'circle', opacity: .85 } };
     });

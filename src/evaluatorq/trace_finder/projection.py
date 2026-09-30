@@ -11,7 +11,7 @@ from evaluatorq.contracts import tool_result_to_text
 
 from .models import TraceProjection, TraceRecord
 
-MAX_TOKEN_BUDGET = 25_000
+MAX_TOKEN_BUDGET = 50_000
 MAX_PROJECTED_TOOL_CALLS = 32
 MAX_TOOL_FIELD_BYTES = 128
 OMISSION_MARKER = '[... earlier bytes omitted ...]'

@@ -211,7 +211,7 @@ def _register_subapps(app: typer.Typer) -> None:
         help='Find recent Orq traces with a natural-language classifier task.',
         epilog=_FIND_EPILOG,
     )(find)
-    app.command('insights', help='Discover and label what recent Orq traces are about.')(insights_cmd)
+    app.command('insights', help='Discover and label patterns in Orq or local traces.')(insights_cmd)
 
 
 def main() -> None:

@@ -255,6 +255,7 @@ def test_numeric_map_colouring_keeps_unlabelled_points(tmp_path, monkeypatch):
 
     assert len(payload['points']) == 9
     assert [point['trace_id'] for point in payload['missing_points']] == ['trace-1']
+    assert payload['missing_points'][0]['span_id'] == 'span-1'
 
 
 def test_map_json_reports_unknown_or_unsupported_colour_label(tmp_path, monkeypatch):
@@ -295,10 +296,10 @@ def test_crosstab_spec_has_both_axes_and_links_cells_to_filtered_traces():
         row='dimension:intent',
         row_value='All requests',
         column='label:customer_satisfaction',
-        column_value='0.0',
+        column_value='0',
     )
     assert 'trace-1' in traces_html
-    assert 'trace-2' not in traces_html
+    assert 'trace-4' not in traces_html  # 0.375 is the 'mid' level; 0.0 and 0.125 both read as 'low'
 
 
 def test_priority_chart_contains_quadrant_labels_and_empty_state():
@@ -432,12 +433,12 @@ def test_cluster_detail_returns_content_for_existing_detail_panel():
     assert '<section class="insights-detail">' not in markup
 
 
-def test_dimensions_has_tree_map_toggle_and_missing_coordinate_state():
+def test_dimensions_has_no_map_and_map_tab_shows_missing_coordinate_state():
     run = _map_run()
     markup = insights_views.dimensions(run)
-    assert 'data-insights-view="tree"' in markup
-    assert 'data-insights-view="map"' in markup
-    assert 'data-map-url=' in markup
+    assert 'data-insights-view' not in markup
+    assert 'data-map-url=' not in markup
+    assert 'data-map-url=' in insights_views.map_tab(run)
     missing_coords = run.model_copy(
         update={
             'traces': [trace.model_copy(update={'coords': {}}) for trace in run.traces],
@@ -446,7 +447,41 @@ def test_dimensions_has_tree_map_toggle_and_missing_coordinate_state():
             },
         }
     )
-    assert 'Map unavailable: UMAP skipped for this dimension' in insights_views.dimensions(missing_coords)
+    assert 'Map unavailable: UMAP skipped for this dimension' in insights_views.map_tab(missing_coords)
     script = Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js'
     assert "axis('UMAP 1')" in script.read_text(encoding='utf-8')
     assert "aspectmode: 'cube'" in script.read_text(encoding='utf-8')
+
+
+def test_label_card_rows_filter_to_their_traces_for_yes_no_and_score_labels():
+    from evaluatorq.insights.models import LabelAnswer, label_key
+    from evaluatorq.insights.presets import RISKY_ACTION, USER_FRUSTRATION
+
+    assert label_key(RISKY_ACTION, 'deleted') == 'deleted'
+    assert label_key(USER_FRUSTRATION, 0.0) == '1'
+    assert label_key(USER_FRUSTRATION, 1.0) == '5'
+    run = _map_run()
+    trace = run.traces[0]
+    trace.labels['risky_action'] = LabelAnswer(value='deleted', confidence=None, probabilities=None, error=None)
+    run.labels['risky_action'] = run.labels['customer_satisfaction'].model_copy(update={'spec': RISKY_ACTION, 'counts': {'deleted': 1}})
+
+    assert 'value=deleted' in insights_views.labels(run)
+    assert trace.trace_id in insights_views.traces(run, label='risky_action', value='deleted')
+
+
+def test_label_values_are_listed_in_the_labels_own_order():
+    from evaluatorq.insights.models import label_order
+    from evaluatorq.insights.presets import OUTCOME, RISKY_ACTION, SENTIMENT, USER_FRUSTRATION
+
+    assert label_order(SENTIMENT) == ['positive', 'neutral', 'negative']
+    assert label_order(USER_FRUSTRATION) == ['1', '2', '3', '4', '5']
+    assert label_order(RISKY_ACTION)[0] == 'none'
+    assert label_order(OUTCOME)[-1] == 'inconclusive'
+    run = _map_run()
+    run.labels['sentiment'] = run.labels['sentiment'].model_copy(
+        update={'spec': SENTIMENT, 'counts': {'negative': 1, 'neutral': 1, 'positive': 1}}
+    )
+
+    card = insights_views.labels(run)
+
+    assert card.index('value=positive') < card.index('value=neutral') < card.index('value=negative')

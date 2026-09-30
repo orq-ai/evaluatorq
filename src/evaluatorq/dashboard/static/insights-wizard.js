@@ -9,6 +9,7 @@
   const start = form.querySelector('[data-wizard-start]');
   const error = document.getElementById('insights-wizard-error');
   const preview = document.getElementById('insights-run-preview');
+  const snapshotPreview = document.getElementById('insights-snapshot-preview');
   const facetOptions = document.getElementById('insights-facet-options');
   let facetRequest = null;
   let facetLoadedWindow = null;
@@ -95,6 +96,39 @@
     }
   }
 
+  async function refreshSnapshotPreview() {
+    const path = form.elements.snapshot_path.value.trim();
+    if (snapshotRequest) snapshotRequest.abort();
+    if (selected('source')[0] !== 'snapshot' || !path) {
+      snapshotPreview.replaceChildren();
+      if (step === 3) updatePreview();
+      return false;
+    }
+    const request = new AbortController();
+    snapshotRequest = request;
+    snapshotPreview.textContent = 'Measuring projected input…';
+    if (step === 3) updatePreview();
+    const body = new FormData();
+    body.set('csrf', form.elements.csrf.value);
+    body.set('snapshot_path', path);
+    try {
+      const response = await fetch('/insights/snapshot-preview', { method: 'POST', body, signal: request.signal });
+      const html = await response.text();
+      if (snapshotRequest !== request) return false;
+      snapshotPreview.innerHTML = html;
+      if (step === 3) updatePreview();
+      return response.ok;
+    } catch (failure) {
+      if (failure.name !== 'AbortError' && snapshotRequest === request) {
+        snapshotPreview.textContent = 'Could not measure this trace file. Check the path and try again.';
+        if (step === 3) updatePreview();
+      }
+      return false;
+    } finally {
+      if (snapshotRequest === request) snapshotRequest = null;
+    }
+  }
+
   function plan() {
     const source = selected('source')[0];
     const dimensions = selected('dimensions');
@@ -136,7 +170,13 @@
     const selectedFacets = Array.from(facetOptions.querySelectorAll('input[name^="facet_"]:checked')).map(function (input) {
       return input.name.slice(6).replaceAll('_', ' ') + ' = ' + input.value;
     });
-    facets.textContent = source === 'finder' ? 'Facets: fixed by Finder export' : 'Facets: ' + (selectedFacets.join(', ') || 'all values');
+    facets.textContent = source === 'finder' ? 'Facets: fixed by Finder export' : source === 'snapshot' ? 'Facets: fixed by local file' : 'Facets: ' + (selectedFacets.join(', ') || 'all values');
+    const coverage = document.createElement('div');
+    if (source === 'snapshot') {
+      coverage.innerHTML = snapshotPreview.innerHTML || '<p>Measuring projected input…</p>';
+    } else {
+      coverage.textContent = 'Truncation can be measured after the traces load from Orq. The run page will show the exact amount.';
+    }
     const heading = document.createElement('h4');
     heading.textContent = 'Expected stages';
     const list = document.createElement('ol');
@@ -145,7 +185,7 @@
       item.textContent = name;
       list.appendChild(item);
     });
-    preview.replaceChildren(summary, facets, heading, list);
+    preview.replaceChildren(summary, facets, coverage, heading, list);
   }
 
   function effectiveLabels(dimensions) {
@@ -176,22 +216,37 @@
     const source = selected('source')[0];
     if (step === 1 && source === 'query' && !form.elements.query.value.trim()) return 'Enter a question to find matching traces.';
     if (step === 1 && source === 'finder' && !form.elements.finder_export.value.trim()) return 'Enter a Finder JSON path.';
-    if (step === 1 && source !== 'finder' && (!form.elements.window_days.checkValidity() || !form.elements.limit.checkValidity())) return 'Enter a valid window and trace limit.';
-    if (step === 1 && source !== 'finder' && facetOptions.getAttribute('aria-busy') === 'true') return 'Wait for the facet values to load.';
-    if (step === 2 && !selected('labels').length && !selected('dimensions').length) return 'Select at least one label or dimension.';
+    if (step === 1 && source === 'snapshot' && !form.elements.snapshot_path.value.trim()) return 'Enter a trace snapshot JSON path.';
+    if (step === 1 && source !== 'finder' && source !== 'snapshot' && (!form.elements.window_days.checkValidity() || !form.elements.limit.checkValidity())) return 'Enter a valid window and trace limit.';
+    if (step === 1 && source !== 'finder' && source !== 'snapshot' && facetOptions.getAttribute('aria-busy') === 'true') return 'Wait for the facet values to load.';
+    if (step === 2 && !selected('labels').length && !selected('dimensions').length && !form.elements.coding_analysis.checked) return 'Select at least one label or dimension.';
     if (step === 2 && !form.elements.parallelism.checkValidity()) return 'Enter a valid parallel request count.';
     return '';
   }
 
   back.addEventListener('click', function () { showStep(Math.max(1, step - 1)); });
-  next.addEventListener('click', function () {
+  next.addEventListener('click', async function () {
     const message = validateStep();
     if (message) { showError(message); return; }
+    if (step === 1 && selected('source')[0] === 'snapshot') {
+      clearTimeout(snapshotTimer);
+      next.disabled = true;
+      const valid = await refreshSnapshotPreview();
+      next.disabled = false;
+      if (!valid) { showError('Could not load the trace file preview. Check the path and try again.'); return; }
+    }
     showStep(Math.min(3, step + 1));
+  });
+  form.elements.snapshot_path.addEventListener('input', function () {
+    clearTimeout(snapshotTimer);
+    showError('');
+    snapshotTimer = setTimeout(refreshSnapshotPreview, 450);
   });
   form.addEventListener('change', function (event) {
     updateSource();
     if (event.target.name === 'window_days' || event.target.name === 'source') refreshFacets();
+    if (event.target.name === 'source') { showError(''); refreshSnapshotPreview(); }
+    if (event.target.matches('input[name^="facet_"]')) updateFacetChips();
     if (step === 3) updatePreview();
   });
   form.addEventListener('input', function (event) {
