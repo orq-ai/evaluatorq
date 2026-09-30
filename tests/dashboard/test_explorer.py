@@ -775,8 +775,10 @@ def test_traces_filters_button_opens_the_facet_menu_directly(explorer_client) ->
     assert html.count('id="finder-controls"') == 1
     assert 'data-explorer-filters aria-haspopup="true" aria-expanded="false">Filters</button>' in html
     assert '.finder-command ~ #finder-body .finder-controls .add { display:none; }' in css
-    assert 'else if (menu) openFacetMenu(menu, filtersButton);' in js
+    assert 'else if (menu) {' in js
+    assert 'openFacetMenu(menu, filtersButton);' in js
     assert 'if (filtersDirty) { filtersDirty = false; loadExplorer(); }' in js
+    assert "window.htmx.trigger(menu, 'refreshFacets')" in js
 
 
 def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
@@ -809,6 +811,34 @@ def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
 
     _load(client, facet_model='gpt-5.6-luna')
     assert source.calls[-1]['facets'].model == frozenset({'gpt-5.6-luna'})
+
+
+def test_pending_traces_facet_menu_refreshes_when_loaded_rows_arrive(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue(model=('gpt-5.6-luna',))
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
+    _, source, client = explorer_client
+    source.rows = ()
+    _load(client)
+
+    pending_menu = client.get('/find/facets?form_id=explorer-load-form&counts=loaded').text
+    assert 'Counts are of the 0 rows currently loaded' in pending_menu
+    assert 'hx-trigger="refreshFacets"' in pending_menu
+    assert 'data-refresh-on-open' in pending_menu
+
+    source.rows = _rows(2)
+    _load(client)
+    refreshed_menu = client.get(
+        '/find/facets?form_id=explorer-load-form&counts=loaded&open=1&facet_model=gpt-5.6-luna'
+    ).text
+
+    assert 'Counts are of the 2 rows currently loaded' in refreshed_menu
+    assert 'class="finder-facets open"' in refreshed_menu
+    assert 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna" checked' in refreshed_menu
+    assert '<span class="facet-n" title="Loaded traces">2</span>' in refreshed_menu
 
 
 def test_toolbar_shows_removable_filter_chips_and_count(explorer_client) -> None:

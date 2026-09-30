@@ -110,7 +110,13 @@
     if (filtersButton) {
       const menu = document.querySelector('.finder-controls .finder-facets');
       if (menu && menu.classList.contains('open')) closeFacetMenus();
-      else if (menu) openFacetMenu(menu, filtersButton);
+      else if (menu) {
+        openFacetMenu(menu, filtersButton);
+        if (menu.hasAttribute('data-refresh-on-open') && window.htmx) {
+          menu.setAttribute('hx-vals', '{"open":"1"}');
+          window.htmx.trigger(menu, 'refreshFacets');
+        }
+      }
       return;
     }
     const chipOpen = evt.target.closest('[data-chip-open]');
@@ -157,6 +163,13 @@
     menu.classList.add('open');
     document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'true'); });
   }
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    const target = evt.detail && evt.detail.target;
+    if (!target || !target.matches || !target.matches('.finder-facets')) return;
+    const menu = document.querySelector('.finder-controls .finder-facets.open');
+    const anchor = document.querySelector('[data-explorer-filters]');
+    if (menu && anchor) openFacetMenu(menu, anchor);
+  });
   function closeFacetMenus() {
     document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
     document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });

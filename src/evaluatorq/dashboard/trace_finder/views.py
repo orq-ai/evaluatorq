@@ -262,10 +262,16 @@ def facet_menu(
         subs.append(
             f'<div class="facet-sub" data-facet-sub="{esc(name)}" hidden><div class="hd">{esc(label)}</div>{body}</div>'
         )
-    if pending:
+    row_scoped = form_id == 'explorer-load-form'
+    if pending or row_scoped:
         note = '<p class="finder-empty">Loading facet values…</p>'
-        counts_param = '&counts=loaded' if loaded_rows is not None else ''
-        loader = f' hx-get="/find/facets?form_id={form_id}{counts_param}" hx-trigger="load" hx-include="#finder-controls" hx-swap="outerHTML" hx-indicator=".finder-facet-loading"'
+        counts_param = '&counts=loaded' if loaded_rows is not None or row_scoped else ''
+        triggers = 'load, refreshFacets' if pending else 'refreshFacets'
+        loader = (
+            f' hx-get="/find/facets?form_id={form_id}{counts_param}" hx-trigger="{triggers}" '
+            'hx-include="#finder-controls" hx-swap="outerHTML" hx-indicator=".finder-facet-loading" '
+            'hx-sync="#finder-controls:replace"'
+        )
     else:
         note = (
             '<p class="finder-empty">Facet values are unavailable; check the Orq connection and reopen.</p>'
@@ -276,7 +282,7 @@ def facet_menu(
         )
         loader = ''
     return (
-        f'<div class="finder-facets{" open" if open_ else ""}{" pending" if pending else ""}"{loader}><div class="facet-list">{"".join(items)}{note}</div>'
+        f'<div class="finder-facets{" open" if open_ else ""}{" pending" if pending else ""}"{" data-refresh-on-open" if row_scoped else ""}{loader}><div class="facet-list">{"".join(items)}{note}</div>'
         f'{"".join(subs)}</div>'
     )
 

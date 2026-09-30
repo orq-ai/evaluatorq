@@ -1009,7 +1009,14 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             explorer = store.explorer if store is not None else None
             loaded_rows = (await explorer.view()).rows if explorer is not None else None
         return _html(
-            facet_menu(catalogue, numeric=numeric, form_id=form_id, selection=selection, loaded_rows=loaded_rows)
+            facet_menu(
+                catalogue,
+                numeric=numeric,
+                open_=params.get('open') == '1',
+                form_id=form_id,
+                selection=selection,
+                loaded_rows=loaded_rows,
+            )
         )
 
     @app.get('/find/dismiss')
