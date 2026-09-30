@@ -74,6 +74,34 @@ def test_subagent_evidence_anchors_child_step_and_relates_spawning_call() -> Non
     assert evidence.related_call_ids == ['spawn']
 
 
+def test_empty_visible_linked_subagent_counts_and_uses_spawn_evidence() -> None:
+    child = traj([compaction()], trajectory_id='child')
+    root = traj(
+        [agent(calls=[call('Agent', {}, 'spawn')], results=[spawned('child', call_id='spawn')])],
+        trajectory_id='root',
+        subagents=[child],
+    )
+
+    report = compute_signals(
+        root,
+        only=[
+            'subagent_invocation_count',
+            'total_subagent_messages',
+            'avg_messages_per_subagent_invocation',
+        ],
+    )
+
+    assert report.values() == {
+        'subagent_invocation_count': 1,
+        'total_subagent_messages': 0,
+        'avg_messages_per_subagent_invocation': 0,
+    }
+    evidence = report.results['subagent_invocation_count'].evidence
+    assert len(evidence) == 1
+    assert (evidence[0].agent_path, evidence[0].step_id, evidence[0].call_id) == ((), 1, 'spawn')
+    assert evidence[0].reason == 'subagent has no visible steps'
+
+
 def test_max_depth_is_zero_at_root_and_counts_nested_subagents() -> None:
     root_only = compute_signals(traj([user(), agent()], trajectory_id='root'), only=['max_depth'])
     assert root_only.values()['max_depth'] == 0

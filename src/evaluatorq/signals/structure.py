@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
 from evaluatorq.signals import preconditions as pre
-from evaluatorq.signals.models import Evidence, SignalFn, SignalResult, result
+from evaluatorq.signals.models import Evidence, Precondition, SignalFn, SignalResult, result
 from evaluatorq.signals.walk import SignalContext, WalkedStep, finish_reasons, infer_provider, is_llm_step, step_model
 
 if TYPE_CHECKING:
@@ -284,19 +284,35 @@ def loaded_skill_value_count(ctx: SignalContext) -> SignalResult:
     )
 
 
-def _subagent_paths(ctx: SignalContext) -> set[tuple[str, ...]]:
-    return {w.agent_path for w in ctx.walked if w.agent_path}
+def _subagents(ctx: SignalContext) -> list[tuple[tuple[str, ...], AtifTrajectory]]:
+    """Return every embedded child trajectory and its path, including children with no walked steps."""
+    found: list[tuple[tuple[str, ...], AtifTrajectory]] = []
+    seen: set[int] = set()
+
+    def visit(trajectory: AtifTrajectory, path: tuple[str, ...]) -> None:
+        for child in trajectory.subagent_trajectories or []:
+            if id(child) in seen:
+                continue
+            seen.add(id(child))
+            child_path = (*path, child.trajectory_id) if child.trajectory_id is not None else path
+            found.append((child_path, child))
+            visit(child, child_path)
+
+    visit(ctx.trajectory, ())
+    return found
 
 
 def subagent_invocation_count(ctx: SignalContext) -> SignalResult:
-    paths = _subagent_paths(ctx)
+    subagents = _subagents(ctx)
     pc = pre.subagent_linkage(ctx)
-    first_by_path: dict[tuple[str, ...], WalkedStep] = {}
+    first_by_trajectory: dict[int, WalkedStep] = {}
     for entry in ctx.walked:
         if entry.agent_path:
-            first_by_path.setdefault(entry.agent_path, entry)
+            first_by_trajectory.setdefault(id(entry.trajectory), entry)
+    subagent_by_path = {path: trajectory for path, trajectory in subagents}
 
     evidence: list[Evidence] = []
+    linked_trajectories: set[int] = set()
     for call in ctx.calls:
         if call.result is None:
             continue
@@ -304,7 +320,11 @@ def subagent_invocation_count(ctx: SignalContext) -> SignalResult:
             if ref.trajectory_id is None:
                 continue
             child_path = (*call.step.agent_path, ref.trajectory_id)
-            first = first_by_path.get(child_path)
+            trajectory = subagent_by_path.get(child_path)
+            if trajectory is None:
+                continue
+            linked_trajectories.add(id(trajectory))
+            first = first_by_trajectory.get(id(trajectory))
             if first is not None:
                 evidence.append(
                     Evidence(
@@ -314,9 +334,15 @@ def subagent_invocation_count(ctx: SignalContext) -> SignalResult:
                         related_call_ids=[call.call.tool_call_id],
                     )
                 )
-    # Any embedded but unlinked child is still an invocation and walk marks it explicitly.
-    evidence.extend(_ev(entry, 'unlinked subagent') for entry in first_by_path.values() if entry.unlinked)
-    return result('subagent_invocation_count', 'A', len(paths), evidence, [pc])
+            else:
+                evidence.append(_call_ev(call, 'subagent has no visible steps'))
+    for _, trajectory in subagents:
+        if id(trajectory) in linked_trajectories:
+            continue
+        first = first_by_trajectory.get(id(trajectory))
+        if first is not None:
+            evidence.append(_ev(first, 'unlinked subagent'))
+    return result('subagent_invocation_count', 'A', len(subagents), evidence, [pc])
 
 
 def total_subagent_messages(ctx: SignalContext) -> SignalResult:
@@ -325,11 +351,22 @@ def total_subagent_messages(ctx: SignalContext) -> SignalResult:
 
 
 def avg_messages_per_subagent_invocation(ctx: SignalContext) -> SignalResult:
-    paths = _subagent_paths(ctx)
+    subagents = _subagents(ctx)
     entries = [w for w in ctx.walked if w.agent_path]
-    pcs = [pre.has_subagents(ctx), pre.subagent_linkage(ctx)]
+    pcs = [
+        Precondition(
+            name='has subagent invocations',
+            met=bool(subagents),
+            detail=f'{len(subagents)} subagent invocations',
+        ),
+        pre.subagent_linkage(ctx),
+    ]
     return result(
-        'avg_messages_per_subagent_invocation', 'A', round(len(entries) / len(paths), 3) if paths else None, [], pcs
+        'avg_messages_per_subagent_invocation',
+        'A',
+        round(len(entries) / len(subagents), 3) if subagents else None,
+        [],
+        pcs,
     )
 
 
