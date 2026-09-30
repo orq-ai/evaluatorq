@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -10,7 +11,13 @@ from loguru import logger
 
 from evaluatorq.common.reports import esc
 from evaluatorq.trace_finder.columns import COLUMNS, MATCH, Column, fmt_cost, fmt_time, fmt_tokens
-from evaluatorq.trace_finder.explorer import CONVERSATION_METRICS, PAGE_ROWS, TOP_METRICS, conversation_key
+from evaluatorq.trace_finder.explorer import (
+    CONVERSATION_METRICS,
+    PAGE_ROWS,
+    TOP_METRICS,
+    ai_matched,
+    conversation_key,
+)
 from evaluatorq.trace_finder.orq_source import MAX_LIVE_TRACES
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, segments
 
@@ -56,7 +63,7 @@ def range_inputs(start: datetime | None, end: datetime | None, window_days: int,
         for label, span in PRESETS
     )
     controls = (
-        f'<form id="explorer-load-form" hidden hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace" hx-include="#finder-controls">{_csrf()}</form>'
+        f'<form id="explorer-load-form" hidden hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace" hx-include="#finder-controls, #finder-scope">{_csrf()}</form>'
         '<input id="explorer-range-mode" type="hidden" name="range_mode" value="relative" form="explorer-load-form" hx-preserve data-explorer-range-mode>'
         f'<input id="explorer-range-seconds" type="hidden" name="range_seconds" value="{window_days * 86400}" form="explorer-load-form" hx-preserve data-explorer-range-seconds>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
@@ -107,7 +114,15 @@ def _match_cells(row: TraceRow, snapshot: RunSnapshot | None) -> str:
             for index in range(len(dimensions))
         )
     if result.error or not dimensions:
-        label = 'Judgment failed' if result.error else 'Included' if result.matched else 'Not included'
+        label = (
+            'Judgment failed'
+            if result.error
+            else 'Kept by filters'
+            if not dimensions and result.matched
+            else 'Included'
+            if result.matched
+            else 'Not included'
+        )
         cell = f'<td><span class="verdict xr-match"><span class="sw" style="background:{esc(_result_color(result, dimensions))}"></span>{esc(label)}</span></td>'
         return cell * max(1, len(dimensions))
     return _answer_cells(result, dimensions)
@@ -117,26 +132,114 @@ def _within_snapshot(snapshot: RunSnapshot | None) -> RunSnapshot | None:
     return snapshot if snapshot is not None and snapshot.within_results else None
 
 
+def _ai_has_run(snapshot: RunSnapshot | None) -> bool:
+    return snapshot is not None and snapshot.within_results and bool(snapshot.results)
+
+
+def _classified(snapshot: RunSnapshot | None) -> bool:
+    """True when the run asked the classifier something; a filter-only run keeps rows without judging them."""
+    return snapshot is not None and bool(snapshot.dimensions)
+
+
+def _visible_columns(columns: Sequence[Column], snapshot: RunSnapshot | None) -> tuple[Column, ...]:
+    if _ai_has_run(snapshot):
+        return tuple(columns)
+    return tuple(column for column in columns if column.key != MATCH)
+
+
 def _drawer_attrs(trace_id: str, msg: int | None = None) -> str:
     query = f'?msg={msg}' if msg is not None else ''
     return f'hx-get="/find/trace/{quote(trace_id, safe="")}{query}" hx-target="#finder-drawer" hx-swap="innerHTML" hx-indicator="#finder-drawer-loading"'
 
 
+_MIN_COL_CH = 6
+_CELL_PAD_CH = 6  # 11px cell padding either side plus the status dot and bar glyphs
+_MAX_COL_CH = 48
+# Header text is uppercase and letter-spaced at a smaller font than the body cells, so it runs
+# wider per character; this factor approximates that without measuring real glyph metrics.
+_HEADER_CHAR_FACTOR = 1.15
+_HEADER_ARROW_CH = 3  # room for the sort arrow / ✦ sparkle appended to the header label
+_TAG_RE = re.compile(r'<[^>]+>')
+_SMALL_SPLIT_RE = re.compile(r'<small[^>]*>|</small>')
+
+
+def _visible_chars(cell_html: str) -> int:
+    """Longest visible line in a rendered cell, HTML tags stripped.
+
+    A ``<small>`` second line (e.g. the date under a time, or the agent under a trace name) is
+    treated as its own line so it doesn't just add to the first line's width.
+    """
+    lines = _SMALL_SPLIT_RE.split(cell_html)
+    return max((len(_TAG_RE.sub('', line)) for line in lines), default=0)
+
+
+def _clamp_ch(chars: float) -> int:
+    return max(_MIN_COL_CH, min(_MAX_COL_CH, round(chars)))
+
+
+def _header_widths(
+    columns: Sequence[Column], rows: Sequence[TraceRow], snapshot: RunSnapshot | None
+) -> tuple[int, ...]:
+    """A fixed width in ``ch`` per rendered header (MATCH can expand into several).
+
+    Widths are computed from every loaded row (``rows``, not just the current page) so paging
+    never changes them, and are clamped to a sane range so one long value can't blow up the table.
+    """
+    widths: list[int] = []
+    for column in columns:
+        labels = _match_names(snapshot, column.label) if column.key == MATCH else (column.label,)
+        if column.key == MATCH:
+            per_label_chars = [0] * len(labels)
+            for row in rows:
+                cells = [cell for cell in _match_cells(row, snapshot).split('</td>') if cell.strip()]
+                for index in range(len(labels)):
+                    cell = cells[index] if index < len(cells) else (cells[-1] if cells else '')
+                    per_label_chars[index] = max(per_label_chars[index], _visible_chars(cell))
+            cell_chars = per_label_chars
+        else:
+            max_chars = max((_visible_chars(column.render(row)) for row in rows), default=0)
+            cell_chars = [max_chars] * len(labels)
+        for label, chars in zip(labels, cell_chars, strict=True):
+            header_chars = len(label) * _HEADER_CHAR_FACTOR + _HEADER_ARROW_CH
+            widths.append(_clamp_ch(max(header_chars, chars + _CELL_PAD_CH)))
+    return tuple(widths)
+
+
 def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot | None) -> str:
     snapshot = _within_snapshot(snapshot)
+    columns = _visible_columns(columns, snapshot)
     results = snapshot.results if snapshot is not None and snapshot.results else None
     heads = ''
     for column in columns:
-        arrow = (' ↓' if view.descending else ' ↑') if view.sort == column.key else ''
-        direction = 'asc' if view.sort == column.key and view.descending else 'desc'
+        sorted_here = view.sort == column.key
+        arrow = (
+            f'<span class="xr-sort-arrow" aria-hidden="true">{"↓" if view.descending else "↑"}</span>'
+            if sorted_here
+            else ''
+        )
+        aria_sort = f' aria-sort="{"descending" if view.descending else "ascending"}"' if sorted_here else ''
+        direction = 'asc' if sorted_here and view.descending else 'desc'
         labels = _match_names(snapshot, column.label) if column.key == MATCH else (column.label,)
+        sparkle = '<span class="xr-ai-sparkle" aria-hidden="true">✦</span>' if column.key == MATCH else ''
         heads += ''.join(
-            f'<th class="{"num" if column.numeric else ""}"><button type="button" class="link" '
-            f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{esc(label)}{arrow}</button></th>'
+            f'<th class="{"num" if column.numeric else ""}"{aria_sort}><button type="button" class="link" data-xr-sort="{column.key}" '
+            f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">'
+            f'{sparkle}{esc(label)}{arrow}</button></th>'
             for label in labels
         )
     if not columns:
         return _empty('No columns selected.', 'Choose at least one column from Columns to show trace details.')
+    widths = _header_widths(columns, view.rows, snapshot)
+    # One text column takes no fixed width so it absorbs the card's spare room; the table's
+    # min-width keeps every column at least as wide as its measured content.
+    rendered_keys = [
+        c.key for c in columns for _ in (_match_names(snapshot, c.label) if c.key == MATCH else (c.label,))
+    ]
+    flex_key = next((key for key in ('trace', 'name', 'agent') if key in rendered_keys), None)
+    colgroup = ''.join(
+        '<col>' if key == flex_key else f'<col style="width:{width}ch">'
+        for key, width in zip(rendered_keys, widths, strict=True)
+    )
     conversation = None
     body = ''
     for row in view.page_rows(results):
@@ -146,8 +249,14 @@ def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot |
             if view.quick_view in CONVERSATION_METRICS and view.sort is None and key is not None and key != conversation
             else ''
         )
+        row_classes = (['xr-err'] if row.is_error else []) + (
+            ['xr-hit']
+            if results is not None and _classified(snapshot) and ai_matched(results.get(row.trace_id))
+            else []
+        )
+        row_class = f' class="{" ".join(row_classes)}"' if row_classes else ''
         body += (
-            f'<tr data-tv-row="{esc(row.trace_id)}"{marker} {_drawer_attrs(row.trace_id)}>'
+            f'<tr data-tv-row="{esc(row.trace_id)}"{marker}{row_class} tabindex="0" {_drawer_attrs(row.trace_id)}>'
             + ''.join(
                 _match_cells(row, snapshot)
                 if c.key == MATCH
@@ -157,7 +266,10 @@ def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot |
             + '</tr>'
         )
         conversation = key
-    return f'<table class="finder-table xr-table"><thead><tr>{heads}</tr></thead><tbody>{body}</tbody></table>'
+    return (
+        f'<table class="finder-table xr-table" style="min-width:{sum(widths)}ch"><colgroup>{colgroup}</colgroup>'
+        f'<thead><tr>{heads}</tr></thead><tbody>{body}</tbody></table>'
+    )
 
 
 def _tip_attrs(segment: Segment, position: int, count: int) -> str:
@@ -199,7 +311,13 @@ def _metrics(row: TraceRow) -> str:
     )
 
 
-def trajectories(view: ExplorerView, records: Mapping[str, TraceRecord | None], snapshot: RunSnapshot | None) -> str:
+def trajectories(
+    view: ExplorerView,
+    records: Mapping[str, TraceRecord | None],
+    snapshot: RunSnapshot | None,
+    *,
+    loading: bool = False,
+) -> str:
     snapshot = _within_snapshot(snapshot)
     page = view.page_rows(snapshot.results if snapshot is not None and snapshot.results else None)
     bars = {row.trace_id: segments(record.messages) if (record := records.get(row.trace_id)) else None for row in page}
@@ -218,12 +336,13 @@ def trajectories(view: ExplorerView, records: Mapping[str, TraceRecord | None], 
         if kind in totals
     )
     ticks = ''.join(f'<b style="left:{q * 25}%">{fmt_tokens(widest * q // 4) if q else "0"}</b>' for q in range(5))
-    matched = snapshot is not None and bool(snapshot.results)
+    classified = _classified(snapshot) and snapshot is not None and bool(snapshot.results)
     rows_html = ''
     for row in page:
         segs = bars[row.trace_id]
-        result = snapshot.results.get(row.trace_id) if matched and snapshot is not None else None
-        dim = ' nomatch' if result is not None and not result.matched else ''
+        result = snapshot.results.get(row.trace_id) if classified and snapshot is not None else None
+        dim = (' hit' if ai_matched(result) else ' nomatch') if result is not None else ''
+        dim += ' row-err' if row.is_error else ''
         if segs:
             width = sum(s.tokens for s in segs) / widest * 100
             inner = ''.join(
@@ -235,9 +354,9 @@ def trajectories(view: ExplorerView, records: Mapping[str, TraceRecord | None], 
             message_count = f'{count} msgs'
         else:
             bar = '<div class="tv-segs tv-nomsg" style="width:100%"><i class="k-other" style="flex-grow:1"></i></div>'
-            message_count = 'no messages'
+            message_count = 'loading…' if loading and row.trace_id not in records else 'no messages'
         rows_html += (
-            f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" {_drawer_attrs(row.trace_id)}>'
+            f'<div class="tv-r{dim}" data-tv-row="{esc(row.trace_id)}" tabindex="0" {_drawer_attrs(row.trace_id)}>'
             f'{_identity(row, snapshot)}<div class="tv-bar"><div class="tv-plot"><div class="tv-track"></div>{bar}</div>'
             f'<span class="tv-end">{message_count}</span></div>{_metrics(row)}</div>'
         )
@@ -254,24 +373,27 @@ def _toolbar(
     columns: Sequence[Column],
     *,
     has_results: bool,
+    ai_has_run: bool = False,
     window_days: int = 7,
     counts: Mapping[str, int] | None = None,
 ) -> str:
     chosen = {c.key for c in columns}
     counts = counts or {}
+    chips = (('all', 'All'), ('errors', 'Errors')) + ((('matches', 'AI matches'),) if 'matches' in counts else ())
     quick_views = (
         ''.join(
-            f'<button type="button" class="{"on" if view.quick_view == key else ""}" aria-pressed="{str(view.quick_view == key).lower()}" '
+            f'<button type="button" class="xr-qv-{key}{" has-errors" if key == "errors" and counts.get(key) else ""}{" on" if view.quick_view == key else ""}" aria-pressed="{str(view.quick_view == key).lower()}" '
             f'hx-get="/find/rows?quick_view={key}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">'
             f'{label}{f" <span class={chr(34)}xr-count{chr(34)}>{counts[key]}</span>" if key in counts else ""}</button>'
-            for key, label in (('all', 'All'), ('errors', 'Errors'), ('matches', 'AI matches'))
+            for key, label in chips
         )
         + '<span class="xr-qv-sep" aria-hidden="true"></span>'
         + '<details class="xr-top-menu"><summary class="'
         + ('on' if view.quick_view in TOP_METRICS or view.quick_view in CONVERSATION_METRICS else '')
         + '">'
-        + (TOP_QUICK_VIEW_LABELS.get(view.quick_view, 'Top 10%') + ' ▾')
-        + '</summary><div class="xr-top-list" role="group" aria-label="Top 10% views">'
+        + (TOP_QUICK_VIEW_LABELS.get(view.quick_view, 'Views') + ' ▾')
+        + '</summary><div class="xr-top-list" role="group" aria-label="Views">'
+        + f'<button type="button" class="{"on" if view.quick_view == "all" else ""}" aria-pressed="{str(view.quick_view == "all").lower()}" hx-get="/find/rows?quick_view=all" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">All traces</button>'
         + '<span class="xr-top-head">Traces</span>'
         + ''.join(
             f'<button type="button" class="{"on" if view.quick_view == key else ""}" aria-pressed="{str(view.quick_view == key).lower()}" title="Top 10% of loaded traces by {TOP_METRICS[key][0]}" hx-get="/find/rows?quick_view={key}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{TOP_QUICK_VIEW_LABELS[key]}</button>'
@@ -285,7 +407,8 @@ def _toolbar(
         + '</div></details>'
     )
     boxes = ''.join(
-        f'<label><input type="checkbox" name="columns" value="{c.key}"{" checked" if c.key in chosen else ""}>{esc(c.label)}</label>'
+        f'<label{"" if ai_has_run or c.key != MATCH else " hidden"}>'
+        f'<input type="checkbox" name="columns" value="{c.key}"{" checked" if c.key in chosen else ""}>{esc(c.label)}</label>'
         for c in COLUMNS.values()
     )
     switch = ''.join(
@@ -306,7 +429,7 @@ def _toolbar(
         else ''
     )
     columns_menu = (
-        '<details class="xr-cols"><summary>Columns ▾</summary>'
+        '<details class="xr-cols" id="explorer-cols"><summary>Columns ▾</summary>'
         f'<form hx-post="/find/columns" hx-trigger="change" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{_csrf()}{boxes}</form></details>'
         if view.view == 'table'
         else ''
@@ -367,19 +490,23 @@ def results(
     poll = ' hx-get="/find/rows" hx-trigger="every 1s" hx-swap="outerHTML"' if view.state == 'loading' else ''
     judged = snapshot.results if snapshot is not None and snapshot.results else None
     counts: dict[str, int] = {'errors': sum(1 for row in view.rows if row.is_error)} if view.rows else {}
-    if judged:
-        counts['matches'] = sum(1 for row in view.rows if (hit := judged.get(row.trace_id)) is not None and hit.matched)
-    toolbar = _toolbar(view, columns, has_results=bool(judged), window_days=window_days, counts=counts)
+    classified = bool(judged) and _classified(snapshot)
+    if judged and classified:
+        counts['matches'] = sum(1 for row in view.rows if ai_matched(judged.get(row.trace_id)))
+    toolbar = _toolbar(
+        view,
+        columns,
+        has_results=bool(judged),
+        ai_has_run=_ai_has_run(snapshot),
+        window_days=window_days,
+        counts=counts,
+    )
     judged_count = sum(1 for row in view.rows if row.trace_id in judged) if judged else 0
     judged_in_view = judged_count
-    matched_in_view = (
-        sum(1 for row in view.rows if (result := judged.get(row.trace_id)) is not None and result.matched)
-        if judged
-        else 0
-    )
+    matched_in_view = sum(1 for row in view.rows if ai_matched(judged.get(row.trace_id))) if judged else 0
     judged_status = (
         f' · {judged_in_view} judged, {matched_in_view} match'
-        if judged and view.quick_view != 'matches' and view.state != 'loading'
+        if classified and view.quick_view != 'matches' and view.state != 'loading'
         else ''
     )
     reason = (
@@ -389,7 +516,7 @@ def results(
     )
     not_judged = (
         f' · {reason}'
-        if judged and snapshot is not None and snapshot.state == 'completed' and judged_count < len(view.rows)
+        if classified and snapshot is not None and snapshot.state == 'completed' and judged_count < len(view.rows)
         else ''
     )
     missing_conversations = (
@@ -440,7 +567,7 @@ def results(
         results = snapshot.results if snapshot is not None and snapshot.within_results else None
         visible_rows = view.visible_rows(results)
         body = (
-            trajectories(view, records or {}, snapshot)
+            trajectories(view, records or {}, snapshot, loading=view.state == 'loading')
             if view.view == 'trajectories'
             else f'<div class="xr-table-wrap">{table(view, columns, snapshot)}</div>'
         )
@@ -458,8 +585,7 @@ def results(
                 body = (
                     '<div class="xr-empty"><h4>No AI matches</h4>'
                     f'<p>None of the {judged_count} judged traces match “{esc(snapshot.request.query if snapshot.request else "")}”. '
-                    'Rephrase the question, or pick New search to look beyond the loaded rows.</p>'
-                    '<button type="button" class="btn-secondary" data-finder-edit>Edit question</button></div>'
+                    'Rephrase the question, or pick New search to look beyond the loaded rows.</p></div>'
                 )
             elif label:
                 body = _empty(
@@ -478,4 +604,4 @@ def results(
         inner = f'{banner}{body}{_pager(view, results)}'
     inner = f'{status}{toolbar}{inner}'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
-    return f'<section id="explorer-results" class="xr" hx-sync="this:replace"{oob_attr}{poll}>{error_html}{inner}</section>'
+    return f'<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope"{oob_attr}{poll}>{error_html}{inner}</section>'

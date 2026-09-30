@@ -549,11 +549,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
         results = snapshot.results if snapshot.within_results else None
-        records = (
-            await explorer.records([row.trace_id for row in view.page_rows(results)])
-            if view.view == 'trajectories' and view.rows
-            else None
-        )
+        page_ids = [row.trace_id for row in view.page_rows(results)]
+        records = None
+        if view.view == 'trajectories' and view.rows:
+            records = explorer.cached_records(page_ids) if view.state == 'loading' else await explorer.records(page_ids)
         return explorer_views.results(
             view,
             resolve_columns(_settings(req.app).explorer_columns),
@@ -693,6 +692,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                         facets=population.facets,
                         numeric=population.numeric,
                         wait=True,
+                        warm_trajectories=False,
                     )
                     if view.state == 'failed':
                         raise RuntimeError(view.error or 'Trace table loading failed.')
@@ -772,7 +772,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         body_oob = (
             f'<div id="finder-body" hx-swap-oob="innerHTML">'
             f'{render_fragment(req, snapshot, settings, **load_kwargs)}</div>'
-            f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows))}</div>'
+            f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows), selected=str(form.get("scope") or ""))}</div>'
         )
         return _html(await _explorer_html(req) + body_oob)
 
@@ -801,7 +801,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                     return _html(await _explorer_html(req, error=f'Could not count messages: {exc}'))
         body = await _explorer_html(req)
         if explorer is not None:
-            body += f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows))}</div>'
+            body += f'<div id="finder-scope" hx-swap-oob="innerHTML">{scope_toggle(has_rows=bool((await explorer.view()).rows), selected=req.query_params.get("scope"))}</div>'
         return _html(body)
 
     @app.post('/find/columns')
@@ -921,16 +921,20 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         row = await store.explorer.row(trace_id) if store.explorer is not None else None
         snapshot = await store.snapshot()
         detail = await store.trace_detail(trace_id) if row is None or snapshot.within_results else None
-        if detail is None and row is not None and store.explorer is not None:
+        # A within-results run can narrow the visible explorer rows while its drawer
+        # request is in flight. The explorer keeps the hydrated records by trace ID,
+        # so recover from that cache even when the row has since left the visible set.
+        if detail is None and store.explorer is not None and (row is not None or snapshot.within_results):
             record = (await store.explorer.records([trace_id])).get(trace_id)
-            if record is None:
+            if record is not None:
+                detail = TraceDetail(trace=record, projection=None, classification=None)
+            elif row is not None or await store.explorer.has_cached_record(trace_id):
                 logger.warning('Find drawer could not load messages for explorer trace {}', trace_id)
                 return _html(
                     missing_trace_drawer(
                         trace_id, reason='The messages could not be loaded for this trace. Open it in Orq instead.'
                     )
                 )
-            detail = TraceDetail(trace=record, projection=None, classification=None)
         if detail is None:
             # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
             logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)

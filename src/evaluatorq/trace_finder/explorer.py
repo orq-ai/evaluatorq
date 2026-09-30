@@ -68,6 +68,11 @@ CONVERSATION_METRICS: Mapping[str, tuple[str, Callable[[Sequence[TraceRow], Mapp
 }
 
 
+def ai_matched(result: TraceClassification | None) -> bool:
+    """True only for a trace the classifier judged a match; a filter-only run's kept rows have no answers."""
+    return result is not None and result.matched and bool(result.answers)
+
+
 def conversation_key(row: TraceRow) -> str | None:
     return row.thread_id or row.session_id
 
@@ -153,11 +158,7 @@ class ExplorerView:
         if self.quick_view == 'errors':
             rows = tuple(row for row in rows if row.is_error)
         elif self.quick_view == 'matches':
-            rows = tuple(
-                row
-                for row in rows
-                if results is not None and (result := results.get(row.trace_id)) is not None and result.matched
-            )
+            rows = tuple(row for row in rows if results is not None and ai_matched(results.get(row.trace_id)))
         elif self.quick_view in TOP_METRICS:
             rows = top_share(rows, TOP_METRICS[self.quick_view][1])
         elif self.quick_view in CONVERSATION_METRICS:
@@ -188,7 +189,7 @@ class ExplorerStore:
         self._records: dict[str, TraceRecord | None] = {}
         self._records_lock = asyncio.Lock()
 
-    async def load(
+    async def load(  # noqa: C901 — one task owns search, first-page prewarm, and generation state
         self,
         start: datetime,
         end: datetime,
@@ -197,6 +198,7 @@ class ExplorerStore:
         facets: FacetSelection,
         numeric: NumericFilters,
         wait: bool = False,
+        warm_trajectories: bool = True,
     ) -> ExplorerView:
         await self._cancel()
         self._records.clear()
@@ -212,22 +214,48 @@ class ExplorerStore:
             view=self._view.view,
         )
 
+        prewarm_task: asyncio.Task[None] | None = None
+
+        async def prewarm(rows: Sequence[TraceRow]) -> None:
+            try:
+                await self.records([row.trace_id for row in rows])
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:  # noqa: BLE001 — trajectory data must not fail the summary load
+                logger.warning('Explorer trajectory prewarm failed: {}', error)
+
         def on_page(rows: tuple[TraceRow, ...]) -> None:
+            nonlocal prewarm_task
             if self._view.generation == generation:
                 self._view = replace(self._view, rows=rows)
+                if warm_trajectories and len(rows) >= PAGE_ROWS and prewarm_task is None:
+                    prewarm_task = asyncio.create_task(prewarm(rows[:PAGE_ROWS]))
 
         async def run() -> None:
             try:
                 rows = await self._search(start, end, limit, facets=facets, numeric=numeric, on_page=on_page)
             except asyncio.CancelledError:
+                if prewarm_task is not None and not prewarm_task.done():
+                    prewarm_task.cancel()
+                    await asyncio.gather(prewarm_task, return_exceptions=True)
                 raise
             except Exception as error:  # noqa: BLE001 — keep rows loaded so far and name the failure
+                if prewarm_task is not None and not prewarm_task.done():
+                    prewarm_task.cancel()
+                    await asyncio.gather(prewarm_task, return_exceptions=True)
                 if self._view.generation == generation:
                     logger.warning('Explorer load failed after {} row(s): {}', len(self._view.rows), error)
                     self._view = replace(self._view, state='failed', error=str(error))
                 return
             if self._view.generation == generation:
-                self._view = replace(self._view, state='loaded', rows=rows)
+                self._view = replace(self._view, rows=rows)
+                if warm_trajectories:
+                    if prewarm_task is None:
+                        await prewarm(rows[:PAGE_ROWS])
+                    else:
+                        await prewarm_task
+                if self._view.generation == generation:
+                    self._view = replace(self._view, state='loaded')
 
         self._task = asyncio.create_task(run())
         if wait:
@@ -292,6 +320,10 @@ class ExplorerStore:
                 return {trace_id: hydrated.get(trace_id) for trace_id in trace_ids}
             return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
 
+    def cached_records(self, trace_ids: Sequence[str]) -> dict[str, TraceRecord | None]:
+        """Return only trajectory records this load has already hydrated."""
+        return {trace_id: self._records[trace_id] for trace_id in trace_ids if trace_id in self._records}
+
     async def message_counts(self) -> ExplorerView:
         generation = self._view.generation
         records = await self.records([row.trace_id for row in self._view.rows])
@@ -306,6 +338,11 @@ class ExplorerStore:
 
     async def row(self, trace_id: str) -> TraceRow | None:
         return next((row for row in self._view.rows if row.trace_id == trace_id), None)
+
+    async def has_cached_record(self, trace_id: str) -> bool:
+        """Return whether this load already tried to hydrate ``trace_id``."""
+        async with self._records_lock:
+            return trace_id in self._records
 
     async def close(self) -> None:
         await self._cancel()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import json
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -160,6 +161,31 @@ def test_table_renders_one_row_per_page_row_with_drawer_links() -> None:
     )
     assert 'data-conv=' not in all_view
     assert 'data-conv=' in conversation_view
+
+
+def test_table_column_widths_are_fixed_per_header_and_stable_across_pages() -> None:
+    columns = resolve_columns(['status', 'trace'])
+    long_rows = tuple(
+        row.model_copy(update={'name': 'a very long trace name that should widen this column quite a bit'})
+        for row in _rows(150)
+    )
+    view = ExplorerView(state='loaded', rows=long_rows)
+    html = explorer_views.table(view, columns, None)
+
+    assert html.count('<colgroup>') == 1
+    cols = re.findall(r'<col(?: style="width:(\d+)ch")?>', html)
+    headers = re.findall(r'<th(?=[ >])[^>]*>', html)
+    assert len(cols) == len(headers) == len(columns)
+
+    # The trace column is the flex column: it carries no fixed width, so it absorbs spare room.
+    status_width, trace_width = cols
+    assert status_width and not trace_width
+    assert f'min-width:{status_width}' not in html
+    assert re.search(r'min-width:(\d+)ch', html)
+
+    page_two = replace(view, page=1)
+    html_page_two = explorer_views.table(page_two, columns, None)
+    assert re.findall(r'<col[^>]*>', html_page_two) == re.findall(r'<col[^>]*>', html)
 
 
 def test_table_shows_escaped_ai_match_text_and_aligns_numeric_columns() -> None:
@@ -475,35 +501,51 @@ def test_rows_route_updates_quick_view_state_and_toolbar(explorer_client) -> Non
     _load(client)
     html = client.get('/find/rows?quick_view=errors').text
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=errors"' in html
-    assert '<summary class="">Top 10% ▾</summary>' in html
+    assert '<summary class="">Views ▾</summary>' in html
     assert 'No errors found.' in html
 
 
 def test_reset_refreshes_explorer_results_out_of_band(explorer_client) -> None:
     store, _, client = explorer_client
+    store.snapshot_value = _judged_snapshot(matched=1, verdicts={'trace-0000': True})
     _load(client)
     matches = client.get('/find/rows?quick_view=matches').text
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=matches"' in matches
     response = client.post('/find/reset', data=csrf_data())
     assert response.status_code == 200
-    assert '<section id="explorer-results" class="xr" hx-sync="this:replace" hx-swap-oob="true"' in response.text
+    assert '<section id="explorer-results" class="xr" hx-sync="this:replace" hx-include="#finder-scope" hx-swap-oob="true"' in response.text
     assert 'aria-pressed="true" hx-get="/find/rows?quick_view=all"' in response.text
 
+def _judged_snapshot(**kwargs: Any) -> Any:
+    """A completed within-results run whose classifier judged the given trace ids (a: match, b: no match)."""
+    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.trace_finder import (
+        CompiledQuery,
+        DimensionAnswer,
+        RunSnapshot,
+        TraceClassification,
+        ValueSelection,
+    )
+
+    results = {
+        trace_id: TraceClassification(
+            trace_id=trace_id,
+            span_id=f's-{trace_id}',
+            answers=(DimensionAnswer(value='yes' if matched else 'no', matched=matched),),
+            matched=matched,
+            raw_result={},
+        )
+        for trace_id, matched in kwargs.pop('verdicts').items()
+    }
+    dimension = CompiledQuery(
+        task=ClassifyQuestion(kind='choice', instructions='Judge.', criteria={'yes': 'x', 'no': 'y'}, state={}),
+        selection=ValueSelection(kind='values', values=('yes',)),
+    )
+    return RunSnapshot(state='completed', within_results=True, results=results, dimensions=(dimension,), **kwargs)
 
 def test_status_line_reports_judged_and_matches_for_current_rows() -> None:
-    from evaluatorq.trace_finder import RunSnapshot, TraceClassification
-
     rows = (TraceRow(trace_id='a'), TraceRow(trace_id='b'), TraceRow(trace_id='c'))
-    snapshot = RunSnapshot(
-        state='completed',
-        within_results=True,
-        total=2,
-        matched=1,
-        results={
-            'a': TraceClassification(trace_id='a', span_id='s1', matched=True, raw_result={}),
-            'b': TraceClassification(trace_id='b', span_id='s2', matched=False, raw_result={}),
-        },
-    )
+    snapshot = _judged_snapshot(total=2, matched=1, verdicts={'a': True, 'b': False})
     first = explorer_views.results(
         ExplorerView(state='loaded', rows=rows), resolve_columns(None), records=None, snapshot=snapshot
     )
@@ -516,20 +558,26 @@ def test_status_line_reports_judged_and_matches_for_current_rows() -> None:
     assert '1 traces loaded · 1 judged, 1 match' in changed
 
 
-def test_narrowed_status_reports_judged_and_matches_before_not_judged() -> None:
+def test_filter_only_run_does_not_report_judged_or_ai_matches() -> None:
     from evaluatorq.trace_finder import RunSnapshot, TraceClassification
 
+    rows = (TraceRow(trace_id='a'), TraceRow(trace_id='b'))
     snapshot = RunSnapshot(
         state='completed',
         within_results=True,
-        loaded=5,
         total=2,
-        matched=1,
-        results={
-            'a': TraceClassification(trace_id='a', span_id='s1', matched=True, raw_result={}),
-            'b': TraceClassification(trace_id='b', span_id='s2', matched=False, raw_result={}),
-        },
+        matched=2,
+        results={r.trace_id: TraceClassification(trace_id=r.trace_id, span_id='s', matched=True, raw_result={}) for r in rows},
     )
+    view = ExplorerView(state='loaded', rows=rows)
+    html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=snapshot)
+    assert 'judged' not in html
+    assert 'Kept by filters' in html
+    assert 'AI matches' not in html
+
+
+def test_narrowed_status_reports_judged_and_matches_before_not_judged() -> None:
+    snapshot = _judged_snapshot(loaded=5, total=2, matched=1, verdicts={'a': True, 'b': False})
     view = ExplorerView(state='loaded', rows=(TraceRow(trace_id='a'), TraceRow(trace_id='b')), narrowed_from=5)
     html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=snapshot)
     assert '2 of 5 loaded traces match the filters · 2 judged, 1 match' in html
@@ -557,7 +605,9 @@ def test_rows_route_hydrates_longest_conversation_view_and_shows_message_status(
 
     html = client.get('/find/rows?quick_view=conv_longest').text
 
-    assert source.hydrate_calls == [tuple(row.trace_id for row in source.rows)]
+    # The load warmed the first page; the conversation view hydrates only the rest.
+    hydrated = [trace_id for call in source.hydrate_calls for trace_id in call]
+    assert hydrated == [row.trace_id for row in source.rows]
     assert 'Top 10% of conversations by messages' in html
 
 
@@ -624,9 +674,47 @@ def test_columns_post_saves_choice(explorer_client, tmp_path: Path) -> None:
     assert json.loads((tmp_path / 'settings.json').read_text())['explorer_columns'] == ['model', 'cost']
 
 
-def test_trajectories_view_hydrates_only_the_visible_page(explorer_client) -> None:
+def test_match_column_choice_survives_a_columns_edit_made_before_any_ai_run(explorer_client) -> None:
+    from evaluatorq.common.judge import ClassifyQuestion
+    from evaluatorq.trace_finder import CompiledQuery, DimensionAnswer, RunSnapshot, TraceClassification, ValueSelection
+
     store, _, client = explorer_client
     _load(client)
+
+    # Before any Ask AI run, the match checkbox is hidden but still present, so a columns
+    # edit (as the browser would submit it) keeps 'match' in the posted values.
+    menu_html = client.get('/find/rows').text
+    assert '<label hidden><input type="checkbox" name="columns" value="match" checked>' in menu_html
+
+    client.post('/find/columns', data=csrf_data({'columns': ['started', 'trace', 'status', 'model', 'match']}))
+
+    # An Ask AI run now produces results.
+    result = TraceClassification(
+        trace_id='trace-0000',
+        span_id='s',
+        answers=(DimensionAnswer(value=True, matched=True, summary='Asked for a refund.'),),
+        matched=True,
+        raw_result={},
+    )
+    store.snapshot_value = RunSnapshot(
+        state='completed',
+        results={'trace-0000': result},
+        completed=1,
+        matched=1,
+        within_results=True,
+        dimensions=(CompiledQuery(
+            task=ClassifyQuestion(kind='noul', instructions='Judge.', state={}),
+            selection=ValueSelection(kind='values', values=(True,)),
+        ),),
+    )
+
+    rows_html = client.get('/find/rows').text
+    thead = rows_html.split('<thead>')[1].split('</thead>')[0]
+    assert 'AI match' in thead
+
+
+def test_trajectories_view_hydrates_only_the_visible_page(explorer_client) -> None:
+    store, _, client = explorer_client
     calls: list[int] = []
     original = store.explorer._hydrate  # pyright: ignore[reportPrivateUsage]
 
@@ -635,6 +723,8 @@ def test_trajectories_view_hydrates_only_the_visible_page(explorer_client) -> No
         return await original(rows)
 
     store.explorer._hydrate = counting  # pyright: ignore[reportPrivateUsage]
+    # The load warms the first page's trajectories, so opening Trajectories hydrates nothing more.
+    _load(client)
     html = client.get('/find/rows?view=trajectories').text
     assert calls == [100]
     assert html.count('data-tv-row=') == 100
@@ -644,12 +734,6 @@ def test_new_search_results_do_not_change_trajectory_hydration_page(explorer_cli
     from evaluatorq.trace_finder import TraceClassification
 
     store, _, client = explorer_client
-    _load(client)
-    store.snapshot_value = replace(
-        store.snapshot_value,
-        results={'trace-0249': TraceClassification(trace_id='trace-0249', span_id='s', matched=True, raw_result={})},
-        within_results=False,
-    )
     calls: list[tuple[str, ...]] = []
     original = store.explorer._hydrate  # pyright: ignore[reportPrivateUsage]
 
@@ -658,6 +742,12 @@ def test_new_search_results_do_not_change_trajectory_hydration_page(explorer_cli
         return await original(rows)
 
     store.explorer._hydrate = counting  # pyright: ignore[reportPrivateUsage]
+    _load(client)
+    store.snapshot_value = replace(
+        store.snapshot_value,
+        results={'trace-0249': TraceClassification(trace_id='trace-0249', span_id='s', matched=True, raw_result={})},
+        within_results=False,
+    )
     html = client.get('/find/rows?view=trajectories').text
     assert len(calls) == 1 and len(calls[0]) == 100
     assert calls[0][0] == 'trace-0000'
@@ -738,6 +828,17 @@ def test_rows_controls_share_sync_and_scope_oob(explorer_client) -> None:
     html = client.get('/find/rows?view=trajectories').text
     assert 'hx-sync="#explorer-results:replace"' in html
     assert 'id="finder-scope" hx-swap-oob="innerHTML"' in html
+    assert 'hx-include="#finder-scope"' in html
+
+
+def test_loading_traces_preserves_new_search_scope(explorer_client) -> None:
+    _, _, client = explorer_client
+    loaded = _load(client, scope='new').text
+    assert 'name="scope" value="new" form="finder-query-form" checked' in loaded
+
+    polled = client.get('/find/rows?scope=new').text
+    assert 'name="scope" value="new" form="finder-query-form" checked' in polled
+    assert 'name="scope" value="within" form="finder-query-form" checked' not in polled
 
 
 def test_new_search_results_do_not_dim_unclassified_explorer_rows() -> None:
@@ -792,7 +893,8 @@ def test_shared_toolbar_keeps_columns_before_load_and_view_switch_in_both_modes(
         html = explorer_views.results(
             ExplorerView(state='loaded', rows=_rows(1), view=mode), columns, records=None, snapshot=None
         )
-        assert html.index('Filters') < html.index('All') < html.index('Errors') < html.index('AI matches')
+        assert html.index('Filters') < html.index('All') < html.index('Errors')
+        assert 'AI matches' not in html
         assert html.index(context) < html.index('form="explorer-load-form">Load') < html.index('aria-label="View"')
 
 
@@ -812,13 +914,11 @@ def test_shared_toolbar_keeps_load_and_view_switch_visible_in_all_states(state: 
 
 
 def test_quick_views_filter_only_loaded_population_and_render_empty_state() -> None:
-    from evaluatorq.trace_finder import RunSnapshot, TraceClassification
+    from evaluatorq.trace_finder import RunSnapshot
 
     rows = _rows(3)
     rows = (rows[0].model_copy(update={'status': 'error'}), rows[1], rows[2])
-    matches = TraceClassification(trace_id=rows[1].trace_id, span_id='s', matched=True, raw_result={})
-    outside = TraceClassification(trace_id='not-loaded', span_id='s2', matched=True, raw_result={})
-    snapshot = RunSnapshot(results={matches.trace_id: matches, outside.trace_id: outside}, within_results=True)
+    snapshot = _judged_snapshot(verdicts={rows[1].trace_id: True, 'not-loaded': True})
     error_html = explorer_views.results(
         ExplorerView(state='loaded', rows=rows, quick_view='errors'),
         resolve_columns(None),
@@ -865,7 +965,7 @@ def test_drawer_opens_at_the_requested_message() -> None:
             {'role': 'user', 'content': 'bye'},
         ),
     )
-    row = TraceRow(trace_id='t1', status='failed', cost_total=1.25, currency='EUR&')
+    row = TraceRow(trace_id='t1', status='failed', cost_total=1.25, currency='EUR&', reasoning_tokens=148)
     html = drawer(TraceDetail(trace=trace, projection=None, classification=None), msg=2, row=row)
     assert 'id="msg-2"' in html
     assert html.count('<details class="fd-msg') == 3
@@ -876,6 +976,7 @@ def test_drawer_opens_at_the_requested_message() -> None:
     assert '1.2500 EUR&amp;' in html
     assert 'EUR&amp;amp;' not in html
     assert 'fd-msg-meta' in html
+    assert '148 reasoning' in html
 
 
 def test_missing_trace_reason_is_escaped_and_wrapped() -> None:
@@ -895,10 +996,9 @@ def test_drawer_message_meta_and_segment_click_browser_fixes() -> None:
 
 def test_trace_route_falls_back_to_explorer_rows(explorer_client) -> None:
     store, source, client = explorer_client
-    _load(client)
     trace_id = source.rows[0].trace_id
 
-    async def records(ids: Any) -> dict[str, Any]:
+    async def hydrate(rows: Any) -> dict[str, Any]:
         return {
             trace_id: TraceRecord(
                 schema_version=1,
@@ -913,13 +1013,21 @@ def test_trace_route_falls_back_to_explorer_rows(explorer_client) -> None:
                 trace_type='agent',
                 messages=({'role': 'user', 'content': 'hi'},),
             )
+            for row in rows
+            if row.trace_id == trace_id
         }
 
-    store.explorer.records = records
+    store.explorer._hydrate = hydrate
+    _load(client)
     store.trace_detail = lambda _id: _none()
+    store.snapshot_value = replace(store.snapshot_value, within_results=True)
+    view = asyncio.run(store.explorer.view())
+    cached = asyncio.run(store.explorer.records([trace_id]))
+    assert cached[trace_id] is not None
+    asyncio.run(store.explorer.narrow(view.generation, set(), facets=view.facets, numeric=view.numeric))
     html = client.get(f'/find/trace/{trace_id}?msg=1').text
     assert 'id="msg-1"' in html
-    assert 'support' in html
+    assert '<div class="fd-msg-content">hi</div>' in html
 
 
 def test_explorer_drawer_ignores_an_unrelated_new_search_result(explorer_client) -> None:
@@ -945,8 +1053,18 @@ def test_explorer_drawer_ignores_an_unrelated_new_search_result(explorer_client)
 def test_trace_route_explains_missing_messages(explorer_client) -> None:
     store, source, client = explorer_client
     _load(client)
+    trace_id = source.rows[0].trace_id
+
+    async def hydrate(rows: Any) -> dict[str, None]:
+        return {row.trace_id: None for row in rows}
+
+    store.explorer._hydrate = hydrate
+    asyncio.run(store.explorer.records([trace_id]))
+    view = asyncio.run(store.explorer.view())
+    asyncio.run(store.explorer.narrow(view.generation, set(), facets=view.facets, numeric=view.numeric))
+    store.snapshot_value = replace(store.snapshot_value, within_results=True)
     store.trace_detail = lambda _id: _none()
-    html = client.get(f'/find/trace/{source.rows[0].trace_id}').text
+    html = client.get(f'/find/trace/{trace_id}').text
     assert 'messages could not be loaded' in html
 
 
@@ -1101,7 +1219,7 @@ def test_large_within_run_is_forced_through_review(explorer_client) -> None:
     assert captured['request'].population.limit == 600
 
 
-def test_ai_match_column_is_visible_before_results_and_can_be_hidden(explorer_client) -> None:
+def test_ai_match_column_appears_after_results_and_can_be_hidden(explorer_client) -> None:
     import dataclasses
 
     from evaluatorq.dashboard.trace_finder.explorer_views import table
@@ -1112,16 +1230,16 @@ def test_ai_match_column_is_visible_before_results_and_can_be_hidden(explorer_cl
     _load(client)
     view = asyncio.run(store.explorer.view())
     initial = table(view, resolve_columns(None), None)
-    assert '>AI match<' in initial
-    assert '<td class="muted">—</td>' in initial
+    assert 'AI match' not in initial
+    assert 'xr-ai-sparkle' not in initial
     first = view.rows[0].trace_id
     snapshot = dataclasses.replace(
         store.snapshot_value,
         results={first: TraceClassification(trace_id=first, span_id='s', matched=True, raw_result={})},
         within_results=True,
     )
-    assert '>AI match<' in table(view, resolve_columns(None), snapshot)
-    assert '>AI match<' not in table(view, resolve_columns(['status', 'model']), snapshot)
+    assert '>✦</span>AI match<' in table(view, resolve_columns(None), snapshot)
+    assert '>✦</span>AI match<' not in table(view, resolve_columns(['status', 'model']), snapshot)
 
 
 def test_generated_filter_chip_carries_ai_badge() -> None:
@@ -1167,3 +1285,14 @@ def test_narrowed_status_accounts_for_traces_without_conversation() -> None:
     snapshot = RunSnapshot(within_results=True, state='completed', loaded=190)
     html = explorer_views.results(view, resolve_columns(None), records=None, snapshot=snapshot)
     assert '0 of 200 loaded traces match the filters · 10 of the 200 have no conversation' in html
+
+
+def test_ai_matches_chip_shows_once_the_classifier_has_judged_rows() -> None:
+    snapshot = _judged_snapshot(matched=1, verdicts={'a': True, 'b': False})
+    html = explorer_views.results(
+        ExplorerView(state='loaded', rows=(TraceRow(trace_id='a'), TraceRow(trace_id='b'))),
+        resolve_columns(None),
+        records=None,
+        snapshot=snapshot,
+    )
+    assert 'AI matches' in html

@@ -15,11 +15,11 @@ from __future__ import annotations
 _TRACES_DENSITY_CSS = """
 /* /traces density pass. The command strip exists only on /traces; /find keeps its search hero. */
 .finder:not(:has(> .finder-command)) { max-width:1040px; }
-.finder:has(> .finder-command) { gap:0; max-width:1420px; margin:0 auto; overflow:hidden; border:1px solid #dedfe2; border-radius:10px; background:#fff; box-shadow:0 7px 28px #2928310a; color:#25232e; }
+.finder:has(> .finder-command) { gap:0; max-width:none; margin:0 auto; overflow:hidden; background:#fff; color:#25232e; }
 .finder:has(> .finder-command) .finder-command { align-self:stretch; max-width:none; padding:13px 16px 0; border:0; border-radius:0; background:#fff; box-shadow:none; }
 .finder:has(> .finder-command) .finder-command-title { margin:0 0 8px; font-size:20px; line-height:1.3; letter-spacing:-.02em; }
 .finder:has(> .finder-command) .finder-command-query { gap:8px; min-height:53px; padding:5px 8px; border:0; border-top:1px solid #e5e6e9; border-bottom:1px solid #e5e6e9; border-radius:0; box-shadow:none; }
-.finder:has(> .finder-command) .finder-command-query:focus-within { box-shadow:none; }
+.finder:has(> .finder-command) .finder-command-query:focus-within { box-shadow:none; outline:2px solid #025558; outline-offset:-2px; }
 .finder:has(> .finder-command) .finder-ai-label { display:inline-flex; align-items:center; white-space:nowrap; padding:8px 10px; border:1px solid #f0cb9f; border-radius:6px; background:#fff4e7; color:#9a5f20; font-size:12px; font-weight:750; }
 .finder:has(> .finder-command) .finder-command-query .col { flex:1; min-width:180px; }
 .finder:has(> .finder-command) .finder-command-textarea { max-height:4em; padding:8px 4px; font-family:var(--font-sans); font-size:13px; line-height:1.35; }
@@ -50,12 +50,13 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-table tbody tr:hover td:first-child { background:#f8faf8; }
 .finder:has(> .finder-command) .xr-table tr.sel td:first-child { background:#f3f8f7; }
 .finder:has(> .finder-command) .xr-table th:last-child, .finder:has(> .finder-command) .xr-table td:last-child { padding-right:18px; }
-.finder:has(> .finder-command) .xr-table { min-width:1020px; border-collapse:collapse; font-size:12px; overflow:visible; }
+.finder:has(> .finder-command) .xr-table { width:max-content; table-layout:fixed; border-collapse:collapse; font-size:12px; overflow:visible; }
 .finder:has(> .finder-command) .xr-table thead { display:table-header-group!important; }
 .finder:has(> .finder-command) .xr-table tbody tr { display:table-row!important; height:auto!important; }
 .finder:has(> .finder-command) .xr-table td { display:table-cell!important; }
-.finder:has(> .finder-command) .xr-table th { padding:9px 11px; border-bottom:1px solid #dfe1e5; background:#f8f9fa; color:#686a74; font-size:10px; letter-spacing:.055em; white-space:nowrap; }
-.finder:has(> .finder-command) .xr-table td { padding:7px 11px; border-bottom:1px solid #e8e9ec; white-space:nowrap; }
+.finder:has(> .finder-command) .xr-table th { padding:9px 11px; border-bottom:1px solid #dfe1e5; background:#f8f9fa; color:#686a74; font-size:10px; letter-spacing:.055em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.finder:has(> .finder-command) .xr-ai-sparkle { margin-right:4px; color:#a66124; font-size:12px; }
+.finder:has(> .finder-command) .xr-table td { padding:7px 11px; border-bottom:1px solid #e8e9ec; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .finder:has(> .finder-command) .xr-table tbody tr:hover { background:#f8faf8; }
 .finder:has(> .finder-command) .xr-status ~ .xr-empty { margin:0 12px 12px; }
 /* Square pass: every header control shares one height, square corners, centred labels and the card's 16px gutter. */
@@ -89,8 +90,10 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-switch button { flex:1 1 0; height:auto; padding:0 8px; border-radius:0; text-align:center; }
 @media (max-width:850px) { .finder:has(> .finder-command) .finder-command-query > button { flex:1 1 100%; } }
 /* Quick-view tabs carry the table's status colours: errors red, AI matches amber. */
-.finder:has(> .finder-command) .xr-quickviews > button:nth-child(2) { color:#a8473b; }
-.finder:has(> .finder-command) .xr-quickviews > button:nth-child(2).on { color:#bd5548; border-color:#bd5548; background:#fdf3f1; }
+.finder:has(> .finder-command) .xr-quickviews > .xr-qv-errors { color:#686a74; }
+.finder:has(> .finder-command) .xr-quickviews > .xr-qv-errors.has-errors { color:#b3261e; font-weight:700; }
+.finder:has(> .finder-command) .xr-quickviews > .xr-qv-errors.has-errors .xr-count { padding:0 5px; border-radius:8px; background:#b3261e; color:#fff; }
+.finder:has(> .finder-command) .xr-quickviews > .xr-qv-errors.on { border-color:#b3261e; background:#fdf3f1; }
 .finder:has(> .finder-command) .xr-quickviews > button:nth-child(3) { color:#94591f; }
 .finder:has(> .finder-command) .xr-quickviews > button:nth-child(3).on { color:#a66124; border-color:#ed8844; background:#fff6ec; }
 .finder:has(> .finder-command) .xr-quickviews > button:first-child.on { background:#f4f3f1; }
@@ -158,7 +161,7 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-apply:hover { background:#3a3844; }
 .finder:has(> .finder-command) .xr-apply:focus-visible { outline:2px solid #025558; outline-offset:1px; }
 @media (max-width:850px) { .finder:has(> .finder-command) .xr-time-options { width:calc(100vw - 50px); } }
-@media (max-width:850px) { .finder:has(> .finder-command) .xr-quickviews { flex:1 1 100%; flex-wrap:wrap; } }
+@media (max-width:1100px) { .finder:has(> .finder-command) .xr-quickviews { flex:1 1 100%; flex-wrap:wrap; } }
 .finder:has(> .finder-command) .xr-range input:focus-visible,
 .finder:has(> .finder-command) .xr-preset:focus-visible,
 .finder:has(> .finder-command) .xr-exact > summary:focus-visible { outline:2px solid #025558; outline-offset:-2px; }
@@ -192,13 +195,24 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-yn.failed::before { background:#bd5548; }
 .finder:has(> .finder-command) .xr-pending { letter-spacing:.1em; }
 .finder:has(> .finder-command) .finder-progress[data-state="completed"] .state { color:#686a74; }
-.finder:has(> .finder-command) .finder-progress[data-state="completed"] [data-finder-edit] { margin-left:auto; }
-.finder:has(> .finder-command) .finder-progress[data-state="completed"] > a.btn-secondary { margin-left:0; }
-body:has(.finder-command) .finder-status.done { display:none; }
+body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder-status.idle { display:none; }
+/* Table fills its card; the flex column absorbs the spare width and the inline min-width keeps the rest legible. */
+.finder:has(> .finder-command) .xr-table { width:100%; }
+/* Errors stay loud: a red bar on the row, status text at 4.5:1 or better, and a shape that survives without colour. */
+.finder:has(> .finder-command) .xr-table .status-label.ok { color:#1a6a3c; }
+.finder:has(> .finder-command) .xr-table .status-label.err { color:#b3261e; }
+.finder:has(> .finder-command) .xr-table .dot.err { border-radius:1px; transform:rotate(45deg) scale(.85); background:#b3261e; }
+.finder:has(> .finder-command) .xr-table tr.xr-err td:first-child { box-shadow:inset 3px 0 0 #b3261e, inset -1px 0 0 #e8e9ec; }
+.finder:has(> .finder-command) .tv-r.row-err { box-shadow:inset 3px 0 0 #b3261e; }
+/* AI matches get an accent bar; rows the question passed over stay fully readable. */
+.finder:has(> .finder-command) .xr-table tr.xr-hit td:first-child, .finder:has(> .finder-command) .tv-r.hit { box-shadow:inset 3px 0 0 #ed8844, inset -1px 0 0 #e8e9ec; }
+.finder:has(> .finder-command) .tv-r.hit { background:#fffaf3; }
+.finder:has(> .finder-command) .tv-r.nomatch { opacity:1; }
+.finder:has(> .finder-command) .xr-table th[aria-sort] { color:#25232e; }
+.finder:has(> .finder-command) .xr-sort-arrow { margin-left:4px; font-weight:700; }
+.finder:has(> .finder-command) .xr-table tbody tr:focus-visible, .finder:has(> .finder-command) .tv-r:focus-visible { outline:2px solid #025558; outline-offset:-2px; }
 .finder:has(> .finder-command) .xr-empty { border-radius:0; }
 .finder:has(> .finder-command) .xr-empty h4 { text-transform:none; letter-spacing:0; }
-body:has(.xr-empty [data-finder-edit]) .finder-progress [data-finder-edit] { display:none; }
-.finder:has(> .finder-command) .xr-empty .btn-secondary { height:32px; margin-top:8px; padding:0 12px; border:1px solid #d5d8df; border-radius:0; background:#fff; color:#25232e; font:inherit; font-size:12px; cursor:pointer; }
 @media (prefers-reduced-motion:reduce) { .finder:has(> .finder-command) * { transition:none!important; } }
 @media (max-width:850px) {
   body:has(.finder-command) .app-sidebar { display:none; }
@@ -208,13 +222,13 @@ body:has(.xr-empty [data-finder-edit]) .finder-progress [data-finder-edit] { dis
   .finder:has(> .finder-command) .finder-command-query .col { flex:1 1 calc(100% - 120px); }
   .finder:has(> .finder-command) .xr-toolbar { padding:6px 10px; }
   .finder:has(> .finder-command) .xr-toolbar .spacer { display:none; }
+}
+/* The toolbar's five controls need ~640px; below that width they take a full row of their own instead of clipping. */
+@media (max-width:1100px) {
+  .finder:has(> .finder-command) .finder-command-query { flex-wrap:wrap; }
+  .finder:has(> .finder-command) .finder-command-query .col { flex:1 1 200px; min-width:0; }
   .finder:has(> .finder-command) .xr-toolbar-right { flex:1 1 100%; width:100%; min-width:0; margin:0 0 2px; grid-template-columns:repeat(3,minmax(0,1fr)); }
   .finder:has(> .finder-command) .xr-toolbar-right .finder-seg { grid-column:span 2; }
-  .finder:has(> .finder-command) .xr-table { width:auto; min-width:980px; }
-  .finder:has(> .finder-command) .xr-table th:first-child,
-  .finder:has(> .finder-command) .xr-table td:first-child { width:110px; }
-  .finder:has(> .finder-command) .xr-table th:nth-child(2),
-  .finder:has(> .finder-command) .xr-table td:nth-child(2) { width:190px; }
 }
 """
 

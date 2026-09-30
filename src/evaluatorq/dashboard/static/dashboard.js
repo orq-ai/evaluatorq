@@ -868,16 +868,6 @@
     document.getElementById('explorer-load-form')?.requestSubmit();
   });
 
-  // Edit question: hand the question back to the Ask AI input instead of making the user retype it.
-  document.addEventListener('click', function (evt) {
-    if (!evt.target.closest('[data-finder-edit]')) return;
-    const input = document.querySelector('.finder-command-textarea');
-    if (!input) return;
-    input.focus();
-    input.select();
-    input.scrollIntoView({ block: 'nearest' });
-  });
-
   document.addEventListener('keydown', function (evt) {
     if (evt.key === 'Enter' && evt.target.matches?.('.xr-exact input')) {
       evt.preventDefault();
@@ -889,6 +879,35 @@
     if (!menu) return;
     menu.open = false;
     menu.querySelector('summary')?.focus();
+  });
+
+  // The Columns menu lives inside #explorer-results, which every tick swaps.
+  // Remember whether it was open (and which box had focus) and restore both.
+  let colsWasOpen = false;
+  let colsFocus = null;
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id !== 'explorer-results') return;
+    const menu = document.getElementById('explorer-cols');
+    colsWasOpen = !!menu?.open;
+    const active = document.activeElement;
+    colsFocus = colsWasOpen && active && menu.contains(active) ? (active.value || null) : null;
+  });
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail.target?.id !== 'explorer-results' && !document.getElementById('explorer-results')) return;
+    if (!colsWasOpen) return;
+    colsWasOpen = false;
+    const menu = document.getElementById('explorer-cols');
+    if (!menu) return;
+    menu.open = true;
+    if (colsFocus !== null) {
+      const box = Array.from(menu.querySelectorAll('input')).find((i) => i.value === colsFocus);
+      box?.focus({ preventScroll: true });
+    }
+    colsFocus = null;
+  });
+  document.addEventListener('click', function (evt) {
+    const menu = document.getElementById('explorer-cols');
+    if (menu?.open && !menu.contains(evt.target)) menu.open = false;
   });
 
   // Trajectories: one tooltip, positioned from the hovered segment's data-* attributes.
@@ -934,21 +953,27 @@
   }, true);
 
   // Drawer: scroll the thread (not the page) to the selected message, and move the selection locally.
-  function drawerSelect(root, index) {
+  function drawerMarkSelected(root, index) {
     root.querySelectorAll('.fd-msg').forEach((el) => {
       const on = el.getAttribute('data-msg') === String(index);
       el.classList.toggle('on', on);
-      el.open = on;
     });
     root.querySelectorAll('.fd-mini i').forEach((el) => el.classList.toggle('on', el.getAttribute('data-mini-msg') === String(index)));
+  }
+  function drawerScrollTo(root, index) {
     const list = root.querySelector('#fd-thread');
     const target = root.querySelector('#msg-' + index);
     if (list && target) list.scrollTop = target.offsetTop - list.offsetTop - list.clientHeight / 2 + target.clientHeight / 2;
   }
+  function drawerSelect(root, index) {
+    drawerMarkSelected(root, index);
+    root.querySelectorAll('.fd-msg').forEach((el) => { el.open = el.getAttribute('data-msg') === String(index); });
+    drawerScrollTo(root, index);
+  }
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     if (evt.detail.target && evt.detail.target.id === 'finder-drawer') {
       const on = evt.detail.target.querySelector('.fd-msg.on');
-      if (on) drawerSelect(evt.detail.target, on.getAttribute('data-msg'));
+      if (on) drawerScrollTo(evt.detail.target, on.getAttribute('data-msg'));
     }
   });
   document.addEventListener('click', function (evt) {
@@ -956,7 +981,109 @@
     const summary = evt.target.closest('.fd-msg > summary');
     const root = document.getElementById('finder-drawer');
     if (!root || (!mini && !summary)) return;
-    if (summary) evt.preventDefault();
-    drawerSelect(root, mini ? mini.getAttribute('data-mini-msg') : summary.parentElement.getAttribute('data-msg'));
+    if (mini) {
+      drawerSelect(root, mini.getAttribute('data-mini-msg'));
+      return;
+    }
+    const details = summary.parentElement;
+    const index = details.getAttribute('data-msg');
+    drawerMarkSelected(root, index);
+    if (!details.open) drawerScrollTo(root, index);
+  });
+
+  // Finder rows open the trace drawer from the keyboard; the drawer behaves as a modal dialog:
+  // focus moves in on open, Tab stays inside, Escape closes, focus returns to the opening row,
+  // and j/k (or ArrowDown/ArrowUp) step to the next/previous trace like the simulation drawer.
+  let finderOpenId = null;
+  const finderDialog = () => document.querySelector('#finder-drawer [role="dialog"]');
+  const finderRows = () => Array.from(document.querySelectorAll('#explorer-results [data-tv-row]'));
+  const finderRow = (id) => finderRows().find((row) => row.getAttribute('data-tv-row') === id) || null;
+  function finderEditable(el) {
+    return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  }
+  function finderStep(delta) {
+    const rows = finderRows();
+    const current = rows.findIndex((row) => row.getAttribute('data-tv-row') === finderOpenId);
+    if (current < 0 || !rows.length) return;
+    const next = rows[(current + delta + rows.length) % rows.length];
+    next.scrollIntoView({ block: 'nearest' });
+    next.click();
+  }
+  document.addEventListener('click', function (evt) {
+    const row = evt.target.closest('#explorer-results [data-tv-row]');
+    if (row) finderOpenId = row.getAttribute('data-tv-row');
+  }, true);
+  document.addEventListener('keydown', function (evt) {
+    const dialog = finderDialog();
+    if (!dialog) {
+      const row = evt.target.closest?.('#explorer-results [data-tv-row]');
+      if (row && evt.target === row && (evt.key === 'Enter' || evt.key === ' ')) {
+        evt.preventDefault();
+        row.click();
+      }
+      return;
+    }
+    if (evt.key === 'Escape') {
+      evt.preventDefault();
+      dialog.querySelector('.rt-drawer-close')?.click();
+      return;
+    }
+    if (evt.key === 'Tab') {
+      const items = Array.from(dialog.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, summary, [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => el.offsetParent !== null);
+      if (!items.length) { evt.preventDefault(); dialog.focus(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!dialog.contains(active) || (evt.shiftKey && (active === first || active === dialog))) {
+        evt.preventDefault();
+        (evt.shiftKey ? last : first).focus();
+      } else if (!evt.shiftKey && active === last) {
+        evt.preventDefault();
+        first.focus();
+      }
+      return;
+    }
+    if (evt.metaKey || evt.ctrlKey || evt.altKey || finderEditable(document.activeElement)) return;
+    if (evt.key === 'j' || evt.key === 'J' || evt.key === 'ArrowDown') {
+      evt.preventDefault();
+      finderStep(1);
+    } else if (evt.key === 'k' || evt.key === 'K' || evt.key === 'ArrowUp') {
+      evt.preventDefault();
+      finderStep(-1);
+    }
+  });
+  document.body.addEventListener('htmx:afterSettle', function (evt) {
+    if (evt.detail.target?.id !== 'finder-drawer') return;
+    const dialog = finderDialog();
+    if (dialog) {
+      if (!dialog.contains(document.activeElement)) dialog.focus({ preventScroll: true });
+      return;
+    }
+    const row = finderOpenId && finderRow(finderOpenId);
+    if (row) row.focus({ preventScroll: true });
+  });
+
+  // Explorer swaps replace the rows and headers; put focus back on the row or sort button that had it.
+  let explorerFocus = null;
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    const sortButton = evt.detail.elt?.closest?.('[data-xr-sort]');
+    if (sortButton) explorerFocus = ['data-xr-sort', sortButton.getAttribute('data-xr-sort')];
+  });
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id !== 'explorer-results' || explorerFocus) return;
+    // Polls re-render the results while a load finishes; they must not drop focus either.
+    const active = document.activeElement;
+    const row = active?.closest?.('#explorer-results [data-tv-row]');
+    if (row === active) explorerFocus = ['data-tv-row', row.getAttribute('data-tv-row')];
+    const sortButton = active?.closest?.('#explorer-results [data-xr-sort]');
+    if (sortButton) explorerFocus = ['data-xr-sort', sortButton.getAttribute('data-xr-sort')];
+  });
+  document.body.addEventListener('htmx:afterSettle', function () {
+    if (!explorerFocus) return;
+    const [attr, value] = explorerFocus;
+    explorerFocus = null;
+    const target = Array.from(document.querySelectorAll('#explorer-results [' + attr + ']')).find((el) => el.getAttribute(attr) === value);
+    if (target && !finderDialog()) target.focus({ preventScroll: true });
   });
 })();

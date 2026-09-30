@@ -931,11 +931,10 @@ def test_completed_within_progress_reports_run_counts() -> None:
     assert 'when asked' not in html
 
 
-def test_completed_empty_run_keeps_edit_and_clear_without_download() -> None:
+def test_completed_empty_run_keeps_clear_without_download() -> None:
     from evaluatorq.dashboard.trace_finder.views import progress
 
     html = progress(RunSnapshot(state='completed', total=0))
-    assert 'Edit question' in html
     assert 'Clear AI results' in html
     assert 'Download results' not in html
 

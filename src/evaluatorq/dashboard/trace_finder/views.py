@@ -395,7 +395,7 @@ def _answers_text(result: TraceClassification, dimensions: tuple[CompiledQuery, 
     """One-line summary of a trace's answers, named by dimension."""
 
     if not result.answers:
-        return 'matched by filters'
+        return 'kept by filters, not judged by the AI'
     names = [dimension.name for dimension in dimensions or ()]
     return ' · '.join(
         f'{names[index] + ": " if index < len(names) else ""}{_value_text(answer.value)}'
@@ -497,8 +497,7 @@ def progress(
         f'<form class="finder-progress-action" hx-post="/find/cancel" hx-target="#finder-body" hx-swap="innerHTML" hx-disabled-elt="find button">{csrf_field()}<button class="btn-secondary" type="submit">Cancel</button><span role="status">Cancelling…</span></form>'
         if running
         else (
-            '<button type="button" class="btn-secondary" data-finder-edit>Edit question</button>'
-            + (
+            (
                 f'<a class="btn-secondary" href="{esc(export_url)}" title="Every judged trace with its answers, as JSON">Download results</a>'
                 if snapshot.total
                 else ''
@@ -523,6 +522,9 @@ def progress(
         if snapshot.total == 0 and snapshot.loaded
         else '<span class="sep">·</span><span>Stopped before traces were loaded</span>'
         if snapshot.total == 0
+        else '<span class="sep">·</span><span class="finder-progress-answer">This question did not map to any filter or AI check. '
+        "Ask AI finds traces; it can't compute totals or rankings. Try asking which traces show something.</span>"
+        if snapshot.dimensions == () and not _question_added_filters(snapshot)
         else f'<span class="sep">·</span><span><b>{snapshot.matched}</b> kept by filters</span>'
         '<span class="sep">·</span><span>no AI classification needed</span>'
         if snapshot.dimensions == ()
@@ -537,6 +539,13 @@ def progress(
         f'<div class="finder-progress" data-state="{esc(snapshot.state)}">{live_html}<span class="state">{esc(state)}</span>{counts}'
         f'{elapsed_html}{error_html}{action}{_progress_bar(snapshot)}</div>'
     )
+
+
+def _question_added_filters(snapshot: RunSnapshot) -> bool:
+    """True when the compiled question narrowed the traces by any facet or numeric filter."""
+    facets = any(getattr(snapshot.generated_filters, name) for name in FACET_NAMES)
+    numeric = any(value is not None for value in snapshot.generated_numeric.model_dump().values())
+    return facets or numeric
 
 
 def _judging_text(snapshot: RunSnapshot) -> str:
@@ -880,7 +889,7 @@ def body(
             f'{task_panel(snapshot.dimensions, editable=True, open_=True, request=snapshot.request, total=snapshot.total)}'
             f'{filter_output_panel(snapshot)}'
             '<div class="finder-review-actions"><button class="btn-secondary" type="submit" form="explorer-load-form" '
-            'hx-post="/find/load" hx-include="#finder-start-form, #finder-controls" hx-target="#explorer-results" hx-swap="outerHTML">'
+            'hx-post="/find/load" hx-include="#finder-start-form, #finder-controls, #finder-scope" hx-target="#explorer-results" hx-swap="outerHTML">'
             'Apply filters only</button></div>'
         )
     if snapshot.state == 'idle':
@@ -951,15 +960,18 @@ def fragment(
     return f'<div class="finder-body-fragment"{attrs}>{error_html}{body(snapshot, settings, catalogue=catalogue, pending=pending, api_available=api_available, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}</div>'
 
 
-def scope_toggle(*, has_rows: bool) -> str:
+def scope_toggle(*, has_rows: bool, selected: str | None = None) -> str:
+    selected = selected if selected in {'within', 'new'} else ('within' if has_rows else 'new')
+    if selected == 'within' and not has_rows:
+        selected = 'new'
     within = '' if has_rows else ' disabled'
     return (
         '<label><input type="radio" name="scope" value="within" form="finder-query-form"'
-        + (' checked' if has_rows else '')
+        + (' checked' if selected == 'within' else '')
         + within
         + '><span>Within results</span></label>'
         + '<label><input type="radio" name="scope" value="new" form="finder-query-form"'
-        + ('' if has_rows else ' checked')
+        + (' checked' if selected == 'new' else '')
         + '><span>New search</span></label>'
     )
 
@@ -973,7 +985,7 @@ def drawer(
         '<p>Not classified yet.</p>'
         if result is None
         else (
-            f'<p><b>{"Included" if result.matched and not result.error else "Not included"}</b> · {esc(_answers_text(result, detail.dimensions))}</p>'
+            f'<p><b>{"Not included" if not result.matched else "Included" if result.answers else "Kept by filters"}</b> · {esc(_answers_text(result, detail.dimensions))}</p>'
             if not result.error
             else f'<p role="alert">Failed: {esc(result.error)}</p>'
         )
@@ -1005,11 +1017,12 @@ def drawer(
     row_header = ''
     if row is not None:
         models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.models)
+        reasoning = f' ({esc(fmt_tokens(row.reasoning_tokens))} reasoning)' if row.reasoning_tokens else ''
         row_header = (
             f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
             f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
             f'<div class="fd-row-meta">Started {esc(fmt_time(row.started_at))} · {esc(fmt_tokens(row.tokens_in))} in → '
-            f'{esc(fmt_tokens(row.tokens_out))} out · {esc(fmt_tokens(row.cached_tokens))} cache · '
+            f'{esc(fmt_tokens(row.tokens_out))} out{reasoning} · {esc(fmt_tokens(row.cached_tokens))} cache · '
             f'{fmt_cost(row.cost_total, row.currency)}</div>'
         )
     body_html = (
@@ -1065,7 +1078,7 @@ def _thread_message(
     name = KIND_LABELS.get(kind, role)
     tool = f' · <span class="mono">{esc(label)}</span>' if label else ''
     return (
-        f'<details class="fd-msg k-{esc(kind)}{" on" if selected else ""}" id="msg-{index}" data-msg="{index}"{" open" if selected else ""}>'
+        f'<details class="fd-msg k-{esc(kind)}{" on" if selected else ""}" id="msg-{index}" data-msg="{index}"{" open" if selected and len(content) <= 10_000 else ""}>'
         f'<summary><span class="role"><b>{esc(name)}</b>{tool}</span><em class="fd-msg-meta">#{index} · ~{tokens:,} tok</em>'
         f'<span class="fd-msg-preview">{esc(preview)}</span></summary>'
         f'<div class="fd-msg-content">{esc(content)}</div></details>'
