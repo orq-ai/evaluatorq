@@ -1615,7 +1615,9 @@ def test_poll_appends_explorer_results_during_classification(explorer_client) ->
     assert 'hx-swap-oob="true"' in html
     # The poll swaps the run status and marks its explorer renders; it never redraws the filter row.
     assert html.startswith('<div id="finder-run-status">')
-    assert html.count('data-poll') == 2
+    assert html.count(' data-poll data-poll-sequence=') == 2
+    sequences = re.findall(r'data-poll-sequence="(\d+)"', html)
+    assert len(sequences) == 2 and sequences[0] == sequences[1]
     assert 'id="finder-controls"' not in html
     assert 'name="facet_model" value="poll-model"' not in html
 
@@ -2800,20 +2802,44 @@ def test_render_key_is_stable_for_an_unchanged_poll(explorer_client) -> None:
     assert keys(client.get('/find/rows?sort=tokens_in&dir=asc').text) != first
 
 
-def test_reverse_poll_completion_is_rejected_by_render_sequence(explorer_client) -> None:
+@pytest.mark.asyncio
+async def test_reverse_poll_completion_is_rejected_by_render_sequence(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _, _, client = explorer_client
     _load(client)
+    first_store_entered = asyncio.Event()
+    release_first_store = asyncio.Event()
+    store_calls = 0
+    original_store = finder_routes._store
 
-    def sequence(html: str) -> int:
-        match = re.search(r'id="explorer-results"[^>]*data-poll-sequence="(\d+)"', html)
+    async def delayed_store(app: Any, **kwargs: Any) -> Any:
+        nonlocal store_calls
+        store_calls += 1
+        if store_calls == 1:
+            first_store_entered.set()
+            await release_first_store.wait()
+        return await original_store(app, **kwargs)
+
+    monkeypatch.setattr(finder_routes, '_store', delayed_store)
+
+    def sequence(html: str, element_id: str) -> int:
+        match = re.search(rf'id="{element_id}"[^>]*data-poll-sequence="(\d+)"', html)
         assert match is not None
         return int(match.group(1))
 
-    # The first poll can finish rendering after the second one. Its request-time sequence
-    # stays lower, so dashboard.js rejects it even when view.version did not change.
-    earlier = client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text
-    later = client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text
-    assert sequence(earlier) < sequence(later)
+    async with AsyncClient(transport=ASGITransport(app=client.app), base_url='http://testserver') as http:
+        earlier_task = asyncio.create_task(http.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}))
+        await asyncio.wait_for(first_store_entered.wait(), timeout=2)
+        later = await http.get('/find/rows', headers={'HX-Trigger': 'explorer-results'})
+        release_first_store.set()
+        earlier = await earlier_task
+
+    # The second response completes first, but the delayed first request keeps its lower
+    # token because allocation happened before it awaited store access.
+    assert sequence(later.text, 'explorer-results') > sequence(earlier.text, 'explorer-results')
+    assert sequence(later.text, 'explorer-toolbar') == sequence(later.text, 'explorer-results')
+    assert sequence(earlier.text, 'explorer-toolbar') == sequence(earlier.text, 'explorer-results')
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     assert 'if (sequence < shownSequence) { evt.detail.shouldSwap = false; return; }' in js
 

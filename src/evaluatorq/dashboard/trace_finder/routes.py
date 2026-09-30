@@ -613,7 +613,14 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             'explorer_numeric': explorer_view.numeric if explorer_view is not None else None,
         }
 
-    async def _explorer_html(req: Request, *, oob: bool = False, error: str | None = None, poll: bool = False) -> str:
+    async def _explorer_html(
+        req: Request,
+        *,
+        oob: bool = False,
+        error: str | None = None,
+        poll: bool = False,
+        poll_sequence: int | None = None,
+    ) -> str:
         store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
@@ -627,11 +634,10 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 window_days=_settings(req.app).window_days,
                 traces_layout=not is_search(req),
                 poll=poll,
-                poll_sequence=next(_POLL_RENDER_SEQUENCE) if poll else None,
+                poll_sequence=poll_sequence,
             )
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
-        poll_sequence = next(_POLL_RENDER_SEQUENCE) if poll else None
         results = snapshot.results if snapshot.within_results else None
         page_ids = [row.trace_id for row in view.page_rows(results)]
         records = None
@@ -871,6 +877,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
     # or identical to it, and after a real swap restores open menus, scroll, .sel and focus.
     @app.get('/find/poll')
     async def find_poll(req: Request) -> Response:
+        poll_sequence = next(_POLL_RENDER_SEQUENCE)
         settings = _settings(req.app)
         store = await store_for(req)
         if isinstance(store, RunStore):
@@ -885,7 +892,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             if (explorer_view.rows or snapshot.within_results) and (
                 snapshot.state in {'classifying', 'completed'} or snapshot.results
             ):
-                explorer_oob = await _explorer_html(req, oob=True, poll=True)
+                explorer_oob = await _explorer_html(req, oob=True, poll=True, poll_sequence=poll_sequence)
         if not is_search(req) and store is not None and snapshot.state not in {'idle', 'awaiting_review'}:
             running = snapshot.state in {'compiling', 'classifying'}
             status = run_status(snapshot, settings, has_explorer=explorer_view is not None)
@@ -950,6 +957,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
 
     @app.get('/find/rows')
     async def find_rows(req: Request) -> Response:
+        polling = req.headers.get('HX-Trigger') == 'explorer-results'
+        poll_sequence = next(_POLL_RENDER_SEQUENCE) if polling else None
         store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
         explorer = store.explorer if store is not None else None
         if explorer is not None:
@@ -969,8 +978,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             if view.state == 'loaded' and view.quick_view == 'conv_longest' and view.rows:
                 await explorer.start_message_counting(retry=params.get('quick_view') == 'conv_longest')
         # The section's own timer swaps nothing itself (hx-swap="none"), so its render arrives out of band.
-        polling = req.headers.get('HX-Trigger') == 'explorer-results'
-        body = await _explorer_html(req, oob=polling, poll=polling)
+        body = await _explorer_html(req, oob=polling, poll=polling, poll_sequence=poll_sequence)
         return _html(body)
 
     @app.post('/find/columns')
