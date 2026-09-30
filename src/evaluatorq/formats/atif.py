@@ -232,8 +232,9 @@ def _parts_have_audio(content: str | list[AtifContentPart] | None) -> bool:
 class AtifTrajectory(BaseModel):
     """An agent run as an ATIF-v1.7 or v1.8 trajectory.
 
-    Reading accepts `ATIF-v1.7` and `ATIF-v1.8` only. `from_json` requires `schema_version` at the document
-    root; built in code (or embedded as a subagent) the field defaults to `ATIF-v1.7`. `to_json` keeps the
+    Read a document with `from_json`, not `model_validate_json`. Reading accepts `ATIF-v1.7` and `ATIF-v1.8`
+    only. `from_json` requires `schema_version` at the document root and rejects a v1.7 document holding
+    audio; built in code (or embedded as a subagent) the field defaults to `ATIF-v1.7`. `to_json` keeps the
     trajectory's own `schema_version`, upgrading to v1.8 when any content part in the document (embedded
     subagents included) is audio.
     """
@@ -291,10 +292,12 @@ class AtifTrajectory(BaseModel):
     def from_json(cls, data: str | bytes | dict[str, Any]) -> AtifTrajectory:
         """Read an ATIF JSON document (text, bytes or an already-parsed dict).
 
-        Unlike `model_validate`, the document root must carry `schema_version`, as the ATIF spec requires.
+        Unlike `model_validate`, the document root must carry `schema_version`, as the ATIF spec requires,
+        and a document stamped `ATIF-v1.7` may not contain audio content parts (audio needs `ATIF-v1.8`).
 
         Raises:
-            ValueError: The document is not a JSON object, has no `schema_version`, or does not validate.
+            ValueError: The document is not a JSON object, has no `schema_version`, claims `ATIF-v1.7` while
+                containing audio, or does not validate.
         """
         doc: Any = json.loads(data) if isinstance(data, (str, bytes)) else data
         if not isinstance(doc, dict):
@@ -303,7 +306,11 @@ class AtifTrajectory(BaseModel):
         if 'schema_version' not in doc:
             msg = 'schema_version is required (supported: ATIF-v1.7, ATIF-v1.8)'
             raise ValueError(msg)
-        return cls.model_validate(doc)
+        trajectory = cls.model_validate(doc)
+        if trajectory.schema_version == 'ATIF-v1.7' and trajectory.has_audio():
+            msg = 'Document declares schema_version ATIF-v1.7 but contains audio content parts (audio needs ATIF-v1.8)'
+            raise ValueError(msg)
+        return trajectory
 
     def has_audio(self) -> bool:
         """Return True if any content part in this trajectory or an embedded subagent is audio."""

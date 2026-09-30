@@ -90,11 +90,11 @@ def test_atif_responses_atif_merges_steps_whose_results_have_no_call_id() -> Non
     assert all(s.metrics is None for s in back.steps)
 
 
-def test_chat_otel_chat_keeps_messages_but_not_item_ids() -> None:
+def test_chat_otel_chat_keeps_messages_and_item_ids() -> None:
     chat = _chat()
     back = chat.to_otel().to_chat()
     expected = [m.model_dump(exclude_none=True) for m in chat.messages]
-    del expected[1]['tool_calls'][0]['item_id']  # held in ATIF step extra, which OTel drops
+    assert expected[1]['tool_calls'][0]['item_id']  # held in ATIF step extra, carried as a span attribute
     assert [m.model_dump(exclude_none=True) for m in back.messages] == expected
 
 

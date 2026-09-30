@@ -274,10 +274,10 @@ def test_image_result_content_becomes_a_warned_marker(caplog: pytest.LogCaptureF
         'steps': [{'step_id': 1, 'source': 'agent', 'message': '', 'tool_calls': [
             {'tool_call_id': 'c', 'function_name': 'f', 'arguments': {}}],
             'observation': {'results': [{'source_call_id': 'c', 'content': [
-                {'type': 'text', 'text': 'see '},
+                {'type': 'text', 'text': 'see'},
                 {'type': 'image', 'source': {'media_type': 'image/png', 'path': 'p.png'}}]}]}}]})
     tool = next(s for s in traj.to_otel().spans if s.operation == 'execute_tool')
-    assert tool.attributes['gen_ai.tool.call.result'] == 'see [image: p.png]'
+    assert tool.attributes['gen_ai.tool.call.result'] == 'see\n[image: p.png]'
     assert caplog.text.count('p.png') == 1
 
 
@@ -336,3 +336,83 @@ def test_multi_part_messages_join_with_newlines_in_every_role() -> None:
     span = _chat('c', [{'role': 'user', 'parts': parts}], [{'role': 'assistant', 'parts': parts}])
     span['attributes']['gen_ai.system_instructions'] = parts
     assert _sig(OtelTrace.from_orq([span]).to_atif()) == [('system', 'a\nb'), ('user', 'a\nb'), ('agent', 'a\nb')]
+
+
+def _extras_traj() -> AtifTrajectory:
+    return AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7',
+        'session_id': 's-extra',
+        'agent': {'name': 'a', 'version': '1'},
+        'extra': {'run': {'seed': 7}},
+        'final_metrics': {'total_steps': 2, 'total_cost_usd': 0.5, 'extra': {'judge': 'j1'}},
+        'steps': [
+            {'step_id': 1, 'source': 'user', 'message': 'go'},
+            {
+                'step_id': 2,
+                'source': 'agent',
+                'message': '',
+                'extra': {'custom': [1, 2], 'finish_reasons': ['tool_calls']},
+                'tool_calls': [
+                    {'tool_call_id': 'c1', 'function_name': 'f', 'arguments': {}, 'extra': {'origin': 'mcp'}}
+                ],
+                'observation': {'results': [{'source_call_id': 'c1', 'content': 'ok', 'extra': {'latency': 3}}]},
+            },
+        ],
+    })
+
+
+def test_atif_extras_and_final_metrics_round_trip_through_otel() -> None:
+    src = _extras_traj()
+    trace = src.to_otel()
+    root = trace.roots()[0]
+    assert json.loads(root.attributes['evaluatorq.atif.trajectory.extra']) == {'run': {'seed': 7}}
+    chat = next(s for s in trace.spans if s.operation == 'chat')
+    assert json.loads(chat.attributes['evaluatorq.atif.step.extra']) == {'custom': [1, 2]}
+    back = trace.to_atif()
+    assert back.extra == src.extra
+    assert back.final_metrics == src.final_metrics
+    step = back.steps[1]
+    assert step.extra is not None and step.extra['custom'] == [1, 2] and 'ancestry' in step.extra
+    assert step.tool_calls is not None and step.tool_calls[0].extra == {'origin': 'mcp'}
+    assert step.observation is not None and step.observation.results[0].extra == {'latency': 3}
+
+
+def test_empty_extras_write_no_attribute() -> None:
+    trace = _steps(('user', 'hi'), ('agent', 'yo')).to_otel()
+    assert not any(key.startswith('evaluatorq.atif.') for span in trace.spans for key in span.attributes)
+
+
+def test_values_the_trace_yields_win_over_carried_ones(caplog: pytest.LogCaptureFixture) -> None:
+    src = _extras_traj()
+    trace = src.to_otel()
+    chat = next(s for s in trace.spans if s.operation == 'chat')
+    chat.attributes['evaluatorq.atif.step.extra'] = json.dumps({'custom': 1, 'finish_reasons': ['stop']})
+    step = trace.to_atif().steps[1]
+    assert step.extra is not None and step.extra['finish_reasons'] == ['tool_calls'] and step.extra['custom'] == 1
+    assert 'finish_reasons' in caplog.text
+
+
+def test_object_valued_invocation_keeps_times_and_status() -> None:
+    from types import SimpleNamespace
+
+    invocation = SimpleNamespace(start_timestamp=1_700_000_000.0, end_timestamp=1_700_000_002.0, status='error')
+    traj = AtifTrajectory(
+        session_id='s-obj',  # the id seed would otherwise JSON-dump the object
+        agent=AtifAgent(name='a', version='1'),
+        steps=[AtifStep(step_id=1, source='agent', message='x', extra={'invocation': invocation})],
+    )
+    chat = next(s for s in traj.to_otel().spans if s.operation == 'chat')
+    assert chat.start_time is not None and chat.start_time.timestamp() == 1_700_000_000.0
+    assert chat.end_time is not None and chat.end_time.timestamp() == 1_700_000_002.0
+    assert chat.status == 'error'
+
+
+def test_multi_part_text_result_joins_with_newlines() -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'},
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': '', 'tool_calls': [
+            {'tool_call_id': 'c', 'function_name': 'f', 'arguments': {}}],
+            'observation': {'results': [{'source_call_id': 'c', 'content': [
+                {'type': 'text', 'text': 'a'}, {'type': 'text', 'text': 'b'}]}]}}]})
+    tool = next(s for s in traj.to_otel().spans if s.operation == 'execute_tool')
+    assert tool.attributes['gen_ai.tool.call.result'] == 'a\nb'

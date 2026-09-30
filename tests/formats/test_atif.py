@@ -219,3 +219,29 @@ def test_v1_8_without_audio_keeps_1_8_by_default() -> None:
 def test_v1_8_without_audio_can_downgrade_to_1_7() -> None:
     traj = AtifTrajectory.model_validate(_traj(schema_version='ATIF-v1.8'))
     assert json.loads(traj.to_json(version='1.7'))['schema_version'] == 'ATIF-v1.7'
+
+
+def _audio_doc() -> dict[str, Any]:
+    return _audio_traj().model_dump(mode='json', exclude_none=True)
+
+
+def test_from_json_rejects_v1_7_document_with_audio() -> None:
+    doc = {**_audio_doc(), 'schema_version': 'ATIF-v1.7'}
+    with pytest.raises(ValueError, match=r'ATIF-v1\.7.*audio'):
+        AtifTrajectory.from_json(json.dumps(doc))
+
+
+def test_from_json_rejects_v1_7_document_with_audio_in_embedded_subagent() -> None:
+    sub = {**_audio_doc(), 'trajectory_id': 'sub'}
+    del sub['schema_version']
+    with pytest.raises(ValueError, match=r'ATIF-v1\.7.*audio'):
+        AtifTrajectory.from_json(_traj(subagent_trajectories=[sub]))
+
+
+def test_from_json_accepts_v1_8_document_with_audio() -> None:
+    assert AtifTrajectory.from_json(json.dumps(_audio_doc())).has_audio()
+
+
+def test_code_built_v1_7_with_audio_still_upgrades_on_write() -> None:
+    traj = AtifTrajectory.model_validate({**_audio_doc(), 'schema_version': 'ATIF-v1.7'})
+    assert json.loads(traj.to_json())['schema_version'] == 'ATIF-v1.8'

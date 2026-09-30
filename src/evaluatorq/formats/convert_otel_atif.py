@@ -10,22 +10,26 @@ spans only: `invoke_agent` spans carry inclusive totals that would double-count.
 ATIF -> OTel emits the GenAI semconv layout: one `invoke_agent` span, and under it one `chat` span per agent step
 plus one `execute_tool` span per tool call as siblings. User and system steps after the last agent step go into
 one final `chat` span that has input and no output, which OTel -> ATIF reads back as those steps and no agent
-step. Ids are SHA-256 of the session and trajectory ids.
+step. Ids are SHA-256 of the session and trajectory ids. ATIF `extra` data with no semconv home, and
+`final_metrics`, travel as JSON-string attributes under `evaluatorq.atif.` and are read back on the way in.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from loguru import logger
 
+from evaluatorq.common.fields import get_field
 from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.formats._ids import content_seed, stable_hex
 from evaluatorq.formats._shared import arguments_text, atif_content_text, final_metrics, join_text, tool_arguments
 from evaluatorq.formats.atif import (
     AtifAgent,
     AtifContentPart,
+    AtifFinalMetrics,
     AtifMetrics,
     AtifObservation,
     AtifObservationResult,
@@ -56,6 +60,15 @@ _UNKNOWN = 'unknown'
 _OTHER_ERROR = '_OTHER'  # the semconv `error.type` fallback when a failed span names no error
 _STATUSES = frozenset({'ok', 'error', 'unset'})
 
+# ATIF data OTel has no attribute for, carried as JSON strings so OTel -> ATIF can restore it.
+_STEP_EXTRA = 'evaluatorq.atif.step.extra'
+_TRAJECTORY_EXTRA = 'evaluatorq.atif.trajectory.extra'
+_FINAL_METRICS = 'evaluatorq.atif.final_metrics'
+_TOOL_CALL_EXTRA = 'evaluatorq.atif.tool_call.extra'
+_RESULT_EXTRA = 'evaluatorq.atif.result.extra'
+# Step extra keys the chat span already maps (or OTel -> ATIF derives from the span); never carried as JSON.
+_MAPPED_STEP_EXTRA = frozenset({'ancestry', 'invocation', 'finish_reasons', 'error_type', 'requested_model'})
+
 
 @dataclass
 class _Scope:
@@ -83,9 +96,12 @@ def otel_to_atif(trace: OtelTrace, *, agent_name: str = _UNKNOWN, agent_version:
     The agent name and version fall back to `gen_ai.agent.name` / `gen_ai.agent.version` of the scope's
     `invoke_agent` span when left at `'unknown'`.
 
+    `evaluatorq.atif.*` attributes written by `atif_to_otel` are merged back into the matching `extra` and
+    `final_metrics`; a key the trace itself yields keeps the trace's value (a differing carried value is warned).
+
     Lost: chat input messages before the first chat span (prior history, warned), extra output choices
-    (warned), span attributes other than model, usage, finish reasons and error type, and spans that are not
-    `chat`, `execute_tool` or `invoke_agent`.
+    (warned), span attributes other than model, usage, finish reasons, error type and `evaluatorq.atif.*`, and
+    spans that are not `chat`, `execute_tool` or `invoke_agent`.
 
     Raises:
         ValueError: The trace has no chat span that yields a step.
@@ -169,6 +185,7 @@ def _build(
     subagents = _subagents(trace, scope, drafts, session_id, trajectory_id, by_id)
     if not drafts:
         return None
+    agent_span = tops[0] if len(tops) == 1 and tops[0].operation == 'invoke_agent' else None
     steps = [
         AtifStep(
             step_id=index + 1,
@@ -182,9 +199,51 @@ def _build(
         trajectory_id=trajectory_id,
         agent=agent,
         steps=steps,
-        final_metrics=final_metrics(steps),
+        final_metrics=_final_metrics(steps, agent_span),
+        extra=_carried(agent_span, _TRAJECTORY_EXTRA),
         subagent_trajectories=subagents or None,
     )
+
+
+def _final_metrics(steps: list[AtifStep], agent_span: OtelSpan | None) -> AtifFinalMetrics | None:
+    derived = final_metrics(steps)
+    carried = _carried(agent_span, _FINAL_METRICS)
+    if carried is None:
+        return derived
+    merged = _merge(derived.model_dump(exclude_none=True) if derived else None, carried, _FINAL_METRICS)
+    try:
+        return AtifFinalMetrics.model_validate(merged)
+    except ValueError as exc:
+        logger.warning('{} does not validate ({}); using the totals summed from the steps', _FINAL_METRICS, exc)
+        return derived
+
+
+def _carried(span: OtelSpan | None, key: str) -> dict[str, Any] | None:
+    """The JSON object `atif_to_otel` stored under `key`, or None when absent or unreadable (warned)."""
+    raw = span.attributes.get(key) if span is not None else None
+    if raw is None:
+        return None
+    try:
+        value: Any = json.loads(raw) if isinstance(raw, str) else raw
+    except json.JSONDecodeError:
+        value = None
+    if value == {}:
+        return None
+    if not isinstance(value, dict):
+        logger.warning('Span {} attribute {} is not a JSON object; ignoring it', span.span_id if span else '', key)
+        return None
+    return cast('dict[str, Any]', value)
+
+
+def _merge(derived: dict[str, Any] | None, carried: dict[str, Any] | None, where: str) -> dict[str, Any] | None:
+    """Carried keys plus derived ones; a derived key wins, and a differing carried value for it is warned."""
+    if not carried:
+        return derived
+    derived = derived or {}
+    clashes = sorted(key for key, value in derived.items() if key in carried and carried[key] != value)
+    if clashes:
+        logger.warning('{}: keeping the values the trace yields for {}, over the carried ones', where, clashes)
+    return {**carried, **derived}
 
 
 def _chat_steps(chats: list[OtelSpan], by_id: dict[str, OtelSpan]) -> tuple[list[_Draft], list[list[OtelMessage]]]:
@@ -292,6 +351,7 @@ def _agent_step(chat: OtelSpan, by_id: dict[str, OtelSpan]) -> _Draft | None:
             other.append(part)
     extra = _step_extra(chat, by_id)
     extra.update(_split_text(other, f'chat span {chat.span_id} output')[1] or {})
+    extra = _merge(extra, _carried(chat, _STEP_EXTRA), f'chat span {chat.span_id} {_STEP_EXTRA}')
     fields: dict[str, Any] = {
         'source': 'agent',
         'message': join_text(texts),
@@ -387,8 +447,12 @@ def _attach_results(
         if draft.span is None:
             continue
         issued_at = position[draft.span.span_id]
-        for call in draft.fields['tool_calls'] or []:
+        calls: list[AtifToolCall] = draft.fields['tool_calls'] or []
+        for n, call in enumerate(calls):
             span = by_call.get(call.tool_call_id)
+            call_extra = _carried(span, _TOOL_CALL_EXTRA)
+            if call_extra is not None:
+                calls[n] = call.model_copy(update={'extra': call_extra})
             found = next(
                 (n for n, (at, part) in enumerate(responses) if at > issued_at and part.id == call.tool_call_id), None
             )
@@ -462,7 +526,8 @@ def _result(
         content = tool_result_to_text(part.response)
     if orphan and call_id is not None:
         extra['orphan_call_id'] = call_id
-    return AtifObservationResult(source_call_id=None if orphan else call_id, content=content, extra=extra or None)
+    merged = _merge(extra, _carried(span, _RESULT_EXTRA), f'tool span {span.span_id if span else ""} {_RESULT_EXTRA}')
+    return AtifObservationResult(source_call_id=None if orphan else call_id, content=content, extra=merged or None)
 
 
 def _subagents(
@@ -522,11 +587,17 @@ def atif_to_otel(traj: AtifTrajectory) -> OtelTrace:
     `execute_tool` span of the call whose result references them, else under the root span, and share the
     root's trace id.
 
+    Kept as JSON-string attributes (skipped when empty): agent step `extra` beyond the keys mapped to
+    semconv (`evaluatorq.atif.step.extra` on the chat span), trajectory `extra` and `final_metrics`
+    (`evaluatorq.atif.trajectory.extra`, `evaluatorq.atif.final_metrics` on the `invoke_agent` span), and
+    tool-call and result `extra` (`evaluatorq.atif.tool_call.extra`, `evaluatorq.atif.result.extra` on the
+    `execute_tool` span). Step `extra.ancestry` is not carried: OTel -> ATIF rebuilds it from the span tree.
+
     Lost, with a warning per kind: observation results with no `source_call_id` (no tool message or span
     holds them), results on user and system steps, and subagent refs that are not embedded. Lost silently:
     the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`, `agent.tool_definitions`,
-    user and system step timestamps, `llm_call_count`, `is_copied_context`, and step `extra` keys other than
-    `invocation`, `finish_reasons`, `error_type`, `requested_model` and `original_role`.
+    `agent.extra`, user and system step timestamps and `extra` (other than `original_role`), `llm_call_count`,
+    `is_copied_context`, and metrics `extra` other than `reasoning_tokens`.
     """
     trace_id = stable_hex(_seed(traj), 'trace', length=32)
     return OtelTrace(spans=_emit_agent(traj, None, trace_id))
@@ -567,6 +638,9 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     }
     if traj.session_id is not None:
         attributes['gen_ai.conversation.id'] = traj.session_id
+    _put_json(attributes, _TRAJECTORY_EXTRA, traj.extra)
+    if traj.final_metrics is not None:
+        _put_json(attributes, _FINAL_METRICS, traj.final_metrics.model_dump(mode='json', exclude_none=True))
     starts = [span.start_time for span in spans if span.start_time is not None]
     root = OtelSpan(
         trace_id=trace_id,
@@ -735,7 +809,15 @@ def _chat_attributes(step: AtifStep, error_type: str | None) -> dict[str, Any]:
         attributes['gen_ai.response.finish_reasons'] = finish_reasons
     if error_type is not None:
         attributes['error.type'] = error_type
+    unmapped = {key: value for key, value in (step.extra or {}).items() if key not in _MAPPED_STEP_EXTRA}
+    _put_json(attributes, _STEP_EXTRA, unmapped)
     return attributes
+
+
+def _put_json(attributes: dict[str, Any], key: str, value: dict[str, Any] | None) -> None:
+    """Store a non-empty dict as a JSON-string attribute (values JSON cannot encode are written as text)."""
+    if value:
+        attributes[key] = json.dumps(value, separators=(',', ':'), default=str)
 
 
 def _tool_span(
@@ -753,8 +835,10 @@ def _tool_span(
         'gen_ai.tool.call.id': call.tool_call_id,
         'gen_ai.tool.call.arguments': arguments_text(call.arguments),
     }
+    _put_json(attributes, _TOOL_CALL_EXTRA, call.extra)
     error_type = None
     if result is not None:
+        _put_json(attributes, _RESULT_EXTRA, result.extra)
         if text is not None:
             attributes['gen_ai.tool.call.result'] = text
         error = (result.extra or {}).get('error_type')
@@ -776,14 +860,13 @@ def _tool_span(
 def _times(step: AtifStep) -> tuple[datetime | None, datetime | None, Literal['ok', 'error', 'unset']]:
     """Start, end and status from `extra.invocation`, else the step timestamp as the start (no end is invented)."""
     invocation = (step.extra or {}).get('invocation')
-    if not isinstance(invocation, dict):
+    if invocation is None:
         return parse_time(step.timestamp), None, 'unset'
-    invocation = cast('dict[str, Any]', invocation)
-    start = parse_time(invocation.get('start_timestamp')) or parse_time(step.timestamp)
-    status = invocation.get('status')
+    start = parse_time(get_field(invocation, 'start_timestamp')) or parse_time(step.timestamp)
+    status = get_field(invocation, 'status')
     return (
         start,
-        parse_time(invocation.get('end_timestamp')),
+        parse_time(get_field(invocation, 'end_timestamp')),
         cast("Literal['ok', 'error', 'unset']", status) if status in _STATUSES else 'unset',
     )
 
