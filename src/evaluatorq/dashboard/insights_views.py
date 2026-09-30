@@ -482,9 +482,8 @@ def labels(run: InsightsRun) -> str:
     for name, result in run.labels.items():
         total = max(1, sum(result.counts.values()))
         rows = []
-        counts = list(result.counts.items())
-        if result.spec.kind == 'score':
-            counts.sort(key=lambda item: int(item[0]) if item[0].isdigit() else float('inf'))
+        counts_by_value = result.counts
+        counts = [(value, counts_by_value[value]) for value in _ordered(run, name, counts_by_value)]
         for value, count in counts:
             pct = round(count / total * 100)
             href = f'/insights/{quote(run.run_id, safe="")}/tab/traces?label={quote(name)}&value={quote(value)}'
