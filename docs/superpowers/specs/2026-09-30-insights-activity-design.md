@@ -22,7 +22,7 @@ The Shell commands section groups normalized commands by program, with expandabl
 
 Show a weekly chart for the selected item's trace coverage. Each week displays both traces using the item and eligible traces observed that week, so a week with little data cannot resemble a strong trend. Use the trace timestamp and a consistent UTC week boundary. Do not draw a trend when the run has only one populated week; show the week's count instead.
 
-Show `Often together` lists for items in the same category and in the other categories. Rank by the number of traces containing both items, show that count alongside the selected item's trace count, and allow each partner to be selected. Exclude a shell tool's mechanically nested relationship with its own shell commands so `Bash` does not dominate every command's cross-category list. These are co-occurrences within a trace; the stored maps cannot reveal order, arguments, or success of individual calls.
+Show `Often together` lists for items in the same category and in the other categories. Rank by the number of traces containing both items, show that count alongside the selected item's trace count and the rounded percentage of selected-item traces, and allow each partner to be selected. Keep the count and percentage together when long item names wrap. Exclude a shell tool's mechanically nested relationship with its own shell commands so `Bash` does not dominate every command's cross-category list. These are co-occurrences within a trace; the stored maps cannot reveal order, arguments, or success of individual calls.
 
 ## Empty and degraded states
 
