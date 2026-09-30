@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -69,6 +70,7 @@ from evaluatorq.trace_finder.table_csv import export_table_csv
 
 _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
 CONFIRM_ROWS = 500
+_POLL_RENDER_SEQUENCE = itertools.count(1)
 
 
 class FinderRunForm(BaseModel):
@@ -625,9 +627,11 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 window_days=_settings(req.app).window_days,
                 traces_layout=not is_search(req),
                 poll=poll,
+                poll_sequence=next(_POLL_RENDER_SEQUENCE) if poll else None,
             )
         view = await explorer.view()
         snapshot = await store.snapshot_for_render()
+        poll_sequence = next(_POLL_RENDER_SEQUENCE) if poll else None
         results = snapshot.results if snapshot.within_results else None
         page_ids = [row.trace_id for row in view.page_rows(results)]
         records = None
@@ -667,6 +671,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             window_days=_settings(req.app).window_days,
             traces_layout=not is_search(req),
             poll=poll,
+            poll_sequence=poll_sequence,
         )
 
     @app.get('/find')

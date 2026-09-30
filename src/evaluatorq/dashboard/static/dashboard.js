@@ -1122,9 +1122,13 @@
     if (!target || !incoming || !incoming.hasAttribute('data-poll')) return;
     const shown = Number(document.getElementById('explorer-results')?.getAttribute('data-view-version') || 0);
     const version = Number(incoming.getAttribute('data-view-version') || 0);
+    const shownSequence = Number(target.getAttribute('data-poll-sequence') || 0);
+    const sequence = Number(incoming.getAttribute('data-poll-sequence') || 0);
     if (version < shown) { evt.detail.shouldSwap = false; return; }
+    if (sequence < shownSequence) { evt.detail.shouldSwap = false; return; }
     if (incoming.getAttribute('data-render-key') === target.getAttribute('data-render-key')) {
       target.setAttribute('data-view-version', String(version));
+      target.setAttribute('data-poll-sequence', String(sequence));
       evt.detail.shouldSwap = false;
       return;
     }

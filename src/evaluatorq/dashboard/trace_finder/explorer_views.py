@@ -795,6 +795,7 @@ def results(
     window_days: int = 7,
     traces_layout: bool = False,
     poll: bool = False,
+    poll_sequence: int | None = None,
 ) -> str:
     """Render the results section plus its out-of-band toolbar; ``poll`` marks a timer-driven render.
 
@@ -961,6 +962,8 @@ def results(
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     section_body = f'{error_html}{inner}'
     marks = f' data-view-version="{view.version}"' + (' data-poll' if poll else '')
+    if poll_sequence is not None:
+        marks += f' data-poll-sequence="{poll_sequence}"'
     initial_load_mark = ' data-initial-load="ready"' if poll and view.initial_load and view.state == 'loaded' else ''
     # The toolbar travels beside the section, out of band, so the page can keep it ahead of the Ask AI band in the DOM.
     return (

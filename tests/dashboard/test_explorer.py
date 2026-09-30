@@ -2800,6 +2800,24 @@ def test_render_key_is_stable_for_an_unchanged_poll(explorer_client) -> None:
     assert keys(client.get('/find/rows?sort=tokens_in&dir=asc').text) != first
 
 
+def test_reverse_poll_completion_is_rejected_by_render_sequence(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+
+    def sequence(html: str) -> int:
+        match = re.search(r'id="explorer-results"[^>]*data-poll-sequence="(\d+)"', html)
+        assert match is not None
+        return int(match.group(1))
+
+    # The first poll can finish rendering after the second one. Its request-time sequence
+    # stays lower, so dashboard.js rejects it even when view.version did not change.
+    earlier = client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text
+    later = client.get('/find/rows', headers={'HX-Trigger': 'explorer-results'}).text
+    assert sequence(earlier) < sequence(later)
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert 'if (sequence < shownSequence) { evt.detail.shouldSwap = false; return; }' in js
+
+
 def test_poll_in_trajectories_view_never_fetches_messages(explorer_client) -> None:
     from evaluatorq.trace_finder import TraceClassification
 
