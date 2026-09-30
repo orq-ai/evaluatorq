@@ -122,7 +122,52 @@ def test_error_tool_span_records_error_type() -> None:
                             'gen_ai.tool.call.result': 'boom', 'error.type': 'ToolError'}
     obs = OtelTrace.from_orq(raw).to_atif().steps[2].observation
     assert obs is not None
-    assert obs.results[0].extra == {'error_type': 'ToolError'}
+    assert obs.results[0].extra == {
+        'error_type': 'ToolError', 'status': 'error', 'start_timestamp': 1_776_679_202.0,
+        'end_timestamp': 1_776_679_205.0,
+    }
+
+
+def test_tool_span_timing_status_and_definitions_are_converted_and_round_trip() -> None:
+    raw = [
+        {'span_id': 'root', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        {'span_id': 'chat', 'parent_span_id': 'root', 'started_at': 1, 'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.tool.definitions': [
+                {'type': 'function', 'function': {'name': 'lookup', 'parameters': {'type': 'object'}}},
+                {'name': 'flat', 'parameters': {'type': 'object'}},
+            ],
+            'gen_ai.input.messages': [_text('user', 'hi')],
+            'gen_ai.output.messages': [{'role': 'assistant', 'parts': [
+                {'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]}],
+        }},
+        {'span_id': 'tool', 'parent_span_id': 'root', 'started_at': 2, 'ended_at': 4, 'status': 'ok', 'attributes': {
+            'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.id': 'c1',
+            'gen_ai.tool.call.result': 'found',
+        }},
+        {'span_id': 'chat2', 'parent_span_id': 'root', 'started_at': 5, 'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.tool.definitions': [{'name': 'lookup', 'parameters': {'type': 'string'}}],
+            'gen_ai.input.messages': [_text('user', 'hi'),
+                {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]},
+                {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'c1', 'response': 'found'}]}],
+            'gen_ai.output.messages': [_text('assistant', 'done')],
+        }},
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [d.get('name') or d['function']['name'] for d in traj.agent.tool_definitions or []] == ['lookup', 'flat']
+    observation = traj.steps[1].observation
+    assert observation is not None
+    result = observation.results[0]
+    assert result.extra == {'start_timestamp': 2.0, 'end_timestamp': 4.0, 'status': 'ok'}
+    tool = next(span for span in traj.to_otel().spans if span.operation == 'execute_tool')
+    assert tool.start_time is not None and tool.start_time.timestamp() == 2
+    assert tool.end_time is not None and tool.end_time.timestamp() == 4
+    assert tool.status == 'ok'
+    back = traj.to_otel().to_atif()
+    assert back.agent.tool_definitions == traj.agent.tool_definitions
+    assert back.steps[1].observation is not None
+    assert back.steps[1].observation.results[0].extra == result.extra
 
 
 # --- the real Orq export: AgentInvoke wrapper, system prompt as a message, results only in later inputs ---
@@ -249,7 +294,8 @@ def test_unmatched_tool_results_are_warned_and_kept(caplog: pytest.LogCaptureFix
     step = OtelTrace.from_orq(raw).to_atif().steps[1]
     assert step.observation is not None
     results = [(r.source_call_id, r.content, r.extra) for r in step.observation.results]
-    assert results == [('c1', 'ok', None), (None, 'lost', None), (None, 'R', {'orphan_call_id': 'nope'})]
+    assert results == [('c1', 'ok', None), (None, 'lost', {'start_timestamp': 2.0}),
+                       (None, 'R', {'orphan_call_id': 'nope'})]
     assert '2 tool results match no tool call' in caplog.text
 
 

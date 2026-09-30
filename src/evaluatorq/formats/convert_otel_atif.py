@@ -192,6 +192,31 @@ def _attribute(span: OtelSpan | None, key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _tool_definitions(chats: list[OtelSpan]) -> list[dict[str, Any]] | None:
+    """Collect declared tools in first-seen order, keeping the first definition per name."""
+    definitions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for chat in chats:
+        raw = chat.attributes.get('gen_ai.tool.definitions')
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning('Chat span {} has unreadable gen_ai.tool.definitions; ignoring it', chat.span_id)
+                continue
+        if not isinstance(raw, list):
+            continue
+        for definition in raw:
+            if not isinstance(definition, dict):
+                continue
+            function = definition.get('function')
+            name = function.get('name') if isinstance(function, dict) else definition.get('name')
+            if isinstance(name, str) and name and name not in seen:
+                seen.add(name)
+                definitions.append(definition)
+    return definitions or None
+
+
 def _build(
     trace: OtelTrace, tops: list[OtelSpan], *, session_id: str, trajectory_id: str | None, agent: AtifAgent
 ) -> AtifTrajectory | None:
@@ -213,10 +238,11 @@ def _build(
         )
         for index, draft in enumerate(drafts)
     ]
+    definitions = _tool_definitions(chats)
     return AtifTrajectory(
         session_id=session_id,
         trajectory_id=trajectory_id,
-        agent=agent,
+        agent=agent.model_copy(update={'tool_definitions': definitions}) if definitions else agent,
         steps=steps,
         final_metrics=_final_metrics(steps, agent_span),
         extra=_carried(agent_span, _TRAJECTORY_EXTRA),
@@ -602,6 +628,12 @@ def _result(
         content = tool_result_to_text(value) if value is not None else None
         if span.status == 'error':
             extra['error_type'] = span.error_type or _OTHER_ERROR
+        if span.start_time is not None:
+            extra['start_timestamp'] = span.start_time.timestamp()
+        if span.end_time is not None:
+            extra['end_timestamp'] = span.end_time.timestamp()
+        if span.status != 'unset':
+            extra['status'] = span.status
     if content is None and part is not None and part.response is not None:
         content = tool_result_to_text(part.response)
     if orphan and call_id is not None:
@@ -675,7 +707,7 @@ def atif_to_otel(traj: AtifTrajectory) -> OtelTrace:
 
     Lost, with a warning per kind: observation results with no `source_call_id` (no tool message or span
     holds them), results on user and system steps, and subagent refs that are not embedded. Lost silently:
-    the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`, `agent.tool_definitions`,
+    the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`,
     `agent.extra`, user and system step timestamps and `extra` (other than `original_role`), `llm_call_count`,
     `is_copied_context`, and metrics `extra` other than `reasoning_tokens`.
     """
@@ -700,7 +732,11 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     uncarried = False  # a user or system step no chat span has put into its input yet
     for index, step in enumerate(traj.steps):
         if step.source == 'agent':
-            spans.extend(_emit_step(step, seed, trace_id, agent_span_id, history, system, call_spans))
+            spans.extend(
+                _emit_step(
+                    step, seed, trace_id, agent_span_id, history, system, call_spans, traj.agent.tool_definitions
+                )
+            )
             uncarried = False
             continue
         role = _input_role(step)
@@ -806,6 +842,7 @@ def _emit_step(
     history: list[OtelMessage],
     system: list[OtelPart],
     call_spans: dict[str, str],
+    tool_definitions: list[dict[str, Any]] | None,
 ) -> list[OtelSpan]:
     """Emit one agent step's chat span and tool spans, then extend `history` with its turn and results."""
     output = OtelMessage(role='assistant', parts=_assistant_parts(step))
@@ -824,7 +861,7 @@ def _emit_step(
         input_messages=list(history) or None,
         output_messages=[output],
         system_instructions=list(system) or None,
-        attributes=_chat_attributes(step, error_type),
+        attributes=_chat_attributes(step, error_type, tool_definitions),
     )
     results: dict[str, AtifObservationResult] = {}
     for result in step.observation.results if step.observation else []:
@@ -868,8 +905,12 @@ def _assistant_parts(step: AtifStep) -> list[OtelPart]:
     return parts
 
 
-def _chat_attributes(step: AtifStep, error_type: str | None) -> dict[str, Any]:
+def _chat_attributes(
+    step: AtifStep, error_type: str | None, tool_definitions: list[dict[str, Any]] | None
+) -> dict[str, Any]:
     attributes: dict[str, Any] = {'gen_ai.operation.name': 'chat'}
+    if tool_definitions:
+        attributes['gen_ai.tool.definitions'] = tool_definitions
     if step.model_name:
         attributes['gen_ai.request.model'] = _extra_str(step, 'requested_model') or step.model_name
         attributes['gen_ai.response.model'] = step.model_name
@@ -925,13 +966,19 @@ def _tool_span(
         if isinstance(error, str):
             error_type = error
             attributes['error.type'] = error
+    extra = result.extra or {} if result is not None else {}
+    status = extra.get('status')
+    if status not in _STATUSES:
+        status = 'error' if error_type is not None else 'unset'
     return OtelSpan(
         trace_id=trace_id,
         span_id=span_id,
         parent_span_id=parent_span_id,
         name=f'execute_tool {call.function_name}',
         operation='execute_tool',
-        status='error' if error_type is not None else 'unset',
+        start_time=parse_time(extra.get('start_timestamp')),
+        end_time=parse_time(extra.get('end_timestamp')),
+        status=cast("Literal['ok', 'error', 'unset']", status),
         error_type=error_type,
         attributes=attributes,
     )
