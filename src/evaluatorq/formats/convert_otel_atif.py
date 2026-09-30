@@ -331,7 +331,7 @@ def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
         suffix = signatures[-length:]
         for index in range(len(tail_signatures) - length + 1):
             if tail_signatures[index : index + length] == suffix:
-                return [*head, *tail[index + length :]]
+                return [*head, *tail[:index], *tail[index + length :]]
     return [*head, *tail]
 
 

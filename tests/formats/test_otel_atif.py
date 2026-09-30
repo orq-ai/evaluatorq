@@ -594,6 +594,15 @@ def test_rewritten_history_keeps_repeated_new_turn() -> None:
     ]
 
 
+def test_rewritten_history_keeps_new_message_before_replayed_block() -> None:
+    trace = _replay_trace([
+        _text('user', 'q2'), _text('user', 'q1'), _text('assistant', 'a1'), _text('user', 'q3'),
+    ])
+    assert _sig(trace.to_atif()) == [
+        ('system', 'be brief'), ('user', 'q1'), ('agent', 'a1'), ('user', 'q2'), ('user', 'q3'), ('agent', 'a2'),
+    ]
+
+
 def test_reissued_tool_call_with_same_id_but_new_arguments_is_new_input() -> None:
     first_call = {'role': 'assistant', 'parts': [
         {'type': 'tool_call', 'id': 'same', 'name': 'lookup', 'arguments': {'query': 'first'}}]}

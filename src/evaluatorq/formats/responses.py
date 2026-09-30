@@ -154,6 +154,15 @@ class ResponsesConversation(BaseModel):
         items: list[dict[str, Any]] | None = info.data.get('items')
         if responses is None or items is None:
             return responses
+        unsupported = sorted({
+            item.type
+            for response in responses
+            for item in response.output
+            if item.type not in _MODEL_OUTPUT_TYPES and not (item.type == 'message' and item.role == 'assistant')
+        })
+        if unsupported:
+            msg = f'Response.output item types {unsupported} are not supported by ResponsesConversation.responses'
+            raise ValueError(msg)
         turns = output_turns(items)
         typed = {index: output_item(items[index]) for turn in turns for index in turn}
         if all(not response.output for response in responses):

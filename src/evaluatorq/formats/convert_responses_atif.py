@@ -67,6 +67,7 @@ if TYPE_CHECKING:
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text'})
 _UNMAPPED_OUTPUTS_KEY = 'evaluatorq.responses_output_items'
+_UNMAPPED_RESULTS_KEY = 'evaluatorq.responses_result_items'
 _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']] = {
     'image/jpeg': 'image/jpeg',
     'image/png': 'image/png',
@@ -90,6 +91,7 @@ class _Draft:
     calls: list[dict[str, Any]] = field(default_factory=list)
     results: list[dict[str, Any]] = field(default_factory=list)
     unmapped_outputs: list[dict[str, Any]] = field(default_factory=list)
+    unmapped_results: list[dict[str, Any]] = field(default_factory=list)
     seen_result: bool = False
     item: dict[str, Any] | None = None  # the message item of a user/system step
     response: Response | None = None  # the model call that produced an agent step
@@ -155,10 +157,28 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         'custom_tool_call': lambda index, item: current_agent(index).unmapped_outputs.append(item),
         'mcp_call': lambda index, item: current_agent(index).unmapped_outputs.append(item),
         'function_call_output': lambda _, item: _attach_output(item, drafts),
+        'custom_tool_call_output': lambda _, item: _attach_custom_output(item, drafts),
         'compaction': lambda _, item: drafts.append(_Draft(source='system', item=item)),
     }
     walk_items(items, handlers, 'ATIF')
     return drafts
+
+
+def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
+    call_id = item.get('call_id')
+    for draft in reversed(drafts):
+        if draft.source != 'agent':
+            break
+        if any(call.get('call_id') == call_id for call in draft.unmapped_outputs):
+            draft.unmapped_results.append(item)
+            draft.seen_result = True
+            return
+    logger.warning('custom_tool_call_output for call_id {!r} matches no custom_tool_call; preserving it.', call_id)
+    last = drafts[-1] if drafts and drafts[-1].source == 'agent' else _Draft(source='agent')
+    if not drafts or last is not drafts[-1]:
+        drafts.append(last)
+    last.unmapped_results.append(item)
+    last.seen_result = True
 
 
 def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
@@ -284,6 +304,8 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
         extra['fc_item_ids'] = fc_item_ids
     if draft.unmapped_outputs:
         extra[_UNMAPPED_OUTPUTS_KEY] = draft.unmapped_outputs
+    if draft.unmapped_results:
+        extra[_UNMAPPED_RESULTS_KEY] = draft.unmapped_results
     results = [AtifObservationResult(**result) for result in draft.results]
     fields: dict[str, Any] = {}
     if response is not None:
@@ -471,7 +493,9 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
     messages = (
         [Message(role='assistant', content=content or None, tool_calls=calls or None)]
-        if content or calls or not (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
+        if content
+        or calls
+        or not any((step.extra or {}).get(key) for key in (_UNMAPPED_OUTPUTS_KEY, _UNMAPPED_RESULTS_KEY))
         else []
     )
     for result in step.observation.results if step.observation else []:
@@ -508,6 +532,14 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
             (index for index, item in enumerate(items) if item.get('type') == 'function_call_output'), len(items)
         )
         items[insertion:insertion] = outputs
+    raw_results = (step.extra or {}).get(_UNMAPPED_RESULTS_KEY)
+    if isinstance(raw_results, list):
+        results = [
+            item for item in raw_results if isinstance(item, dict) and item.get('type') == 'custom_tool_call_output'
+        ]
+        if len(results) != len(raw_results):
+            logger.warning('Step {} has malformed Responses custom tool results; dropping them.', step.step_id)
+        items.extend(results)
     return items
 
 

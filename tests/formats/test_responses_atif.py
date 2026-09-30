@@ -426,6 +426,13 @@ def test_compaction_item_round_trips_through_atif() -> None:
     assert back.items[-2:] == items[-2:]
 
 
+def test_compaction_response_output_is_rejected_before_alignment() -> None:
+    compaction = {'type': 'compaction', 'id': 'cmp_1', 'encrypted_content': 'gAAA'}
+    response = Response.model_validate({**_response('gpt-x', None).model_dump(), 'output': [compaction]})
+    with pytest.raises(ValueError, match=r"Response.output item types \['compaction'\] are not supported"):
+        ResponsesConversation(items=[compaction], responses=[response])
+
+
 def test_custom_and_mcp_calls_belong_to_response_and_agent_step() -> None:
     custom = {'type': 'custom_tool_call', 'call_id': 'c2', 'name': 'search', 'input': 'query'}
     mcp = {'type': 'mcp_call', 'id': 'mcp_1', 'arguments': '{}', 'name': 'lookup', 'server_label': 'srv'}
@@ -438,3 +445,13 @@ def test_custom_and_mcp_calls_belong_to_response_and_agent_step() -> None:
     assert step.extra is not None and step.extra['evaluatorq.responses_output_items'] == [custom, mcp]
     back = conv.to_atif().to_responses()
     assert back.items[1:] == [custom, mcp]
+
+
+def test_custom_tool_result_round_trips_with_its_call() -> None:
+    call = {'type': 'custom_tool_call', 'call_id': 'c2', 'name': 'search', 'input': 'query'}
+    result = {'type': 'custom_tool_call_output', 'call_id': 'c2', 'output': '/tmp/result'}
+    items = [_ITEMS[0], call, result]
+    traj = ResponsesConversation(items=items).to_atif()
+    step = traj.steps[1]
+    assert step.extra is not None and step.extra['evaluatorq.responses_result_items'] == [result]
+    assert traj.to_responses().items[-2:] == [call, result]
