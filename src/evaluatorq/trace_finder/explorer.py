@@ -538,11 +538,36 @@ class ExplorerStore:
         """Return only trajectory records this load has already hydrated."""
         return {trace_id: self._records[trace_id] for trace_id in trace_ids if trace_id in self._records}
 
-    async def retain_records(self, trace_ids: Collection[str]) -> None:
+    async def retain_records(self, generation: int, trace_ids: Collection[str]) -> None:
         """Drop hydrated records outside the active classification set."""
         keep = set(trace_ids)
         async with self._records_lock:
-            self._records = {trace_id: record for trace_id, record in self._records.items() if trace_id in keep}
+            if self._view.generation == generation:
+                self._records = {trace_id: record for trace_id, record in self._records.items() if trace_id in keep}
+
+    async def records_until_usable(
+        self, trace_ids: Sequence[str], *, generation: int, limit: int
+    ) -> tuple[tuple[TraceRecord, ...], int]:
+        """Hydrate rows in order until ``limit`` usable records are found, retaining only those records."""
+        rows_by_id = {row.trace_id: row for row in self._view.rows}
+        rows = [rows_by_id[trace_id] for trace_id in trace_ids if trace_id in rows_by_id]
+        usable: list[TraceRecord] = []
+        skipped = 0
+        position = 0
+        while position < len(rows) and len(usable) < limit and self._view.generation == generation:
+            batch = rows[position : position + limit - len(usable)]
+            records = await self.records([row.trace_id for row in batch])
+            if self._view.generation != generation:
+                break
+            for row in batch:
+                record = records.get(row.trace_id)
+                if record is None:
+                    skipped += 1
+                else:
+                    usable.append(record)
+            position += len(batch)
+            await self.retain_records(generation, [record.trace_id for record in usable])
+        return tuple(usable), skipped
 
     async def message_counts(self) -> ExplorerView:
         generation = self._view.generation

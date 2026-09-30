@@ -115,6 +115,7 @@ class RunStore:
         *,
         wait: bool = True,
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
         """Compile, select the population, and stage or start the requested run.
@@ -126,7 +127,15 @@ class RunStore:
         skipped, and the generated facets and numeric bounds narrow the loaded rows locally.
         """
 
-        return await self._prepare(request, None, compile_query=True, wait=wait, traces=traces, table=table)
+        return await self._prepare(
+            request,
+            None,
+            compile_query=True,
+            wait=wait,
+            traces=traces,
+            traces_limited=traces_limited,
+            table=table,
+        )
 
     async def start(
         self, request: RunRequest, dimensions: Sequence[CompiledQuery], *, wait: bool = True
@@ -143,13 +152,23 @@ class RunStore:
         compile_query: bool,
         wait: bool = True,
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
         generation, staged_traces = await self._begin(
-            request, compile_query=compile_query, within_results=traces is not None or table is not None
+            request,
+            compile_query=compile_query,
+            within_results=traces is not None or traces_limited is not None or table is not None,
         )
         work = self._plan_and_start(
-            generation, staged_traces, request, dimensions, compile_query=compile_query, traces=traces, table=table
+            generation,
+            staged_traces,
+            request,
+            dimensions,
+            compile_query=compile_query,
+            traces=traces,
+            traces_limited=traces_limited,
+            table=table,
         )
         if wait:
             return await work
@@ -233,11 +252,14 @@ class RunStore:
         *,
         compile_query: bool,
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
     ) -> RunSnapshot:
         # The table narrows with the run only while it still shows the rows this run was asked about.
         explorer_generation = (
-            (await self.explorer.view()).generation if traces is not None and self.explorer is not None else None
+            (await self.explorer.view()).generation
+            if (traces is not None or traces_limited is not None) and self.explorer is not None
+            else None
         )
         try:
             unsupported_reason: str | None = None
@@ -319,20 +341,30 @@ class RunStore:
                 )
 
             if not staged_traces:
-                if traces is not None or table is not None:
+                if traces is not None or traces_limited is not None or table is not None:
                     population = request.population
-                    loader = traces or (lambda: table(population))  # pyright: ignore[reportOptionalCall]
+                    use_limited_loader = (
+                        traces_limited is not None
+                        and generated_filters == FacetSelection()
+                        and generated_numeric == NumericFilters()
+                    )
+                    loader = (
+                        (lambda: traces_limited(population.limit))
+                        if use_limited_loader and traces_limited is not None
+                        else traces or (lambda: table(population))  # pyright: ignore[reportOptionalCall]
+                    )
                     loaded_traces = await self._load_owned(generation, loader)
                     self._report_loaded(generation, len(loaded_traces or ()), len(loaded_traces or ()))
                     # Loaded rows skip the Orq query, so apply the question's generated filters here
                     # and to the table only for within-results runs.
                     staged_traces = (
                         _narrowed(loaded_traces or (), generated_filters, generated_numeric)
-                        if traces is not None
+                        if traces is not None and not use_limited_loader
                         else tuple(loaded_traces or ())
                     )
                     if (
                         traces is not None
+                        and not use_limited_loader
                         and explorer_generation is not None
                         and self.explorer is not None
                         and staged_traces != loaded_traces
@@ -344,8 +376,14 @@ class RunStore:
                             numeric=_merge_numeric(request.population.numeric, generated_numeric),
                         )
                     staged_traces = staged_traces[: request.population.limit]
-                    if traces is not None and self.explorer is not None:
-                        await self.explorer.retain_records([trace.trace_id for trace in staged_traces])
+                    if (
+                        (traces is not None or traces_limited is not None)
+                        and self.explorer is not None
+                        and explorer_generation is not None
+                    ):
+                        await self.explorer.retain_records(
+                            explorer_generation, [trace.trace_id for trace in staged_traces]
+                        )
                     if loaded_traces and not staged_traces:
                         async with self._lock:
                             if generation == self._generation and self._snapshot.state == 'compiling':
@@ -366,7 +404,7 @@ class RunStore:
                 if generation != self._generation or self._snapshot.state != 'compiling':
                     return self._view()
                 if not staged_traces:
-                    raise _empty_traces_error(loaded_rows=traces is not None)
+                    raise _empty_traces_error(loaded_rows=traces is not None or traces_limited is not None)
                 trace_ids = tuple(trace.trace_id for trace in staged_traces)
                 if len(set(trace_ids)) != len(trace_ids):
                     raise ValueError('The selected population contains duplicate trace IDs.')

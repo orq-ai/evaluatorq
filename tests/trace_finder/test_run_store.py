@@ -218,7 +218,7 @@ def make_store(
 
     async def select_filters(query: str, population: PopulationRequest) -> FacetSelection:
         del query, population
-        return filters or FacetSelection(provider=frozenset({'openai'}))
+        return filters if filters is not None else FacetSelection(provider=frozenset({'openai'}))
 
     store = RunStore(
         compiler=planner,
@@ -739,6 +739,30 @@ async def test_compile_with_traces_narrows_loaded_rows_to_the_generated_facet_se
     assert snapshot.generated_filters == FacetSelection(model=frozenset({'gpt-4'}))
     assert snapshot.trace_ids == ('trace-1',)
     assert tuple(item.trace_id for item in snapshot.traces) == ('trace-1',)
+
+
+@pytest.mark.asyncio
+async def test_unfiltered_within_run_uses_limit_loader() -> None:
+    planner = Planner()
+    planner.plan = CompiledPlan(dimensions=(compiled_query(),), numeric=NumericFilters())
+    store, _, _, _, _ = make_store(planner=planner, filters=FacetSelection())
+    asked: list[int] = []
+
+    async def full_loader() -> tuple[TraceRecord, ...]:
+        raise AssertionError('unfiltered limit runs must not hydrate the whole result set')
+
+    async def limited_loader(limit: int) -> tuple[TraceRecord, ...]:
+        asked.append(limit)
+        return (trace(27),)
+
+    snapshot = await store.compile(
+        request(population=PopulationRequest(limit=1)),
+        traces=full_loader,
+        traces_limited=limited_loader,
+    )
+
+    assert asked == [1]
+    assert snapshot.trace_ids == ('trace-27',)
 
 
 @pytest.mark.asyncio

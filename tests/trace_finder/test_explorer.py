@@ -91,9 +91,44 @@ async def test_retain_records_releases_hydrated_rows_outside_the_active_set() ->
     await store.load(START, END, 2, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
     await store.records(['keep', 'drop'])
 
-    await store.retain_records({'keep'})
+    await store.retain_records((await store.view()).generation, {'keep'})
 
     assert store.cached_records(['keep', 'drop']) == {'keep': record('keep')}
+
+
+@pytest.mark.asyncio
+async def test_stale_record_retention_does_not_clear_a_new_load_cache() -> None:
+    rows = (TraceRow(trace_id='keep'), TraceRow(trace_id='drop'))
+    store = store_for(FakeSource(rows))
+    first = await store.load(START, END, 2, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.records(['keep', 'drop'])
+    second = await store.load(START, END, 2, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.records(['keep', 'drop'])
+
+    await store.retain_records(first.generation, {'keep'})
+
+    assert store.cached_records(['keep', 'drop']) == {'keep': record('keep'), 'drop': record('drop')}
+    assert second.generation != first.generation
+
+
+@pytest.mark.asyncio
+async def test_records_until_usable_hydrates_only_through_the_requested_limit() -> None:
+    rows = tuple(TraceRow(trace_id=f't{i}') for i in range(5000))
+    source = FakeSource(rows)
+    source.missing.update({'t0', 't1'})
+    store = store_for(source)
+    view = await store.load(
+        START, END, len(rows), facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False
+    )
+
+    records, skipped = await store.records_until_usable(
+        [row.trace_id for row in rows], generation=view.generation, limit=1
+    )
+
+    assert tuple(record.trace_id for record in records) == ('t2',)
+    assert source.hydrate_calls == [('t0',), ('t1',), ('t2',)]
+    assert skipped == 2
+    assert set(store.cached_records([row.trace_id for row in rows])) == {'t2'}
 
 
 @pytest.mark.asyncio

@@ -824,7 +824,22 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 async def loaded_traces() -> tuple[TraceRecord, ...]:
                     return await hydrate_explorer_rows(ids)
 
-                snapshot = await store.compile(request, wait=False, traces=loaded_traces)
+                async def loaded_traces_limited(limit: int) -> tuple[TraceRecord, ...]:
+                    records, missing = await explorer.records_until_usable(
+                        ids, generation=explorer_view.generation, limit=limit
+                    )
+                    if missing:
+                        logger.warning(
+                            'Skipping {} loaded trace(s) without usable messages in the classification', missing
+                        )
+                    return records
+
+                snapshot = await store.compile(
+                    request,
+                    wait=False,
+                    traces=loaded_traces,
+                    traces_limited=loaded_traces_limited,
+                )
             else:
                 request = _run_request(form, settings)
                 explorer = store.explorer if req.state.finder_surface != 'search' else None
