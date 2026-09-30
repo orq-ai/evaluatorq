@@ -223,11 +223,18 @@
     window.htmx.ajax('GET', url, { target: '#explorer-results', swap: 'outerHTML' });
   }
   document.body.addEventListener('htmx:afterSettle', function (evt) {
-    if (evt.detail?.target?.id === 'explorer-results') runPendingExplorerControl();
+    const target = evt.detail?.target;
+    if (!pendingExplorerControl || target?.id !== 'explorer-results') return;
+    const loadFailed = target.matches('.finder-form-error') || !!target.querySelector('.finder-form-error');
+    if (loadFailed) {
+      pendingExplorerControl = null;
+      return;
+    }
+    runPendingExplorerControl();
   });
   ['htmx:sendError', 'htmx:responseError', 'htmx:timeout'].forEach(function (name) {
     document.body.addEventListener(name, function (evt) {
-      if (evt.detail?.elt?.id === 'explorer-load-form') runPendingExplorerControl();
+      if (evt.detail?.elt?.id === 'explorer-load-form') pendingExplorerControl = null;
     });
   });
   // A swap of the whole filter row (Load, Clear, a new run) replaces the menu and its unsaved ticks with it.
@@ -884,9 +891,7 @@
     const days = Number(seconds) / 86400;
     label.textContent = 'Last ' + (Number.isInteger(days) ? days : days.toFixed(1)) + ' days';
   }
-  document.addEventListener('submit', function (evt) {
-    const form = evt.target;
-    if (!form || form.id !== 'explorer-load-form') return;
+  function explorerRefreshRelativeRange() {
     const mode = document.querySelector('[data-explorer-range-mode]');
     if (!mode || mode.value !== 'relative') return;
     const seconds = Number(document.querySelector('[data-explorer-range-seconds]')?.value || 0);
@@ -902,6 +907,16 @@
       timeInput.value = pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
     });
     explorerUpdateOffsets();
+  }
+  document.addEventListener('submit', function (evt) {
+    const form = evt.target;
+    if (!form || form.id !== 'explorer-load-form') return;
+    explorerRefreshRelativeRange();
+  }, true);
+  // Apply filters only sends its own hx-post, bypassing the form submit event.
+  // Refresh relative dates before htmx gathers the request parameters.
+  document.addEventListener('click', function (evt) {
+    if (evt.target.closest('[hx-post="/find/load"]')) explorerRefreshRelativeRange();
   }, true);
   document.addEventListener('submit', function (evt) {
     const form = evt.target;

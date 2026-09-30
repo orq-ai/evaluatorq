@@ -1430,7 +1430,21 @@ def test_dashboard_js_keeps_facet_search_and_rows_controls_sequenced() -> None:
     assert "control = evt.target.closest('[hx-get][hx-target=\"#explorer-results\"]')" in js
     assert 'pendingExplorerControl = url;' in js
     assert "window.htmx.ajax('GET', url, { target: '#explorer-results', swap: 'outerHTML' })" in js
-    assert "evt.detail?.target?.id === 'explorer-results') runPendingExplorerControl()" in js
+    assert "target.querySelector('.finder-form-error')" in js
+    assert 'if (loadFailed) {' in js
+    assert 'pendingExplorerControl = null;' in js
+    assert 'if (loadFailed) {\n      pendingExplorerControl = null;\n      return;' in js
+
+
+def test_apply_filters_only_refreshes_relative_range_before_htmx_load() -> None:
+    from evaluatorq.dashboard.trace_finder import views as finder_views
+    from evaluatorq.trace_finder import DashboardSettings, RunSnapshot
+
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    html = finder_views.body(RunSnapshot(state='awaiting_review', dimensions=()), DashboardSettings())
+    assert 'hx-post="/find/load"' in html
+    assert "evt.target.closest('[hx-post=\"/find/load\"]')" in js
+    assert 'explorerRefreshRelativeRange();' in js
 
 
 def test_dashboard_js_preserves_open_custom_range_across_results_swaps() -> None:
@@ -1533,6 +1547,7 @@ def test_error_responses_swap_as_html(explorer_client) -> None:
     _, _, client = explorer_client
     response = _load(client, **{'from': '2026-09-27T12:00:00', 'to': '2026-09-27T11:00:00'})
     assert response.status_code == 200
+    assert 'class="finder-review finder-form-error"' in response.text
     assert 'From must be before To.' in response.text
 
 
