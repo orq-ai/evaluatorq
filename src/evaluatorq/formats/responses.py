@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from evaluatorq.openresponses.otel_messages import RESPONSES_ITEM_TYPES
 
 if TYPE_CHECKING:
+    from evaluatorq.formats.atif import AtifTrajectory
     from evaluatorq.formats.chat import ChatConversation
 
 _KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message'}
@@ -41,3 +42,17 @@ class ResponsesConversation(BaseModel):
         from evaluatorq.formats import convert_chat_responses
 
         return convert_chat_responses.responses_to_chat(self)
+
+    def to_atif(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> AtifTrajectory:
+        """Convert to an ATIF trajectory: user/system messages become steps, assistant output becomes agent steps.
+
+        A tool result closes its agent step; `responses` enrich agent steps only when there is exactly one per
+        agent step (otherwise they are ignored with a warning). Kept in free-form slots: reasoning tokens and
+        total tokens in `metrics.extra`; `status`, `error` and `incomplete_details` (non-default only), the
+        response id, `fc_` item ids and encrypted-only reasoning in step `extra`; the developer role in
+        `extra.original_role` of a system step. Lost: encrypted reasoning content, non-text assistant parts,
+        file parts (rendered as `[file: name]` markers), and item types ATIF has no step for (warned).
+        """
+        from evaluatorq.formats import convert_responses_atif
+
+        return convert_responses_atif.responses_to_atif(self, agent_name=agent_name, agent_version=agent_version)
