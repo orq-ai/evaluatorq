@@ -80,7 +80,7 @@ def _part(part: Any, role_kind: Kind, index: int, tool_name: str | None) -> Segm
     function = part.get('function')
     if isinstance(function, Mapping):
         call = function
-    shared_text = content_part_text(part if part.get('type') else {'type': kind, **part})
+    shared_text = content_part_text(part if part.get('type') else {**part, 'type': kind})
     if shared_text is not None:
         return _segment(
             role_kind,
