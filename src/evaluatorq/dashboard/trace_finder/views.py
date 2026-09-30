@@ -40,6 +40,16 @@ SAMPLES = (
     'Conversations over 20k tokens that should have been escalated to a human.',
     'Responses from the docs agent that make unsupported claims.',
 )
+COMMAND_LEDE = 'Recent traces from your agents, newest first: ask a question in plain words, or filter the list below.'
+COMMAND_PLACEHOLDER = 'Ask about these traces, for example: Did any customers get frustrated?'
+COMMAND_EXAMPLES = (
+    'Did any customers get frustrated?',
+    'Which conversations mention refunds?',
+    'Where did a failed tool call leave the user stuck?',
+)
+SCOPE_HELP_WITHIN = 'Loaded traces: Ask AI reads only the traces already loaded below, up to the row limit.'
+SCOPE_HELP_NEW = 'All traces: Ask AI turns your question into filters and searches the whole time range again, then loads the matches.'
+ASK_AI_COST_NOTE = 'It uses a model, and each question reads the traces it covers.'
 FACET_LABELS = (
     ('project', 'project'),
     ('agent_name', 'agent'),
@@ -110,20 +120,28 @@ def traces_command_strip(
     """Compact AI query strip used by /traces; /find keeps its own legacy search hero."""
     disabled = '' if api_available else ' disabled'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
+    chips = ''.join(
+        f'<button type="button" data-finder-example="{esc(sample)}">{esc(sample)}</button>'
+        for sample in COMMAND_EXAMPLES
+    )
     return (
         '<section class="finder-hero finder-command">'
-        '<h2 class="finder-title finder-command-title">Traces</h2>'
+        f'<p class="finder-command-lede">{esc(COMMAND_LEDE)}</p>'
         '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
-        f'<div class="col"><textarea class="finder-command-textarea" name="query" rows="1" placeholder="Ask about these traces…" required{disabled}>'
+        f'<div class="col"><textarea class="finder-command-textarea" name="query" rows="1" placeholder="{esc(COMMAND_PLACEHOLDER)}" required{disabled}>'
         f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="{esc(mode)}">'
-        '<div id="finder-scope" class="finder-seg" role="radiogroup" aria-label="Ask AI scope">'
-        f'{scope_toggle(has_rows=has_rows)}</div><a href="/settings" aria-label="AI configuration" title="AI configuration" '
-        'class="finder-command-gear" style="min-width:42px;min-height:42px">⚙</a>'
+        '<span class="finder-scope-label" id="finder-scope-label">Search in</span>'
+        '<div id="finder-scope" class="finder-seg" role="radiogroup" aria-labelledby="finder-scope-label">'
+        f'{scope_toggle(has_rows=has_rows)}</div><a href="/settings" title="Choose the models Ask AI uses" '
+        'class="finder-command-gear"><span aria-hidden="true">⚙</span> AI settings</a>'
         f'<button class="finder-go finder-command-search" type="submit"{disabled}><span class="finder-go-idle">Search</span>'
         '<span class="finder-go-working" role="status">Searching…</span></button>'
         '</form>'
+        f'<p class="finder-command-help"><span class="scope-within">{esc(SCOPE_HELP_WITHIN)}</span>'
+        f'<span class="scope-new">{esc(SCOPE_HELP_NEW)}</span> {esc(ASK_AI_COST_NOTE)}</p>'
+        f'<div class="finder-command-examples"><span>Try</span>{chips}</div>'
         f'{error_html}</section>'
     )
 
@@ -635,7 +653,7 @@ def _judging_text(
         )
     if not done:
         parts.append(f'<span>{snapshot.rate:.1f}/s</span>')
-    return ''.join(f'<span class="sep">·</span>{part}' for part in parts)
+    return ''.join(f'<span class="part">{part}</span>' for part in parts)
 
 
 def _compiling_text(snapshot: RunSnapshot) -> str:
@@ -1046,10 +1064,10 @@ def scope_toggle(*, has_rows: bool, selected: str | None = None) -> str:
         '<label><input type="radio" name="scope" value="within" form="finder-query-form"'
         + (' checked' if selected == 'within' else '')
         + within
-        + '><span>Within results</span></label>'
+        + '><span>Loaded traces</span></label>'
         + '<label><input type="radio" name="scope" value="new" form="finder-query-form"'
         + (' checked' if selected == 'new' else '')
-        + '><span>New search</span></label>'
+        + '><span>All traces</span></label>'
     )
 
 

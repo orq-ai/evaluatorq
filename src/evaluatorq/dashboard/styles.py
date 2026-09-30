@@ -17,13 +17,12 @@ _TRACES_DENSITY_CSS = """
 .finder:not(:has(> .finder-command)) { max-width:1040px; }
 .finder:has(> .finder-command) { gap:0; max-width:none; margin:0 auto; overflow:hidden; background:#fff; color:#25232e; }
 .finder:has(> .finder-command) .finder-command { align-self:stretch; max-width:none; padding:13px 16px 0; border:0; border-radius:0; background:#fff; box-shadow:none; }
-.finder:has(> .finder-command) .finder-command-title { margin:0 0 8px; font-size:20px; line-height:1.3; letter-spacing:-.02em; }
 .finder:has(> .finder-command) .finder-command-query { gap:8px; min-height:53px; padding:5px 8px; border:0; border-top:1px solid #e5e6e9; border-bottom:1px solid #e5e6e9; border-radius:0; box-shadow:none; }
 .finder:has(> .finder-command) .finder-command-query:focus-within { box-shadow:none; outline:2px solid #025558; outline-offset:-2px; }
 .finder:has(> .finder-command) .finder-ai-label { display:inline-flex; align-items:center; white-space:nowrap; padding:8px 10px; border:1px solid #f0cb9f; border-radius:6px; background:#fff4e7; color:#9a5f20; font-size:12px; font-weight:750; }
 .finder:has(> .finder-command) .finder-command-query .col { flex:1; min-width:180px; }
 .finder:has(> .finder-command) .finder-command-textarea { max-height:4em; padding:8px 4px; font-family:var(--font-sans); font-size:13px; line-height:1.35; }
-.finder:has(> .finder-command) .finder-command-query > a { display:inline-grid; place-items:center; flex:0 0 42px; width:42px; height:42px; min-width:42px!important; min-height:42px!important; box-sizing:border-box; border:1px solid #d9dbe0; border-radius:6px; color:#494753; font-size:27px; line-height:1; text-decoration:none; }
+.finder:has(> .finder-command) .finder-command-query > a { display:inline-flex; align-items:center; gap:5px; flex:0 0 auto; height:42px; min-height:42px!important; padding:0 10px; white-space:nowrap; box-sizing:border-box; border:1px solid #d9dbe0; border-radius:6px; color:#494753; font-size:12px; font-weight:500; line-height:1; text-decoration:none; }
 .finder:has(> .finder-command) .finder-command-query > button { flex:0 0 94px; min-height:38px; border-radius:6px; font-size:12px; }
 .finder:has(> .finder-command) #finder-body { gap:0; }
 .finder:has(> .finder-command) #explorer-results-slot { min-width:0; }
@@ -78,7 +77,8 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-cols > summary,
 .finder:has(> .finder-command) .xr-sort > summary,
 .finder:has(> .finder-command) .xr-toolbar-right .btn-secondary { display:flex; align-items:center; justify-content:center; box-sizing:border-box; height:var(--ctl); min-height:var(--ctl)!important; margin:0; padding-top:0; padding-bottom:0; border-radius:0; line-height:1; text-align:center; }
-.finder:has(> .finder-command) .finder-command-query > a { flex:0 0 var(--ctl); width:var(--ctl); min-width:var(--ctl)!important; font-size:26px; }
+.finder:has(> .finder-command) .finder-command-query > a { flex:0 0 auto; width:auto; height:var(--ctl); font-size:12px; }
+.finder:has(> .finder-command) .finder-command-query > a > span { font-size:16px; }
 .finder:has(> .finder-command) .finder-command-textarea { padding:9px 4px; }
 .finder:has(> .finder-command) .finder-seg { display:inline-flex; padding:2px; align-items:stretch; }
 .finder:has(> .finder-command) .finder-seg label { display:flex; flex:1 1 0; }
@@ -3059,6 +3059,21 @@ i.k-system { background:var(--traj-system); }i.k-user { background:var(--traj-us
 @media (max-width:900px) { .tv-hd,.tv-r { grid-template-columns:minmax(160px,220px) minmax(0,1fr); }.tv-mh,.tv-m { display:none; } }
 @media (max-width:480px) { .tv-lg { flex-wrap:wrap; gap:8px 12px; padding:10px 12px; }.tv-lg > span { white-space:nowrap; }.tv-hd,.tv-r { grid-template-columns:minmax(128px,160px) minmax(0,1fr); column-gap:10px; padding:0 12px; }.tv-hd .ax,.tv-bar { grid-template-columns:minmax(0,1fr) 64px; gap:6px; }.tv-scale b:nth-child(2),.tv-scale b:nth-child(3),.tv-scale b:nth-child(4) { display:none; }.tv-scale b:first-child { left:0!important; transform:none; }.tv-scale b:last-child { left:auto!important; right:0; transform:none; } }
 @media (max-width:480px) { .tv-hd .ax > b:nth-child(2),.tv-hd .ax > b:nth-child(3),.tv-hd .ax > b:nth-child(4) { display:none; }.tv-hd .ax > b:first-child { left:0!important; transform:none; }.tv-hd .ax > b:last-child { left:auto!important; right:0; transform:none; }.tv-bar > .tv-segs + .tv-end { left:auto!important; right:0; padding-left:0; } }
+.finder-command-lede { margin:0 0 8px; color:var(--text-body); font-size:13px; }
+.finder-scope-label { color:var(--text-muted); font-size:12px; white-space:nowrap; }
+.finder-command-help { margin:6px 0 0; color:var(--text-muted); font-size:11.5px; line-height:1.4; }
+.finder-command:has(input[name="scope"][value="within"]:checked) .scope-new,
+.finder-command:has(input[name="scope"][value="new"]:checked) .scope-within { display:none; }
+.finder-command-examples { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin:8px 0 10px; font-size:12px; color:var(--text-muted); }
+.finder-command-examples button { border:1px solid #d5d8df; border-radius:999px; background:#fff; color:var(--text-body); font:inherit; padding:3px 10px; cursor:pointer; }
+.finder-command-examples button:hover { background:#f5f5f6; }
+.finder-command-examples button:focus-visible { outline:2px solid #025558; outline-offset:1px; }
+.finder-progress .part { display:contents; }
+.finder:has(> .finder-command) .finder-progress { column-gap:16px; }
+.finder:has(> .finder-command) .finder-progress .sep { display:none; }
+.finder:has(> .finder-command) .xr-switch button .xr-help { display:inline-grid; flex:none; width:13px; height:13px; padding:0; margin-left:4px; border:1px solid currentColor; border-radius:50%; background:none; }
+.xr-help { display:inline-grid; place-items:center; width:13px; height:13px; margin-left:4px; border:1px solid currentColor; border-radius:50%; font-size:9px; font-weight:700; line-height:1; opacity:.6; vertical-align:1px; }
+.tv-note { margin-left:auto; color:var(--text-muted); font-style:italic; }
 """
 
 

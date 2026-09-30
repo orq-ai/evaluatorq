@@ -32,6 +32,19 @@ if TYPE_CHECKING:
     from evaluatorq.trace_finder.trajectory import Segment
 
 DEFAULT_EXPLORER_ROWS = 200
+TRAJECTORIES_HELP = 'Shows each trace as a bar of its messages, sized by estimated tokens'
+COLUMN_HELP = {
+    'cache_pct': "Share of input tokens served from the provider's prompt cache",
+    'tokens_in': 'Tokens sent to the model, including any served from the cache',
+    'tokens_out': 'Tokens the model wrote back',
+}
+TOTAL_HELP = {
+    'in': COLUMN_HELP['tokens_in'],
+    'out': COLUMN_HELP['tokens_out'],
+    'cache read': COLUMN_HELP['cache_pct'],
+    'p50': 'Half of the shown traces finished faster than this',
+    'p95': 'Nineteen in twenty of the shown traces finished faster than this',
+}
 PRESETS = (
     ('15m', timedelta(minutes=15)),
     ('1h', timedelta(hours=1)),
@@ -229,10 +242,13 @@ def table(view: ExplorerView, columns: Sequence[Column], snapshot: RunSnapshot |
         direction = 'asc' if sorted_here and view.descending else 'desc'
         labels = _match_names(snapshot, column.label) if column.key == MATCH else (column.label,)
         sparkle = '<span class="xr-ai-sparkle" aria-hidden="true">✦</span>' if column.key == MATCH else ''
+        help_text = COLUMN_HELP.get(column.key)
+        title = f' title="{esc(help_text)}"' if help_text else ''
+        help_mark = '<span class="xr-help" aria-hidden="true">?</span>' if help_text else ''
         heads += ''.join(
-            f'<th class="{"num" if column.numeric else ""}"{aria_sort}><button type="button" class="link" data-xr-sort="{column.key}" '
+            f'<th class="{"num" if column.numeric else ""}"{aria_sort}><button type="button" class="link" data-xr-sort="{column.key}"{title} '
             f'hx-get="/find/rows?sort={column.key}&dir={direction}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">'
-            f'{sparkle}{esc(label)}{arrow}</button></th>'
+            f'{sparkle}{esc(label)}{help_mark}{arrow}</button></th>'
             for label in labels
         )
     if not columns:
@@ -369,9 +385,10 @@ def trajectories(
             f'<span class="tv-end">{message_count}</span></div>{_metrics(row)}</div>'
         )
     return (
-        f'<div class="tv"><div class="tv-lg">{legend}</div>'
+        f'<div class="tv"><div class="tv-lg">{legend}<span class="tv-note" title="{esc(TRAJECTORIES_HELP)}">Bar sizes are estimates (text length ÷ 4), not exact token counts.</span></div>'
         f'<div class="tv-hd"><span>Trace</span><div class="ax"><div class="tv-scale">{ticks}</div><span>Messages</span></div>'
-        '<div class="tv-mh"><span>Input / output</span><span>Cache reads</span><span>Cost</span></div></div>'
+        f'<div class="tv-mh"><span title="{esc(COLUMN_HELP["tokens_in"])}; and tokens the model wrote back">Input / output</span>'
+        f'<span title="{esc(COLUMN_HELP["cache_pct"])}">Cache reads</span><span>Cost</span></div></div>'
         f'<div class="tv-rows">{rows_html}</div><div class="tv-tip" role="tooltip" hidden></div></div>'
     )
 
@@ -423,6 +440,10 @@ def _toolbar(
         f'<button type="button" class="{"on" if view.view == mode else ""}" aria-pressed="{str(view.view == mode).lower()}" '
         f'hx-get="/find/rows?view={mode}" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">{label}</button>'
         for mode, label in (('table', 'Table'), ('trajectories', 'Trajectories'))
+    )
+    switch = switch.replace(
+        '>Trajectories</button>',
+        f' title="{esc(TRAJECTORIES_HELP)}">Trajectories<span class="xr-help" aria-hidden="true">?</span></button>',
     )
     sort = (
         '<details class="xr-sort"><summary>Sort</summary><button type="button" class="link" hx-get="/find/rows?sort=started&dir=desc" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace">time</button>'
@@ -498,7 +519,9 @@ def _totals_strip(rows: Sequence[TraceRow]) -> str:
         ('p95', fmt_duration(t.p95_ms)),
     )
     cells = ''.join(
-        f'<span class="xr-total"><span class="xr-total-label">{label}</span> {value}</span>' for label, value in parts
+        f'<span class="xr-total"{f" title={chr(34)}{esc(TOTAL_HELP[label])}{chr(34)}" if label in TOTAL_HELP else ""}>'
+        f'<span class="xr-total-label">{label}</span> {value}</span>'
+        for label, value in parts
     )
     return f'<div class="xr-totals" aria-label="Totals for the traces shown">{cells}</div>'
 
@@ -556,6 +579,10 @@ def results(
         and snapshot.loaded < view.narrowed_from
         else ''
     )
+    shown = len(view.visible_rows(judged))
+    shown_loaded = (
+        f'{len(view.rows)} traces loaded' if shown == len(view.rows) else f'{shown} of {len(view.rows)} loaded traces'
+    )
     status = (
         f'<div class="xr-status" role="status">Loading traces · {len(view.rows)} / {view.limit}</div>'
         if view.state == 'loading'
@@ -568,7 +595,7 @@ def results(
         if view.quick_view in CONVERSATION_METRICS
         else f'<div class="xr-status" role="status">{len(view.rows)} of {view.narrowed_from} loaded traces match the filters{judged_status}{missing_conversations}{not_judged}</div>'
         if view.narrowed_from is not None
-        else f'<div class="xr-status" role="status">{len(view.rows)} traces loaded{judged_status}{not_judged}</div>'
+        else f'<div class="xr-status" role="status">{shown_loaded}{judged_status}{not_judged}</div>'
     )
     if view.state == 'idle':
         inner = _empty('Load traces to start.', 'Pick a time range and filters, then press Load. Loading uses no AI.')

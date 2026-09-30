@@ -1065,11 +1065,18 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
     store, client = setup_finder
     html = client.get('/traces').text
 
-    assert '<h2 class="finder-title finder-command-title">Traces</h2>' in html
+    assert 'class="finder-title finder-command-title"' not in html
+    assert 'class="finder-command-lede"' in html
+    assert 'data-finder-example=' in html
+    assert 'placeholder="Ask about these traces, for example: Did any customers get frustrated?"' in html
+    assert 'Search in' in html
+    assert '<span>Loaded traces</span>' in html
+    assert '<span>All traces</span>' in html
+    assert 'It uses a model' in html
     assert 'Ask AI' in html
     assert '>Search<' in html
-    assert 'href="/settings" aria-label="AI configuration"' in html
-    assert 'class="finder-command-gear" style="min-width:42px;min-height:42px"' in html
+    assert 'href="/settings" title="Choose the models Ask AI uses" class="finder-command-gear"' in html
+    assert 'AI settings</a>' in html
     assert html.index('id="finder-scope"') < html.index('class="finder-command-gear"') < html.index('finder-command-search')
     assert 'value="within" form="finder-query-form"' in html
     assert 'value="new" form="finder-query-form"' in html
@@ -1112,5 +1119,5 @@ def test_find_keeps_legacy_search_hero_separate_from_traces(setup_finder) -> Non
 
     assert 'Find the signal.' in html
     assert 'Find traces' in html
-    assert 'href="/settings" aria-label="AI configuration"' not in html
+    assert 'AI settings</a>' not in html
     assert 'id="explorer-results"' not in html
