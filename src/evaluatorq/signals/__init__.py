@@ -9,6 +9,7 @@ report.values()  # name -> value, no-basis signals omitted
 """
 
 from evaluatorq.signals.config import ClassifierConfig, SignalsConfig, TagThresholds
+from evaluatorq.signals.evaluator import signal_evaluator, signal_evaluators, to_trajectory
 from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult
 from evaluatorq.signals.registry import SIGNAL_NAMES, compute_signals
 from evaluatorq.signals.walk import SignalContext
@@ -24,4 +25,7 @@ __all__ = [
     'SignalsConfig',
     'TagThresholds',
     'compute_signals',
+    'signal_evaluator',
+    'signal_evaluators',
+    'to_trajectory',
 ]

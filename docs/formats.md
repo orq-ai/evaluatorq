@@ -39,6 +39,19 @@ Chat and Responses also convert directly to each other. Every other pair compose
 
 `to_atif()` and `to_otel()` on a non-ATIF source take `agent_name` and `agent_version`, which fill `AtifTrajectory.agent`. `OtelTrace.to_atif()` falls back to the `gen_ai.agent.name` and `gen_ai.agent.version` attributes of the root `invoke_agent` span when you leave them unset. Both default to `'unknown'` otherwise. `ChatConversation.to_atif()` and `ResponsesConversation.to_atif()` also take `session_id`; left unset, it is a hash of the conversation, so the same input always gets the same id.
 
+## Add trajectory tags to an evaluation
+
+`signal_evaluators()` turns trajectory tags into evaluatorq scorers. Use it when your output is ATIF, chat, Responses, OTel, or a chat message list and you want deterministic structural tags without an LLM judge. These tags describe execution patterns, not answer quality.
+
+```python
+from evaluatorq.signals import signal_evaluators
+
+evaluators = signal_evaluators()  # every trajectory tag, bundled thresholds
+print([evaluator['name'] for evaluator in evaluators])
+```
+
+Add the returned evaluators to an `evaluatorq()` run's `evaluators` list. Unsupported output shapes and signals without enough evidence produce an inconclusive score (`value=None`, `pass_=None`) with an explanation, so a missing transcript is visible instead of looking like a clean run.
+
 ## What each conversion loses
 
 Every conversion is lossy in some direction. The loss is never silent for structure: a dropped tool result, message, subagent or history block logs a `loguru` warning. What is dropped without a warning is metadata that has no slot in the target, and each method's `Lost:` list names it.

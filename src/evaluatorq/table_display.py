@@ -11,7 +11,7 @@ from rich.text import Text
 
 from .types import EvaluationResultCell, EvaluatorqResult
 
-ScoreValue = float | bool | str | EvaluationResultCell | dict[str, Any]
+ScoreValue = float | bool | str | EvaluationResultCell | dict[str, Any] | None
 """Score value type - can be numeric, boolean, string, EvaluationResultCell or dict"""
 
 ScoresByEvaluatorAndJob = dict[str, dict[str, list[ScoreValue]]]
@@ -39,6 +39,9 @@ def _format_evaluator_scores(scores: list[ScoreValue]) -> tuple[str, str]:
         return ('-', 'dim')
 
     first_score = scores[0]
+
+    if all(score is None for score in scores):
+        return ('[no basis]', 'dim')
 
     if isinstance(first_score, EvaluationResultCell):
         # Structured result cell, show placeholder
