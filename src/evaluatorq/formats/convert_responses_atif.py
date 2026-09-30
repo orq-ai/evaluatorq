@@ -12,10 +12,12 @@ import json
 import mimetypes
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 
 from loguru import logger
-from openai.types.responses import Response
+from openai.types.responses import Response, ResponseError, ResponseStatus
+from openai.types.responses.response import IncompleteDetails
+from pydantic import BaseModel, ValidationError
 
 from evaluatorq.contracts import (
     ContentPart,
@@ -55,6 +57,7 @@ _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'i
     'image/webp': 'image/webp',
 }
 _RAW_ARGUMENTS_KEY = '_raw'
+_RESPONSE_STATUSES: frozenset[str] = frozenset(get_args(ResponseStatus))
 _NO_STEPS = 'ResponsesConversation has no items; ATIF needs at least one step'
 
 
@@ -392,12 +395,16 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
             'id': 'rs_' + stable_hex(seed, str(step.step_id), length=24),
             'summary': [{'type': 'summary_text', 'text': step.reasoning_content}],
         })
-    fc_item_ids: dict[str, str] = (step.extra or {}).get('fc_item_ids') or {}
+    fc_item_ids = (step.extra or {}).get('fc_item_ids') or {}
+    if not isinstance(fc_item_ids, dict):
+        _warn_foreign('fc_item_ids', step.step_id, fc_item_ids)
+        fc_item_ids = {}
+    fc_item_ids = cast('dict[str, Any]', fc_item_ids)
     calls = [
         StrategyToolCall(
             id=call.tool_call_id,
             function=FunctionCall(name=call.function_name, arguments=_arguments_text(call.arguments)),
-            item_id=fc_item_ids.get(call.tool_call_id),
+            item_id=item_id if isinstance(item_id := fc_item_ids.get(call.tool_call_id), str) else None,
         )
         for call in step.tool_calls or []
     ]
@@ -438,21 +445,28 @@ def _arguments_text(arguments: dict[str, Any]) -> str:
 
 def _response(step: AtifStep, seed: str) -> Response:
     extra = step.extra or {}
-    metrics = step.metrics
     usage: dict[str, Any] | None = None
-    if metrics is not None:
-        metrics_extra = metrics.extra or {}
+    if step.metrics is not None:
+        metrics = step.metrics
         prompt = metrics.prompt_tokens or 0
         completion = metrics.completion_tokens or 0
         usage = {
             'input_tokens': prompt,
             'output_tokens': completion,
-            'total_tokens': metrics_extra.get('total_tokens') or prompt + completion,
+            'total_tokens': _extra_int(metrics.extra, 'total_tokens', step.step_id) or prompt + completion,
             'input_tokens_details': {'cached_tokens': metrics.cached_tokens or 0},
-            'output_tokens_details': {'reasoning_tokens': metrics_extra.get('reasoning_tokens') or 0},
+            'output_tokens_details': {'reasoning_tokens': _extra_int(metrics.extra, 'reasoning_tokens', step.step_id)},
         }
+    response_id = extra.get('response_id')
+    if response_id is not None and not isinstance(response_id, str):
+        _warn_foreign('response_id', step.step_id, response_id)
+        response_id = None
+    status = extra.get('status')
+    if status is not None and status not in _RESPONSE_STATUSES:
+        _warn_foreign('status', step.step_id, status)
+        status = None
     return Response.model_validate({
-        'id': extra.get('response_id') or 'resp_' + stable_hex(seed, 'response', str(step.step_id), length=24),
+        'id': response_id or 'resp_' + stable_hex(seed, 'response', str(step.step_id), length=24),
         'created_at': _epoch(step.timestamp),
         'model': step.model_name or '',
         'object': 'response',
@@ -460,11 +474,42 @@ def _response(step: AtifStep, seed: str) -> Response:
         'parallel_tool_calls': False,
         'tool_choice': 'auto',
         'tools': [],
-        'status': extra.get('status') or 'completed',
-        'error': extra.get('error'),
-        'incomplete_details': extra.get('incomplete_details'),
+        'status': status or 'completed',
+        'error': _extra_model(extra, 'error', ResponseError, step.step_id),
+        'incomplete_details': _extra_model(extra, 'incomplete_details', IncompleteDetails, step.step_id),
         'usage': usage,
     })
+
+
+def _warn_foreign(key: str, step_id: int, value: object) -> None:
+    logger.warning(
+        'Step {} extra.{} = {!r} is not a Responses value; dropping it from the Response.', step_id, key, value
+    )
+
+
+def _extra_int(extra: dict[str, Any] | None, key: str, step_id: int) -> int:
+    value = (extra or {}).get(key)
+    if value is None:
+        return 0
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    _warn_foreign(key, step_id, value)
+    return 0
+
+
+def _extra_model(extra: dict[str, Any], key: str, model: type[BaseModel], step_id: int) -> dict[str, Any] | None:
+    value = extra.get(key)
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        try:
+            model.model_validate(value)
+        except ValidationError:
+            pass
+        else:
+            return cast('dict[str, Any]', value)
+    _warn_foreign(key, step_id, value)
+    return None
 
 
 def _epoch(timestamp: str | None) -> float:

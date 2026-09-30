@@ -205,3 +205,22 @@ def test_one_response_per_agent_step_keeps_metadata_aligned(caplog: pytest.LogCa
     assert metrics is not None and (metrics.prompt_tokens, metrics.completion_tokens, metrics.cached_tokens) == (5, 2, 1)
     assert again.steps[1].timestamp is None
     assert not [r for r in caplog.records if r.levelname == 'WARNING']
+
+
+def test_foreign_step_extra_values_are_dropped_not_crashing(caplog: pytest.LogCaptureFixture) -> None:
+    traj = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'}, 'session_id': 's',
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': 'x', 'model_name': 'gpt-x',
+                   'tool_calls': [{'tool_call_id': 'c1', 'function_name': 'f', 'arguments': {}}],
+                   'metrics': {'prompt_tokens': 5, 'extra': {'total_tokens': 'many', 'reasoning_tokens': 1.5}},
+                   'extra': {'error': 'boom', 'status': 'error', 'incomplete_details': {'reason': 7},
+                             'response_id': 3, 'fc_item_ids': ['fc_1']}}]})
+    conv = traj.to_responses()
+    assert conv.responses is not None
+    response = conv.responses[0]
+    assert (response.status, response.error, response.incomplete_details) == ('completed', None, None)
+    assert response.id.startswith('resp_') and response.usage is not None
+    assert (response.usage.total_tokens, response.usage.output_tokens_details.reasoning_tokens) == (5, 0)
+    assert 'id' not in next(i for i in conv.items if i['type'] == 'function_call')
+    for key in ('error', 'status', 'incomplete_details', 'response_id', 'fc_item_ids', 'total_tokens', 'reasoning_tokens'):
+        assert f'extra.{key}' in caplog.text
