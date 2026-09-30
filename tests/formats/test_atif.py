@@ -173,3 +173,14 @@ def test_audio_media_type_alias_normalised() -> None:
     traj = AtifTrajectory.model_validate(_traj(schema_version='ATIF-v1.8', steps=steps))
     assert traj.has_audio()
     assert 'audio/mpeg' in traj.to_json()
+
+
+def test_v1_8_without_audio_keeps_1_8_by_default() -> None:
+    traj = AtifTrajectory.model_validate(_traj(schema_version='ATIF-v1.8'))
+    assert not traj.has_audio()
+    assert json.loads(traj.to_json())['schema_version'] == 'ATIF-v1.8'
+
+
+def test_v1_8_without_audio_can_downgrade_to_1_7() -> None:
+    traj = AtifTrajectory.model_validate(_traj(schema_version='ATIF-v1.8'))
+    assert json.loads(traj.to_json(version='1.7'))['schema_version'] == 'ATIF-v1.7'
