@@ -1421,6 +1421,46 @@ def test_find_drawer_keeps_legacy_layout() -> None:
     assert 'fd-traces' not in html
 
 
+def test_traces_drawer_hides_raw_classifier_explanation_but_find_keeps_it() -> None:
+    from evaluatorq.dashboard.trace_finder.views import drawer
+    from evaluatorq.trace_finder import TraceDetail
+    from evaluatorq.trace_finder.models import DimensionAnswer, TraceClassification
+
+    trace = TraceRecord(
+        schema_version=1,
+        trace_id='reason-check',
+        span_id='span',
+        timestamp=datetime(2026, 9, 27, tzinfo=timezone.utc),
+        project='p',
+        model='gpt-5.6-luna',
+        provider='openai',
+        status='ok',
+        product='chat',
+        trace_type='agent',
+        messages=({'role': 'user', 'content': 'Hello'},),
+    )
+    detail = TraceDetail(
+        trace=trace,
+        projection=None,
+        classification=TraceClassification(
+            trace_id='reason-check',
+            span_id='span',
+            matched=True,
+            answers=(DimensionAnswer(value=True, matched=True, confidence=0.91),),
+            raw_result={'explanation': 'CLASSIFIER_REASON_SENTINEL'},
+        ),
+    )
+
+    traces_html = drawer(detail, traces_layout=True)
+    find_html = drawer(detail)
+
+    assert 'Classifier score 91%' in traces_html
+    assert 'Raw result' not in traces_html
+    assert 'CLASSIFIER_REASON_SENTINEL' not in traces_html
+    assert 'Raw result' in find_html
+    assert 'CLASSIFIER_REASON_SENTINEL' in find_html
+
+
 def test_drawer_labels_empty_conversation_state() -> None:
     from evaluatorq.dashboard.trace_finder.views import drawer
     from evaluatorq.trace_finder import TraceDetail

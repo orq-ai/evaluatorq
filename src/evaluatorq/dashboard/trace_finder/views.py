@@ -1199,9 +1199,8 @@ def drawer(
         f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
         '<div class="fd-tabs">'
         '<button type="button" data-panel="fd-input" onclick="eqFinderTab(this,\'fd-input\')">Classifier input</button>'
-        '<button type="button" data-panel="fd-raw" onclick="eqFinderTab(this,\'fd-raw\')">Raw result</button></div>'
+        '</div>'
         f'<div id="fd-input" class="fd-panel" hidden><div class="fd-panel-title">Classifier input</div><pre>{esc(payload)}</pre></div>'
-        f'<div id="fd-raw" class="fd-panel" hidden><div class="fd-panel-title">Raw result</div><pre>{esc(raw)}</pre></div>'
     )
     if traces_layout:
         identity_html = ''
