@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 DEFAULT_EXPLORER_ROWS = 200
 TRAJECTORIES_HELP = 'Shows each trace as a bar of its messages, sized by estimated tokens'
 COLUMN_HELP = {
-    'cache_pct': "Share of input tokens served from the provider's prompt cache",
+    'cache_pct': 'Share of input tokens the provider reused from an earlier request, which is cheaper and faster.',
     'tokens_in': 'Tokens sent to the model, including any served from the cache',
     'tokens_out': 'Tokens the model wrote back',
 }

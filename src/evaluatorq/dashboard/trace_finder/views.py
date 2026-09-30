@@ -45,11 +45,11 @@ COMMAND_PLACEHOLDER = 'Ask a question, e.g. Did any customers get frustrated?'
 COMMAND_EXAMPLES = (
     'Did any customers get frustrated?',
     'Which conversations mention refunds?',
-    'Where did a failed tool call leave the user stuck?',
+    'Where did the agent fail to help someone?',
 )
 SCOPE_HELP_WITHIN = 'Loaded traces: Ask AI reads only the traces already loaded below, up to the row limit.'
-SCOPE_HELP_NEW = 'All traces: Ask AI turns your question into filters and searches the whole time range again, then loads the matches.'
-ASK_AI_COST_NOTE = 'It uses a model, and each question reads the traces it covers.'
+SCOPE_HELP_NEW = 'All traces: Ask AI searches every trace in the chosen time range, then loads the matches.'
+ASK_AI_COST_NOTE = 'Each question is answered by an AI model, so it takes a few seconds and costs a little.'
 FACET_LABELS = (
     ('project', 'project'),
     ('agent_name', 'agent'),
@@ -653,7 +653,7 @@ def _judging_text(
         )
     if not done:
         parts.append(f'<span>{snapshot.rate:.1f}/s</span>')
-    return ''.join(f'<span class="part">{part}</span>' for part in parts)
+    return ''.join(f'<span class="part"><span class="sep">·</span>{part}</span>' for part in parts)
 
 
 def _compiling_text(snapshot: RunSnapshot) -> str:

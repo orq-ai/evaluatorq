@@ -932,6 +932,13 @@ def test_completed_within_progress_reports_run_counts() -> None:
     assert 'when asked' not in html
 
 
+def test_progress_parts_keep_a_separator_before_each_part() -> None:
+    from evaluatorq.dashboard.trace_finder.views import progress
+
+    html = progress(RunSnapshot(state='completed', total=5, matched=2))
+    assert html.count('<span class="part"><span class="sep">·</span>') >= 2
+
+
 def test_completed_answer_sentence_offers_show_only_and_names_model() -> None:
     from evaluatorq.dashboard.trace_finder.views import progress
 
@@ -1072,7 +1079,7 @@ def test_traces_page_uses_compact_ai_strip_and_one_classification_surface(setup_
     assert 'Search in' in html
     assert '<span>Loaded traces</span>' in html
     assert '<span>All traces</span>' in html
-    assert 'It uses a model' in html
+    assert 'answered by an AI model' in html
     assert 'Ask AI' in html
     assert '>Search<' in html
     assert 'href="/settings" title="Choose the models Ask AI uses" class="finder-command-gear"' in html

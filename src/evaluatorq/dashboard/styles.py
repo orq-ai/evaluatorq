@@ -3071,8 +3071,10 @@ i.k-system { background:var(--traj-system); }i.k-user { background:var(--traj-us
 .finder-progress .part { display:contents; }
 .finder:has(> .finder-command) .finder-progress { column-gap:16px; }
 .finder:has(> .finder-command) .finder-progress .sep { display:none; }
+.finder:has(> .finder-command) .xr-switch button { display:inline-flex; align-items:center; white-space:nowrap; }
 .finder:has(> .finder-command) .xr-switch button .xr-help { display:inline-grid; flex:none; width:13px; height:13px; padding:0; margin-left:4px; border:1px solid currentColor; border-radius:50%; background:none; }
 .xr-help { display:inline-grid; place-items:center; width:13px; height:13px; margin-left:4px; border:1px solid currentColor; border-radius:50%; font-size:9px; font-weight:700; line-height:1; opacity:.6; vertical-align:1px; }
+@media (max-width:1000px) { .finder-command-examples { flex-wrap:nowrap; overflow-x:auto; }.finder-command-examples button { flex:none; white-space:nowrap; }.finder-command-lede { font-size:12px; margin-bottom:6px; }.finder-command-help { font-size:11px; } }
 .tv-note { margin-left:auto; color:var(--text-muted); font-style:italic; }
 """
 
