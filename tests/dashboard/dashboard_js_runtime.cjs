@@ -31,7 +31,7 @@ function classList() {
   };
 }
 
-function loadDashboard({ elements = new Map(), query = () => null, queryAll = () => [] } = {}) {
+function loadDashboard({ elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces' } = {}) {
   const body = emitter();
   const documentEvents = emitter();
   const windowEvents = emitter();
@@ -44,8 +44,10 @@ function loadDashboard({ elements = new Map(), query = () => null, queryAll = ()
     getElementById(id) { return elements.get(id) || null; },
     querySelector: query,
     querySelectorAll: queryAll,
+    activeElement: null,
   };
   const window = {
+    location: { pathname },
     addEventListener: windowEvents.addEventListener,
     setTimeout(callback) {
       const id = nextTimer++;
@@ -80,8 +82,58 @@ function loadDashboard({ elements = new Map(), query = () => null, queryAll = ()
     document, window, history, location: { hash: '' },
     FormData: class {}, Event: class {}, CSS: { escape: value => value },
   });
-  return { body, document, history, entries, scheduled, intervals };
+  return { body, document, documentEvents, window, history, entries, scheduled, intervals };
 }
+
+function keyEvent(key, options = {}) {
+  let prevented = false;
+  return {
+    key,
+    target: { tagName: 'BODY', closest() { return null; } },
+    preventDefault() { prevented = true; },
+    get defaultPrevented() { return prevented; },
+    ...options,
+  };
+}
+
+test('trace shortcuts respect editable targets, modifiers, modal state, and route', () => {
+  let focuses = 0;
+  let selections = 0;
+  const input = {
+    tagName: 'TEXTAREA', disabled: false,
+    focus() { focuses += 1; },
+    select() { selections += 1; },
+  };
+  let modalOpen = false;
+  const app = loadDashboard({
+    query: selector => selector.includes('textarea') ? input : null,
+    queryAll: selector => selector === 'dialog[open], [role="dialog"][aria-modal="true"]' && modalOpen
+      ? [{ open: true }]
+      : [],
+  });
+  const press = (key, options) => {
+    const event = keyEvent(key, options);
+    app.documentEvents.emit('keydown', event);
+    return event;
+  };
+
+  assert.equal(press('/').defaultPrevented, true);
+  assert.equal(focuses, 1);
+  assert.equal(selections, 1);
+
+  const editable = { tagName: 'INPUT', isContentEditable: false };
+  app.document.activeElement = editable;
+  assert.equal(press('/').defaultPrevented, false);
+  app.document.activeElement = null;
+  assert.equal(press('/', { ctrlKey: true }).defaultPrevented, false);
+
+  modalOpen = true;
+  assert.equal(press('/').defaultPrevented, false);
+  modalOpen = false;
+  app.window.location.pathname = '/reports';
+  assert.equal(press('/').defaultPrevented, false);
+  assert.equal(focuses, 1);
+});
 
 test('finder placeholders rotate on the interval and stop after dismissal', () => {
   const query = {
