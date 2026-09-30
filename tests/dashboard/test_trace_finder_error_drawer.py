@@ -38,7 +38,7 @@ def test_span_tree_and_lazy_error_lookup_share_loose_status_shapes() -> None:
         't',
         [
             {'status': 'failed'},
-            {'span_id': 'status-code', 'status_code': 'ERROR'},
+            {'span_id': 'status-code', 'status': 'Unset', 'status_code': 'ERROR'},
             SimpleNamespace(span_id='object-status', status=SimpleNamespace(code='failed')),
         ],
         first_error_message='detail loaded for status-code',
@@ -47,5 +47,6 @@ def test_span_tree_and_lazy_error_lookup_share_loose_status_shapes() -> None:
     assert 'fd-span-error' in tree
     assert 'fd-span-first-error' in tree
     assert 'detail loaded for status-code' in tree
+    assert 'fd-span-status">ERROR</span>' in tree
     assert tree.index('fd-span-first-error') < tree.index('status-code')
     assert tree.count('fd-span-first-error') == 1

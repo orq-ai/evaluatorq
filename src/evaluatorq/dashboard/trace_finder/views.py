@@ -16,7 +16,7 @@ from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button
 from evaluatorq.trace_finder import classification_legend
 from evaluatorq.trace_finder.columns import fmt_cost, fmt_duration, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
-from evaluatorq.trace_finder.span_status import is_error_span
+from evaluatorq.trace_finder.span_status import is_error_span, span_status_text
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, Kind, Segment, segments
 
 if TYPE_CHECKING:
@@ -1310,15 +1310,7 @@ def span_tree(  # noqa: C901
         return str(raw) if raw is not None else ''
 
     def status_text(span: object) -> str:
-        status = value(span, 'status')
-        if isinstance(status, str) and status:
-            return status
-        if status is not None:
-            for key in ('code', 'status_code', 'state', 'name'):
-                detail = value(status, key)
-                if detail:
-                    return str(detail)
-        return text(span, 'status_code') or 'unknown'
+        return span_status_text(span) or 'unknown'
 
     entries: dict[str, object] = {}
     order: list[str] = []

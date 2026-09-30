@@ -52,7 +52,7 @@ def test_optional_error_message_column_is_honest_without_summary_message() -> No
     error = TraceRow(trace_id='failed', status='error')
     success = TraceRow(trace_id='ok', status='ok')
 
-    assert COLUMNS['error_message'].label == 'Error message'
+    assert COLUMNS['error_message'].label == 'Error details'
     assert COLUMNS['error_message'].render(error) == (
         '<span title="Open this trace, then choose Spans">Open Spans for details</span>'
     )
