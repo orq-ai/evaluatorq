@@ -13,6 +13,7 @@ from evaluatorq.openresponses.otel_messages import RESPONSES_ITEM_TYPES
 if TYPE_CHECKING:
     from evaluatorq.formats.atif import AtifTrajectory
     from evaluatorq.formats.chat import ChatConversation
+    from evaluatorq.formats.otel import OtelTrace
 
 _KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message'}
 
@@ -56,3 +57,11 @@ class ResponsesConversation(BaseModel):
         from evaluatorq.formats import convert_responses_atif
 
         return convert_responses_atif.responses_to_atif(self, agent_name=agent_name, agent_version=agent_version)
+
+    def to_otel(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> OtelTrace:
+        """Convert to one OTel trace through ATIF.
+
+        Lost: everything lost by `ResponsesConversation.to_atif` and `AtifTrajectory.to_otel` (encrypted
+        reasoning content, non-text assistant parts, file parts as markers, item types ATIF has no step for).
+        """
+        return self.to_atif(agent_name=agent_name, agent_version=agent_version).to_otel()

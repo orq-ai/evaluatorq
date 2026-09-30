@@ -239,13 +239,21 @@ class OtelTrace(BaseModel):
 
         return convert_otel_atif.otel_to_atif(self, agent_name=agent_name, agent_version=agent_version)
 
-    def to_responses(self) -> ResponsesConversation:
-        """Convert to a Responses transcript via ATIF."""
-        return self.to_atif().to_responses()
+    def to_responses(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> ResponsesConversation:
+        """Convert to a Responses transcript through ATIF.
 
-    def to_chat(self) -> ChatConversation:
-        """Convert to chat via ATIF and Responses. Lossy: see `AtifTrajectory.to_chat`."""
-        return self.to_atif().to_chat()
+        Lost: everything lost by `OtelTrace.to_atif` and `AtifTrajectory.to_responses` (span times and ancestry,
+        subagent trees, per-call metrics beyond one `Response` per agent step).
+        """
+        return self.to_atif(agent_name=agent_name, agent_version=agent_version).to_responses()
+
+    def to_chat(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> ChatConversation:
+        """Convert to chat through ATIF and Responses.
+
+        Lost: everything lost by `to_atif` and `ResponsesConversation.to_chat` (reasoning, span times and
+        ancestry, per-call metrics, subagent trees, media).
+        """
+        return self.to_atif(agent_name=agent_name, agent_version=agent_version).to_responses().to_chat()
 
 
 # --- raw Orq span parsing ---------------------------------------------------------------------------
