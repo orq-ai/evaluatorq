@@ -177,13 +177,13 @@ async def test_stale_hydration_does_not_fill_the_next_load_cache() -> None:
 
     new_source = FakeSource((TraceRow(trace_id='same'),))
     store = ExplorerStore(search=FakeSource((TraceRow(trace_id='same'),)).search, hydrate=slow_hydrate)
-    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     stale_request = asyncio.create_task(store.records(['same']))
     await entered.wait()
 
     store._search = new_source.search  # pyright: ignore[reportPrivateUsage]
     store._hydrate = new_source.hydrate_rows  # pyright: ignore[reportPrivateUsage]
-    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     release.set()
     await stale_request
 
@@ -203,11 +203,11 @@ async def test_message_counts_ignores_stale_generation() -> None:
         return {row.trace_id: record(row.trace_id) for row in rows}
 
     store = ExplorerStore(search=FakeSource((TraceRow(trace_id='old'),)).search, hydrate=slow_hydrate)
-    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     counts = asyncio.create_task(store.message_counts())
     await entered.wait()
     store._search = FakeSource((TraceRow(trace_id='new'),)).search  # pyright: ignore[reportPrivateUsage]
-    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     release.set()
     await counts
 
@@ -246,7 +246,7 @@ async def test_concurrent_records_requests_share_hydration() -> None:
         return {row.trace_id: record(row.trace_id) for row in rows}
 
     store = ExplorerStore(search=source.search, hydrate=slow_hydrate)
-    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
 
     first = asyncio.create_task(store.records(['same']))
     await entered.wait()
