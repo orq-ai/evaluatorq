@@ -561,18 +561,7 @@ class OrqTraceSource:
                 span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
                 if not span_id:
                     continue
-                async with semaphore:
-                    marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
-                    try:
-                        response = await self._client.traces.get_span_async(
-                            trace_id=trace_id,
-                            span_id=span_id,
-                            timeout_ms=SDK_TIMEOUT_MS,
-                        )
-                        raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
-                    finally:
-                        if marker is not None:
-                            _CAPTURE_REQUEST.reset(marker)
+                response, raw_response = await self._get_span(trace_id, span_id, semaphore)
                 detail = _field(response, 'span') or response
                 raw_detail = _field(raw_response, 'span') if raw_response else None
                 detail_fallback = raw_detail is None
@@ -586,7 +575,7 @@ class OrqTraceSource:
                         return record, fallback_count
                     if fallback is None:
                         fallback = record
-        except Exception as exc:  # noqa: BLE001 - the summary messages may still be usable; logged once per batch
+        except Exception as exc:  # the summary messages may still be usable; logged once per batch
             if fallback is None and not _usable(messages):
                 raise  # nothing to show: keep the load failure visible instead of an empty trace
             span_lookup_failed = True
@@ -599,6 +588,21 @@ class OrqTraceSource:
             messages = await self._with_system_prompt(summary, raw_summary, messages, semaphore, issues)
             return _record(summary, raw_summary, summary, raw_summary, messages, project_names), fallback_count
         return None, fallback_count
+
+    async def _get_span(self, trace_id: str, span_id: str, semaphore: asyncio.Semaphore) -> tuple[Any, Any]:
+        async with semaphore:
+            marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
+            try:
+                response = await self._client.traces.get_span_async(
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    timeout_ms=SDK_TIMEOUT_MS,
+                )
+                raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
+            finally:
+                if marker is not None:
+                    _CAPTURE_REQUEST.reset(marker)
+        return response, raw_response
 
     async def _with_system_prompt(
         self,

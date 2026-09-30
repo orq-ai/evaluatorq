@@ -1053,6 +1053,11 @@ class SpanLookupFailingTraces(FakeTraces):
         return await super().list_spans_async(trace_id=trace_id, **kwargs)
 
 
+class SpanDetailFailingTraces(FakeTraces):
+    async def get_span_async(self, *, trace_id: str, span_id: str, **kwargs: Any) -> Any:
+        raise RuntimeError('span detail API down')
+
+
 def with_output_tokens(trace: Any) -> Any:
     trace.usage = namespace(prompt_tokens=10, completion_tokens=5)
     return trace
@@ -1075,6 +1080,28 @@ async def test_hydrate_rows_keeps_summary_messages_when_the_span_lookup_raises(
 
     assert records['partial'] is not None
     assert records['partial'].messages == ({'role': 'user', 'content': 'short question'},)
+    assert sum('span lookup failed' in warning for warning in warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_keeps_summary_messages_when_span_detail_lookup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    trace = with_output_tokens(summary('detail-failure', messages=user_messages('short question')))
+    spans = {'detail-failure': [span('reply', minute=0, span_type='span.responses')]}
+    source = make_source(FakeOrq(SpanDetailFailingTraces({None: ([trace], False, None)}, spans=spans)))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    record = records['detail-failure']
+    assert record is not None
+    assert record.messages == ({'role': 'user', 'content': 'short question'},)
     assert sum('span lookup failed' in warning for warning in warnings) == 1
 
 
