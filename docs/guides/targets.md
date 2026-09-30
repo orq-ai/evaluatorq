@@ -7,7 +7,7 @@ There are two ways to name a target:
 - a **string identifier** (`"agent:<key>"`, `"deployment:<key>"`), which evaluatorq resolves against the Orq platform, and
 - an **`AgentTarget` object**, which you construct in Python and hand over directly. Built-in ones ship with the package; the framework integrations wrap LangGraph/CrewAI/etc. agents into one; and you can write your own.
 
-The CLI only accepts the string form — an object target is constructed in Python, so `eq redteam run --target` resolves identifiers only.
+`eq redteam run --target` resolves string identifiers only, so an object target there is constructed in Python. The simulation CLI is the exception: `eq sim run` also takes `--vercel-url` and `--openai-model`, and builds the target object for you.
 
 ## Choosing a kind
 
@@ -20,7 +20,8 @@ The CLI only accepts the string form — an object target is constructed in Pyth
 | `CodingAgentTarget` | Your system under test is a coding-agent CLI (Claude Code, Codex, OpenCode) on this machine, run directly or via `orq launch` | Static: the agent's tool names plus the skills you injected. See [Coding agents as targets](../coding-agent-targets.md) |
 | `LangGraphTarget`, `OpenAIAgentTarget`, `PydanticAITarget`, `CrewAITarget` | Your agent is built in that framework | Whatever the wrapper can extract |
 | `CallableTarget` | Your agent is already a Python function | The function's name, or an `AgentContext` you pass |
-| Your own `AgentTarget` subclass | Anything else — an HTTP endpoint, a local pipeline, a bespoke tool loop | Whatever your `get_agent_context()` returns |
+| `VercelAISdkTarget` | Your agent is served over HTTP by the Vercel AI SDK — a Next.js route handler or equivalent | Minimal — the endpoint URL, unless you pass an `AgentContext`. See [Over HTTP](#over-http-vercelaisdktarget) |
+| Your own `AgentTarget` subclass | Anything else — an HTTP endpoint the AI SDK protocol does not fit, a local pipeline, a bespoke tool loop | Whatever your `get_agent_context()` returns |
 
 Context discovery matters more than it looks. Attack strategies are selected and written against the target's declared tools, memory and system prompt: a target that reports no tools never gets a tool-misuse attack, because those strategies are gated on `requires_tools=True`. See [Writing your own target](#writing-your-own-target) below.
 
@@ -283,6 +284,223 @@ print(asyncio.run(target.get_agent_context()).has_tools)
 
 - **`reset_fn`** — a zero-argument callback invoked on `new()`. `red_team()` and `simulate()` call `new()` once per concurrent job, and a callable that closes over module-level state would otherwise carry one attack's leftovers into the next. The wrapper cannot see inside your function, so clearing that state is yours to do. It is also the only cleanup hook you get: `CallableTarget` inherits the no-op `cleanup_memory`, so a run that mints memory entity ids logs a warning that adversarial data may persist and deletes nothing.
 - **`usage_fn`** — `(messages, response_text) -> TokenUsage | None`, for plumbing token counts out of a function that only returns a string. An exception raised inside it is logged and yields `usage=None` rather than failing the run. It must be **synchronous**, and that one is not forgiving: an `async def usage_fn` is never awaited, so the coroutine object reaches `AgentResponse` and the call dies with a pydantic `ValidationError` instead of degrading. On a page where every other function is `async def`, this is the easy mistake to make.
+
+## Over HTTP: `VercelAISdkTarget`
+
+`VercelAISdkTarget` wraps an HTTP endpoint that serves a Vercel AI SDK agent — a Next.js route handler, or anything else that speaks the same protocol. The AI SDK is a TypeScript library, so the boundary between your agent and evaluatorq is the wire rather than a Python object.
+
+Reach for it when your agent is already served over HTTP and you were about to write your own `AgentTarget` for it. The target class itself needs no extra — its transport is `httpx`, which evaluatorq always installs — though the entry point you then call may need one, as `red_team()` does for its static dataset. Do not reach for it to talk to an arbitrary JSON API: the request shape below is fixed, and a target that needs a different body is a [subclass](#writing-your-own-target).
+
+```python
+from evaluatorq.simulation import VercelAISdkTarget
+
+target = VercelAISdkTarget("http://localhost:3000/api/chat")
+```
+
+Constructed bare like that it reports **no tools** to the attack planner, which silently narrows what a red-team run will try — see [Failure modes](#failure-modes) before you rely on one.
+
+`red_team()` and `simulate()` both accept the object, but only `evaluatorq.simulation` re-exports the class — a red-team script imports it from `evaluatorq.integrations.vercel_ai_sdk_integration`, or from `evaluatorq.simulation` as above, because `evaluatorq.redteam` does not carry it.
+
+The simulation CLI accepts the endpoint directly too, which is the one target kind on this page that does not have to be built in Python:
+
+```bash
+eq sim run --vercel-url http://localhost:3000/api/chat --help
+```
+
+That path drives the endpoint; it does not gate a build. `eq sim run` has no flag that suppresses the Orq upload — it uploads whenever `ORQ_API_KEY` is set, and that key is also what its own simulator and judge calls need — and it exits `0` whatever the scores are. A CI step therefore reads the file it wrote with `--report` and decides for itself. The flags are in the [simulation CLI reference](../cli-reference/simulation.md).
+
+### What goes over the wire
+
+Every turn POSTs the whole transcript. The target is stateless, so conversation continuity is the caller's: `simulate()` and `red_team()` re-send the full message list each turn, and state you keep inside the handler is yours to manage.
+
+```json
+{"messages": [{"role": "user", "content": "Where is my order 4131?"}]}
+```
+
+The reply is parsed three ways. Which one runs is decided by the `content-type` header, not by what the body actually contains:
+
+| Reply is parsed as | When the header says | What is read |
+|---|---|---|
+| AI SDK Data Stream Protocol | `text/plain` — or any body that starts with `0:` | The `0:` chunks, joined. Token usage from the `e:` or `d:` finish frame |
+| JSON | `application/json` | `message` if present — its `content` when it is an object, else itself — then the first of `text`, `content`, `response`, `output`, then `choices[0].message.content`. Token usage only from a nested `usage` object |
+| The raw body, verbatim | anything else | Nothing else; no usage |
+
+Two consequences are worth knowing before you point a run at an endpoint, because both produce a wrong answer rather than an error:
+
+- **`text/plain` means the data stream, not prose.** A handler that returns ordinary text under `text/plain` is parsed as a data stream, every line fails the `0:` test, and the agent's reply comes back as the **empty string** — which a judge reads as an agent that said nothing. Serve plain prose as JSON instead.
+- **Only the v4 data stream is understood.** The `0:`/`e:`/`d:` framing is AI SDK v4's. A v5 handler returning the newer SSE stream (`content-type: text/event-stream`, `data: {"type":"text-delta",...}` frames) matches no branch above, so the whole SSE envelope — braces, JSON and all — becomes the agent's reply and gets scored as its answer. Return JSON from a v5 route, or check the endpoint first with the script below.
+
+Token usage is narrower than it looks, too: only a nested `usage` object is read, so top-level `promptTokens` / `completionTokens` fields are ignored, and a `usage` whose input and output counts are both zero is discarded.
+
+### Check an endpoint before you spend a run
+
+This script serves a stub AI SDK handler, sends one turn through the target, and prints what came back. Point `AI_SDK_URL` at your own endpoint and it checks that one instead — which is the cheap way to find out whether evaluatorq can read your handler's reply before a scored run depends on it.
+
+```python
+import asyncio
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from evaluatorq.contracts import Message
+from evaluatorq.simulation import VercelAISdkTarget
+
+
+class _Stub(BaseHTTPRequestHandler):
+    """Stands in for a Next.js route handler that returns a data stream."""
+
+    def do_POST(self) -> None:
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        asked = [m for m in body["messages"] if m["role"] == "user"][-1]["content"]
+        stream = f'0:{json.dumps(f"You asked: {asked}")}\n'
+        stream += 'e:{"finishReason":"stop","usage":{"promptTokens":11,"completionTokens":7}}\n'
+        payload = stream.encode()
+        self.send_response(200)
+        self.send_header("content-type", "text/plain; charset=utf-8")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+async def main() -> None:
+    url = os.environ.get("AI_SDK_URL")
+    if url is None:
+        server = HTTPServer(("127.0.0.1", 0), _Stub)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{server.server_port}/api/chat"
+
+    target = VercelAISdkTarget(url)
+    response = await target.respond([Message(role="user", content="Where is my order 4131?")])
+    print("text:", response.text)
+    if response.usage is None:
+        print("usage: none reported")
+    else:
+        print("usage:", response.usage.input_tokens, "in,", response.usage.output_tokens, "out")
+
+
+asyncio.run(main())
+```
+
+A reply none of the three parsers recognise shows up as the raw body in `text:`, and `usage: none reported` means nothing in the reply carried token counts — `AgentResponse.usage` is `None`, not a zeroed object, so read it defensively as above. Neither case raises; both are in the failure modes below.
+
+### Driving it with a simulated user
+
+The target object goes into `simulate()` unchanged. Everything else — personas, scenarios, criteria — is exactly as in [Agent Simulation](agent-simulation.md). This one spends money and needs `ORQ_API_KEY` set before you run it, for the reason under the script.
+
+```python
+import asyncio
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from evaluatorq.simulation import (
+    CommunicationStyle,
+    Persona,
+    Scenario,
+    VercelAISdkTarget,
+    simulate,
+)
+
+
+class _Stub(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+        asked = [m for m in body["messages"] if m["role"] == "user"][-1]["content"]
+        payload = f'0:{json.dumps(f"You asked: {asked}")}\n'.encode()
+        self.send_response(200)
+        self.send_header("content-type", "text/plain; charset=utf-8")
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+async def main() -> None:
+    url = os.environ.get("AI_SDK_URL")
+    if url is None:
+        server = HTTPServer(("127.0.0.1", 0), _Stub)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{server.server_port}/api/chat"
+
+    results = await simulate(
+        run_name="ai-sdk-endpoint",
+        target=VercelAISdkTarget(url),
+        personas=[
+            Persona(
+                name="Rosa Alvarez",
+                patience=3,
+                assertiveness=4,
+                politeness=3,
+                technical_level=2,
+                communication_style=CommunicationStyle.terse,
+                background="Ordered a lamp that has not arrived.",
+            )
+        ],
+        scenarios=[Scenario(name="late delivery", goal="Find out where order 4131 is.")],
+        max_turns=2,
+        evaluator_names=["goal_achieved"],
+        upload_results=False,
+        raise_on_execution_failure=False,
+    )
+    print("turns:", results[0].turn_count, "| goal achieved:", results[0].goal_achieved)
+
+
+asyncio.run(main())
+```
+
+The simulated user and the judge are LLM calls of evaluatorq's own, so this needs `ORQ_API_KEY` even though your endpoint holds its own provider credentials. `upload_results=False` keeps the run off the Orq platform; drop it and the results upload as an Experiment.
+
+### Replayed tool turns: `v5` or `v4`
+
+When a transcript carries tool calls, they are rendered as AI SDK content parts so a `streamText()` handler sees the prior tool context. The two SDK generations spell the payload differently, and `message_format` picks which:
+
+| Part | `message_format="v5"` (default) | `message_format="v4"` |
+|---|---|---|
+| tool call | `{"type": "tool-call", "toolCallId": ..., "toolName": ..., "input": {...}}` | the same, with `"args"` instead of `"input"` |
+| tool result | `{"type": "tool-result", ..., "output": {"type": "text", "value": "in transit"}}` | the same, with a bare `"result": "in transit"` |
+
+Plain text turns are `{"role", "content"}` in both, so the setting only matters once tool calls enter a transcript. Set `message_format="v4"` when the endpoint runs AI SDK v4.
+
+Note where those tool calls can come from. This target reports **only text** back: `respond()` builds its `AgentResponse` from a single text item, so a tool call your handler makes never reaches evaluatorq and never enters the transcript it replays. Tool turns therefore only appear when the transcript was seeded from somewhere that has them — trace-derived datapoints, or a replayed run. On a conversation this target generated by itself, `message_format` changes nothing.
+
+### Failure modes
+
+Most of these are silent, in the sense that the run completes and the report reads as though nothing went wrong.
+
+| What happens | How it surfaces |
+|---|---|
+| **No `agent_context` was passed** | `get_agent_context()` reports an opaque target with no tools, so every strategy gated on `requires_tools` is filtered out. The red-team run completes and never tried tool misuse at all. Silent — pass an `AgentContext` listing the endpoint's tools, built exactly as in the [`CallableTarget` example](#what-the-attacker-sees) |
+| **The handler returns plain prose under `content-type: text/plain`** | It is parsed as a data stream, no line matches, and the reply is the **empty string** — which a judge scores as an agent that said nothing. Silent, and the worst of these |
+| **The handler returns a v5 SSE stream, or JSON without the JSON header** | No branch matches, so the raw body — SSE envelope or JSON source — becomes the agent's reply and is scored as its answer. Silent — use the check above before a scored run |
+| **A JSON reply carries an empty `message` alongside a filled `text`** | `message` is read first and wins even when empty, so the reply is `""` and the `text` field is never reached. Silent |
+| **The handler answers by calling a tool and saying nothing** | Reply-side tool-call frames are not parsed and `respond()` returns text only, so the turn arrives as an empty reply. An agent that acted scores as silent. Silent |
+| **Nothing in the reply carries `usage`** | `AgentResponse.usage` is `None` — not a zeroed object — so the run reports no tokens and no cost for the target, and code that reaches straight for `response.usage.input_tokens` raises `AttributeError`. Silent in a run, loud in your own code |
+| **A non-2xx response** | `raise_for_status()` raises `httpx.HTTPStatusError`, which the runner records as a failed target call. Loud |
+| **The endpoint is slower than `timeout`** | `httpx.ReadTimeout` after 120 seconds by default. Loud |
+
+The first row is the expensive one, because it changes what the attacker is allowed to try rather than what it sees, and a narrowed run still reports a resistance rate that reads like a clean bill of health. Compare `total_attacks` against `evaluated_attacks` on the report to catch it. evaluatorq defines no discovery convention for HTTP targets — nothing is fetched from the endpoint to describe it — so on this target kind the context is entirely the caller's to supply.
+
+### Constructor options
+
+| Option | Default | What it does |
+|---|---|---|
+| `url` | required | The endpoint that serves the agent |
+| `headers` | `{}` | Extra request headers, for authentication |
+| `extra_body` | `{}` | Fields merged into the request body next to `messages`, such as `{"model": "gpt-5.6-luna"}` for a handler that takes a model |
+| `timeout` | `120.0` | Per-request timeout in seconds |
+| `agent_context` | `None` | The `AgentContext` the attack planner reads — see the first failure mode above |
+| `message_format` | `"v5"` | AI SDK generation for replayed tool turns |
+
+`name` is the URL, which is what reports and the run store key on. When you pass no `agent_context`, the generated one strips credentials and any query string out of its key, so a URL carrying a token does not leak through that field; pass your own context and the key is whatever you put in it. Either way the full URL still appears in `name`, so keep secrets in `headers` rather than in the URL.
+
+`extra_body` and `headers` are merged into the request without a reserved-key guard, so an `extra_body` carrying `messages`, or a header re-setting `Content-Type`, overwrites what the target built.
 
 ## Writing your own target
 

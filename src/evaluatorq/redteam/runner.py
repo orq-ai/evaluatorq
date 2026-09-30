@@ -33,8 +33,6 @@ from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.target_call import call_target_with_retry, close_target, default_map_error
 from evaluatorq.common.thread_context import (
     _evaluatorq_run_scope,
-    build_static_thread_id,
-    conversation_thread,
     evaluatorq_pipeline,
 )
 from evaluatorq.common.tracing import AttrMap, set_span_attrs, truncate_for_span
@@ -93,7 +91,12 @@ from evaluatorq.redteam.replay import DATAPOINTS_KEY as REPLAY_DATAPOINTS_KEY
 from evaluatorq.redteam.replay import RUN_CONFIG_KEY as REPLAY_RUN_CONFIG_KEY
 from evaluatorq.redteam.replay import RedTeamReplay, load_redteam_replay
 from evaluatorq.redteam.reports.recommendations import generate_focus_area_recommendations
-from evaluatorq.redteam.runtime.jobs import _build_messages, _sanitize_job_name, create_deployment_job
+from evaluatorq.redteam.runtime.jobs import (
+    _build_messages,
+    _sanitize_job_name,
+    create_deployment_job,
+    static_target_spans,
+)
 from evaluatorq.redteam.traces import TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import with_redteam_span
 from evaluatorq.redteam.vulnerability_registry import (
@@ -1768,11 +1771,6 @@ def _safe_resolve_target_kind(at: Any) -> TargetKind:
         return TargetKind.DIRECT
 
 
-def _make_safe_target(value: str) -> str:
-    """Return a job-name-safe slug from a target value."""
-    return ''.join(ch if ch.isalnum() or ch in {'-', '_'} else '-' for ch in value).strip('-') or 'unknown'
-
-
 def _deduplicate_target_labels(
     string_targets: Sequence[str],
     agent_targets: Sequence[Any],
@@ -1828,15 +1826,6 @@ def _extract_static_prompt(data: DataPoint) -> str:
     return '\n\n'.join(p for p in user_parts if p)
 
 
-def _static_attack_attrs(data: DataPoint) -> dict[str, str]:
-    """Return the common trace attributes for a static red-team datapoint."""
-    return {
-        'orq.redteam.category': data.inputs.get('category', ''),
-        'orq.redteam.vulnerability': data.inputs.get('vulnerability', data.inputs.get('category', '')),
-        'orq.redteam.strategy_name': data.inputs.get('strategy_name', ''),
-    }
-
-
 async def _run_static_target_call(
     target: Any,
     prompt: str,
@@ -1889,6 +1878,9 @@ def _create_static_job_for_agent_target(
     ``default_map_error`` — a generic ``target_error`` — when the caller has none)
     so the static leg reports the same normalized error taxonomy as hybrid/dynamic
     instead of a backend-agnostic default.
+
+    A datapoint with no user content raises ``ValueError`` before any target is
+    created, so an empty prompt is never sent and scored.
     """
     safe = _sanitize_job_name(label)
     cfg = cfg or PIPELINE_CONFIG
@@ -1896,50 +1888,45 @@ def _create_static_job_for_agent_target(
     @job(f'redteam:static:{safe}')
     async def agent_target_job(data: DataPoint, _row: int) -> dict[str, Any]:
         prompt = _extract_static_prompt(data)
+        if not prompt:
+            sample_id = data.inputs.get('id', 'unknown')
+            raise ValueError(
+                f'Static datapoint {sample_id!r} for target {label!r} '
+                f'produced an empty prompt ({len(_build_messages(data))} messages, none with user content).'
+            )
         target = target_factory()
         try:
-            attack_attrs = _static_attack_attrs(data)
             target_input = truncate_for_span(prompt)
-            thread_id = build_static_thread_id(run_id, safe, _row)
             async with (
-                with_redteam_span('orq.redteam.attack', attack_attrs),
+                static_target_spans(data, safe, run_id, _row, target_input) as (target_span, thread_id),
                 with_redteam_span(
-                    'orq.redteam.target_call',
+                    f'agent {label}',
                     {
-                        **attack_attrs,
+                        'orq.redteam.llm_purpose': 'target',
                         'input': target_input,
                         'orq.redteam.input': target_input,
                     },
-                ) as target_span,
+                ) as agent_span,
             ):
-                with conversation_thread(thread_id):
-                    async with with_redteam_span(
-                        f'agent {label}',
-                        {
-                            'orq.redteam.llm_purpose': 'target',
-                            'input': target_input,
-                            'orq.redteam.input': target_input,
-                        },
-                    ) as agent_span:
-                        output = await _run_static_target_call(
-                            target,
-                            prompt,
-                            target_agent_timeout_ms=cfg.target_agent_timeout_ms,
-                            max_target_retries=cfg.max_target_retries,
-                            map_error=map_error,
-                        )
-                        if output['error'] is not None:
-                            error_attrs: AttrMap = {
-                                'orq.redteam.error_type': output['error_type'],
-                                'orq.redteam.error_code': output['error_code'],
-                            }
-                            set_span_attrs(target_span, error_attrs)
-                            set_span_attrs(agent_span, error_attrs)
-                        else:
-                            response_text = truncate_for_span(output['response'])
-                            output_attrs: AttrMap = {'output': response_text, 'orq.redteam.output': response_text}
-                            set_span_attrs(target_span, output_attrs)
-                            set_span_attrs(agent_span, output_attrs)
+                output = await _run_static_target_call(
+                    target,
+                    prompt,
+                    target_agent_timeout_ms=cfg.target_agent_timeout_ms,
+                    max_target_retries=cfg.max_target_retries,
+                    map_error=map_error,
+                )
+                if output['error'] is not None:
+                    error_attrs: AttrMap = {
+                        'orq.redteam.error_type': output['error_type'],
+                        'orq.redteam.error_code': output['error_code'],
+                    }
+                    set_span_attrs(target_span, error_attrs)
+                    set_span_attrs(agent_span, error_attrs)
+                else:
+                    response_text = truncate_for_span(output['response'])
+                    output_attrs: AttrMap = {'output': response_text, 'orq.redteam.output': response_text}
+                    set_span_attrs(target_span, output_attrs)
+                    set_span_attrs(agent_span, output_attrs)
 
             return {**output, 'thread_id': thread_id}
         finally:
@@ -2233,7 +2220,7 @@ async def _prepare_target(
         A `PreparedTarget` instance with all per-target state.
     """
     target_kind, target_value = _parse_dynamic_target(target, mode)
-    safe_target = _make_safe_target(target_value)
+    safe_target = _sanitize_job_name(target_value)
     backend = make_agent_backend(target_config=target_config, pipeline_config=pipeline_config)
 
     # Context retrieval (skip if already fetched for the confirm step)
@@ -3140,80 +3127,13 @@ def _build_agent_target_jobs(
         for dp in at_static_dps:
             dp.inputs['hybrid_source'] = 'static'
 
-        # Build a static job that invokes the AgentTarget directly
-        # Reuse the same BareTargetBackend created for the dynamic job
-        @job(f'redteam:static:{at_safe}')
-        async def at_static_job(
-            data: DataPoint,
-            _row: int,
-            _backend: Any = at_backend,
-            _label: str = at_label,
-            _safe: str = at_safe,
-            _cfg: LLMConfig = pipeline_config or PIPELINE_CONFIG,
-        ) -> Any:
-            """Send a static datapoint to the AgentTarget via respond."""
-            messages = _build_messages(data)
-            prompt = _extract_static_prompt(data)
-            if not prompt:
-                sample_id = data.inputs.get('id', 'unknown')
-                raise ValueError(
-                    f'Static datapoint {sample_id!r} for target {_label!r} '
-                    f'produced an empty prompt ({len(messages)} messages, none with user content).'
-                )
-            target_instance = _backend.create_target(_label)
-            try:
-                attack_attrs = _static_attack_attrs(data)
-                target_input = truncate_for_span(prompt)
-                thread_id = build_static_thread_id(run_id, _safe, _row)
-                async with (
-                    with_redteam_span('orq.redteam.attack', attack_attrs),
-                    with_redteam_span(
-                        'orq.redteam.target_call',
-                        {
-                            **attack_attrs,
-                            'input': target_input,
-                            'orq.redteam.input': target_input,
-                        },
-                    ) as target_span,
-                ):
-                    with conversation_thread(thread_id):
-                        async with with_redteam_span(
-                            f'agent {_label}',
-                            {
-                                'orq.redteam.llm_purpose': 'target',
-                                'input': target_input,
-                                'orq.redteam.input': target_input,
-                            },
-                        ) as agent_span:
-                            # Shared with the non-hybrid static path: retry, timeout, error key.
-                            output = await _run_static_target_call(
-                                target_instance,
-                                prompt,
-                                target_agent_timeout_ms=_cfg.target_agent_timeout_ms,
-                                max_target_retries=_cfg.max_target_retries,
-                                map_error=_backend.map_error,
-                            )
-                            if output['error'] is not None:
-                                error_attrs: AttrMap = {
-                                    'orq.redteam.error_type': output['error_type'],
-                                    'orq.redteam.error_code': output['error_code'],
-                                }
-                                set_span_attrs(target_span, error_attrs)
-                                set_span_attrs(agent_span, error_attrs)
-                            else:
-                                response_text = truncate_for_span(output['response'])
-                                output_attrs: AttrMap = {
-                                    'output': response_text,
-                                    'orq.redteam.output': response_text,
-                                }
-                                set_span_attrs(target_span, output_attrs)
-                                set_span_attrs(agent_span, output_attrs)
-                return {
-                    **output,
-                    'thread_id': thread_id,
-                }
-            finally:
-                await close_target(target_instance)
+        at_static_job = _create_static_job_for_agent_target(
+            lambda: at_backend.create_target(at_label),
+            at_label,
+            pipeline_config,
+            map_error=at_backend.map_error,
+            run_id=run_id,
+        )
 
         @job(f'redteam:hybrid:{at_safe}')
         async def at_target_job(
@@ -3540,7 +3460,7 @@ async def _run_dynamic_or_hybrid(
                 run_id=run_id,
             )
 
-            at_safe = _make_safe_target(at_label)
+            at_safe = _sanitize_job_name(at_label)
 
             at_is_generating = shared_at_dps is None
             if shared_at_dps is None:
@@ -4587,7 +4507,7 @@ def _patch_static_job_reports(
     job_name_to_target: dict[str, tuple[TargetKind, str]] = {}
     for t in targets:
         t_kind, t_value = parse_target(t)
-        safe = _make_safe_target(t_value)
+        safe = _sanitize_job_name(t_value)
         # create_deployment_job names follow "redteam:static:<safe_target>" convention;
         # use the safe slug for the lookup key to handle collisions gracefully.
         job_name_to_target[safe] = (t_kind, t_value)

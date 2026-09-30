@@ -615,7 +615,9 @@ def test_sim_drawer_has_back_nav_close_controls(sim_run) -> None:
 
 
 def test_sim_drawer_runtime_dispatches_conversations_without_anchor_handler() -> None:
-    source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text(
+        encoding='utf-8'
+    )
     keyboard_handler = source.split("document.body.addEventListener('keydown'", 1)[1].split('});', 1)[0]
 
     assert "trigger.getAttribute('data-drawer-url')" in source

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import stat
+import os
+import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from loguru import logger
@@ -15,6 +17,7 @@ from evaluatorq.backends import coding_agent as coding_agent_module
 from evaluatorq.backends import container as c
 from evaluatorq.backends.coding_agent import CodingAgentError, CodingAgentTarget, CodingAgentUnavailableError
 from evaluatorq.contracts import Message
+from tests.backends.fakes import install_fake
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
@@ -26,29 +29,71 @@ async def _wait_until(predicate, description: str, timeout: float = 5.0) -> None
             raise AssertionError(f'timed out waiting for {description}')
         await asyncio.sleep(0.01)
 
-FAKE = r"""#!/bin/sh
-printf 'ARGV %s\n' "$*" >> "$FAKE_LOG"
-[ "$1" = "--context" ] && shift 2
-case "$1" in
-  image) [ -n "$FAKE_IMAGE_ERROR" ] && echo "$FAKE_IMAGE_ERROR" >&2
-         exit ${FAKE_IMAGE_EXIT:-0};;
-  ps) exit 0;;
-  run) [ -n "$FAKE_RUN_SLEEP" ] && sleep "$FAKE_RUN_SLEEP"
-       [ -n "$FAKE_RUN_EXIT" ] && { echo "daemon down" >&2; exit $FAKE_RUN_EXIT; }; echo CREATED >> "$FAKE_LOG"; [ -n "$FAKE_RUN_STOPPED" ] && touch "$FAKE_STOPPED"; echo cid; exit 0;;
-  inspect) if [ -f "$FAKE_STOPPED" ]; then rm "$FAKE_STOPPED"; echo false; else echo true; fi; exit 0;;
-  exec) env | sed 's/^/ENV /' >> "$FAKE_LOG"; cat - >/dev/null
-        [ -n "$FAKE_EXEC_SLEEP" ] && sleep "$FAKE_EXEC_SLEEP"
-        [ -n "$FAKE_STDOUT" ] && cat "$FAKE_STDOUT"; exit ${FAKE_EXEC_EXIT:-0};;
-  rm) [ -n "$FAKE_RM_SLEEP" ] && sleep "$FAKE_RM_SLEEP"; [ -n "$FAKE_RM_EXIT" ] && exit "$FAKE_RM_EXIT"; echo REMOVED >> "$FAKE_LOG"; exit 0;;
-esac
+FAKE = """\
+import os, sys, time
+from pathlib import Path
+
+args, env = sys.argv[1:], os.environ.get
+
+
+def log(line):
+    with open(os.environ['FAKE_LOG'], 'a', encoding='utf-8') as f:
+        if os.name == 'nt':
+            # Windows emulates O_APPEND, so concurrent fakes drop lines; the OS frees this lock if we are killed.
+            # The lock sits past EOF because Windows byte locks are mandatory and would fail the test's reads.
+            import msvcrt
+
+            f.seek(1 << 30)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        f.write(line + '\\n')
+
+
+log('ARGV ' + ' '.join(args))
+if args[:1] == ['--context']:
+    args = args[2:]
+sub = args[0] if args else ''
+if sub == 'image':
+    if env('FAKE_IMAGE_ERROR'):
+        print(env('FAKE_IMAGE_ERROR'), file=sys.stderr)
+    sys.exit(int(env('FAKE_IMAGE_EXIT') or 0))
+if sub == 'run':
+    if env('FAKE_RUN_SLEEP'):
+        time.sleep(float(env('FAKE_RUN_SLEEP')))
+    if env('FAKE_RUN_EXIT'):
+        print('daemon down', file=sys.stderr)
+        sys.exit(int(env('FAKE_RUN_EXIT')))
+    log('CREATED')
+    if env('FAKE_RUN_STOPPED'):
+        Path(env('FAKE_STOPPED')).touch()
+    print('cid')
+if sub == 'inspect':
+    stopped = Path(env('FAKE_STOPPED') or os.devnull)
+    if env('FAKE_STOPPED') and stopped.is_file():
+        stopped.unlink()
+        print('false')
+    else:
+        print('true')
+if sub == 'exec':
+    log('\\n'.join(f'ENV {key}={value}' for key, value in os.environ.items()))
+    sys.stdin.read()
+    if env('FAKE_EXEC_SLEEP'):
+        time.sleep(float(env('FAKE_EXEC_SLEEP')))
+    if env('FAKE_STDOUT'):
+        with open(env('FAKE_STDOUT'), 'rb') as f:
+            sys.stdout.buffer.write(f.read())
+    sys.exit(int(env('FAKE_EXEC_EXIT') or 0))
+if sub == 'rm':
+    if env('FAKE_RM_SLEEP'):
+        time.sleep(float(env('FAKE_RM_SLEEP')))
+    if env('FAKE_RM_EXIT'):
+        sys.exit(int(env('FAKE_RM_EXIT')))
+    log('REMOVED')
 """
 
 
 @pytest.fixture
 def docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    script = tmp_path / 'docker'
-    script.write_text(FAKE)
-    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    script = install_fake(tmp_path, 'docker', FAKE)
     log = tmp_path / 'log'
     monkeypatch.setenv('FAKE_LOG', str(log))
     monkeypatch.setenv('FAKE_STDOUT', str(FIXTURES / 'claude_tool.jsonl'))
@@ -84,7 +129,7 @@ async def test_turn_runs_in_one_container_and_close_removes_it(docker, monkeypat
     await target.respond([Message(role='user', content='again')])
     assert len(calls('run')) == 1 and len(calls('exec')) == 2
     [run] = calls('run')
-    assert '--context orbstack' in run and '--name task-7-claude-' in run and '/work:/app' in run
+    assert '--context orbstack' in run and '--name task-7-claude-' in run and f'{os.sep}work:/app' in run
     [exec1, _] = calls('exec')
     assert '-e EXTRA -e ANTHROPIC_API_KEY' in exec1 and 'evq-entrypoint claude' in exec1
     text = log.read_text()
@@ -116,7 +161,7 @@ async def test_image_missing(docker, monkeypatch, error: str) -> None:
     with pytest.raises(CodingAgentUnavailableError) as info:
         await _target(binary).respond([Message(role='user', content='x')])
     assert info.value.code == 'cli.image_missing'
-    assert 'eq coding-agent build-image' in info.value.message and 'docker build' in info.value.message
+    assert 'eq coding-agent build-image' in info.value.message and 'build -t img:1' in info.value.message
 
 
 @pytest.mark.asyncio
@@ -442,3 +487,44 @@ async def test_orphan_sweep_runs_before_first_container(docker) -> None:
     subcommands = [l.split()[1] for l in log.read_text().splitlines() if l.startswith('ARGV')]
     assert subcommands[:3] == ['image', 'ps', 'run']
     await target.close()
+
+
+def test_host_ids_falls_back_to_image_agent_without_getuid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(c.os, 'getuid', raising=False)
+    assert c.host_ids() == (c.IMAGE_AGENT_ID, c.IMAGE_AGENT_ID)
+
+
+@pytest.mark.asyncio
+async def test_kill_group_uses_taskkill_without_killpg(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0, '', '')
+
+    monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
+    monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
+    await coding_agent_module.kill_group(SimpleNamespace(returncode=None, pid=4242))  # pyright: ignore[reportArgumentType]
+    assert calls == [['taskkill', '/T', '/F', '/PID', '4242']]
+
+
+@pytest.mark.asyncio
+async def test_kill_group_kills_agent_process_when_taskkill_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    killed: list[int] = []
+
+    def fake_run(argv: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 1, '', 'ERROR: Access is denied.')
+
+    monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
+    monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
+    proc = SimpleNamespace(returncode=None, pid=4242, kill=lambda: killed.append(4242))
+    await coding_agent_module.kill_group(proc)  # pyright: ignore[reportArgumentType]
+    assert killed == [4242]
+
+
+def test_pid_alive_dispatches_to_windows_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    probed: list[int] = []
+    monkeypatch.setattr(c.sys, 'platform', 'win32')
+    monkeypatch.setattr(c, 'windows_pid_alive', lambda pid: probed.append(pid) or False)
+    assert c.pid_alive(4242) is False
+    assert probed == [4242]

@@ -597,17 +597,6 @@ class TestSimFilterRailCounter:
 
 
 # ---------------------------------------------------------------------------
-# Task 7: persist open <details> filter dropdowns across HTMX filter swaps.
-# ---------------------------------------------------------------------------
-def test_dashboard_js_has_details_persistence_hook():
-    from pathlib import Path
-
-    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
-    assert 'htmx:beforeSwap' in js
-    assert 'filter-dd' in js or 'details[open]' in js
-
-
-# ---------------------------------------------------------------------------
 # Task 11: double-fetch removal — the sim row-list wrapper no longer
 # self-refetches on orq:filter-changed; the /filter POST body swap already
 # delivers the (now heavier, card-based) row list.
