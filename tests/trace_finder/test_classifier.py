@@ -196,7 +196,7 @@ def _entry(value: object, raw_answer: dict[str, Any] | None) -> dict[str, Any]:
 
 def _result(
     *,
-    dimensions: Sequence[CompiledQuery] = (_compiled(),),
+    dimensions: Sequence[CompiledQuery] | None = None,
     values: Sequence[Any] | None = None,
     raw_answers: Sequence[dict[str, Any] | None] | None = None,
     datapoint_error: str | None = None,
@@ -204,6 +204,7 @@ def _result(
     evaluator_error: str | None = None,
     job_results: list[JobResult] | None = None,
 ) -> DataPointResult:
+    dimensions = (_compiled(),) if dimensions is None else dimensions
     if job_results is None:
         count = len(dimensions)
         resolved_values = list(values) if values is not None else ['frustrated'] * count
@@ -230,8 +231,9 @@ def _result(
 
 
 def _result_from_evaluation(
-    evaluation: EvaluationResult, dimensions: Sequence[CompiledQuery] = (_compiled(),)
+    evaluation: EvaluationResult, dimensions: Sequence[CompiledQuery] | None = None
 ) -> DataPointResult:
+    dimensions = (_compiled(),) if dimensions is None else dimensions
     entry = {'value': evaluation.value, 'explanation': evaluation.explanation, 'raw_output': evaluation.raw_output}
     return DataPointResult(
         data_point=build_datapoint(_trace(), _projection()),
