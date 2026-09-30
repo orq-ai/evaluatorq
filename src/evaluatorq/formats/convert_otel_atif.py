@@ -1,0 +1,719 @@
+"""Convert between OTel GenAI traces and ATIF trajectories.
+
+OTel -> ATIF reads one agent run per `invoke_agent` scope: `chat` spans become steps in start-time order, and
+the conversation comes from each chat span's *new* input (the part the previous chat span had not seen), so a
+trace whose chat spans replay the full history (Orq does) is not duplicated. Tool results come from
+`execute_tool` spans or, failing those, from `tool_call_response` parts in later chat inputs, and attach to the
+step that issued the call. Nested `invoke_agent` spans become `subagent_trajectories`. Usage is read from chat
+spans only: `invoke_agent` spans carry inclusive totals that would double-count.
+
+ATIF -> OTel emits the GenAI semconv layout: one `invoke_agent` span, and under it one `chat` span per agent step
+plus one `execute_tool` span per tool call as siblings. Ids are SHA-256 of the session and trajectory ids.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Literal, cast
+
+from loguru import logger
+
+from evaluatorq.contracts import InputTextContent, content_to_text, tool_result_to_text
+from evaluatorq.formats._ids import content_seed, stable_hex
+from evaluatorq.formats.atif import (
+    AtifAgent,
+    AtifContentPart,
+    AtifFinalMetrics,
+    AtifMetrics,
+    AtifObservation,
+    AtifObservationResult,
+    AtifStep,
+    AtifSubagentRef,
+    AtifToolCall,
+    AtifTrajectory,
+)
+from evaluatorq.formats.otel import (
+    OtelMessage,
+    OtelPart,
+    OtelReasoningPart,
+    OtelSpan,
+    OtelTextPart,
+    OtelToolCallPart,
+    OtelToolCallResponsePart,
+    OtelTrace,
+    OtelUriPart,
+    parse_time,
+    span_usage,
+)
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+_RAW_ARGUMENTS_KEY = '_raw'
+_NO_STEPS = 'OtelTrace has no chat spans; ATIF needs at least one step'
+_UNKNOWN = 'unknown'
+_OTHER_ERROR = '_OTHER'  # the semconv `error.type` fallback when a failed span names no error
+_STATUSES = frozenset({'ok', 'error', 'unset'})
+
+
+@dataclass
+class _Scope:
+    """The spans of one agent run, and the nested `invoke_agent` spans that become its subagents."""
+
+    members: list[OtelSpan]
+    subagents: list[OtelSpan]
+
+
+@dataclass
+class _Draft:
+    """One ATIF step being assembled; `span` is the chat span of an agent step."""
+
+    fields: dict[str, Any]
+    span: OtelSpan | None = None
+    results: list[AtifObservationResult] = field(default_factory=list)
+
+
+# OTel -> ATIF
+
+
+def otel_to_atif(trace: OtelTrace, *, agent_name: str = _UNKNOWN, agent_version: str = _UNKNOWN) -> AtifTrajectory:
+    """Build an ATIF trajectory from an OTel trace; see the module docstring for the mapping.
+
+    The agent name and version fall back to `gen_ai.agent.name` / `gen_ai.agent.version` of the scope's
+    `invoke_agent` span when left at `'unknown'`.
+
+    Lost: chat input messages before the first chat span (prior history, warned), extra output choices
+    (warned), span attributes other than model, usage, finish reasons and error type, and spans that are not
+    `chat`, `execute_tool` or `invoke_agent`.
+
+    Raises:
+        ValueError: The trace has no chat span that yields a step.
+    """
+    tops = _root_scope(trace)
+    scope_root = tops[0] if len(tops) == 1 and tops[0].operation == 'invoke_agent' else None
+    name = agent_name if agent_name != _UNKNOWN else _attribute(scope_root, 'gen_ai.agent.name') or _UNKNOWN
+    version = agent_version if agent_version != _UNKNOWN else _attribute(scope_root, 'gen_ai.agent.version')
+    traj = _build(
+        trace,
+        tops,
+        session_id=_session_id(trace, tops),
+        trajectory_id=None,
+        agent=AtifAgent(name=name, version=version or _UNKNOWN),
+    )
+    if traj is None:
+        raise ValueError(_NO_STEPS)
+    return traj
+
+
+def _root_scope(trace: OtelTrace) -> list[OtelSpan]:
+    """Return the top spans of the run: one `invoke_agent` span, or every root merged into a synthetic scope."""
+    roots = trace.roots()
+    if len(roots) > 1:
+        logger.warning('OtelTrace has {} roots; converting them as one run in start-time order', len(roots))
+        return roots
+    if not roots or roots[0].operation == 'invoke_agent':
+        return roots
+    agents = [span for span in trace.children(roots[0].span_id) if span.operation == 'invoke_agent']
+    return agents if len(agents) == 1 else roots  # Orq wraps its one invoke_agent span in an AgentInvoke root
+
+
+def _collect(trace: OtelTrace, tops: list[OtelSpan]) -> _Scope:
+    """Walk down from `tops`. An `invoke_agent` span below another one starts a subagent and is not descended."""
+    scope = _Scope(members=[], subagents=[])
+    seen: set[str] = set()
+    stack = [(top, top.operation == 'invoke_agent') for top in reversed(tops)]
+    while stack:
+        span, in_agent = stack.pop()
+        if span.span_id in seen:
+            continue
+        seen.add(span.span_id)
+        scope.members.append(span)
+        for child in reversed(trace.children(span.span_id)):
+            if child.operation == 'invoke_agent' and in_agent:
+                scope.subagents.append(child)
+            else:
+                stack.append((child, in_agent or child.operation == 'invoke_agent'))
+    scope.subagents = _by_start(scope.subagents)
+    return scope
+
+
+def _by_start(spans: list[OtelSpan]) -> list[OtelSpan]:
+    # sorted() is stable, so ties (and spans without a time, which go last) keep list order
+    return sorted(spans, key=lambda s: (s.start_time is None, s.start_time.timestamp() if s.start_time else 0.0))
+
+
+def _session_id(trace: OtelTrace, tops: list[OtelSpan]) -> str:
+    for span in [*tops, *trace.roots()]:
+        conversation = span.attributes.get('gen_ai.conversation.id')
+        if isinstance(conversation, str) and conversation:
+            return conversation
+    trace_id = next((span.trace_id for span in tops if span.trace_id), None)
+    return trace_id or stable_hex(content_seed([span.span_id for span in trace.spans]), length=16)
+
+
+def _attribute(span: OtelSpan | None, key: str) -> str | None:
+    value = span.attributes.get(key) if span is not None else None
+    return value if isinstance(value, str) and value else None
+
+
+def _build(
+    trace: OtelTrace, tops: list[OtelSpan], *, session_id: str, trajectory_id: str | None, agent: AtifAgent
+) -> AtifTrajectory | None:
+    """Build the trajectory of one scope, or None when it yields no step."""
+    scope = _collect(trace, tops)
+    by_id = {span.span_id: span for span in trace.spans}
+    chats = _by_start([span for span in scope.members if span.operation == 'chat'])
+    drafts, new_inputs = _chat_steps(chats, by_id)
+    _attach_results(drafts, scope.members, chats, new_inputs)
+    subagents = _subagents(trace, scope, drafts, session_id, trajectory_id, by_id)
+    if not drafts:
+        return None
+    steps = [
+        AtifStep(
+            step_id=index + 1,
+            observation=AtifObservation(results=draft.results) if draft.results else None,
+            **draft.fields,
+        )
+        for index, draft in enumerate(drafts)
+    ]
+    return AtifTrajectory(
+        schema_version='ATIF-v1.7',
+        session_id=session_id,
+        trajectory_id=trajectory_id,
+        agent=agent,
+        steps=steps,
+        final_metrics=_final_metrics(steps),
+        subagent_trajectories=subagents or None,
+    )
+
+
+def _chat_steps(chats: list[OtelSpan], by_id: dict[str, OtelSpan]) -> tuple[list[_Draft], list[list[OtelMessage]]]:
+    """Cut steps from chat spans; also return each span's new input (empty for the first, whose input is history)."""
+    drafts: list[_Draft] = []
+    new_inputs: list[list[OtelMessage]] = []
+    for index, chat in enumerate(chats):
+        if index == 0:
+            drafts.extend(_system_instruction_steps(chat))
+            drafts.extend(_history(chat.input_messages or [], first=True))
+            new_inputs.append([])
+        else:
+            new = _new_input(chats[index - 1], chat)
+            drafts.extend(_history(new, first=False))
+            new_inputs.append(new)
+        agent = _agent_step(chat, by_id)
+        if agent is not None:
+            drafts.append(agent)
+    return drafts, new_inputs
+
+
+def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
+    seen = len(prev.input_messages or []) + len(prev.output_messages or [])
+    messages = chat.input_messages or []
+    if len(messages) < seen:
+        logger.warning(
+            'Chat span {} has {} input messages, fewer than the {} its predecessor saw; reading no new input from it',
+            chat.span_id,
+            len(messages),
+            seen,
+        )
+        return []
+    return messages[seen:]
+
+
+def _system_instruction_steps(chat: OtelSpan) -> list[_Draft]:
+    if not chat.system_instructions:
+        return []
+    texts, rest = _split_text(chat.system_instructions, chat.span_id)
+    return [_Draft(fields={'source': 'system', 'message': '\n'.join(texts), 'extra': rest})]
+
+
+def _history(messages: list[OtelMessage], *, first: bool) -> list[_Draft]:
+    """Turn system and user input messages into steps. Tool messages are read as results elsewhere."""
+    drafts: list[_Draft] = []
+    history = 0
+    for message in messages:
+        if message.role in ('system', 'developer', 'user'):
+            drafts.append(_message_step(message))
+        elif first and message.role in ('assistant', 'tool'):
+            history += 1
+        elif message.role == 'assistant':
+            logger.warning('Chat input has an assistant message the previous chat span did not output; skipping it')
+        elif message.role != 'tool':
+            logger.warning('Skipping chat input message with role {!r}: ATIF has no such step source', message.role)
+    if history:
+        logger.warning('history of {} messages before the first chat span is not converted', history)
+    return drafts
+
+
+def _message_step(message: OtelMessage) -> _Draft:
+    texts, extra = _split_text(message.parts, message.role)
+    text = content_to_text([InputTextContent(type='input_text', text=t) for t in texts])
+    if message.role == 'developer':
+        extra = {**(extra or {}), 'original_role': 'developer'}
+    source = 'user' if message.role == 'user' else 'system'
+    return _Draft(fields={'source': source, 'message': text, 'extra': extra})
+
+
+def _split_text(parts: list[OtelPart], where: str) -> tuple[list[str], dict[str, Any] | None]:
+    """Return the text parts' contents and, when others exist, an `extra` holding them (warned)."""
+    texts = [part.content for part in parts if isinstance(part, OtelTextPart)]
+    rest = [part.model_dump(mode='json') for part in parts if not isinstance(part, OtelTextPart)]
+    if not rest:
+        return texts, None
+    logger.warning(
+        '{} non-text parts in {} have no ATIF step equivalent; keeping them in extra.non_text_parts', len(rest), where
+    )
+    return texts, {'non_text_parts': rest}
+
+
+def _agent_step(chat: OtelSpan, by_id: dict[str, OtelSpan]) -> _Draft | None:
+    outputs = chat.output_messages or []
+    message = next((m for m in outputs if m.role == 'assistant'), None)
+    if message is None:
+        if outputs:
+            logger.warning('Chat span {} has no assistant output message; it gives no agent step', chat.span_id)
+        return None
+    if len(outputs) > 1:
+        logger.warning(
+            'Chat span {} has {} output messages; reading the first assistant one', chat.span_id, len(outputs)
+        )
+    texts: list[str] = []
+    reasoning: list[str] = []
+    calls: list[AtifToolCall] = []
+    other: list[OtelPart] = []
+    for part in message.parts:
+        if isinstance(part, OtelTextPart):
+            texts.append(part.content)
+        elif isinstance(part, OtelReasoningPart):
+            reasoning.append(part.content)
+        elif isinstance(part, OtelToolCallPart):
+            calls.append(_tool_call(part, chat.span_id, len(calls)))
+        else:
+            other.append(part)
+    extra = _step_extra(chat, by_id)
+    extra.update(_split_text(other, f'chat span {chat.span_id} output')[1] or {})
+    fields: dict[str, Any] = {
+        'source': 'agent',
+        'message': '\n'.join(texts),
+        'reasoning_content': '\n\n'.join(reasoning) or None,
+        'tool_calls': calls or None,
+        'model_name': _attribute(chat, 'gen_ai.response.model') or _attribute(chat, 'gen_ai.request.model'),
+        'metrics': _metrics(chat),
+        'llm_call_count': 1,
+        'timestamp': chat.start_time.isoformat() if chat.start_time else None,
+        'extra': extra,
+    }
+    return _Draft(fields=fields, span=chat)
+
+
+def _tool_call(part: OtelToolCallPart, span_id: str, index: int) -> AtifToolCall:
+    call_id = part.id or 'call_' + stable_hex(span_id, part.name, str(index), length=16)
+    return AtifToolCall(tool_call_id=call_id, function_name=part.name, arguments=_arguments(part.arguments, part.name))
+
+
+def _arguments(raw: Any, name: str) -> dict[str, Any]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return cast('dict[str, Any]', raw)
+    decoded: Any = None
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            decoded = None
+    if isinstance(decoded, dict):
+        return cast('dict[str, Any]', decoded)
+    logger.warning('Tool call {!r} arguments are not a JSON object; keeping them as {{"_raw": ...}}', name)
+    return {_RAW_ARGUMENTS_KEY: raw if isinstance(raw, str) else json.dumps(raw, default=str)}
+
+
+def _step_extra(chat: OtelSpan, by_id: dict[str, OtelSpan]) -> dict[str, Any]:
+    """NeMo-layout step extra: `ancestry`, `invocation`, plus error type, finish reasons and a differing request model."""
+    parent = by_id.get(chat.parent_span_id) if chat.parent_span_id else None
+    ancestry = {'function_id': chat.span_id, 'function_name': chat.name}
+    if chat.parent_span_id is not None:
+        ancestry['parent_id'] = chat.parent_span_id
+    if parent is not None:
+        ancestry['parent_name'] = parent.name
+    invocation: dict[str, Any] = {'status': chat.status}
+    if chat.start_time is not None:
+        invocation['start_timestamp'] = chat.start_time.timestamp()
+    if chat.end_time is not None:
+        invocation['end_timestamp'] = chat.end_time.timestamp()
+    extra: dict[str, Any] = {'ancestry': ancestry, 'invocation': invocation}
+    if chat.error_type is not None:
+        extra['error_type'] = chat.error_type
+    finish_reasons = chat.attributes.get('gen_ai.response.finish_reasons')
+    if finish_reasons is not None:
+        extra['finish_reasons'] = finish_reasons
+    requested = _attribute(chat, 'gen_ai.request.model')
+    responded = _attribute(chat, 'gen_ai.response.model')
+    if requested and responded and requested != responded:
+        extra['requested_model'] = requested
+    return extra
+
+
+def _metrics(chat: OtelSpan) -> AtifMetrics | None:
+    usage = span_usage(chat)
+    values = (usage.input_tokens, usage.output_tokens, usage.cached_tokens, usage.reasoning_tokens, usage.cost_usd)
+    if all(value is None for value in values):
+        return None
+    return AtifMetrics(
+        prompt_tokens=_tokens(usage.input_tokens, chat.span_id),
+        completion_tokens=_tokens(usage.output_tokens, chat.span_id),
+        cached_tokens=_tokens(usage.cached_tokens, chat.span_id),
+        cost_usd=float(usage.cost_usd) if usage.cost_usd is not None else None,
+        extra={'reasoning_tokens': usage.reasoning_tokens} if usage.reasoning_tokens is not None else None,
+    )
+
+
+def _tokens(value: float | None, span_id: str) -> int | None:
+    if value is None or float(value).is_integer():
+        return None if value is None else int(value)
+    logger.warning('Chat span {} reports a fractional token count {}; dropping it', span_id, value)
+    return None
+
+
+def _attach_results(
+    drafts: list[_Draft], members: list[OtelSpan], chats: list[OtelSpan], new_inputs: list[list[OtelMessage]]
+) -> None:
+    """Give each tool call its result: an `execute_tool` span first, else a later chat span's new input."""
+    tool_spans: dict[str, OtelSpan] = {}
+    for span in _by_start(members):
+        call_id = span.attributes.get('gen_ai.tool.call.id')
+        if span.operation == 'execute_tool' and isinstance(call_id, str):
+            tool_spans.setdefault(call_id, span)
+    position = {chat.span_id: index for index, chat in enumerate(chats)}
+    for draft in drafts:
+        if draft.span is None:
+            continue
+        later = new_inputs[position[draft.span.span_id] + 1 :]
+        for call in draft.fields['tool_calls'] or []:
+            result = _result(
+                call.tool_call_id, tool_spans.get(call.tool_call_id), _response_part(call.tool_call_id, later)
+            )
+            if result is not None:
+                draft.results.append(result)
+
+
+def _response_part(call_id: str, inputs: list[list[OtelMessage]]) -> OtelToolCallResponsePart | None:
+    for messages in inputs:
+        for message in messages:
+            for part in message.parts:
+                if isinstance(part, OtelToolCallResponsePart) and part.id == call_id:
+                    return part
+    return None
+
+
+def _result(call_id: str, span: OtelSpan | None, part: OtelToolCallResponsePart | None) -> AtifObservationResult | None:
+    """The result of one call, or None when nothing reports one (no empty result is made up)."""
+    if span is None and part is None:
+        return None
+    content: str | None = None
+    extra: dict[str, Any] | None = None
+    if span is not None:
+        value = span.attributes.get('gen_ai.tool.call.result')
+        content = tool_result_to_text(value) if value is not None else None
+        if span.status == 'error':
+            extra = {'error_type': span.error_type or _OTHER_ERROR}
+    if content is None and part is not None and part.response is not None:
+        content = tool_result_to_text(part.response)
+    return AtifObservationResult(source_call_id=call_id, content=content, extra=extra)
+
+
+def _subagents(
+    trace: OtelTrace,
+    scope: _Scope,
+    drafts: list[_Draft],
+    session_id: str,
+    trajectory_id: str | None,
+    by_id: dict[str, OtelSpan],
+) -> list[AtifTrajectory]:
+    """Build each nested `invoke_agent` span as a subagent trajectory and reference it from a result."""
+    subagents: list[AtifTrajectory] = []
+    for span in scope.subagents:
+        child_id = stable_hex(session_id, trajectory_id or '', span.span_id, length=32)
+        agent = AtifAgent(
+            name=_attribute(span, 'gen_ai.agent.name') or span.name or _UNKNOWN,
+            version=_attribute(span, 'gen_ai.agent.version') or _UNKNOWN,
+        )
+        child = _build(trace, [span], session_id=session_id, trajectory_id=child_id, agent=agent)
+        if child is None:
+            logger.warning('Subagent span {} has no chat spans; dropping it', span.span_id)
+            continue
+        subagents.append(child)
+        _reference(AtifSubagentRef(trajectory_id=child_id, session_id=session_id), span, drafts, by_id)
+    return subagents
+
+
+def _reference(ref: AtifSubagentRef, span: OtelSpan, drafts: list[_Draft], by_id: dict[str, OtelSpan]) -> None:
+    """Put `ref` on the result of the call whose `execute_tool` span holds the subagent, else on an extra result."""
+    parent = by_id.get(span.parent_span_id) if span.parent_span_id else None
+    call_id = parent.attributes.get('gen_ai.tool.call.id') if parent and parent.operation == 'execute_tool' else None
+    for draft in drafts:
+        for index, result in enumerate(draft.results):
+            if call_id is not None and result.source_call_id == call_id:
+                refs = [*(result.subagent_trajectory_ref or []), ref]
+                draft.results[index] = result.model_copy(update={'subagent_trajectory_ref': refs})
+                return
+    agents = [draft for draft in drafts if draft.span is not None]
+    if not agents:
+        logger.warning('Subagent span {} has no agent step to reference it; leaving it unreferenced', span.span_id)
+        return
+    started = span.start_time
+    before = [d for d in agents if started and d.span and d.span.start_time and d.span.start_time <= started]
+    target = before[-1] if before else agents[0]
+    target.results.append(AtifObservationResult(source_call_id=None, subagent_trajectory_ref=[ref]))
+
+
+def _final_metrics(steps: list[AtifStep]) -> AtifFinalMetrics:
+    measured = [step.metrics for step in steps if step.metrics is not None]
+
+    def total(values: list[Any]) -> Any:
+        present = [value for value in values if value is not None]
+        return sum(present) if present else None
+
+    return AtifFinalMetrics(
+        total_prompt_tokens=total([m.prompt_tokens for m in measured]),
+        total_completion_tokens=total([m.completion_tokens for m in measured]),
+        total_cached_tokens=total([m.cached_tokens for m in measured]),
+        total_cost_usd=total([m.cost_usd for m in measured]),
+        total_steps=len(steps),
+    )
+
+
+# ATIF -> OTel
+
+
+def atif_to_otel(traj: AtifTrajectory) -> OtelTrace:
+    """Render an ATIF trajectory as one OTel trace in the GenAI semconv layout; see the module docstring.
+
+    Chat span input is the running history (user messages, assistant turns and tool results); system steps
+    become `system_instructions` of every later chat span. Embedded subagents are emitted under the
+    `execute_tool` span of the call whose result references them, else under the root span, and share the
+    root's trace id.
+
+    Lost: observation results with no `source_call_id` (no tool message or span holds them), results on
+    user and system steps, externally referenced subagents (`trajectory_path`), `llm_call_count`,
+    `is_copied_context`, and step `extra` keys other than `invocation`, `finish_reasons`, `error_type`
+    and `requested_model`.
+    """
+    trace_id = stable_hex(_seed(traj), 'trace', length=32)
+    return OtelTrace(spans=_emit_agent(traj, None, trace_id))
+
+
+def _seed(traj: AtifTrajectory) -> str:
+    base = traj.session_id or content_seed(traj.model_dump(mode='json'))
+    return stable_hex(base, traj.trajectory_id or '', length=64)
+
+
+def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str) -> list[OtelSpan]:
+    """Emit the `invoke_agent` span of `traj`, its chat and tool spans, then its subagents' spans."""
+    seed = _seed(traj)
+    agent_span_id = stable_hex(seed, 'invoke_agent', '0', length=16)
+    spans: list[OtelSpan] = []
+    call_spans: dict[str, str] = {}
+    history: list[OtelMessage] = []
+    system: list[OtelPart] = []
+    for step in traj.steps:
+        if step.source == 'system':
+            system.extend(_otel_parts(step.message))
+        elif step.source == 'user':
+            history.append(OtelMessage(role='user', parts=_otel_parts(step.message)))
+        else:
+            spans.extend(_emit_step(step, seed, trace_id, agent_span_id, history, system, call_spans))
+    attributes: dict[str, Any] = {
+        'gen_ai.operation.name': 'invoke_agent',
+        'gen_ai.agent.name': traj.agent.name,
+        'gen_ai.agent.version': traj.agent.version,
+    }
+    if traj.session_id is not None:
+        attributes['gen_ai.conversation.id'] = traj.session_id
+    starts = [span.start_time for span in spans if span.start_time is not None]
+    root = OtelSpan(
+        trace_id=trace_id,
+        span_id=agent_span_id,
+        parent_span_id=parent_span_id,
+        name=f'invoke_agent {traj.agent.name}',
+        operation='invoke_agent',
+        start_time=min(starts) if starts else None,
+        attributes=attributes,
+    )
+    refs = _ref_calls(traj)
+    for sub in traj.subagent_trajectories or []:
+        parent = call_spans.get(refs.get(sub.trajectory_id or '', ''), agent_span_id)
+        spans.extend(_emit_agent(sub, parent, trace_id))
+    return [root, *spans]
+
+
+def _ref_calls(traj: AtifTrajectory) -> dict[str, str]:
+    """Map each referenced subagent trajectory id to the call id of the result that references it."""
+    refs: dict[str, str] = {}
+    for step in traj.steps:
+        for result in step.observation.results if step.observation else []:
+            for ref in result.subagent_trajectory_ref or []:
+                if ref.trajectory_id is not None and result.source_call_id is not None:
+                    refs.setdefault(ref.trajectory_id, result.source_call_id)
+    return refs
+
+
+def _emit_step(
+    step: AtifStep,
+    seed: str,
+    trace_id: str,
+    parent_span_id: str,
+    history: list[OtelMessage],
+    system: list[OtelPart],
+    call_spans: dict[str, str],
+) -> list[OtelSpan]:
+    """Emit one agent step's chat span and tool spans, then extend `history` with its turn and results."""
+    output = OtelMessage(role='assistant', parts=_assistant_parts(step))
+    start, end, status = _times(step)
+    error_type = _extra_str(step, 'error_type')
+    chat = OtelSpan(
+        trace_id=trace_id,
+        span_id=stable_hex(seed, 'chat', str(step.step_id), length=16),
+        parent_span_id=parent_span_id,
+        name=f'chat {step.model_name}' if step.model_name else 'chat',
+        operation='chat',
+        start_time=start,
+        end_time=end,
+        status=status,
+        error_type=error_type,
+        input_messages=list(history) or None,
+        output_messages=[output],
+        system_instructions=list(system) or None,
+        attributes=_chat_attributes(step, error_type),
+    )
+    results: dict[str, AtifObservationResult] = {}
+    for result in step.observation.results if step.observation else []:
+        if result.source_call_id is not None:
+            results.setdefault(result.source_call_id, result)
+    spans = [chat]
+    for index, call in enumerate(step.tool_calls or []):
+        span_id = stable_hex(seed, 'execute_tool', f'{step.step_id}.{index}', length=16)
+        spans.append(_tool_span(call, results.get(call.tool_call_id), trace_id, span_id, parent_span_id))
+        call_spans.setdefault(call.tool_call_id, span_id)
+    history.append(output)
+    for call_id, result in results.items():
+        response = _result_text(result.content) if result.content is not None else None
+        part = OtelToolCallResponsePart(type='tool_call_response', id=call_id, response=response)
+        history.append(OtelMessage(role='tool', parts=[part]))
+    return spans
+
+
+def _assistant_parts(step: AtifStep) -> list[OtelPart]:
+    parts: list[OtelPart] = []
+    if step.reasoning_content:
+        parts.append(OtelReasoningPart(type='reasoning', content=step.reasoning_content))
+    parts.extend(_otel_parts(step.message))
+    parts.extend(
+        OtelToolCallPart(type='tool_call', id=call.tool_call_id, name=call.function_name, arguments=call.arguments)
+        for call in step.tool_calls or []
+    )
+    return parts
+
+
+def _chat_attributes(step: AtifStep, error_type: str | None) -> dict[str, Any]:
+    attributes: dict[str, Any] = {'gen_ai.operation.name': 'chat'}
+    if step.model_name:
+        attributes['gen_ai.request.model'] = _extra_str(step, 'requested_model') or step.model_name
+        attributes['gen_ai.response.model'] = step.model_name
+    metrics = step.metrics
+    if metrics is not None:
+        reasoning = (metrics.extra or {}).get('reasoning_tokens')
+        usage = {
+            'gen_ai.usage.input_tokens': metrics.prompt_tokens,
+            'gen_ai.usage.output_tokens': metrics.completion_tokens,
+            'gen_ai.usage.cache_read.input_tokens': metrics.cached_tokens,
+            'gen_ai.usage.reasoning.output_tokens': reasoning if isinstance(reasoning, (int, float)) else None,
+            'gen_ai.usage.total_cost': metrics.cost_usd,
+        }
+        attributes.update({key: value for key, value in usage.items() if value is not None})
+    finish_reasons = (step.extra or {}).get('finish_reasons')
+    if isinstance(finish_reasons, list):
+        attributes['gen_ai.response.finish_reasons'] = finish_reasons
+    if error_type is not None:
+        attributes['error.type'] = error_type
+    return attributes
+
+
+def _tool_span(
+    call: AtifToolCall, result: AtifObservationResult | None, trace_id: str, span_id: str, parent_span_id: str
+) -> OtelSpan:
+    attributes: dict[str, Any] = {
+        'gen_ai.operation.name': 'execute_tool',
+        'gen_ai.tool.name': call.function_name,
+        'gen_ai.tool.call.id': call.tool_call_id,
+        'gen_ai.tool.call.arguments': _arguments_text(call.arguments),
+    }
+    error_type = None
+    if result is not None:
+        if result.content is not None:
+            attributes['gen_ai.tool.call.result'] = _result_text(result.content)
+        error = (result.extra or {}).get('error_type')
+        if isinstance(error, str):
+            error_type = error
+            attributes['error.type'] = error
+    return OtelSpan(
+        trace_id=trace_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
+        name=f'execute_tool {call.function_name}',
+        operation='execute_tool',
+        status='error' if error_type is not None else 'unset',
+        error_type=error_type,
+        attributes=attributes,
+    )
+
+
+def _times(step: AtifStep) -> tuple[datetime | None, datetime | None, Literal['ok', 'error', 'unset']]:
+    """Start, end and status from `extra.invocation`, else the step timestamp as the start (no end is invented)."""
+    invocation = (step.extra or {}).get('invocation')
+    if not isinstance(invocation, dict):
+        return parse_time(step.timestamp), None, 'unset'
+    invocation = cast('dict[str, Any]', invocation)
+    start = parse_time(invocation.get('start_timestamp')) or parse_time(step.timestamp)
+    status = invocation.get('status')
+    return (
+        start,
+        parse_time(invocation.get('end_timestamp')),
+        cast("Literal['ok', 'error', 'unset']", status) if status in _STATUSES else 'unset',
+    )
+
+
+def _extra_str(step: AtifStep, key: str) -> str | None:
+    value = (step.extra or {}).get(key)
+    return value if isinstance(value, str) else None
+
+
+def _otel_parts(message: str | list[AtifContentPart]) -> list[OtelPart]:
+    if isinstance(message, str):
+        return [OtelTextPart(type='text', content=message)] if message else []
+    parts: list[OtelPart] = []
+    for part in message:
+        if part.type == 'text':
+            parts.append(OtelTextPart(type='text', content=part.text or ''))
+        elif part.source is not None:
+            parts.append(
+                OtelUriPart(type='uri', modality=part.type, uri=part.source.path, mime_type=part.source.media_type)
+            )
+    return parts
+
+
+def _result_text(content: str | list[AtifContentPart]) -> str:
+    if isinstance(content, str):
+        return content
+    return ''.join(
+        part.text or '' if part.type == 'text' else f'[{part.type}: {part.source.path if part.source else ""}]'
+        for part in content
+    )
+
+
+def _arguments_text(arguments: dict[str, Any]) -> str:
+    raw = arguments.get(_RAW_ARGUMENTS_KEY)
+    if len(arguments) == 1 and isinstance(raw, str):
+        return raw
+    return json.dumps(arguments, separators=(',', ':'), sort_keys=True)

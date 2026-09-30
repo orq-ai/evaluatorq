@@ -1,0 +1,232 @@
+"""OTel <-> ATIF conversion."""
+
+# ruff: noqa: S101
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifToolCall, AtifTrajectory
+from evaluatorq.formats.otel import OtelTrace
+
+FIX = Path(__file__).parent / 'fixtures'
+
+
+def _trace() -> OtelTrace:
+    return OtelTrace.from_orq(json.loads((FIX / 'otel' / 'orq_agent_subagent.json').read_text()))
+
+
+def _real() -> OtelTrace:
+    return OtelTrace.from_orq(json.loads((FIX / 'otel' / 'orq_agent_real.json').read_text())['spans'])
+
+
+def test_otel_to_atif_step_layout() -> None:
+    traj = _trace().to_atif(agent_name='planner')
+    assert traj.session_id == 'sess-1'
+    assert [s.source for s in traj.steps] == ['system', 'user', 'agent', 'agent']
+    step = traj.steps[2]
+    assert step.reasoning_content == 'I should delegate.'
+    assert step.model_name == 'gpt-x' and step.llm_call_count == 1
+    assert step.metrics is not None and (step.metrics.prompt_tokens, step.metrics.cached_tokens) == (100, 40)
+    assert step.tool_calls is not None and step.tool_calls[0].arguments == {'topic': 'ATIF'}
+
+
+def test_tool_result_attaches_to_issuing_step_with_subagent_ref() -> None:
+    traj = _trace().to_atif()
+    obs = traj.steps[2].observation
+    assert obs is not None
+    result = obs.results[0]
+    assert result.source_call_id == 'call_1' and result.content == 'done'
+    assert result.subagent_trajectory_ref is not None
+    ref = result.subagent_trajectory_ref[0]
+    assert traj.subagent_trajectories is not None
+    assert traj.subagent_trajectories[0].trajectory_id == ref.trajectory_id
+    assert traj.subagent_trajectories[0].agent.name == 'researcher'
+
+
+def test_step_extra_follows_nemo_layout() -> None:
+    extra = _trace().to_atif().steps[2].extra
+    assert extra is not None
+    assert extra['ancestry']['function_id'] == 'c1' and extra['ancestry']['parent_id'] == 'a1'
+    assert extra['invocation']['status'] == 'ok' or extra['invocation']['status'] == 'unset'
+
+
+def test_parent_usage_is_not_summed_into_final_metrics() -> None:
+    raw = json.loads((FIX / 'otel' / 'orq_agent_subagent.json').read_text())
+    raw[0]['attributes']['gen_ai.usage.input_tokens'] = 9999
+    fm = OtelTrace.from_orq(raw).to_atif().final_metrics
+    assert fm is not None and fm.total_prompt_tokens == 100 + 150
+
+
+def test_atif_to_otel_tree_shape() -> None:
+    traj = AtifTrajectory.model_validate_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
+    trace = traj.to_otel()
+    ops = [s.operation for s in trace.spans]
+    assert ops.count('invoke_agent') == 2
+    root = trace.roots()[0]
+    assert root.operation == 'invoke_agent'
+    kinds = {s.operation for s in trace.children(root.span_id)}
+    assert kinds <= {'chat', 'execute_tool', 'invoke_agent'}
+    assert len({s.trace_id for s in trace.spans}) == 1
+
+
+def test_conversion_is_deterministic() -> None:
+    traj = AtifTrajectory.model_validate_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
+    assert traj.to_otel().model_dump_json() == traj.to_otel().model_dump_json()
+
+
+def test_subagent_ids_differ_from_parent() -> None:
+    traj = AtifTrajectory.model_validate_json((FIX / 'atif' / 'phoenix_v17_embedded_subagents.json').read_text())
+    ids = [s.span_id for s in traj.to_otel().spans]
+    assert len(ids) == len(set(ids))
+
+
+def test_otel_atif_otel_preserves_tree_and_tool_linkage() -> None:
+    once = _trace().to_atif().to_otel()
+    twice = once.to_atif().to_otel()
+    shape = lambda t: sorted((s.operation, s.name) for s in t.spans)  # noqa: E731
+    assert shape(once) == shape(twice)
+    tools = [s for s in once.spans if s.operation == 'execute_tool']
+    assert tools[0].attributes['gen_ai.tool.call.id'] == 'call_1'
+
+
+def test_two_roots_warns(caplog: pytest.LogCaptureFixture) -> None:
+    raw: list[dict[str, Any]] = json.loads((FIX / 'otel' / 'orq_agent_subagent.json').read_text())
+    extra_root = dict(raw[4], span_id='c9', parent_span_id=None)
+    OtelTrace.from_orq([*raw, extra_root]).to_atif()
+    assert 'roots' in caplog.text
+
+
+def test_no_chat_span_raises() -> None:
+    with pytest.raises(ValueError, match='no chat spans'):
+        OtelTrace.from_orq([{'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}}]).to_atif()
+
+
+def test_chat_span_without_output_gives_no_agent_step() -> None:
+    span = {'span_id': 'c', 'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': [
+        {'role': 'user', 'parts': [{'type': 'text', 'content': 'hi'}]}]}}
+    traj = OtelTrace.from_orq([span]).to_atif()
+    assert [s.source for s in traj.steps] == ['user']
+
+
+def test_error_tool_span_records_error_type() -> None:
+    raw = json.loads((FIX / 'otel' / 'orq_agent_subagent.json').read_text())
+    raw[2]['status'] = 'error'
+    raw[2]['attributes'] = {'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.id': 'call_1',
+                            'gen_ai.tool.call.result': 'boom', 'error.type': 'ToolError'}
+    obs = OtelTrace.from_orq(raw).to_atif().steps[2].observation
+    assert obs is not None
+    assert obs.results[0].extra == {'error_type': 'ToolError'}
+
+
+# --- the real Orq export: AgentInvoke wrapper, system prompt as a message, results only in later inputs ---
+
+
+def test_real_orq_trace_scope_and_steps(caplog: pytest.LogCaptureFixture) -> None:
+    traj = _real().to_atif()
+    assert 'roots' not in caplog.text and 'scope' not in caplog.text
+    assert traj.session_id == '01M3RHSVX9X29KGKFVQREXFF74'
+    assert traj.agent.name == 'trace-probe-parent'
+    assert [s.source for s in traj.steps] == ['system', 'user', 'agent', 'agent', 'agent']
+    assert isinstance(traj.steps[0].message, str) and 'You never know the date yourself' in traj.steps[0].message
+    assert traj.steps[1].message == 'What is the date today, and what day of the week is it?'
+    assert traj.subagent_trajectories is None
+
+
+def test_real_orq_trace_results_come_from_later_chat_inputs() -> None:
+    steps = _real().to_atif().steps
+    for step, name in ((steps[2], 'retrieve_agents'), (steps[3], 'call_sub_agent')):
+        assert step.tool_calls is not None and [c.function_name for c in step.tool_calls] == [name]
+        assert step.observation is not None and len(step.observation.results) == 1
+        result = step.observation.results[0]
+        assert result.source_call_id == step.tool_calls[0].tool_call_id
+        assert isinstance(result.content, str) and result.content
+    last = steps[4]
+    assert isinstance(last.message, str) and last.message.startswith('Child says: ')
+    assert last.tool_calls is None and last.observation is None
+    assert steps[3].observation is not None and '"result"' in str(steps[3].observation.results[0].content)
+
+
+def test_real_orq_trace_metrics_come_from_chat_spans_only() -> None:
+    traj = _real().to_atif()
+    assert [s.metrics.prompt_tokens for s in traj.steps if s.metrics] == [305, 363, 497]
+    fm = traj.final_metrics
+    assert fm is not None
+    assert (fm.total_prompt_tokens, fm.total_completion_tokens, fm.total_steps) == (1165, 78, 5)
+    assert fm.total_cost_usd == pytest.approx(4e-05 + 5.53e-05 + 6.02e-05)
+    assert traj.steps[2].model_name == 'gpt-6-luna'
+    assert traj.steps[2].extra is not None and traj.steps[2].extra['finish_reasons'] == ['tool_calls']
+
+
+def test_real_orq_trace_round_trips_through_otel() -> None:
+    first = _real().to_atif()
+    second = first.to_otel().to_atif()
+    assert [s.source for s in second.steps] == [s.source for s in first.steps]
+    assert [s.message for s in second.steps] == [s.message for s in first.steps]
+    assert [s.observation for s in second.steps] == [s.observation for s in first.steps]
+    assert second.final_metrics == first.final_metrics
+
+
+# --- edge cases ---
+
+
+def _chat(span_id: str, inputs: list[dict[str, Any]], outputs: list[dict[str, Any]], **extra: Any) -> dict[str, Any]:
+    return {'span_id': span_id, **extra, 'attributes': {
+        'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': inputs, 'gen_ai.output.messages': outputs}}
+
+
+def _text(role: str, text: str) -> dict[str, Any]:
+    return {'role': role, 'parts': [{'type': 'text', 'content': text}]}
+
+
+def test_history_before_first_chat_span_is_warned_and_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    span = _chat('c', [_text('user', 'a'), _text('assistant', 'b'), _text('user', 'c')], [_text('assistant', 'd')])
+    traj = OtelTrace.from_orq([span]).to_atif()
+    assert [(s.source, s.message) for s in traj.steps] == [('user', 'a'), ('user', 'c'), ('agent', 'd')]
+    assert 'history of 1 messages before the first chat span is not converted' in caplog.text
+
+
+def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'name': 'f', 'arguments': 'not json'}]}
+    raw = [_chat('c', [_text('user', 'a')], [call])]
+    first = OtelTrace.from_orq(raw).to_atif()
+    step = first.steps[1]
+    assert step.tool_calls is not None
+    assert step.tool_calls[0].tool_call_id.startswith('call_') and len(step.tool_calls[0].tool_call_id) == 21
+    assert step.tool_calls[0].arguments == {'_raw': 'not json'}
+    assert step.observation is None
+    assert OtelTrace.from_orq(raw).to_atif() == first
+
+
+def test_raw_arguments_are_written_back_as_the_string() -> None:
+    traj = AtifTrajectory(
+        schema_version='ATIF-v1.7',
+        agent=AtifAgent(name='a', version='1'),
+        steps=[
+            AtifStep(step_id=1, source='user', message='hi'),
+            AtifStep(step_id=2, source='agent', message='', tool_calls=[
+                AtifToolCall(tool_call_id='c1', function_name='f', arguments={'_raw': 'not json'})]),
+        ],
+    )
+    tool = next(s for s in traj.to_otel().spans if s.operation == 'execute_tool')
+    assert tool.attributes['gen_ai.tool.call.arguments'] == 'not json'
+    assert 'gen_ai.tool.call.result' not in tool.attributes
+
+
+def test_atif_to_otel_keeps_history_usage_and_times() -> None:
+    traj = _trace().to_atif()
+    trace = traj.to_otel()
+    chats = [s for s in trace.spans if s.operation == 'chat' and s.parent_span_id == trace.roots()[0].span_id]
+    assert [len(c.input_messages or []) for c in chats] == [1, 3]
+    assert chats[1].input_messages is not None and chats[1].input_messages[2].role == 'tool'
+    assert chats[0].system_instructions is not None
+    assert chats[0].attributes['gen_ai.usage.input_tokens'] == 100
+    assert chats[0].attributes['gen_ai.usage.cache_read.input_tokens'] == 40
+    assert chats[0].attributes['gen_ai.response.finish_reasons'] == ['tool_calls']
+    assert chats[0].start_time is not None and chats[0].end_time is not None
+    assert chats[0].output_messages is not None
+    assert [p.type for p in chats[0].output_messages[0].parts] == ['reasoning', 'tool_call']
