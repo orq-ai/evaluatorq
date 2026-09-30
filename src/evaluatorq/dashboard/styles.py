@@ -250,7 +250,7 @@ body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder
 .finder:has(> .finder-command) .xr-switch button { border-radius:4px; background:transparent; color:#5b5964; font-weight:500; }
 .finder:has(> .finder-command) .finder-seg input:checked + span,
 .finder:has(> .finder-command) .xr-switch button.on { background:#fff; color:#25232e; font-weight:600; box-shadow:0 0 0 1px #d5d8df, 0 1px 2px rgba(20,20,30,.12); }
-.finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:minmax(150px,1fr) 80px 90px 64px 64px 200px 148px; }
+.finder:has(> .finder-command) .xr-toolbar-right { grid-template-columns:minmax(150px,1fr) 80px 90px 64px 64px 200px; }
 /* The toolbar sits directly under the question box and never moves. The page puts it ahead of the Ask AI band in the DOM, so the
    band, its criteria and the run progress render under it without CSS reordering, and Tab follows what the eye sees. */
 .finder:has(> .finder-command) :is(#explorer-toolbar, #finder-body, .finder-body-fragment, #explorer-results-slot, .xr) { display:contents; }
