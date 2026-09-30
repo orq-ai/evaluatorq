@@ -14,7 +14,15 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, Valida
 from evaluatorq.common.structured_output import generate_structured
 
 from .debug import enabled as debug_enabled
-from .models import MAX_DIMENSIONS, CompiledQuery, LegendItem, NumericFilters, ThresholdSelection, ValueSelection
+from .models import (
+    FILTER_OR_JUDGMENT_RULE,
+    MAX_DIMENSIONS,
+    CompiledQuery,
+    LegendItem,
+    NumericFilters,
+    ThresholdSelection,
+    ValueSelection,
+)
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -48,19 +56,24 @@ _STRICT_DURATION_MAX = re.compile(
     re.IGNORECASE,
 )
 
-COMPILER_INSTRUCTIONS = """Compile the user's request into zero to three semantic classification dimensions.
+COMPILER_INSTRUCTIONS = f"""Compile the user's request into zero to three semantic classification dimensions.
 
-Each dimension is one independent judgment of a conversation, shown to the user as its own table
-column, and a trace matches only when every dimension matches. Return an empty dimensions list
-only when every part of the request is a token or duration bound (extracted below) or names an
-exact metadata value: a project, agent, model, provider, status, product, trace type, tool, or time,
-which a separate filter step applies. Any descriptive phrase about what the trace is or does needs
-a dimension, even when it sounds like a category: "coding agents over 50k tokens" needs a
-dimension for "coding agent" plus tokens_min 50001, because no metadata field says which traces are
-coding agents. Add dimensions for things that need reading the conversation, such as kind of
-work, sentiment, intent, quality, or whether an event happened. Use one dimension
-for one judgment and never split a single judgment across several; use two or three only when the
+Each dimension is one conversation judgment, shown to the user as its own table column, and a
+trace matches only when every dimension matches. A separate filter step applies metadata filters
+under the same rule you follow:
+
+{FILTER_OR_JUDGMENT_RULE}
+
+Return an empty dimensions list only when every part of the request is a metadata filter, a token
+or duration bound (extracted below), or an aggregate question. Any descriptive phrase about what
+the trace is or does needs a dimension, even when it sounds like a category:
+"coding agents over 50k tokens" needs a dimension for "coding agent" plus tokens_min 50001,
+because no metadata field says which traces are coding agents. Use one dimension for one
+judgment and never split a single judgment across several; use two or three only when the
 request combines separate judgments. Never add more than three.
+
+Set unsupported_reason to one short sentence naming what cannot be answered when the request asks
+for an aggregate (a total, average, count or ranking); otherwise null.
 
 Give each dimension a name of one to three words for its column header, such as "Frustrated" or
 "Unsupported claim". Generate only its semantic task and matching selection rule. Never generate,
@@ -87,8 +100,7 @@ Extract numeric constraints on total tokens and duration into numeric. Bounds ar
 counts, so strict phrases must move by one unit: "over 20k tokens" → tokens_min: 20001 and
 "slower than 30 seconds" → duration_ms_min: 30001. Likewise "under 20k tokens" → tokens_max:
 19999. A bare count with no unit ("above 50k") means total tokens. Keep all four numeric fields
-null when the query does not mention a token or duration constraint. Never extract project, model,
-provider, status, product, trace type, agent, or tool constraints; the classifier handles those."""
+null when the query does not mention a token or duration constraint."""
 
 
 class CompileError(RuntimeError):
@@ -223,6 +235,7 @@ class CompilerWireQuery(BaseModel):
 
     dimensions: list[WireDimension]
     numeric: WireNumeric
+    unsupported_reason: str | None = Field(max_length=200)
 
     def to_domain(self) -> tuple[tuple[CompiledQuery, ...], NumericFilters]:
         """Convert the wire document into the shared semantic and numeric contracts."""
@@ -244,6 +257,8 @@ class CompiledPlan(BaseModel):
 
     dimensions: tuple[CompiledQuery, ...] = Field(max_length=MAX_DIMENSIONS)
     numeric: NumericFilters
+    # Set when the question asks for an aggregate (total, average, ranking) that finding traces cannot answer.
+    unsupported_reason: str | None = None
 
 
 async def compile_query(
@@ -293,7 +308,8 @@ async def compile_query(
         try:
             dimensions, numeric = wire.to_domain()
             numeric = _tighten_strict_bounds(normalized, numeric)
-            return CompiledPlan(dimensions=dimensions, numeric=numeric)
+            reason = (wire.unsupported_reason or '').strip() or None
+            return CompiledPlan(dimensions=dimensions, numeric=numeric, unsupported_reason=reason)
         except (ValidationError, ValueError) as exc:
             if attempt:
                 raise CompileError(f'Compiler produced an invalid plan: {exc}') from exc

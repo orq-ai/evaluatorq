@@ -230,6 +230,19 @@ SelectionRule = Annotated[ValueSelection | ThresholdSelection, Field(discriminat
 
 MAX_DIMENSIONS = 3
 
+# One rule, sent verbatim to both the filter selector and the compiler, so the two planners cannot
+# disagree about whether a phrase is a metadata filter or a judgment of the conversation.
+FILTER_OR_JUDGMENT_RULE = """Metadata filter or conversation judgment:
+- Use a metadata filter only for an exact value the user literally names (a project, model, provider, agent, tool, product or trace type) or for an explicit trace status request ("failed traces", "status error", "errored traces").
+- Anything that needs reading what happened in the conversation is a conversation judgment: a tool call failed or returned an error, the agent gave up, the user was frustrated, a hallucination, a refusal. Never also map it onto a status filter or any other metadata value.
+- When a word could be either ("errors", "issues"), make it a conversation judgment and add no status filter, unless the user says status, failed trace or errored trace.
+- Aggregate questions (totals, averages, counts, rankings) cannot be answered by finding traces: use no filter and no judgment.
+Examples:
+- "failed traces" -> status filter; no judgment.
+- "tool errors" -> judgment "a tool call returned an error"; no status filter.
+- "gpt-5 traces where the user is angry" -> model filter gpt-5 and judgment "the user is angry".
+- "which model costs the most?" -> nothing; it is an aggregate question."""
+
 
 class CompiledQuery(BaseModel):
     """One classifier dimension: a short column name, a semantic task and its validated inclusion rule."""

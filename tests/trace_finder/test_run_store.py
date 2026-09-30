@@ -914,6 +914,22 @@ async def test_numeric_only_plan_warns_when_the_question_says_more_than_numbers(
 
 
 @pytest.mark.asyncio
+async def test_aggregate_plan_warns_that_ask_ai_cannot_compute_totals() -> None:
+    # "which model is costing us the most?" once completed as "no AI classification needed", claiming
+    # success while answering nothing.
+    planner = Planner()
+    planner.plan = CompiledPlan(dimensions=(), numeric=NumericFilters(), unsupported_reason='Cost per model is a total.')
+    store, _, _, _, _ = make_store(planner=planner, filters=FacetSelection())
+    aggregate = request(mode='review').model_copy(update={'query': 'which model is costing us the most?'})
+
+    snapshot = await store.compile(aggregate, traces=lambda: _loaded_traces())
+
+    assert snapshot.plan_warning == (
+        "Ask AI finds traces; it can't compute totals, averages or rankings. Cost per model is a total."
+    )
+
+
+@pytest.mark.asyncio
 async def test_compile_with_traces_records_how_many_rows_were_loaded() -> None:
     store, _, _, _, _ = make_store(planner=_unbounded_planner())
 

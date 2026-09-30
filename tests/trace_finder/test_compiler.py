@@ -17,7 +17,7 @@ from evaluatorq.trace_finder.compiler import (
     classification_legend,
     compile_query,
 )
-from evaluatorq.trace_finder.models import CompiledQuery, ValueSelection
+from evaluatorq.trace_finder.models import FILTER_OR_JUDGMENT_RULE, CompiledQuery, ValueSelection
 from evaluatorq.trace_finder.debug import cli_debug
 
 
@@ -45,6 +45,7 @@ def choice_document() -> dict[str, Any]:
             'duration_ms_min': None,
             'duration_ms_max': None,
         },
+        'unsupported_reason': None,
     }
 
 
@@ -351,6 +352,43 @@ def test_compiler_prompt_keeps_descriptive_phrases_as_dimensions() -> None:
     # filter picker found nothing and every trace over 50k matched, coding or not.
     assert 'coding agents over 50k tokens' in COMPILER_INSTRUCTIONS
     assert 'only when every part of the request' in COMPILER_INSTRUCTIONS
+
+
+def test_compiler_prompt_carries_the_shared_filter_or_judgment_rule() -> None:
+    # "which traces had tool errors?" once became status = error, which emptied the table before the
+    # "Tool errors" dimension could run; both planners must read the same rule.
+    assert FILTER_OR_JUDGMENT_RULE in COMPILER_INSTRUCTIONS
+    assert '"tool errors" -> judgment' in FILTER_OR_JUDGMENT_RULE
+    assert 'Aggregate questions' in FILTER_OR_JUDGMENT_RULE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('reason', 'expected'), [(None, None), ('  ', None), ('Costs per model.', 'Costs per model.')])
+async def test_compile_query_threads_the_unsupported_reason(monkeypatch, reason: str | None, expected: str | None) -> None:
+    document = choice_document()
+    document['dimensions'] = []
+    document['numeric'] = dict.fromkeys(document['numeric'])
+    document['unsupported_reason'] = reason
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'which model costs the most?')
+
+    assert plan.dimensions == ()
+    assert plan.unsupported_reason == expected
+
+
+def test_compiler_wire_schema_requires_a_nullable_unsupported_reason() -> None:
+    schema = CompilerWireQuery.model_json_schema()
+
+    assert 'unsupported_reason' in schema['required']
+    document = choice_document()
+    del document['unsupported_reason']
+    with pytest.raises(ValidationError):
+        CompilerWireQuery.model_validate(document)
 
 
 def test_classification_legend_uses_dashboard_chart_tokens() -> None:

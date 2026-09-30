@@ -252,7 +252,9 @@ class RunStore:
                 generated_filters = filter_result.selection
                 generated_numeric = plan.numeric.model_copy(deep=True)
                 dimensions = _revalidated(plan.dimensions)
-                plan_warning = _uncovered_words_warning(request.query, dimensions, generated_filters)
+                plan_warning = _unsupported_warning(plan.unsupported_reason) or _uncovered_words_warning(
+                    request.query, dimensions, generated_filters
+                )
                 # Already-loaded rows are narrowed locally instead; a fresh population, from Orq or the
                 # table, is queried with the question's filters.
                 if traces is None:
@@ -743,6 +745,14 @@ _NUMERIC_QUERY_WORDS = frozenset([
     'took',
     'taking',
 ])
+
+
+def _unsupported_warning(reason: str | None) -> str | None:
+    """Say plainly that an aggregate question was not answered, instead of reporting a quiet success."""
+
+    if reason is None:
+        return None
+    return f"Ask AI finds traces; it can't compute totals, averages or rankings. {reason}"
 
 
 def _uncovered_words_warning(query: str, dimensions: tuple[CompiledQuery, ...], filters: FacetSelection) -> str | None:
