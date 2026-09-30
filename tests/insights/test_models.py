@@ -24,7 +24,7 @@ from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 
 def test_finder_export_and_query_are_exclusive() -> None:
-    with pytest.raises(ValueError, match='finder_export'):
+    with pytest.raises(ValueError, match='query'):
         InsightsPopulation(query='x', finder_export=Path('a.json'))
 
 
@@ -113,6 +113,19 @@ def test_saved_run_rejects_unconfigured_trace_labels(minimal_run: InsightsRun, v
         InsightsRun.model_validate(payload)
     with pytest.raises(ValidationError, match="unconfigured label 'unrequested'"):
         InsightsRun.model_validate_json(json.dumps(payload))
+
+
+def test_saved_run_accepts_requested_coding_labels(minimal_run: InsightsRun) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['config']['coding_analysis'] = True
+    payload['traces'][0]['labels']['coding_agent'] = {
+        'value': True, 'confidence': None, 'probabilities': None, 'error': None
+    }
+    payload['traces'][0]['labels']['task_type'] = {
+        'value': 'bugfix', 'confidence': None, 'probabilities': None, 'error': None
+    }
+
+    assert InsightsRun.model_validate_json(json.dumps(payload)).traces[0].labels['task_type'].value == 'bugfix'
 
 
 @pytest.mark.parametrize('probability', [0.0, 1.0, 0, 1])

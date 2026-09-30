@@ -304,6 +304,10 @@ class InsightsRun(BaseModel):
     @model_validator(mode='after')
     def _label_values_match_specs(self) -> Self:
         kinds = {spec.name: spec.kind for spec in self.config.labels}
+        if self.config.coding_analysis:
+            from evaluatorq.insights.presets import CODING_LABELS
+
+            kinds.update({spec.name: spec.kind for spec in CODING_LABELS})
         for trace in self.traces:
             for name, answer in trace.labels.items():
                 if name not in kinds:
