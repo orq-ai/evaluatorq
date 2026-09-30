@@ -50,7 +50,10 @@ jobs:
         shell: bash
 
     steps:
+      # Keeps the write token out of .git/config, where the test suite could read it; the coverage step gets it as input.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
