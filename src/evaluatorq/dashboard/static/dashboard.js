@@ -961,7 +961,25 @@
         : null;
     }
     const sel = root.querySelector('[data-tv-row].sel');
-    return { details: details, scroll: scroll, focus: focus, sel: sel ? sel.getAttribute('data-tv-row') : null };
+    // OOB toolbar swaps bypass hx-preserve for controls inside the toolbar. Keep values the user
+    // may still be editing (custom range and requested row count) until they choose Load/Apply.
+    const controls = Array.from(root.querySelectorAll('input[id], select[id], textarea[id]')).map(function (el) {
+      return {
+        id: el.id,
+        value: el.value,
+        checked: 'checked' in el ? el.checked : null,
+        utc: el.getAttribute('data-utc'),
+        localised: el.getAttribute('data-localised'),
+        required: el.required
+      };
+    });
+    return {
+      details: details,
+      scroll: scroll,
+      focus: focus,
+      sel: sel ? sel.getAttribute('data-tv-row') : null,
+      controls: controls
+    };
   }
   function pollRestore(root, state) {
     const seen = {};
@@ -976,6 +994,17 @@
       if (at) { el.scrollLeft = at[0]; el.scrollTop = at[1]; }
     });
     if (state.sel) root.querySelector('[data-tv-row="' + CSS.escape(state.sel) + '"]')?.classList.add('sel');
+    (state.controls || []).forEach(function (saved) {
+      const el = root.querySelector('#' + CSS.escape(saved.id));
+      if (!el) return;
+      el.value = saved.value;
+      if (saved.checked !== null) el.checked = saved.checked;
+      if (saved.utc === null) el.removeAttribute('data-utc');
+      else el.setAttribute('data-utc', saved.utc);
+      if (saved.localised === null) el.removeAttribute('data-localised');
+      else el.setAttribute('data-localised', saved.localised);
+      el.required = saved.required;
+    });
     if (state.focus) root.querySelector(state.focus)?.focus({ preventScroll: true });
   }
   document.body.addEventListener('htmx:oobBeforeSwap', function (evt) {

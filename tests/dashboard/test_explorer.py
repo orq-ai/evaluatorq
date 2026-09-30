@@ -2194,6 +2194,21 @@ def test_results_self_poll_answers_out_of_band_and_marks_the_render(explorer_cli
     assert section is not None
     assert 'hx-swap-oob="true"' in section.group(0)
     assert 'data-poll' in section.group(0)
+    toolbar = re.search(r'<div id="explorer-toolbar"[^>]*>', polled)
+    assert toolbar is not None
+    assert 'data-poll' in toolbar.group(0)
+    # These stable IDs let dashboard.js restore unfinished range and row edits after an OOB poll swap.
+    for control_id in (
+        'explorer-range-mode',
+        'explorer-range-seconds',
+        'explorer-from',
+        'explorer-from-time',
+        'explorer-to',
+        'explorer-to-time',
+        'explorer-rows',
+    ):
+        assert f'id="{control_id}"' in polled
+    assert polled.count('hx-preserve') >= 6
     clicked = client.get('/find/rows?page=1').text
     clicked_section = re.search(r'<section id="explorer-results"[^>]*>', clicked)
     assert clicked_section is not None
