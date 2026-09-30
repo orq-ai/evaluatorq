@@ -156,11 +156,34 @@ async def test_failed_trajectory_warmup_clears_flag_and_can_retry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_switching_quick_view_clears_sort() -> None:
+async def test_switching_quick_view_keeps_sort_and_resets_page() -> None:
     store = store_for(FakeSource((TraceRow(trace_id='a'),)))
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
-    await store.set_view(sort='tokens_in')
+    await store.set_view(sort='tokens_in', descending=False, page=2)
     view = await store.set_view(quick_view='slow')
+    assert (view.quick_view, view.sort, view.descending, view.page) == ('slow', 'tokens_in', False, 0)
+
+
+@pytest.mark.asyncio
+async def test_load_keeps_quick_view_and_sort_and_resets_page() -> None:
+    store = store_for(FakeSource(tuple(TraceRow(trace_id=f't{i}') for i in range(3))))
+    await store.load(START, END, 3, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.set_view(quick_view='errors')
+    await store.set_view(sort='tokens_in', descending=False, page=2)
+
+    view = await store.load(START, END, 3, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+
+    assert (view.quick_view, view.sort, view.descending, view.page) == ('errors', 'tokens_in', False, 0)
+
+
+@pytest.mark.asyncio
+async def test_load_drops_a_match_sort_the_new_rows_cannot_have() -> None:
+    store = store_for(FakeSource((TraceRow(trace_id='a'),)))
+    await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await store.set_view(sort='match')
+
+    view = await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+
     assert view.sort is None
 
 

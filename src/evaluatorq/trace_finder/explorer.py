@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, get_args
 
 from loguru import logger
 
-from .columns import sort_rows
+from .columns import COLUMNS, MATCH, sort_rows
 from .models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
@@ -297,6 +297,9 @@ class ExplorerStore:
         await self._cancel()
         self._records.clear()
         generation = next(_SEQUENCE)
+        previous = self._view
+        # The tab and sort survive a Load; a match sort does not, as the new rows are not judged yet.
+        kept_sort = previous.sort if previous.sort in COLUMNS and previous.sort != MATCH else None
         self._view = ExplorerView(
             generation=generation,
             version=generation,
@@ -306,7 +309,10 @@ class ExplorerStore:
             end=end,
             facets=facets,
             numeric=numeric,
-            view=self._view.view,
+            view=previous.view,
+            quick_view=previous.quick_view,
+            sort=kept_sort,
+            descending=previous.descending if kept_sort is not None else True,
         )
 
         async def prewarm(rows: Sequence[TraceRow]) -> None:
@@ -367,14 +373,17 @@ class ExplorerStore:
         matched_only: bool | None = None,
         quick_view: QuickView | None = None,
     ) -> ExplorerView:
-        """Change display state; ``page`` is clamped when rendered because matches affect row count."""
+        """Change display state; ``page`` is clamped when rendered because matches affect row count.
+
+        Switching ``quick_view`` keeps the sort and goes back to the first page unless ``page`` is given.
+        """
         current = self._view
         switching_quick_view = quick_view is not None and quick_view != current.quick_view
         updated = replace(
             current,
-            sort=None if switching_quick_view and sort is None else sort if sort is not None else current.sort,
+            sort=sort if sort is not None else current.sort,
             descending=descending if descending is not None else current.descending,
-            page=0 if switching_quick_view and sort is None else max(0, page if page is not None else current.page),
+            page=max(0, page) if page is not None else 0 if switching_quick_view else current.page,
             view=view if view is not None else current.view,
             matched_only=matched_only if matched_only is not None else current.matched_only,
             quick_view=quick_view if quick_view is not None else current.quick_view,
