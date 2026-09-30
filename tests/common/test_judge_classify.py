@@ -45,6 +45,7 @@ def _jev_entry() -> model_catalogue.ModelInfo:
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch):
     model_catalogue.reset_catalogue_cache()
+    judge_mod._classify_mismatch_warned.clear()
 
     async def fake_load(client=None):  # noqa: ANN001, ARG001
         return {
@@ -877,3 +878,25 @@ async def test_a_classify_only_model_fails_before_the_call_even_off_the_router()
     client.post.assert_not_called()
     client.chat.completions.create.assert_not_called()
     client.chat.completions.parse.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.MonkeyPatch):
+    """`DEFAULT_PIPELINE_MODEL` is classify-capable, so a per-call line would be one per attack."""
+
+    async def catalogue(client=None):  # noqa: ANN001, ARG001
+        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)}  # noqa: FBT003
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
+    model_catalogue.reset_catalogue_cache()
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    for _ in range(3):
+        outcome = await _judge(client, None, model='gpt-5-mini', api='chat_completions')
+        assert outcome.error_kind is None
+
+    # The warned-set, not the log text: `caplog` double-records a loguru line through its
+    # handler bridge, so counting lines there measures the bridge rather than the dedup.
+    assert judge_mod._classify_mismatch_warned == {('gpt-5-mini', 'prompted')}
+    assert client.chat.completions.create.await_count == 3

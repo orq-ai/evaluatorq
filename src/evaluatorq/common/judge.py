@@ -1091,6 +1091,22 @@ async def _attempt(
         ).model_copy(update={'endpoint': 'chat'})
 
 
+# Classify/prompt mismatches already warned about, keyed by model and direction. The same
+# judge runs once per datapoint and `DEFAULT_PIPELINE_MODEL` is classify-capable, so without
+# this every attack evaluation in a red-team run logs a line the caller cannot act on from
+# `red_team()`. Same reasoning as `_classify_fallback_warned` in `model_catalogue`.
+_classify_mismatch_warned: set[tuple[str, str]] = set()
+
+
+def _warn_classify_mismatch_once(model: str, direction: str, message: str) -> None:
+    """Log ``message`` for this ``model`` and ``direction`` at most once per process."""
+    key = (model, direction)
+    if key in _classify_mismatch_warned:
+        return
+    _classify_mismatch_warned.add(key)
+    logger.warning(message, model)
+
+
 async def run_judge(
     *,
     client: AsyncOpenAI,
@@ -1107,8 +1123,10 @@ async def run_judge(
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
 
-    **Classify models.** A model the catalogue marks as classify-only (Jev) is
-    judged on the router's ``/classify`` endpoint from the ``classify`` question.
+    **Classify models.** A judge is asked on the router's ``/classify`` endpoint when
+    the caller supplied a ``classify`` question and the catalogue says the model serves
+    that endpoint. The flag alone does not mean classify-*only*, so it never redirects a
+    caller who asked for the prompt path.
     The prompt, the verdict schema and the sampling keywords play no part in that
     call: the leg warns per call about every `LLMCallConfig` field it does not
     read, and the keywords that are not config fields (``system_prompt``,
@@ -1185,17 +1203,19 @@ async def run_judge(
         )
     use_classify = wants_classify and serves_classify
     if serves_classify and not wants_classify:
-        logger.warning(
+        _warn_classify_mismatch_once(
+            model,
+            'prompted',
             'Judge [{}] serves the classify endpoint, but the caller built no classify question; '
             'judging it on the prompt path instead. From `llm_jury`, pass `criteria` and, for '
             'numeric verdicts, `levels` to judge it on classify.',
-            model,
         )
     elif wants_classify and not serves_classify:
-        logger.warning(
+        _warn_classify_mismatch_once(
+            model,
+            'dropped',
             'Judge [{}] does not serve the classify endpoint; dropping the classify question and '
             'judging it on the prompt path instead.',
-            model,
         )
     classify_question = classify if use_classify else None
     if use_classify:
