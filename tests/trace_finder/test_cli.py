@@ -129,6 +129,25 @@ def test_find_exits_nonzero_when_classifications_failed(monkeypatch: Any, tmp_pa
     assert not output.exists()
 
 
+def test_find_prefers_failed_count_over_plan_warning_on_completed_run(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    class WarnedStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            return replace(snapshot, state='completed', error=None, failed=2, plan_warning='Words not covered: foo')
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: WarnedStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 1
+    assert '2 failed classifications' in result.output
+    assert 'Words not covered' not in result.output
+
+
 def test_find_prints_plan_warning_when_ask_ai_cannot_answer(monkeypatch: Any, tmp_path: Path) -> None:
     from evaluatorq.trace_finder import cli as find_cli
 

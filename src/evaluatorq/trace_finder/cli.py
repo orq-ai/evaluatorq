@@ -365,12 +365,9 @@ def find(
     if snapshot.state != 'completed' or snapshot.failed:
         detail = (
             snapshot.error
+            or (f'Find run completed with {snapshot.failed} failed classifications.' if snapshot.failed else None)
             or snapshot.plan_warning
-            or (
-                f'Find run completed with {snapshot.failed} failed classifications.'
-                if snapshot.failed
-                else f'Find run ended in {snapshot.state}.'
-            )
+            or f'Find run ended in {snapshot.state}.'
         )
         emit_error(detail)
         raise typer.Exit(code=1)
