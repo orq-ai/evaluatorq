@@ -14,6 +14,8 @@ from evaluatorq.dashboard.trace_finder import routes as finder_routes, views as 
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.dashboard.trace_links import trace_span_url
+from evaluatorq.trace_finder.explorer import ExplorerStore
+from evaluatorq.trace_finder.rows import TraceRow
 from evaluatorq.trace_finder import (
     CompiledQuery,
     DashboardSettings,
@@ -394,7 +396,8 @@ def test_search_reset_does_not_clear_traces_state(monkeypatch: pytest.MonkeyPatc
     assert client.get('/traces').status_code == 200
     assert client.get('/find').status_code == 200
     assert len(stores) == 2
-    assert app.state.finder_store is stores[0]
+    assert not hasattr(app.state, 'finder_store')
+    assert client.cookies.get('evaluatorq_dashboard_session') is not None
     assert app.state.finder_search_store is stores[1]
 
     client.post('/find/run', data=csrf_data({'surface': 'search', 'query': 'frustrated customers'}))
@@ -407,6 +410,139 @@ def test_search_reset_does_not_clear_traces_state(monkeypatch: pytest.MonkeyPatc
     client.post('/find/reset', data=csrf_data({'surface': 'search'}))
     assert stores[1].snapshot_value.state == 'idle'
     assert stores[0].snapshot_value.state == 'idle'
+
+
+def test_traces_state_is_isolated_between_browser_sessions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    stores: list[FakeStore] = []
+
+    async def build_store(_app: Any) -> FakeStore:
+        store = FakeStore()
+        trace_id = f'trace-{len(stores) + 1}'
+        store.trace = store.trace.model_copy(update={'trace_id': trace_id})
+        row = TraceRow(trace_id=trace_id, status='ok', tokens_in=100 + len(stores), agent_name=trace_id)
+
+        async def search_rows(
+            start: Any,
+            end: Any,
+            limit: int,
+            *,
+            facets: Any,
+            numeric: Any,
+            on_page: Any = None,
+        ) -> tuple[TraceRow, ...]:
+            if on_page is not None:
+                on_page((row,))
+            return (row,)
+
+        async def hydrate_rows(_rows: Any) -> dict[str, Any]:
+            return {}
+
+        store.explorer = ExplorerStore(search=search_rows, hydrate=hydrate_rows)
+        store.snapshot_for_render = store.snapshot
+        now = datetime.now(timezone.utc)
+        await store.explorer.load(
+            now - timedelta(days=1),
+            now,
+            1,
+            facets=FacetSelection(),
+            numeric=NumericFilters(),
+            wait=True,
+            warm_trajectories=False,
+        )
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    app = build_app(roots=[tmp_path])
+    first = TestClient(app, raise_server_exceptions=True)
+    second = TestClient(app, raise_server_exceptions=True)
+
+    first_page = first.get('/traces')
+    second_page = second.get('/traces')
+    assert first_page.status_code == second_page.status_code == 200
+    assert first_page.headers['set-cookie'].startswith('evaluatorq_dashboard_session=')
+    assert second_page.headers['set-cookie'].startswith('evaluatorq_dashboard_session=')
+    assert 'httponly' in first_page.headers['set-cookie'].lower()
+    assert 'samesite=lax' in first_page.headers['set-cookie'].lower()
+    assert 'max-age=' not in first_page.headers['set-cookie'].lower()
+    assert first.cookies.get('evaluatorq_dashboard_session') != second.cookies.get('evaluatorq_dashboard_session')
+    assert len(stores) == 2
+
+    first.post('/find/run', data=csrf_data({'query': 'first browser query'}))
+    second.post('/find/run', data=csrf_data({'query': 'second browser query'}))
+    first_request = stores[0].compile_request
+    second_request = stores[1].compile_request
+    assert first_request is not None
+    assert second_request is not None
+    assert first_request.query == 'first browser query'
+    assert second_request.query == 'second browser query'
+    first_rows = first.get('/find/rows?sort=tokens_in&dir=asc')
+    second_rows = second.get('/find/rows?sort=tokens_in&dir=desc')
+    assert 'data-tv-row="trace-1"' in first_rows.text
+    assert 'data-tv-row="trace-2"' not in first_rows.text
+    assert 'data-tv-row="trace-2"' in second_rows.text
+    assert 'data-tv-row="trace-1"' not in second_rows.text
+    assert first.get('/find/poll').status_code == 200
+    assert second.get('/find/poll').status_code == 200
+    assert first.get('/find/trace/trace-1').status_code == 200
+    assert second.get('/find/trace/trace-2').status_code == 200
+    assert first.get('/find/trace/trace-2').status_code == 200
+    assert 'not part of the current run' in first.get('/find/trace/trace-2').text
+    assert first.get('/find/export.json').status_code == 404
+    stores[0].complete()
+    stores[1].complete()
+    assert json.loads(first.get('/find/export.json').text)['counts']['matched'] == 1
+    assert json.loads(second.get('/find/export.json').text)['counts']['matched'] == 1
+
+    first_cookie = first.cookies.get('evaluatorq_dashboard_session')
+    assert first_cookie is not None
+    first.cookies.clear()
+    first.cookies.set('evaluatorq_dashboard_session', f'{first_cookie}tampered')
+    rotated = first.get('/find/rows')
+    assert rotated.status_code == 200
+    assert f'{first_cookie}tampered' not in rotated.headers['set-cookie']
+    assert len(stores) == 3
+    assert stores[2].snapshot_value.state == 'idle'
+    assert 'data-tv-row="trace-3"' in rotated.text
+    assert 'data-tv-row="trace-1"' not in rotated.text
+
+
+def test_legacy_find_surface_is_shared_between_browser_sessions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    stores: list[FakeStore] = []
+
+    async def build_store(_app: Any) -> FakeStore:
+        store = FakeStore()
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    app = build_app(roots=[tmp_path])
+    first = TestClient(app, raise_server_exceptions=True)
+    second = TestClient(app, raise_server_exceptions=True)
+    first.get('/find')
+    second.get('/find')
+    assert len(stores) == 1
+    first.post('/find/run', data=csrf_data({'surface': 'search', 'query': 'shared search'}))
+    request = stores[0].compile_request
+    assert request is not None
+    assert request.query == 'shared search'
+    second.post('/find/reset', data=csrf_data({'surface': 'search'}))
+    assert stores[0].snapshot_value.state == 'idle'
+
+
+def test_traces_cookie_is_secure_for_https_requests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    client = TestClient(build_app(roots=[tmp_path]), base_url='https://testserver')
+
+    response = client.get('/traces')
+
+    assert response.status_code == 200
+    assert 'secure' in response.headers['set-cookie'].lower()
 
 
 def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -23,6 +24,7 @@ from evaluatorq.common.orq_client import (
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.dashboard.trace_finder.search_views import search_fragment, search_page_html
+from evaluatorq.dashboard.trace_finder.sessions import TraceSessionRegistry
 from evaluatorq.dashboard.trace_finder.views import (
     drawer,
     facet_menu,
@@ -97,6 +99,8 @@ def initialize_finder_settings(app: Any) -> None:
     app.state.finder_settings = settings
     app.state.finder_generation = 0
     app.state.finder_store_lock = asyncio.Lock()
+    app.state.dashboard_session_signing_key = secrets.token_bytes(32)
+    app.state.trace_sessions = TraceSessionRegistry()
 
 
 def _settings(app: Any) -> Any:
@@ -170,8 +174,19 @@ async def _build_store(app: Any) -> RunStore | None:
     return build_run_store(settings, client=resolved.client, orq=orq, cleanup=cleanup)
 
 
-async def _store(app: Any, *, surface: Literal['search', 'traces'] = 'traces') -> RunStore | None:
-    state_name = 'finder_search_store' if surface == 'search' else 'finder_store'
+async def _store(
+    app: Any,
+    *,
+    surface: Literal['search', 'traces'] = 'traces',
+    session_id: str | None = None,
+    request_state: Any | None = None,
+) -> RunStore | None:
+    if surface == 'traces':
+        if session_id is None:
+            raise RuntimeError('A verified browser session is required for the Traces store.')
+        return await app.state.trace_sessions.get(session_id, lambda: _build_store(app), request_state=request_state)
+
+    state_name = 'finder_search_store'
     store = getattr(app.state, state_name, None)
     if store is not None:
         return store
@@ -292,11 +307,11 @@ def _catalogue_kwargs(
     return {'pending': True}
 
 
-async def warm_initial_finder(app: Any) -> RunStore | None:
+async def warm_initial_finder(app: Any, session_id: str, request_state: Any) -> RunStore | None:
     """Start the default rows and facets without waiting for either Orq query."""
     if not _api_available(app):
         return None
-    store = await _store(app)
+    store = await _store(app, session_id=session_id, request_state=request_state)
     if store is None:
         return None
     explorer = store.explorer
@@ -519,7 +534,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         return req.query_params.get('surface') == 'search' or getattr(req.state, 'finder_surface', None) == 'search'
 
     async def store_for(req: Request) -> RunStore | None:
-        return await _store(req.app, surface='search' if is_search(req) else 'traces')
+        surface: Literal['search', 'traces'] = 'search' if is_search(req) else 'traces'
+        session_id = None if surface == 'search' else req.state.dashboard_session_id
+        return await _store(req.app, surface=surface, session_id=session_id, request_state=req.scope['state'])
 
     def render_fragment(req: Request, snapshot: RunSnapshot, settings: Any, **kwargs: Any) -> str:
         if is_search(req):
@@ -534,7 +551,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         return fragment(snapshot, settings, **kwargs)
 
     async def _explorer_html(req: Request, *, oob: bool = False, error: str | None = None) -> str:
-        store = await _store(req.app)
+        store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
             return explorer_views.results(
@@ -583,7 +600,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
     @app.get('/traces')
     async def traces_page(req: Request) -> Response:
         settings = _settings(req.app)
-        store = await warm_initial_finder(req.app)
+        store = await warm_initial_finder(req.app, req.state.dashboard_session_id, req.scope['state'])
         api_available = store is not None
         explorer = store.explorer if store is not None else None
         explorer_view = await explorer.view() if explorer is not None else None
@@ -743,7 +760,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         rejected = request_rejected(req, form)
         if rejected:
             return _html(await _explorer_html(req, error=rejected))
-        store = await _store(req.app)
+        store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
             return _html(await _explorer_html(req, error=_unavailable_reason(req.app)))
@@ -780,7 +797,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
 
     @app.get('/find/rows')
     async def find_rows(req: Request) -> Response:
-        store = await _store(req.app)
+        store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
         explorer = store.explorer if store is not None else None
         if explorer is not None:
             params = req.query_params
@@ -1031,7 +1048,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         numeric = NumericFilters(**numeric_values)
         loaded_rows = None
         if params.get('counts') == 'loaded':
-            store = await _store(req.app)
+            store = await _store(req.app, session_id=req.state.dashboard_session_id, request_state=req.scope['state'])
             explorer = store.explorer if store is not None else None
             loaded_rows = (await explorer.view()).rows if explorer is not None else None
         return _html(

@@ -61,8 +61,8 @@ from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.trace_finder.routes import (
     initialize_finder_settings,
     register_finder_routes,
-    warm_initial_finder,
 )
+from evaluatorq.dashboard.trace_finder.sessions import TraceSessionMiddleware
 from evaluatorq.dashboard.view import (
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
@@ -336,10 +336,10 @@ async def _save_settings(req: Request) -> Response | NotStr:
             logger.warning(
                 'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
             )
-        old_store = getattr(req.app.state, 'finder_store', None)
         old_search_store = getattr(req.app.state, 'finder_search_store', None)
+        old_session_stores = await req.app.state.trace_sessions.detach_all()
+        old_legacy_store = getattr(req.app.state, 'finder_store', None)
         old_warmup = getattr(req.app.state, 'finder_catalogue_warmup', None)
-        old_initial_warmup = getattr(req.app.state, 'finder_initial_warmup', None)
         req.app.state.finder_settings = effective_settings()
         req.app.state.finder_generation += 1
         for state_name in (
@@ -347,14 +347,12 @@ async def _save_settings(req: Request) -> Response | NotStr:
             'finder_search_store',
             'finder_catalogue_cache',
             'finder_catalogue_warmup',
-            'finder_initial_warmup',
         ):
             if hasattr(req.app.state, state_name):
                 delattr(req.app.state, state_name)
-    await _cancel_background_task(old_initial_warmup)
     await _cancel_background_task(old_warmup[2] if old_warmup is not None else None)
-    # Retire both stores after removing them from app state so new requests cannot acquire them.
-    await _close_finder_stores(old_store, old_search_store)
+    # Retire stores after removing them from app state so new requests cannot acquire them.
+    await _close_finder_stores(*old_session_stores, old_legacy_store, old_search_store)
     req.app.state.finder_unavailable_reason = None
     return RedirectResponse('/settings?saved=1', status_code=303)
 
@@ -369,13 +367,6 @@ async def _close_finder_stores(*stores: Any) -> None:
     for store in stores:
         if store is not None:
             await store.close()
-
-
-async def _warm_initial_finder_on_startup(app: FastHTML) -> None:
-    try:
-        await warm_initial_finder(app)
-    except Exception as exc:  # Warmup must never stop dashboard startup.
-        logger.opt(exception=True).warning('Dashboard trace warmup failed: {}', exc)
 
 
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
@@ -782,14 +773,12 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
 
     @asynccontextmanager
     async def lifespan(runtime: FastHTML) -> Any:
-        initial_warmup = asyncio.create_task(_warm_initial_finder_on_startup(runtime))
-        runtime.state.finder_initial_warmup = initial_warmup
         try:
             yield
         finally:
-            await _cancel_background_task(initial_warmup)
             warmup = getattr(runtime.state, 'finder_catalogue_warmup', None)
             await _cancel_background_task(warmup[2] if warmup is not None else None)
+            await runtime.state.trace_sessions.close_all()
             store = getattr(runtime.state, 'finder_store', None)
             if store is not None:
                 await store.close()
@@ -808,6 +797,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     )
     app.state.roots = roots
     initialize_finder_settings(app)
+    app.add_middleware(TraceSessionMiddleware, app_state=app.state)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for
     # /r/{rid}/export.html, export.md, export.csv, export.json etc.

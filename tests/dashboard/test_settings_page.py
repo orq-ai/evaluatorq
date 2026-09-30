@@ -232,6 +232,8 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
     assert client.get('/find').status_code == 200
     assert client.get('/traces').status_code == 200
+    second_browser = TestClient(client.app, raise_server_exceptions=True)
+    assert second_browser.get('/traces').status_code == 200
 
     response = client.post(
         '/settings',
@@ -245,11 +247,13 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
         }),
     )
     assert response.status_code == 303
-    assert len(closed) == 2
-    assert len(set(closed)) == 2
+    assert len(closed) == 3
+    assert len(set(closed)) == 3
     state = getattr(client.app, 'state')
     assert not hasattr(state, 'finder_store')
     assert not hasattr(state, 'finder_search_store')
+    assert client.get('/find/rows').status_code == 200
+    assert models[-1] == 'new/compiler'
     assert client.get('/find').status_code == 200
     assert models[-1] == 'new/compiler'
 
@@ -270,10 +274,16 @@ def test_dashboard_shutdown_closes_finder_stores(tmp_path: Path, monkeypatch: py
             closed.append(self.name)
 
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     app = build_app(roots=[tmp_path])
-    app.state.finder_store = Store('explorer')
-    app.state.finder_search_store = Store('search')
+    stores = iter((Store('explorer'), Store('search')))
+
+    async def build_store(_app: Any) -> Store:
+        return next(stores)
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
     with TestClient(app) as client:
+        assert client.get('/traces').status_code == 200
         assert client.get('/find').status_code == 200
 
     assert sorted(closed) == ['explorer', 'search']
@@ -779,9 +789,9 @@ async def test_concurrent_finder_requests_construct_one_store(
         return store
 
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
-    first = asyncio.create_task(finder_routes._store(app))
+    first = asyncio.create_task(finder_routes._store(app, session_id='session-id'))
     await entered.wait()
-    second = asyncio.create_task(finder_routes._store(app))
+    second = asyncio.create_task(finder_routes._store(app, session_id='session-id'))
     release.set()
 
     assert await asyncio.gather(first, second) == [store, store]

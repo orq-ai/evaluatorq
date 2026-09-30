@@ -476,7 +476,9 @@ def test_initial_traces_respect_saved_project(explorer_client) -> None:
     assert source.calls[0]['facets'].project_id == 'project-selected'
 
 
-def test_server_warms_traces_and_facets_before_the_first_find_request(explorer_client, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_first_traces_request_warms_rows_and_facets_for_its_session(
+    explorer_client, monkeypatch: pytest.MonkeyPatch
+) -> None:
     store, source, client = explorer_client
     started = threading.Event()
     release = threading.Event()
@@ -492,8 +494,9 @@ def test_server_warms_traces_and_facets_before_the_first_find_request(explorer_c
     monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
     with client:
         try:
-            assert started.wait(timeout=2)
+            assert not source.calls
             assert client.get('/traces').status_code == 200
+            assert started.wait(timeout=2)
             assert len(source.calls) == 1
             assert calls == [7]
         finally:
