@@ -1150,6 +1150,22 @@ def test_yes_no_cell_renders_prose_reason_through_match_cells() -> None:
     assert 'The user asks how to filter traces.' in html
 
 
+def test_prose_reason_is_html_escaped_in_table_and_drawer() -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.trace_finder.explorer_views import _match_cells
+    from evaluatorq.dashboard.trace_finder.views import _drawer_reason
+
+    _, result, snapshot = _yes_no_snapshot('Asked <script>alert("x")</script> & explained.')
+    html = _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
+    drawer = _drawer_reason(result.answers[0])
+
+    assert '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; explained.' in html
+    assert '<script>' not in html
+    assert '&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; explained.' in drawer
+    assert '<script>' not in drawer
+
+
 def test_score_only_summary_is_never_rendered_as_a_reason() -> None:
     from types import SimpleNamespace
 
@@ -1159,13 +1175,57 @@ def test_score_only_summary_is_never_rendered_as_a_reason() -> None:
     score_text = 'noul=0.93 (threshold 0.5)'
     dimension, result, snapshot = _yes_no_snapshot(score_text)
 
-    assert 'xr-reason' not in _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
-    assert 'xr-reason' not in _answer_cells(result, (dimension,))
+    assert 'No explanation returned · classifier score 93%' in _match_cells(
+        SimpleNamespace(trace_id='t'), snapshot
+    )  # type: ignore[arg-type]
+    assert 'No explanation returned · classifier score 93%' in _answer_cells(result, (dimension,))
     drawer = _drawer_reason(result.answers[0])
     assert score_text not in drawer
     assert 'fd-reason' in drawer
-    assert 'yes · 93% confident' in drawer
+    assert 'No explanation returned · classifier score 93%' in drawer
     assert 'Reason' not in drawer
+
+
+def test_score_only_matched_answer_without_confidence_says_no_explanation() -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.trace_finder.explorer_views import _match_cells
+    from evaluatorq.dashboard.trace_finder.views import _answer_cells, _drawer_reason
+
+    dimension, result, snapshot = _yes_no_snapshot('noul=0.93 (threshold 0.5)', confidence=None)
+    table = _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
+    cells = _answer_cells(result, (dimension,))
+    drawer = _drawer_reason(result.answers[0])
+
+    assert 'No explanation returned' in table
+    assert 'classifier score' not in table
+    assert 'No explanation returned' in cells
+    assert 'classifier score' not in cells
+    assert 'No explanation returned' in drawer
+    assert 'confident' not in drawer
+
+
+def test_unmatched_or_failed_score_answer_has_no_fallback_reason() -> None:
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.trace_finder.explorer_views import _match_cells
+    from evaluatorq.dashboard.trace_finder.views import _drawer_reason
+
+    _, result, snapshot = _yes_no_snapshot('noul=0.93 (threshold 0.5)')
+    unmatched = result.answers[0].model_copy(update={'matched': False})
+    failed = result.answers[0].model_copy(update={'error': 'classifier failed'})
+    unmatched_result = result.model_copy(update={'answers': (unmatched,), 'matched': False})
+    failed_result = result.model_copy(update={'answers': (failed,), 'error': 'classifier failed'})
+
+    assert 'No explanation returned' not in _drawer_reason(unmatched)
+    assert 'No explanation returned' not in _drawer_reason(failed)
+    assert 'No explanation returned' not in _match_cells(
+        SimpleNamespace(trace_id='t'), replace(snapshot, results={'t': unmatched_result})
+    )  # type: ignore[arg-type]
+    assert 'No explanation returned' not in _match_cells(
+        SimpleNamespace(trace_id='t'), replace(snapshot, results={'t': failed_result})
+    )  # type: ignore[arg-type]
 
 
 def test_drawer_labels_a_real_reason() -> None:

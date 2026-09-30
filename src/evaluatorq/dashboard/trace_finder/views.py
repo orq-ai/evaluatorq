@@ -508,8 +508,19 @@ def _reason_text(answer: DimensionAnswer) -> str | None:
 
 
 def _reason_line(answer: DimensionAnswer) -> str:
-    reason = _reason_text(answer) if answer.matched else None
-    return f'<div class="xr-reason" title="{esc(reason)}">{esc(reason)}</div>' if reason else ''
+    if answer.error or not answer.matched:
+        return ''
+    reason = _reason_text(answer)
+    if reason:
+        return f'<div class="xr-reason" title="{esc(reason)}">{esc(reason)}</div>'
+    fallback = _no_explanation_text(answer)
+    return f'<div class="xr-reason">{esc(fallback)}</div>'
+
+
+def _no_explanation_text(answer: DimensionAnswer) -> str:
+    if answer.confidence is None:
+        return 'No explanation returned'
+    return f'No explanation returned · classifier score {answer.confidence:.0%}'
 
 
 def _capped(question: str, limit: int = _QUESTION_CAP) -> str:
@@ -517,14 +528,15 @@ def _capped(question: str, limit: int = _QUESTION_CAP) -> str:
 
 
 def _drawer_reason(answer: DimensionAnswer) -> str:
-    """A labelled prose reason, or a compact confidence when the classifier gave only numbers."""
+    """A labelled prose reason, or an honest notice when the classifier gave only numbers."""
+    if answer.error:
+        return ''
     reason = _reason_text(answer)
     if reason:
         return f'<p class="fd-reason"><b>Reason</b> {esc(reason)}</p>'
-    if answer.confidence is not None and not answer.error:
-        verdict = 'yes' if answer.value is True else 'no' if answer.value is False else _value_text(answer.value)
-        return f'<p class="fd-reason">{esc(verdict)} · {answer.confidence:.0%} confident</p>'
-    return ''
+    if not answer.matched:
+        return ''
+    return f'<p class="fd-reason">{esc(_no_explanation_text(answer))}</p>'
 
 
 def _answer_cells(result: TraceClassification, dimensions: tuple[CompiledQuery, ...]) -> str:
