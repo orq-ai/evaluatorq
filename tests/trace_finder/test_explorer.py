@@ -191,7 +191,11 @@ async def test_load_drops_a_match_sort_the_new_rows_cannot_have() -> None:
 async def test_narrow_updates_rows_filters_and_page_only_for_current_generation() -> None:
     rows = tuple(TraceRow(trace_id=f't{i}') for i in range(3))
     store = store_for(FakeSource(rows))
-    view = await store.load(START, END, 3, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    original_facets = FacetSelection(model=frozenset({'gpt-4'}))
+    original_numeric = NumericFilters(tokens_min=12)
+    view = await store.load(
+        START, END, 3, facets=original_facets, numeric=original_numeric, wait=True
+    )
     await store.set_view(page=2)
 
     facets = FacetSelection(model=frozenset({'gpt-5'}))
@@ -210,6 +214,50 @@ async def test_narrow_updates_rows_filters_and_page_only_for_current_generation(
 
     await store.narrow(view.generation - 1, {'t2'}, facets=FacetSelection(), numeric=NumericFilters())
     assert await store.view() == narrowed
+
+    restored = await store.restore_narrowed()
+    assert [row.trace_id for row in restored.rows] == ['t0', 't1', 't2']
+    assert restored.facets == original_facets
+    assert restored.numeric == original_numeric
+    assert restored.narrowed_from is None
+    assert restored.page == 0
+
+    await store.narrow(view.generation, {'t2'}, facets=facets, numeric=numeric)
+    narrowed_again = await store.view()
+    assert [row.trace_id for row in narrowed_again.rows] == ['t2']
+    restored_again = await store.restore_narrowed()
+    assert [row.trace_id for row in restored_again.rows] == ['t0', 't1', 't2']
+    assert restored_again.facets == original_facets
+    assert restored_again.numeric == original_numeric
+
+
+@pytest.mark.asyncio
+async def test_drawer_hydration_is_not_blocked_by_first_page_prewarm() -> None:
+    rows = tuple(TraceRow(trace_id=f't{i}') for i in range(100))
+    prewarm_entered = asyncio.Event()
+    drawer_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def hydrate(rows: Any) -> dict[str, TraceRecord | None]:
+        ids = {row.trace_id for row in rows}
+        if len(ids) == 100:
+            prewarm_entered.set()
+        else:
+            drawer_entered.set()
+        await release.wait()
+        return {trace_id: record(trace_id) for trace_id in ids}
+
+    store = ExplorerStore(search=FakeSource(rows).search, hydrate=hydrate)
+    await store.load(START, END, 100, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
+    await prewarm_entered.wait()
+
+    drawer = asyncio.create_task(store.records(['t0']))
+    await asyncio.wait_for(drawer_entered.wait(), timeout=1)
+    release.set()
+    assert await drawer == {'t0': record('t0')}
+    prewarm = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    assert prewarm is not None
+    await prewarm
 
 
 @pytest.mark.asyncio
@@ -236,6 +284,32 @@ async def test_failed_load_keeps_partial_rows_and_error() -> None:
     assert view.state == 'failed'
     assert [row.trace_id for row in view.rows] == ['t0', 't1']
     assert view.error is not None and 'page 2 timed out' in view.error
+
+
+@pytest.mark.asyncio
+async def test_cancelled_load_leaves_loading_with_rows_so_far() -> None:
+    first_page = asyncio.Event()
+
+    async def search(*args: Any, on_page: Any = None, **kwargs: Any) -> tuple[TraceRow, ...]:
+        on_page((TraceRow(trace_id='t0'),))
+        first_page.set()
+        await asyncio.Event().wait()
+        raise AssertionError('unreachable')
+
+    store = ExplorerStore(search=search, hydrate=FakeSource(()).hydrate_rows)
+    # The New search path awaits the load inside the run task; cancelling that run cancels the load.
+    waiter = asyncio.create_task(
+        store.load(START, END, 5, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
+    )
+    await first_page.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    view = await store.view()
+    assert view.state == 'failed'
+    assert view.error == 'Loading was cancelled.'
+    assert [row.trace_id for row in view.rows] == ['t0']
 
 
 @pytest.mark.asyncio

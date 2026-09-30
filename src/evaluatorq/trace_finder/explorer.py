@@ -270,6 +270,8 @@ class ExplorerStore:
         self._prewarm_task: asyncio.Task[None] | None = None
         self._records: dict[str, TraceRecord | None] = {}
         self._records_lock = asyncio.Lock()
+        self._hydrations: dict[tuple[str, ...], asyncio.Task[dict[str, TraceRecord | None]]] = {}
+        self._pre_narrow_view: ExplorerView | None = None
 
     async def spans(self, trace_id: str) -> list[Any]:
         """Fetch the trace's bounded span summaries on demand."""
@@ -295,8 +297,10 @@ class ExplorerStore:
         warm_trajectories: bool = True,
     ) -> ExplorerView:
         await self._cancel()
+        self._hydrations.clear()
         self._records.clear()
         generation = next(_SEQUENCE)
+        self._pre_narrow_view = None
         previous = self._view
         # The tab and sort survive a Load; a match sort does not, as the new rows are not judged yet.
         kept_sort = previous.sort if previous.sort in COLUMNS and previous.sort != MATCH else None
@@ -341,6 +345,8 @@ class ExplorerStore:
             try:
                 rows = await self._search(start, end, limit, facets=facets, numeric=numeric, on_page=on_page)
             except asyncio.CancelledError:
+                if self._view.generation == generation and self._view.state == 'loading':
+                    self._view = replace(self._view, state='failed', error='Loading was cancelled.')
                 raise
             except Exception as error:  # noqa: BLE001 — keep rows loaded so far and name the failure
                 if self._prewarm_task is not None and not self._prewarm_task.done():
@@ -401,6 +407,8 @@ class ExplorerStore:
         if self._view.generation != generation:
             return
         current = self._view
+        if self._pre_narrow_view is None:
+            self._pre_narrow_view = current
         updated = replace(
             current,
             narrowed_from=self._view.narrowed_from if self._view.narrowed_from is not None else len(self._view.rows),
@@ -411,20 +419,63 @@ class ExplorerStore:
         )
         self._view = updated if updated == current else replace(updated, version=next(_SEQUENCE))
 
+    async def restore_narrowed(self) -> ExplorerView:
+        """Restore the rows and user filters saved before the first AI narrowing of this generation.
+
+        Filter edits made while the AI-narrowed results are showing are discarded with that narrowed
+        state; a later run after restoring saves a fresh snapshot.
+        """
+        previous = self._pre_narrow_view
+        if previous is None or previous.generation != self._view.generation:
+            return self._view
+        self._pre_narrow_view = None
+        updated = replace(
+            self._view,
+            rows=previous.rows,
+            facets=previous.facets,
+            numeric=previous.numeric,
+            narrowed_from=None,
+            page=0,
+            sort=None if self._view.sort == MATCH else self._view.sort,
+            descending=True if self._view.sort == MATCH else self._view.descending,
+        )
+        self._view = updated if updated == self._view else replace(updated, version=next(_SEQUENCE))
+        return self._view
+
     async def records(self, trace_ids: Sequence[str]) -> dict[str, TraceRecord | None]:
-        """Hydrate requested rows; successes and failures are cached until the next load."""
+        """Hydrate requested rows; successful records and empty traces are cached until the next load."""
         async with self._records_lock:
             generation = self._view.generation
             requested = set(trace_ids)
             wanted = [row for row in self._view.rows if row.trace_id in requested and row.trace_id not in self._records]
+            key: tuple[str, ...] | None = None
             if wanted:
-                hydrated = await self._hydrate(wanted)
+                key = tuple(sorted(row.trace_id for row in wanted))
+                task = self._hydrations.get(key)
+                if task is None:
+
+                    async def hydrate_rows() -> dict[str, TraceRecord | None]:
+                        return await self._hydrate(wanted)
+
+                    task = asyncio.create_task(hydrate_rows())
+                    self._hydrations[key] = task
+            else:
+                task = None
+        if task is not None:
+            try:
+                hydrated = await asyncio.shield(task)
+            finally:
+                async with self._records_lock:
+                    if key is not None and self._hydrations.get(key) is task and task.done():
+                        del self._hydrations[key]
+            async with self._records_lock:
                 # A load may replace rows while hydration is in progress. Its cache belongs
                 # to that load only, so late results from the previous generation are discarded.
                 if self._view.generation == generation:
                     self._records.update(hydrated)
                     return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
                 return {trace_id: hydrated.get(trace_id) for trace_id in trace_ids}
+        async with self._records_lock:
             return {trace_id: self._records.get(trace_id) for trace_id in trace_ids}
 
     def cached_records(self, trace_ids: Sequence[str]) -> dict[str, TraceRecord | None]:
@@ -447,7 +498,7 @@ class ExplorerStore:
         return next((row for row in self._view.rows if row.trace_id == trace_id), None)
 
     async def has_cached_record(self, trace_id: str) -> bool:
-        """Return whether this load already tried to hydrate ``trace_id``."""
+        """Return whether this load cached a record or a successfully empty trace."""
         async with self._records_lock:
             return trace_id in self._records
 
