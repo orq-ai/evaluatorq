@@ -8,6 +8,7 @@ report.values()  # name -> value, no-basis signals omitted
 ```
 """
 
+from evaluatorq.signals.classify import classify_tool_roles
 from evaluatorq.signals.config import ClassifierConfig, SignalsConfig, TagThresholds
 from evaluatorq.signals.evaluator import signal_evaluator, signal_evaluators, to_trajectory
 from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult
@@ -24,6 +25,7 @@ __all__ = [
     'SignalResult',
     'SignalsConfig',
     'TagThresholds',
+    'classify_tool_roles',
     'compute_signals',
     'signal_evaluator',
     'signal_evaluators',
