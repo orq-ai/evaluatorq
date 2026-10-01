@@ -45,6 +45,18 @@ INSIGHTS_WORKER_STALE_SECONDS = 90
 INSIGHTS_WORKER_HEARTBEAT_SECONDS = 10
 
 
+def _set_private_file_mode(descriptor: int, mode: int) -> None:
+    """Apply POSIX file permissions; Windows uses the containing directory ACL.
+
+    Windows does not expose ``os.fchmod`` and does not implement POSIX mode
+    bits as access control. Private worker files are created inside their
+    private application or temporary directories, so their access inherits
+    that directory's Windows ACL.
+    """
+    if os.name != 'nt':
+        os.fchmod(descriptor, mode)
+
+
 def worker_state_path(runs_dir: Path, run_id: str) -> Path:
     if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
         raise ValueError('Invalid Insights run ID for worker state')
@@ -64,7 +76,7 @@ def _write_worker_state(path: Path, state: dict[str, object]) -> None:
     descriptor, temporary = tempfile.mkstemp(prefix=f'.{path.stem}.', suffix='.tmp', dir=path.parent)
     try:
         with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
-            os.fchmod(handle.fileno(), 0o600)
+            _set_private_file_mode(handle.fileno(), 0o600)
             json.dump(state, handle)
             handle.flush()
             os.fsync(handle.fileno())
@@ -983,7 +995,7 @@ def launch_insights(
                 mode='w', encoding='utf-8', dir=reference_path.parent, prefix=f'.{run_id}.', suffix='.tmp', delete=False
             ) as reference_file:
                 reference_temporary = Path(reference_file.name)
-                os.fchmod(reference_file.fileno(), 0o600)
+                _set_private_file_mode(reference_file.fileno(), 0o600)
                 reference_file.write(json.dumps({'finder_export': spec.finder_export}))
                 reference_file.flush()
                 os.fsync(reference_file.fileno())
