@@ -242,6 +242,18 @@ def test_real_orq_root_singular_input_message() -> None:
     assert part.content.startswith('What is the date today')
 
 
+@pytest.mark.parametrize('container', ['list', 'single', 'indexed'])
+def test_router_root_direct_messages_parse_a2a_parts(container: str, caplog: pytest.LogCaptureFixture) -> None:
+    message = {'role': 'agent', 'parts': [{'kind': 'text', 'text': 'Hello.'}]}
+    value: Any = [message] if container == 'list' else message if container == 'single' else {'0': message}
+    [span] = OtelTrace.from_orq([{'span_id': 'root', 'type': 'trace', 'attributes': {
+        'gen_ai.operation.name': 'chat', 'gen_ai.output': value}}]).spans
+    assert span.output_messages is not None
+    assert [parsed.role for parsed in span.output_messages] == ['agent']
+    assert span.output_messages[0].parts == [OtelTextPart(type='text', content='Hello.')]
+    assert 'Unknown OTel message part type' not in caplog.text
+
+
 def test_usage_falls_back_to_span_summary() -> None:
     span = {
         'span_id': 's',

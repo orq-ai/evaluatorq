@@ -124,6 +124,148 @@ def test_chat_span_without_output_gives_no_agent_step() -> None:
     assert [s.source for s in traj.steps] == ['user']
 
 
+def test_router_chat_agent_output_is_an_assistant_turn() -> None:
+    span = {
+        'span_id': 'router-chat',
+        'type': 'span.chat_completion',
+        'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.input.messages': [_text('user', 'hello')],
+            'gen_ai.output.messages': [_text('agent', 'hi')],
+        },
+    }
+    traj = OtelTrace.from_orq([span]).to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [('user', 'hello'), ('agent', 'hi')]
+
+
+def test_router_responses_root_mirrors_child_only_once() -> None:
+    inputs = [_text('user', 'write hello.py')]
+    outputs = [_text('agent', 'hello.py')]
+    raw = [
+        {
+            'span_id': 'root',
+            'type': 'trace',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input': inputs, 'gen_ai.output': outputs},
+        },
+        {
+            'span_id': 'child',
+            'parent_span_id': 'root',
+            'type': 'span.responses',
+            'attributes': {
+                'gen_ai.operation.name': 'chat',
+                'gen_ai.input.messages': inputs,
+                'gen_ai.output.messages': outputs,
+            },
+        },
+    ]
+    trace = OtelTrace.from_orq(raw)
+    assert trace.spans[0].span_type == 'trace'
+    assert trace.spans[0].input_messages == trace.spans[1].input_messages
+    assert trace.spans[0].output_messages == trace.spans[1].output_messages
+    traj = trace.to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [('user', 'write hello.py'), ('agent', 'hello.py')]
+
+
+def test_router_mirror_ignores_non_transcript_message_metadata() -> None:
+    root_input = {**_text('user', 'Hi'), 'id': 'root-user', 'name': 'router'}
+    child_input = {**_text('user', 'Hi'), 'id': 'child-user'}
+    root_output = {
+        **_text('agent', 'Hello.'), 'id': 'root-answer', 'finish_reason': 'stop',
+        'parts': [{'type': 'text', 'content': 'Hello.', 'transport_id': 'root'}],
+    }
+    child_output = {
+        **_text('assistant', 'Hello.'), 'id': 'child-answer', 'finish_reason': 'completed',
+        'parts': [{'type': 'text', 'content': 'Hello.', 'transport_id': 'child'}],
+    }
+    raw = [
+        {'span_id': 'root', 'type': 'trace', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai.input': [root_input], 'gen_ai.output': [root_output]}},
+        {'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': [child_input],
+            'gen_ai.output.messages': [child_output]}},
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [('user', 'Hi'), ('agent', 'Hello.')]
+
+
+def test_identical_sibling_chat_spans_remain_distinct() -> None:
+    inputs = [_text('user', 'again')]
+    outputs = [_text('assistant', 'same')]
+    raw = [
+        {'span_id': 'root', 'type': 'trace'},
+        {
+            'span_id': 'first', 'parent_span_id': 'root', 'type': 'span.responses',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': inputs, 'gen_ai.output.messages': outputs},
+        },
+        {
+            'span_id': 'second', 'parent_span_id': 'root', 'type': 'span.responses',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': inputs, 'gen_ai.output.messages': outputs},
+        },
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [step.message for step in traj.steps if step.source == 'agent'] == ['same', 'same']
+
+
+def test_router_root_with_distinct_output_remains_a_chat_span() -> None:
+    inputs = [_text('user', 'again')]
+    raw = [
+        {
+            'span_id': 'root', 'type': 'trace',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input': inputs,
+                           'gen_ai.output': [_text('agent', 'first')]},
+        },
+        {
+            'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': inputs,
+                           'gen_ai.output.messages': [_text('agent', 'second')]},
+        },
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [step.message for step in traj.steps if step.source == 'agent'] == ['first', 'second']
+
+
+def test_tool_span_timing_status_and_definitions_round_trip() -> None:
+    raw = [
+        {'span_id': 'root', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        {'span_id': 'chat', 'parent_span_id': 'root', 'started_at': 1, 'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.tool.definitions': [
+                {'type': 'function', 'function': {'name': 'lookup', 'parameters': {'type': 'object'}}},
+                {'name': 'flat', 'parameters': {'type': 'object'}},
+            ],
+            'gen_ai.input.messages': [_text('user', 'hi')],
+            'gen_ai.output.messages': [{'role': 'assistant', 'parts': [
+                {'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]}],
+        }},
+        {'span_id': 'tool', 'parent_span_id': 'root', 'started_at': 2, 'ended_at': 4, 'status': 'ok', 'attributes': {
+            'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.id': 'c1',
+            'gen_ai.tool.call.result': 'found',
+        }},
+        {'span_id': 'chat2', 'parent_span_id': 'root', 'started_at': 5, 'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.tool.definitions': [{'name': 'lookup', 'parameters': {'type': 'string'}}],
+            'gen_ai.input.messages': [_text('user', 'hi'),
+                {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]},
+                {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'c1', 'response': 'found'}]}],
+            'gen_ai.output.messages': [_text('assistant', 'done')],
+        }},
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [d.get('name') or d['function']['name'] for d in traj.agent.tool_definitions or []] == ['lookup', 'flat']
+    observation = traj.steps[1].observation
+    assert observation is not None
+    result = observation.results[0]
+    assert result.extra == {'start_timestamp': 2.0, 'end_timestamp': 4.0, 'status': 'ok'}
+    tool = next(span for span in traj.to_otel().spans if span.operation == 'execute_tool')
+    assert tool.start_time is not None and tool.start_time.timestamp() == 2
+    assert tool.end_time is not None and tool.end_time.timestamp() == 4
+    assert tool.status == 'ok'
+    back = traj.to_otel().to_atif()
+    assert back.agent.tool_definitions == traj.agent.tool_definitions
+    assert back.steps[1].observation is not None
+    assert back.steps[1].observation.results[0].extra == result.extra
+
+
 def test_per_turn_chat_inputs_are_not_dropped() -> None:
     raw = [
         _chat('c1', [_text('user', 'first')], [_text('assistant', 'answer one')]),
@@ -170,48 +312,6 @@ def test_error_tool_span_records_error_type() -> None:
         'error_type': 'ToolError', 'status': 'error', 'start_timestamp': 1_776_679_202.0,
         'end_timestamp': 1_776_679_205.0,
     }
-
-
-def test_tool_span_timing_status_and_definitions_are_converted_and_round_trip() -> None:
-    raw = [
-        {'span_id': 'root', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
-        {'span_id': 'chat', 'parent_span_id': 'root', 'started_at': 1, 'attributes': {
-            'gen_ai.operation.name': 'chat',
-            'gen_ai.tool.definitions': [
-                {'type': 'function', 'function': {'name': 'lookup', 'parameters': {'type': 'object'}}},
-                {'name': 'flat', 'parameters': {'type': 'object'}},
-            ],
-            'gen_ai.input.messages': [_text('user', 'hi')],
-            'gen_ai.output.messages': [{'role': 'assistant', 'parts': [
-                {'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]}],
-        }},
-        {'span_id': 'tool', 'parent_span_id': 'root', 'started_at': 2, 'ended_at': 4, 'status': 'ok', 'attributes': {
-            'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.id': 'c1',
-            'gen_ai.tool.call.result': 'found',
-        }},
-        {'span_id': 'chat2', 'parent_span_id': 'root', 'started_at': 5, 'attributes': {
-            'gen_ai.operation.name': 'chat',
-            'gen_ai.tool.definitions': [{'name': 'lookup', 'parameters': {'type': 'string'}}],
-            'gen_ai.input.messages': [_text('user', 'hi'),
-                {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]},
-                {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'c1', 'response': 'found'}]}],
-            'gen_ai.output.messages': [_text('assistant', 'done')],
-        }},
-    ]
-    traj = OtelTrace.from_orq(raw).to_atif()
-    assert [d.get('name') or d['function']['name'] for d in traj.agent.tool_definitions or []] == ['lookup', 'flat']
-    observation = traj.steps[1].observation
-    assert observation is not None
-    result = observation.results[0]
-    assert result.extra == {'start_timestamp': 2.0, 'end_timestamp': 4.0, 'status': 'ok'}
-    tool = next(span for span in traj.to_otel().spans if span.operation == 'execute_tool')
-    assert tool.start_time is not None and tool.start_time.timestamp() == 2
-    assert tool.end_time is not None and tool.end_time.timestamp() == 4
-    assert tool.status == 'ok'
-    back = traj.to_otel().to_atif()
-    assert back.agent.tool_definitions == traj.agent.tool_definitions
-    assert back.steps[1].observation is not None
-    assert back.steps[1].observation.results[0].extra == result.extra
 
 
 # --- the real Orq export: AgentInvoke wrapper, system prompt as a message, results only in later inputs ---
@@ -532,8 +632,11 @@ def test_unmatched_tool_results_are_warned_and_kept(caplog: pytest.LogCaptureFix
     step = OtelTrace.from_orq(raw).to_atif().steps[1]
     assert step.observation is not None
     results = [(r.source_call_id, r.content, r.extra) for r in step.observation.results]
-    assert results == [('c1', 'ok', None), (None, 'lost', {'start_timestamp': 2.0}),
-                       (None, 'R', {'orphan_call_id': 'nope'})]
+    assert results == [
+        ('c1', 'ok', None),
+        (None, 'lost', {'start_timestamp': 2.0}),
+        (None, 'R', {'orphan_call_id': 'nope'}),
+    ]
     assert '2 tool results match no tool call' in caplog.text
 
 

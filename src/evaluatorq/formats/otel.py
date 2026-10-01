@@ -198,13 +198,14 @@ class OtelUsage(BaseModel):
 
 
 class OtelSpan(BaseModel):
-    """One span. `attributes` holds flat dotted keys; parsed message attributes are removed from it."""
+    """One span. `span_type` keeps Orq's raw wrapper type; parsed message attributes leave `attributes`."""
 
     model_config = ConfigDict(frozen=True)
     trace_id: str
     span_id: str
     parent_span_id: str | None = None
     name: str = ''
+    span_type: str | None = None
     operation: str | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
@@ -288,12 +289,14 @@ class OtelTrace(BaseModel):
 _MESSAGE_ATTRIBUTES = (
     ('input_messages', 'gen_ai.input.messages'),
     ('input_messages', 'gen_ai.input.message'),  # Orq root span: one message, singular key
+    ('input_messages', 'gen_ai.input'),  # Orq router root: direct message list
     ('output_messages', 'gen_ai.output.messages'),
+    ('output_messages', 'gen_ai.output'),  # Orq router root: direct message list
 )
 _SYSTEM_INSTRUCTIONS = 'gen_ai.system_instructions'
 # Structured values kept whole by `flatten_attributes` (their inner dicts are data, not attribute namespaces).
 _LEAF_ATTRIBUTES = frozenset({
-    *(key for _, key in _MESSAGE_ATTRIBUTES),
+    *(key for _, key in _MESSAGE_ATTRIBUTES if key not in ('gen_ai.input', 'gen_ai.output')),
     _SYSTEM_INSTRUCTIONS,
     'gen_ai.tool.definitions',
 })
@@ -344,16 +347,23 @@ def flatten_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
     derived: dict[str, Any] = {}
     direct: dict[str, Any] = {}
 
+    def is_leaf(key: str, value: dict[str, Any]) -> bool:
+        if key in _LEAF_ATTRIBUTES:
+            return True
+        return key in ('gen_ai.input', 'gen_ai.output') and (
+            'role' in value or (bool(value) and all(index.isdigit() for index in value))
+        )
+
     def walk(prefix: str, value: dict[str, Any]) -> None:
         for key, item in value.items():
             dotted = f'{prefix}.{key}'
-            if isinstance(item, dict) and dotted not in _LEAF_ATTRIBUTES:
+            if isinstance(item, dict) and not is_leaf(dotted, cast('dict[str, Any]', item)):
                 walk(dotted, cast('dict[str, Any]', item))
             else:
                 derived.setdefault(dotted, item)
 
     for key, value in attrs.items():
-        if isinstance(value, dict) and key not in _LEAF_ATTRIBUTES:
+        if isinstance(value, dict) and not is_leaf(key, cast('dict[str, Any]', value)):
             walk(key, cast('dict[str, Any]', value))
         else:
             direct[key] = value
@@ -395,6 +405,7 @@ def _span_from_orq(raw: dict[str, Any], index: int) -> OtelSpan:
         span_id=span_id_of(raw, index),
         parent_span_id=parent_span_id_of(raw),
         name=str(raw.get('name') or ''),
+        span_type=raw.get('type') if isinstance(raw.get('type'), str) else None,
         operation=_operation(attributes, raw),
         start_time=parse_time(_first(raw, 'started_at', 'start_time')),
         end_time=parse_time(_first(raw, 'ended_at', 'end_time')),
@@ -444,6 +455,11 @@ def _messages_from_attribute(attributes: dict[str, Any], key: str) -> list[OtelM
     if not ok:
         return None
     value = _as_list(value)
+    if isinstance(value, dict):
+        if 'messages' in value:
+            value = _as_list(value['messages'])
+        elif 'message' in value:
+            value = _as_list(value['message'])
     if isinstance(value, dict):
         value = [value]
     if not isinstance(value, list):
