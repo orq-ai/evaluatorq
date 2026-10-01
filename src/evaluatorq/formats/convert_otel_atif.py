@@ -574,6 +574,64 @@ def _tokens(value: float | None, span_id: str) -> int | None:
     return None
 
 
+def _next_call_issues(
+    drafts: list[_Draft], position: dict[str, int]
+) -> dict[str, list[tuple[int, datetime | None] | None]]:
+    """For each tool-call occurrence, find the next later turn that issues that same call id."""
+    call_issue_times: dict[str, list[tuple[int, datetime | None]]] = {}
+    for draft in drafts:
+        if draft.span is None:
+            continue
+        issued_at = position[draft.span.span_id]
+        for call in draft.fields['tool_calls'] or []:
+            call_issue_times.setdefault(call.tool_call_id, []).append((issued_at, draft.span.start_time))
+    next_issues: dict[str, list[tuple[int, datetime | None] | None]] = {}
+    for call_id, occurrences in call_issue_times.items():
+        next_issue_by_position: dict[int, tuple[int, datetime | None]] = {}
+        next_position: int | None = None
+        next_started: datetime | None = None
+        for issued_at, started in reversed(occurrences):
+            if next_position is not None and next_position > issued_at:
+                next_issue_by_position[issued_at] = (next_position, next_started)
+            if next_position is None or issued_at < next_position:
+                next_position, next_started = issued_at, started
+        next_issues[call_id] = [next_issue_by_position.get(issued_at) for issued_at, _ in occurrences]
+    return next_issues
+
+
+def _take_tool_span(
+    call_id: str,
+    by_call: dict[str, list[OtelSpan]],
+    next_issues: dict[str, list[tuple[int, datetime | None] | None]],
+    next_span_by_call: dict[str, int],
+    call_occurrence_by_id: dict[str, int],
+    response_position: int | None,
+) -> OtelSpan | None:
+    """Consume this call id's next span unless its time places it after a later call occurrence."""
+    spans = by_call.get(call_id, [])
+    span_index = next_span_by_call.get(call_id, 0)
+    span = spans[span_index] if span_index < len(spans) else None
+    occurrence = call_occurrence_by_id.get(call_id, 0)
+    call_occurrence_by_id[call_id] = occurrence + 1
+    later_issues = next_issues.get(call_id, [])
+    later_issue = later_issues[occurrence] if occurrence < len(later_issues) else None
+    span_time = (span.start_time or span.end_time) if span is not None else None
+    if span is not None and span_time is not None and later_issue is not None:
+        later_position, later_issue_time = later_issue
+        if (
+            later_issue_time is not None
+            and span_time > later_issue_time
+            and response_position is not None
+            and response_position <= later_position
+        ):
+            # Only defer when the earlier call already has a response before the later turn.
+            # Equal times stay in occurrence order because the trace cannot disambiguate them.
+            return None
+    if span is not None:
+        next_span_by_call[call_id] = span_index + 1
+    return span
+
+
 def _attach_results(
     drafts: list[_Draft], members: list[OtelSpan], chats: list[OtelSpan], new_inputs: list[list[OtelMessage]]
 ) -> None:
@@ -596,9 +654,11 @@ def _attach_results(
         if isinstance(part, OtelToolCallResponsePart)
     ]
     position = {chat.span_id: index for index, chat in enumerate(chats)}
+    next_issues = _next_call_issues(drafts, position)
     used_spans: set[str] = set()
     used_parts: set[int] = set()
     next_span_by_call: dict[str, int] = {}
+    call_occurrence_by_id: dict[str, int] = {}
     for draft in drafts:
         if draft.span is None:
             continue
@@ -607,15 +667,6 @@ def _attach_results(
         pending_results: list[tuple[int, int, AtifObservationResult, str | None]] = []
         result_order = 0
         for n, call in enumerate(calls):
-            spans = by_call.get(call.tool_call_id, [])
-            span_index = next_span_by_call.get(call.tool_call_id, 0)
-            span = spans[span_index] if span_index < len(spans) else None
-            if span is not None:
-                next_span_by_call[call.tool_call_id] = span_index + 1
-                draft.tool_span_ids.add(span.span_id)
-            call_extra = _carried(span, _TOOL_CALL_EXTRA)
-            if call_extra is not None:
-                calls[n] = call.model_copy(update={'extra': {**(call.extra or {}), **call_extra}})
             found = next(
                 (
                     index
@@ -627,6 +678,19 @@ def _attach_results(
             part = responses[found][1] if found is not None else None
             if found is not None:
                 used_parts.add(found)
+            span = _take_tool_span(
+                call.tool_call_id,
+                by_call,
+                next_issues,
+                next_span_by_call,
+                call_occurrence_by_id,
+                responses[found][0] if found is not None else None,
+            )
+            if span is not None:
+                draft.tool_span_ids.add(span.span_id)
+            call_extra = _carried(span, _TOOL_CALL_EXTRA)
+            if call_extra is not None:
+                calls[n] = call.model_copy(update={'extra': {**(call.extra or {}), **call_extra}})
             result = _result(call_id=call.tool_call_id, span=span, part=part)
             if result is not None:
                 response_order = found if found is not None else len(responses) + n

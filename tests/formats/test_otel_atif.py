@@ -572,6 +572,54 @@ def test_reused_tool_call_id_consumes_later_chat_responses_in_order() -> None:
         'first result', 'second result']
 
 
+def test_reused_call_id_assigns_later_execute_span_after_response_part_fallback() -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'same', 'name': 'f', 'arguments': {}}]}
+
+    def response(text: str) -> dict[str, Any]:
+        return {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'same', 'response': text}]}
+
+    raw = [
+        {'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        _chat('c1', [_text('user', 'first')], [call], parent_span_id='a', started_at=1),
+        _chat(
+            'c2', [_text('user', 'first'), call, response('first result')], [call],
+            parent_span_id='a', started_at=4,
+        ),
+        {
+            'span_id': 't2', 'parent_span_id': 'a', 'started_at': 5, 'ended_at': 6, 'status': 'error',
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'second result',
+            },
+        },
+        _chat(
+            'c3',
+            [_text('user', 'first'), call, response('first result'), call, response('second result')],
+            [_text('assistant', 'done')],
+            parent_span_id='a',
+            started_at=7,
+        ),
+    ]
+
+    agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent' and step.tool_calls]
+
+    assert len(agents) == 2
+    assert agents[0].observation is not None
+    first_result = agents[0].observation.results[0]
+    assert first_result.content == 'first result'
+    assert first_result.extra is None
+    assert agents[1].observation is not None
+    second_result = agents[1].observation.results[0]
+    assert second_result.content == 'second result'
+    assert second_result.extra == {
+        'error_type': '_OTHER',
+        'start_timestamp': 5.0,
+        'end_timestamp': 6.0,
+        'status': 'error',
+    }
+
+
 def test_atif_to_otel_assigns_duplicate_call_id_results_by_occurrence() -> None:
     traj = AtifTrajectory.model_validate({
         'schema_version': 'ATIF-v1.7', 'trajectory_id': 't', 'agent': {'name': 'a', 'version': '1'},
@@ -821,7 +869,8 @@ def test_atif_epoch_seconds_after_numeric_otel_cutoff_keep_their_unit() -> None:
     back = trace.to_atif()
     assert back.steps[0].extra is not None and back.steps[0].extra['invocation']['start_timestamp'] == future
     assert back.steps[0].observation is not None
-    assert back.steps[0].observation.results[0].extra['start_timestamp'] == future + 1
+    result_extra = back.steps[0].observation.results[0].extra
+    assert result_extra is not None and result_extra['start_timestamp'] == future + 1
 
 
 def test_multi_part_text_result_joins_with_newlines() -> None:
