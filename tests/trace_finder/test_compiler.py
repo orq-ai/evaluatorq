@@ -51,13 +51,13 @@ def choice_document() -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    ('label', 'expected'),
+    ('word', 'expected'),
     [('yes', True), ('true', True), ('True', True), ('no', False), ('false', False)],
 )
-def test_noul_text_selection_is_normalized_to_booleans(label: str, expected: bool) -> None:
+def test_noul_word_selection_is_normalized_to_booleans(word: str, expected: bool) -> None:
     document = choice_document()
     document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
-    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': [label]}
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': [word]}
 
     dimensions, _ = CompilerWireQuery.model_validate(document).to_domain()
     compiled = dimensions[0]
@@ -72,15 +72,19 @@ async def test_compile_query_names_a_non_numeric_plan_error(monkeypatch) -> None
     document = choice_document()
     document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
     document['dimensions'][0]['selection'] = {'kind': 'values', 'values': ['maybe']}
+    calls = 0
 
     async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        nonlocal calls
+        calls += 1
         return FakeStructuredResult(CompilerWireQuery.model_validate(document))
 
     monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
 
-    with pytest.raises(CompileError, match='invalid query plan') as raised:
+    with pytest.raises(CompileError, match='invalid plan') as raised:
         await compile_query(cast(Any, object()), 'compiler-model', 'frustrated users')
     assert 'numeric' not in str(raised.value)
+    assert calls == 2
 
 
 @pytest.mark.asyncio
@@ -93,7 +97,7 @@ async def test_compile_query_wraps_inconsistent_task_criteria(monkeypatch) -> No
 
     monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
 
-    with pytest.raises(CompileError, match='invalid query plan'):
+    with pytest.raises(CompileError, match='invalid plan'):
         await compile_query(cast(Any, object()), 'compiler-model', 'pick a label')
 
 
@@ -351,7 +355,7 @@ async def test_compile_query_reports_impossible_strict_bounds(monkeypatch, query
 
     monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
 
-    with pytest.raises(CompileError, match='Compiler produced an invalid plan'):
+    with pytest.raises(CompileError, match='Compiler produced contradictory numeric bounds'):
         await compile_query(cast(Any, object()), 'compiler-model', query)
 
 

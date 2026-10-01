@@ -888,17 +888,6 @@ def settings_body(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
             f'<span class="config-val">{control}{error_html}</span></div>'
         )
-    for name, label, input_attrs in (
-        ('limit', 'AI trace limit', 'min="1" max="5000" step="1"'),
-        ('parallelism', 'AI parallelism', 'min="1" max="200" step="1"'),
-    ):
-        error = errors.get(name)
-        error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
-        field_rows.append(
-            f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
-            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="number" '
-            f'{input_attrs} value="{esc(setting_value(name))}" required>{error_html}</span></div>'
-        )
     mode = setting_value('ask_ai_mode') or 'immediate'
     mode_options = ''.join(
         f'<option value="{value}"{" selected" if value == mode else ""}>{label}</option>'
@@ -962,7 +951,7 @@ def settings_body(
         '</form>'
     )
     settings_panel = _panel(
-        'AI defaults', 'These values set the starting limits for trace review.', f'{saved_html}{form}'
+        'Models', 'Window, limit and parallelism are set per run on the Trace search page', f'{saved_html}{form}'
     )
 
     def val_html(v: str | list[str]) -> str:

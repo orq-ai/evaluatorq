@@ -263,7 +263,7 @@
     document.querySelectorAll('.finder-facets.open').forEach(function (menu) {
       if (menu === except) return;
       menu.classList.remove('open');
-      const trigger = menu.parentElement.querySelector('.add, .model-pick-btn');
+      const trigger = menu.parentElement.querySelector('[data-explorer-filters], .add, .model-pick-btn');
       if (trigger) trigger.setAttribute('aria-expanded', 'false');
     });
   }
@@ -320,8 +320,8 @@
     const query = search.value.trim().toLocaleLowerCase();
     let visible = 0;
     sub.querySelectorAll('.facet-values label, .facet-values .model-option').forEach(function (option) {
-      const label = option.querySelector('input + span') || option;
-      const matches = label.textContent.toLocaleLowerCase().includes(query);
+      const label = option.querySelector('input + span');
+      const matches = (label ? label.textContent : option.textContent).toLocaleLowerCase().includes(query);
       option.hidden = !matches;
       if (matches) visible += 1;
     });

@@ -16,6 +16,7 @@ from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import apply_ui
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
+from evaluatorq.dashboard.trace_finder.search_views import search_page_html
 from evaluatorq.dashboard.orq_scope import OrqProject, OrqScope
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
@@ -77,12 +78,15 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     assert saved['ask_ai_mode'] == 'review'
 
 
-def test_settings_expose_validated_ai_limits(client: TestClient) -> None:
-    html = client.get('/settings').text
+def test_ai_limits_are_per_run_trace_search_controls(client: TestClient) -> None:
+    settings_html = client.get('/settings').text
+    search_html = search_page_html(RunSnapshot(), DashboardSettings.model_validate({}), api_available=False)
 
-    assert 'id="limit" name="limit" type="number" min="1" max="5000"' in html
-    assert 'id="parallelism" name="parallelism" type="number" min="1" max="200"' in html
-    assert '<option value="immediate" selected>Just proceed</option>' in html
+    assert 'name="limit"' not in settings_html
+    assert 'name="parallelism"' not in settings_html
+    assert 'name="limit"' in search_html
+    assert 'name="parallelism"' in search_html
+    assert '<option value="immediate" selected>Just proceed</option>' in settings_html
 
 
 @pytest.mark.asyncio
@@ -163,7 +167,7 @@ def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None
     )
 
 
-def test_invalid_numeric_field_is_rejected(client: TestClient, settings_file: Path) -> None:
+def test_invalid_numeric_field_is_rejected_without_saving(client: TestClient, settings_file: Path) -> None:
     response = client.post(
         '/settings',
         data=csrf_data({
@@ -175,7 +179,6 @@ def test_invalid_numeric_field_is_rejected(client: TestClient, settings_file: Pa
     )
 
     assert response.status_code == 422
-    assert 'less than or equal to 5000' in response.text
     assert not settings_file.exists()
 
 
@@ -479,17 +482,15 @@ def test_dashboard_shutdown_closes_finder_stores(tmp_path: Path, monkeypatch: py
 
 
 def test_settings_page_shows_saved_values(client: TestClient, settings_file: Path) -> None:
-    save_settings(
-        DashboardSettings(
-            compiler_model='saved/compiler',
-            classifier_model='saved/classifier',
-            apply_model='saved/apply',
-            window_days=11,
-            limit=123,
-            parallelism=19,
-        ),
-        settings_file,
+    settings = DashboardSettings(
+        compiler_model='saved/compiler',
+        classifier_model='saved/classifier',
+        apply_model='saved/apply',
+        window_days=11,
+        limit=123,
+        parallelism=19,
     )
+    save_settings(settings, settings_file)
 
     response = client.get('/settings')
 
@@ -498,10 +499,12 @@ def test_settings_page_shows_saved_values(client: TestClient, settings_file: Pat
     assert 'value="saved/classifier"' in response.text
     assert 'value="saved/apply"' in response.text
     assert 'name="window_days"' not in response.text
-    assert 'name="limit"' in response.text
-    assert 'value="123"' in response.text
-    assert 'name="parallelism"' in response.text
-    assert 'value="19"' in response.text
+    assert 'name="limit"' not in response.text
+    assert 'name="parallelism"' not in response.text
+
+    search_html = search_page_html(RunSnapshot(), settings, api_available=False)
+    assert 'name="limit" type="number" min="1" max="5000" value="123"' in search_html
+    assert 'name="parallelism" type="number" min="1" max="200" value="19"' in search_html
 
 
 def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> None:

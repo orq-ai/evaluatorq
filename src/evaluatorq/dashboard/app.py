@@ -263,12 +263,8 @@ async def _settings(req: Request) -> NotStr:
                 }
             )
     scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
-    config = await asyncio.to_thread(
-        _settings_config,
-        roots,
-        next((p for p in profiles if p.name == settings.orq_profile), None),
-        settings=settings,
-    )
+    profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+    config = await asyncio.to_thread(_settings_config, roots, profile, settings=settings)
     body = settings_body(
         config,
         settings,
