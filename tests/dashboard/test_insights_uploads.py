@@ -1,0 +1,221 @@
+"""Validated upload handling for Insights source files."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+from starlette.testclient import TestClient
+
+from evaluatorq.dashboard.app import build_app
+from evaluatorq.trace_finder.models import Snapshot
+from tests.insights.test_population import _run_export, make_trace
+
+
+def _token(client: TestClient) -> str:
+    page = client.get('/insights/new')
+    match = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert match is not None
+    return match.group(1)
+
+
+def test_upload_validates_and_stores_finder_export_under_runs_dir(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+
+    response = client.post(
+        '/insights/uploads',
+        data={'csrf': _token(client), 'kind': 'finder'},
+        files={'file': ('export.json', _run_export(['trace-1']).model_dump_json(), 'application/json')},
+    )
+
+    assert response.status_code == 201
+    stored = Path(response.json()['path'])
+    assert stored.parent == tmp_path / 'insights-runs' / '.uploads'
+    assert stored.exists()
+    if os.name == 'posix':
+        assert stored.stat().st_mode & 0o777 == 0o600
+    assert json.loads(stored.read_text())['schema_version'] == 1
+
+
+def test_upload_rejects_bad_csrf_type_and_invalid_content(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    token = _token(client)
+
+    assert (
+        client.post('/insights/uploads', data={'kind': 'snapshot'}, files={'file': ('x.json', '{}')}).status_code == 403
+    )
+    assert (
+        client.post(
+            '/insights/uploads', data={'csrf': token, 'kind': 'other'}, files={'file': ('x.json', '{}')}
+        ).status_code
+        == 422
+    )
+    invalid = client.post(
+        '/insights/uploads', data={'csrf': token, 'kind': 'finder'}, files={'file': ('x.json', '{"traces": []}')}
+    )
+    assert invalid.status_code == 422
+    wrong_kind = client.post(
+        '/insights/uploads',
+        data={'csrf': token, 'kind': 'snapshot'},
+        files={'file': ('export.json', _run_export(['trace-1']).model_dump_json(), 'application/json')},
+    )
+    assert wrong_kind.status_code == 422
+    assert not list((tmp_path / 'insights-runs' / '.uploads').glob('*'))
+
+
+def test_upload_rejects_oversized_files_before_storing(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_uploads import MAX_INSIGHTS_UPLOAD_BYTES
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    token = _token(client)
+    body = b' ' * (MAX_INSIGHTS_UPLOAD_BYTES + 1)
+
+    response = client.post(
+        '/insights/uploads', data={'csrf': token, 'kind': 'snapshot'}, files={'file': ('large.json', body)}
+    )
+
+    assert response.status_code == 413
+    assert not list((tmp_path / 'insights-runs' / '.uploads').glob('*'))
+
+
+def test_finder_upload_rejects_10_mib_plus_one_while_snapshot_keeps_100_mib_limit(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from evaluatorq.dashboard.insights_uploads import MAX_FINDER_EXPORT_BYTES, store_upload
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    token = _token(client)
+    export = _run_export(['trace-1']).model_dump_json().encode()
+    export += b' ' * (MAX_FINDER_EXPORT_BYTES + 1 - len(export))
+
+    response = client.post(
+        '/insights/uploads', data={'csrf': token, 'kind': 'finder'}, files={'file': ('large.json', export)}
+    )
+
+    assert response.status_code == 413
+    assert '10 MiB size limit' in response.json()['error']
+    assert not list((tmp_path / 'insights-runs' / '.uploads').glob('*'))
+
+    snapshot = Snapshot(traces=(make_trace('trace-1'),)).model_dump_json().encode()
+    snapshot += b' ' * (MAX_FINDER_EXPORT_BYTES + 1 - len(snapshot))
+    stored = store_upload(tmp_path, snapshot, 'snapshot')
+    assert stored.read_bytes() == snapshot
+
+
+@pytest.mark.anyio
+async def test_request_body_limit_stops_consuming_oversized_stream() -> None:
+    import asyncio
+
+    from evaluatorq.dashboard.insights_uploads import (
+        MAX_INSIGHTS_UPLOAD_BYTES,
+        UploadRequestTooLargeError,
+        limit_request_body,
+    )
+
+    chunks = [b'x' * (MAX_INSIGHTS_UPLOAD_BYTES // 2)] * 3
+    calls = 0
+
+    async def receive():
+        nonlocal calls
+        await asyncio.sleep(0)
+        calls += 1
+        if calls <= len(chunks):
+            return {'type': 'http.request', 'body': chunks[calls - 1], 'more_body': True}
+        return {'type': 'http.request', 'body': b'', 'more_body': False}
+
+    class RequestStub:
+        _receive = staticmethod(receive)
+
+    request = RequestStub()
+    limit_request_body(request)
+
+    async def consume_until_rejected() -> None:
+        wrapped_receive = getattr(request, '_receive')
+        await wrapped_receive()
+        await wrapped_receive()
+        await wrapped_receive()
+
+    with pytest.raises(UploadRequestTooLargeError):
+        await consume_until_rejected()
+    assert calls == 3
+
+
+def test_expired_abandoned_uploads_are_removed_safely(tmp_path: Path) -> None:
+    import os
+
+    from evaluatorq.dashboard.insights_uploads import (
+        ABANDONED_UPLOAD_TTL_SECONDS,
+        cleanup_expired_uploads,
+        store_upload,
+        uploads_dir,
+    )
+
+    runs_dir = tmp_path / 'runs'
+    live = store_upload(runs_dir, Snapshot(traces=(make_trace('live'),)).model_dump_json().encode(), 'snapshot')
+    stale = store_upload(runs_dir, Snapshot(traces=(make_trace('stale'),)).model_dump_json().encode(), 'snapshot')
+    os.utime(stale, (100, 100))
+    unrelated = uploads_dir(runs_dir) / 'keep-me.txt'
+    unrelated.write_text('keep')
+
+    assert cleanup_expired_uploads(runs_dir, now=100 + ABANDONED_UPLOAD_TTL_SECONDS + 1) == 1
+    assert live.exists()
+    assert not stale.exists()
+    assert unrelated.exists()
+
+
+def test_uploaded_snapshot_path_is_revalidated_if_removed_before_worker_opens_it(tmp_path: Path) -> None:
+    from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec
+    from evaluatorq.dashboard.insights_uploads import store_upload
+
+    path = store_upload(tmp_path, Snapshot(traces=(make_trace('one'),)).model_dump_json().encode(), 'snapshot')
+    InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
+    path.unlink()
+
+    with pytest.raises(Exception, match='Could not read a valid local trace snapshot'):
+        InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
+
+
+def test_worker_removes_route_upload_after_success_and_failure(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_launch import InsightsLaunchPayload, InsightsLaunchSpec
+    from evaluatorq.dashboard.insights_uploads import store_upload
+    from evaluatorq.dashboard.insights_worker import main
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    runs_dir = tmp_path / 'runs'
+    source = store_upload(runs_dir, Snapshot(traces=(make_trace('one'),)).model_dump_json().encode(), 'snapshot')
+    spec = InsightsLaunchSpec(source='snapshot', snapshot_path=str(source))
+    payload = InsightsLaunchPayload(run_id='run-1', run_name='test', runs_dir=runs_dir, spec=spec)
+    monkeypatch.delenv('EVALUATORQ_INSIGHTS_MANIFEST', raising=False)
+    with (
+        patch('evaluatorq.dashboard.insights_worker.read_launch_payload', return_value=payload),
+        patch('evaluatorq.dashboard.insights_worker.insights', side_effect=_completed_run),
+    ):
+        assert main() == 0
+    assert not source.exists()
+
+    source = store_upload(runs_dir, Snapshot(traces=(make_trace('two'),)).model_dump_json().encode(), 'snapshot')
+    spec = InsightsLaunchSpec(source='snapshot', snapshot_path=str(source))
+    payload = InsightsLaunchPayload(run_id='run-2', run_name='test', runs_dir=runs_dir, spec=spec)
+    with (
+        patch('evaluatorq.dashboard.insights_worker.read_launch_payload', return_value=payload),
+        patch('evaluatorq.dashboard.insights_worker.insights', side_effect=_failed_run),
+    ):
+        assert main() == 1
+    assert not source.exists()
+
+
+async def _completed_run(*args, **kwargs):
+    return type('Run', (), {'status': 'completed'})()
+
+
+async def _failed_run(*args, **kwargs):
+    raise RuntimeError('pipeline failed')

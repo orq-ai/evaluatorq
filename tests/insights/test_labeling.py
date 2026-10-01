@@ -447,6 +447,52 @@ async def test_coding_agent_gets_coding_labels_in_conversation_and_tool_calls(mo
 
 
 @pytest.mark.asyncio
+async def test_selected_coding_labels_keep_gate_and_only_ask_selected_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+    from evaluatorq.insights.presets import TASK_TYPE, UNFIXED_ERROR
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+
+    [outcome] = await label_traces(
+        [make_trace('t')],
+        labels=[],
+        compiled=None,
+        client=_client(),
+        model='jev',
+        coding=True,
+        coding_labels=[TASK_TYPE, UNFIXED_ERROR],
+    )
+
+    assert [set(request.questions) for request in calls] == [{'coding_agent'}, {'task_type'}, {'unfixed_error'}]
+    assert set(outcome.answers) == {'coding_agent', 'task_type', 'unfixed_error'}
+
+
+@pytest.mark.asyncio
+async def test_conversation_only_coding_subset_skips_empty_tool_classify(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+    from evaluatorq.insights.presets import TASK_TYPE
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+
+    [outcome] = await label_traces(
+        [make_trace('t')],
+        labels=[],
+        compiled=None,
+        client=_client(),
+        model='jev',
+        coding=True,
+        coding_labels=[TASK_TYPE],
+    )
+
+    assert [set(request.questions) for request in calls] == [{'coding_agent'}, {'task_type'}]
+    assert set(outcome.answers) == {'coding_agent', 'task_type'}
+
+
+@pytest.mark.asyncio
 async def test_non_coding_agent_is_not_asked_coding_labels(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 

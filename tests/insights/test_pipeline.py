@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,7 @@ from evaluatorq.insights.models import (
     InsightsPopulation,
     InsightsRun,
     LabelAnswer,
+    LabelSpec,
     TraceInsight,
     TraceSummary,
 )
@@ -124,11 +127,17 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
         return DimensionResult(name=name, source_field='request', clusters=clusters)
 
     monkeypatch.setattr(pipeline, '_build_dimension', dimension)
-    run = await pipeline.insights(_population(), dimensions=('intent',), labels=(), runs_dir=tmp_path, run_name='happy')
+    run = await pipeline.insights(
+        _population(), dimensions=('intent',), labels=(), runs_dir=tmp_path, run_name='happy', _source_name='traces.json'
+    )
+    assert run.population['source_name'] == 'traces.json'
     assert run.status == 'completed'
     assert len([c for c in run.dimensions['intent'].clusters if c.level == 'base']) == 3
     files = list(tmp_path.glob('insights_*.json'))
     assert len(files) == 1
+    from evaluatorq import __version__
+
+    assert json.loads(files[0].read_text())['evaluatorq_version'] == __version__
     from evaluatorq.common.run_manifest import list_manifests
 
     manifest = list_manifests(tmp_path)[0]
@@ -778,6 +787,37 @@ async def test_all_false_query_matches_finish_as_empty_without_summary_or_dimens
     from evaluatorq.common.run_manifest import list_manifests
 
     assert list_manifests(tmp_path)[0].status.value == 'completed'
+
+
+@pytest.mark.asyncio
+async def test_selected_coding_labels_are_sent_to_labeler_and_persisted(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(2)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    received: dict[str, object] = {}
+
+    async def label(items, **kwargs):
+        received.update(kwargs)
+        return [SimpleNamespace(trace=item, answers={}, matched=None, error=None) for item in items]
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+
+    async def dimension(name, *args, **kwargs):
+        return _dimension_result(name)
+
+    monkeypatch.setattr(pipeline, '_build_dimension', dimension)
+    run = await pipeline.insights(
+        _population(), dimensions=('intent',), coding_labels=('task_type', 'verified'), runs_dir=tmp_path
+    )
+
+    selected = cast(list[LabelSpec], received['coding_labels'])
+    assert [spec.name for spec in selected] == ['task_type', 'verified']
+    assert received['coding'] is True
+    assert [spec.name for spec in run.config.coding_labels] == ['task_type', 'verified']
+    assert run.config.coding_analysis is False
 
 
 @pytest.mark.asyncio

@@ -27,18 +27,20 @@ from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
 from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
+from evaluatorq.dashboard.insights_uploads import MAX_FINDER_EXPORT_BYTES, is_uploaded_source, read_uploaded_source
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.insights.progress import stage_plan
+from evaluatorq.insights.store import get_insights_runs_dir
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import FacetSelection, Snapshot
 
 Source = Literal['recent', 'query', 'finder', 'snapshot']
-Preset = Literal['sentiment', 'customer_satisfaction']
+Preset = str
+_CODING_PRESETS = {spec.name: spec for spec in CODING_LABELS[1:]}
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'
 _MANIFEST_ENV = 'EVALUATORQ_INSIGHTS_MANIFEST'
 _SNAPSHOT_ENV = 'EVALUATORQ_INSIGHTS_FINDER_SNAPSHOT'
-MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
 FINDER_EXPORT_REFERENCE_DIR = '.finder-export-leases'
 INSIGHTS_WORKER_STATE_DIR = '.insights-workers'
 INSIGHTS_WORKER_STALE_SECONDS = 90
@@ -865,11 +867,15 @@ class InsightsLaunchSpec(BaseModel):
     query: str = Field(default='', max_length=500)
     finder_export: str = Field(default='', max_length=4096)
     snapshot_path: str = Field(default='', max_length=4096)
+    # Original name of an uploaded source file; the stored upload has a random name.
+    source_name: str = Field(default='', max_length=255)
     window_days: int = Field(default=7, ge=1, le=90)
     limit: int = Field(default=100, ge=1, le=5000)
     facets: FacetSelection = FacetSelection()
     parallelism: int = Field(default=20, ge=1, le=200)
-    labels: list[Preset] = Field(default_factory=list)
+    labels: list[Preset] = Field(default_factory=list, max_length=len(LABEL_PRESETS))
+    custom_labels: list[LabelSpec] = Field(default_factory=list, max_length=10)
+    coding_labels: list[str] = Field(default_factory=list, max_length=len(_CODING_PRESETS))
     dimensions: list[DimensionName] = Field(default_factory=lambda: ['intent'])
     _finder_export_snapshot: str | None = PrivateAttr(default=None)
 
@@ -888,14 +894,18 @@ class InsightsLaunchSpec(BaseModel):
             raise ValueError('Enter the path to a local trace snapshot.')
         path = Path(self.snapshot_path).expanduser()
         try:
-            snapshot = Snapshot.model_validate_json(path.read_text(encoding='utf-8'))
+            if is_uploaded_source(get_insights_runs_dir(), path):
+                raw_snapshot = read_uploaded_source(get_insights_runs_dir(), path, 'snapshot')
+                snapshot = Snapshot.model_validate_json(raw_snapshot)
+            else:
+                snapshot = Snapshot.model_validate_json(path.read_text(encoding='utf-8'))
         except (OSError, ValueError) as exc:
             raise ValueError(f'Could not read a valid local trace snapshot: {exc}') from exc
         if not snapshot.traces:
             raise ValueError('The local trace snapshot contains no traces.')
 
     @model_validator(mode='after')
-    def validate_source(self) -> Self:
+    def validate_source(self) -> Self:  # noqa: C901
         if self.source == 'query' and not self.query.strip():
             raise ValueError('Enter a question to find matching traces.')
         if self.source == 'finder':
@@ -909,10 +919,13 @@ class InsightsLaunchSpec(BaseModel):
                 path = (requested if requested.is_absolute() else root / requested).resolve()
             except (OSError, RuntimeError) as exc:
                 raise ValueError(f'Could not resolve Finder export path: {exc}') from exc
-            if path.parent != root:
-                raise ValueError(f'Finder exports must be in {root}.')
+            if path.parent != root and not is_uploaded_source(get_insights_runs_dir(), path):
+                raise ValueError(f'Finder exports must be in {root} or use a validated Insights upload.')
             try:
-                raw = _read_approved_finder_export(root, path)
+                if is_uploaded_source(get_insights_runs_dir(), path):
+                    raw = read_uploaded_source(get_insights_runs_dir(), path, 'finder')
+                else:
+                    raw = _read_approved_finder_export(root, path)
                 if len(raw) > MAX_FINDER_EXPORT_BYTES:
                     raise ValueError(
                         f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
@@ -923,10 +936,35 @@ class InsightsLaunchSpec(BaseModel):
                 raise ValueError(f'Could not read a valid Finder export: {exc}') from exc
             self.finder_export = str(path)
         self._validate_snapshot_source()
-        if not self.labels and not self.dimensions and not self.coding_analysis:
-            raise ValueError('Select at least one label or dimension.')
+        if any(name not in LABEL_PRESETS for name in self.labels):
+            raise ValueError('Select only available Insights label presets.')
+        if any(name not in _CODING_PRESETS for name in self.coding_labels):
+            raise ValueError('Select only available coding labels.')
         if len(set(self.labels)) != len(self.labels) or len(set(self.dimensions)) != len(self.dimensions):
             raise ValueError('Select each label and dimension once.')
+        if len(set(self.coding_labels)) != len(self.coding_labels):
+            raise ValueError('Select each coding label once.')
+        custom_names = [spec.name for spec in self.custom_labels]
+        for spec in self.custom_labels:
+            if not 1 <= len(spec.instructions) <= 2000:
+                raise ValueError('Custom label instructions must contain between 1 and 2000 characters.')
+            spec.to_question('')
+        if len(set(custom_names)) != len(custom_names):
+            raise ValueError('Custom label names must be unique.')
+        all_names = [*self.labels, *custom_names]
+        if len(set(all_names)) != len(all_names):
+            raise ValueError('Preset and custom label names must be unique.')
+        reserved = {spec.name for spec in CODING_LABELS}
+        if reserved.intersection(all_names):
+            raise ValueError('Custom labels cannot use names reserved for coding analysis.')
+        if (
+            not self.labels
+            and not self.custom_labels
+            and not self.dimensions
+            and not self.coding_analysis
+            and not self.coding_labels
+        ):
+            raise ValueError('Select at least one label or dimension.')
         return self
 
     def population(self) -> InsightsPopulation:
@@ -942,7 +980,16 @@ class InsightsLaunchSpec(BaseModel):
         )
 
     def label_specs(self) -> list[LabelSpec]:
-        return [LABEL_PRESETS[name] for name in self.labels]
+        return [*(LABEL_PRESETS[name] for name in self.labels), *self.custom_labels]
+
+    @property
+    def coding_enabled(self) -> bool:
+        return self.coding_analysis or bool(self.coding_labels)
+
+    def coding_label_specs(self) -> list[LabelSpec]:
+        if self.coding_analysis:
+            return list(CODING_LABELS[1:])
+        return [_CODING_PRESETS[name] for name in self.coding_labels]
 
     def dimension_names(self) -> list[DimensionName]:
         return list(self.dimensions)
@@ -983,7 +1030,9 @@ def launch_insights(
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
     population, finder_snapshot = _population_for_launch_plan(spec)
     plan = stage_plan(
-        population, [*spec.label_specs(), *(CODING_LABELS if spec.coding_analysis else ())], spec.dimension_names()
+        population,
+        [*spec.label_specs(), *(CODING_LABELS[:1] if spec.coding_enabled else ()), *spec.coding_label_specs()],
+        spec.dimension_names(),
     )
     writer = start_manifest(
         run_id=run_id,

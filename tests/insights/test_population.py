@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -158,6 +160,7 @@ async def test_local_snapshot_uses_messages_without_orq(monkeypatch: pytest.Monk
     assert [trace.trace_id for trace in resolved.traces] == ['local-1']
     assert resolved.traces[0].messages[0]['content'] == 'hello'
     assert resolved.echo['mode'] == 'snapshot'
+    assert resolved.echo['snapshot_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert resolved.echo['n_projection_truncated'] == 0
     assert resolved.echo['n_source_messages'] == 1
     assert resolved.echo['n_omitted_messages'] == 0

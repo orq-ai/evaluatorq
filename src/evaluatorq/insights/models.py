@@ -270,12 +270,18 @@ class InsightsConfig(BaseModel):
     priority_dimension: DimensionName = 'intent'
     cache: bool = True
     coding_analysis: bool = False
+    coding_labels: list[LabelSpec] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _selections_are_unique(self) -> Self:
         label_names = [label.name for label in self.labels]
         if len(label_names) != len(set(label_names)):
             raise ValueError('labels must have unique names')
+        coding_label_names = [label.name for label in self.coding_labels]
+        if len(coding_label_names) != len(set(coding_label_names)):
+            raise ValueError('coding_labels must have unique names')
+        if set(label_names).intersection(coding_label_names):
+            raise ValueError('labels and coding_labels must have unique names')
         if len(self.dimensions) != len(set(self.dimensions)):
             raise ValueError('dimensions must not contain duplicates')
         return self
@@ -285,6 +291,8 @@ class InsightsRun(BaseModel):
     """The full, persisted result of one insights run — written as `insights_<timestamp>_<slug>.json`."""
 
     schema_version: Literal[1] = 1
+    # None on runs saved before the stamp existed.
+    evaluatorq_version: str | None = None
     run_id: str
     run_name: str
     created_at: datetime
@@ -304,10 +312,18 @@ class InsightsRun(BaseModel):
     @model_validator(mode='after')
     def _label_values_match_specs(self) -> Self:
         kinds = {spec.name: spec.kind for spec in self.config.labels}
-        if self.config.coding_analysis:
+        if self.config.coding_analysis or self.config.coding_labels:
             from evaluatorq.insights.presets import CODING_LABELS
 
-            kinds.update({spec.name: spec.kind for spec in CODING_LABELS})
+            coding_specs = (
+                CODING_LABELS
+                if self.config.coding_analysis
+                else (
+                    *CODING_LABELS[:1],
+                    *self.config.coding_labels,
+                )
+            )
+            kinds.update({spec.name: spec.kind for spec in coding_specs})
         for trace in self.traces:
             for name, answer in trace.labels.items():
                 if name not in kinds:
