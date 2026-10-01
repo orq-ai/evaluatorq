@@ -265,9 +265,11 @@ def test_compare_empty_runs_render_na_kpis_without_failure(tmp_path: Path):
 
     html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
 
-    assert 'Goal-achieved · n/a vs A' in html
-    assert 'Mean score · n/a vs A' in html
-    assert 'Mean turns · n/a vs A' in html
+    kpi_text = ' '.join(re.findall(r'<div class="kpi-(?:value|label)">([^<]*)</div>', html))
+    assert 'Goal-achieved · n/a vs A' in kpi_text
+    assert 'Mean score · n/a vs A' in kpi_text
+    assert 'Mean turns · n/a vs A' in kpi_text
+    assert '-100%' not in kpi_text
     assert 'kpi-card kpi-card--fail' not in html
     assert 'Outcomes' in html
     assert 'No outcome data' in html
