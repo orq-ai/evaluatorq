@@ -288,6 +288,7 @@ async def test_exec_process_creation_error_removes_container(docker, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_idle_timeout_removes_container(docker, monkeypatch) -> None:
     binary, _, calls = docker
     monkeypatch.setenv('FAKE_EXEC_SLEEP', '30')
@@ -303,6 +304,7 @@ async def test_idle_timeout_removes_container(docker, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_cancellation_removes_container_before_propagating(docker, monkeypatch) -> None:
     binary, log, calls = docker
     monkeypatch.setenv('FAKE_EXEC_SLEEP', '30')
@@ -323,6 +325,7 @@ async def test_cancellation_removes_container_before_propagating(docker, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_cancel_during_run_still_cleans_up(docker, monkeypatch) -> None:
     binary, log, calls = docker
     target = _target(binary)
@@ -344,6 +347,7 @@ async def test_cancel_during_run_still_cleans_up(docker, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_cancel_during_restart_removal_waits_until_old_container_is_removed(docker, monkeypatch, tmp_path) -> None:
     binary, log, calls = docker
     target = _target(binary)

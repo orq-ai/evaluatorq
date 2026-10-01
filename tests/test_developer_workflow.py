@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
-
+from typing import TypedDict, cast
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class _CollectedItem(TypedDict):
+    nodeid: str
+    markers: list[str]
 
 
 def _table(text: str, name: str) -> str:
@@ -77,6 +86,45 @@ def _assert_ci_typecheck_contract(workflow: str) -> None:
     assert "        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'" in ty_steps[0].splitlines()
 
 
+def _collected_items(tmp_path: Path, *pytest_args: str) -> list[_CollectedItem]:
+    output = tmp_path / f'collection-{len(list(tmp_path.iterdir()))}.json'
+    script = '''
+import json
+from pathlib import Path
+import sys
+
+import pytest
+
+
+class CollectionRecorder:
+    def pytest_collection_finish(self, session):
+        items = [
+            {
+                "nodeid": item.nodeid,
+                "markers": sorted(marker.name for marker in item.iter_markers()),
+            }
+            for item in session.items
+        ]
+        Path(sys.argv[1]).write_text(json.dumps(items))
+
+
+raise SystemExit(pytest.main(sys.argv[2:], plugins=[CollectionRecorder()]))
+'''
+    env = os.environ.copy()
+    env.pop('PYTEST_ADDOPTS', None)
+    subprocess.run(
+        [sys.executable, '-c', script, str(output), '--collect-only', '-q', *pytest_args],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = json.loads(output.read_text())
+    assert isinstance(result, list)
+    return cast('list[_CollectedItem]', result)
+
+
 def test_ty_is_the_only_locked_typechecker() -> None:
     pyproject = (REPO_ROOT / 'pyproject.toml').read_text()
     dev_dependencies = _array(_table(pyproject, 'dependency-groups'), 'dev')
@@ -141,6 +189,21 @@ def test_ci_keeps_full_non_integration_test_commands() -> None:
     assert workflow.count("run: uv run pytest -m 'not integration'") == 2
     assert "run: uv run pytest -m 'not integration'\n" in workflow
     assert "run: uv run pytest -m 'not integration' --cov --cov-report=term\n" in workflow
+
+
+def test_pytest_default_is_quick_and_explicit_non_integration_is_full(tmp_path: Path) -> None:
+    default_items = _collected_items(tmp_path)
+    full_non_integration_items = _collected_items(tmp_path, '-m', 'not integration')
+
+    assert default_items
+    assert all('slow' not in item['markers'] and 'integration' not in item['markers'] for item in default_items)
+    assert all('integration' not in item['markers'] for item in full_non_integration_items)
+
+    slow_non_integration = {
+        item['nodeid'] for item in full_non_integration_items if 'slow' in item['markers']
+    }
+    assert slow_non_integration
+    assert slow_non_integration.isdisjoint(item['nodeid'] for item in default_items)
 
 
 def test_ty_checks_the_supported_project_surface() -> None:

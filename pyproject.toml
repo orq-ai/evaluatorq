@@ -20,9 +20,11 @@ exclude = [ "examples/", ".venv/", "tests/" ]
 testpaths = [ "tests" ]
 python_files = [ "test_*.py", "*_test.py" ]
 norecursedirs = [ ".venv", "dist", "*.egg-info" ]
+addopts = [ "-m", "not integration and not slow" ]
 markers = [
   "integration: marks tests as integration tests (require ORQ_API_KEY in .env)",
-  "allow_network: test may open real outbound connections (exempt from the conftest network guard)"
+  "allow_network: test may open real outbound connections (exempt from the conftest network guard)",
+  "slow: marks tests that require real elapsed time for timeout or scheduler behavior"
 ]
 timeout = 120
 
