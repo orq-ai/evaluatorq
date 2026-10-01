@@ -115,6 +115,9 @@ async def send_results_to_orq(
                 jr.setdefault('error', '')
                 for es in jr.get('evaluatorScores') or []:
                     if 'score' in es:
+                        # Keep a null score explicit: it means the evaluator ran
+                        # but could not establish a value (for example, no basis).
+                        es['score'].setdefault('value', None)
                         es['score'].setdefault('explanation', '')
                         # Evaluator-cost metadata is for local reports only; never
                         # upload the judge's token usage or raw response to the platform.

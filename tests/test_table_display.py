@@ -83,6 +83,23 @@ class TestCalculateEvaluatorAverages:
         display_value, _ = data["averages"]["quality"]["job1"]
         assert display_value == "[string]"
 
+    def test_renders_missing_scores_as_no_basis(self, make_result: Callable[..., DataPointResult]):
+        results = [make_result("job1", [{"evaluator_name": "trajectory-tag", "value": None}])]
+
+        data = calculate_evaluator_averages(results)
+
+        assert data["averages"]["trajectory-tag"]["job1"] == ("[no basis]", "dim")
+
+    @pytest.mark.parametrize("values", [[True, None], [None, True]])
+    def test_excludes_missing_scores_from_pass_rate(
+        self, make_result: Callable[..., DataPointResult], values: list[bool | None]
+    ):
+        results = [make_result("job1", [{"evaluator_name": "trajectory-tag", "value": value}]) for value in values]
+
+        data = calculate_evaluator_averages(results)
+
+        assert data["averages"]["trajectory-tag"]["job1"] == ("100.0%", "green")
+
     def test_renders_evaluation_result_cell_as_structured(self, make_result: Callable[..., DataPointResult]):
         cell = EvaluationResultCell(
             type="bert_score",
