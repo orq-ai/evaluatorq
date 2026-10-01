@@ -31,7 +31,9 @@ function classList() {
   };
 }
 
-function loadDashboard({ elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces' } = {}) {
+function loadDashboard({
+  elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces', dateClass = Date,
+} = {}) {
   const body = emitter();
   const documentEvents = emitter();
   const windowEvents = emitter();
@@ -80,9 +82,80 @@ function loadDashboard({ elements = new Map(), query = () => null, queryAll = ()
   };
   vm.runInNewContext(source, {
     document, window, history, location: { hash: '' },
-    FormData: class {}, Event: class {}, CSS: { escape: value => value },
+    FormData: class {}, Event: class {}, Date: dateClass, CSS: { escape: value => value },
   });
   return { body, document, documentEvents, window, history, entries, scheduled, intervals };
+}
+
+function frozenDate(now) {
+  const NativeDate = Date;
+  return class extends NativeDate {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+  };
+}
+
+function requestBody(form, includedById) {
+  const includedForms = form.hxInclude.split(',').map(selector => includedById.get(selector.trim().slice(1)));
+  assert.ok(includedForms.every(Boolean), 'every hx-include selector should resolve to a form/control group');
+  const fields = [...form.elements, ...includedForms.flatMap(included => included.elements)];
+  const params = new URLSearchParams();
+  for (const field of fields) {
+    if (field.name && !field.disabled) params.append(field.name, field.value);
+  }
+  return params;
+}
+
+function submitExplorerQuery({ mode, seconds = '900', now, start, end }) {
+  const dateClass = frozenDate(now);
+  const input = (name, value, id = '') => ({ name, value, id, disabled: false });
+  const fields = [
+    input('new_from', ''), input('new_to', ''),
+    input('new_from_tz_offset', '0'), input('new_to_tz_offset', '0'),
+  ];
+  const from = input('from', start.slice(0, 10), 'explorer-from');
+  const fromTime = input('from_time', start.slice(11), 'explorer-from-time');
+  const to = input('to', end.slice(0, 10), 'explorer-to');
+  const toTime = input('to_time', end.slice(11), 'explorer-to-time');
+  toTime.setCustomValidity = () => {};
+  toTime.reportValidity = () => {};
+  const rangeMode = input('range_mode', mode);
+  const rangeSeconds = input('range_seconds', seconds);
+  const rangeFromOffset = input('from_tz_offset', '0');
+  const rangeToOffset = input('to_tz_offset', '0');
+  const explorerElements = [from, fromTime, to, toTime, rangeMode, rangeSeconds, rangeFromOffset, rangeToOffset];
+  const controls = { id: 'finder-controls', elements: fields };
+  const explorerForm = { id: 'explorer-load-form', elements: explorerElements };
+  const queryForm = {
+    id: 'finder-query-form',
+    hxInclude: '#finder-controls, #explorer-load-form',
+    elements: [input('query', 'slow traces'), input('scope', 'new'), input('mode', 'immediate')],
+  };
+  const elements = new Map([
+    ['explorer-load-form', explorerForm], ['explorer-from', from], ['explorer-from-time', fromTime],
+    ['explorer-to', to], ['explorer-to-time', toTime],
+  ]);
+  const app = loadDashboard({
+    elements,
+    dateClass,
+    query(selector) {
+      if (selector === '[data-explorer-range-mode]') return rangeMode;
+      if (selector === '[data-explorer-range-seconds]') return rangeSeconds;
+      if (selector === '[name="from_tz_offset"][form="explorer-load-form"]') return rangeFromOffset;
+      if (selector === '[name="to_tz_offset"][form="explorer-load-form"]') return rangeToOffset;
+      return null;
+    },
+    queryAll(selector) { return selector === '#finder-controls [data-new-range]' ? fields : []; },
+  });
+  const evt = {
+    target: queryForm,
+    prevented: false,
+    stopped: false,
+    preventDefault() { this.prevented = true; },
+    stopImmediatePropagation() { this.stopped = true; },
+  };
+  app.documentEvents.emit('submit', evt);
+  const body = requestBody(queryForm, new Map([['finder-controls', controls], ['explorer-load-form', explorerForm]]));
+  return { app, body, evt, fields, queryForm };
 }
 
 function keyEvent(key, options = {}) {
@@ -151,6 +224,60 @@ test('finder placeholders rotate on the interval and stop after dismissal', () =
   query.dataset.finderPlaceholderDismissed = 'true';
   callback();
   assert.equal(query.placeholder, 'Second example');
+});
+
+test('trace Ask AI submits custom bounds and endpoint timezone offsets', () => {
+  const app = submitExplorerQuery({
+    mode: 'exact', now: Date.parse('2026-09-30T12:00:00Z'),
+    start: '2026-09-30T10:15:00', end: '2026-09-30T11:45:30',
+  });
+  assert.equal(app.evt.prevented, false);
+  assert.equal(app.body.get('new_from'), '2026-09-30T10:15:00');
+  assert.equal(app.body.get('new_to'), '2026-09-30T11:45:30');
+  assert.equal(app.body.get('new_from_tz_offset'), String(new Date('2026-09-30T10:15:00').getTimezoneOffset()));
+  assert.equal(app.body.get('new_to_tz_offset'), String(new Date('2026-09-30T11:45:30').getTimezoneOffset()));
+  assert.equal(app.body.get('from'), '2026-09-30');
+  assert.equal(app.body.get('from_time'), '10:15:00');
+  assert.equal(app.body.get('to'), '2026-09-30');
+  assert.equal(app.body.get('to_time'), '11:45:30');
+  assert.equal(app.body.get('range_mode'), 'exact');
+  assert.equal(app.body.get('query'), 'slow traces');
+});
+
+test('trace Ask AI refreshes a relative range at submit time and submits it', () => {
+  const now = Date.parse('2026-09-30T12:00:00Z');
+  const result = submitExplorerQuery({
+    mode: 'relative', seconds: '3600', now,
+    start: '2026-09-30T09:00:00', end: '2026-09-30T10:00:00',
+  });
+  const DateAtSubmit = frozenDate(now);
+  const end = new DateAtSubmit();
+  const start = new DateAtSubmit(now - 3600 * 1000);
+  const localValue = date => {
+    const pad = value => String(value).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+      `T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  };
+  assert.equal(result.evt.prevented, false);
+  assert.equal(result.body.get('new_from'), localValue(start));
+  assert.equal(result.body.get('new_to'), localValue(end));
+  assert.equal(result.body.get('new_from_tz_offset'), String(start.getTimezoneOffset()));
+  assert.equal(result.body.get('new_to_tz_offset'), String(end.getTimezoneOffset()));
+  assert.equal(result.body.get('range_seconds'), '3600');
+});
+
+test('search form submission on /find skips explorer range validation', () => {
+  const queryForm = { id: 'finder-query-form', elements: [] };
+  const app = loadDashboard({ pathname: '/find' });
+  const evt = {
+    target: queryForm,
+    prevented: false,
+    stopImmediatePropagation() { this.stopped = true; },
+    preventDefault() { this.prevented = true; },
+  };
+  app.documentEvents.emit('submit', evt);
+  assert.equal(evt.prevented, false);
+  assert.equal(evt.stopped, undefined);
 });
 
 test('open filter dropdown survives a fragment swap', () => {

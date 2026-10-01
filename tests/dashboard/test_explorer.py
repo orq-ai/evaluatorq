@@ -1703,12 +1703,6 @@ def test_apply_filters_only_refreshes_relative_range_before_htmx_load() -> None:
     assert 'explorerRefreshRelativeRange();' in js
 
 
-def test_ask_ai_refreshes_relative_range_before_copying_bounds() -> None:
-    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
-    submit_handler = js.split("if (!form || form.id !== 'finder-query-form') return;", 1)[1]
-    assert submit_handler.index('explorerRefreshRelativeRange();') < submit_handler.index("const dateTime = (name)")
-
-
 def test_dashboard_js_preserves_open_custom_range_across_results_swaps() -> None:
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     assert 'customRangeWasOpen = !!document.querySelector(\'.xr-exact\')?.open;' in js
