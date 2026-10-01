@@ -1108,11 +1108,10 @@
     const active = document.activeElement;
     let focus = null;
     if (active && root.contains(active)) {
-      focus = active.id ? '#' + CSS.escape(active.id)
-        : active.hasAttribute('data-tv-row') ? '[data-tv-row="' + CSS.escape(active.getAttribute('data-tv-row')) + '"]'
-        : active.hasAttribute('data-xr-sort') ? '[data-xr-sort="' + CSS.escape(active.getAttribute('data-xr-sort')) + '"]'
-        : active.name ? '[name="' + CSS.escape(active.name) + '"][value="' + CSS.escape(active.value) + '"]'
-        : null;
+      if (active.id) focus = '#' + CSS.escape(active.id);
+      else if (active.hasAttribute('data-tv-row')) focus = '[data-tv-row="' + CSS.escape(active.getAttribute('data-tv-row')) + '"]';
+      else if (active.hasAttribute('data-xr-sort')) focus = '[data-xr-sort="' + CSS.escape(active.getAttribute('data-xr-sort')) + '"]';
+      else if (active.name) focus = '[name="' + CSS.escape(active.name) + '"][value="' + CSS.escape(active.value) + '"]';
     }
     const sel = root.querySelector('[data-tv-row].sel');
     // OOB toolbar swaps bypass hx-preserve for controls inside the toolbar. Keep values the user
@@ -1177,17 +1176,19 @@
       evt.detail.shouldSwap = false;
       return;
     }
-    pollKept[target.id] = pollState(target);
+    pollKept[target.id] = pollKept[target.id] || [];
+    pollKept[target.id].push(pollState(target));
   });
   function pollAfterSwap(id) {
-    const state = pollKept[id];
-    delete pollKept[id];
+    const states = pollKept[id];
+    const state = states && states.shift();
+    if (states && !states.length) delete pollKept[id];
     const root = document.getElementById(id);
     if (state && root) pollRestore(root, state);
   }
   document.body.addEventListener('htmx:oobAfterSwap', function (evt) {
     const id = evt.detail.target && evt.detail.target.id;
-    if (id && pollKept[id]) pollAfterSwap(id);
+    if (id && pollKept[id]?.length) pollAfterSwap(id);
     const results = id === 'explorer-results' ? document.getElementById('explorer-results') : null;
     if (results?.hasAttribute('data-initial-load')) {
       const scope = document.getElementById('finder-scope');
@@ -1208,7 +1209,10 @@
   });
   // The run-status slot is the Ask AI poll's main target; keep its open criteria cards across ticks.
   document.body.addEventListener('htmx:beforeSwap', function (evt) {
-    if (evt.detail.target?.id === 'finder-run-status') pollKept['finder-run-status'] = pollState(evt.detail.target);
+    if (evt.detail.target?.id === 'finder-run-status') {
+      pollKept['finder-run-status'] = pollKept['finder-run-status'] || [];
+      pollKept['finder-run-status'].push(pollState(evt.detail.target));
+    }
   });
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     if (evt.detail.target?.id === 'finder-run-status') pollAfterSwap('finder-run-status');
