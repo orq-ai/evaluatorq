@@ -43,16 +43,33 @@ def choice_document() -> dict[str, Any]:
     }
 
 
-def test_noul_yes_no_selection_is_normalized_to_booleans() -> None:
+@pytest.mark.parametrize(('word', 'expected'), [('yes', True), ('true', True), ('True', True), ('no', False), ('false', False)])
+def test_noul_word_selection_is_normalized_to_booleans(word: str, expected: bool) -> None:
     document = choice_document()
     document['task'].update(kind='noul', choice_criteria=None)
-    document['selection'] = {'kind': 'values', 'values': ['yes']}
+    document['selection'] = {'kind': 'values', 'values': [word]}
 
     compiled, _ = CompilerWireQuery.model_validate(document).to_domain()
 
     assert compiled.task.kind == 'noul'
     assert isinstance(compiled.selection, ValueSelection)
-    assert compiled.selection.values == (True,)
+    assert compiled.selection.values == (expected,)
+
+
+@pytest.mark.asyncio
+async def test_compile_query_names_a_non_numeric_plan_error(monkeypatch) -> None:
+    document = choice_document()
+    document['task'].update(kind='noul', choice_criteria=None)
+    document['selection'] = {'kind': 'values', 'values': ['maybe']}
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid query plan') as raised:
+        await compile_query(cast(Any, object()), 'compiler-model', 'frustrated users')
+    assert 'numeric' not in str(raised.value)
 
 
 class FakeStructuredResult:
