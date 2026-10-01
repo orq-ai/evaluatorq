@@ -153,6 +153,7 @@ plugins:
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
           - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
           - formats.md: Convert an agent run between chat messages, OpenResponses items, OTel GenAI traces and ATIF trajectories.
+          - signals.md: Deterministic measurements and tags computed from agent trajectories.
         Setup:
           - installation.md: Installing evaluatorq and its extras.
           - components.md: The four components and which one answers your question.
@@ -223,6 +224,10 @@ plugins:
           # Anchor verified present in the built HTML.
           - "../simulation/#evaluatorq.simulation.LLMCallConfig"
           - "../openresponses/#evaluatorq.openresponses.ResponseResourceDict"
+          # The signals page annotates its trajectory input with the public
+          # formats type. Htmlproofer cannot map this generated page URL back
+          # to the virtual formats source page; the anchor exists in formats.
+          - "../formats/#evaluatorq.formats.AtifTrajectory"
 
 markdown_extensions:
   - tables
@@ -279,6 +284,7 @@ nav:
       - Dashboard: dashboard.md
       - Trace Finder: trace-finder.md
       - Formats: formats.md
+      - Signals: signals.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Vulnerabilities & Frameworks: guides/vulnerabilities-and-frameworks.md

@@ -1,4 +1,4 @@
-"""Deterministic ADR-25 trace signals, computed on `evaluatorq.formats.AtifTrajectory`.
+"""Deterministic ADR-25 trace signals, computed on an ATIF trajectory.
 
 ```python
 from evaluatorq.signals import compute_signals
