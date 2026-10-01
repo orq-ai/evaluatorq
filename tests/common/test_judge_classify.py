@@ -219,7 +219,7 @@ async def test_run_classify_disables_an_injected_clients_sdk_retries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_classify_reports_requested_answer_keys_that_are_missing() -> None:
+async def test_run_classify_preserves_partial_answers_and_usage() -> None:
     client = _client(
         {
             'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
@@ -237,10 +237,11 @@ async def test_run_classify_reports_requested_answer_keys_that_are_missing() -> 
 
     outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
-    assert outcome.error_kind is JudgeError.PARSE
-    assert outcome.response is None
-    assert outcome.error_message is not None
-    assert 'risk' in outcome.error_message
+    assert outcome.error_kind is None
+    assert outcome.response is not None
+    assert set(outcome.response.answers) == {'tone'}
+    assert outcome.token_usage is not None
+    assert outcome.token_usage.input_tokens == 120
 
 
 @pytest.mark.asyncio
@@ -871,6 +872,10 @@ async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question
     )
 
     assert len(calls) == 2
+    assert all('Judge the supplied state' in call['prompt_template'] for call in calls)
+    prompt_contexts = [json.loads(call['replacements']['classify_question']) for call in calls]
+    assert {context['instructions'] for context in prompt_contexts} == {'tone?', 'risk?'}
+    assert all(context['state'] == 'reply' for context in prompt_contexts)
     client.post.assert_not_called()
     assert outcomes['tone'].payload is not None
     assert outcomes['tone'].payload.value == 'answered-tone?'
@@ -897,3 +902,32 @@ async def test_run_classify_judges_maps_an_api_error_to_every_question_key() -> 
         assert outcome.error_kind is JudgeError.TIMEOUT
         assert outcome.endpoint == 'classify'
         assert outcome.payload is None
+    assert outcomes['tone'] is not outcomes['risk']
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_error() -> None:
+    client = _client(
+        {
+            'answers': {'tone': {'type': 'noul', 'noul': 0.9}},
+            'usage': _usage(),
+            'model': 'jev-latest',
+        }
+    )
+    questions = {
+        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='reply', questions=questions
+    )
+
+    assert outcomes['tone'].error_kind is None
+    missing = outcomes['risk']
+    assert missing.error_kind is JudgeError.PARSE
+    assert missing.endpoint == 'classify'
+    assert missing.token_usage is not None
+    assert missing.token_usage.input_tokens == 120
+    assert missing.raw_content is not None
+    assert 'tone' in missing.raw_content
