@@ -131,6 +131,8 @@ The groups separate measurements by the kind of trajectory behavior they describ
 
 ### C — Autonomy
 
+Autonomous step counts include delegated subagent work between root user messages. `max_autonomous_duration_ms` uses root-agent timestamps, so a child step's later timestamp does not extend the root segment.
+
 | Signal | Measures | Additional input needed |
 |---|---|---|
 | `autonomous_segment_count` | Runs of agent work between user messages. | User and agent steps |
