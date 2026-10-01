@@ -265,8 +265,9 @@ def test_compare_empty_runs_render_na_kpis_without_failure(tmp_path: Path):
 
     html = TestClient(build_app([tmp_path / 'runs', sim])).get(f'/compare/sim?a={rid_a}&b={rid_b}').text
 
-    assert html.count('n/a') >= 2
-    assert re.search(r'<span class="cmp-delta cmp-down">[^<]*-100%', html) is None
+    assert 'Goal-achieved · n/a vs A' in html
+    assert 'Mean score · n/a vs A' in html
+    assert 'Mean turns · n/a vs A' in html
     assert 'kpi-card kpi-card--fail' not in html
     assert 'Outcomes' in html
     assert 'No outcome data' in html

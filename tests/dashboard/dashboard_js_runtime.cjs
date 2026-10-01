@@ -34,20 +34,48 @@ function classList() {
 function loadDashboard({
   elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces', dateClass = Date,
 } = {}) {
-  const body = emitter();
+  const body = Object.assign(emitter(), { appendChild() {} });
   const documentEvents = emitter();
   const windowEvents = emitter();
   const scheduled = new Map();
   const intervals = new Map();
+  let shortcutGuide = null;
   let nextTimer = 1;
   const document = {
     body,
     addEventListener: documentEvents.addEventListener,
     getElementById(id) { return elements.get(id) || null; },
-    querySelector: query,
+    querySelector(selector) {
+      if (selector === '#finder-shortcut-guide' && shortcutGuide) return shortcutGuide;
+      return query(selector);
+    },
     querySelectorAll: queryAll,
-    createElement() {
-      return { style: {}, dataset: {}, append() {}, replaceChildren() {} };
+    createElement(tagName) {
+      const listeners = new Map();
+      const closeButton = {
+        focus() { this.focused = true; },
+        addEventListener(name, callback) {
+          if (!listeners.has(`close:${name}`)) listeners.set(`close:${name}`, []);
+          listeners.get(`close:${name}`).push(callback);
+        },
+      };
+      const element = {
+        tagName: tagName.toUpperCase(), style: {}, dataset: {}, open: false,
+        append() {}, replaceChildren() {},
+        setAttribute() {},
+        addEventListener(name, callback) {
+          if (!listeners.has(name)) listeners.set(name, []);
+          listeners.get(name).push(callback);
+        },
+        querySelector(selector) {
+          return selector === '[data-shortcut-guide-close]' ? closeButton : null;
+        },
+        showModal() { this.open = true; },
+        close() { this.open = false; },
+        focus() { this.focused = true; },
+      };
+      if (tagName === 'dialog') shortcutGuide = element;
+      return element;
     },
     activeElement: null,
   };
@@ -201,7 +229,16 @@ test('trace shortcuts respect editable targets, modifiers, modal state, and rout
   app.document.activeElement = editable;
   assert.equal(press('/').defaultPrevented, false);
   app.document.activeElement = null;
+  assert.equal(press('/', { target: editable }).defaultPrevented, false);
   assert.equal(press('/', { ctrlKey: true }).defaultPrevented, false);
+
+  const guideEvent = press('?');
+  assert.equal(guideEvent.defaultPrevented, true);
+  const guide = app.document.querySelector('#finder-shortcut-guide');
+  assert.equal(guide.open, true);
+  assert.equal(press('/').defaultPrevented, false);
+  assert.equal(press('Escape').defaultPrevented, true);
+  assert.equal(guide.open, false);
 
   modalOpen = true;
   assert.equal(press('/').defaultPrevented, false);
