@@ -499,6 +499,7 @@
   document.body.addEventListener('htmx:afterSettle', function (evt) {
     const target = evt.detail?.target;
     if (!pendingExplorerControl || target?.id !== 'explorer-results' ||
+        evt.detail?.elt?.id !== 'explorer-results' ||
         evt.detail?.requestConfig !== explorerControlRequest) return;
     const loadFailed = !!document.querySelector('#explorer-results .finder-form-error');
     explorerControlRequest = null;

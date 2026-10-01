@@ -575,7 +575,7 @@ test('trajectory tooltip stays within narrow and wide containers', () => {
   assert.equal(tip.style.left, '65px');
 });
 
-test('pending explorer control waits for its own form settle and coalesces a second control click', () => {
+test('pending explorer control waits for its main result settle and coalesces a second control click', () => {
   let submits = 0;
   const form = { id: 'explorer-load-form', requestSubmit() { submits += 1; } };
   const filterButton = { setAttribute() {} };
@@ -606,6 +606,10 @@ test('pending explorer control waits for its own form settle and coalesces a sec
 
   const requestConfig = {};
   app.body.emit('htmx:beforeRequest', { detail: { elt: form, requestConfig } });
+  app.body.emit('htmx:afterSettle', {
+    detail: { target: { id: 'explorer-results' }, elt: { id: 'finder-controls' }, requestConfig },
+  });
+  assert.deepEqual(calls, []);
   app.body.emit('htmx:afterSettle', {
     detail: { target: { id: 'explorer-results' }, elt: { id: 'explorer-results' }, requestConfig: {} },
   });
