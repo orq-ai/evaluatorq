@@ -10,6 +10,12 @@ Use Traces to inspect recent traffic, browse and sort traces, review token and c
 
 The dashboard is included in the `dashboard` extra. It needs Orq credentials because it reads live traces and routes model calls through Orq. Set `ORQ_API_KEY` or select an `orq` CLI profile in Settings.
 
+Install the dashboard extra with:
+
+```bash
+uv add 'evaluatorq[dashboard]'
+```
+
 ```bash
 eq dashboard
 ```
@@ -66,6 +72,11 @@ Above the table, **Ask AI** plans a natural-language question before it spends a
 Each trace is projected into a bounded classifier state before judgment: the projection keeps the newest conversation suffix, preserves tool-call arguments and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary. Ask AI does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable that tracing.
 
 On **Traces**, Ask AI can classify traces already loaded in the table or search a new population. The finder plans the query once, then spends one classifier call per selected trace.
+
+On **Traces**, choose the population Ask AI should classify:
+
+- **Within results** classifies every trace already loaded in the table, including rows outside the selected tab or page. It is selected after the first automatic load succeeds and after later loads; if a load returns no rows, asking within results explains that you must load traces first. During loading and classification, the progress line shows live counts and a thin progress bar; the corner status badge is hidden while the run is working. Before classifying, it applies the filters your question implies to the loaded rows: token and duration bounds, so "above 50k tokens" drops smaller rows, and the metadata values the filter model picks, such as a model, status or agent. A row with no token or duration value is dropped when that bound is set. The table narrows to the same rows, and the question's filters appear as chips, in the **Filters** count and in the **Filters** menu, so removing a chip brings the other loaded rows back. If those filters drop every loaded row, the table shows zero rows and the run completes with a notice that names the filter and nearest loaded value, such as `None of the 190 loaded traces have at least 50,001 tokens (the largest has 18,411). Try New search to look beyond the loaded rows.` At most the AI trace limit from Settings is judged; rows past it show as not judged. AI answers stay on their rows when you reload the table, change filters or change the time range, until you press **Clear AI results**. Runs above 500 traces require review before classification.
+- **New search** searches the time range currently shown in the Traces toolbar, up to its **Rows** limit, independently of the rows already loaded. It then reloads the table with the searched traces so the AI match column, quick views, drawer and trajectories show the run’s results. Relative ranges such as **15m** and **1h**, as well as exact **From** and **To** dates, apply to the new search. The progress line shows how many traces have loaded out of the requested maximum while the search runs. The saved parallelism setting still applies. The separate **Trace search** page (`/find`) has per-run window, limit, and parallelism controls.
 
 ```mermaid
 flowchart TD
@@ -134,9 +145,6 @@ The classifier judges each projected trace through evaluatorq. Results stream in
 !!! info "What leaves your machine"
     The finder does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable it.
 
-
-- **Within results** classifies every trace already loaded in the table, including rows outside the selected tab or page. It is selected after the first automatic load succeeds and after later loads; if a load returns no rows, asking within results explains that you must load traces first. During loading and classification, the progress line shows live counts and a thin progress bar; the corner status badge is hidden while the run is working. Before classifying, it applies the filters your question implies to the loaded rows: token and duration bounds, so "above 50k tokens" drops smaller rows, and the metadata values the filter model picks, such as a model, status or agent. A row with no token or duration value is dropped when that bound is set. The table narrows to the same rows, and the question's filters appear as chips, in the **Filters** count and in the **Filters** menu, so removing a chip brings the other loaded rows back. If those filters drop every loaded row, the table shows zero rows and the run completes with a notice that names the filter and nearest loaded value, such as `None of the 190 loaded traces have at least 50,001 tokens (the largest has 18,411). Try New search to look beyond the loaded rows.` At most the AI trace limit from Settings is judged; rows past it show as not judged. AI answers stay on their rows when you reload the table, change filters or change the time range, until you press **Clear AI results**. Runs above 500 traces require review before classification.
-- **New search** searches the time range currently shown in the Traces toolbar, up to its **Rows** limit, independently of the rows already loaded. It then reloads the table with the searched traces so the AI match column, quick views, drawer and trajectories show the run’s results. Relative ranges such as **15m** and **1h**, as well as exact **From** and **To** dates, apply to the new search. The progress line shows how many traces have loaded out of the requested maximum while the search runs. The saved parallelism setting still applies. The separate **Trace search** page (`/find`) has per-run window, limit, and parallelism controls.
 
 On **Trace search**, the review panel (shown in **Review first**) gains an **Apply filters only** button below the plan, so you can load the reviewed population into the table without spending a classifier call — the classify button itself is labelled with the trace count it is about to judge.
 
@@ -213,9 +221,7 @@ The dashboard command accepts `--compiler-model`, `--classifier-model`, `--windo
 
 ## CLI reference
 
-`eq find` runs an immediate finder query — the same compile-and-classify pipeline as **New search** — with a terminal activity indicator, then prints a newest-first table of matched traces and a summary of the full run. The CLI has no explorer table, trajectories view, or drawer; it is the classification pipeline only. Add `--json PATH` to write the completed run export. Pass `--positive-only` to keep only matched trace records in that JSON export; its counts still describe the full run. Pass `--debug` to print progress when it changes, the compiler request and structured output, and the filter and per-trace classifier requests and responses. For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. Debug output includes projected conversation content for every classified trace, even with `--positive-only`, so treat saved logs as trace data. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same finder diagnostics in CLI and dashboard runs.
-
-The command cancels a run that has not finished after two hours. If any trace classification fails, the command exits with status 1 and does not write the JSON file.
+`eq find` runs an immediate finder query — the same compile-and-classify pipeline as **New search** — with a terminal activity indicator, then prints a newest-first table of matched traces and a summary of the full run. The CLI has no explorer table, trajectories view, or drawer; it is the classification pipeline only. Add `--json PATH` to write the completed run export. Pass `--positive-only` to keep only matched trace records in that JSON export; its counts still describe the full run. `EVALUATORQ_LOG_LEVEL=DEBUG` enables finder diagnostics in CLI and dashboard runs.
 
 Pass `--profile NAME` to use that `orq` CLI profile for both trace retrieval and model calls. It overrides the saved profile and environment credentials. Without the flag, the saved profile applies; choose **Environment** in Settings to use `ORQ_API_KEY` and `ORQ_BASE_URL`. A saved project ID limits the CLI trace population only while the profile, key, and API host still match the saved selection. If you rotate a key or change hosts, save the project again in Settings; use `--project` to choose a project facet for one run.
 
@@ -225,7 +231,7 @@ eq find "customers asking for a refund" --compiler-model openai/gpt-5.6-luna --c
 ```
 
 - `--json PATH` writes the completed run export; add `--positive-only` to keep only matched records (counts still describe the full run).
-- `--debug` prints progress when it changes, the compiler request and structured output, and the filter and per-trace classifier requests and responses. For a small diagnostic run: `eq find "mentions a refund" --limit 10 --debug`. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.
+- For a small diagnostic run with `--debug`, use `eq find "mentions a refund" --limit 10 --debug`.
 
 !!! warning "Debug output contains trace data"
     Debug output includes projected conversation content for every classified trace, even with `--positive-only`. Treat saved logs as trace data.
