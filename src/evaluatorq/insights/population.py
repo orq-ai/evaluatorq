@@ -329,7 +329,7 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
     echo: dict[str, Any] = {
         'mode': 'export',
         'query': export.query,
-        'finder_export': str(pop.finder_export),
+        'finder_export': str(pop.finder_export.resolve()),
         'facets': facets.model_dump(mode='json'),
         'numeric': numeric.model_dump(mode='json'),
         'start': start.isoformat() if start else None,

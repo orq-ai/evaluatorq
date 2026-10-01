@@ -413,6 +413,26 @@ async def test_export_path_keeps_matched_only_and_warns_on_missing_ids(
 
 
 @pytest.mark.asyncio
+async def test_export_path_echo_records_an_absolute_path(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / 'export.json').write_text(_run_export(['t1']).model_dump_json())
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(traces=(make_trace('t1'),))
+
+    resolved = await resolve_population(
+        InsightsPopulation.from_finder_export(Path('export.json')),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+
+    recorded = Path(resolved.echo['finder_export'])
+    assert recorded.is_absolute()
+    assert recorded == (tmp_path / 'export.json').resolve()
+
+
+@pytest.mark.asyncio
 async def test_export_path_reloads_merged_filters_and_pinned_time_range(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
