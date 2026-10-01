@@ -950,7 +950,13 @@ def results(
                     if view.quick_view in CONVERSATION_METRICS
                     else 'Choose All to return to the full loaded trace population.',
                 )
-        if results and view.matched_only and not view.visible_rows(results):
+        if (
+            snapshot is not None
+            and snapshot.state == 'completed'
+            and results is not None
+            and view.matched_only
+            and not view.visible_rows(results)
+        ):
             body = _empty('No matches.', 'No loaded traces match this filter.')
         inner = f'{banner}{body}{_pager(view, results)}'
     totals_strip = (

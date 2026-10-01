@@ -345,6 +345,7 @@ async def test_matched_only_filters_with_results_and_is_ignored_without() -> Non
     }
     assert [row.trace_id for row in view.visible_rows(results)] == ['t1']
     assert len(view.visible_rows(None)) == 3
+    assert view.visible_rows({}) == ()
 
 
 @pytest.mark.asyncio

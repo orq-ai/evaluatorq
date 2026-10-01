@@ -223,7 +223,7 @@ class ExplorerView:
             rows = top_share(rows, TOP_METRICS[self.quick_view][1])
         elif self.quick_view in CONVERSATION_METRICS:
             rows = top_conversations(rows, CONVERSATION_METRICS[self.quick_view][1], self.message_counts)
-        if self.matched_only and results:
+        if self.matched_only and results is not None:
             rows = tuple(row for row in rows if (result := results.get(row.trace_id)) is not None and result.matched)
         if self.sort is None:
             return rows

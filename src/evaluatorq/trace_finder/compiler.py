@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, field_validator
 
 from evaluatorq.common.structured_output import generate_structured
 
@@ -176,6 +176,16 @@ class WireDimension(BaseModel):
     task: WireTask
     selection: WireSelection
 
+    @field_validator('name')
+    @classmethod
+    def require_nonblank_name(cls, value: str) -> str:
+        """Names are column labels and must remain meaningful after whitespace is removed."""
+
+        name = value.strip()
+        if not name:
+            raise ValueError('dimension name must not be blank')
+        return name
+
     def to_domain(self) -> CompiledQuery:
         """Convert one wire dimension into the validated domain dimension."""
 
@@ -216,7 +226,7 @@ class WireDimension(BaseModel):
             selection = ThresholdSelection.model_validate(self.selection.model_dump())
 
         return CompiledQuery.model_validate({
-            'name': self.name.strip() or 'AI match',
+            'name': self.name,
             'task': {
                 'kind': task.kind,
                 'instructions': task.instructions,
@@ -242,10 +252,10 @@ class CompilerWireQuery(BaseModel):
 
         dimensions = self.dimensions
         if len(dimensions) > MAX_DIMENSIONS:
-            logger.warning(
-                'trace query compiler returned {} dimensions; keeping the first {}', len(dimensions), MAX_DIMENSIONS
-            )
-            dimensions = dimensions[:MAX_DIMENSIONS]
+            raise ValueError(f'compiler returned {len(dimensions)} dimensions; maximum is {MAX_DIMENSIONS}')
+        names = [dimension.name.casefold() for dimension in dimensions]
+        if len(names) != len(set(names)):
+            raise ValueError('dimension names must be unique')
         numeric = NumericFilters.model_validate(self.numeric.model_dump())
         return tuple(dimension.to_domain() for dimension in dimensions), numeric
 

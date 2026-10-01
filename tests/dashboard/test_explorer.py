@@ -2494,6 +2494,15 @@ def test_views_menu_does_not_repeat_the_all_quick_tab_and_matched_only_empty_sta
     assert 'No loaded traces match this filter.' in empty
     assert 'Turn off Matches only' not in empty
 
+    no_results = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, matched_only=True),
+        resolve_columns(None),
+        records=None,
+        snapshot=_judged_snapshot(verdicts={}),
+    )
+    assert 'No matches.' in no_results
+    assert 'No loaded traces match this filter.' in no_results
+
 
 def test_drawer_rejects_responses_from_older_trace_selections() -> None:
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()

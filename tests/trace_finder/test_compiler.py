@@ -18,6 +18,7 @@ from evaluatorq.trace_finder.compiler import (
     compile_query,
 )
 from evaluatorq.trace_finder.models import FILTER_OR_JUDGMENT_RULE, CompiledQuery, ValueSelection
+from evaluatorq.trace_finder.models import MAX_DIMENSIONS
 from evaluatorq.trace_finder.debug import cli_debug
 
 
@@ -128,6 +129,34 @@ def test_compiler_wire_rejects_both_noul_values() -> None:
         CompilerWireQuery.model_validate(document).to_domain()
 
 
+def test_compiler_wire_rejects_whitespace_dimension_names() -> None:
+    document = choice_document()
+    document['dimensions'][0]['name'] = ' \t '
+
+    with pytest.raises(ValidationError, match='dimension name must not be blank'):
+        CompilerWireQuery.model_validate(document)
+
+
+def test_compiler_wire_rejects_duplicate_dimension_names() -> None:
+    document = choice_document()
+    second = json.loads(json.dumps(document['dimensions'][0]))
+    second['name'] = ' support need '
+    document['dimensions'].append(second)
+
+    with pytest.raises(ValueError, match='dimension names must be unique'):
+        CompilerWireQuery.model_validate(document).to_domain()
+
+
+def test_compiler_wire_rejects_more_than_maximum_dimensions() -> None:
+    document = choice_document()
+    document['dimensions'] = [
+        {**document['dimensions'][0], 'name': f'Dimension {index}'} for index in range(MAX_DIMENSIONS + 1)
+    ]
+
+    with pytest.raises(ValueError, match=f'maximum is {MAX_DIMENSIONS}'):
+        CompilerWireQuery.model_validate(document).to_domain()
+
+
 @pytest.mark.asyncio
 async def test_compile_query_raises_after_two_invalid_plans(monkeypatch) -> None:
     invalid = choice_document()
@@ -144,6 +173,29 @@ async def test_compile_query_raises_after_two_invalid_plans(monkeypatch) -> None
     with pytest.raises(CompileError, match='invalid plan.*selection must list only'):
         await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_compile_query_retries_too_many_dimensions(monkeypatch) -> None:
+    invalid = choice_document()
+    invalid['dimensions'] = [
+        {**invalid['dimensions'][0], 'name': f'Dimension {index}'} for index in range(MAX_DIMENSIONS + 1)
+    ]
+    valid = choice_document()
+    responses = iter([invalid, valid])
+    calls: list[dict[str, Any]] = []
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        calls.append(kwargs)
+        response = next(responses)
+        return FakeStructuredResult(CompilerWireQuery.model_validate(response), raw=json.dumps(response))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+
+    assert len(plan.dimensions) == 1
+    assert len(calls) == 2
+    assert f'maximum is {MAX_DIMENSIONS}' in calls[1]['messages'][-1]['content']
 
 
 def test_compiler_prompt_explains_match_selection() -> None:
