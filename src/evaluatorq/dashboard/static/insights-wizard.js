@@ -16,8 +16,6 @@
   let snapshotRequest = null;
   let snapshotTimer = null;
   let facetLoadedWindow = null;
-  let snapshotRequest = null;
-  let snapshotTimer = null;
   let step = 1;
 
   function setFacetLoading(loading) {

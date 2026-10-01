@@ -445,7 +445,6 @@ def main() -> int:
                     _finder_export_source=Path(spec.finder_export),
                     _finder_export_sha256=hashlib.sha256(raw_snapshot).hexdigest(),
                     _source_name=spec.source_name or None,
-                    coding_analysis=spec.coding_analysis,
                 )
             )
         else:
