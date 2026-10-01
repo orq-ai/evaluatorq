@@ -36,6 +36,13 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
     projections = {name: review_xy(run, name) for name in run.dimensions}
     projection_states = {name: review_xy_state(run, name, points) for name, points in projections.items()}
     label_specs = {spec.name: spec for spec in run.config.labels}
+    if run.config.coding_analysis:
+        coding_specs = CODING_LABELS
+    elif run.config.coding_labels:
+        coding_specs = (CODING_LABELS[0], *run.config.coding_labels)
+    else:
+        coding_specs = ()
+    label_specs.update({spec.name: spec for spec in coding_specs})
     labels = [
         {
             'name': result.spec.name,

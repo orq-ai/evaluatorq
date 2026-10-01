@@ -151,6 +151,27 @@ def test_review_payload_preserves_ui_trace_identity_scores_errors_and_tool_stats
     json.dumps(payload)
 
 
+def test_review_payload_normalizes_coding_scores_from_legacy_full_bundle():
+    run = _run([_trace('coding-span')])
+    trace = run.traces[0].model_copy(
+        update={
+            'labels': {
+                'user_corrections': LabelAnswer(value=0.5, confidence=None, probabilities=None, error=None),
+            }
+        }
+    )
+    run = run.model_copy(
+        update={
+            'traces': [trace],
+            'config': run.config.model_copy(update={'coding_analysis': True}),
+        }
+    )
+
+    row = _trace_rows(build_review_payload(run))[0]
+
+    assert row['l'] == {'user_corrections': ['2']}
+
+
 def test_rerun_payload_retains_available_file_source_path(tmp_path):
     source = tmp_path / 'snapshot.json'
     source.write_text('{}', encoding='utf-8')
