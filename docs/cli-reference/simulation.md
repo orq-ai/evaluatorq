@@ -155,6 +155,8 @@ eq sim run --config gen.json --num-scenarios 3 --json
 
 A flag passed on the command line beats the file, and the file beats the flag default. The command checks where a value came from, not what it is, so `--max-turns 10` wins over `"max_turns": 6` even though 10 is the default. A `null` in the file means "not set" and falls back to the flag default. `"save": false` in the file has the effect of `--no-save`.
 
+The target and the input source are each one choice, so a command-line flag replaces the file's whole choice rather than adding a second one. `--target`, `--vercel-url` or `--openai-model` drops the file's `"target"`. On `eq sim simulate`, `--input`, `--dataset-id`, `--experiment-id` or `--from-run` drops the file's `"datapoints"`, `"personas"`, `"scenarios"`, `"dataset_id"`, `"experiment_id"`, `"experiment_run_id"` and `"previous_run"`. `--experiment-run-id` alone narrows the file's `"experiment_id"` instead. Two flags for the same choice on the command line are still rejected.
+
 Unknown keys fail the command before anything runs, at every depth, so `"num_personas"` in a `sim simulate` file or `"patiense"` inside a persona is rejected with the field path. `"target"` takes only the `agent:<key>` and `deployment:<key>` string forms; a callable or `AgentTarget`, `user_simulator`, `judge`, `hooks` and `generation_client` stay Python-only.
 
 With `--json`, stdout carries the `SimulationRun` and nothing else; the run-store save, the report files and every progress line still happen, on stderr.

@@ -554,6 +554,44 @@ _INLINE_SOURCE_FIELDS = ('datapoints', 'personas', 'scenarios')
 
 
 @dataclass(frozen=True)
+class ExclusiveGroup:
+    """Flags and config fields that name one choice, of which a run may make exactly one.
+
+    Passing any ``triggers`` flag on the command line drops every config field in ``fields``: the flag
+    replaces the file's choice rather than adding a second one, which the "exactly one" checks reject.
+    """
+
+    triggers: tuple[str, ...]
+    fields: tuple[str, ...]
+
+
+_TARGET_GROUP = ExclusiveGroup(triggers=('target', 'vercel_url', 'openai_model'), fields=('target',))
+# --experiment-run-id is not a trigger: on its own it narrows the file's experiment_id, it does not replace it.
+_SIMULATE_INPUT_GROUP = ExclusiveGroup(
+    triggers=('datapoints', 'dataset_id', 'experiment_id', 'from_run'),
+    fields=(*_INLINE_SOURCE_FIELDS, 'dataset_id', 'experiment_id', 'experiment_run_id', 'previous_run'),
+)
+
+
+def _drop_overridden_groups(
+    ctx: typer.Context, cfg: BaseModel | None, groups: tuple[ExclusiveGroup, ...]
+) -> BaseModel | None:
+    """Return ``cfg`` without the fields of every group a command-line flag already chose for."""
+    if cfg is None:
+        return None
+    dropped = {
+        field
+        for group in groups
+        if any(explicitly_set(ctx, trigger) for trigger in group.triggers)
+        for field in group.fields
+    }
+    if not dropped & cfg.model_fields_set:
+        return cfg
+    kept = cfg.model_fields_set - dropped
+    return type(cfg).model_construct(_fields_set=kept, **{name: getattr(cfg, name) for name in kept})
+
+
+@dataclass(frozen=True)
 class ConfiguredRun:
     """A sim command's parameters after folding in ``--config`` and ``--llm-config``."""
 
@@ -571,11 +609,17 @@ def _apply_sim_config(
     cli_args: dict[str, Any],
     *,
     fields: dict[str, str],
+    groups: tuple[ExclusiveGroup, ...],
     llm_config_json: str | None,
 ) -> ConfiguredRun:
-    """Resolve a sim command's config-backed parameters: explicit flag > config file > flag default."""
+    """Resolve a sim command's config-backed parameters: explicit flag > config file > flag default.
+
+    Within each of ``groups`` a command-line flag beats the file's whole group, not just its own field, so
+    ``--openai-model`` replaces a file's ``"target"`` instead of colliding with it.
+    """
     from evaluatorq.simulation.run_config import to_internal_kwargs
 
+    cfg = _drop_overridden_groups(ctx, cfg, groups)
     params = cli_args
     values = {param: pick(ctx, cfg, param=param, field=field, value=params[param]) for param, field in fields.items()}
     no_save = not pick(ctx, cfg, param='no_save', field='save', value=not params['no_save'])
@@ -937,7 +981,14 @@ def simulate(
 
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = load_config(config_source, SimulateRunConfig) if config_source is not None else None
-    configured = _apply_sim_config(ctx, cfg, cli_args, fields=_SIMULATE_CONFIG_FIELDS, llm_config_json=llm_config_json)
+    configured = _apply_sim_config(
+        ctx,
+        cfg,
+        cli_args,
+        fields=_SIMULATE_CONFIG_FIELDS,
+        groups=(_TARGET_GROUP, _SIMULATE_INPUT_GROUP),
+        llm_config_json=llm_config_json,
+    )
     values = configured.values
     dataset_id = values['dataset_id']
     experiment_id = values['experiment_id']
@@ -1355,7 +1406,14 @@ def run(
 
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = load_config(config_source, GenerateAndSimulateRunConfig) if config_source is not None else None
-    configured = _apply_sim_config(ctx, cfg, cli_args, fields=_RUN_CONFIG_FIELDS, llm_config_json=llm_config_json)
+    configured = _apply_sim_config(
+        ctx,
+        cfg,
+        cli_args,
+        fields=_RUN_CONFIG_FIELDS,
+        groups=(_TARGET_GROUP,),
+        llm_config_json=llm_config_json,
+    )
     values = configured.values
     agent_description = values['agent_description']
     target = values['target']
