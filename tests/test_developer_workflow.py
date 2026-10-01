@@ -36,17 +36,37 @@ def _locked_version(lockfile: str, package_name: str) -> str:
     raise AssertionError(f'missing locked package {package_name}')
 
 
-def test_ty_is_added_without_removing_basedpyright() -> None:
+def test_ty_is_the_only_locked_typechecker() -> None:
     pyproject = (REPO_ROOT / 'pyproject.toml').read_text()
     dev_dependencies = _array(_table(pyproject, 'dependency-groups'), 'dev')
 
     assert 'ty==0.0.84' in dev_dependencies
-    assert any(dependency.startswith('basedpyright') for dependency in dev_dependencies)
-    assert '[tool.basedpyright]' in pyproject
+    assert not any(dependency.startswith('basedpyright') for dependency in dev_dependencies)
+    assert '[tool.basedpyright]' not in pyproject
 
     lockfile = (REPO_ROOT / 'uv.lock').read_text()
     assert _locked_version(lockfile, 'ty') == '0.0.84'
-    assert _locked_version(lockfile, 'basedpyright')
+    assert not re.search(r'(?m)^name = "(?:basedpyright|pytest-xdist)"$', lockfile)
+
+
+def test_ci_runs_ty_once_on_the_python_310_ubuntu_leg() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+
+    assert workflow.count('run: uv run ty check') == 1
+    assert 'basedpyright' not in workflow.lower()
+    assert "if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'" in workflow
+    assert (
+        "name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})"
+        in workflow
+    )
+
+
+def test_ci_keeps_full_non_integration_test_commands() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+
+    assert workflow.count("run: uv run pytest -m 'not integration'") == 2
+    assert "run: uv run pytest -m 'not integration'\n" in workflow
+    assert "run: uv run pytest -m 'not integration' --cov --cov-report=term\n" in workflow
 
 
 def test_ty_checks_the_supported_project_surface() -> None:
