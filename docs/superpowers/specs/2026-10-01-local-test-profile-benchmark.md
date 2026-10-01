@@ -6,7 +6,7 @@ Use these results to decide whether the quick profile meets this change's accept
 
 ## Result
 
-The quick profile passed both gates on implementation commit `69fae17d4581730cea5125520f51eae45b693185`.
+Under the disclosed fixed-order protocol, the quick profile passed both gates on implementation commit `69fae17d4581730cea5125520f51eae45b693185`.
 
 | Profile | Selected outcome in every sample | Median wall time | Median peak resident memory |
 |---|---:|---:|---:|
@@ -18,6 +18,8 @@ The wall-time reduction is `(127.37 - 88.85) / 127.37 = 30.24%`, above the requi
 ## Method
 
 The six measured commands ran serially in a clean worktree at the named commit, with no benchmark samples overlapping. The order was quick samples 1–3 followed by full samples 1–3. There was no dedicated warm-up and no cache reset between samples; the failed pre-fix run described below happened before all six valid samples. `PYTEST_ADDOPTS` was unset. These are the commands as run:
+
+Because every quick sample ran before every full sample, profile and run order are confounded: cache warming, thermal behavior, or background-load drift could contribute to the observed gap. The 30.24% result is the difference between medians under this disclosed protocol, not a randomized or alternating estimate of the pure profile effect.
 
 ```bash
 /usr/bin/time -lp uv run pytest
