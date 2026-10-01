@@ -99,11 +99,22 @@
     }
 
     const item = evt.target.closest('.facet-item');
-    if (item) { showFacet(item); return; }
-    const addFilter = evt.target.closest('.finder-controls .add');
+    if (item) {
+      showFacet(item);
+      // Clicking (or Enter on) a category moves focus into its values, so a keyboard user is not left in the list.
+      const sub = item.closest('.finder-facets').querySelector('.facet-sub[data-facet-sub="' + item.getAttribute('data-facet') + '"]');
+      const first = sub && sub.querySelector('input, button');
+      if (first) first.focus();
+      return;
+    }
+    const option = evt.target.closest('.model-pick .model-option');
+    if (option) { pickModel(option, option.getAttribute('data-model')); return; }
+    const addFilter = evt.target.closest('.finder-controls .add, .model-pick-btn');
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
+      closeMenus(ownMenu);
       if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
+      addFilter.setAttribute('aria-expanded', ownMenu && ownMenu.classList.contains('open') ? 'true' : 'false');
       return;
     }
     const chipOpen = evt.target.closest('[data-chip-open]');
@@ -121,9 +132,7 @@
       }
       return;
     }
-    if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (!evt.target.closest('.finder-controls .addwrap, .model-pick') && !evt.target.closest('.chip-open')) closeMenus();
 
     const remove = evt.target.closest('[data-finder-remove]');
     if (!remove) return;
@@ -139,6 +148,39 @@
     });
     remove.closest('.chip').remove();
   });
+
+  function closeMenus(except) {
+    document.querySelectorAll('.finder-facets.open').forEach(function (menu) {
+      if (menu === except) return;
+      menu.classList.remove('open');
+      const trigger = menu.parentElement.querySelector('.add, .model-pick-btn');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function pickModel(from, model) {
+    const pick = from.closest('.model-pick');
+    pick.querySelector('input[type="hidden"]').value = model;
+    pick.querySelector('.model-pick-btn').textContent = model || 'Choose a model';
+    pick.querySelectorAll('.model-option').forEach(function (other) {
+      other.classList.toggle('is-selected', other === from);
+      other.setAttribute('aria-pressed', other === from ? 'true' : 'false');
+    });
+    pick.querySelectorAll('.facet-item .count').forEach(function (tick) { tick.remove(); });
+    const owner = pick.querySelector('.facet-item[data-facet="' + from.closest('.facet-sub').getAttribute('data-facet-sub') + '"]');
+    if (owner && model) owner.querySelector('.chev').insertAdjacentHTML('beforebegin', '<span class="count">✓</span>');
+    if (from.classList.contains('model-option')) closeModelMenu(pick);
+  }
+
+  document.body.addEventListener('input', function (evt) {
+    const custom = evt.target.closest('.model-pick .model-custom');
+    if (custom) pickModel(custom, custom.value.trim());
+  });
+
+  function closeModelMenu(pick) {
+    closeMenus();
+    pick.querySelector('.model-pick-btn').focus();
+  }
 
   function showFacet(item) {
     const menu = item.closest('.finder-facets');
@@ -167,7 +209,7 @@
     const sub = search.closest('.facet-sub');
     const query = search.value.trim().toLocaleLowerCase();
     let visible = 0;
-    sub.querySelectorAll('.facet-values label').forEach(function (option) {
+    sub.querySelectorAll('.facet-values label, .facet-values .model-option').forEach(function (option) {
       const matches = option.textContent.toLocaleLowerCase().includes(query);
       option.hidden = !matches;
       if (matches) visible += 1;
@@ -188,9 +230,7 @@
   });
 
   document.addEventListener('keydown', function (evt) {
-    if (evt.key === 'Escape') {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (evt.key === 'Escape') closeMenus();
     if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
     const query = evt.target.closest('#finder-query-form textarea[name="query"]');
     if (!query) return;

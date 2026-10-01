@@ -39,6 +39,8 @@ class TestModelCatalogueLive:
             # published rate ($0.25 / $2.00 per 1M) with generous slack so a
             # routine price change doesn't flake this, but a unit-shape bug
             # (10x/1000x off) trips it.
+            assert info.input_cost_per_1k is not None
+            assert info.output_cost_per_1k is not None
             assert 0.0001 <= info.input_cost_per_1k <= 0.001
             assert 0.001 <= info.output_cost_per_1k <= 0.01
         finally:

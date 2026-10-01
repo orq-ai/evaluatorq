@@ -163,9 +163,14 @@ class CompilerWireQuery(BaseModel):
 
         if isinstance(self.selection, WireValueSelection):
             selection_values = self.selection.values
-            if task.kind == 'noul' and all(value in ('yes', 'no') for value in selection_values):
-                logger.warning('trace query compiler returned yes/no labels for a boolean selection; converting them')
-                selection_values = tuple(value == 'yes' for value in selection_values)
+            words = {'yes': True, 'true': True, 'no': False, 'false': False}
+            if task.kind == 'noul' and all(
+                isinstance(value, str) and value.lower() in words for value in selection_values
+            ):
+                logger.warning(
+                    'trace query compiler returned {} for a boolean selection; converting them', selection_values
+                )
+                selection_values = tuple(words[str(value).lower()] for value in selection_values)
             selection: ValueSelection | ThresholdSelection = ValueSelection(kind='values', values=selection_values)
         else:
             selection = ThresholdSelection.model_validate(self.selection.model_dump())
@@ -238,6 +243,9 @@ async def compile_query(
         logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
     try:
         compiled, numeric = wire.to_domain()
+    except ValueError as exc:
+        raise CompileError(f'Compiler produced an invalid query plan: {exc}') from exc
+    try:
         numeric = _tighten_strict_bounds(normalized, numeric)
     except ValidationError as exc:
         raise CompileError(f'Compiler produced contradictory numeric bounds: {exc}') from exc

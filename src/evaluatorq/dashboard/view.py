@@ -27,6 +27,7 @@ from datetime import datetime
 from itertools import starmap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
@@ -795,6 +796,59 @@ def _scope_settings_rows(scope: OrqScope, *, workspace: str, chosen_project: str
     return ''.join(rows)
 
 
+MODEL_FIELDS = {
+    'compiler_model': 'Compiler model',
+    'classifier_model': 'Classifier model',
+    'apply_model': 'Apply-recommendations model',
+}
+
+
+def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
+    """A two-level model menu (provider, then model) with a Custom free-text entry.
+
+    Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
+    Without a catalogue the field stays a plain text box.
+    """
+    label = MODEL_FIELDS[name]
+    if not groups:
+        return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
+    known = any(value in ids for ids in groups.values())
+    items: list[str] = []
+    subs: list[str] = []
+    for index, (provider, ids) in enumerate((*groups.items(), ('Custom…', ()))):
+        key = f'{name}-{index}'
+        chosen = value in ids if ids else not known
+        items.append(
+            f'<button type="button" class="facet-item" data-facet="{esc(key)}" aria-haspopup="true" aria-expanded="false">'
+            f'<span>{esc(provider)}</span>{"<span class=count>✓</span>" if chosen else ""}'
+            '<span class="chev" aria-hidden="true">&rsaquo;</span></button>'
+        )
+        if ids:
+            options = ''.join(
+                f'<button type="button" class="model-option{" is-selected" if model == value else ""}" data-model="{esc(model)}"'
+                f' aria-pressed="{"true" if model == value else "false"}">{esc(model.removeprefix(provider + "/"))}</button>'
+                for model in ids
+            )
+            body = (
+                f'<input class="facet-search" type="search" placeholder="Search models" aria-label="Search {esc(provider)} models" autocomplete="off">'
+                f'<div class="facet-values">{options}</div>'
+                '<p class="facet-no-results" hidden>No matching models.</p>'
+            )
+        else:
+            body = (
+                f'<input class="model-custom" type="text" value="{"" if known else esc(value)}" '
+                f'placeholder="provider/model" aria-label="{esc(label)} (custom)">'
+            )
+        subs.append(
+            f'<div class="facet-sub" data-facet-sub="{esc(key)}" hidden><div class="hd">{esc(provider)}</div>{body}</div>'
+        )
+    return (
+        f'<span class="model-pick"><input type="hidden" name="{esc(name)}" value="{esc(value)}">'
+        f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false">{esc(value) or "Choose a model"}</button>'
+        f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>'
+    )
+
+
 def settings_body(
     config: list[tuple[str, str | list[str]]],
     settings: Any | None = None,
@@ -808,7 +862,8 @@ def settings_body(
     """Render editable finder settings above the read-only runtime configuration.
 
     ``profiles`` are the orq CLI's credential profiles; when there are any, an
-    Advanced block offers them as the credentials the dashboard uses.
+    Advanced block offers them as the credentials the dashboard uses. Model fields
+    render as text boxes and swap in their workspace menu once it has loaded.
     """
     if settings is None:
         from evaluatorq.trace_finder.settings import effective_settings
@@ -820,19 +875,18 @@ def settings_body(
         value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
         return '' if value is None else str(value)
 
-    fields = (
-        ('compiler_model', 'Compiler model', 'text'),
-        ('classifier_model', 'Classifier model', 'text'),
-        ('apply_model', 'Apply-recommendations model', 'text'),
-    )
+    profile_query = urlencode({'profile': setting_value('orq_profile')})
     field_rows: list[str] = []
-    for name, label, input_type in fields:
+    for name, label in MODEL_FIELDS.items():
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
+        control = (
+            f'<span hx-get="/settings/models?field={name}&amp;{esc(profile_query)}" hx-trigger="load" '
+            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {})}</span>'
+        )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
-            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="{input_type}" '
-            f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
+            f'<span class="config-val">{control}{error_html}</span></div>'
         )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     if preview:
