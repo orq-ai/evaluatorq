@@ -475,6 +475,9 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .model-pick .finder-facets { top: calc(100% + 4px); }
 .model-pick .finder-facets .facet-item > span:first-child { text-transform: none; }
 .model-pick .finder-facets .facet-list { max-height: 420px; overflow-y: auto; }
+.model-pick .model-option { display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text-body); font: inherit; font-size: 12px; text-align: left; word-break: break-all; cursor: pointer; }
+.model-pick .model-option:hover, .model-pick .model-option:focus-visible { background: var(--surface-sunken); color: var(--text-strong); outline: none; }
+.model-pick .model-option[hidden] { display: none; }
 .model-pick .model-option.is-selected { background: var(--surface-sunken); color: var(--text-strong); font-weight: 600; }
 .model-pick .model-custom { box-sizing: border-box; width: calc(100% - 12px); margin: 4px 6px 8px; }
 .settings-field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }

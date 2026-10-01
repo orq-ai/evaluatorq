@@ -33,6 +33,7 @@ is skipped rather than silently mixed into a USD total.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -112,12 +113,11 @@ class ModelInfo(_ModelInfoFields):
         )
 
 
-# host -> (model_id -> ModelInfo). A host is absent until its first fetch, and
-# maps to {} when the fetch failed or the account has no models. Keyed on host
-# because a long-lived process (jobs runner, dashboard) can serve runs against
-# prod and staging in turn, and prices attributed to the wrong deployment are
-# worse than no prices.
-_catalogues: dict[str, dict[str, ModelInfo]] = {}
+# (host, credential) -> (model_id -> ModelInfo). Absent until its first fetch, and
+# {} when the fetch failed or the account has no models. A long-lived process
+# (jobs runner, dashboard) can serve prod and staging in turn, and switch between
+# workspaces on one host; each workspace enables its own models.
+_catalogues: dict[tuple[str, str], dict[str, ModelInfo]] = {}
 # Built lazily: a module-level asyncio.Lock() binds to the loop running at import
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
@@ -128,7 +128,7 @@ _lock: asyncio.Lock | None = None
 _overrides: dict[str, ModelInfo] = {}
 # Consecutive failed fetches per host: retry a few times, then give up for the
 # process rather than hammering a host that is genuinely down.
-_fetch_failures: dict[str, int] = {}
+_fetch_failures: dict[tuple[str, str], int] = {}
 _MAX_FETCH_FAILURES = 3
 # Env var rather than a parameter: `_load_catalogue` is called from pricing paths
 # with no config object to thread.
@@ -335,7 +335,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
 
 
 async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelInfo]:
-    """Fetch the Orq model catalogue once per process, per host.
+    """Fetch the Orq model catalogue once per process, per host and credential.
 
     The host is taken from ``client`` when it routes through the Orq router, so an
     injected staging/on-prem client is not priced against prod; otherwise
@@ -348,24 +348,25 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
     consequence spelled out.
     """
     host = resolve_results_base_url(client) if client is not None else orq_base_url()
-    cached = _catalogues.get(host)
+    # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
+    # different workspace would 401 (caching {}) or price against the wrong one.
+    api_key = (
+        (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
+        if client is not None
+        else os.environ.get('ORQ_API_KEY')
+    )
+    cache_key = (host, hashlib.sha256(api_key.encode()).hexdigest()[:16] if isinstance(api_key, str) else '')
+    cached = _catalogues.get(cache_key)
     if cached is not None:
         return cached
     async with _catalogue_lock():
-        cached = _catalogues.get(host)
+        cached = _catalogues.get(cache_key)
         if cached is not None:
             return cached
-        # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
-        # different workspace would 401 (caching {}) or price against the wrong one.
-        api_key = (
-            (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
-            if client is not None
-            else os.environ.get('ORQ_API_KEY')
-        )
         if not api_key:
             logger.debug('No ORQ_API_KEY and no client credential; model catalogue unavailable')
-            _catalogues[host] = {}
-            return _catalogues[host]
+            _catalogues[cache_key] = {}
+            return _catalogues[cache_key]
         payload: object = None
         try:
             async with httpx.AsyncClient(timeout=_CATALOGUE_TIMEOUT_S) as http_client:
@@ -378,7 +379,7 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         except (httpx.HTTPError, ValueError) as exc:
             # Narrow on purpose: a bug inside _parse_catalogue must not be cached
             # away as "the network was down", so parsing happens outside the try.
-            failures = _fetch_failures[host] = _fetch_failures.get(host, 0) + 1
+            failures = _fetch_failures[cache_key] = _fetch_failures.get(cache_key, 0) + 1
             give_up = failures >= _MAX_FETCH_FAILURES
             logger.warning(
                 'Orq model catalogue unavailable ({}: {}) at {}/v2/models (attempt {} of {}) — '
@@ -392,14 +393,14 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
                 'for the rest of this process' if give_up else 'until a later call succeeds',
             )
             if give_up:
-                _catalogues[host] = {}
-                return _catalogues[host]
+                _catalogues[cache_key] = {}
+                return _catalogues[cache_key]
             # Not cached: a transient hiccup must not degrade the whole run.
             return {}
-        _fetch_failures.pop(host, None)
-        _catalogues[host] = _parse_catalogue(payload)
-        logger.debug('Loaded catalogue for {} models from {}', len(_catalogues[host]), host)
-        return _catalogues[host]
+        _fetch_failures.pop(cache_key, None)
+        _catalogues[cache_key] = _parse_catalogue(payload)
+        logger.debug('Loaded catalogue for {} models from {}', len(_catalogues[cache_key]), host)
+        return _catalogues[cache_key]
 
 
 async def models_by_provider(client: AsyncOpenAI | None = None, *, classify: bool = False) -> dict[str, list[str]]:

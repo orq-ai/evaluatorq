@@ -503,7 +503,29 @@ async def test_cache_is_keyed_by_host(monkeypatch: pytest.MonkeyPatch):
     await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
 
     assert len(calls) == 2
-    assert set(pricing._catalogues) == {'https://host-a.example', 'https://host-b.example'}  # pyright: ignore[reportPrivateUsage]
+    assert {host for host, _ in pricing._catalogues} == {'https://host-a.example', 'https://host-b.example'}  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_catalogue_is_cached_per_credential_on_one_host(monkeypatch: pytest.MonkeyPatch):
+    """Two workspaces on one host enable different models; one must not see the other's list."""
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    calls: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        'AsyncClient',
+        _FakeAsyncClient(
+            calls,
+            lambda: _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]),
+        ),
+    )
+
+    monkeypatch.setenv('ORQ_API_KEY', 'key-workspace-a')
+    await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setenv('ORQ_API_KEY', 'key-workspace-b')
+    await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
+
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio

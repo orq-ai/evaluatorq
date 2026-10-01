@@ -780,7 +780,7 @@ def test_model_fields_offer_workspace_models_grouped_by_provider(
 
     assert '<input type="hidden" id="compiler_model" name="compiler_model" value="openai/gpt-5.6-luna">' in html
     assert '<div class="hd">openai</div>' in html
-    assert '<label class="model-option is-selected" data-model="openai/gpt-5.6-luna"><span>gpt-5.6-luna</span></label>' in html
+    assert 'data-model="openai/gpt-5.6-luna" aria-pressed="true">gpt-5.6-luna</button>' in html
     # A saved model the workspace does not list opens under Custom, text filled in.
     assert '<input class="model-custom" type="text" value="my/finetune"' in html
 

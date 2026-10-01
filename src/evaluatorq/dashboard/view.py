@@ -816,8 +816,8 @@ def _model_control(name: str, label: str, value: str, groups: Mapping[str, Seque
         )
         if ids:
             options = ''.join(
-                f'<label class="model-option{" is-selected" if model == value else ""}" data-model="{esc(model)}">'
-                f'<span>{esc(model.removeprefix(provider + "/"))}</span></label>'
+                f'<button type="button" class="model-option{" is-selected" if model == value else ""}" data-model="{esc(model)}"'
+                f' aria-pressed="{"true" if model == value else "false"}">{esc(model.removeprefix(provider + "/"))}</button>'
                 for model in ids
             )
             body = (
@@ -835,7 +835,7 @@ def _model_control(name: str, label: str, value: str, groups: Mapping[str, Seque
         )
     return (
         f'<span class="model-pick"><input type="hidden" id="{esc(name)}" name="{esc(name)}" value="{esc(value)}">'
-        f'<button type="button" class="model-pick-btn" aria-haspopup="true">{esc(value) or "Choose a model"}</button>'
+        f'<button type="button" class="model-pick-btn" aria-haspopup="true" aria-expanded="false">{esc(value) or "Choose a model"}</button>'
         f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>'
     )
 
