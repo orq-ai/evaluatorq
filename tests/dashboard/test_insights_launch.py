@@ -374,7 +374,14 @@ def test_worker_import_failure_marks_manifest_failed(tmp_path: Path, monkeypatch
     assert manifest.status == 'error'
     assert manifest.stage == 'setup'
     assert manifest.error is not None and 'missing optional dependency' in manifest.error
-    assert not snapshot_directory.exists()
+    if os.name == 'nt':
+        # The stdlib-only bootstrap cannot safely delete snapshots when worker
+        # import itself fails, so it leaves the private temporary directory.
+        assert snapshot_directory.exists()
+        snapshot_path.unlink()
+        snapshot_directory.rmdir()
+    else:
+        assert not snapshot_directory.exists()
     assert not reference.exists()
 
 
@@ -423,13 +430,23 @@ def test_worker_bootstrap_snapshot_cleanup_does_not_follow_directory_swap(
     with patch.object(runpy, 'run_module', side_effect=fail_import), pytest.raises(ImportError):
         exec(_WORKER_BOOTSTRAP, {})
 
-    assert swapped
-    assert (snapshot_directory / 'keep.txt').read_text(encoding='utf-8') == 'keep'
-    assert not (original_directory / 'finder-export.json').exists()
+    if os.name == 'nt':
+        # Bootstrap cleanup intentionally avoids path-based deletion on Windows.
+        assert not swapped
+        assert snapshot_path.exists()
+        assert protected.read_text(encoding='utf-8') == 'keep'
+        snapshot_path.unlink()
+        snapshot_directory.rmdir()
+        protected.unlink()
+        replacement.rmdir()
+    else:
+        assert swapped
+        assert (snapshot_directory / 'keep.txt').read_text(encoding='utf-8') == 'keep'
+        assert not (original_directory / 'finder-export.json').exists()
+        snapshot_directory.joinpath('keep.txt').unlink()
+        snapshot_directory.rmdir()
+        original_directory.rmdir()
     assert list_manifests(tmp_path)[0].status == 'error'
-    (snapshot_directory / 'keep.txt').unlink()
-    snapshot_directory.rmdir()
-    original_directory.rmdir()
 
 
 def test_successful_worker_exit_does_not_recover_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -706,6 +723,31 @@ def test_dashboard_finder_export_must_be_in_approved_directory(
             InsightsLaunchSpec(source='finder', finder_export=path)
 
 
+def test_windows_path_normalization_resolves_short_path_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard import insights_launch
+
+    long_path = r'C:\Users\runneradmin\AppData\Local\Temp'
+    short_path = r'C:\Users\RUNNER~1\AppData\Local\Temp'
+
+    def realpath(value: str) -> str:
+        return long_path if value == short_path else value
+
+    monkeypatch.setattr(
+        insights_launch,
+        'os',
+        SimpleNamespace(name='nt', path=SimpleNamespace(realpath=realpath)),
+    )
+
+    assert insights_launch._normalized_windows_path(short_path) == insights_launch._normalized_windows_path(
+        long_path
+    )
+    extended_path = '\\\\?\\' + long_path
+    assert insights_launch._normalized_windows_path(extended_path) == insights_launch._normalized_windows_path(long_path)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX dir_fd swap; Windows reparse swap has dedicated coverage')
 def test_finder_export_replacement_with_symlink_during_open_is_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -732,6 +774,7 @@ def test_finder_export_replacement_with_symlink_during_open_is_rejected(
         InsightsLaunchSpec(source='finder', finder_export='approved.json')
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX dir_fd swap; Windows reparse swap has dedicated coverage')
 def test_finder_export_directory_replacement_during_open_is_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1046,12 +1089,14 @@ def test_finder_insights_launch_records_source_until_run_finishes(
 
     reference = finder_export_reference_path(tmp_path / 'insights-runs', run_id)
     assert json.loads(reference.read_text(encoding='utf-8')) == {'finder_export': str(export_path)}
-    assert reference.stat().st_mode & 0o777 == 0o600
-    assert reference.parent.stat().st_mode & 0o777 == 0o700
+    if os.name != 'nt':
+        assert reference.stat().st_mode & 0o777 == 0o600
+        assert reference.parent.stat().st_mode & 0o777 == 0o700
     assert read_private_finder_reference(reference) == {'finder_export': str(export_path)}
     assert len(list_manifests(tmp_path / 'insights-runs')) == 1
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='chmod does not configure Windows file or directory ACLs')
 def test_finder_reference_rejects_shared_directory_and_file_modes(tmp_path: Path) -> None:
     reference = finder_export_reference_path(tmp_path / 'runs', 'private-run')
     ensure_private_finder_reference_dir(reference.parent)

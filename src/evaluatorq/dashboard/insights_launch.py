@@ -302,7 +302,7 @@ def _windows_worker_status(pid: int, expected_identity: object) -> bool | None:
 
 def _windows_process_details(pid: int) -> tuple[str, bool] | None:
     """Return Windows process creation time and liveness using read-only APIs."""
-    if not hasattr(ctypes, 'WinDLL'):
+    if not hasattr(ctypes, 'WinDLL') or pid > 0xFFFFFFFF:
         return None
     from ctypes import wintypes
 
@@ -511,11 +511,21 @@ def get_finder_exports_dir() -> Path:
 
 
 def _normalized_windows_path(value: str) -> str:
-    if value.startswith('\\\\?\\UNC\\'):
-        value = '\\\\' + value[8:]
-    elif value.startswith('\\\\?\\'):
-        value = value[4:]
-    return str(PureWindowsPath(value)).casefold()
+    def without_extended_prefix(path: str) -> str:
+        if path.startswith('\\\\?\\UNC\\'):
+            return '\\\\' + path[8:]
+        if path.startswith('\\\\?\\'):
+            return path[4:]
+        return path
+
+    value = without_extended_prefix(value)
+    # GetFinalPathNameByHandleW returns the long path spelling, while paths
+    # supplied by Windows APIs such as tempfile.gettempdir() can use 8.3
+    # aliases (for example RUNNER~1). realpath resolves both spellings before
+    # comparing them, while the opened handle's file ID still guards against
+    # the directory being replaced between checks.
+    canonical = without_extended_prefix(os.path.realpath(value)) if os.name == 'nt' else value
+    return str(PureWindowsPath(canonical)).casefold()
 
 
 def _windows_directory_identity(root: Path) -> tuple[int, int, int]:

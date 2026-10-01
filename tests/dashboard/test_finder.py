@@ -747,7 +747,9 @@ def test_finder_pruning_skips_when_a_lease_is_malformed(monkeypatch: pytest.Monk
     exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
-        os.utime(path, ns=(index + 1, index + 1))
+        # Windows filesystem timestamps have coarser resolution than these
+        # nanosecond increments; whole-second values keep the ordering stable.
+        os.utime(path, (index + 1, index + 1))
     runs_dir = tmp_path / 'insights-runs'
     marker = finder_export_reference_path(runs_dir, 'malformed-lease')
     ensure_private_finder_reference_dir(marker.parent)
@@ -769,7 +771,7 @@ def test_finder_pruning_recovers_after_malformed_lease_expires(monkeypatch: pyte
     exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
-        os.utime(path, ns=(index + 1, index + 1))
+        os.utime(path, (index + 1, index + 1))
     marker = finder_export_reference_path(tmp_path / 'insights-runs', 'malformed-lease')
     ensure_private_finder_reference_dir(marker.parent)
     marker.write_text('{invalid JSON', encoding='utf-8')
@@ -783,6 +785,7 @@ def test_finder_pruning_recovers_after_malformed_lease_expires(monkeypatch: pyte
     assert all(path.exists() for path in exports[1:])
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='chmod does not configure Windows directory ACLs')
 def test_finder_pruning_skips_when_lease_directory_is_unsafe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from evaluatorq.dashboard.insights_launch import ensure_private_finder_reference_dir
 
@@ -792,7 +795,7 @@ def test_finder_pruning_skips_when_lease_directory_is_unsafe(monkeypatch: pytest
     exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
-        os.utime(path, ns=(index + 1, index + 1))
+        os.utime(path, (index + 1, index + 1))
     leases = tmp_path / 'insights-runs' / '.finder-export-leases'
     ensure_private_finder_reference_dir(leases)
     leases.chmod(0o755)
@@ -811,7 +814,7 @@ def test_finder_pruning_is_normal_when_no_lease_directory_exists(
     exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
-        os.utime(path, ns=(index + 1, index + 1))
+        os.utime(path, (index + 1, index + 1))
 
     finder_routes._prune_finder_exports(export_dir)
 
@@ -829,7 +832,7 @@ def test_finder_export_retention_keeps_recent_and_saved_insights_references(
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
         path.touch()
-        os.utime(path, ns=(index + 1, index + 1))
+        os.utime(path, (index + 1, index + 1))
     old_referenced = exports[0]
     runs_dir = tmp_path / 'insights-runs'
     runs_dir.mkdir()
@@ -868,7 +871,7 @@ def test_finder_export_pruning_cannot_delete_a_concurrent_replacement(
     exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
-        os.utime(path, ns=(index + 1, index + 1))
+        os.utime(path, (index + 1, index + 1))
     target = exports[0]
     unlink_started = threading.Event()
     continue_unlink = threading.Event()
@@ -920,7 +923,7 @@ def test_finder_export_retention_pins_in_flight_insights_source(
     exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
-        os.utime(path, ns=(index + 1, index + 1))
+        os.utime(path, (index + 1, index + 1))
     runs_dir = tmp_path / 'insights-runs'
     writer = start_manifest(run_id='active-run', surface='insights', run_name='active', runs_dir=runs_dir)
     marker = finder_export_reference_path(runs_dir, 'active-run')
@@ -955,7 +958,7 @@ def test_finder_export_retention_expires_abandoned_in_flight_reference(
     exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
     for index, path in enumerate(exports):
         path.write_text('{}', encoding='utf-8')
-        os.utime(path, ns=(index + 1, index + 1))
+        os.utime(path, (index + 1, index + 1))
     runs_dir = tmp_path / 'insights-runs'
     writer = start_manifest(run_id='abandoned-run', surface='insights', run_name='abandoned', runs_dir=runs_dir)
     marker = finder_export_reference_path(runs_dir, 'abandoned-run')

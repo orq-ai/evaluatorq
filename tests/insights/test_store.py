@@ -36,6 +36,7 @@ def test_same_name_and_second_never_overwrites(tmp_path: Path, minimal_run) -> N
     assert load_run(second).run_id == 'run-2'
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Windows uses exclusive rename instead of the POSIX symlink fallback')
 def test_save_run_falls_back_when_hard_links_are_unsupported(tmp_path: Path, minimal_run, monkeypatch) -> None:
     def unsupported_link(source: Path, destination: Path) -> None:
         raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
@@ -71,6 +72,7 @@ def test_fallback_symlink_is_readable_with_relative_runs_dir(tmp_path: Path, min
     assert load_run(path) == minimal_run
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Windows uses exclusive rename instead of the POSIX symlink fallback')
 def test_save_run_fallback_does_not_overwrite_name_claimed_during_publication(
     tmp_path: Path, minimal_run, monkeypatch
 ) -> None:
@@ -99,6 +101,7 @@ def test_save_run_fallback_does_not_overwrite_name_claimed_during_publication(
     assert load_run(saved) == minimal_run
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Windows uses exclusive rename instead of the POSIX symlink fallback')
 def test_fallback_never_exposes_json_until_atomic_publication(tmp_path: Path, minimal_run, monkeypatch) -> None:
     def unsupported_link(source: Path, destination: Path) -> None:
         raise OSError(errno.EOPNOTSUPP, 'hard links are unsupported')
@@ -119,6 +122,7 @@ def test_fallback_never_exposes_json_until_atomic_publication(tmp_path: Path, mi
     assert path.resolve().exists()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Windows uses exclusive rename instead of the POSIX symlink fallback')
 def test_save_run_fallback_fails_cleanly_when_symlinks_are_unavailable(
     tmp_path: Path, minimal_run, monkeypatch
 ) -> None:
