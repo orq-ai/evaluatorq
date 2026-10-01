@@ -829,6 +829,8 @@ def test_run_report_and_autosave_both_written(
     # Without --no-save, --report writes the explicit file AND the
     # auto-save still lands under .evaluatorq/sim-runs/ (independent sinks).
     monkeypatch.chdir(tmp_path)
+    run_store = tmp_path / ".evaluatorq"
+    monkeypatch.setenv("EVALUATORQ_DIR", str(run_store))
     report = tmp_path / "report.json"
 
     with (
@@ -852,8 +854,8 @@ def test_run_report_and_autosave_both_written(
     assert result.exit_code == 0, result.output
     assert report.exists()
     assert json.loads(report.read_text())["mode"] == "run"
-    run_store = list((tmp_path / ".evaluatorq" / "sim-runs").glob("*.json"))
-    assert len(run_store) == 1
+    auto_saves = list((run_store / "sim-runs").glob("*.json"))
+    assert len(auto_saves) == 1
 
 
 def test_simulate_rejects_three_targets(tmp_path: Path) -> None:
