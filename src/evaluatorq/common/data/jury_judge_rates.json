@@ -8,6 +8,12 @@
       "seated_effort": "high",
       "priced_at_ceiling": true
     },
+    "anthropic/claude-opus-5.5": {
+      "input_rate": 4.0,
+      "output_rate": 20.0,
+      "seated_effort": "high",
+      "priced_at_ceiling": true
+    },
     "aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0": {
       "input_rate": 1.1,
       "output_rate": 5.5,
@@ -35,6 +41,12 @@
     "deepseek/deepseek-v4-pro": {
       "input_rate": 0.435,
       "output_rate": 0.87,
+      "seated_effort": "high",
+      "priced_at_ceiling": true
+    },
+    "deepseek/deepseek-v4.1-flash": {
+      "input_rate": 0.15,
+      "output_rate": 0.6,
       "seated_effort": "high",
       "priced_at_ceiling": true
     },
