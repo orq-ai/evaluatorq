@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -880,6 +881,22 @@ async def test_a_classify_only_model_fails_before_the_call_even_off_the_router()
     client.chat.completions.parse.assert_not_called()
 
 
+@contextmanager
+def _captured_warnings():
+    """Collect warning lines from a loguru sink of our own.
+
+    Not `caplog`: its handler bridge records one loguru line twice, so a count taken there
+    measures the bridge. A sink appending to a list counts what the logger actually emitted,
+    which is the behaviour these tests are about.
+    """
+    lines: list[str] = []
+    handler_id = logger.add(lines.append, format='{message}', level='WARNING')
+    try:
+        yield lines
+    finally:
+        logger.remove(handler_id)
+
+
 @pytest.mark.asyncio
 async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.MonkeyPatch):
     """`DEFAULT_PIPELINE_MODEL` is classify-capable, so a per-call line would be one per attack."""
@@ -892,11 +909,27 @@ async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.
     client = _client()
     client.chat.completions.create = AsyncMock(return_value=_chat_reply())
 
-    for _ in range(3):
-        outcome = await _judge(client, None, model='gpt-5-mini', api='chat_completions')
-        assert outcome.error_kind is None
+    with _captured_warnings() as lines:
+        for _ in range(3):
+            outcome = await _judge(client, None, model='gpt-5-mini', api='chat_completions')
+            assert outcome.error_kind is None
 
-    # The warned-set, not the log text: `caplog` double-records a loguru line through its
-    # handler bridge, so counting lines there measures the bridge rather than the dedup.
-    assert judge_mod._classify_mismatch_warned == {('gpt-5-mini', 'prompted')}
+    emitted = [line for line in lines if 'built no classify question' in line]
+    assert len(emitted) == 1, emitted
+    assert client.chat.completions.create.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_the_dropped_question_degrade_warns_once_per_model():
+    """The other direction dedupes too: a question dropped on every call is still one line."""
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    with _captured_warnings() as lines:
+        for _ in range(3):
+            outcome = await _judge(client, _noul_question(), model='gpt-5-mini', api='chat_completions')
+            assert outcome.endpoint == 'chat'
+
+    emitted = [line for line in lines if 'does not serve the classify endpoint' in line]
+    assert len(emitted) == 1, emitted
     assert client.chat.completions.create.await_count == 3
