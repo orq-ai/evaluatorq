@@ -87,7 +87,7 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 | `EVALUATORQ_APPLY_MODEL` | No | `openai/gpt-5.6-luna` | Model used by the dashboard's apply-recommendations merge. Shown in the dashboard config panel. See [Dashboard](dashboard.md). |
 | `EVALUATORQ_DASHBOARD_SETTINGS` | No | `.evaluatorq/dashboard-settings.json` | Path to the JSON file used for dashboard and trace-finder settings, including the selected Orq workspace and project. |
 | `EVALUATORQ_COMPILER_MODEL` | No | `openai/gpt-5.6-luna` | Trace-finder model that compiles a natural-language query into a semantic classifier task. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
-| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Trace-finder classifier model used for facet selection and per-trace classification. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
+| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Classifier model used by the trace finder for facet selection and per-trace classification, and by opt-in signal tool-role classification. Trace-finder CLI or dashboard overrides win for that surface. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
 | `EVALUATORQ_FINDER_WINDOW_DAYS` | No | `7` | Default number of recent days searched by the trace finder. Valid values are `1` through `90`. |
 | `EVALUATORQ_FINDER_LIMIT` | No | `500` | Default maximum number of traces selected for trace-finder classification. Valid values are `1` through `5000`. |
 | `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace classify calls. Valid values are `1` through `200`. |
