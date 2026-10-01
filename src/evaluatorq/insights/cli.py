@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -137,11 +138,11 @@ def _print_snapshot_preview(path: Path) -> None:
     if coverage['n_traces'] == 0:
         emit_error('local trace snapshot contains no traces')
         raise typer.Exit(code=2)
-    Console().print(f'Model input projection: {describe_projection_coverage(coverage)}')
+    Console(file=sys.stdout).print(f'Model input projection: {describe_projection_coverage(coverage)}')
 
 
 def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_shown: bool = False) -> None:
-    console = Console()
+    console = Console(file=sys.stdout)
     if 'n_source_messages' in run.population and not projection_already_shown:
         console.print(f'Model input projection: {describe_projection_coverage(run.population)}')
     for name, dimension in run.dimensions.items():
