@@ -1502,7 +1502,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     consumed: list[str] = []
     consumed_source: list[Path | None] = []
 
-    async def capture_population(population, **kwargs):
+    async def capture_population(_payload, population, **kwargs):
         from evaluatorq.common.run_manifest import ManifestWriter
         from evaluatorq.contracts import RunManifest
 
@@ -1514,9 +1514,9 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
         manifest_path = tmp_path / 'runs' / '.manifests' / f'{payload.run_id}.json'
         manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
         ManifestWriter(manifest, manifest_path).complete()
-        return type('CompletedRun', (), {'status': 'completed'})()
+        return True
 
-    monkeypatch.setattr(insights_worker, 'insights', capture_population)
+    monkeypatch.setattr(insights_worker, '_run_with_selected_auth', capture_population)
     monkeypatch.setenv(_REQUEST_ENV, payload_json)
     assert insights_worker.main() == 0
     assert consumed == ['approved-trace']
