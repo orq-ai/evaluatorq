@@ -492,6 +492,11 @@ class FakeRowSource:
 def explorer_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+
+    async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    monkeypatch.setattr(finder_routes, '_load_catalogue', load_catalogue)
     store = FakeStore()
     source = FakeRowSource(_rows(250))
     store.explorer = ExplorerStore(search=source.search, hydrate=source.hydrate_rows)
@@ -1318,6 +1323,13 @@ async def test_clicking_active_longest_view_retries_failed_message_count(
             if (await store.explorer.view()).state == 'loaded':
                 break
             await asyncio.sleep(0.01)
+        async def prewarm_finished() -> None:
+            while (await store.explorer.view()).trajectory_warming:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(prewarm_finished(), timeout=2)
+        assert not (await store.explorer.view()).trajectory_warming
+        assert calls == 1  # first-page prewarm has finished and failed before counting starts
         await http.get('/find/rows?quick_view=conv_longest')
         for _ in range(20):
             if (await store.explorer.view()).message_count_error:
