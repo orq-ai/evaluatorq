@@ -533,7 +533,7 @@ async def _sim_agent_card(rid: str, req: Request) -> NotStr | Response:
     except Exception as exc:
         logger.warning('Failed to load sim report for agent card {}: {}', path.name, exc)
         return Response('Error loading report', status_code=422, media_type='text/plain')
-    return NotStr(await asyncio.to_thread(report_tabs.sim_agent_card_fragment, run))
+    return NotStr(await report_tabs.sim_agent_card_fragment(run))
 
 
 async def _report_filter(rid: str, req: Request) -> NotStr | Response:
