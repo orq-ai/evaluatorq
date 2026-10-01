@@ -14,7 +14,7 @@ Use it to audit the checker boundary and the accepted coverage differences at th
 |---|---:|---|
 | ty | `0.0.84` | Exact development dependency in `pyproject.toml` and package entry in `uv.lock` |
 | Replaced BasedPyright | `1.37.4` | Package entry in `uv.lock` at `c12bdc240^` |
-| Replaced checker defaults | `recommended` | BasedPyright's pinned [`BasedConfigOptions`](https://github.com/DetachHead/basedpyright/blob/v1.37.4/packages/pyright-internal/src/common/configOptions.ts#L2136-L2145) and [`getRecommendedDiagnosticRuleSet`](https://github.com/DetachHead/basedpyright/blob/v1.37.4/packages/pyright-internal/src/common/configOptions.ts#L947-L1046) |
+| Replaced checker defaults | `recommended` | BasedPyright's pinned [`BasedConfigOptions`](https://github.com/DetachHead/basedpyright/blob/v1.37.4/packages/pyright-internal/src/common/configOptions.ts#L2136-L2145) and [`getRecommendedDiagnosticRuleSet`](https://github.com/DetachHead/basedpyright/blob/v1.37.4/packages/pyright-internal/src/common/configOptions.ts#L947-L1061) |
 | Python analysis target | `3.10` | `[tool.ty.environment]` in `pyproject.toml` |
 | Benchmark pytest | `9.0.3` | Toolchain recorded with the raw samples |
 | Benchmark uv | `0.11.29` | Host toolchain recorded with the raw samples |
@@ -41,6 +41,7 @@ uv run pytest \
 Retrieve the exact official mapping used for the coverage review and print its missing or partial rows:
 
 ```bash
+set -o pipefail
 curl -L --fail --silent https://raw.githubusercontent.com/astral-sh/ty/0.0.84/docs/coming-from-mypy-or-pyright.md \
   | rg '^\| .*?(None yet|partial coverage)'
 ```
@@ -48,10 +49,11 @@ curl -L --fail --silent https://raw.githubusercontent.com/astral-sh/ty/0.0.84/do
 Retrieve the replaced repository configuration and the replaced checker's effective default rule set with:
 
 ```bash
+set -o pipefail
 git show c12bdc240^:pyproject.toml | sed -n '/^\[tool.basedpyright\]/,/^\[tool.ty.src\]/p'
 curl -L --fail --silent \
   https://raw.githubusercontent.com/DetachHead/basedpyright/v1.37.4/packages/pyright-internal/src/common/configOptions.ts \
-  | sed -n '947,1045p'
+  | sed -n '947,1061p'
 ```
 
 Derive the retained diagnostics without a hand-maintained rule list:
