@@ -238,14 +238,40 @@ def _mirrored_router_root(trace: OtelTrace, span: OtelSpan) -> bool:
         return False
     mirrored = any(
         child.operation == 'chat'
-        and child.input_messages == span.input_messages
-        and child.output_messages == span.output_messages
-        and child.system_instructions == span.system_instructions
+        and _same_transcript(child.input_messages, span.input_messages)
+        and _same_transcript(child.output_messages, span.output_messages)
+        and _same_parts(child.system_instructions, span.system_instructions)
         for child in trace.children(span.span_id)
     )
     if mirrored:
         logger.info('Router trace span {} mirrors a child chat span; reading the child once', span.span_id)
     return mirrored
+
+
+def _same_transcript(left: list[OtelMessage] | None, right: list[OtelMessage] | None) -> bool:
+    """Compare conversation content, excluding message ids, names and finish metadata."""
+    if left is None or right is None:
+        return left is right
+    return len(left) == len(right) and all(
+        _normalized_role(a.role) == _normalized_role(b.role) and _same_parts(a.parts, b.parts)
+        for a, b in zip(left, right, strict=True)
+    )
+
+
+def _same_parts(left: list[OtelPart] | None, right: list[OtelPart] | None) -> bool:
+    if left is None or right is None:
+        return left is right
+    return len(left) == len(right) and all(
+        _semantic_part(a) == _semantic_part(b) for a, b in zip(left, right, strict=True)
+    )
+
+
+def _semantic_part(part: OtelPart) -> dict[str, Any]:
+    """Keep known part fields and the full payload of an unknown part for mirror comparison."""
+    payload = part.model_dump(mode='json', exclude_none=True)
+    if isinstance(part, OtelGenericPart):
+        return payload
+    return {key: value for key, value in payload.items() if key in type(part).model_fields}
 
 
 def _final_metrics(steps: list[AtifStep], agent_span: OtelSpan | None) -> AtifFinalMetrics | None:
@@ -359,11 +385,7 @@ def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
 
 def _signature(message: OtelMessage) -> tuple[str, str, tuple[str, ...]]:
     """Compare message role, normalised text, and every non-reasoning part's semantic payload."""
-    role = message.role
-    if role == 'developer':
-        role = 'system'
-    elif role == 'agent':
-        role = 'assistant'
+    role = _normalized_role(message.role)
     text = _WHITESPACE.sub(
         ' ', join_text(part.content for part in message.parts if isinstance(part, OtelTextPart))
     ).strip()
@@ -373,6 +395,14 @@ def _signature(message: OtelMessage) -> tuple[str, str, tuple[str, ...]]:
         if not isinstance(part, (OtelTextPart, OtelReasoningPart))
     )
     return role, text, payloads
+
+
+def _normalized_role(role: str) -> str:
+    if role == 'developer':
+        return 'system'
+    if role == 'agent':
+        return 'assistant'
+    return role
 
 
 def _compaction_part(part: OtelPart) -> bool:

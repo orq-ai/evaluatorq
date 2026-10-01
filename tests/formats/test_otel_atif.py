@@ -166,6 +166,28 @@ def test_router_responses_root_mirrors_child_only_once() -> None:
     assert [(step.source, step.message) for step in traj.steps] == [('user', 'write hello.py'), ('agent', 'hello.py')]
 
 
+def test_router_mirror_ignores_non_transcript_message_metadata() -> None:
+    root_input = {**_text('user', 'Hi'), 'id': 'root-user', 'name': 'router'}
+    child_input = {**_text('user', 'Hi'), 'id': 'child-user'}
+    root_output = {
+        **_text('agent', 'Hello.'), 'id': 'root-answer', 'finish_reason': 'stop',
+        'parts': [{'type': 'text', 'content': 'Hello.', 'transport_id': 'root'}],
+    }
+    child_output = {
+        **_text('assistant', 'Hello.'), 'id': 'child-answer', 'finish_reason': 'completed',
+        'parts': [{'type': 'text', 'content': 'Hello.', 'transport_id': 'child'}],
+    }
+    raw = [
+        {'span_id': 'root', 'type': 'trace', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai.input': [root_input], 'gen_ai.output': [root_output]}},
+        {'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': [child_input],
+            'gen_ai.output.messages': [child_output]}},
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [('user', 'Hi'), ('agent', 'Hello.')]
+
+
 def test_identical_sibling_chat_spans_remain_distinct() -> None:
     inputs = [_text('user', 'again')]
     outputs = [_text('assistant', 'same')]
