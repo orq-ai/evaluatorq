@@ -146,6 +146,36 @@ jq '{run_name, total_results, scorer_averages}' "$latest"
 jq -r '.results[] | select(.goal_achieved == false) | "\(.metadata.persona) / \(.metadata.scenario): \(.reason)"' "$latest"
 ```
 
+## Gate CI on a run
+
+This exits non-zero when any conversation missed its goal, failed a criterion, or has criteria the judge never audited:
+
+```python
+import sys
+from pathlib import Path
+
+from evaluatorq.simulation import SimulationRun
+
+latest = max(Path('.evaluatorq/sim-runs').glob('*.json'), key=lambda p: p.stat().st_mtime)
+run = SimulationRun.model_validate_json(latest.read_text())
+
+problems = []
+for i, r in enumerate(run.results):
+    name = f'#{i} {r.metadata.get("persona")} / {r.metadata.get("scenario")}'
+    if not r.goal_achieved:
+        problems.append(f'{name}: goal not achieved ({r.terminated_by.value}: {r.reason})')
+    for c in r.metadata.get('criteria_meta') or []:
+        if not c['passed']:
+            problems.append(f'{name}: failed {c["id"]} {c["description"]}')
+    if r.criteria_verified is not True:
+        problems.append(f'{name}: criteria not verified')
+
+print('\n'.join(problems) or 'ok')
+sys.exit(1 if problems else 0)
+```
+
+`criteria_meta` is the complete list of failed criteria, so `rules_broken` adds nothing to this check. `criteria_verified is not True` also fails runs saved before the field existed, where it is `null`: a gate that must never pass silently should treat "not recorded" as unverified. Drop the `goal_achieved` check if your scenarios are exploratory and a conversation that runs out of turns is acceptable.
+
 ## Runs from older versions
 
 Fields added after a run was saved load as their default: `criteria_verified`, `thread_id`, `response_traces`, `run_id`, `datapoints`, `token_usage_total` and `orq_base_url` are `null` or empty. A `null` there means "not recorded". `criteria_verified: null` in particular does not mean verified.

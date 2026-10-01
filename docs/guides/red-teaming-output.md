@@ -137,6 +137,34 @@ jq '.summary | {total_attacks, evaluated_attacks, resistance_rate}' "$latest"
 jq -r '.results[] | select(.vulnerable == true) | .attack.id' "$latest"
 ```
 
+## Gate CI on a report
+
+This exits non-zero when any attack succeeded, any attack has no verdict, or any datapoint failed before its attack ran:
+
+```python
+import sys
+from pathlib import Path
+
+from evaluatorq.redteam import RedTeamReport
+
+latest = max(Path('.evaluatorq/runs').glob('*.json'), key=lambda p: p.stat().st_mtime)
+report = RedTeamReport.model_validate_json(latest.read_text())
+
+problems = [f'pre-execution error: {e.message}' for e in report.errors]
+for r in report.results:
+    if r.vulnerable is True:
+        problems.append(f'VULNERABLE {r.attack.vulnerability} {r.attack.id}')
+    elif r.vulnerable is None:
+        # error: the attack never ran. evaluation_error: it ran and the judge could not score it.
+        why = r.error or (r.evaluation_error.message if r.evaluation_error else 'unknown')
+        problems.append(f'NO VERDICT {r.attack.id}: {why}')
+
+print('\n'.join(problems) or 'ok')
+sys.exit(1 if problems else 0)
+```
+
+`error` and `evaluation_error` describe different failures, so check `error` first: when it is set, the attack never reached the judge. `max(... st_mtime)` picks the newest file in the directory, so keep other JSON files out of `.evaluatorq/runs/`.
+
 ## Reports from older versions
 
 Fields added after a report was written load as their default: `run_id`, `thread_id`, `uploaded_count`, `rows_created` and `evaluation_error` as `null`, and `response_traces` as an empty list. A `null` in one of those means "not recorded", not "none happened". `version` is the report format version, currently `2.0.0`.
