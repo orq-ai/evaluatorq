@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import TypedDict, cast
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -86,6 +88,12 @@ def _assert_ci_typecheck_contract(workflow: str) -> None:
     assert "        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'" in ty_steps[0].splitlines()
 
 
+def _subprocess_output(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode(errors='replace')
+    return value or ''
+
+
 def _collected_items(tmp_path: Path, *pytest_args: str) -> list[_CollectedItem]:
     output = tmp_path / f'collection-{len(list(tmp_path.iterdir()))}.json'
     script = '''
@@ -112,13 +120,26 @@ raise SystemExit(pytest.main(sys.argv[2:], plugins=[CollectionRecorder()]))
 '''
     env = os.environ.copy()
     env.pop('PYTEST_ADDOPTS', None)
-    subprocess.run(
-        [sys.executable, '-c', script, str(output), '--collect-only', '-q', *pytest_args],
-        cwd=REPO_ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
+    try:
+        completed = subprocess.run(
+            [sys.executable, '-c', script, str(output), '--collect-only', '-q', *pytest_args],
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise AssertionError(
+            f'pytest collection timed out after {error.timeout} seconds\n'
+            f'stdout:\n{_subprocess_output(error.stdout)}\n'
+            f'stderr:\n{_subprocess_output(error.stderr)}'
+        ) from error
+    assert completed.returncode == 0, (
+        f'pytest collection failed with exit code {completed.returncode}\n'
+        f'stdout:\n{completed.stdout}\n'
+        f'stderr:\n{completed.stderr}'
     )
     result = json.loads(output.read_text())
     assert isinstance(result, list)
@@ -204,6 +225,38 @@ def test_pytest_default_is_quick_and_explicit_non_integration_is_full(tmp_path: 
     }
     assert slow_non_integration
     assert slow_non_integration.isdisjoint(item['nodeid'] for item in default_items)
+
+
+def test_collection_subprocess_is_bounded_and_surfaces_stderr(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    call_kwargs: dict[str, object] = {}
+
+    def failed_collection(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        call_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(args=[], returncode=1, stdout='collection stdout', stderr='collection exploded')
+
+    monkeypatch.setattr(subprocess, 'run', failed_collection)
+
+    with pytest.raises(AssertionError, match='collection exploded'):
+        _collected_items(tmp_path)
+
+    assert call_kwargs['timeout'] == 30
+
+
+def test_collection_timeout_surfaces_captured_stderr(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def timed_out_collection(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(
+            cmd=cast('list[str]', args[0]),
+            timeout=cast('float', kwargs['timeout']),
+            output='partial collection output',
+            stderr='collection plugin hung',
+        )
+
+    monkeypatch.setattr(subprocess, 'run', timed_out_collection)
+
+    with pytest.raises(AssertionError, match='collection plugin hung'):
+        _collected_items(tmp_path)
 
 
 def test_ty_checks_the_supported_project_surface() -> None:
