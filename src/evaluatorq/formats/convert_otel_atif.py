@@ -185,16 +185,11 @@ def _by_start(spans: list[OtelSpan]) -> list[OtelSpan]:
 def _by_tool_time(spans: list[OtelSpan]) -> list[OtelSpan]:
     """Order tool spans by start time, using the end time when the start is missing."""
 
-    def tool_time(span: OtelSpan) -> datetime | None:
-        return span.start_time or span.end_time
+    def key(span: OtelSpan) -> tuple[bool, float]:
+        at = span.start_time or span.end_time
+        return at is None, at.timestamp() if at is not None else 0.0
 
-    return sorted(
-        spans,
-        key=lambda span: (
-            tool_time(span) is None,
-            tool_time(span).timestamp() if tool_time(span) is not None else 0.0,
-        ),
-    )
+    return sorted(spans, key=key)
 
 
 def _session_id(trace: OtelTrace, tops: list[OtelSpan]) -> str:
