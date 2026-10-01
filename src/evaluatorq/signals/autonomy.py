@@ -10,7 +10,7 @@ from typing import Any
 from evaluatorq.formats._shared import atif_content_text, parse_iso
 from evaluatorq.signals.models import Evidence, Group, Precondition, SignalFn, SignalResult, result
 from evaluatorq.signals.preconditions import subagent_linkage, timestamps, tool_timestamps
-from evaluatorq.signals.walk import CallRecord, SignalContext, WalkedStep, invocation, llm_times, tool_times
+from evaluatorq.signals.walk import CallRecord, SignalContext, WalkedStep, invocation, is_llm_step, llm_times, tool_times
 
 
 def _all_agent_steps(ctx: SignalContext) -> list[WalkedStep]:
@@ -257,8 +257,8 @@ def _llm_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], lis
             exact_stamps.append(end)
         if current is not None:
             iso_stamps.append(current)
-        is_llm_step = entry.step.source == 'agent' and entry.step.llm_call_count != 0
-        if is_llm_step:
+        llm_step = is_llm_step(entry)
+        if llm_step:
             if start is not None and end is not None and end >= start:
                 llm.append((start, end, entry, 'llm', None, False))
             elif (
@@ -269,7 +269,7 @@ def _llm_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], lis
                 and current >= prior[entry.agent_path]
             ):
                 llm.append((prior[entry.agent_path], current, entry, 'llm', None, True))
-        if is_llm_step and current is not None:
+        if llm_step and current is not None:
             prior[entry.agent_path] = current
     return llm, exact_stamps, iso_stamps
 

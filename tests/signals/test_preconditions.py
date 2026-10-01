@@ -89,6 +89,15 @@ def test_timestamps_fall_back_to_iso_as_partial() -> None:
     assert pre.timestamps(context(traj([agent(model='m')]))).met is False
 
 
+def test_timestamps_only_count_steps_the_walker_identifies_as_llm_calls() -> None:
+    no_llm = context(traj([agent('no call', llm_call_count=0)]))
+    assert pre.timestamps(no_llm).met is True
+    assert pre.timestamps(no_llm).detail == 'no LLM steps'
+
+    model_fallback = context(traj([agent('known model', model='openai/gpt-x')]))
+    assert pre.timestamps(model_fallback).met is False
+
+
 def test_subagent_checks() -> None:
     child = traj([agent('c')], trajectory_id='child')
     stray = traj([agent('s')], trajectory_id='stray')

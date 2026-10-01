@@ -23,7 +23,7 @@ def shell_command_family(command: object) -> str | None:
     while tokens:
         if _ASSIGNMENT.fullmatch(tokens[0]):
             tokens.pop(0)
-        elif len(tokens) >= 3 and tokens[0] == 'cd' and tokens[2] == '&&':
+        elif len(tokens) >= 3 and tokens[0] == 'cd' and tokens[2] in {';', '&&'}:
             tokens = tokens[3:]
         else:
             break

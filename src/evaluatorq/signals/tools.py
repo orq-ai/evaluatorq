@@ -321,7 +321,7 @@ def consecutive_command_family_max(ctx: SignalContext) -> SignalResult:
             }
         )
         for family, run in runs
-        if len(run) > 1
+        if len(run) == longest and longest > 1
     ]
     return result('consecutive_command_family_max', 'B', longest, evidence)
 

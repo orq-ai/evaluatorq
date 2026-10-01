@@ -105,7 +105,7 @@ def _tag_signal(rule: TagRule) -> SignalFn:
         for clause in _clauses(rule):
             key = f'{rule.name}.{clause.metric}'
             if clause.fixed is not None:
-                threshold = thresholds_config.thresholds[key]
+                threshold = clause.fixed
                 percentile = None
             else:
                 percentile = ctx.config.tag_percentiles.get(key)

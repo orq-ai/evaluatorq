@@ -142,6 +142,26 @@ def test_command_family_runs_and_oscillation():
     assert values['tool_oscillation_count'].evidence[0].reason == '4-call oscillation: git status ↔ orq traces'
 
 
+def test_command_family_max_evidence_contains_only_longest_run():
+    trajectory = traj([
+        agent(calls=[call('Bash', {'command': command}, str(index))])
+        for index, command in enumerate([
+            'git status',
+            'git diff',
+            'orq traces',
+            'orq traces list',
+            'orq traces get',
+        ])
+    ])
+
+    report = _values(trajectory, 'consecutive_command_family_max')['consecutive_command_family_max']
+
+    assert report.value == 3
+    assert len(report.evidence) == 1
+    assert report.evidence[0].call_id == '2'
+    assert report.evidence[0].reason == '3x orq traces'
+
+
 def test_command_family_skips_cd_and_environment_prefixes():
     trajectory = traj([
         agent(calls=[call('Bash', {'command': 'cd /tmp && FOO=bar git status'}, 'first')]),

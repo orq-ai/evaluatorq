@@ -116,11 +116,13 @@ def test_wall_and_segment_timing_track_exact_bounds_and_iso_extrema_separately()
             calls=[call('tool', call_id='tool-call')],
             results=[ok(start_timestamp=start + 3, end_timestamp=start + 5)],
             timestamp='2026-01-01T00:00:02Z',
+            llm_call_count=1,
             extra={'invocation': {'start_timestamp': start + 2, 'end_timestamp': start + 3}},
         ),
         agent(
             'answer',
             timestamp='2026-01-01T00:00:06Z',
+            llm_call_count=1,
             extra={'invocation': {'start_timestamp': start + 6, 'end_timestamp': start + 7}},
         ),
     ])
@@ -142,8 +144,9 @@ def test_iso_timestamps_use_approximate_fallback_intervals() -> None:
             calls=[call('tool', call_id='c')],
             results=[ok()],
             timestamp='2026-01-01T00:00:02Z',
+            llm_call_count=1,
         ),
-        agent('answer', timestamp='2026-01-01T00:00:05Z'),
+        agent('answer', timestamp='2026-01-01T00:00:05Z', llm_call_count=1),
     ])
     values = _run(trajectory, 'wall_time_ms', 'active_time_ms', 'llm_time_ms', 'tool_time_ms')
     assert values['wall_time_ms'].value == 5000
@@ -161,8 +164,8 @@ def test_timing_without_timestamps_has_no_basis() -> None:
 
 def test_partial_llm_timing_is_disclosed_on_reported_duration() -> None:
     trajectory = traj([
-        agent('timed', extra={'invocation': {'start_timestamp': 1.0, 'end_timestamp': 2.0}}),
-        agent('untimed'),
+        agent('timed', llm_call_count=1, extra={'invocation': {'start_timestamp': 1.0, 'end_timestamp': 2.0}}),
+        agent('untimed', llm_call_count=1),
     ])
 
     signal = _run(trajectory, 'llm_time_ms')['llm_time_ms']
@@ -173,18 +176,29 @@ def test_partial_llm_timing_is_disclosed_on_reported_duration() -> None:
 
 def test_llm_fallback_uses_previous_llm_step_not_user_or_tool_step() -> None:
     trajectory = traj([
-        agent('first', timestamp='2026-01-01T00:00:01Z'),
+        agent('first', timestamp='2026-01-01T00:00:01Z', llm_call_count=1),
         _timed_user('2026-01-01T00:00:03Z'),
         agent(
             calls=[call('search')],
             timestamp='2026-01-01T00:00:04Z',
             llm_call_count=0,
         ),
-        agent('second', timestamp='2026-01-01T00:00:05Z'),
+        agent('second', timestamp='2026-01-01T00:00:05Z', llm_call_count=1),
     ])
 
     signal = llm_time_ms(context(trajectory))
     assert signal.value == 4000
+    assert signal.approximate is True
+
+
+def test_llm_duration_uses_the_shared_model_fallback_predicate() -> None:
+    trajectory = traj([
+        agent('first', model='openai/gpt-x', timestamp='2026-01-01T00:00:01Z'),
+        agent('second', model='openai/gpt-x', timestamp='2026-01-01T00:00:02Z'),
+    ])
+
+    signal = llm_time_ms(context(trajectory))
+    assert signal.value == 1000
     assert signal.approximate is True
 
 
@@ -228,9 +242,10 @@ def test_missing_tool_timing_is_disclosed_instead_of_exact_zero() -> None:
         agent(
             calls=[call('search', call_id='c')],
             results=[ok()],
+            llm_call_count=1,
             extra={'invocation': {'start_timestamp': 1.0, 'end_timestamp': 2.0}},
         ),
-        agent('answer', extra={'invocation': {'start_timestamp': 3.0, 'end_timestamp': 4.0}}),
+        agent('answer', llm_call_count=1, extra={'invocation': {'start_timestamp': 3.0, 'end_timestamp': 4.0}}),
     ])
 
     values = _run(trajectory, 'tool_time_ms', 'llm_time_ms')

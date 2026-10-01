@@ -5,7 +5,7 @@ from __future__ import annotations
 from evaluatorq.signals import SignalsConfig, TagThresholds, compute_signals
 from evaluatorq.signals.registry import SIGNALS
 
-from .conftest import agent, call, traj, user
+from .conftest import agent, call, failed, traj, user
 
 
 def _thresholds(**updates: float) -> TagThresholds:
@@ -74,6 +74,25 @@ def test_tag_percentile_override_uses_configured_cohort_table() -> None:
     assert tag.value is True
     assert tag.rule_version == f'{config.version}'
     assert 'cohort p0' in (tag.reason or '')
+
+
+def test_fixed_clause_uses_its_declared_threshold() -> None:
+    trajectory = traj([
+        agent(calls=[call('fetch', {}, f'failed-{index}')], results=[
+            failed()
+        ])
+        for index in range(3)
+    ])
+    thresholds = _thresholds(**{'error_heavy.tool_error_count': 100})
+    config = SignalsConfig(
+        tag_thresholds=thresholds,
+        tag_percentiles={'error_heavy.tool_error_count': 0},
+    )
+
+    tag = compute_signals(trajectory, config, only=['error_heavy']).results['error_heavy']
+
+    assert tag.value is True
+    assert 'tool_error_count > 2' in (tag.reason or '')
 
 
 def test_only_tag_computes_each_dependency_once(monkeypatch) -> None:

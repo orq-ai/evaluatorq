@@ -257,7 +257,7 @@ def timestamps(ctx: SignalContext) -> Precondition:
     `'partial'`: it gives a start but no end, so durations from it are approximate.
     """
     walked = ctx.walked
-    llm = [w for w in walked if w.step.source == 'agent' and w.step.llm_call_count != 0]
+    llm = [w for w in walked if is_llm_step(w)]
     if not llm:
         return Precondition(name='LLM timestamp coverage', met=True, detail='no LLM steps', required=False)
     times = [llm_times(w) for w in llm]
