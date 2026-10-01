@@ -74,7 +74,7 @@ def _load_rates() -> MappingProxyType[str, JudgeRates]:
     returned mapping would silently reprice every published preset for the life
     of the process.
     """
-    raw = cast('dict[str, Any]', json.loads(_RATES_PATH.read_text()))
+    raw = cast('dict[str, Any]', json.loads(_RATES_PATH.read_text(encoding='utf-8')))
     return MappingProxyType({rid: JudgeRates(**fields) for rid, fields in raw['judges'].items()})
 
 
@@ -85,7 +85,7 @@ def judge_rates(router_id: str) -> JudgeRates | None:
 
 def captured_at() -> str:
     """When the rates were captured, for anyone deciding whether to trust the table."""
-    return cast('str', json.loads(_RATES_PATH.read_text())['captured_at'])
+    return cast('str', json.loads(_RATES_PATH.read_text(encoding='utf-8'))['captured_at'])
 
 
 # Host, region and serving-variant noise that makes one model look like several.

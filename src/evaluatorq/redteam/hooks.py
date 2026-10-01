@@ -17,13 +17,13 @@ Public API:
 from __future__ import annotations
 
 import asyncio
-import shlex
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
 from loguru import logger
 
 from evaluatorq.common.async_utils import combine_confirm, fan_out
+from evaluatorq.common.cli_tty import shell_path
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import AgentCapability, PipelineStage
 from evaluatorq.redteam.reports.display import print_report_summary
@@ -39,7 +39,7 @@ from evaluatorq.redteam.contracts import RedTeamReport
 
 
 def _dashboard_hint(directory: str | Path) -> str:
-    return f'eq dashboard {shlex.quote(str(directory))}'
+    return f'eq dashboard {shell_path(directory)}'
 
 
 # Capabilities that meaningfully expand an agent's blast radius. Surfaced

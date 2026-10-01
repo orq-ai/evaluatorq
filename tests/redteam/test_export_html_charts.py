@@ -34,7 +34,7 @@ def test_no_plotly_or_kaleido_in_redteam_export() -> None:
     """The redteam export module must contain no plotly or try_render_svg references."""
     eh_module = importlib.import_module('evaluatorq.redteam.reports.export_html')
     assert eh_module.__file__ is not None
-    src = Path(eh_module.__file__).read_text()
+    src = Path(eh_module.__file__).read_text(encoding='utf-8')
     assert 'plotly' not in src and 'try_render_svg' not in src
 
 

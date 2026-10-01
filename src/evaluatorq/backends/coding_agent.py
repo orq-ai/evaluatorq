@@ -24,6 +24,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -42,6 +43,7 @@ from evaluatorq.backends.container import (
     build_exec_argv,
     build_run_argv,
     forwarded_env_names,
+    host_ids,
     isolation_breaking_flags,
     register,
     release_containers,
@@ -51,6 +53,7 @@ from evaluatorq.backends.container import (
     unsafe_mounts,
     write_beat,
 )
+from evaluatorq.common.cli_tty import shell_join
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
@@ -103,7 +106,7 @@ class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheri
     CodingAgentError, NonRetryableTargetError
 ):
     """Non-retryable codes: ``cli.not_found``, ``cli.timeout``, ``cli.prompt_too_long``,
-    ``cli.agent_not_found``, ``cli.image_missing``, and ``cli.container_start``. Retrying these
+    ``cli.agent_not_found``, ``cli.image_missing``, ``cli.container_start``, and ``cli.unsafe_shim``. Retrying these
     outcomes repeats the same failure, so the retry loop stops.
     """
 
@@ -250,6 +253,33 @@ def build_argv(
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
 
 
+# cmd.exe re-parses a batch launcher's command line and CPython does not escape for it (BatBadBut).
+CMD_METACHARACTERS = frozenset('"%&|<>^!\r\n')
+BATCH_SUFFIXES = frozenset({'.bat', '.cmd'})
+
+
+def is_batch_launcher(executable: str) -> bool:
+    return sys.platform == 'win32' and Path(executable).suffix.lower() in BATCH_SUFFIXES
+
+
+def refuse_unsafe_batch_args(argv: list[str]) -> None:
+    if not is_batch_launcher(argv[0]):
+        return
+    native = (
+        'download orq-win32-x64.exe from https://github.com/orq-ai/orq-cli/releases and put it on PATH as orq.exe'
+        if Path(argv[0]).stem.lower() == 'orq'
+        else 'install the agent CLI as a native .exe'
+    )
+    for arg in argv[1:]:
+        if found := sorted(CMD_METACHARACTERS & set(arg)):
+            raise CodingAgentUnavailableError(
+                'cli.unsafe_shim',
+                f'{argv[0]} is a Windows batch-file launcher, and cmd.exe would interpret '
+                f'{", ".join(repr(c) for c in found)} in the argument {arg!r}. Remove those characters from '
+                f'`extra_args` or `model`, or {native} so evaluatorq can call it directly.',
+            )
+
+
 PROMPT_INSTRUCTION = (
     'You are continuing the conversation below. It is a JSON array of chat messages in order; '
     '"tool" entries are the results of your own earlier tool calls. Reply to the last "user" message. '
@@ -280,7 +310,8 @@ def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_
     """Render the transcript as a delimited JSON conversation followed by the reply instruction.
 
     ``inline_system`` prepends ``system_prompt`` as a ``system`` entry for agents without a
-    system-prompt flag (codex, opencode). Claude receives it via ``--append-system-prompt`` instead.
+    system-prompt flag (codex, opencode), or for claude behind a Windows ``.cmd`` launcher; otherwise
+    Claude receives it via ``--append-system-prompt``.
     """
     entries: list[dict[str, Any]] = []
     if inline_system and system_prompt:
@@ -782,7 +813,7 @@ class CodingAgentTarget(AgentTarget):
                 return self._container_name
             old_name = self._container_name
             marker = root / 'home' / '.evq-exit'
-            cause = marker.read_text().strip() if marker.exists() else None
+            cause = marker.read_text(encoding='utf-8').strip() if marker.exists() else None
             marker.unlink(missing_ok=True)
             log_kill(
                 self._agent,
@@ -800,8 +831,9 @@ class CodingAgentTarget(AgentTarget):
                 if any(phrase in detail.lower() for phrase in ('no such image', 'no such object', 'image not known')):
                     raise CodingAgentUnavailableError(
                         'cli.image_missing',
-                        f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '
-                        f'or `{opts.binary} build -t {opts.image} {build_dir}`',
+                        f'image {opts.image!r} not found. Build it with '
+                        f'`{shell_join(["eq", "coding-agent", "build-image", "--tag", opts.image])}` '
+                        f'or `{shell_join([opts.binary, "build", "-t", opts.image, str(build_dir)])}`',
                     )
                 raise CodingAgentUnavailableError(
                     'cli.container_start',
@@ -822,9 +854,10 @@ class CodingAgentTarget(AgentTarget):
         register(name, LiveContainer(binary=opts.binary, context=opts.context, beat=beat))
         self._owned.append(name)
         self._container_name = name
+        uid, gid = host_ids()
         try:
             started = await self._docker(
-                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=os.getuid(), gid=os.getgid())
+                build_run_argv(opts, name=name, root=root, lease_dir=lease_dir, uid=uid, gid=gid)
             )
         except BaseException:
             await self._drop_container_shielded()
@@ -929,7 +962,7 @@ class CodingAgentTarget(AgentTarget):
         self._require_creator_process('close')
         proc = self._proc
         if proc is not None:
-            kill_group(proc)
+            await kill_group(proc)
             self._proc = None
         if self._container is not None:
             await self._drop_container_shielded()
@@ -967,21 +1000,31 @@ class CodingAgentTarget(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         self._require_creator_process('respond')
         workdir = self._ensure_workdir()
-        prompt = render_prompt(
-            messages, system_prompt=self._system_prompt, inline_system=self._spec.system_prompt_flag is None
+        env = {**os.environ, **self._env}
+        # Looked up on the child PATH: Windows would search the parent's, and for .exe files only.
+        host_binary = (
+            shutil.which('orq' if self._launcher == 'orq' else self._spec.binary, path=env.get('PATH'))
+            if self._container is None
+            else None
         )
+        # A batch launcher cannot carry free text safely, so the system prompt rides in the stdin transcript.
+        inline_system = self._spec.system_prompt_flag is None or (
+            host_binary is not None and is_batch_launcher(host_binary)
+        )
+        prompt = render_prompt(messages, system_prompt=self._system_prompt, inline_system=inline_system)
         argv, stdin_text = build_argv(
             agent=self._agent,
             launcher=self._launcher,
             model=self._model,
             permission_mode=self._permission_mode,
-            system_prompt=self._system_prompt,
+            system_prompt=None if inline_system else self._system_prompt,
             extra_args=self._extra_args,
             orq=self._orq,
             prompt=prompt,
         )
+        if host_binary is not None:
+            argv = [host_binary, *argv[1:]]
         on_early_exit: Callable[[], Awaitable[None]] | None = None
-        env = {**os.environ, **self._env}
         agent_binary = argv[0]
         argv, on_early_exit, name = await self._prepare_container_exec(argv)
         async with with_llm_span(
@@ -1077,6 +1120,7 @@ class CodingAgentTarget(AgentTarget):
         Stdout is read in chunks, so neither a long JSONL line nor a partial one can stall or crash the read.
         The caller owns container cleanup after this method has killed the process group on early exit.
         """
+        refuse_unsafe_batch_args(argv)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -1097,7 +1141,7 @@ class CodingAgentTarget(AgentTarget):
             ) from exc
         self._proc = proc
         if proc.stdout is None or proc.stderr is None:
-            kill_group(proc)
+            await kill_group(proc)
             self._proc = None
             raise RuntimeError('coding-agent process was created without stdout and stderr pipes')
         activity = [asyncio.get_running_loop().time()]
@@ -1130,7 +1174,7 @@ class CodingAgentTarget(AgentTarget):
             log_kill(self._agent, 'cancelled', 'the caller cancelled the turn')
             raise
         finally:
-            kill_group(proc, force=not finished)
+            await kill_group(proc, force=not finished)
             self._proc = None
             if stdin_task is not None:
                 stdin_task.cancel()
@@ -1269,8 +1313,51 @@ def parse_jsonl(stdout: str) -> list[dict[str, Any]]:
     return events
 
 
-def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
+def taskkill_tree(pid: int) -> bool:
+    """End a Windows process tree with taskkill /T. Return whether it succeeded, logging why when it did not."""
+    try:
+        result = subprocess.run(
+            ['taskkill', '/T', '/F', '/PID', str(pid)], capture_output=True, text=True, check=False, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning(
+            f'CodingAgentTarget: taskkill could not end process tree {pid}, killing the agent process only: {exc}'
+        )
+        return False
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()[:STDERR_EXCERPT_CHARS]
+        logger.warning(
+            f'CodingAgentTarget: taskkill exited {result.returncode} for process tree {pid}, '
+            f'killing the agent process only; its children may still be running: {detail}'
+        )
+        return False
+    return True
+
+
+def kill_direct(proc: asyncio.subprocess.Process) -> None:
+    """Fallback when taskkill fails: end the agent process itself. Its children are out of reach."""
+    with contextlib.suppress(ProcessLookupError):
+        proc.kill()
+
+
+async def kill_group(proc: asyncio.subprocess.Process, *, force: bool = False) -> None:
     if proc.returncode is not None and not force:
+        return
+    if not hasattr(os, 'killpg'):
+        # Windows has no process groups, so this is best effort: taskkill /T ends the tree it can still
+        # reach from the pid. Once the CLI has exited, its children are unreachable and the pid may be reused.
+        if proc.returncode is None:
+            operation = asyncio.ensure_future(asyncio.to_thread(taskkill_tree, proc.pid))
+            try:
+                tree_killed = await asyncio.shield(operation)
+            except asyncio.CancelledError:
+                # `to_thread` cannot stop taskkill. Wait for its bounded result so cleanup runs after the kill.
+                await finish_task_uninterruptibly(operation)
+                if operation.cancelled() or operation.exception() is not None or not operation.result():
+                    kill_direct(proc)
+                raise
+            if not tree_killed:
+                kill_direct(proc)
         return
     with contextlib.suppress(ProcessLookupError):
         os.killpg(proc.pid, signal.SIGKILL)

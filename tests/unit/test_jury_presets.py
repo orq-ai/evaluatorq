@@ -344,7 +344,7 @@ class TestDocsTable:
 
         page = Path(__file__).resolve().parents[2] / 'docs' / 'jury-presets.md'
         rows: dict[str, tuple[tuple[str, ...], str, float, tuple[str, ...]]] = {}
-        for line in page.read_text().splitlines():
+        for line in page.read_text(encoding='utf-8').splitlines():
             match = re.match(
                 r'^\| \*\*(?P<name>[^*]+)\*\*[^|]*\|(?P<judges>[^|]+)\|(?P<aggregation>[^|]+)\|'
                 r'\s*(?P<cost>[\d.]+)\s*\|(?P<reserve>[^|]*)\|',

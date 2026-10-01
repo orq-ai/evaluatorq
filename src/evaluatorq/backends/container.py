@@ -5,14 +5,15 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import ctypes
 import importlib.metadata
 import os
 import posixpath
 import re
-import shlex
 import signal
 import socket
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -20,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from evaluatorq.common.cli_tty import shell_join
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -55,6 +58,23 @@ ISOLATION_FLAGS = frozenset({
 ISOLATION_PAIRS = frozenset({'--pid', '--network', '--net', '--ipc', '--userns', '--uts'})
 RESERVED_LABELS = frozenset({CONTAINER_LABEL, HOST_PID_LABEL, HOST_LABEL})
 _MANAGED_VALUE_FLAGS = frozenset({'--entrypoint', '--user', '-u'})
+# The packaged image's `agent` user. A Windows host has no uid to map, so the container runs as this one.
+IMAGE_AGENT_ID = 1001
+# Win32 constants for windows_pid_alive.
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+ERROR_ACCESS_DENIED = 5
+STILL_ACTIVE = 259
+
+
+def host_ids() -> tuple[int, int]:
+    """Return the uid and gid the container runs as.
+
+    The host user's on POSIX, so files written to the mounts stay theirs; the image's `agent` user (1001) on
+    Windows, which has no uid to map.
+    """
+    if hasattr(os, 'getuid'):
+        return os.getuid(), os.getgid()
+    return IMAGE_AGENT_ID, IMAGE_AGENT_ID
 
 
 class DockerOptions(BaseModel):
@@ -370,7 +390,7 @@ def remove_containers(binary: str, context: str | None, names: Sequence[str], *,
                 return []
             pending = failed or [name for name in pending if name not in missing] or pending
             reason = proc.stderr.strip() or f'command exited with status {proc.returncode}'
-    command = shlex.join([*cli_prefix(binary, context), 'rm', '-f', *pending])
+    command = shell_join([*cli_prefix(binary, context), 'rm', '-f', *pending])
     logger.error(
         f'could not remove container(s) {", ".join(pending)}: {reason}. Their lease ends them within '
         f'{LEASE_CHECK_S * 2}s; to remove now run: {command}'
@@ -488,7 +508,8 @@ def install_exit_hooks() -> None:
         )
         return
     if should_install_signals:
-        for sig in (signal.SIGTERM, signal.SIGHUP):
+        # Windows has no SIGHUP.
+        for sig in (signal.SIGTERM, *((signal.SIGHUP,) if hasattr(signal, 'SIGHUP') else ())):
             previous = signal.getsignal(sig)
             _installed_signal_handlers[sig] = previous
             signal.signal(sig, make_signal_handler(previous))
@@ -496,6 +517,8 @@ def install_exit_hooks() -> None:
 
 def pid_alive(pid: int) -> bool:
     """Return whether a PID exists or is inaccessible to this process."""
+    if sys.platform == 'win32':
+        return windows_pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -503,6 +526,35 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def windows_pid_alive(pid: int) -> bool:
+    """Windows liveness check. `os.kill(pid, 0)` is not a probe there: signal 0 is CTRL_C_EVENT.
+
+    Limit: a process that exited with code 259 reads as alive, because 259 is also `STILL_ACTIVE`, so
+    `sweep_orphans` leaves its container to the lease.
+    """
+    if sys.platform != 'win32':
+        raise RuntimeError('windows_pid_alive is Windows only')
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    kernel32.OpenProcess.argtypes = (ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong)
+    kernel32.GetExitCodeProcess.argtypes = (ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong))
+    kernel32.CloseHandle.argtypes = (ctypes.c_void_p,)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+    if not handle:
+        return ctypes.get_last_error() == ERROR_ACCESS_DENIED  # exists, owned by someone else
+    try:
+        code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            logger.warning(
+                f'pid liveness: GetExitCodeProcess failed for pid {pid} (error {ctypes.get_last_error()}); '
+                'treating it as alive'
+            )
+            return True
+        return code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def sweep_orphans(binary: str, context: str | None) -> None:
