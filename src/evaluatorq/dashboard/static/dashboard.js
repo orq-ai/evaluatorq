@@ -39,9 +39,20 @@
 
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     var scope = evt.detail.target;
-    if (!scope || !window.vegaEmbed) return;
+    if (scope && scope.id === 'insights-content') syncInsightsTab();
+    if (!scope) return;
+    initInsightsMaps(scope);
+    if (!window.vegaEmbed) return;
 
-    scope.querySelectorAll('[data-vega-for]').forEach(function (tag) {
+    let tags = scope.querySelectorAll('[data-vega-for]');
+    // htmx removes script tags when allowScriptTags is false, including the
+    // application/json islands that hold chart specs. Read those inert tags
+    // from the response so the swapped chart can still be embedded.
+    if (!tags.length && scope.querySelector('.vega-chart') && evt.detail.xhr) {
+      const response = new DOMParser().parseFromString(evt.detail.xhr.responseText, 'text/html');
+      tags = response.querySelectorAll('[data-vega-for]');
+    }
+    tags.forEach(function (tag) {
       var id = tag.getAttribute('data-vega-for');
       if (!id) return;
 
@@ -65,6 +76,251 @@
       window.vegaEmbed(el, spec, { actions: false }).then(function (r) {
         window.__orqVegaViews[id] = r;
       });
+    });
+  });
+
+  function syncInsightsTab() {
+    const nav = document.querySelector('.insights-tabs');
+    if (!nav) return;
+    nav.querySelectorAll('a').forEach(function (link) {
+      const active = new URL(link.href).pathname === window.location.pathname;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+  }
+  document.body.addEventListener('htmx:historyRestore', syncInsightsTab);
+  window.addEventListener('popstate', function () {
+    syncInsightsTab();
+  });
+
+  function mapTraces(payload) {
+    if (payload.color_mode === 'continuous') {
+      const traces = [{
+        type: 'scatter3d', mode: 'markers', name: 'traces',
+        x: payload.points.map(function (p) { return p.x; }),
+        y: payload.points.map(function (p) { return p.y; }),
+        z: payload.points.map(function (p) { return p.z; }),
+        text: payload.points.map(function (p) { return p.trace_id + ' · ' + p.cluster_name; }),
+        customdata: payload.points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
+        hovertemplate: '%{text}<extra></extra>',
+        marker: { size: 4, color: payload.points.map(function (p) { return p.color_value; }),
+          colorscale: payload.color_scale, cmin: 0, cmax: 1, showscale: true,
+          colorbar: { title: 'Label value', thickness: 10 }, opacity: .85 }
+      }];
+      if (payload.missing_points && payload.missing_points.length) {
+        traces.push({ type: 'scatter3d', mode: 'markers', name: 'No value',
+          x: payload.missing_points.map(function (p) { return p.x; }),
+          y: payload.missing_points.map(function (p) { return p.y; }),
+          z: payload.missing_points.map(function (p) { return p.z; }),
+          text: payload.missing_points.map(function (p) { return p.trace_id; }),
+          customdata: payload.missing_points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
+          hovertemplate: '%{text}<extra>No value</extra>',
+          marker: { size: 4, color: '#e4e2df', symbol: 'circle', opacity: .85 } });
+      }
+      return traces;
+    }
+    let groups;
+    if (payload.color_mode === 'category') {
+      groups = [];
+      const categorySeen = new Set();
+      const groupsByCategory = new Map();
+      payload.points.forEach(function (point) {
+        const category = String(point.label_value);
+        let symbolGroups = groupsByCategory.get(category);
+        if (!symbolGroups) {
+          symbolGroups = new Map();
+          groupsByCategory.set(category, symbolGroups);
+        }
+        let group = symbolGroups.get(point.symbol);
+        if (!group) {
+          const showLegend = !categorySeen.has(category);
+          categorySeen.add(category);
+          group = { category: category, name: category, color: point.color, symbol: point.symbol,
+            showLegend: showLegend, points: [] };
+          symbolGroups.set(point.symbol, group);
+          groups.push(group);
+        }
+        group.points.push(point);
+      });
+    } else {
+      groups = payload.legend.map(function (item) {
+        return { id: item.cluster_id, name: item.name, color: item.color, symbol: item.symbol, points: [] };
+      });
+      const groupsByCluster = new Map(groups.map(function (group) { return [group.id, group]; }));
+      payload.points.forEach(function (point) {
+        const group = groupsByCluster.get(point.cluster_id);
+        if (group) group.points.push(point);
+      });
+    }
+    return groups.map(function (group) {
+      const points = group.points;
+      return { type: 'scatter3d', mode: 'markers', name: group.name,
+        showlegend: group.showLegend !== false,
+        x: points.map(function (p) { return p.x; }), y: points.map(function (p) { return p.y; }),
+        z: points.map(function (p) { return p.z; }), text: points.map(function (p) { return p.trace_id; }),
+        customdata: points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
+        hovertemplate: '%{text}<extra>' + group.name + '</extra>',
+        marker: { size: 4, color: group.color, symbol: group.symbol || 'circle', opacity: .85 } };
+    });
+  }
+
+  function showInsightsMapError(el, error) {
+    const parent = el.parentElement;
+    if (window.Plotly && window.Plotly.purge) window.Plotly.purge(el);
+    el.replaceChildren();
+    el.style.visibility = 'hidden';
+    let empty = parent.querySelector('[data-map-empty]');
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.className = 'insights-map-empty';
+      empty.setAttribute('data-map-empty', '');
+      empty.setAttribute('role', 'status');
+      parent.insertBefore(empty, el.nextSibling);
+    }
+    empty.textContent = 'Map unavailable: could not load map data.';
+    empty.hidden = false;
+    console.error('Insights map failed', error);
+  }
+
+  function drawInsightsMap(el) {
+    if (!el || el.offsetParent === null) return;
+    const requestId = (el.__insightsMapRequestId || 0) + 1;
+    el.__insightsMapRequestId = requestId;
+    if (!window.Plotly) {
+      showInsightsMapError(el, new Error('Plotly is unavailable'));
+      return;
+    }
+    const selector = el.closest('.insights-map-view').querySelector('[data-map-color]');
+    const colorBy = selector ? selector.value : 'cluster';
+    const baseUrl = el.getAttribute('data-map-url').replace(/color_by=[^&]*/, 'color_by=' + encodeURIComponent(colorBy));
+    fetch(baseUrl).then(function (response) {
+      if (!response.ok) throw new Error('Map request failed with status ' + response.status);
+      return response.json();
+    }).then(function (payload) {
+      if (el.__insightsMapRequestId !== requestId || !el.isConnected) return;
+      if (payload.error) throw new Error(payload.error);
+      const parent = el.parentElement;
+      let empty = parent.querySelector('[data-map-empty]');
+      const hasPoints = payload.points.length || (payload.missing_points && payload.missing_points.length);
+      const sand = payload.grid_color;
+      const bg = payload.background_color;
+      const axis = function (title) { return { title: { text: title }, showgrid: true, gridcolor: sand,
+        zeroline: false, showbackground: true, backgroundcolor: bg, showticklabels: true }; };
+      const layout = { margin: { l: 0, r: 0, t: 12, b: 0 }, showlegend: true, uirevision: 'insights-map',
+        legend: { orientation: 'h', x: 0, xanchor: 'left', y: 1, yanchor: 'bottom',
+          bgcolor: 'rgba(255,255,255,.8)', font: { size: 11 } },
+        scene: { xaxis: axis('UMAP 1'), yaxis: axis('UMAP 2'), zaxis: axis('UMAP 3'),
+          bgcolor: '#fff', aspectmode: 'cube', dragmode: 'orbit' }, paper_bgcolor: '#fff' };
+      const priorRender = el.__insightsMapRender || Promise.resolve();
+      const render = priorRender.catch(function () {}).then(function () {
+        if (el.__insightsMapRequestId !== requestId || !el.isConnected) return;
+        if (!hasPoints) {
+          if (!empty) {
+            empty = document.createElement('div');
+            empty.className = 'insights-map-empty';
+            empty.setAttribute('data-map-empty', '');
+            empty.setAttribute('role', 'status');
+            parent.insertBefore(empty, el.nextSibling);
+          }
+          empty.textContent = 'Map unavailable: no traces have coordinates and a readable value for this colour.';
+          empty.hidden = false;
+          if (window.Plotly.purge) window.Plotly.purge(el);
+          el.replaceChildren();
+          el.style.visibility = 'hidden';
+          return;
+        }
+        if (empty) empty.hidden = true;
+        el.style.visibility = '';
+        return Promise.resolve(window.Plotly.react(el, mapTraces(payload), layout, { displaylogo: false, responsive: true })).then(function () {
+          if (el.__insightsMapRequestId !== requestId) return;
+          el.removeAllListeners && el.removeAllListeners('plotly_click');
+          el.on('plotly_click', function (event) {
+            const point = event.points && event.points[0];
+            const cluster = point && point.customdata && point.customdata[0];
+            const mapLayout = el.closest('.insights-map-layout');
+            const panel = mapLayout ? mapLayout.querySelector('[data-map-detail]') : document.getElementById('insights-cluster-detail');
+            if (!panel || !point || !point.customdata) return;
+            const data = point.customdata;
+            panel.replaceChildren();
+            const heading = document.createElement('h3');
+            heading.textContent = data[1];
+            panel.appendChild(heading);
+            if (data[3] || data[4]) {
+              const meta = document.createElement('p');
+              meta.className = 'insights-muted';
+              meta.textContent = [data[3], data[4]].filter(Boolean).join(' · ');
+              panel.appendChild(meta);
+            }
+            if (data[2]) {
+              const summary = document.createElement('p');
+              summary.textContent = data[2];
+              panel.appendChild(summary);
+            }
+            if (!cluster || cluster === 'noise' || cluster === 'Unclassified') return;
+            const clusterPanel = document.createElement('div');
+            panel.appendChild(clusterPanel);
+            const detailUrl = el.getAttribute('data-cluster-detail-url-template');
+            if (window.htmx && detailUrl) window.htmx.ajax('GET', detailUrl.replace('{cluster_id}', encodeURIComponent(cluster)), { target: clusterPanel, swap: 'innerHTML' });
+            else clusterPanel.textContent = cluster;
+          });
+        });
+      });
+      el.__insightsMapRender = render;
+      return render;
+    }).catch(function (error) {
+      if (el.__insightsMapRequestId === requestId && el.isConnected) showInsightsMapError(el, error);
+    });
+  }
+
+  function initInsightsMaps(scope) {
+    if (!scope || !scope.querySelectorAll) return;
+    scope.querySelectorAll('.insights-map-chart').forEach(drawInsightsMap);
+  }
+
+  document.addEventListener('DOMContentLoaded', function () { initInsightsMaps(document); });
+  document.body.addEventListener('change', function (evt) {
+    if (evt.target.matches('[data-map-color]')) drawInsightsMap(evt.target.closest('.insights-map-view').querySelector('.insights-map-chart'));
+    if (evt.target.matches('[data-map-projection]')) {
+      const viewer = evt.target.closest('.insights-map-fullscreen-viewer');
+      const name = evt.target.value;
+      viewer.querySelectorAll('[data-map-projection-panel]').forEach(function (panel) {
+        panel.hidden = panel.getAttribute('data-map-projection-panel') !== name;
+      });
+      const panel = Array.from(viewer.querySelectorAll('[data-map-projection-panel]')).find(function (item) { return !item.hidden; });
+      if (panel) drawInsightsMap(panel.querySelector('.insights-map-chart'));
+    }
+  });
+  document.body.addEventListener('click', function (evt) {
+    const fullscreenButton = evt.target.closest('[data-map-fullscreen]');
+    if (fullscreenButton) {
+      const viewer = fullscreenButton.closest('.insights-map-fullscreen-viewer');
+      if (document.fullscreenElement === viewer) document.exitFullscreen();
+      else if (viewer.classList.contains('is-expanded')) viewer.classList.remove('is-expanded');
+      else if (viewer.requestFullscreen) viewer.requestFullscreen().catch(function () {
+        viewer.classList.add('is-expanded');
+        fullscreenButton.textContent = 'Exit full screen';
+      });
+      else viewer.classList.add('is-expanded');
+      fullscreenButton.textContent = document.fullscreenElement === viewer || viewer.classList.contains('is-expanded') ? 'Exit full screen' : 'Full screen';
+      setTimeout(function () {
+        const visible = viewer.querySelector('[data-map-projection-panel]:not([hidden]) .insights-map-chart');
+        if (visible && window.Plotly && window.Plotly.Plots) window.Plotly.Plots.resize(visible);
+      }, 100);
+      return;
+    }
+  });
+  document.addEventListener('fullscreenchange', function () {
+    const viewer = document.querySelector('.insights-map-fullscreen-viewer');
+    if (!viewer) return;
+    viewer.querySelector('[data-map-fullscreen]').textContent = document.fullscreenElement === viewer ? 'Exit full screen' : 'Full screen';
+    const visible = viewer.querySelector('[data-map-projection-panel]:not([hidden]) .insights-map-chart');
+    if (visible && window.Plotly && window.Plotly.Plots) window.Plotly.Plots.resize(visible);
+  });
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Escape') document.querySelectorAll('.insights-map-fullscreen-viewer.is-expanded').forEach(function (viewer) {
+      viewer.classList.remove('is-expanded');
+      viewer.querySelector('[data-map-fullscreen]').textContent = 'Full screen';
     });
   });
 

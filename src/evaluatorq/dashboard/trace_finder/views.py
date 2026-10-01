@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -14,6 +15,7 @@ from evaluatorq.dashboard.trace_finder import explorer_views
 from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
 from evaluatorq.trace_finder.columns import fmt_cost, fmt_duration, fmt_time, fmt_tokens
+from evaluatorq.trace_finder.export import export_filename
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 from evaluatorq.trace_finder.span_status import is_error_span, span_status_text
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, Kind, Segment, segments
@@ -196,6 +198,7 @@ def facet_menu(
     selection: FacetSelection | None = None,
     pending: bool = False,
     loaded_rows: Sequence[TraceRow] | None = None,
+    include_numeric: bool = True,
 ) -> str:
     """Two-level filter menu: a category list, and a value popout the client opens per category.
 
@@ -203,13 +206,16 @@ def facet_menu(
     on the page, so a page render never waits on the Orq facet call.
 
     ``loaded_rows`` adds a count next to each value, tallied from the rows already on the page (no
-    extra Orq call), so a count is of loaded traces, not of everything Orq holds.
+    extra Orq call), so a count is of loaded traces, not of everything Orq holds. Insights uses
+    ``include_numeric=False`` because its population accepts categorical facets only.
     """
     tallies = _loaded_tallies(loaded_rows) if loaded_rows is not None else {}
     items: list[str] = []
     subs: list[str] = []
     for name, label in FACET_LABELS:
         numeric_facet = name in NUMERIC_FACET_NAMES
+        if numeric_facet and not include_numeric:
+            continue
         selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
         values = tuple(dict.fromkeys((*_facet_values(catalogue, name), *sorted(selected_values))))
         if numeric_facet:
@@ -1077,7 +1083,28 @@ def body(
         explorer_numeric=explorer_numeric,
         explorer_view=explorer_view,
     )
-    return f'{controls_html}{run_status(snapshot, settings, has_explorer=explorer_view is not None)}'
+    analyze = ''
+    if snapshot.state == 'completed' and snapshot.dimensions is not None:
+        export_name = export_filename(snapshot)
+        local_filename = shlex.quote(export_name)
+        powershell_filename = "'" + export_name.replace("'", "''") + "'"
+        python = (
+            'from pathlib import Path\n'
+            'from evaluatorq.insights import InsightsPopulation, insights_sync\n\n'
+            f'population = InsightsPopulation.from_finder_export(Path({export_name!r}))\n'
+            'run = insights_sync(population)'
+        )
+        analyze = (
+            '<section class="finder-analyze-matches"><h3>Analyze matches</h3>'
+            '<p>Download the completed export to use it with the CLI or Python. A server-side copy is also saved for '
+            'the Insights wizard; enter the filename there. The examples below expect the downloaded file in your '
+            'current directory.</p>'
+            f'<p><a class="btn-secondary" href="/find/export.json?export={quote(export_name, safe="")}">Download and save {esc(export_name)}</a></p>'
+            f'<label>CLI (macOS/Linux)</label><pre><code>eq insights --from-finder {esc(local_filename)}</code></pre>'
+            f'<label>CLI (Windows PowerShell)</label><pre><code>eq insights --from-finder {esc(powershell_filename)}</code></pre>'
+            f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
+        )
+    return f'{controls_html}{run_status(snapshot, settings, has_explorer=explorer_view is not None)}{analyze}'
 
 
 def run_status(snapshot: RunSnapshot, settings: DashboardSettings, *, has_explorer: bool) -> str:

@@ -1,4 +1,4 @@
-"""Tests for saved dashboard scope and environment fallback resolution."""
+"""Tests for environment workspace links and saved profile host resolution."""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ def test_resolve_slug_none_when_unset() -> None:
 def test_resolve_slug_from_authenticated_cli_and_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard.orq_scope import OrqScope
 
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
     monkeypatch.setenv('ORQ_API_KEY', 'test-project-key')
     calls: list[tuple[str | None, bool]] = []
 
@@ -122,6 +123,8 @@ def test_uncached_slug_lookup_does_not_block_running_event_loop(monkeypatch: pyt
     from evaluatorq.dashboard.orq_scope import OrqScope
 
     monkeypatch.setenv('ORQ_API_KEY', 'slow-key')
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    ow._cli_slug_cache.clear()
     started = threading.Event()
     release = threading.Event()
 
@@ -141,6 +144,20 @@ def test_uncached_slug_lookup_does_not_block_running_event_loop(monkeypatch: pyt
         assert await lookup == 'orq-research'
 
     asyncio.run(exercise())
+@pytest.mark.parametrize('method', ['environment', 'cli_profile'])
+def test_legacy_saved_workspace_does_not_create_trace_links(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, method: str
+) -> None:
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: None)
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': method, 'orq_profile': 'staging', 'orq_workspace': 'old-workspace',
+    }), path)
+
+    assert ow.resolve_slug() is None
 
 
 # --- host -------------------------------------------------------------------

@@ -961,6 +961,8 @@ def test_load_keeps_ai_results_and_renders_answers_for_loaded_rows(explorer_clie
     )
     store.snapshot_value = RunSnapshot(
         state='completed',
+        created_at=datetime(2026, 9, 22, 12, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 9, 22, 12, 1, tzinfo=timezone.utc),
         results={'trace-0000': result},
         completed=1,
         matched=1,
@@ -1164,6 +1166,8 @@ def _judged_snapshot(**kwargs: Any) -> Any:
         selection=ValueSelection(kind='values', values=('yes',)),
     )
     kwargs.setdefault('explorer_generation', 1)
+    kwargs.setdefault('created_at', datetime(2026, 9, 22, 12, tzinfo=timezone.utc))
+    kwargs.setdefault('finished_at', datetime(2026, 9, 22, 12, 1, tzinfo=timezone.utc))
     return RunSnapshot(state='completed', within_results=True, results=results, dimensions=(dimension,), **kwargs)
 
 
@@ -1969,7 +1973,12 @@ def test_terminal_poll_includes_last_explorer_results(explorer_client) -> None:
 
     result = TraceClassification(trace_id='trace-0000', span_id='s', matched=True, raw_result={})
     store.snapshot_value = replace(
-        store.snapshot_value, state='completed', results={'trace-0000': result}, within_results=True
+        store.snapshot_value,
+        state='completed',
+        results={'trace-0000': result},
+        within_results=True,
+        created_at=datetime(2026, 9, 22, 12, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 9, 22, 12, 1, tzinfo=timezone.utc),
     )
     html = client.get('/find/poll').text
     assert 'hx-swap-oob="true"' in html

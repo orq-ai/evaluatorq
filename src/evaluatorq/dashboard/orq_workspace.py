@@ -4,10 +4,9 @@ Deep-links now derive their host + workspace from each run's own
 ``experiment_url`` (``{host}/{workspace}/experiments/{id}``; see
 ``orq_links.parse_experiment_url``), which the web app resolves correctly for
 anyone with access — no API key, no workspace config, no ``orq`` CLI. This module
-is the fallback for runs without an ``experiment_url``: it reads the saved
-dashboard workspace first, then the environment, then discovers the slug for
-the active credential through the Orq CLI. Links are hidden when no workspace
-slug is available.
+is the fallback for runs without an ``experiment_url``: it reads the
+workspace from the environment, then discovers the active CLI credential's
+slug. Links are hidden when no workspace slug is available.
 """
 
 from __future__ import annotations
@@ -74,21 +73,21 @@ def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_
 
 
 def resolve_slug() -> str | None:
-    """Workspace slug from settings, environment, or the authenticated CLI."""
-    from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
-
-    settings = load_settings()
-    if settings.orq_workspace:
-        return settings.orq_workspace
+    """Workspace slug from the environment or active Orq CLI credential."""
     env = os.environ.get('ORQ_WORKSPACE') or os.environ.get('ORQ_WORKSPACE_SLUG')
     if env and env.strip():
         return env.strip()
-    if settings.orq_profile:
+    if not shutil.which('orq'):
+        return None
+    from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
+
+    settings = load_settings()
+    if settings.orq_auth_method == 'cli_profile' and settings.orq_profile:
         return _cli_slug(settings.orq_profile, settings.orq_credential_fingerprint)
     api_key = os.environ.get('ORQ_API_KEY', '').strip()
     if api_key:
         return _cli_slug(None, credential_fingerprint(api_key, os.environ.get('ORQ_BASE_URL')))
-    return _cli_slug(None, None, use_cli_session=True) if shutil.which('orq') else None
+    return _cli_slug(None, None, use_cli_session=True)
 
 
 def resolve_base_url() -> str:

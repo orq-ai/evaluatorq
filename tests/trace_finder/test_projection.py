@@ -9,12 +9,56 @@ from typing import Any
 import pytest
 
 from evaluatorq.trace_finder.models import TraceRecord
-from evaluatorq.trace_finder.projection import estimate_tokens, project_trace
+from evaluatorq.trace_finder.orq_source import _conversation_messages
+from evaluatorq.trace_finder.projection import (
+    MAX_TOKEN_BUDGET,
+    estimate_tokens,
+    project_trace,
+)
 
 
 def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
     serialized = ''.join('{}[],:;' for _ in range(100))
     assert estimate_tokens(serialized) == len(serialized.encode('utf-8'))
+
+
+def test_default_projection_budget_accepts_more_than_the_previous_limit() -> None:
+    trace = _trace(messages=({'role': 'user', 'content': 'x' * 30_000},))
+
+    projection = project_trace(trace)
+
+    assert MAX_TOKEN_BUDGET == 50_000
+    assert projection.payload['messages'][0]['content'] == 'x' * 30_000
+    assert projection.omitted_bytes == 0
+    assert projection.estimated_tokens <= MAX_TOKEN_BUDGET
+
+
+def test_parts_text_block_with_content_key_is_kept() -> None:
+    text = 'x' * 2000
+    trace = _trace(messages=({'role': 'user', 'content': [{'type': 'text', 'content': text}]},))
+    assert text in project_trace(trace).serialized
+
+
+def test_chat_shaped_parts_text_is_normalized_into_message_content() -> None:
+    messages = _conversation_messages({
+        'input': [{'role': 'user', 'parts': [{'type': 'text', 'text': 'Keep this request.'}]}],
+        'output': [{'role': 'assistant', 'parts': [{'type': 'text', 'text': 'Keep this answer.'}]}],
+    })
+
+    assert [message['content'] for message in messages] == ['Keep this request.', 'Keep this answer.']
+
+
+def test_dict_content_text_slot_is_truncated_to_fit_the_projection_budget() -> None:
+    text = 'prefix-' + 'x' * 2000 + '-tail'
+    trace = _trace(messages=({'role': 'user', 'content': {'type': 'text', 'content': text}},))
+
+    projection = project_trace(trace, token_budget=300)
+
+    block = projection.payload['messages'][0]['content'][0]
+    assert block['text'].startswith('[... earlier bytes omitted ...]')
+    assert block['text'].endswith('-tail')
+    assert projection.estimated_tokens <= 300
+    assert projection.omitted_bytes > 0
 
 
 @pytest.mark.parametrize('block_type', ['text', 'input_text', 'output_text'])
@@ -43,7 +87,7 @@ def test_truncates_structured_text_blocks_preserving_shape_and_byte_accounting(
     assert trace.messages[0]['content'][1] == block
 
 
-def test_project_trace_preserves_visible_tool_structure_without_tool_bodies() -> None:
+def test_project_trace_keeps_tool_result_categories_but_drops_orphans() -> None:
     trace = _trace(
         status='failed',
         messages=(
@@ -100,12 +144,14 @@ def test_project_trace_preserves_visible_tool_structure_without_tool_bodies() ->
                         'name': 'lookup_customer',
                         'arguments': {'customer_id': 'cust_1', 'labels': ['vip']},
                         'status': 'completed',
+                        'result_category': None,
                     },
                     {
                         'id': 'call_456',
                         'name': 'charge_card',
                         'arguments': 'not valid json',
                         'status': 'error',
+                        'result_category': 'provider_error',
                     },
                 ],
             },
@@ -115,21 +161,303 @@ def test_project_trace_preserves_visible_tool_structure_without_tool_bodies() ->
     assert projection.omitted_messages == 0
     assert projection.omitted_bytes == 0
     assert 'secret tool body' not in projection.serialized
+    assert 'result_excerpt' not in projection.serialized
+    assert 'secret orphan tool body' not in projection.serialized
     assert 'lookup_customer' in projection.serialized
     assert 'error' in projection.serialized
     assert json.loads(projection.serialized) == projection.payload
 
 
-def test_project_trace_keeps_a_complete_newest_suffix_and_reports_discarded_units() -> None:
-    old_user = {'role': 'user', 'content': 'u' * 500}
+def test_idless_tool_call_does_not_attach_an_idless_result() -> None:
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'content': 'unrelated private result', 'status': 'failed'},
+    ))
+
+    projection = project_trace(trace)
+    call = projection.payload['messages'][0]['tool_calls'][0]
+
+    assert call['status'] == 'pending'
+    assert call['result_category'] is None
+    assert 'unrelated private result' not in projection.serialized
+
+
+@pytest.mark.parametrize('failure_signal', [{'status': 'failed'}, {'is_error': True}, {'error': 'unavailable'}])
+def test_otel_tool_error_is_projected_with_error_status(failure_signal: dict[str, Any]) -> None:
+    messages = _conversation_messages(
+        {
+            'attributes': {
+                'gen_ai': {
+                    'output': [
+                        {
+                            'role': 'assistant',
+                            'parts': [
+                                {
+                                    'type': 'tool_call',
+                                    'id': 'c1',
+                                    'name': 'lookup_invoice',
+                                    'arguments': {},
+                                }
+                            ],
+                        },
+                        {
+                            'role': 'tool',
+                            'parts': [
+                                {
+                                    'type': 'tool_call_response',
+                                    'id': 'c1',
+                                    'response': 'invoice service unavailable',
+                                    **failure_signal,
+                                }
+                            ],
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    trace = _trace(messages=tuple(messages))
+
+    projection = project_trace(trace)
+
+    projected_call = projection.payload['messages'][0]['tool_calls'][0]
+    assert projected_call['status'] == 'error'
+    assert projected_call['result_category'] == 'unavailable'
+
+
+def test_otel_explicit_success_status_precedes_error_prefix_heuristic() -> None:
+    messages = _conversation_messages(
+        {
+            'attributes': {
+                'gen_ai': {
+                    'output': [
+                        {
+                            'role': 'assistant',
+                            'parts': [
+                                {'type': 'tool_call', 'id': 'c1', 'name': 'lookup_invoice', 'arguments': {}}
+                            ],
+                        },
+                        {
+                            'role': 'tool',
+                            'parts': [
+                                {
+                                    'type': 'tool_call_response',
+                                    'id': 'c1',
+                                    'response': 'Error: no previous error was found',
+                                    'status': 'completed',
+                                }
+                            ],
+                        },
+                    ]
+                }
+            }
+        }
+    )
+    trace = _trace(messages=tuple(messages))
+
+    projection = project_trace(trace)
+
+    projected_call = projection.payload['messages'][0]['tool_calls'][0]
+    assert projected_call['status'] == 'completed'
+
+
+def test_tool_result_text_mentioning_error_is_not_marked_as_failure() -> None:
+    trace = _trace(
+        messages=(
+            {
+                'role': 'assistant',
+                'tool_calls': [
+                    {'id': 'c1', 'type': 'function', 'function': {'name': 'lookup_invoice', 'arguments': '{}'}}
+                ],
+            },
+            {
+                'role': 'tool',
+                'tool_call_id': 'c1',
+                'content': 'The error shown above was resolved successfully.',
+            },
+        )
+    )
+
+    projection = project_trace(trace)
+
+    assert projection.payload['messages'][0]['tool_calls'][0]['status'] == 'completed'
+
+
+@pytest.mark.parametrize(('body', 'category'), [
+    ('Error: invoice not found. secret=never persist', 'not_found'),
+    ('request failed: permission denied; token=opaque', 'permission_denied'),
+    ('provider rate limit exceeded', 'rate_limited'),
+    ('operation timed out', 'timeout'),
+    ('service unavailable', 'unavailable'),
+    ('invalid request payload', 'invalid_request'),
+    ('Error: opaque provider detail', 'provider_error'),
+])
+def test_tool_result_persists_only_allowlisted_error_category(body: str, category: str) -> None:
+    result = {'role': 'tool', 'tool_call_id': 'c1', 'content': body}
+    if not body.startswith('Error:'):
+        result['status'] = 'failed'
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        result,
+    ))
+
+    projection = project_trace(trace)
+    call = projection.payload['messages'][0]['tool_calls'][0]
+
+    assert call['status'] == 'error'
+    assert call['result_category'] == category
+    assert category in _allowed_result_categories()
+    assert body not in projection.serialized
+    assert 'result_excerpt' not in projection.serialized
+
+
+def test_successful_tool_text_mentioning_failure_category_stays_completed() -> None:
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {
+            'role': 'tool',
+            'tool_call_id': 'c1',
+            'content': 'No matching item was not found in cache; the fallback service is available.',
+        },
+    ))
+
+    call = project_trace(trace).payload['messages'][0]['tool_calls'][0]
+
+    assert call['status'] == 'completed'
+    assert call['result_category'] is None
+
+
+def test_nested_unknown_and_base64_secrets_never_enter_projection() -> None:
+    import base64
+
+    secret = 'undocumented-provider-secret-7b91'
+    encoded = base64.b64encode(secret.encode()).decode()
+    body = json.dumps({
+        'error': {
+            'provider_payload': {
+                'opaque': secret,
+                'binary': encoded,
+                'unclassified': {'credential_blob': 'nested-live-value'},
+            }
+        }
+    })
+    trace = _trace(messages=(
+        {'role': 'assistant', 'tool_calls': [{'id': 'c1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': body},
+    ))
+
+    projection = project_trace(trace)
+
+    assert projection.payload['messages'][0]['tool_calls'][0]['status'] == 'error'
+    assert projection.payload['messages'][0]['tool_calls'][0]['result_category'] == 'provider_error'
+    for value in (secret, encoded, 'nested-live-value', body):
+        assert value not in projection.serialized
+
+
+def _allowed_result_categories() -> set[str]:
+    return {
+        'not_found', 'permission_denied', 'rate_limited', 'timeout', 'unavailable',
+        'invalid_request', 'provider_error',
+    }
+
+
+def test_project_trace_keeps_first_user_message_and_newest_suffix_and_reports_the_middle() -> None:
+    first_user = {'role': 'user', 'content': 'First request'}
     old_assistant = {'role': 'assistant', 'content': 'a' * 500}
+    old_user = {'role': 'user', 'content': 'u' * 500}
     newest = {'role': 'user', 'content': 'Newest request'}
 
-    projection = project_trace(_trace(messages=(old_user, old_assistant, newest)), token_budget=300)
+    projection = project_trace(_trace(messages=(first_user, old_assistant, old_user, newest)), token_budget=300)
 
-    assert projection.payload == {'trace_status': 'completed', 'messages': [newest]}
+    assert projection.payload == {
+        'trace_status': 'completed',
+        'messages': [first_user, newest],
+        'omitted_earlier_messages': 2,
+    }
     assert projection.omitted_messages == 2
-    assert projection.omitted_bytes == sum(_serialized_bytes(message) for message in (old_user, old_assistant))
+    assert projection.omitted_bytes == sum(_serialized_bytes(message) for message in (old_assistant, old_user))
+    assert projection.estimated_tokens <= 300
+
+
+def test_first_user_message_survives_when_earlier_system_message_and_long_history_are_dropped() -> None:
+    system = {'role': 'system', 'content': 'You are helpful.'}
+    first_user = {'role': 'user', 'content': 'Please cancel my order'}
+    middle = tuple({'role': 'assistant', 'content': f'step {index} ' + 'x' * 200} for index in range(30))
+    newest = {'role': 'user', 'content': 'thanks'}
+
+    projection = project_trace(_trace(messages=(system, first_user, *middle, newest)), token_budget=1_000)
+
+    messages = projection.payload['messages']
+    assert first_user in messages
+    assert messages[-1] == newest
+    assert messages.index(first_user) < messages.index(newest)
+    assert projection.omitted_messages > 0
+    assert projection.estimated_tokens <= 1_000
+
+
+def test_oversized_first_user_message_is_truncated_within_budget() -> None:
+    first_user = {'role': 'user', 'content': 'u' * 5_000}
+    newest = {'role': 'user', 'content': 'new'}
+
+    projection = project_trace(_trace(messages=(first_user, newest)), token_budget=300)
+
+    assert projection.payload['messages'][0]['role'] == 'user'
+    assert projection.payload['messages'][0]['content'].startswith('[... earlier bytes omitted ...]')
+    assert projection.estimated_tokens <= 300
+
+
+def test_omission_marker_is_surfaced_to_the_model_and_stays_within_budget() -> None:
+    messages = tuple({'role': 'user', 'content': f'turn {index} ' + 'x' * 200} for index in range(40))
+
+    projection = project_trace(_trace(messages=messages), token_budget=1_000)
+
+    assert projection.omitted_messages > 0
+    assert f'"omitted_earlier_messages":{projection.omitted_messages}' in projection.serialized
+    assert projection.estimated_tokens <= 1_000
+
+
+def test_no_omission_marker_when_the_whole_trace_fits() -> None:
+    projection = project_trace(_trace(messages=({'role': 'user', 'content': 'hi'},)))
+
+    assert 'omitted_earlier_messages' not in projection.payload
+
+
+def test_dropping_earlier_messages_logs_a_warning() -> None:
+    from loguru import logger
+
+    logs: list[str] = []
+    sink = logger.add(lambda message: logs.append(str(message)), level='WARNING')
+    try:
+        messages = (
+            {'role': 'user', 'content': 'first'},
+            {'role': 'assistant', 'content': 'a' * 500},
+            {'role': 'user', 'content': 'new'},
+        )
+        projection = project_trace(_trace(messages=messages), token_budget=300)
+    finally:
+        logger.remove(sink)
+
+    assert projection.estimated_tokens <= 300
+    assert any('dropped 1 earlier message' in line for line in logs)
+
+
+def test_anthropic_tool_result_block_bodies_are_not_projected() -> None:
+    secret = 'SECRET-TOOL-BODY-TOKEN'
+    messages = (
+        {'role': 'user', 'content': 'look it up'},
+        {
+            'role': 'user',
+            'content': [
+                {'type': 'tool_result', 'tool_use_id': 'tu1', 'content': secret},
+                {'type': 'tool_result', 'tool_use_id': 'tu2', 'content': [{'type': 'text', 'text': secret}]},
+            ],
+        },
+    )
+
+    projection = project_trace(_trace(messages=messages))
+
+    assert secret not in projection.serialized
+    assert 'tool result body' in projection.serialized
 
 
 def test_project_trace_tail_truncates_an_oversized_newest_message() -> None:
@@ -196,10 +524,10 @@ def test_project_trace_tail_truncates_oversized_parsed_tool_arguments() -> None:
         )
     )
 
-    projection = project_trace(trace, token_budget=240)
+    projection = project_trace(trace, token_budget=280)
 
     projected_call = projection.payload['messages'][0]['tool_calls'][0]
-    assert projection.estimated_tokens <= 240
+    assert projection.estimated_tokens <= 280
     assert projection.omitted_bytes > 0
     assert projected_call['id'] == 'call_789'
     assert projected_call['name'] == 'search_orders'

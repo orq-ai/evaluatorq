@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 
@@ -36,6 +36,9 @@ class DashboardSettings(BaseModel):
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
     ask_ai_mode: Literal['immediate', 'review'] = 'immediate'
+    orq_auth_method: Literal['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'] = 'environment'
+    orq_api_key_ciphertext: str | None = None
+    orq_oauth_server: str | None = None
     orq_profile: str | None = None
     orq_profile_host: str | None = None
     orq_credential_fingerprint: str | None = None
@@ -57,6 +60,15 @@ class DashboardSettings(BaseModel):
             logger.warning('Dropping unknown explorer column(s) {} from dashboard settings', ', '.join(unknown))
         return tuple(key for key in value if key in COLUMNS)
 
+    @model_validator(mode='before')
+    @classmethod
+    def migrate_auth_method(cls, value: object) -> object:
+        """Infer the legacy profile auth choice when older config lacks the field."""
+
+        if isinstance(value, dict) and 'orq_auth_method' not in value and value.get('orq_profile'):
+            return {**value, 'orq_auth_method': 'cli_profile'}
+        return value
+
     @field_validator(
         'orq_profile',
         'orq_profile_host',
@@ -64,6 +76,7 @@ class DashboardSettings(BaseModel):
         'orq_workspace',
         'orq_project_id',
         'orq_project_name',
+        'orq_oauth_server',
         mode='before',
     )
     @classmethod
@@ -164,6 +177,10 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     are ignored with a warning.
     """
     values = load_settings().model_dump()
+    # Older Settings files may contain a saved workspace or project. Authentication
+    # now uses the selected credential's full scope; callers can still override
+    # these fields explicitly for a single invocation.
+    values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
     for field, env_name in (
         ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
         ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
@@ -198,3 +215,31 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     if overrides:
         values.update({key: value for key, value in overrides.items() if value is not None})
     return DashboardSettings.model_validate(values)
+
+
+def store_api_key(settings: DashboardSettings, key: str) -> DashboardSettings:
+    """Encrypt a user-entered API key and return settings containing ciphertext only.
+
+    The encryption key is stored in macOS Keychain on macOS. Other platforms
+    require ``EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY`` to be set to a Fernet key.
+    """
+    from evaluatorq.trace_finder.secure_credentials import encrypt_api_key
+
+    normalized = key.strip()
+    if not normalized:
+        raise ValueError('API key must not be blank')
+    return settings.model_copy(
+        update={
+            'orq_auth_method': 'stored_api_key',
+            'orq_api_key_ciphertext': encrypt_api_key(normalized),
+        }
+    )
+
+
+def read_stored_api_key(settings: DashboardSettings) -> str | None:
+    """Decrypt the saved user-entered API key, if one is configured."""
+    if not settings.orq_api_key_ciphertext:
+        return None
+    from evaluatorq.trace_finder.secure_credentials import decrypt_api_key
+
+    return decrypt_api_key(settings.orq_api_key_ciphertext)

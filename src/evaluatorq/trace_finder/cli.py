@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path  # noqa: TC003 — Typer resolves this annotation at runtime
 from typing import Annotated, Any
@@ -20,6 +19,7 @@ from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import (
     DEFAULT_ORQ_BASE_URL,
+    OrqProfile,
     close_orq_client,
     list_orq_profiles,
     resolve_orq_client,
@@ -42,9 +42,25 @@ from .models import (
 from .orq_source import OrqSourceError
 from .pipeline import build_run_store
 from .run_store import RunStore
-from .settings import credential_fingerprint, effective_settings
+from .settings import effective_settings
 
 MAX_FIND_WAIT_SECONDS = 2 * 60 * 60
+
+
+def resolve_cli_profile(name: str | None) -> OrqProfile | None:
+    """Use an explicitly named or saved Orq profile without falling back when it is unavailable."""
+    if name is None:
+        return None
+    selected = next((candidate for candidate in list_orq_profiles() if candidate.name == name), None)
+    if selected is None:
+        raise ValueError(f'Orq profile {name!r} is unavailable. Check `orq auth profile list`.')
+    if '*' in selected.api_key:
+        raise ValueError(
+            f'Orq profile {name!r} has a masked key that evaluatorq cannot read. '
+            'Run `orq doctor --fix` or use ORQ_API_KEY.'
+        )
+    return selected
+
 
 _FIND_EPILOG = examples(
     '# find traces whose conversations match a semantic question',
@@ -296,24 +312,14 @@ def find(
     })
     orq = None
     try:
-        selected = None
-        profile_name = profile if profile is not None else settings.orq_profile
-        if profile_name is not None:
-            selected = next((candidate for candidate in list_orq_profiles() if candidate.name == profile_name), None)
-            if selected is None:
-                raise ValueError(f'Orq profile {profile_name!r} is unavailable. Check `orq auth profile list`.')
-            if '*' in selected.api_key:
-                raise ValueError(
-                    f'Orq profile {profile_name!r} has a masked key that evaluatorq cannot read. '
-                    'Run `orq doctor --fix` or use ORQ_API_KEY.'
-                )
+        saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
+        profile_name = profile if profile is not None else saved_profile
+        selected = resolve_cli_profile(profile_name)
         if selected is None:
-            fingerprint = credential_fingerprint(os.environ.get('ORQ_API_KEY'), os.environ.get('ORQ_BASE_URL'))
             orq = resolve_orq_client()
             resolved = resolve_llm_client(require_orq=True, max_retries=0)
         else:
             host = selected.server or DEFAULT_ORQ_BASE_URL
-            fingerprint = credential_fingerprint(selected.api_key, host)
             orq = resolve_orq_client(selected.api_key, base_url=host)
             resolved = resolve_llm_client(
                 extra_api_key=selected.api_key, orq_host=host, require_orq=True, max_retries=0
@@ -323,9 +329,6 @@ def find(
             asyncio.run(close_orq_client(orq))
         emit_error(exc)
         raise typer.Exit(code=2) from None
-
-    if profile_name != settings.orq_profile or fingerprint != settings.orq_credential_fingerprint:
-        settings = settings.model_copy(update={'orq_project_id': None, 'orq_project_name': None})
 
     client = resolved.client
     runner_entered = False

@@ -289,7 +289,7 @@ class RunStore:
                 if traces is None:
                     population = request.population.model_copy(
                         update={
-                            'facets': _merge_facets(request.population.facets, generated_filters),
+                            'facets': merge_facets(request.population.facets, generated_filters),
                             'numeric': _merge_numeric(request.population.numeric, plan.numeric),
                         }
                     )
@@ -386,7 +386,7 @@ class RunStore:
                         await self.explorer.narrow(
                             explorer_generation,
                             {trace.trace_id for trace in staged_traces},
-                            facets=_merge_facets(request.population.facets, generated_filters),
+                            facets=merge_facets(request.population.facets, generated_filters),
                             numeric=_merge_numeric(request.population.numeric, generated_numeric),
                         )
                     staged_traces = staged_traces[: request.population.limit]
@@ -734,7 +734,7 @@ class RunStore:
         return _detach(view) if detach else view
 
 
-def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
+def merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
     """Merge facets with caller-supplied non-empty values taking precedence."""
 
     return FacetSelection(
@@ -921,13 +921,18 @@ def _within_numeric(trace: TraceRecord, bounds: NumericFilters) -> bool:
     return True
 
 
-def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
+def merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
     """Merge numeric bounds with each caller-supplied bound taking precedence."""
 
     return NumericFilters(**{
         name: getattr(caller, name) if getattr(caller, name) is not None else getattr(generated, name)
         for name in NumericFilters.model_fields
     })
+
+
+def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
+    """Internal spelling retained by the trace-finder planner."""
+    return merge_numeric(caller, generated)
 
 
 def _detach(snapshot: RunSnapshot) -> RunSnapshot:

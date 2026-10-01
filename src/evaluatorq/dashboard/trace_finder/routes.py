@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import itertools
+import json
 import os
 import secrets
+import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
@@ -16,11 +21,17 @@ from starlette.responses import Response
 
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import (
-    DEFAULT_ORQ_BASE_URL,
     OrqProfile,
     close_orq_client,
     list_orq_profiles,
     resolve_orq_client,
+)
+from evaluatorq.common.run_store_dir import get_store_dir
+from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.insights_launch import (
+    FINDER_EXPORT_REFERENCE_DIR,
+    read_private_finder_reference,
+    validate_private_finder_reference_dir,
 )
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder import explorer_views
@@ -49,6 +60,7 @@ from evaluatorq.trace_finder import (
     export_json,
     load_facet_catalogue,
 )
+from evaluatorq.trace_finder.export import export_filename
 
 if TYPE_CHECKING:
     from evaluatorq.trace_finder import FacetCatalogue
@@ -71,6 +83,199 @@ from evaluatorq.trace_finder.table_csv import export_table_csv
 _NUMERIC_FIELDS = tuple(f'{name}_{bound}' for name in NUMERIC_FACET_NAMES for bound in ('min', 'max'))
 CONFIRM_ROWS = 500
 _POLL_RENDER_SEQUENCE = itertools.count(1)
+_FINDER_EXPORT_RETENTION = 50
+_FINDER_EXPORT_HANDOFF_GRACE = timedelta(hours=1)
+_FINDER_EXPORT_REFERENCE_MAX_AGE = timedelta(days=30)
+_FINDER_EXPORT_THREAD_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _finder_export_lock(export_dir: Path):
+    """Serialize Finder export replacement and pruning across threads and processes."""
+    export_dir.mkdir(parents=True, exist_ok=True)
+    with _FINDER_EXPORT_THREAD_LOCK:
+        lock_path = export_dir / '.finder-export.lock'
+        flags = os.O_CREAT | os.O_RDWR
+        if hasattr(os, 'O_NOFOLLOW'):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(lock_path, flags, 0o600)
+        try:
+            if hasattr(os, 'fchmod'):
+                os.fchmod(descriptor, 0o600)
+            try:
+                import fcntl
+            except ImportError:
+                try:
+                    import msvcrt
+                except ImportError as exc:
+                    raise OSError('Finder export inter-process locking is unavailable') from exc
+                # msvcrt locks byte ranges, so make byte zero available first.
+                # Competing initializers write the same byte at offset zero.
+                if os.fstat(descriptor).st_size == 0:
+                    os.write(descriptor, b'\0')
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                # LK_LOCK waits for contention and raises if it cannot acquire
+                # the lock. Never continue with only the process-local lock.
+                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _referenced_finder_exports(export_dir: Path) -> set[Path] | None:
+    """Find exports in saved and active runs, returning None if references are uncertain."""
+    referenced: set[Path] = set()
+    try:
+        run_paths = list(get_store_dir('insights-runs').glob('insights_*.json'))
+    except OSError as exc:
+        logger.warning('Could not inspect Insights runs for Finder export references: {}', exc)
+        return None
+    export_root = export_dir.resolve()
+    for run_path in run_paths:
+        try:
+            data = json.loads(run_path.read_text(encoding='utf-8'))
+            population = data.get('population') if isinstance(data, dict) else None
+            value = population.get('finder_export') if isinstance(population, dict) else None
+            if not isinstance(value, str) or not value:
+                continue
+            candidate = Path(value).expanduser()
+            resolved = (candidate if candidate.is_absolute() else export_root / candidate).resolve()
+            if (
+                resolved.parent == export_root
+                and resolved.name.startswith('trace-finder-')
+                and resolved.suffix == '.json'
+            ):
+                referenced.add(resolved)
+        except (OSError, ValueError, TypeError, RuntimeError) as exc:
+            logger.warning('Could not inspect Insights run {} for Finder export references: {}', run_path, exc)
+            return None
+    runs_dir = get_store_dir('insights-runs')
+    manifests_dir = runs_dir / '.manifests'
+    references_dir = runs_dir / FINDER_EXPORT_REFERENCE_DIR
+    now = datetime.now(timezone.utc).timestamp()
+    try:
+        validate_private_finder_reference_dir(references_dir)
+    except FileNotFoundError:
+        return referenced
+    except OSError as exc:
+        logger.warning('Could not inspect Finder export lease directory {}: {}', references_dir, exc)
+        return None
+    for marker in references_dir.glob('*.json'):
+        candidate, trusted = _inflight_finder_export(marker, manifests_dir, export_root, now)
+        if not trusted:
+            return None
+        if candidate is not None:
+            referenced.add(candidate)
+    return referenced
+
+
+def _inflight_finder_export(
+    marker: Path, manifests_dir: Path, export_root: Path, now: float
+) -> tuple[Path | None, bool]:
+    """Read one lease and say whether its export reference was trustworthy."""
+    try:
+        # An unreadable marker can block pruning while it might still belong to
+        # a live run, but the lease itself expires after the maximum run age.
+        if now - marker.lstat().st_mtime > _FINDER_EXPORT_REFERENCE_MAX_AGE.total_seconds():
+            try:
+                marker.unlink(missing_ok=True)
+            except IsADirectoryError:
+                logger.warning('Ignoring expired non-file Finder export lease {}', marker)
+            else:
+                logger.warning('Removed expired Finder export lease {} before pruning', marker)
+            return None, True
+        if not marker.stem.replace('-', '').replace('_', '').isalnum():
+            logger.warning('Could not inspect in-flight Finder export reference with invalid run ID: {}', marker)
+            return None, False
+        data = read_private_finder_reference(marker)
+        manifest_path = manifests_dir / f'{marker.stem}.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        if not isinstance(manifest, dict):
+            return None, False
+        age = now - manifest_path.stat().st_mtime
+        if manifest.get('status') != 'running' or age > _FINDER_EXPORT_REFERENCE_MAX_AGE.total_seconds():
+            marker.unlink(missing_ok=True)
+            return None, True
+        value = data.get('finder_export')
+        if not isinstance(value, str) or not value:
+            return None, False
+        candidate_path = Path(value).expanduser()
+        candidate = (candidate_path if candidate_path.is_absolute() else export_root / candidate_path).resolve()
+        if (
+            candidate.parent == export_root
+            and candidate.name.startswith('trace-finder-')
+            and candidate.suffix == '.json'
+        ):
+            return candidate, True
+        return None, True
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
+        logger.warning('Could not inspect in-flight Finder export reference {}: {}', marker, exc)
+        return None, False
+
+
+def _prune_finder_exports(export_dir: Path) -> None:
+    """Keep recent handoff exports, the newest older exports, and saved Insights sources."""
+    try:
+        with _finder_export_lock(export_dir):
+            _prune_finder_exports_locked(export_dir)
+    except OSError as exc:
+        logger.warning('Could not prune saved Finder exports in {}: {}', export_dir, exc)
+
+
+def _prune_finder_exports_locked(export_dir: Path) -> None:
+    """Prune exports while the cross-process export lock is held."""
+    try:
+        files = [path for path in export_dir.glob('trace-finder-*.json') if path.is_file() and not path.is_symlink()]
+        files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        # With at most the retention limit of exports, every unreferenced file
+        # is retained anyway. Avoid scanning all Insights manifests and leases
+        # on the common download path until pruning could actually remove a file.
+        if len(files) <= _FINDER_EXPORT_RETENTION:
+            return
+        retained = _referenced_finder_exports(export_dir)
+        if retained is None:
+            logger.warning('Skipping Finder export pruning because Insights references could not be verified')
+            return
+        handoff_cutoff = datetime.now(timezone.utc).timestamp() - _FINDER_EXPORT_HANDOFF_GRACE.total_seconds()
+        retained.update(path.resolve() for path in files if path.stat().st_mtime >= handoff_cutoff)
+        unreferenced = [path for path in files if path.resolve() not in retained]
+        for path in unreferenced[_FINDER_EXPORT_RETENTION:]:
+            try:
+                path.unlink()
+            except OSError as exc:  # noqa: PERF203 - one failed deletion must not stop retention cleanup
+                logger.warning('Could not remove expired Finder export {}: {}', path.name, exc)
+    except (OSError, RuntimeError) as exc:
+        logger.warning('Could not prune saved Finder exports in {}: {}', export_dir, exc)
+
+
+def _save_finder_export(export_dir: Path, export_name: str, payload: str) -> None:
+    """Persist one completed export and prune older unreferenced files off-loop."""
+    with _finder_export_lock(export_dir):
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode='w', encoding='utf-8', dir=export_dir, prefix='.finder-', suffix='.tmp', delete=False
+            ) as handle:
+                temporary = Path(handle.name)
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(export_dir / export_name)
+        finally:
+            if temporary is not None:
+                with contextlib.suppress(OSError):
+                    temporary.unlink(missing_ok=True)
+        _prune_finder_exports_locked(export_dir)
 
 
 class FinderRunForm(BaseModel):
@@ -98,9 +303,9 @@ def initialize_finder_settings(app: Any) -> None:
     if getattr(app.state, 'finder_settings', None) is not None:
         return
     settings = effective_settings()
-    profiles = list_orq_profiles() if settings.orq_profile is not None else ()
+    profiles = list_orq_profiles() if settings.orq_auth_method == 'cli_profile' else ()
     app.state.finder_profile = next((p for p in profiles if p.name == settings.orq_profile), None)
-    if settings.orq_profile is not None and app.state.finder_profile is None:
+    if settings.orq_auth_method == 'cli_profile' and app.state.finder_profile is None:
         logger.warning(
             'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
         )
@@ -118,8 +323,10 @@ def _settings(app: Any) -> Any:
     return settings
 
 
-def _profile(app: Any) -> OrqProfile | None:
+def selected_orq_profile(app: Any) -> OrqProfile | None:
     settings = _settings(app)
+    if settings.orq_auth_method != 'cli_profile':
+        return None
     profile: OrqProfile | None = getattr(app.state, 'finder_profile', None)
     if settings.orq_profile is not None and profile is None:
         raise ValueError(
@@ -130,22 +337,33 @@ def _profile(app: Any) -> OrqProfile | None:
     return profile
 
 
+def selected_dashboard_auth(app: Any) -> DashboardAuth:
+    """Resolve the dashboard's saved method, including API keys outside CLI profiles."""
+
+    settings = _settings(app)
+    profile = selected_orq_profile(app)
+    return resolve_dashboard_auth(settings, profiles=(profile,) if profile is not None else ())
+
+
 def _api_available(app: Any) -> bool:
     try:
-        return _profile(app) is not None or bool(os.environ.get('ORQ_API_KEY', '').strip())
+        auth = selected_dashboard_auth(app)
+        return auth.method == 'cli_oauth' or bool(auth.api_key)
     except ValueError:
         return False
 
 
 def _unavailable_reason(app: Any) -> str:
     try:
-        _profile(app)
+        auth = selected_dashboard_auth(app)
     except ValueError as exc:
         return str(exc)
     failure = getattr(app.state, 'finder_unavailable_reason', None)
     if failure:
         return str(failure)
-    return 'Set ORQ_API_KEY to load traces'
+    if auth.method == 'environment' and not auth.api_key:
+        return 'ORQ_API_KEY is not set. Choose an authentication method in Settings.'
+    return 'Choose a working authentication method in Settings to load traces'
 
 
 async def _build_store(app: Any) -> RunStore | None:
@@ -153,17 +371,18 @@ async def _build_store(app: Any) -> RunStore | None:
     settings = _settings(app)
     resolved = None
     try:
-        profile = _profile(app)
-        resolved = resolve_llm_client(
-            extra_api_key=profile.api_key if profile else None,
-            orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-            require_orq=True,
-            max_retries=0,
-        )
-        orq = resolve_orq_client(
-            profile.api_key if profile else None,
-            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-        )
+        auth = selected_dashboard_auth(app)
+        if auth.method == 'cli_oauth':
+            orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+        else:
+            resolved = resolve_llm_client(
+                extra_api_key=auth.api_key,
+                orq_host=auth.base_url,
+                require_orq=True,
+                max_retries=0,
+            )
+            llm = resolved.client
+            orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
     except (ImportError, ValueError) as exc:
         if resolved is not None and resolved.owned:
             await resolved.client.close()
@@ -176,10 +395,10 @@ async def _build_store(app: Any) -> RunStore | None:
         try:
             await close_orq_client(orq)
         finally:
-            if resolved.owned:
+            if resolved is not None and resolved.owned:
                 await resolved.client.close()
 
-    return build_run_store(settings, client=resolved.client, orq=orq, cleanup=cleanup)
+    return build_run_store(settings, client=llm, orq=orq, cleanup=cleanup)
 
 
 async def _store(
@@ -253,12 +472,13 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
         if expires > now and cached_window == window:
             return catalogue
     orq = None
+    llm = None
     try:
-        profile = _profile(app)
-        orq = resolve_orq_client(
-            profile.api_key if profile else None,
-            base_url=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-        )
+        auth = selected_dashboard_auth(app)
+        if auth.method == 'cli_oauth':
+            orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+        else:
+            orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
         catalogue = await load_facet_catalogue(
             orq,
             start=now - timedelta(days=window),
@@ -281,6 +501,11 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
                 await close_orq_client(orq)
             except Exception as exc:  # noqa: BLE001 — cleanup failure must not replace the menu response.
                 logger.opt(exception=True).warning('Could not close the facet catalogue Orq client: {}', exc)
+        if llm is not None:
+            try:
+                await llm.close()
+            except Exception as exc:  # noqa: BLE001 — cleanup failure must not replace the menu response.
+                logger.opt(exception=True).warning('Could not close the facet catalogue LLM client: {}', exc)
     if generation != app.state.finder_generation:
         logger.debug('Discarding facet values loaded for a retired finder configuration')
         return None
@@ -1237,10 +1462,25 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         snapshot = await store.snapshot()
         if snapshot.state != 'completed' or snapshot.request is None or snapshot.dimensions is None:
             return Response('Not found', status_code=404, media_type='text/plain')
+        export_name = export_filename(snapshot)
+        requested_export = req.query_params.get('export')
+        if requested_export is not None and requested_export != export_name:
+            return Response(
+                'This Finder result changed. Refresh the page to download the current result.',
+                status_code=409,
+                media_type='text/plain',
+            )
+        payload = export_json(snapshot)
+        export_dir = get_store_dir('finder-exports')
+        try:
+            await asyncio.to_thread(_save_finder_export, export_dir, export_name, payload)
+        except OSError as exc:
+            logger.warning('Could not save Finder export for Insights: {}', exc)
+            return Response('Could not save Finder export for Insights.', status_code=500, media_type='text/plain')
         return Response(
-            export_json(snapshot),
+            payload,
             media_type='application/json',
-            headers={'Content-Disposition': f'attachment; filename="trace-finder-{snapshot.generation}.json"'},
+            headers={'Content-Disposition': f'attachment; filename="{export_name}"'},
         )
 
     @app.get('/find/facets')

@@ -55,6 +55,23 @@ _SIDEBAR_TOGGLE_SCRIPT = (
     '</script>\n'
 )
 
+_AUTH_TOAST_SCRIPT = (
+    '<script>'
+    "document.addEventListener('DOMContentLoaded',function(){"
+    "fetch('/auth/status',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(s){"
+    "if(s.status==='valid')return;"
+    "var id='eq-auth-toast:'+s.method+':'+s.status+':'+s.message;"
+    "try{if(sessionStorage.getItem(id))return;sessionStorage.setItem(id,'1');}catch(e){}"
+    "var toast=document.getElementById('eq-auth-toast');if(!toast)return;"
+    "toast.querySelector('.eq-auth-toast-message').textContent=s.message;"
+    "toast.hidden=false;toast.classList.toggle('is-warning',s.status==='unavailable');"
+    'var close=function(){toast.hidden=true};'
+    "toast.querySelector('button').addEventListener('click',close,{once:true});"
+    'setTimeout(close,12000);'
+    '}).catch(function(){});});'
+    '</script>'
+)
+
 # The v1 brand mark (orq ink-nodes logomark), vendored from the design system.
 # Inlined rather than served via /static/ so it renders in tests and exports too.
 _MARK_PATH = Path(__file__).parent / 'static' / 'orq-mark.svg'
@@ -134,6 +151,7 @@ _NAV: list[tuple[str, str, str, str]] = [
         '/traces',
         TRACE_ICON,
     ),
+    ('insights', 'Insights', '/insights', '<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-7"/>'),
     (
         'settings',
         'Settings',
@@ -232,6 +250,7 @@ def page(
         '</head>\n'
         '<body class="eq-dashboard">\n'
         f'{_SIDEBAR_TOGGLE_SCRIPT}'
+        f'{_AUTH_TOAST_SCRIPT}'
         '<div class="app-shell">\n'
         f'{sidebar}\n'
         '<div class="app-main">\n'
@@ -243,6 +262,11 @@ def page(
         f'{body_html}\n'
         '</main>\n'
         '</div>\n'
+        '</div>\n'
+        '<div id="eq-auth-toast" class="eq-auth-toast" role="status" hidden>'
+        '<span class="eq-auth-toast-message"></span>'
+        '<a href="/settings">Settings</a>'
+        '<button type="button" aria-label="Dismiss authentication notice">&times;</button>'
         '</div>\n'
         '</body>\n'
         '</html>\n'
