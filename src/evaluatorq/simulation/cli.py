@@ -35,10 +35,23 @@ from dataclasses import dataclass
 from pathlib import Path  # noqa: TC003 — typer resolves the command annotations at runtime
 from typing import TYPE_CHECKING, Annotated, Any, NoReturn
 
+import click
 import typer
 from loguru import logger
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_config import (
+    JSON_OUTPUT_HELP,
+    config_option_help,
+    echo_schema,
+    explicitly_set,
+    load_config,
+    overlay_model,
+    parse_json_model,
+    pick,
+    reserve_stdout_for_json,
+    unmapped_fields,
+)
 from evaluatorq.common.cli_epilog import examples as _examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
@@ -55,6 +68,9 @@ from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+    from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
     from evaluatorq.simulation.types import SimulationRun
 
 app = typer.Typer(
@@ -489,6 +505,124 @@ _UPLOAD_DATASET_EPILOG = _examples(
 # ---------------------------------------------------------------------------
 
 
+_CONFIG_HELP_TAIL = (
+    'Explicit flags override it. --sim-model wins over "llm_config.model" when passed; '
+    '"target" takes the agent:<key> / deployment:<key> string forms only.'
+)
+
+_SIMULATE_CONFIG_HELP = f'{config_option_help("simulate()", "eq sim schema")} {_CONFIG_HELP_TAIL}'
+_RUN_CONFIG_HELP = f'{config_option_help("generate_and_simulate()", "eq sim schema --command run")} {_CONFIG_HELP_TAIL}'
+
+_LLM_CONFIG_HELP = (
+    'LLMCallConfig for every simulation-side LLM call as a JSON object, e.g. '
+    '\'{"model": "openai/gpt-5.6-luna", "temperature": 0.2}\'. Replaces "llm_config" from --config. '
+    '--sim-model wins over its "model" when passed.'
+)
+
+# Parameters both `sim simulate` and `sim run` share with their config file, keyed by parameter,
+# valued by the public keyword (and config field) each one stands for.
+_SHARED_CONFIG_FIELDS: dict[str, str] = {
+    'target': 'target',
+    'memory_entity': 'memory_entity_id',
+    'report_path': 'report_path',
+    'name': 'run_name',
+    'max_turns': 'max_turns',
+    'datapoint_parallelism': 'datapoint_parallelism',
+    'llm_parallelism': 'llm_parallelism',
+    'evaluator': 'evaluator_names',
+    'recommendations': 'recommendations',
+    'executive_summary': 'executive_summary',
+}
+_SIMULATE_CONFIG_FIELDS: dict[str, str] = {
+    **_SHARED_CONFIG_FIELDS,
+    'dataset_id': 'dataset_id',
+    'experiment_id': 'experiment_id',
+    'experiment_run_id': 'experiment_run_id',
+    'from_run': 'previous_run',
+}
+_RUN_CONFIG_FIELDS: dict[str, str] = {
+    **_SHARED_CONFIG_FIELDS,
+    'agent_description': 'agent_description',
+    'num_personas': 'num_personas',
+    'num_scenarios': 'num_scenarios',
+    'persona_seed': 'persona_seeds',
+    'scenario_seed': 'scenario_seeds',
+    'generation_instructions': 'generation_instructions',
+    'target_reasoning_effort': 'target_reasoning_effort',
+}
+_INLINE_SOURCE_FIELDS = ('datapoints', 'personas', 'scenarios')
+
+
+@dataclass(frozen=True)
+class ConfiguredRun:
+    """A sim command's parameters after folding in ``--config`` and ``--llm-config``."""
+
+    values: dict[str, Any]
+    """Every config-backed parameter, keyed by CLI parameter name: flag if passed, else config, else default."""
+    llm_config: LLMCallConfig
+    no_save: bool
+    sdk_overrides: dict[str, Any]
+    """Config fields no flag owns, under the internal run function's keyword names, forwarded as given."""
+
+
+def _apply_sim_config(
+    ctx: typer.Context,
+    cfg: BaseModel | None,
+    cli_args: dict[str, Any],
+    *,
+    fields: dict[str, str],
+    llm_config_json: str | None,
+) -> ConfiguredRun:
+    """Resolve a sim command's config-backed parameters: explicit flag > config file > flag default."""
+    from evaluatorq.simulation.run_config import to_internal_kwargs
+
+    params = cli_args
+    values = {param: pick(ctx, cfg, param=param, field=field, value=params[param]) for param, field in fields.items()}
+    no_save = not pick(ctx, cfg, param='no_save', field='save', value=not params['no_save'])
+
+    blob = parse_json_model(llm_config_json, LLMCallConfig, flag='--llm-config') if llm_config_json else None
+    base: LLMCallConfig | None = blob or getattr(cfg, 'llm_config', None)
+    sim_model: str = params['sim_model']
+    if base is None:
+        llm_config = LLMCallConfig(model=sim_model)
+    elif explicitly_set(ctx, 'sim_model') or 'model' not in base.model_fields_set:
+        llm_config = overlay_model(LLMCallConfig, base, {'model': sim_model})
+    else:
+        llm_config = base
+
+    mapped = set(fields.values()) | {'save', 'llm_config'}
+    overrides = to_internal_kwargs(unmapped_fields(cfg, mapped=mapped))
+    return ConfiguredRun(values=values, llm_config=llm_config, no_save=no_save, sdk_overrides=overrides)
+
+
+@app.command()
+def schema(
+    input_schema: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--input/--output',
+            help='--input (default): the shape --config accepts. --output: the SimulationRun that --json prints.',
+        ),
+    ] = True,
+    command: Annotated[
+        str,
+        typer.Option(
+            '--command',
+            click_type=click.Choice(['simulate', 'run']),
+            help="Which command's --config to describe with --input: `sim simulate` or `sim run`.",
+        ),
+    ] = 'simulate',
+) -> None:
+    """Print the JSON schema of `sim simulate` / `sim run`'s config file or of their JSON result."""
+    from evaluatorq.simulation.run_config import GenerateAndSimulateRunConfig, SimulateRunConfig
+    from evaluatorq.simulation.types import SimulationRun
+
+    if not input_schema:
+        echo_schema(SimulationRun, output=True)
+        return
+    echo_schema(SimulateRunConfig if command == 'simulate' else GenerateAndSimulateRunConfig, output=False)
+
+
 @dataclass(frozen=True)
 class SimulateOptions:
     verbose: int
@@ -507,6 +641,7 @@ def _resolve_simulate_options(
     quiet: bool,
     yes: bool,
     executive_summary: bool,
+    inline_source: bool = False,
 ) -> SimulateOptions:
     """Configure logging and hooks for ``eq simulate``, then validate its input-source flags.
 
@@ -548,6 +683,7 @@ def _resolve_simulate_options(
             ('--dataset-id', dataset_id),
             ('--experiment-id', experiment_id),
             ('--from-run', from_run),
+            ('inline datapoints/personas/scenarios in --config', True if inline_source else None),
         )
         if given is not None
     ]
@@ -568,6 +704,7 @@ def _resolve_simulate_options(
 
 @app.command(no_args_is_help=True, epilog=_SIMULATE_EPILOG)
 def simulate(
+    ctx: typer.Context,
     datapoints: Annotated[
         Path | None,
         typer.Option(
@@ -757,6 +894,18 @@ def simulate(
             help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
         ),
     ] = True,
+    config_source: Annotated[
+        str | None,
+        typer.Option('--config', metavar='PATH|-', help=_SIMULATE_CONFIG_HELP),
+    ] = None,
+    llm_config_json: Annotated[
+        str | None,
+        typer.Option('--llm-config', metavar='JSON', help=_LLM_CONFIG_HELP),
+    ] = None,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help=JSON_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run simulations from a pre-built datapoints file, an Orq dataset, experiment, or previous run.
 
@@ -777,7 +926,36 @@ def simulate(
 
     Note: --target agent:<key> invokes a hosted Orq agent through the Responses
     router. --target deployment:<key> uses the deployment callback path.
+
+    Every option above can also come from --config, a JSON file of simulate() keyword arguments, which
+    additionally accepts inline "datapoints", or "personas" and "scenarios", as the input source.
     """
+    # Typer converts each value (str -> Path, str -> enum) only when it calls this function, so
+    # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
+    cli_args = dict(locals())
+    from evaluatorq.simulation.run_config import SimulateRunConfig
+
+    emit_json = reserve_stdout_for_json(ctx) if json_output else None
+    cfg = load_config(config_source, SimulateRunConfig) if config_source is not None else None
+    configured = _apply_sim_config(ctx, cfg, cli_args, fields=_SIMULATE_CONFIG_FIELDS, llm_config_json=llm_config_json)
+    values = configured.values
+    dataset_id = values['dataset_id']
+    experiment_id = values['experiment_id']
+    experiment_run_id = values['experiment_run_id']
+    from_run = values['from_run']
+    target = values['target']
+    memory_entity = values['memory_entity']
+    report_path = values['report_path']
+    name = values['name']
+    max_turns = values['max_turns']
+    datapoint_parallelism = values['datapoint_parallelism']
+    llm_parallelism = values['llm_parallelism']
+    evaluator = values['evaluator']
+    recommendations = values['recommendations']
+    executive_summary = values['executive_summary']
+    no_save = configured.no_save
+    sim_model = configured.llm_config.model
+
     options = _resolve_simulate_options(
         datapoints=datapoints,
         dataset_id=dataset_id,
@@ -789,6 +967,7 @@ def simulate(
         quiet=quiet,
         yes=yes,
         executive_summary=executive_summary,
+        inline_source=any(field in configured.sdk_overrides for field in _INLINE_SOURCE_FIELDS),
     )
     hooks = options.hooks
 
@@ -816,6 +995,8 @@ def simulate(
                 evaluation_name=name,
                 hooks=hooks,
                 recommendations=recommendations,
+                llm_config=configured.llm_config,
+                sdk_overrides=configured.sdk_overrides,
             )
         )
     except KeyboardInterrupt:
@@ -851,6 +1032,9 @@ def simulate(
         _write_report(run, report_path)
         _echo_saved('Report', report_path)
 
+    if emit_json is not None:
+        emit_json(run)
+
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
         _echo_saved('Run', run_path)
@@ -874,13 +1058,23 @@ async def _simulate_impl(
     evaluator_names: list[str] | None,
     evaluation_name: str,
     hooks: Any = None,
-    recommendations: bool = True,
+    recommendations: bool | SimulationRecommendationConfig = True,
+    llm_config: LLMCallConfig | None = None,
+    sdk_overrides: dict[str, Any] | None = None,
 ) -> SimulationRun:
+    """Run ``_simulate_run`` from the command's resolved values.
+
+    ``llm_config`` defaults to one built from ``sim_model``. ``sdk_overrides`` carries the ``--config``
+    fields no flag owns, under ``_simulate_run``'s keyword names; inline ``datapoints`` or
+    ``personas``/``scenarios`` there replace the ``--input`` file as the input source.
+    """
     from evaluatorq.simulation.api import _simulate_run
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
-    loaded = None
-    if dataset_id is None and experiment_id is None and previous_run is None:
+    overrides = dict(sdk_overrides or {})
+    inline = any(field in overrides for field in _INLINE_SOURCE_FIELDS)
+    loaded = overrides.pop('datapoints', None)
+    if dataset_id is None and experiment_id is None and previous_run is None and not inline:
         if datapoints_path is None:  # the command guarantees exactly one source
             raise ValueError('One of datapoints_path, dataset_id, experiment_id, or previous_run is required')
         loaded = load_datapoints_from_jsonl(str(datapoints_path))
@@ -894,7 +1088,7 @@ async def _simulate_impl(
         experiment_run_id=experiment_run_id,
         previous_run=previous_run,
         target=target,
-        llm_config=LLMCallConfig(model=sim_model),
+        llm_config=llm_config if llm_config is not None else LLMCallConfig(model=sim_model),
         max_turns=max_turns,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
@@ -902,6 +1096,7 @@ async def _simulate_impl(
         evaluation_name=evaluation_name,
         hooks=hooks,
         recommendations=recommendations,
+        **overrides,
     )
 
 
@@ -912,6 +1107,7 @@ async def _simulate_impl(
 
 @app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
+    ctx: typer.Context,
     agent_description: Annotated[
         str | None,
         typer.Option('--agent-description', help='Free-text description of the agent under test.'),
@@ -1123,6 +1319,18 @@ def run(
             help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
         ),
     ] = True,
+    config_source: Annotated[
+        str | None,
+        typer.Option('--config', metavar='PATH|-', help=_RUN_CONFIG_HELP),
+    ] = None,
+    llm_config_json: Annotated[
+        str | None,
+        typer.Option('--llm-config', metavar='JSON', help=_LLM_CONFIG_HELP),
+    ] = None,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help=JSON_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Generate personas and scenarios, then run simulations (generate + simulate).
 
@@ -1136,7 +1344,39 @@ def run(
 
     If --target is an agent target, --agent-description may be omitted and is
     fetched from Orq agent context. Other targets require --agent-description.
+
+    Every option above can also come from --config, a JSON file of generate_and_simulate() keyword arguments,
+    which additionally reaches the ones without a flag, such as "edge_case_percentage".
     """
+    # Typer converts each value (str -> Path, str -> enum) only when it calls this function, so
+    # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
+    cli_args = dict(locals())
+    from evaluatorq.simulation.run_config import GenerateAndSimulateRunConfig
+
+    emit_json = reserve_stdout_for_json(ctx) if json_output else None
+    cfg = load_config(config_source, GenerateAndSimulateRunConfig) if config_source is not None else None
+    configured = _apply_sim_config(ctx, cfg, cli_args, fields=_RUN_CONFIG_FIELDS, llm_config_json=llm_config_json)
+    values = configured.values
+    agent_description = values['agent_description']
+    target = values['target']
+    memory_entity = values['memory_entity']
+    report_path = values['report_path']
+    name = values['name']
+    max_turns = values['max_turns']
+    datapoint_parallelism = values['datapoint_parallelism']
+    llm_parallelism = values['llm_parallelism']
+    num_personas = values['num_personas']
+    num_scenarios = values['num_scenarios']
+    persona_seed = values['persona_seed']
+    scenario_seed = values['scenario_seed']
+    generation_instructions = values['generation_instructions']
+    target_reasoning_effort = values['target_reasoning_effort']
+    evaluator = values['evaluator']
+    recommendations = values['recommendations']
+    executive_summary = values['executive_summary']
+    no_save = configured.no_save
+    sim_model = configured.llm_config.model
+
     if quiet:
         verbose = -1
 
@@ -1187,6 +1427,8 @@ def run(
                 scenario_seeds=scenario_seed,
                 generation_instructions=generation_instructions,
                 target_reasoning_effort=target_reasoning_effort,
+                llm_config=configured.llm_config,
+                sdk_overrides=configured.sdk_overrides,
             )
         )
     except KeyboardInterrupt:
@@ -1222,6 +1464,9 @@ def run(
         _write_report(run, report_path)
         _echo_saved('Report', report_path)
 
+    if emit_json is not None:
+        emit_json(run)
+
     if not no_save:
         run_path = _auto_save_run(run=run, run_name=name)
         _echo_saved('Run', run_path)
@@ -1244,12 +1489,19 @@ async def _run_impl(
     evaluation_name: str,
     save_datapoints: Path | None = None,
     hooks: Any = None,
-    recommendations: bool = True,
+    recommendations: bool | SimulationRecommendationConfig = True,
     persona_seeds: list[str] | None = None,
     scenario_seeds: list[str] | None = None,
     generation_instructions: str = '',
     target_reasoning_effort: str | None = None,
+    llm_config: LLMCallConfig | None = None,
+    sdk_overrides: dict[str, Any] | None = None,
 ) -> SimulationRun:
+    """Run ``_generate_and_simulate_run`` from the command's resolved values.
+
+    ``llm_config`` defaults to one built from ``sim_model``. ``sdk_overrides`` carries the ``--config``
+    fields no flag owns, under ``_generate_and_simulate_run``'s keyword names.
+    """
     from evaluatorq.simulation.api import _generate_and_simulate_run
 
     emit = None
@@ -1268,7 +1520,7 @@ async def _run_impl(
     return await _generate_and_simulate_run(
         agent_description=agent_description,
         target=target,
-        llm_config=LLMCallConfig(model=sim_model),
+        llm_config=llm_config if llm_config is not None else LLMCallConfig(model=sim_model),
         max_turns=max_turns,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
@@ -1283,6 +1535,7 @@ async def _run_impl(
         scenario_seeds=scenario_seeds,
         generation_instructions=generation_instructions,
         target_reasoning_effort=target_reasoning_effort,
+        **(sdk_overrides or {}),
     )
 
 

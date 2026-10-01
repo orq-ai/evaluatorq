@@ -19,7 +19,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` |
 | **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls · core-evaluation judge |
 | **API endpoint** | `LLMCallConfig.api` / `EvaluatorConfig.api` (`contracts.py`, `redteam/contracts.py`) | `chat_completions` · `responses` |
-| **own-calls LLM config** | `llm_config=` on `simulate()` / `generate_and_simulate()` / `generate()` / the trace helpers, `llm_config=` on `red_team()`, plus the `sim_model=` / `model=` shorthands | full `LLMCallConfig` · model-name shorthand · neither (per-call-site defaults) |
+| **own-calls LLM config** | `llm_config=` on `simulate()` / `generate_and_simulate()` / `generate()` / the trace helpers, `llm_config=` on `red_team()`, plus the `sim_model=` / `model=` shorthands; on the CLI, `--llm-config` or `"llm_config"` in `--config` for the full config and `--sim-model` / `--attack-model` / `--evaluator-model` for the shorthand | full `LLMCallConfig` · model-name shorthand · neither (per-call-site defaults) |
 
 ### `reasoning-effort scope` is a choice, not a value
 

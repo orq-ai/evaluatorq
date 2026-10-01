@@ -53,6 +53,9 @@ Targets — provide **exactly one**:
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` info; `-vv` debug. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
+| `--config` | `PATH \| -` / `None` | JSON file of `generate_and_simulate()` keyword arguments, or `-` to read it from stdin. See [Driving the CLI from a config file](#driving-the-cli-from-a-config-file); `eq sim schema --command run` prints the accepted shape. |
+| `--llm-config` | JSON / `None` | `LLMCallConfig` for every simulation-side LLM call as a JSON object. Replaces `"llm_config"` from `--config`. `--sim-model` wins over its `"model"` when passed. |
+| `--json` | `bool` / `False` | Print the final `SimulationRun` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
 ---
 
@@ -64,9 +67,9 @@ Run simulations from a pre-built datapoints JSONL file.
 eq sim simulate --input dp.jsonl --target agent:<key>
 ```
 
-Targets — same three flags as `eq sim run`. Provide exactly one of four input sources: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed by `--experiment-run-id`), or `--from-run`.
+Targets — same three flags as `eq sim run`. Provide exactly one input source: `--input` (`-i`), `--dataset-id`, `--experiment-id` (optionally narrowed by `--experiment-run-id`), `--from-run`, or inline `datapoints` (or `personas` with `scenarios`) in `--config`.
 
-There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only. To pin the target's reasoning effort on a pre-built datapoint set, call `simulate()` with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
+There is no `--target-reasoning-effort` flag here — it is a `eq sim run` flag only. To pin the target's reasoning effort on a pre-built datapoint set, set `"target_reasoning_effort"` in `--config`, or call `simulate()` with `target_reasoning_effort=` from Python (see [Tuning](../tuning.md)).
 
 | Flag | Type / Default | Description |
 |---|---|---|
@@ -92,6 +95,84 @@ There is no `--target-reasoning-effort` here — it is a `eq sim run` flag only.
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
+| `--config` | `PATH \| -` / `None` | JSON file of `simulate()` keyword arguments, or `-` to read it from stdin. See [Driving the CLI from a config file](#driving-the-cli-from-a-config-file); `eq sim schema` prints the accepted shape. |
+| `--llm-config` | JSON / `None` | `LLMCallConfig` for every simulation-side LLM call as a JSON object. Replaces `"llm_config"` from `--config`. `--sim-model` wins over its `"model"` when passed. |
+| `--json` | `bool` / `False` | Print the final `SimulationRun` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
+
+### Driving the CLI from a config file
+
+`--config` on `eq sim simulate` and `eq sim run` takes the keyword arguments of the Python `simulate()` and `generate_and_simulate()` functions as one JSON object, under their public names (`run_name`, `experiment_description`, `raise_on_execution_failure`). That reaches every data-shaped parameter, including the ones without a flag: inline `personas` and `scenarios` or `datapoints`, `scoring`, `target_agent_timeout_ms`, `max_tool_result_chars`, `per_simulation_timeout_s`, `upload_results`, the full `llm_config`, and on `sim run` `edge_case_percentage`. Pass a path, or `-` to read it from stdin. YAML is not accepted.
+
+Inline `datapoints`, or `personas` with `scenarios`, count as the input source of `eq sim simulate`, so the file below needs no `--input`:
+
+```json
+{
+  "target": "agent:my-agent",
+  "personas": [
+    {
+      "name": "Impatient customer",
+      "patience": 0.2,
+      "assertiveness": 0.8,
+      "politeness": 0.4,
+      "technical_level": 0.3,
+      "communication_style": "terse",
+      "background": "Wants a refund today"
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "Refund",
+      "goal": "Get a full refund",
+      "criteria": [{"description": "Agent asks for the order number", "type": "must_happen"}]
+    }
+  ],
+  "max_turns": 6,
+  "llm_config": {"model": "openai/gpt-5.6-luna", "temperature": 0.2},
+  "target_reasoning_effort": "low",
+  "per_simulation_timeout_s": 300
+}
+```
+
+```bash
+eq sim simulate --config sim.json --json > run.json
+```
+
+`eq sim run` takes the generation keywords the same way:
+
+```json
+{
+  "target": "agent:my-agent",
+  "num_personas": 4,
+  "edge_case_percentage": 0.25,
+  "generation_instructions": "customers replying in German",
+  "llm_config": {"model": "openai/gpt-5.6-luna"}
+}
+```
+
+```bash
+eq sim run --config gen.json --num-scenarios 3 --json
+```
+
+A flag passed on the command line beats the file, and the file beats the flag default. The command checks where a value came from, not what it is, so `--max-turns 10` wins over `"max_turns": 6` even though 10 is the default. A `null` in the file means "not set" and falls back to the flag default. `"save": false` in the file has the effect of `--no-save`.
+
+Unknown keys fail the command before anything runs, at every depth, so `"num_personas"` in a `sim simulate` file or `"patiense"` inside a persona is rejected with the field path. `"target"` takes only the `agent:<key>` and `deployment:<key>` string forms; a callable or `AgentTarget`, `user_simulator`, `judge`, `hooks` and `generation_client` stay Python-only.
+
+With `--json`, stdout carries the `SimulationRun` and nothing else; the run-store save, the report files and every progress line still happen, on stderr.
+
+---
+
+## `eq sim schema`
+
+Print a JSON schema: what `--config` accepts, or what `--json` prints.
+
+```bash
+eq sim schema [--input | --output] [--command simulate|run]
+```
+
+| Flag | Type / Default | Description |
+|---|---|---|
+| `--input` / `--output` | `bool` / `--input` | `--input` prints the config file schema. `--output` prints the `SimulationRun` schema, which both commands share. |
+| `--command` | `simulate \| run` / `simulate` | Which command's config file `--input` describes: `SimulateRunConfig` for `eq sim simulate`, `GenerateAndSimulateRunConfig` for `eq sim run`. |
 
 ---
 

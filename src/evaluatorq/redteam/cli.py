@@ -16,6 +16,18 @@ from typing import TYPE_CHECKING, Annotated, Any
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_config import (
+    JSON_OUTPUT_HELP,
+    config_option_help,
+    echo_schema,
+    explicitly_set,
+    load_config,
+    overlay_model,
+    parse_json_model,
+    pick,
+    reserve_stdout_for_json,
+    unmapped_fields,
+)
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
@@ -35,6 +47,7 @@ from evaluatorq.redteam.contracts import (
 
 if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import RedTeamReport
+    from evaluatorq.redteam.run_config import RedTeamRunConfig
 
 app = typer.Typer(
     name='redteam',
@@ -53,6 +66,8 @@ _RUN_EPILOG = examples(
     'eq redteam run -t agent:my-agent -c ASI01',
     '# replay the last run against a new agent version (same attacks, new target)',
     'eq redteam run -t agent:my-agent-v2 --from-run latest',
+    '# every red_team() keyword argument from a JSON file, the report as JSON on stdout',
+    'eq redteam run --config run.json --json > report.json',
 )
 
 
@@ -250,9 +265,107 @@ class RunOptions:
     delivery_methods: list[DeliveryMethod | str] | None
     categories: list[str] | None
     vulnerabilities: list[str] | None
-    target_config: Any
     targets: list[str] | str
-    config: LLMConfig
+
+
+# ``eq redteam run`` flag -> the path of the ``LLMConfig`` field it sets.
+_LLM_CONFIG_FLAGS: dict[str, tuple[str, ...]] = {
+    'attack_model': ('attacker', 'model'),
+    'evaluator_model': ('evaluator', 'model'),
+    'min_evaluation_coverage': ('evaluator', 'min_evaluation_coverage'),
+    'target_timeout_ms': ('target_agent_timeout_ms',),
+    'max_target_retries': ('max_target_retries',),
+    'retry_count': ('retry_count',),
+    'max_tool_continuations': ('max_tool_continuations',),
+    'target_reasoning_effort': ('target_reasoning_effort',),
+}
+
+
+def _resolve_llm_config(ctx: typer.Context, base: LLMConfig | None, cli_args: dict[str, Any]) -> LLMConfig:
+    """Fold the narrow LLM flags onto ``base`` (``--llm-config``, else the config file's ``llm_config``).
+
+    With no base every flag applies, defaults included, which is how the command has always built its
+    config. With a base only the flags passed on the command line apply, each to its own field, so a
+    blob's ``attacker.temperature`` survives ``--attack-model``.
+    """
+    updates: dict[str, Any] = {}
+    for param, path in _LLM_CONFIG_FLAGS.items():
+        if base is not None and not explicitly_set(ctx, param):
+            continue
+        node = updates
+        for key in path[:-1]:
+            node = node.setdefault(key, {})
+        node[path[-1]] = cli_args[param]
+    return overlay_model(LLMConfig, base, updates)
+
+
+# ``eq redteam run`` parameters a config file can also set, keyed by parameter, valued by the `red_team`
+# keyword (and `RedTeamRunConfig` field) each one stands for.
+_RUN_CONFIG_FIELDS: dict[str, str] = {
+    'target': 'target',
+    'name': 'name',
+    'mode': 'mode',
+    'categories': 'categories',
+    'vulnerabilities': 'vulnerabilities',
+    'strategies': 'strategies',
+    'delivery_methods': 'delivery_methods',
+    'max_turns': 'max_turns',
+    'max_per_category': 'max_per_category',
+    'attacker_instructions': 'attacker_instructions',
+    'datapoint_parallelism': 'datapoint_parallelism',
+    'llm_parallelism': 'llm_parallelism',
+    'generated_strategy_count': 'generated_strategy_count',
+    'max_dynamic_datapoints': 'max_dynamic_datapoints',
+    'max_static_datapoints': 'max_static_datapoints',
+    'dataset': 'dataset',
+    'from_run': 'previous_run',
+    'artifacts_dir': 'artifacts_dir',
+    'save': 'save',
+    'executive_summary': 'generate_executive_summary',
+    'recommendations': 'recommendations',
+}
+# Config fields the command resolves itself rather than through the table above.
+_RUN_CONFIG_SPECIAL = frozenset({'generate_strategies', 'cleanup_memory', 'target_config', 'llm_config', 'verbosity'})
+
+
+def _apply_run_config(ctx: typer.Context, cfg: RedTeamRunConfig | None, cli_args: dict[str, Any]) -> dict[str, Any]:
+    """Resolve every config-backed parameter of ``eq redteam run`` into `red_team` keyword arguments.
+
+    Each value is the flag when it was passed, else the config file's value, else the flag default. Config
+    fields no flag owns (``datapoints``, ``attack_techniques``, ``description``) are forwarded as given.
+    ``llm_config`` and ``verbosity`` are resolved by the caller.
+    """
+    from evaluatorq.redteam.contracts import TargetConfig
+
+    params = cli_args
+    resolved: dict[str, Any] = {
+        field: pick(ctx, cfg, param=param, field=field, value=params[param])
+        for param, field in _RUN_CONFIG_FIELDS.items()
+    }
+    resolved['generate_strategies'] = pick(
+        ctx,
+        cfg,
+        param='no_generate_strategies',
+        field='generate_strategies',
+        value=not params['no_generate_strategies'],
+    )
+    resolved['cleanup_memory'] = pick(
+        ctx, cfg, param='no_cleanup_memory', field='cleanup_memory', value=not params['no_cleanup_memory']
+    )
+    system_prompt = params['system_prompt']
+    if cfg is not None and cfg.target_config is not None and not explicitly_set(ctx, 'system_prompt'):
+        resolved['target_config'] = cfg.target_config
+    else:
+        resolved['target_config'] = TargetConfig(system_prompt=system_prompt) if system_prompt else None
+
+    target = resolved['target']
+    if not target:
+        raise typer.BadParameter('provide --target, or set "target" in --config.', param_hint="'--target'")
+    resolved['target'] = [target] if isinstance(target, str) else list(target)
+
+    mapped = set(_RUN_CONFIG_FIELDS.values()) | _RUN_CONFIG_SPECIAL
+    resolved.update(unmapped_fields(cfg, mapped=mapped))
+    return resolved
 
 
 def _resolve_run_options(
@@ -261,25 +374,14 @@ def _resolve_run_options(
     vulnerabilities: list[str] | None,
     strategies: list[str] | None,
     delivery_methods: list[str] | None,
-    system_prompt: str | None,
-    attack_model: str,
-    evaluator_model: str,
-    min_evaluation_coverage: float,
-    target_timeout_ms: int,
-    max_target_retries: int,
-    retry_count: int,
-    max_tool_continuations: int,
-    target_reasoning_effort: str | None,
 ) -> RunOptions:
-    """Flatten, validate and resolve ``eq redteam run``'s raw CLI flags into a RunOptions bundle.
+    """Flatten and validate ``eq redteam run``'s data-selection flags into a RunOptions bundle.
 
     Raises ``typer.BadParameter`` on an unknown vulnerability ID or an unknown
     strategy name. An unknown delivery method is deliberately not fatal: it is
     kept as a literal string so a dataset's custom delivery method stays
     filterable, and a warning is echoed to stderr.
     """
-    from evaluatorq.redteam.contracts import LLMCallConfig, TargetConfig
-
     # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
     # Done before validation so the checks below see individual tokens.
     strategies = _split_csv(strategies)
@@ -337,41 +439,28 @@ def _resolve_run_options(
             )
         resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
 
-    target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
     targets: list[str] | str = target if len(target) > 1 else target[0]
-
-    # Build LLMConfig from CLI flags
-    config = LLMConfig(
-        attacker=LLMCallConfig(model=attack_model),
-        evaluator=EvaluatorConfig(model=evaluator_model, min_evaluation_coverage=min_evaluation_coverage),
-        target_agent_timeout_ms=target_timeout_ms,
-        max_target_retries=max_target_retries,
-        retry_count=retry_count,
-        max_tool_continuations=max_tool_continuations,
-        target_reasoning_effort=target_reasoning_effort,
-    )
 
     return RunOptions(
         strategies=strategies,
         delivery_methods=resolved_delivery_methods,
         categories=categories,
         vulnerabilities=vulnerabilities,
-        target_config=target_config,
         targets=targets,
-        config=config,
     )
 
 
 @app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
+    ctx: typer.Context,
     target: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option(
             '--target',
             '-t',
-            help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>" (deployments need --mode static). For OpenAI models use OpenAIModelTarget in the Python API. Repeatable.',
+            help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>" (deployments need --mode static). For OpenAI models use OpenAIModelTarget in the Python API. Repeatable. Required unless --config sets "target".',
         ),
-    ],
+    ] = None,
     name: Annotated[
         str | None,
         typer.Option('--name', '-n', help="Experiment name (defaults to 'red-team')."),
@@ -626,10 +715,46 @@ def run(
         str | None,
         typer.Option('--system-prompt', help='System prompt for the target model/agent.'),
     ] = None,
+    config_source: Annotated[
+        str | None,
+        typer.Option(
+            '--config',
+            metavar='PATH|-',
+            help=config_option_help('red_team()', 'eq redteam schema'),
+        ),
+    ] = None,
+    llm_config_json: Annotated[
+        str | None,
+        typer.Option(
+            '--llm-config',
+            metavar='JSON',
+            help=(
+                'LLMConfig as a JSON object, e.g. \'{"attacker": {"temperature": 0.9}}\'. Replaces "llm_config" '
+                'from --config. --attack-model, --evaluator-model, --min-evaluation-coverage, '
+                '--target-timeout-ms, --max-target-retries, --retry-count, --max-tool-continuations and '
+                '--target-reasoning-effort win over it for their own field when passed.'
+            ),
+        ),
+    ] = None,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help=JSON_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run red teaming against one or more targets."""
+    # Typer converts each value (str -> Path, str -> enum) only when it calls this function, so
+    # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
+    cli_args = dict(locals())
+    from evaluatorq.redteam.run_config import RedTeamRunConfig
+
+    emit_json = reserve_stdout_for_json(ctx) if json_output else None
+    cfg = load_config(config_source, RedTeamRunConfig) if config_source is not None else None
+    llm_blob = parse_json_model(llm_config_json, LLMConfig, flag='--llm-config') if llm_config_json else None
+
     if quiet:
         verbose = -1
+    elif cfg is not None and 'verbosity' in cfg.model_fields_set and not explicitly_set(ctx, 'verbose'):
+        verbose = cfg.verbosity - 1
     _configure_logging(verbose)
 
     from evaluatorq.common.replay import ReplayError
@@ -637,62 +762,28 @@ def run(
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
+    kwargs = _apply_run_config(ctx, cfg, cli_args)
     options = _resolve_run_options(
-        target=target,
-        categories=categories,
-        vulnerabilities=vulnerabilities,
-        strategies=strategies,
-        delivery_methods=delivery_methods,
-        system_prompt=system_prompt,
-        attack_model=attack_model,
-        evaluator_model=evaluator_model,
-        min_evaluation_coverage=min_evaluation_coverage,
-        target_timeout_ms=target_timeout_ms,
-        max_target_retries=max_target_retries,
-        retry_count=retry_count,
-        max_tool_continuations=max_tool_continuations,
-        target_reasoning_effort=target_reasoning_effort,
+        target=kwargs['target'],
+        categories=kwargs['categories'],
+        vulnerabilities=kwargs['vulnerabilities'],
+        strategies=kwargs['strategies'],
+        delivery_methods=kwargs['delivery_methods'],
     )
-    strategies = options.strategies
-    resolved_delivery_methods = options.delivery_methods
-    categories = options.categories
-    vulnerabilities = options.vulnerabilities
-    target_config = options.target_config
     targets = options.targets
-    config = options.config
+    kwargs.update(
+        target=targets,
+        categories=options.categories,
+        vulnerabilities=options.vulnerabilities,
+        strategies=options.strategies,
+        delivery_methods=options.delivery_methods,
+        llm_config=_resolve_llm_config(ctx, llm_blob or (cfg.llm_config if cfg is not None else None), cli_args),
+        hooks=RichHooks(skip_confirm=should_skip_confirm(yes)),
+        verbosity=verbose + 1,
+    )
 
     try:
-        report = asyncio.run(
-            red_team(
-                target=targets,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-                llm_config=config,
-                name=name,
-                mode=mode,
-                categories=categories,
-                vulnerabilities=vulnerabilities,
-                strategies=strategies,
-                delivery_methods=resolved_delivery_methods,
-                max_turns=max_turns,
-                max_per_category=max_per_category,
-                datapoint_parallelism=datapoint_parallelism,
-                llm_parallelism=llm_parallelism,
-                generate_strategies=not no_generate_strategies,
-                generated_strategy_count=generated_strategy_count,
-                max_dynamic_datapoints=max_dynamic_datapoints,
-                max_static_datapoints=max_static_datapoints,
-                cleanup_memory=not no_cleanup_memory,
-                dataset=dataset,
-                previous_run=from_run,
-                hooks=RichHooks(skip_confirm=should_skip_confirm(yes)),
-                artifacts_dir=artifacts_dir,
-                save=save,
-                target_config=target_config,
-                generate_executive_summary=executive_summary,
-                recommendations=recommendations,
-                attacker_instructions=attacker_instructions,
-                verbosity=verbose + 1,
-            )
-        )
+        report = asyncio.run(red_team(**kwargs))
     except CancelledError:
         typer.echo('Run cancelled.')
         raise typer.Exit(code=0)
@@ -726,6 +817,9 @@ def run(
         html_path = write_html_report(report, output_dir=report_html, target=target_label)
         typer.echo(f'HTML report written to {html_path}')
 
+    if emit_json is not None:
+        emit_json(report)
+
     # Coverage gates run last, after artifacts are written — those artifacts are exactly
     # what you need to diagnose the failure, so they must exist before we exit non-zero.
     # Neither case may exit 0: CI cannot read an unscored run as a clean bill of health.
@@ -747,6 +841,24 @@ def run(
             err=True,
         )
         raise typer.Exit(code=1)
+
+
+@app.command()
+def schema(
+    input_schema: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--input/--output',
+            help='--input (default): the shape `eq redteam run --config` accepts. '
+            '--output: the RedTeamReport that `eq redteam run --json` prints.',
+        ),
+    ] = True,
+) -> None:
+    """Print the JSON schema of `eq redteam run`'s config file or of its JSON report."""
+    from evaluatorq.redteam.contracts import RedTeamReport
+    from evaluatorq.redteam.run_config import RedTeamRunConfig
+
+    echo_schema(RedTeamRunConfig if input_schema else RedTeamReport, output=not input_schema)
 
 
 def _import_hf_download() -> Any:

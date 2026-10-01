@@ -14,7 +14,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 
 | Flag | Type / Default | Description |
 |---|---|---|
-| `--target` / `-t` | `str` (repeatable) | Target identifier(s). Use `agent:<key>` for Orq agents or `deployment:<key>`. Repeatable. |
+| `--target` / `-t` | `str` (repeatable) | Target identifier(s). Use `agent:<key>` for Orq agents or `deployment:<key>`. Repeatable. Required unless `--config` sets `"target"`. |
 | `--name` / `-n` | `str \| None` / `None` | Experiment name (defaults to `red-team`). |
 | `--mode` | `str` / `dynamic` | Execution mode: `dynamic`, `static`, or `hybrid`. |
 | `--category` / `-c` | `str` (repeatable) | OWASP categories to test (e.g. `ASI01`). Repeatable and/or comma-separated. Defaults to all. |
@@ -52,6 +52,9 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress progress bars and non-error output. |
+| `--config` | `PATH \| -` / `None` | JSON file of `red_team()` keyword arguments, or `-` to read it from stdin. See [Driving the CLI from a config file](#driving-the-cli-from-a-config-file). |
+| `--llm-config` | JSON / `None` | `LLMConfig` as a JSON object. Replaces `"llm_config"` from `--config`. Each of `--attack-model`, `--evaluator-model`, `--min-evaluation-coverage`, `--target-timeout-ms`, `--max-target-retries`, `--retry-count`, `--max-tool-continuations` and `--target-reasoning-effort` wins over it for its own field when passed. |
+| `--json` | `bool` / `False` | Print the final `RedTeamReport` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
 
@@ -63,6 +66,50 @@ eq redteam run --target agent:<key> [OPTIONS]
 - **Coverage below the floor** (`summary.coverage_below_minimum`): fewer than `--min-evaluation-coverage` (default **`0.8`**) of attacks got a verdict. **A run that finishes at 79% coverage now exits `1`**, not `0` with a warning — the same run used to pass. Pass `--min-evaluation-coverage 0` to warn instead of failing, or a higher value to be stricter. The Python equivalent is `EvaluatorConfig.min_evaluation_coverage` (`None` there also means warn-only) — see [Red Teaming › In CI](../guides/red-teaming.md#in-ci).
 
 Both cases print the dominant failure cause with a sample message before exiting: an `evaluation/<code>` (timeout / parse / api_connection / api_status / scorer_exception) when the judge failed, or an `execution/<code>` when the target failed and there was nothing to judge. Either way a systematically blocked run is diagnosable from the CLI output alone.
+
+### Driving the CLI from a config file
+
+`--config` takes the keyword arguments of the Python `red_team()` function as one JSON object, so every data-shaped parameter is reachable from the CLI, including the ones without a flag (`datapoints`, `attack_techniques`, `description`, the full `llm_config`, a tuned `recommendations` object). Pass a path, or `-` to read it from stdin. YAML is not accepted.
+
+```json
+{
+  "target": "agent:my-agent",
+  "mode": "dynamic",
+  "vulnerabilities": ["goal_hijacking", "prompt_injection"],
+  "max_turns": 3,
+  "llm_config": {
+    "attacker": {"model": "openai/gpt-5.6-luna", "temperature": 0.9},
+    "evaluator": {"model": "openai/gpt-5.6-luna"}
+  },
+  "recommendations": {"max_areas": 2},
+  "save": "none"
+}
+```
+
+```bash
+eq redteam run --config run.json --json > report.json
+cat run.json | eq redteam run --config - --max-turns 5 --json
+```
+
+A flag passed on the command line beats the file, and the file beats the flag default. The command checks where a value came from, not what it is, so `--max-turns 5` wins over `"max_turns": 3` even if 5 were the default. A `null` in the file means "not set" and falls back to the flag default.
+
+Unknown keys fail the run before anything executes, at every depth: `"max_turn"` at the top level and `"temprature"` inside `llm_config` are both rejected with the field path. `"target"` takes only the string forms; an `AgentTarget` object, `hooks` and `llm_client` stay Python-only.
+
+With `--json`, stdout carries the `RedTeamReport` and nothing else, so it pipes straight into `jq` or a file. The coverage gates above still apply: a run below the floor prints its report and then exits `1`.
+
+---
+
+## `eq redteam schema`
+
+Print a JSON schema: what `eq redteam run --config` accepts, or what `eq redteam run --json` prints.
+
+```bash
+eq redteam schema [--input | --output]
+```
+
+| Flag | Type / Default | Description |
+|---|---|---|
+| `--input` / `--output` | `bool` / `--input` | `--input` prints the config file schema (`RedTeamRunConfig`). `--output` prints the `RedTeamReport` schema. |
 
 ---
 
