@@ -24,7 +24,10 @@ uv run ruff check src                     # lint
 ### Running Tests
 
 ```bash
-# Unit tests only (fast, no external services)
+# Quick local profile (no external services; excludes deliberately slow tests)
+uv run pytest
+
+# Complete non-integration profile (run before pushing; matches CI selection)
 uv run pytest -m 'not integration'
 
 # Specific test file
@@ -109,6 +112,6 @@ Add integration modules under `src/evaluatorq/integrations/`. Add the dependency
 ## Pull Requests
 
 - Branch from `main`
-- Run `uv run pytest -m 'not integration'` and `uv run ty check` before pushing; ty checks the whole repository, and CI runs it once on Ubuntu with Python 3.10
+- Run the complete `uv run pytest -m 'not integration'` profile and `uv run ty check` before pushing; the bare local pytest command also excludes deliberately slow tests, while CI runs the complete non-integration profile and runs the whole-repository ty check once on Ubuntu with Python 3.10
 - Use conventional commit format for commit messages (e.g., `feat(redteam): ...`, `fix(evaluatorq): ...`)
 - Keep PRs focused — one feature or fix per PR when possible

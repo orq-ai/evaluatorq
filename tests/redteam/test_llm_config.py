@@ -221,7 +221,7 @@ def _as_client(obj: object) -> "AsyncOpenAI":
 
     retry_extra_body only reads ``base_url`` via client_routes_through_orq, so the
     fake is sufficient at runtime; this routes the cast through ``object`` to satisfy
-    basedpyright (a direct _FakeClient→AsyncOpenAI cast is rejected as non-overlapping).
+    static analysis (a direct _FakeClient→AsyncOpenAI cast is rejected as non-overlapping).
     """
     return cast("AsyncOpenAI", obj)
 

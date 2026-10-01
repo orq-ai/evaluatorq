@@ -26,7 +26,10 @@ Processes are shared too. **Never `pkill -f` a command name** (`mkdocs serve`, `
 # Install dependencies (dev group + all optional extras)
 uv sync --all-extras --all-groups
 
-# Run unit tests (excludes integration tests)
+# Run the quick local profile (excludes integration and deliberately slow tests)
+uv run pytest
+
+# Run the complete non-integration profile before pushing (matches CI selection)
 uv run pytest -m 'not integration'
 
 # Run a specific test file
