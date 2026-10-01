@@ -895,3 +895,16 @@ async def test_unpriced_model_is_listed_but_its_call_stays_unpriced(monkeypatch:
     priced = await pricing.price_usage(_usage(), 'acme/free-chat')
     assert priced is not None
     assert priced.total_cost is None
+
+
+@pytest.mark.parametrize('cost', [float('nan'), float('inf')])
+def test_parse_catalogue_lists_non_finite_cost_unpriced(cost: float):
+    prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
+        [{'model_id': 'a', 'provider': 'openai', 'input_cost': cost, 'output_cost': 0.2}]
+    )
+    assert prices['a'].input_cost_per_1k is None
+
+
+def test_model_info_with_one_rate_is_unpriced():
+    info = ModelInfo(0.1, None, 'self', supports_responses=False)
+    assert (info.input_cost_per_1k, info.output_cost_per_1k) == (None, None)

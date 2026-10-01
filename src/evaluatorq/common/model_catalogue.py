@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -102,6 +103,9 @@ class ModelInfo(_ModelInfoFields):
         collapses the two; doing it in the type closes the same hole for
         `register_model`, which takes whatever a caller hands it.
         """
+        # One rate without the other cannot price a call; keep "unpriced" a single state.
+        if input_cost_per_1k is None or output_cost_per_1k is None:
+            input_cost_per_1k = output_cost_per_1k = None
         return super().__new__(
             cls,
             input_cost_per_1k,
@@ -228,7 +232,7 @@ def _usd_price(entry: dict[str, object], side: str) -> float | None:
     """The entry's ``<side>_cost`` per 1k tokens in USD, or ``None`` when it has no usable one."""
     cost = entry.get(f'{side}_cost')
     # bool is an int subclass: `input_cost: true` would otherwise price at $1.00/1k.
-    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
         return None
     # Currency is '' on most entries and 'usd' on the rest; only a stated non-USD
     # price is refused, so the common empty case still prices.
@@ -301,8 +305,6 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         if not isinstance(model_id, str) or not isinstance(provider, str):
             continue
         inp, out = _usd_price(entry, 'input'), _usd_price(entry, 'output')
-        if inp is None or out is None:
-            inp = out = None
         metadata = _entry_metadata(entry)
         classify_flag = metadata.get('supports_classify')
         if classify_flag is not None and not isinstance(classify_flag, bool):
