@@ -136,7 +136,7 @@ def traces_command_strip(
         '<section class="finder-hero finder-command">'
         f'<p class="finder-command-lede">{esc(COMMAND_LEDE)}</p>'
         '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
-        'hx-swap="innerHTML" hx-include="#finder-controls" hx-disabled-elt="find button">'
+        'hx-swap="innerHTML" hx-include="#finder-controls, #explorer-load-form" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
         f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question, e.g. {esc(COMMAND_EXAMPLES[0])}" '
         f'data-finder-placeholders="{esc(json.dumps(COMMAND_EXAMPLES))}" required{disabled}>'
@@ -1411,35 +1411,38 @@ def span_tree(  # noqa: C901
 
     if not spans:
         return '<p class="finder-empty">No spans are available for this trace.</p>'
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
+
     rendered: set[str] = set()
     output: list[str] = []
-    for start in [*roots, *order]:
-        if start in rendered:
-            continue
-        stack: list[tuple[str, str]] = [('node', start)]
-        while stack:
-            action, span_id = stack.pop()
-            if action == 'close':
-                output.append('</div></details>')
+    with cli_slug_render_scope():
+        for start in [*roots, *order]:
+            if start in rendered:
                 continue
-            if span_id in rendered:
-                continue
-            rendered.add(span_id)
-            descendants = [child for child in children[span_id] if child not in rendered]
-            row_html = row(span_id)
-            if descendants:
-                opened = (
-                    ' open'
-                    if span_id in ancestors or span_id == first_error or (first_error is None and span_id in roots)
-                    else ''
-                )
-                output.append(
-                    f'<details class="fd-span-node"{opened}><summary>{row_html}</summary><div class="fd-span-children">'
-                )
-                stack.append(('close', span_id))
-                stack.extend(('node', child) for child in reversed(descendants))
-            else:
-                output.append(f'<div class="fd-span-node">{row_html}</div>')
+            stack: list[tuple[str, str]] = [('node', start)]
+            while stack:
+                action, span_id = stack.pop()
+                if action == 'close':
+                    output.append('</div></details>')
+                    continue
+                if span_id in rendered:
+                    continue
+                rendered.add(span_id)
+                descendants = [child for child in children[span_id] if child not in rendered]
+                row_html = row(span_id)
+                if descendants:
+                    opened = (
+                        ' open'
+                        if span_id in ancestors or span_id == first_error or (first_error is None and span_id in roots)
+                        else ''
+                    )
+                    output.append(
+                        f'<details class="fd-span-node"{opened}><summary>{row_html}</summary><div class="fd-span-children">'
+                    )
+                    stack.append(('close', span_id))
+                    stack.extend(('node', child) for child in reversed(descendants))
+                else:
+                    output.append(f'<div class="fd-span-node">{row_html}</div>')
     return '<div class="fd-span-tree">' + ''.join(output) + '</div>'
 
 

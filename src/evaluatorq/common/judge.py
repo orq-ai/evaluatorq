@@ -706,23 +706,6 @@ async def run_classify(
             )
             raw_payload = json.dumps(payload, default=str)
             response = ClassifyResponse.model_validate(payload)
-            missing = sorted(set(request.questions) - set(response.answers))
-            if missing:
-                logger.error(
-                    'Judge [{}] classify reply is missing answers for {} (received={})',
-                    model,
-                    missing,
-                    sorted(response.answers),
-                )
-                return ClassifyOutcome(
-                    error_kind=JudgeError.PARSE,
-                    error_message=(
-                        f'classify reply is missing answers for: {", ".join(missing)} '
-                        f'(received: {", ".join(sorted(response.answers))})'
-                    ),
-                    token_usage=usage,
-                    raw_content=response.model_dump_json(),
-                )
             answer = response.answers.get('verdict')
             if answer is not None:
                 set_span_attrs(
@@ -814,7 +797,18 @@ def _classify_answer_outcome(
             endpoint='classify',
         )
     raw = response.model_dump_json()
-    answer = response.answers[key]
+    answer = response.answers.get(key)
+    if answer is None:
+        logger.error('Judge [{}] classify reply is missing answer key {} (raw={})', model, key, raw[:500])
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=(
+                f'classify reply is missing answer for {key} (received: {", ".join(sorted(response.answers))})'
+            ),
+            token_usage=outcome.token_usage,
+            raw_content=raw,
+            endpoint='classify',
+        )
     verdict = _classify_verdict(question, answer)
     if verdict is None:
         logger.error(
@@ -872,8 +866,16 @@ async def run_classify_judges(
                     client=client,
                     model=model,
                     cfg=cfg,
-                    prompt_template='',
-                    replacements={},
+                    prompt_template=(
+                        'Judge the supplied state using the full question and rubric below. '
+                        'Return the requested verdict as JSON.\n\n{classify_question}'
+                    ),
+                    replacements={
+                        'classify_question': json.dumps(
+                            question.model_copy(update={'state': state}).model_dump(mode='json'),
+                            ensure_ascii=False,
+                        )
+                    },
                     span_attributes=span_attributes,
                     classify=question.model_copy(update={'state': state}),
                 )
@@ -903,12 +905,12 @@ async def run_classify_judges(
             timeout_ms=cfg.timeout_ms,
             endpoint='classify',
         )
-        return dict.fromkeys(questions, failed)
+        return {key: failed.model_copy() for key in questions}
     except Exception as e:
         kind = _classify(e) if isinstance(e, APIConnectionError | APIStatusError) else JudgeError.UNKNOWN
         logger.error('Judge [{}] classify call failed ({}): {}', model, kind.value, e)
         failed = JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e, endpoint='classify')
-        return dict.fromkeys(questions, failed)
+        return {key: failed.model_copy() for key in questions}
     return {
         key: _classify_answer_outcome(model=model, question=question, outcome=outcome, key=key)
         for key, question in questions.items()

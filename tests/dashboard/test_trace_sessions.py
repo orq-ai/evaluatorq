@@ -100,3 +100,45 @@ async def test_settings_retirement_defers_close_until_active_request_releases_st
 
     await registry.release(request_state['trace_session_entries'][0])
     assert store.closed is True
+
+
+@pytest.mark.asyncio
+async def test_expired_active_entry_stays_available_until_last_request_releases() -> None:
+    now = 0.0
+    registry = TraceSessionRegistry(max_sessions=2, ttl_seconds=10, monotonic=lambda: now)
+    store = Store('active')
+    first_state: dict[str, Any] = {}
+    second_state: dict[str, Any] = {}
+
+    assert await registry.get(
+        'session-a', lambda: asyncio.sleep(0, result=store), request_state=first_state
+    ) is store
+    now = 1.0
+    assert await registry.get(
+        'session-a', lambda: asyncio.sleep(0, result=Store('replacement')), request_state=second_state
+    ) is store
+    now = 11.0
+    assert store.closed is False
+
+    await registry.release(first_state['trace_session_entries'][0])
+    assert store.closed is False
+    await registry.release(second_state['trace_session_entries'][0])
+    assert store.closed is True
+
+
+@pytest.mark.asyncio
+async def test_capacity_with_only_active_entries_preserves_them_until_release() -> None:
+    registry = TraceSessionRegistry(max_sessions=1)
+    store = Store('active')
+    request_state: dict[str, Any] = {}
+
+    assert await registry.get(
+        'session-a', lambda: asyncio.sleep(0, result=store), request_state=request_state
+    ) is store
+    assert await registry.get('session-b', lambda: asyncio.sleep(0, result=Store('other'))) is None
+    assert store.closed is False
+
+    await registry.release(request_state['trace_session_entries'][0])
+    replacement = Store('replacement')
+    assert await registry.get('session-b', lambda: asyncio.sleep(0, result=replacement)) is replacement
+    assert store.closed is True

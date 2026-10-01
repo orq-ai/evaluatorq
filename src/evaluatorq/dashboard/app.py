@@ -264,8 +264,9 @@ async def _settings(req: Request) -> NotStr:
             )
     scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
     profile = next((p for p in profiles if p.name == settings.orq_profile), None)
+    config = await asyncio.to_thread(_settings_config, roots, profile, settings=settings)
     body = settings_body(
-        _settings_config(roots, profile, settings=settings),
+        config,
         settings,
         saved=req.query_params.get('saved') == '1',
         preview='profile' in req.query_params,
@@ -312,7 +313,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
     rejected = request_rejected(req, form_data)
     if rejected:
         roots = _roots(req)
-        body = settings_body(_settings_config(roots), effective_settings(), errors={'form': rejected})
+        config = await asyncio.to_thread(_settings_config, roots)
+        body = settings_body(config, effective_settings(), errors={'form': rejected})
         return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
     roots = _roots(req)
     # Use saved values as the baseline so unchanged environment overrides are not persisted.
@@ -362,13 +364,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
         else:
             settings = settings.model_copy(update={'orq_project_name': None})
     if settings is None or errors:
-        body = settings_body(
-            _settings_config(roots),
-            values,
-            errors=errors,
-            profiles=profiles,
-            scope=scope,
-        )
+        config = await asyncio.to_thread(_settings_config, roots)
+        body = settings_body(config, values, errors=errors, profiles=profiles, scope=scope)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     await asyncio.to_thread(save_settings, settings)
@@ -521,17 +518,20 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
     # Tabbed body for the known surfaces; the interactive panels live inside
     # their tabs, so they are no longer appended separately.
-    if surface == 'sim':
-        from evaluatorq.dashboard.view import sim_run_compare_control
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        # Same choice list as the overview picker (sim only, no error runs,
-        # capped); the control itself drops the current run from the options.
-        choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-        body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
-    elif surface == 'redteam':
-        body_html = report_tabs.redteam_report_tabs(rid, report_obj)
-    else:
-        body_html = adapter.body(report_obj)
+    with cli_slug_render_scope():
+        if surface == 'sim':
+            from evaluatorq.dashboard.view import sim_run_compare_control
+
+            # Same choice list as the overview picker (sim only, no error runs,
+            # capped); the control itself drops the current run from the options.
+            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+            body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
+        elif surface == 'redteam':
+            body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+        else:
+            body_html = adapter.body(report_obj)
 
     opts = filter_def.options(report_obj)
     total_results = len(filter_def.results(report_obj))
@@ -603,14 +603,18 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
     # Render the tabbed body from the filtered results so the static tab
     # content (tables, charts) tracks the filter, not just the HTMX panels.
-    if surface == 'sim':
-        body_html = report_tabs.sim_report_tabs(rid, report_obj, filtered)
-    elif surface == 'redteam':
-        from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        body_html = report_tabs.redteam_report_tabs(rid, rebuild_filtered_report(report_obj, filtered))
-    else:
-        body_html = adapter.body_from_results(report_obj, filtered)
+    with cli_slug_render_scope():
+        if surface == 'sim':
+            body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
+        elif surface == 'redteam':
+            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+
+            filtered_report = rebuild_filtered_report(report_obj, filtered)
+            body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
+        else:
+            body_html = adapter.body_from_results(report_obj, filtered)
 
     form_html = render_filter_form(
         rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))

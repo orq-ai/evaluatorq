@@ -303,6 +303,19 @@ async def _warm_catalogue(app: Any, window_days: int) -> None:
         task = asyncio.create_task(_load_catalogue(app, window_days))
         app.state.finder_catalogue_warmup = (generation, window_days, task)
 
+        def finish_warmup(done: asyncio.Task[FacetCatalogue | None]) -> None:
+            current = getattr(app.state, 'finder_catalogue_warmup', None)
+            if current is not None and current[2] is done:
+                app.state.finder_catalogue_warmup = None
+            if done.cancelled():
+                return
+            try:
+                done.result()
+            except Exception as exc:  # noqa: BLE001 — background failures must be observed and visible.
+                logger.opt(exception=True).warning('Could not warm the facet catalogue: {}', exc)
+
+        task.add_done_callback(finish_warmup)
+
 
 async def _catalogue_for_window(app: Any, window_days: int) -> FacetCatalogue | None:
     """Share an in-flight warmup with the menu request for the same window."""
@@ -404,7 +417,7 @@ def parse_range(
     def zone_for(value: str | None) -> timezone:
         try:
             return timezone(timedelta(minutes=-int(value or '')))
-        except ValueError:
+        except (OverflowError, ValueError):
             logger.warning('Explorer time range has no usable browser offset {!r}; reading it as UTC', value)
             return timezone.utc
 
@@ -1140,9 +1153,12 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
             logger.warning('Find span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
             error_message = None
+        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
         from evaluatorq.dashboard.trace_finder.views import span_tree
 
-        return _html(span_tree(trace_id, spans, first_error_message=error_message))
+        with cli_slug_render_scope():
+            html = await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
+        return _html(html)
 
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:
@@ -1150,7 +1166,12 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         if store is None:
             return _html('<p class="finder-empty">Trace finding is unavailable.</p>', status_code=404)
         raw_msg = req.query_params.get('msg', '')
-        msg = int(raw_msg) if raw_msg.isdigit() else None
+        try:
+            msg = int(raw_msg) if raw_msg.isdigit() else None
+        except ValueError:
+            # Python limits decimal string conversion length; an invalid message
+            # selection should open the drawer at its default message.
+            msg = None
         row = await store.explorer.row(trace_id) if store.explorer is not None else None
         snapshot = await store.snapshot()
         detail = await store.trace_detail(trace_id) if row is None or snapshot.within_results else None
@@ -1174,7 +1195,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
             logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)
             return _html(missing_trace_drawer(trace_id))
-        return _html(drawer(detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'))
+        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
+
+        with cli_slug_render_scope():
+            html = await asyncio.to_thread(
+                drawer, detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'
+            )
+        return _html(html)
 
     @app.get('/find/export.json')
     async def find_export(req: Request) -> Response:

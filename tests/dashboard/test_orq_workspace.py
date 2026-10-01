@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
 import pytest
 
 from evaluatorq.dashboard import orq_workspace as ow
+from evaluatorq.dashboard.trace_links import thread_trace_url
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +67,80 @@ def test_resolve_slug_from_cli_session_without_api_key(monkeypatch: pytest.Monke
     monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
     assert ow.resolve_slug() == 'orq-research'
     assert calls == [(None, True)]
+
+
+def test_cli_session_scope_is_not_cached_across_profile_switches(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    slugs = iter(('first-workspace', 'second-workspace'))
+    calls = 0
+
+    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        nonlocal calls
+        calls += 1
+        assert profile is None
+        assert use_cli_session is True
+        return OrqScope(workspace_key=next(slugs))
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    assert ow.resolve_slug() == 'first-workspace'
+    assert ow.resolve_slug() == 'second-workspace'
+    assert calls == 2
+
+
+def test_cli_session_slug_is_cached_only_for_one_render(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+
+    monkeypatch.setattr(ow.shutil, 'which', lambda _name: '/usr/bin/orq')
+    slugs = iter(('first-workspace', 'second-workspace'))
+    calls = 0
+
+    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        nonlocal calls
+        calls += 1
+        assert profile is None
+        assert use_cli_session is True
+        return OrqScope(workspace_key=next(slugs))
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    with ow.cli_slug_render_scope():
+        first = thread_trace_url('thread-1')
+        second = thread_trace_url('thread-2')
+    assert calls == 1
+    assert first is not None and '/first-workspace/traces?' in first
+    assert second is not None and '/first-workspace/traces?' in second
+
+    # A new render resolves the CLI's newly selected profile again.
+    with ow.cli_slug_render_scope():
+        third = thread_trace_url('thread-3')
+    assert calls == 2
+    assert third is not None and '/second-workspace/traces?' in third
+
+
+def test_uncached_slug_lookup_does_not_block_running_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.orq_scope import OrqScope
+
+    monkeypatch.setenv('ORQ_API_KEY', 'slow-key')
+    started = threading.Event()
+    release = threading.Event()
+
+    def discover(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        started.set()
+        assert release.wait(timeout=2)
+        return OrqScope(workspace_key='orq-research')
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+
+    async def exercise() -> None:
+        lookup = asyncio.create_task(asyncio.to_thread(ow.resolve_slug))
+        assert await asyncio.to_thread(started.wait, 1)
+        # The loop can run this coroutine while the CLI lookup remains blocked.
+        await asyncio.sleep(0)
+        release.set()
+        assert await lookup == 'orq-research'
+
+    asyncio.run(exercise())
 
 
 # --- host -------------------------------------------------------------------

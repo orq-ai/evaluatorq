@@ -75,32 +75,16 @@ class TraceSessionRegistry:
         """Return one session's store, creating it once without holding the registry lock."""
         while True:
             now = self._monotonic()
-            retired: list[Any] = []
             async with self._lock:
-                expired = [key for key, entry in self._entries.items() if now - entry.last_access >= self.ttl_seconds]
-                for key in expired:
-                    entry = self._entries.pop(key)
-                    entry.retired = True
-                    if entry.store is not None and entry.active_requests == 0:
-                        retired.append(entry.store)
-                entry = self._entries.get(session_id)
-                if entry is None:
-                    while len(self._entries) >= self.max_sessions:
-                        oldest_id = min(self._entries, key=lambda key: self._entries[key].last_access)
-                        oldest = self._entries.pop(oldest_id)
-                        oldest.retired = True
-                        if oldest.store is not None and oldest.active_requests == 0:
-                            retired.append(oldest.store)
-                    entry = _SessionEntry(session_id=session_id, last_access=now)
-                    self._entries[session_id] = entry
-                else:
-                    entry.last_access = now
-                if request_state is not None:
+                entry, retired = self._entry_for(session_id, now)
+                if entry is not None and request_state is not None:
                     active_entries = request_state.setdefault('trace_session_entries', [])
                     if not any(active is entry for active in active_entries):
                         entry.active_requests += 1
                         active_entries.append(entry)
             await _close_stores(retired)
+            if entry is None:
+                return None
 
             async with entry.create_lock:
                 async with self._lock:
@@ -119,11 +103,49 @@ class TraceSessionRegistry:
                 if store is not None:
                     await _close_stores([store])
 
+    def _entry_for(self, session_id: str, now: float) -> tuple[_SessionEntry | None, list[Any]]:
+        """Find or create an entry while preserving entries leased by requests."""
+        retired: list[Any] = []
+        expired = [
+            key
+            for key, entry in self._entries.items()
+            if entry.active_requests == 0 and now - entry.last_access >= self.ttl_seconds
+        ]
+        for key in expired:
+            entry = self._entries.pop(key)
+            entry.retired = True
+            if entry.store is not None:
+                retired.append(entry.store)
+
+        entry = self._entries.get(session_id)
+        if entry is not None:
+            entry.last_access = now
+            return entry, retired
+
+        while len(self._entries) >= self.max_sessions:
+            idle_ids = [key for key, candidate in self._entries.items() if candidate.active_requests == 0]
+            if not idle_ids:
+                # All slots are leased; the caller gets no store until one is released.
+                return None, retired
+            oldest_id = min(idle_ids, key=lambda key: self._entries[key].last_access)
+            oldest = self._entries.pop(oldest_id)
+            oldest.retired = True
+            if oldest.store is not None:
+                retired.append(oldest.store)
+
+        entry = _SessionEntry(session_id=session_id, last_access=now)
+        self._entries[session_id] = entry
+        return entry, retired
+
     async def release(self, entry: _SessionEntry) -> None:
         """Release a request lease and close a retired store when its last request ends."""
         store = None
         async with self._lock:
             entry.active_requests = max(0, entry.active_requests - 1)
+            expired = self._monotonic() - entry.last_access >= self.ttl_seconds
+            if expired and entry.active_requests == 0 and self._entries.get(entry.session_id) is entry:
+                self._entries.pop(entry.session_id)
+                entry.retired = True
             if entry.retired and entry.active_requests == 0:
                 store, entry.store = entry.store, None
         if store is not None:

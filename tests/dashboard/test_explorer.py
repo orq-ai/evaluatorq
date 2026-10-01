@@ -61,6 +61,11 @@ def test_parse_range_treats_bad_offset_as_utc() -> None:
     assert start.tzinfo == timezone.utc
 
 
+def test_parse_range_treats_overflowing_offset_as_utc() -> None:
+    start, _ = finder_routes.parse_range('2026-09-27T10:00', '2026-09-27T11:00', '999999999999999999999')
+    assert start.tzinfo == timezone.utc
+
+
 def test_calendar_date_and_time_values_keep_seconds_and_timezone() -> None:
     values = finder_routes._range_values({
         'from': '2026-09-27',
@@ -538,6 +543,7 @@ def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) 
     after = datetime.now(timezone.utc)
 
     assert response.status_code == 200
+    assert 'hx-include="#finder-controls, #explorer-load-form"' in response.text
     assert len(source.calls) == 1
     assert asyncio.run(store.explorer.view()).initial_load
     call = source.calls[0]
@@ -1734,7 +1740,7 @@ def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
     assert 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' in html
     assert '<span class="facet-n" title="Loaded traces">2</span>' in html
     assert (
-        'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls"'
+        'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls, #explorer-load-form"'
         in html
     )
 
@@ -2316,6 +2322,50 @@ def test_ask_new_search_uses_toolbar_range_and_rows_cap(explorer_client) -> None
     assert population.limit == 43
 
 
+def test_ask_new_search_uses_carried_explorer_range_and_offsets(explorer_client) -> None:
+    store, _, client = explorer_client
+    captured: dict[str, Any] = {}
+
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+        captured['request'] = request
+        return store.snapshot_value
+
+    store.compile = compile
+    response = client.post(
+        '/find/run',
+        data=csrf_data({
+            'query': 'slow traces',
+            'scope': 'new',
+            'mode': 'immediate',
+            'new_from': '2026-09-30T10:15:00',
+            'new_to': '2026-09-30T11:45:30',
+            'new_from_tz_offset': '-120',
+            'new_to_tz_offset': '-60',
+            'window_days': '7',
+            'limit': '43',
+            'parallelism': '10',
+        }),
+    )
+
+    assert response.status_code == 200
+    population = captured['request'].population
+    assert population.start == datetime(2026, 9, 30, 8, 15, tzinfo=timezone.utc)
+    assert population.end == datetime(2026, 9, 30, 10, 45, 30, tzinfo=timezone.utc)
+
+
+def test_find_search_form_does_not_include_explorer_controls(explorer_client) -> None:
+    _, _, client = explorer_client
+    html = client.get('/find').text
+    assert 'hx-include="#finder-controls, #explorer-load-form"' not in html
+
+
+def test_trace_drawer_handles_msg_beyond_python_int_digit_limit(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+    response = client.get(f"/find/trace/trace-0000?msg={'9' * 5000}")
+    assert response.status_code == 200
+
+
 def test_ask_within_results_without_rows_explains(explorer_client) -> None:
     _, _, client = explorer_client
     from evaluatorq.trace_finder import FacetCatalogue
@@ -2505,6 +2555,15 @@ def test_views_menu_does_not_repeat_the_all_quick_tab_and_matched_only_empty_sta
     )
     assert 'No loaded traces match this filter.' in empty
     assert 'Turn off Matches only' not in empty
+
+    no_results = explorer_views.results(
+        ExplorerView(state='loaded', rows=rows, matched_only=True),
+        resolve_columns(None),
+        records=None,
+        snapshot=_judged_snapshot(verdicts={}),
+    )
+    assert 'No matches.' in no_results
+    assert 'No loaded traces match this filter.' in no_results
 
 
 def test_drawer_rejects_responses_from_older_trace_selections() -> None:
@@ -2769,14 +2828,14 @@ def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() ->
     chain = [
         {
             'span_id': f'span-{index}',
-            'name': f'span-{index}',
             'parent_span_id': f'span-{index - 1}' if index else None,
+            'name': f'span-{index}',
         }
         for index in range(2000)
     ]
     cycle = [
-        {'span_id': 'cycle-a', 'name': 'cycle-a', 'parent_span_id': 'cycle-b'},
-        {'span_id': 'cycle-b', 'name': 'cycle-b', 'parent_span_id': 'cycle-a'},
+        {'span_id': 'cycle-a', 'parent_span_id': 'cycle-b', 'name': 'cycle-a'},
+        {'span_id': 'cycle-b', 'parent_span_id': 'cycle-a', 'name': 'cycle-b'},
     ]
     tree = span_tree('trace', [*chain, *cycle])
     assert tree.count('fd-span-row') == 2002
@@ -2785,6 +2844,36 @@ def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() ->
 
 
 
+
+
+def test_span_tree_discovers_cli_workspace_once_per_render(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard import orq_workspace
+    from evaluatorq.dashboard.orq_scope import OrqScope
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    for variable in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL', 'ORQ_API_KEY'):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
+    monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: '/usr/bin/orq')
+    slugs = iter(('first-workspace', 'second-workspace'))
+    calls = 0
+
+    def discover(_profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        nonlocal calls
+        calls += 1
+        assert use_cli_session is True
+        return OrqScope(workspace_key=next(slugs))
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    spans = [{'span_id': f'span-{index}', 'name': f'span-{index}'} for index in range(100)]
+
+    first = span_tree('trace', spans)
+    assert first.count('href="https://my.orq.ai/first-workspace/traces/') == 100
+    assert calls == 1
+
+    second = span_tree('trace', spans)
+    assert second.count('href="https://my.orq.ai/second-workspace/traces/') == 100
+    assert calls == 2
 
 
 def test_results_self_poll_answers_out_of_band_and_marks_the_render(explorer_client) -> None:

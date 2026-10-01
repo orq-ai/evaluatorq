@@ -140,8 +140,7 @@ def test_cli_session_uses_selected_profile_without_empty_profile_flag(monkeypatc
     monkeypatch.setattr(orq_scope.shutil, 'which', lambda _: '/usr/bin/orq')
 
     def run(command, **kwargs):
-        assert command[:1] == ['/usr/bin/orq']
-        assert command[1:3] != ['--profile', '']
+        assert command == ['/usr/bin/orq', 'projects', 'list', '-o', 'json', '--no-input']
         environment = kwargs['env']
         assert all(name not in environment for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'))
         return subprocess.CompletedProcess(command, 0, '{"data": []}', '')

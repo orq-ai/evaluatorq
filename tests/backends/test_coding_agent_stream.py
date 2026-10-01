@@ -122,7 +122,7 @@ async def test_hard_cap_fires_on_steady_output(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_sustained_stderr_resets_idle_limit(tmp_path: Path) -> None:
-    body = f"for _ in range(4):\n    err('progress')\n    time.sleep(0.5)\nout({RESULT!r})\n"
+    body = f"for _ in range(5):\n    err('progress')\n    time.sleep(1)\nout({RESULT!r})\n"
     target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=3000)
     response = await target.respond([Message(role='user', content='x')])
     assert response.text == 'done'

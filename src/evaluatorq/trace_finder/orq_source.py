@@ -474,7 +474,7 @@ class OrqTraceSource:
             nonlocal done
             try:
                 record, fallback_count = await self._hydrate_trace(
-                    row.raw, row.raw, project_names, semaphore, issues, raw_capture_fallback=False
+                    row, row.raw, project_names, semaphore, issues, raw_capture_fallback=False
                 )
                 if fallback_count:
                     fallbacks.append(row.trace_id)
@@ -546,7 +546,7 @@ class OrqTraceSource:
         messages = _conversation_messages(raw_summary)
         output_tokens = _field(_field(raw_summary, 'usage'), 'completion_tokens')
         if output_tokens is None:
-            output_tokens = _field(_field(summary, 'usage'), 'completion_tokens')
+            output_tokens = _summary_output_tokens(summary)
         missing_reply = (
             isinstance(output_tokens, (int, float))
             and not isinstance(output_tokens, bool)
@@ -915,6 +915,12 @@ def _conversation_messages(payload: Any) -> list[dict[str, Any]]:
         if not messages or message != messages[-1]:
             messages.append(message)
     return messages
+
+
+def _summary_output_tokens(summary: Any) -> Any:
+    """Read completion tokens from typed SDK summaries or their compact row projection."""
+    output_tokens = _field(_field(summary, 'usage'), 'completion_tokens')
+    return output_tokens if output_tokens is not None else _field(summary, 'tokens_out')
 
 
 def _has_reply(messages: list[dict[str, Any]]) -> bool:
