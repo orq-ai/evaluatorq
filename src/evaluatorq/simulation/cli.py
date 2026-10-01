@@ -30,7 +30,6 @@ import asyncio
 import json
 import logging
 import os
-import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path  # noqa: TC003 — typer resolves the command annotations at runtime
@@ -44,7 +43,7 @@ from evaluatorq.common.cli_epilog import examples as _examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
-from evaluatorq.common.cli_tty import should_skip_confirm
+from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.llm_limit import check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.contracts import LLMCallConfig
@@ -340,14 +339,9 @@ def _echo_generate_plan(
     asyncio.run(confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True))
 
 
-def _shell_path(path: Path) -> str:
-    """Render a path safely for a copyable shell command."""
-    return shlex.quote(str(path))
-
-
 def _dashboard_command(directory: Path) -> str:
     """Build the canonical multi-run dashboard command for *directory*."""
-    return f'eq dashboard {_shell_path(directory)}'
+    return f'eq dashboard {shell_path(directory)}'
 
 
 _TARGET_PLACEHOLDER = 'agent:<your-agent-key>'
@@ -361,7 +355,7 @@ def _simulate_command(datapoints_path: Path, target: str | None) -> str:
     ``_TARGET_HINT`` at the call site) rather than a bare ``<target>``.
     """
     target_part = target or _TARGET_PLACEHOLDER
-    return f'eq sim simulate -i {_shell_path(datapoints_path)} --target {target_part}'
+    return f'eq sim simulate -i {shell_path(datapoints_path)} --target {target_part}'
 
 
 def _render_rich(renderable: Any, *, soft_wrap: bool = False) -> str:

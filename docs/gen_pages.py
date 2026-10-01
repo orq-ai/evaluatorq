@@ -47,6 +47,7 @@ API_PACKAGES = [
     "evaluatorq.tracing",
     "evaluatorq.integrations",
     "evaluatorq.formats",
+    "evaluatorq.signals",
 ]
 
 

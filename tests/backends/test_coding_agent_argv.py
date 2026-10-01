@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import types
+from pathlib import Path
 from typing import Any
 
 import pydantic
 import pytest
 
-from evaluatorq.backends.coding_agent import AGENTS, CodingAgentTarget, DockerOptions, OrqLaunchOptions, ParsedTurn, build_argv
+from evaluatorq.backends import coding_agent as coding_agent_module
+from evaluatorq.backends.coding_agent import (
+    AGENTS,
+    CodingAgentTarget,
+    CodingAgentUnavailableError,
+    DockerOptions,
+    OrqLaunchOptions,
+    ParsedTurn,
+    build_argv,
+    refuse_unsafe_batch_args,
+)
+from evaluatorq.contracts import Message
 
 PROMPT = 'reply to the user'
 
@@ -154,3 +166,53 @@ def test_parsed_turn_stays_mutable() -> None:
     turn = ParsedTurn()
     turn.text = 'hi'
     assert turn.text == 'hi' and turn.tool_calls == []
+
+
+@pytest.fixture
+def windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(coding_agent_module.sys, 'platform', 'win32')
+
+
+@pytest.mark.parametrize('arg', ['a & calc', 'say "hi"', '%PATH%', 'line\nbreak'])
+@pytest.mark.usefixtures('windows')
+def test_batch_launcher_refuses_cmd_metacharacters(arg: str) -> None:
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        refuse_unsafe_batch_args(['C:\\npm\\claude.CMD', '--model', arg])
+    assert info.value.code == 'cli.unsafe_shim'
+    assert repr(arg) in info.value.message and 'native .exe' in info.value.message
+    refuse_unsafe_batch_args(['C:\\npm\\claude.cmd', '-p', '--verbose'])
+    refuse_unsafe_batch_args(['/usr/bin/claude', '--model', arg])
+
+
+def test_cmd_suffix_is_an_ordinary_program_off_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(coding_agent_module.sys, 'platform', 'linux')
+    refuse_unsafe_batch_args(['/opt/bin/claude.cmd', '--model', 'a & b'])
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures('windows')
+async def test_batch_launcher_moves_system_prompt_to_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    shim = tmp_path / 'claude.cmd'
+    monkeypatch.setattr(coding_agent_module.shutil, 'which', lambda name, path=None: str(shim))
+    seen: dict[str, Any] = {}
+
+    async def fake_run(self: CodingAgentTarget, argv: list[str], stdin_text: str | None, **_: Any) -> tuple[int, str, str]:
+        seen.update(argv=argv, stdin=stdin_text)
+        return 0, '{"type":"result","result":"done","session_id":"s"}\n', ''
+
+    monkeypatch.setattr(CodingAgentTarget, '_run', fake_run)
+    system_prompt = 'Say "hi" & stop\nnow'
+    target = CodingAgentTarget(agent='claude', system_prompt=system_prompt)
+    response = await target.respond([Message(role='user', content='x')])
+    assert response.text == 'done'
+    assert seen['argv'][0] == str(shim)
+    assert '--append-system-prompt' not in seen['argv']
+    assert '{"role": "system", "content": "Say \\"hi\\"' in seen['stdin']
+    await target.close()
+
+
+@pytest.mark.usefixtures('windows')
+def test_orq_batch_launcher_points_at_the_native_release() -> None:
+    with pytest.raises(CodingAgentUnavailableError) as info:
+        refuse_unsafe_batch_args(['C:/npm/orq.cmd', 'claude', '--model', 'a & b'])
+    assert 'orq-win32-x64.exe' in info.value.message and 'native .exe' not in info.value.message

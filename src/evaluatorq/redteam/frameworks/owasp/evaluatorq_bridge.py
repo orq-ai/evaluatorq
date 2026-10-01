@@ -544,7 +544,7 @@ def _load_from_file(
     """Load OWASP dataset from a local JSON file in ``{"samples": [...]}`` format."""
     path = Path(path)
     try:
-        with path.open() as f:
+        with path.open(encoding='utf-8') as f:
             raw = json.load(f)
         dataset = StaticDataset.model_validate(raw)
     except (OSError, json.JSONDecodeError, ValidationError) as e:

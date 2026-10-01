@@ -21,7 +21,8 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast
+from datetime import datetime, timezone
+from typing import Any, Literal, cast
 
 from loguru import logger
 
@@ -64,9 +65,6 @@ from evaluatorq.formats.otel import (
     parse_time,
     span_usage,
 )
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 _NO_STEPS = 'OtelTrace has no chat spans; ATIF needs at least one step'
 _UNKNOWN = 'unknown'
@@ -184,6 +182,16 @@ def _by_start(spans: list[OtelSpan]) -> list[OtelSpan]:
     return sorted(spans, key=lambda s: (s.start_time is None, s.start_time.timestamp() if s.start_time else 0.0))
 
 
+def _by_tool_time(spans: list[OtelSpan]) -> list[OtelSpan]:
+    """Order tool spans by start time, using the end time when the start is missing."""
+
+    def key(span: OtelSpan) -> tuple[bool, float]:
+        at = span.start_time or span.end_time
+        return at is None, at.timestamp() if at is not None else 0.0
+
+    return sorted(spans, key=key)
+
+
 def _session_id(trace: OtelTrace, tops: list[OtelSpan]) -> str:
     for span in [*tops, *trace.roots()]:
         conversation = span.attributes.get('gen_ai.conversation.id')
@@ -196,6 +204,31 @@ def _session_id(trace: OtelTrace, tops: list[OtelSpan]) -> str:
 def _attribute(span: OtelSpan | None, key: str) -> str | None:
     value = span.attributes.get(key) if span is not None else None
     return value if isinstance(value, str) and value else None
+
+
+def _tool_definitions(chats: list[OtelSpan]) -> list[dict[str, Any]] | None:
+    """Collect declared tools in first-seen order, keeping the first definition per name."""
+    definitions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for chat in chats:
+        raw = chat.attributes.get('gen_ai.tool.definitions')
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                logger.warning('Chat span {} has unreadable gen_ai.tool.definitions; ignoring it', chat.span_id)
+                continue
+        if not isinstance(raw, list):
+            continue
+        for definition in raw:
+            if not isinstance(definition, dict):
+                continue
+            function = definition.get('function')
+            name = function.get('name') if isinstance(function, dict) else definition.get('name')
+            if isinstance(name, str) and name and name not in seen:
+                seen.add(name)
+                definitions.append(definition)
+    return definitions or None
 
 
 def _build(
@@ -221,10 +254,11 @@ def _build(
         )
         for index, draft in enumerate(drafts)
     ]
+    definitions = _tool_definitions(chats)
     return AtifTrajectory(
         session_id=session_id,
         trajectory_id=trajectory_id,
-        agent=agent,
+        agent=agent.model_copy(update={'tool_definitions': definitions}) if definitions else agent,
         steps=steps,
         final_metrics=_final_metrics(steps, agent_span),
         extra=_carried(agent_span, _TRAJECTORY_EXTRA),
@@ -602,6 +636,64 @@ def _tokens(value: float | None, span_id: str) -> int | None:
     return None
 
 
+def _next_call_issues(
+    drafts: list[_Draft], position: dict[str, int]
+) -> dict[str, list[tuple[int, datetime | None] | None]]:
+    """For each tool-call occurrence, find the next later turn that issues that same call id."""
+    call_issue_times: dict[str, list[tuple[int, datetime | None]]] = {}
+    for draft in drafts:
+        if draft.span is None:
+            continue
+        issued_at = position[draft.span.span_id]
+        for call in draft.fields['tool_calls'] or []:
+            call_issue_times.setdefault(call.tool_call_id, []).append((issued_at, draft.span.start_time))
+    next_issues: dict[str, list[tuple[int, datetime | None] | None]] = {}
+    for call_id, occurrences in call_issue_times.items():
+        next_issue_by_position: dict[int, tuple[int, datetime | None]] = {}
+        next_position: int | None = None
+        next_started: datetime | None = None
+        for issued_at, started in reversed(occurrences):
+            if next_position is not None and next_position > issued_at:
+                next_issue_by_position[issued_at] = (next_position, next_started)
+            if next_position is None or issued_at < next_position:
+                next_position, next_started = issued_at, started
+        next_issues[call_id] = [next_issue_by_position.get(issued_at) for issued_at, _ in occurrences]
+    return next_issues
+
+
+def _take_tool_span(
+    call_id: str,
+    by_call: dict[str, list[OtelSpan]],
+    next_issues: dict[str, list[tuple[int, datetime | None] | None]],
+    next_span_by_call: dict[str, int],
+    call_occurrence_by_id: dict[str, int],
+    response_position: int | None,
+) -> OtelSpan | None:
+    """Consume this call id's next span unless its time places it after a later call occurrence."""
+    spans = by_call.get(call_id, [])
+    span_index = next_span_by_call.get(call_id, 0)
+    span = spans[span_index] if span_index < len(spans) else None
+    occurrence = call_occurrence_by_id.get(call_id, 0)
+    call_occurrence_by_id[call_id] = occurrence + 1
+    later_issues = next_issues.get(call_id, [])
+    later_issue = later_issues[occurrence] if occurrence < len(later_issues) else None
+    span_time = (span.start_time or span.end_time) if span is not None else None
+    if span is not None and span_time is not None and later_issue is not None:
+        later_position, later_issue_time = later_issue
+        if (
+            later_issue_time is not None
+            and span_time > later_issue_time
+            and response_position is not None
+            and response_position <= later_position
+        ):
+            # Only defer when the earlier call already has a response before the later turn.
+            # Equal times stay in occurrence order because the trace cannot disambiguate them.
+            return None
+    if span is not None:
+        next_span_by_call[call_id] = span_index + 1
+    return span
+
+
 def _attach_results(
     drafts: list[_Draft], members: list[OtelSpan], chats: list[OtelSpan], new_inputs: list[list[OtelMessage]]
 ) -> None:
@@ -610,7 +702,7 @@ def _attach_results(
     Results that match no call (an id-less or unknown-id `execute_tool` span, or a `tool_call_response` part
     whose id no call has) are warned and kept as `source_call_id=None` results on the nearest earlier agent step.
     """
-    tool_spans = [span for span in _by_start(members) if span.operation == 'execute_tool']
+    tool_spans = _by_tool_time([span for span in members if span.operation == 'execute_tool'])
     by_call: dict[str, list[OtelSpan]] = {}
     for span in tool_spans:
         call_id = span.attributes.get('gen_ai.tool.call.id')
@@ -624,9 +716,11 @@ def _attach_results(
         if isinstance(part, OtelToolCallResponsePart)
     ]
     position = {chat.span_id: index for index, chat in enumerate(chats)}
+    next_issues = _next_call_issues(drafts, position)
     used_spans: set[str] = set()
     used_parts: set[int] = set()
     next_span_by_call: dict[str, int] = {}
+    call_occurrence_by_id: dict[str, int] = {}
     for draft in drafts:
         if draft.span is None:
             continue
@@ -635,15 +729,6 @@ def _attach_results(
         pending_results: list[tuple[int, int, AtifObservationResult, str | None]] = []
         result_order = 0
         for n, call in enumerate(calls):
-            spans = by_call.get(call.tool_call_id, [])
-            span_index = next_span_by_call.get(call.tool_call_id, 0)
-            span = spans[span_index] if span_index < len(spans) else None
-            if span is not None:
-                next_span_by_call[call.tool_call_id] = span_index + 1
-                draft.tool_span_ids.add(span.span_id)
-            call_extra = _carried(span, _TOOL_CALL_EXTRA)
-            if call_extra is not None:
-                calls[n] = call.model_copy(update={'extra': {**(call.extra or {}), **call_extra}})
             found = next(
                 (
                     index
@@ -653,6 +738,19 @@ def _attach_results(
                 None,
             )
             part = responses[found][1] if found is not None else None
+            span = _take_tool_span(
+                call.tool_call_id,
+                by_call,
+                next_issues,
+                next_span_by_call,
+                call_occurrence_by_id,
+                responses[found][0] if found is not None else None,
+            )
+            if span is not None:
+                draft.tool_span_ids.add(span.span_id)
+            call_extra = _carried(span, _TOOL_CALL_EXTRA)
+            if call_extra is not None:
+                calls[n] = call.model_copy(update={'extra': {**(call.extra or {}), **call_extra}})
             if found is not None:
                 used_parts.add(found)
             result = _result(call_id=call.tool_call_id, span=span, part=part)
@@ -751,6 +849,12 @@ def _result(
         content = tool_result_to_text(value) if value is not None else None
         if span.status == 'error':
             extra['error_type'] = span.error_type or _OTHER_ERROR
+        if span.start_time is not None:
+            extra['start_timestamp'] = span.start_time.timestamp()
+        if span.end_time is not None:
+            extra['end_timestamp'] = span.end_time.timestamp()
+        if span.status != 'unset':
+            extra['status'] = span.status
     if content is None and part is not None and part.response is not None:
         content = tool_result_to_text(part.response)
     if orphan and call_id is not None:
@@ -858,8 +962,8 @@ def atif_to_otel(traj: AtifTrajectory) -> OtelTrace:
 
     Lost, with a warning per kind: observation results with no `source_call_id` (no tool message or span
     holds them), results on user and system steps, and subagent refs that are not embedded. Lost silently:
-    the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`, `agent.tool_definitions`,
-    `agent.extra`, user and system step timestamps and `extra` (other than `original_role`), `llm_call_count`,
+    the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`, `agent.extra`, user and system step
+    timestamps and `extra` (other than `original_role`), `llm_call_count`,
     `is_copied_context`, and metrics `extra` other than `reasoning_tokens`.
     """
     trace_id = stable_hex(_seed(traj), 'trace', length=32)
@@ -883,7 +987,11 @@ def _emit_agent(traj: AtifTrajectory, parent_span_id: str | None, trace_id: str)
     uncarried = False  # a user or system step no chat span has put into its input yet
     for index, step in enumerate(traj.steps):
         if step.source == 'agent':
-            spans.extend(_emit_step(step, seed, trace_id, agent_span_id, history, system, call_spans))
+            spans.extend(
+                _emit_step(
+                    step, seed, trace_id, agent_span_id, history, system, call_spans, traj.agent.tool_definitions
+                )
+            )
             uncarried = False
             continue
         role = _input_role(step)
@@ -1009,6 +1117,7 @@ def _emit_step(
     history: list[OtelMessage],
     system: list[OtelPart],
     call_spans: dict[tuple[int, str, int], str],
+    tool_definitions: list[dict[str, Any]] | None,
 ) -> list[OtelSpan]:
     """Emit one agent step's chat span and tool spans, then extend `history` with its turn and results."""
     output = OtelMessage(role='assistant', parts=_assistant_parts(step))
@@ -1027,7 +1136,7 @@ def _emit_step(
         input_messages=list(history) or None,
         output_messages=[output],
         system_instructions=list(system) or None,
-        attributes=_chat_attributes(step, error_type),
+        attributes=_chat_attributes(step, error_type, tool_definitions),
     )
     results: dict[str, list[AtifObservationResult]] = {}
     for result in step.observation.results if step.observation else []:
@@ -1117,8 +1226,12 @@ def _assistant_parts(step: AtifStep) -> list[OtelPart]:
     return parts
 
 
-def _chat_attributes(step: AtifStep, error_type: str | None) -> dict[str, Any]:
+def _chat_attributes(
+    step: AtifStep, error_type: str | None, tool_definitions: list[dict[str, Any]] | None
+) -> dict[str, Any]:
     attributes: dict[str, Any] = {'gen_ai.operation.name': 'chat'}
+    if tool_definitions:
+        attributes['gen_ai.tool.definitions'] = tool_definitions
     if step.model_name:
         attributes['gen_ai.request.model'] = _extra_str(step, 'requested_model') or step.model_name
         attributes['gen_ai.response.model'] = step.model_name
@@ -1178,16 +1291,33 @@ def _tool_span(
         if isinstance(error, str):
             error_type = error
             attributes['error.type'] = error
+    extra = result.extra or {} if result is not None else {}
+    status = extra.get('status')
+    if status not in _STATUSES:
+        status = 'error' if error_type is not None else 'unset'
     return OtelSpan(
         trace_id=trace_id,
         span_id=span_id,
         parent_span_id=parent_span_id,
         name=f'execute_tool {call.function_name}',
         operation='execute_tool',
-        status='error' if error_type is not None else 'unset',
+        start_time=_atif_time(extra.get('start_timestamp')),
+        end_time=_atif_time(extra.get('end_timestamp')),
+        status=cast("Literal['ok', 'error', 'unset']", status),
         error_type=error_type,
         attributes=attributes,
     )
+
+
+def _atif_time(value: object) -> datetime | None:
+    """Read ATIF `extra` epoch seconds without OTel's seconds/milliseconds magnitude guess."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            logger.warning('ATIF timestamp {!r} is out of range; leaving it unset', value)
+            return None
+    return parse_time(value)
 
 
 def _times(step: AtifStep) -> tuple[datetime | None, datetime | None, Literal['ok', 'error', 'unset']]:
@@ -1195,11 +1325,11 @@ def _times(step: AtifStep) -> tuple[datetime | None, datetime | None, Literal['o
     invocation = (step.extra or {}).get('invocation')
     if invocation is None:
         return parse_time(step.timestamp), None, 'unset'
-    start = parse_time(get_field(invocation, 'start_timestamp')) or parse_time(step.timestamp)
+    start = _atif_time(get_field(invocation, 'start_timestamp')) or parse_time(step.timestamp)
     status = get_field(invocation, 'status')
     return (
         start,
-        parse_time(get_field(invocation, 'end_timestamp')),
+        _atif_time(get_field(invocation, 'end_timestamp')),
         cast("Literal['ok', 'error', 'unset']", status) if status in _STATUSES else 'unset',
     )
 

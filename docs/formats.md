@@ -39,6 +39,19 @@ Chat and Responses also convert directly to each other. Every other pair compose
 
 `to_atif()` and `to_otel()` on a non-ATIF source take `agent_name` and `agent_version`, which fill `AtifTrajectory.agent`. `OtelTrace.to_atif()` falls back to the `gen_ai.agent.name` and `gen_ai.agent.version` attributes of the root `invoke_agent` span when you leave them unset. Both default to `'unknown'` otherwise. `ChatConversation.to_atif()` and `ResponsesConversation.to_atif()` also take `session_id`; left unset, it is a hash of the conversation, so the same input always gets the same id.
 
+## Add trajectory tags to an evaluation
+
+`signal_evaluators()` turns trajectory tags into evaluatorq scorers. Use it when your output is ATIF, chat, Responses, OTel, or a chat message list and you want deterministic structural tags without an LLM judge. These tags describe execution patterns, not answer quality.
+
+```python
+from evaluatorq.signals import signal_evaluators
+
+evaluators = signal_evaluators()  # every trajectory tag, bundled thresholds
+print([evaluator['name'] for evaluator in evaluators])
+```
+
+Add the returned evaluators to an `evaluatorq()` run's `evaluators` list. Unsupported output shapes and signals without enough evidence produce an inconclusive score (`value=None`, `pass_=None`) with an explanation, so a missing transcript is visible instead of looking like a clean run.
+
 ## What each conversion loses
 
 Every conversion is lossy in some direction. A dropped tool result, message, subagent or history block logs a `loguru` warning. OTel spans with operations other than `chat`, `execute_tool` and `invoke_agent` are ignored without a warning. Metadata that has no slot in the target is also dropped without a warning; each method's `Lost:` list names it.
@@ -55,7 +68,7 @@ The per-method `Lost:` list in the [API reference](reference/evaluatorq/formats.
 
 ### Free-form slots
 
-When a source field has no typed home in the target, the converters keep it in the target's free-form slot instead of dropping it. ATIF keeps it in `extra` on the trajectory, step, tool call or metrics. OTel keeps it in a span's `attributes`. Reasoning token counts, response status and errors, and `fc_` item ids land there when converting Responses to ATIF. ATIF to OTel writes step, trajectory, tool-call and observation-result `extra`, and `final_metrics`, as JSON-string span attributes under `evaluatorq.atif.` (`evaluatorq.atif.step.extra` on the chat span, `evaluatorq.atif.trajectory.extra` and `evaluatorq.atif.final_metrics` on the `invoke_agent` span, `evaluatorq.atif.tool_call.extra` and `evaluatorq.atif.result.extra` on the `execute_tool` span), and OTel to ATIF reads them back. Additional observation results for one tool call use `evaluatorq.atif.additional_results` on its `execute_tool` span. Where the trace itself yields a key, such as a step's `invocation` timing, the trace's value wins and a differing carried value logs a warning. Nothing else reads these keys, so treat them as round-trip storage, not as an interchange contract.
+When a source field has no typed home in the target, the converters keep it in the target's free-form slot instead of dropping it. ATIF keeps it in `extra` on the trajectory, step, tool call or metrics. OTel keeps it in a span's `attributes`. Reasoning token counts, response status and errors, and `fc_` item ids land there when converting Responses to ATIF. ATIF to OTel writes step, trajectory, tool-call and observation-result `extra`, and `final_metrics`, as JSON-string span attributes under `evaluatorq.atif.` (`evaluatorq.atif.step.extra` on the chat span, `evaluatorq.atif.trajectory.extra` and `evaluatorq.atif.final_metrics` on the `invoke_agent` span, `evaluatorq.atif.tool_call.extra` and `evaluatorq.atif.result.extra` on the `execute_tool` span), and OTel to ATIF reads them back. Additional observation results for one tool call use `evaluatorq.atif.additional_results` on its `execute_tool` span. Tool-result start and end timestamps and status map to the corresponding `execute_tool` span fields, and tool definitions map to `gen_ai.tool.definitions` on chat spans. Where the trace itself yields a key, such as a step's `invocation` timing, the trace's value wins and a differing carried value logs a warning. Nothing else reads the `evaluatorq.atif.*` keys, so treat them as round-trip storage, not as an interchange contract.
 
 ## ATIF versions
 
@@ -71,7 +84,7 @@ The converters never call `uuid4`. Trace ids, span ids and call ids they have to
 
 `OtelTrace.from_orq(spans)` takes the raw list of span dicts as Orq returns it (the `v3spans` list) and parses it into typed spans. It handles what real exports look like rather than what the semantic conventions describe: chat-shaped messages keyed by index, the `chat-completion` operation name (read as `chat`), a singular `gen_ai.input.message` or direct `gen_ai.input` and `gen_ai.output` messages on a root span, no `execute_tool` spans, and usage that lives only in the span summary. Orq router output with role `agent` becomes an assistant turn. When a router trace root repeats the same chat input and output as its direct child, conversion reads the child once; distinct calls remain separate.
 
-Supported message content is parsed into typed parts rather than flattened. Malformed messages or parts are skipped with a warning.
+Attribute values stay whole: supported message content is parsed into typed parts rather than flattened, so nothing in valid messages is lost on parse. Malformed messages or parts are skipped with a warning.
 
 ## Examples
 
@@ -146,36 +159,27 @@ print([span.operation for span in trace.spans])  # ['invoke_agent', 'chat', 'exe
 ```python
 from evaluatorq.formats import OtelTrace
 
-inputs = [{'role': 'user', 'parts': [{'type': 'text', 'content': 'Hi'}]}]
-outputs = [{'role': 'agent', 'parts': [{'type': 'text', 'content': 'Hello.'}]}]
 raw_spans = [
     {
-        'span_id': 'root',
-        'type': 'trace',
+        'span_id': 's1',
+        'parent_span_id': None,
+        'name': 'chat-completion',
+        'started_at': '2026-04-20T10:00:00Z',
+        'ended_at': '2026-04-20T10:00:02Z',
         'attributes': {
-            'gen_ai.operation.name': 'chat',
-            'gen_ai.input': inputs,
-            'gen_ai.output': outputs,
-        },
-    },
-    {
-        'span_id': 'call',
-        'parent_span_id': 'root',
-        'type': 'span.responses',
-        'attributes': {
-            'gen_ai.operation.name': 'chat',
+            'gen_ai.operation.name': 'chat-completion',
             'gen_ai.response.model': 'openai/gpt-5.6-luna',
-            'gen_ai.input.messages': inputs,
-            'gen_ai.output.messages': outputs,
+            'gen_ai.input.messages': [{'role': 'user', 'parts': [{'type': 'text', 'content': 'Hi'}]}],
+            'gen_ai.output.messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'Hello.'}]}],
         },
-    },
+    }
 ]
 
 trajectory = OtelTrace.from_orq(raw_spans).to_atif()
 print([(step.source, step.message) for step in trajectory.steps])  # [('user', 'Hi'), ('agent', 'Hello.')]
 ```
 
-The root's `type: trace` identifies the wrapper; its child holds the same call, so conversion produces one agent turn.
+Orq router roots can also hold direct `gen_ai.input` and `gen_ai.output` messages, with a child span carrying the same call. The converter reads a repeated root and child call once; distinct child calls remain separate turns. A root span's `type: trace` identifies this wrapper shape.
 
 A trace with no chat span that yields a step raises `ValueError` from `to_atif()`, so check the span list is not empty or tool-only before converting.
 

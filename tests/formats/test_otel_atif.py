@@ -224,6 +224,48 @@ def test_router_root_with_distinct_output_remains_a_chat_span() -> None:
     assert [step.message for step in traj.steps if step.source == 'agent'] == ['first', 'second']
 
 
+def test_tool_span_timing_status_and_definitions_round_trip() -> None:
+    raw = [
+        {'span_id': 'root', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        {'span_id': 'chat', 'parent_span_id': 'root', 'started_at': 1, 'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.tool.definitions': [
+                {'type': 'function', 'function': {'name': 'lookup', 'parameters': {'type': 'object'}}},
+                {'name': 'flat', 'parameters': {'type': 'object'}},
+            ],
+            'gen_ai.input.messages': [_text('user', 'hi')],
+            'gen_ai.output.messages': [{'role': 'assistant', 'parts': [
+                {'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]}],
+        }},
+        {'span_id': 'tool', 'parent_span_id': 'root', 'started_at': 2, 'ended_at': 4, 'status': 'ok', 'attributes': {
+            'gen_ai.operation.name': 'execute_tool', 'gen_ai.tool.call.id': 'c1',
+            'gen_ai.tool.call.result': 'found',
+        }},
+        {'span_id': 'chat2', 'parent_span_id': 'root', 'started_at': 5, 'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.tool.definitions': [{'name': 'lookup', 'parameters': {'type': 'string'}}],
+            'gen_ai.input.messages': [_text('user', 'hi'),
+                {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'lookup', 'arguments': {}}]},
+                {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'c1', 'response': 'found'}]}],
+            'gen_ai.output.messages': [_text('assistant', 'done')],
+        }},
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [d.get('name') or d['function']['name'] for d in traj.agent.tool_definitions or []] == ['lookup', 'flat']
+    observation = traj.steps[1].observation
+    assert observation is not None
+    result = observation.results[0]
+    assert result.extra == {'start_timestamp': 2.0, 'end_timestamp': 4.0, 'status': 'ok'}
+    tool = next(span for span in traj.to_otel().spans if span.operation == 'execute_tool')
+    assert tool.start_time is not None and tool.start_time.timestamp() == 2
+    assert tool.end_time is not None and tool.end_time.timestamp() == 4
+    assert tool.status == 'ok'
+    back = traj.to_otel().to_atif()
+    assert back.agent.tool_definitions == traj.agent.tool_definitions
+    assert back.steps[1].observation is not None
+    assert back.steps[1].observation.results[0].extra == result.extra
+
+
 def test_per_turn_chat_inputs_are_not_dropped() -> None:
     raw = [
         _chat('c1', [_text('user', 'first')], [_text('assistant', 'answer one')]),
@@ -266,7 +308,10 @@ def test_error_tool_span_records_error_type() -> None:
                             'gen_ai.tool.call.result': 'boom', 'error.type': 'ToolError'}
     obs = OtelTrace.from_orq(raw).to_atif().steps[2].observation
     assert obs is not None
-    assert obs.results[0].extra == {'error_type': 'ToolError'}
+    assert obs.results[0].extra == {
+        'error_type': 'ToolError', 'status': 'error', 'start_timestamp': 1_776_679_202.0,
+        'end_timestamp': 1_776_679_205.0,
+    }
 
 
 # --- the real Orq export: AgentInvoke wrapper, system prompt as a message, results only in later inputs ---
@@ -587,7 +632,11 @@ def test_unmatched_tool_results_are_warned_and_kept(caplog: pytest.LogCaptureFix
     step = OtelTrace.from_orq(raw).to_atif().steps[1]
     assert step.observation is not None
     results = [(r.source_call_id, r.content, r.extra) for r in step.observation.results]
-    assert results == [('c1', 'ok', None), (None, 'lost', None), (None, 'R', {'orphan_call_id': 'nope'})]
+    assert results == [
+        ('c1', 'ok', None),
+        (None, 'lost', {'start_timestamp': 2.0}),
+        (None, 'R', {'orphan_call_id': 'nope'}),
+    ]
     assert '2 tool results match no tool call' in caplog.text
 
 
@@ -624,6 +673,137 @@ def test_reused_tool_call_id_consumes_later_chat_responses_in_order() -> None:
     agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent']
     assert [step.observation.results[0].content for step in agents if step.observation] == [
         'first result', 'second result']
+
+
+def test_reused_call_id_assigns_later_execute_span_after_response_part_fallback() -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'same', 'name': 'f', 'arguments': {}}]}
+
+    def response(text: str) -> dict[str, Any]:
+        return {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'same', 'response': text}]}
+
+    raw = [
+        {'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        _chat('c1', [_text('user', 'first')], [call], parent_span_id='a', started_at=1),
+        _chat(
+            'c2', [_text('user', 'first'), call, response('first result')], [call],
+            parent_span_id='a', started_at=4,
+        ),
+        {
+            'span_id': 't2', 'parent_span_id': 'a', 'started_at': 5, 'ended_at': 6, 'status': 'error',
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'second result',
+            },
+        },
+        _chat(
+            'c3',
+            [_text('user', 'first'), call, response('first result'), call, response('second result')],
+            [_text('assistant', 'done')],
+            parent_span_id='a',
+            started_at=7,
+        ),
+    ]
+
+    agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent' and step.tool_calls]
+
+    assert len(agents) == 2
+    assert agents[0].observation is not None
+    first_result = agents[0].observation.results[0]
+    assert first_result.content == 'first result'
+    assert first_result.extra is None
+    assert agents[1].observation is not None
+    second_result = agents[1].observation.results[0]
+    assert second_result.content == 'second result'
+    assert second_result.extra == {
+        'error_type': '_OTHER',
+        'start_timestamp': 5.0,
+        'end_timestamp': 6.0,
+        'status': 'error',
+    }
+
+
+def test_reused_call_id_orders_a_missing_start_span_by_its_end_time() -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'same', 'name': 'f', 'arguments': {}}]}
+
+    def response(text: str) -> dict[str, Any]:
+        return {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'same', 'response': text}]}
+
+    first = [_text('user', 'first')]
+    first_call = call
+    second_call = call.copy()
+    third_call = call.copy()
+    raw = [
+        {'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        _chat('c1', first, [first_call], parent_span_id='a', started_at=1),
+        {
+            'span_id': 't1',
+            'parent_span_id': 'a',
+            'ended_at': 2,
+            'status': 'error',
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'first span result',
+                'error.type': 'FirstError',
+            },
+        },
+        _chat(
+            'c2', [*first, first_call, response('first response part'), _text('user', 'second')],
+            [second_call], parent_span_id='a', started_at=4,
+        ),
+        {
+            'span_id': 't2',
+            'parent_span_id': 'a',
+            'started_at': 5,
+            'ended_at': 6,
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'second span result',
+            },
+        },
+        _chat(
+            'c3', [
+                *first, first_call, response('first response part'), _text('user', 'second'),
+                second_call, response('second response part'), _text('user', 'third'),
+            ], [third_call], parent_span_id='a', started_at=7,
+        ),
+        {
+            'span_id': 't3',
+            'parent_span_id': 'a',
+            'started_at': 8,
+            'ended_at': 9,
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'third span result',
+            },
+        },
+        _chat(
+            'c4', [
+                *first, first_call, response('first response part'), _text('user', 'second'),
+                second_call, response('second response part'), _text('user', 'third'),
+                third_call, response('third response part'),
+            ], [_text('assistant', 'done')], parent_span_id='a', started_at=10,
+        ),
+    ]
+
+    agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent' and step.tool_calls]
+
+    assert len(agents) == 3
+    assert all(step.observation is not None for step in agents)
+    results = [step.observation.results[0] for step in agents if step.observation is not None]
+    assert [(item.content, item.source_call_id) for item in results] == [
+        ('first span result', 'same'),
+        ('second span result', 'same'),
+        ('third span result', 'same'),
+    ]
+    assert results[0].extra == {
+        'error_type': 'FirstError',
+        'end_timestamp': 2.0,
+        'status': 'error',
+    }
 
 
 def test_atif_to_otel_assigns_duplicate_call_id_results_by_occurrence() -> None:
@@ -840,6 +1020,43 @@ def test_object_valued_invocation_keeps_times_and_status() -> None:
     assert chat.start_time is not None and chat.start_time.timestamp() == 1_700_000_000.0
     assert chat.end_time is not None and chat.end_time.timestamp() == 1_700_000_002.0
     assert chat.status == 'error'
+
+
+def test_atif_epoch_seconds_after_numeric_otel_cutoff_keep_their_unit() -> None:
+    future = 10_000_000_001.0
+    trajectory = AtifTrajectory(
+        session_id='future-time',
+        agent=AtifAgent(name='a', version='1'),
+        steps=[
+            AtifStep(
+                step_id=1,
+                source='agent',
+                message='',
+                tool_calls=[AtifToolCall(tool_call_id='c', function_name='lookup', arguments={})],
+                observation=AtifObservation(results=[
+                    AtifObservationResult(
+                        source_call_id='c',
+                        content='done',
+                        extra={'start_timestamp': future + 1, 'end_timestamp': future + 2, 'status': 'ok'},
+                    )
+                ]),
+                extra={'invocation': {'start_timestamp': future, 'end_timestamp': future + 3}},
+            )
+        ],
+    )
+
+    trace = trajectory.to_otel()
+    chat = next(span for span in trace.spans if span.operation == 'chat')
+    tool = next(span for span in trace.spans if span.operation == 'execute_tool')
+    assert chat.start_time is not None and chat.start_time.timestamp() == future
+    assert chat.end_time is not None and chat.end_time.timestamp() == future + 3
+    assert tool.start_time is not None and tool.start_time.timestamp() == future + 1
+    assert tool.end_time is not None and tool.end_time.timestamp() == future + 2
+    back = trace.to_atif()
+    assert back.steps[0].extra is not None and back.steps[0].extra['invocation']['start_timestamp'] == future
+    assert back.steps[0].observation is not None
+    result_extra = back.steps[0].observation.results[0].extra
+    assert result_extra is not None and result_extra['start_timestamp'] == future + 1
 
 
 def test_multi_part_text_result_joins_with_newlines() -> None:
