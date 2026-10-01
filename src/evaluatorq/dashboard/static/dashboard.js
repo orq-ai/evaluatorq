@@ -100,9 +100,12 @@
 
     const item = evt.target.closest('.facet-item');
     if (item) { showFacet(item); return; }
-    const addFilter = evt.target.closest('.finder-controls .add');
+    const option = evt.target.closest('.model-pick .model-option');
+    if (option) { pickModel(option, option.getAttribute('data-model')); return; }
+    const addFilter = evt.target.closest('.finder-controls .add, .model-pick-btn');
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
+      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { if (menu !== ownMenu) menu.classList.remove('open'); });
       if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
       return;
     }
@@ -121,7 +124,7 @@
       }
       return;
     }
-    if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
+    if (!evt.target.closest('.finder-controls .addwrap, .model-pick') && !evt.target.closest('.chip-open')) {
       document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
     }
 
@@ -138,6 +141,23 @@
       }
     });
     remove.closest('.chip').remove();
+  });
+
+  // Settings model menu: write the pick into the field's hidden input and show it on the button.
+  function pickModel(from, model) {
+    const pick = from.closest('.model-pick');
+    pick.querySelector('input[type="hidden"]').value = model;
+    pick.querySelector('.model-pick-btn').textContent = model || 'Choose a model';
+    pick.querySelectorAll('.model-option').forEach(function (other) { other.classList.toggle('is-selected', other === from); });
+    pick.querySelectorAll('.facet-item .count').forEach(function (tick) { tick.remove(); });
+    const owner = pick.querySelector('.facet-item[data-facet="' + from.closest('.facet-sub').getAttribute('data-facet-sub') + '"]');
+    if (owner && model) owner.querySelector('.chev').insertAdjacentHTML('beforebegin', '<span class="count">✓</span>');
+    if (from.classList.contains('model-option')) pick.querySelector('.finder-facets').classList.remove('open');
+  }
+
+  document.body.addEventListener('input', function (evt) {
+    const custom = evt.target.closest('.model-pick .model-custom');
+    if (custom) pickModel(custom, custom.value.trim());
   });
 
   function showFacet(item) {

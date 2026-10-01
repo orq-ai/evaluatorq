@@ -795,30 +795,48 @@ def _scope_settings_rows(scope: OrqScope, *, workspace: str, chosen_project: str
     return ''.join(rows)
 
 
-CUSTOM_MODEL_OPTION = '__custom__'
-
-
 def _model_control(name: str, label: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
-    """A provider-grouped model dropdown with a "Custom…" free-text escape, or a text box without a catalogue."""
+    """A two-level model menu (provider, then model) with a Custom free-text entry.
+
+    Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
+    Without a catalogue the field stays a plain text box.
+    """
     if not groups:
         return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
     known = any(value in ids for ids in groups.values())
-    options = ''.join(
-        f'<optgroup label="{esc(provider)}">'
-        + ''.join(
-            f'<option value="{esc(model)}"{" selected" if model == value else ""}>'
-            f'{esc(model.removeprefix(provider + "/"))}</option>'
-            for model in ids
+    items: list[str] = []
+    subs: list[str] = []
+    for index, (provider, ids) in enumerate((*groups.items(), ('Custom…', ()))):
+        key = f'{name}-{index}'
+        chosen = value in ids if ids else not known
+        items.append(
+            f'<button type="button" class="facet-item" data-facet="{esc(key)}" aria-haspopup="true" aria-expanded="false">'
+            f'<span>{esc(provider)}</span>{"<span class=count>✓</span>" if chosen else ""}'
+            '<span class="chev" aria-hidden="true">&rsaquo;</span></button>'
         )
-        + '</optgroup>'
-        for provider, ids in groups.items()
-    )
-    options += f'<option value="{CUSTOM_MODEL_OPTION}"{"" if known else " selected"}>Custom…</option>'
+        if ids:
+            options = ''.join(
+                f'<label class="model-option{" is-selected" if model == value else ""}" data-model="{esc(model)}">'
+                f'<span>{esc(model.removeprefix(provider + "/"))}</span></label>'
+                for model in ids
+            )
+            body = (
+                f'<input class="facet-search" type="search" placeholder="Search models" aria-label="Search {esc(provider)} models" autocomplete="off">'
+                f'<div class="facet-values">{options}</div>'
+                '<p class="facet-no-results" hidden>No matching models.</p>'
+            )
+        else:
+            body = (
+                f'<input class="model-custom" type="text" value="{"" if known else esc(value)}" '
+                f'placeholder="provider/model" aria-label="{esc(label)} (custom)">'
+            )
+        subs.append(
+            f'<div class="facet-sub" data-facet-sub="{esc(key)}" hidden><div class="hd">{esc(provider)}</div>{body}</div>'
+        )
     return (
-        f'<select id="{esc(name)}" name="{esc(name)}" '
-        f'onchange="this.nextElementSibling.hidden=this.value!==\'{CUSTOM_MODEL_OPTION}\'">{options}</select>'
-        f'<input name="{esc(name)}_custom" type="text" value="{"" if known else esc(value)}" '
-        f'placeholder="provider/model" aria-label="{esc(label)} (custom)"{" hidden" if known else ""}>'
+        f'<span class="model-pick"><input type="hidden" id="{esc(name)}" name="{esc(name)}" value="{esc(value)}">'
+        f'<button type="button" class="model-pick-btn" aria-haspopup="true">{esc(value) or "Choose a model"}</button>'
+        f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>'
     )
 
 

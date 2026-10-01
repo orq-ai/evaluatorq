@@ -770,21 +770,23 @@ def test_model_fields_offer_workspace_models_grouped_by_provider(
         return {name: _CHOICES for name in ('compiler_model', 'classifier_model', 'apply_model')}
 
     monkeypatch.setattr(app_module, '_model_choices', choices)
-    save_settings(DashboardSettings(compiler_model='openai/gpt-5.6-luna', classifier_model='my/finetune', window_days=7, limit=500, parallelism=100))
+    save_settings(
+        DashboardSettings(
+            compiler_model='openai/gpt-5.6-luna', classifier_model='my/finetune', window_days=7, limit=500, parallelism=100
+        )
+    )
 
     html = client.get('/settings').text
 
-    assert '<optgroup label="openai"><option value="openai/gpt-5.6-luna" selected>gpt-5.6-luna</option>' in html
-    # A saved model the workspace does not list stays editable as a custom value.
-    assert 'name="classifier_model_custom" type="text" value="my/finetune"' in html
-    assert 'name="compiler_model_custom" type="text" value="" placeholder="provider/model" aria-label="Compiler model (custom)" hidden' in html
+    assert '<input type="hidden" id="compiler_model" name="compiler_model" value="openai/gpt-5.6-luna">' in html
+    assert '<div class="hd">openai</div>' in html
+    assert '<label class="model-option is-selected" data-model="openai/gpt-5.6-luna"><span>gpt-5.6-luna</span></label>' in html
+    # A saved model the workspace does not list opens under Custom, text filled in.
+    assert '<input class="model-custom" type="text" value="my/finetune"' in html
 
 
-def test_custom_model_option_saves_the_free_text(client: TestClient, settings_file: Path) -> None:
-    response = client.post(
-        '/settings',
-        data=csrf_data({**_MODELS, 'compiler_model': '__custom__', 'compiler_model_custom': 'my/own-model'}),
-    )
+def test_model_menu_submits_its_hidden_value(client: TestClient, settings_file: Path) -> None:
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'compiler_model': 'my/own-model'}))
 
     assert response.status_code == 303
     assert json.loads(settings_file.read_text())['compiler_model'] == 'my/own-model'

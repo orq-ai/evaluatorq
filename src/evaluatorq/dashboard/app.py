@@ -62,7 +62,6 @@ from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.trace_finder.routes import initialize_finder_settings, register_finder_routes
 from evaluatorq.dashboard.view import (
-    CUSTOM_MODEL_OPTION,
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
     filter_fragment,
@@ -385,10 +384,6 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values: dict[str, object] = {
         name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
     }
-    for name, value in list(values.items()):
-        # The model dropdown's "Custom…" option hands over to its free-text box.
-        if value == CUSTOM_MODEL_OPTION:
-            values[name] = form_data.get(f'{name}_custom', '')
     for name, env_name in (
         ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
         ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),

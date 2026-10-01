@@ -468,6 +468,15 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-saved { margin: 0 0 12px; color: var(--green-600, #16a34a); font-size: 13px; }
 .settings-advanced { margin: 12px 0; }
 .settings-advanced > summary { cursor: pointer; color: var(--text-muted); font-size: 13px; }
+.model-pick { position: relative; display: block; }
+.model-pick-btn { width: 100%; text-align: left; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; font-family: var(--font-mono); cursor: pointer; }
+.model-pick-btn::after { content: "▾"; float: right; color: var(--text-faint); }
+.model-pick:has(.finder-facets.open) .model-pick-btn { border-color: var(--accent); box-shadow: var(--ring); }
+.model-pick .finder-facets { top: calc(100% + 4px); }
+.model-pick .finder-facets .facet-item > span:first-child { text-transform: none; }
+.model-pick .finder-facets .facet-list { max-height: 420px; overflow-y: auto; }
+.model-pick .model-option.is-selected { background: var(--surface-sunken); color: var(--text-strong); font-weight: 600; }
+.model-pick .model-custom { box-sizing: border-box; width: calc(100% - 12px); margin: 4px 6px 8px; }
 .settings-field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }
 
 /* ==== run rows (recent + per-kind list) ============================= */
