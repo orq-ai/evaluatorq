@@ -15,7 +15,7 @@ uv sync --all-extras --all-groups
 
 # Verify the setup
 uv run pytest -m 'not integration' --co  # list tests without running
-uv run basedpyright                       # type check
+uv run ty check                           # type check the whole repository
 uv run ruff check src                     # lint
 ```
 
@@ -50,7 +50,7 @@ uv run ruff check src --fix
 uv run ruff format src
 
 # Type check
-uv run basedpyright
+uv run ty check
 ```
 
 ## Project Structure
@@ -109,6 +109,6 @@ Add integration modules under `src/evaluatorq/integrations/`. Add the dependency
 ## Pull Requests
 
 - Branch from `main`
-- Run `uv run pytest -m 'not integration'` and `uv run basedpyright` before pushing
+- Run `uv run pytest -m 'not integration'` and `uv run ty check` before pushing; ty checks the whole repository, and CI runs it once on Ubuntu with Python 3.10
 - Use conventional commit format for commit messages (e.g., `feat(redteam): ...`, `fix(evaluatorq): ...`)
 - Keep PRs focused — one feature or fix per PR when possible

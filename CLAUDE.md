@@ -42,7 +42,7 @@ uv run ruff check src
 uv run ruff format src
 
 # Type check — the whole repo. Never scope it to a path (see "Before pushing").
-uv run basedpyright
+uv run ty check
 
 # Build
 uv build
@@ -89,13 +89,13 @@ Run the same checks CI runs, **verbatim**, before every push:
 ```bash
 uv run ruff check src
 uv run ruff format --check src
-uv run basedpyright                 # whole repo — NOT a path
+uv run ty check                     # whole repo — NOT a path
 uv run pytest -m 'not integration'
 ```
 
-**Do not scope `basedpyright` to a path.** CI runs it bare, which covers `tests/` as well as `src/`. Running `uv run basedpyright src/` passes clean while CI fails on type errors in test files — parametrized args annotated `str` where the signature wants a `Literal`, raw dicts passed where a pydantic model is expected. That exact mistake left PR #119 red across all four Python versions for three commits without any local signal.
+**Do not scope `ty` to a path.** The configured bare check covers `tests/`, `src/`, root Python files, and docs Python files. A scoped run can pass while CI fails on a type error elsewhere. CI runs the bare check once, on Ubuntu with Python 3.10.
 
-Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **basedpyright** is not scoped. Match CI, not intuition.
+Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ty** is not scoped. Match CI, not intuition.
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 
@@ -209,7 +209,7 @@ These tests use fakes and do not require API credentials. The repository does no
 - Python 3.10+ compatible (use `from __future__ import annotations` for newer typing syntax)
 - `StrEnum` polyfill for Python 3.10 (native in 3.11+)
 - Linting: ruff
-- Type checking: basedpyright (lenient config — many rules disabled)
+- Type checking: ty
 - Logging: `loguru` everywhere (core runtime dependency since 1.3)
 
 ### Releases
