@@ -10,7 +10,15 @@ from typing import Any
 from evaluatorq.formats._shared import atif_content_text, parse_iso
 from evaluatorq.signals.models import Evidence, Group, Precondition, SignalFn, SignalResult, result
 from evaluatorq.signals.preconditions import subagent_linkage, timestamps, tool_timestamps
-from evaluatorq.signals.walk import CallRecord, SignalContext, WalkedStep, invocation, is_llm_step, llm_times, tool_times
+from evaluatorq.signals.walk import (
+    CallRecord,
+    SignalContext,
+    WalkedStep,
+    invocation,
+    is_llm_step,
+    llm_times,
+    tool_times,
+)
 
 
 def _all_agent_steps(ctx: SignalContext) -> list[WalkedStep]:
