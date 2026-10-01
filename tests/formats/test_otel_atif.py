@@ -620,6 +620,89 @@ def test_reused_call_id_assigns_later_execute_span_after_response_part_fallback(
     }
 
 
+def test_reused_call_id_orders_a_missing_start_span_by_its_end_time() -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'same', 'name': 'f', 'arguments': {}}]}
+
+    def response(text: str) -> dict[str, Any]:
+        return {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'same', 'response': text}]}
+
+    first = [_text('user', 'first')]
+    first_call = call
+    second_call = call.copy()
+    third_call = call.copy()
+    raw = [
+        {'span_id': 'a', 'attributes': {'gen_ai.operation.name': 'invoke_agent'}},
+        _chat('c1', first, [first_call], parent_span_id='a', started_at=1),
+        {
+            'span_id': 't1',
+            'parent_span_id': 'a',
+            'ended_at': 2,
+            'status': 'error',
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'first span result',
+                'error.type': 'FirstError',
+            },
+        },
+        _chat(
+            'c2', [*first, first_call, response('first response part'), _text('user', 'second')],
+            [second_call], parent_span_id='a', started_at=4,
+        ),
+        {
+            'span_id': 't2',
+            'parent_span_id': 'a',
+            'started_at': 5,
+            'ended_at': 6,
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'second span result',
+            },
+        },
+        _chat(
+            'c3', [
+                *first, first_call, response('first response part'), _text('user', 'second'),
+                second_call, response('second response part'), _text('user', 'third'),
+            ], [third_call], parent_span_id='a', started_at=7,
+        ),
+        {
+            'span_id': 't3',
+            'parent_span_id': 'a',
+            'started_at': 8,
+            'ended_at': 9,
+            'attributes': {
+                'gen_ai.operation.name': 'execute_tool',
+                'gen_ai.tool.call.id': 'same',
+                'gen_ai.tool.call.result': 'third span result',
+            },
+        },
+        _chat(
+            'c4', [
+                *first, first_call, response('first response part'), _text('user', 'second'),
+                second_call, response('second response part'), _text('user', 'third'),
+                third_call, response('third response part'),
+            ], [_text('assistant', 'done')], parent_span_id='a', started_at=10,
+        ),
+    ]
+
+    agents = [step for step in OtelTrace.from_orq(raw).to_atif().steps if step.source == 'agent' and step.tool_calls]
+
+    assert len(agents) == 3
+    assert all(step.observation is not None for step in agents)
+    results = [step.observation.results[0] for step in agents if step.observation is not None]
+    assert [(item.content, item.source_call_id) for item in results] == [
+        ('first span result', 'same'),
+        ('second span result', 'same'),
+        ('third span result', 'same'),
+    ]
+    assert results[0].extra == {
+        'error_type': 'FirstError',
+        'end_timestamp': 2.0,
+        'status': 'error',
+    }
+
+
 def test_atif_to_otel_assigns_duplicate_call_id_results_by_occurrence() -> None:
     traj = AtifTrajectory.model_validate({
         'schema_version': 'ATIF-v1.7', 'trajectory_id': 't', 'agent': {'name': 'a', 'version': '1'},

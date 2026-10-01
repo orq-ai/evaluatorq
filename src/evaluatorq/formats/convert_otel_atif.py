@@ -182,6 +182,21 @@ def _by_start(spans: list[OtelSpan]) -> list[OtelSpan]:
     return sorted(spans, key=lambda s: (s.start_time is None, s.start_time.timestamp() if s.start_time else 0.0))
 
 
+def _by_tool_time(spans: list[OtelSpan]) -> list[OtelSpan]:
+    """Order tool spans by start time, using the end time when the start is missing."""
+
+    def tool_time(span: OtelSpan) -> datetime | None:
+        return span.start_time or span.end_time
+
+    return sorted(
+        spans,
+        key=lambda span: (
+            tool_time(span) is None,
+            tool_time(span).timestamp() if tool_time(span) is not None else 0.0,
+        ),
+    )
+
+
 def _session_id(trace: OtelTrace, tops: list[OtelSpan]) -> str:
     for span in [*tops, *trace.roots()]:
         conversation = span.attributes.get('gen_ai.conversation.id')
@@ -640,7 +655,7 @@ def _attach_results(
     Results that match no call (an id-less or unknown-id `execute_tool` span, or a `tool_call_response` part
     whose id no call has) are warned and kept as `source_call_id=None` results on the nearest earlier agent step.
     """
-    tool_spans = [span for span in _by_start(members) if span.operation == 'execute_tool']
+    tool_spans = _by_tool_time([span for span in members if span.operation == 'execute_tool'])
     by_call: dict[str, list[OtelSpan]] = {}
     for span in tool_spans:
         call_id = span.attributes.get('gen_ai.tool.call.id')
