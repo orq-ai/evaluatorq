@@ -4,17 +4,14 @@ from __future__ import annotations
 
 import json
 import re
-import shlex
 from collections import defaultdict
 from typing import Any, Literal
 
 from evaluatorq.formats._shared import RAW_ARGUMENTS_KEY
 from evaluatorq.signals import preconditions as pre
-from evaluatorq.signals.models import Evidence, SignalFn, SignalResult, result
+from evaluatorq.signals.models import Evidence, Precondition, SignalFn, SignalResult, result
+from evaluatorq.signals.shell import shell_command_family
 from evaluatorq.signals.walk import CallRecord, SignalContext, result_text, tool_schemas
-
-_CLIS = frozenset({'git', 'orq', 'gh', 'uv', 'docker', 'kubectl', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go'})
-_ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z_0-9]*=.*')
 
 
 def _call_ev(record: CallRecord, reason: str = '') -> Evidence:
@@ -204,7 +201,7 @@ def tool_succeeded_after_retry_count(ctx: SignalContext) -> SignalResult:
 
 
 def _schema_violation(schema: dict[str, Any], arguments: Any) -> str | None:
-    """Return the first validation error, or None when valid/unusable; jsonschema stays optional."""
+    """Return the first argument error; raise when the tool schema itself cannot be checked."""
     try:
         import jsonschema
         from jsonschema.validators import validator_for
@@ -214,8 +211,8 @@ def _schema_violation(schema: dict[str, Any], arguments: Any) -> str | None:
         validator = validator_for(schema, default=jsonschema.Draft202012Validator)
         validator.check_schema(schema)
         errors = sorted(validator(schema).iter_errors(arguments), key=lambda error: list(error.absolute_path))
-    except (jsonschema.SchemaError, TypeError, ValueError):
-        return None
+    except (jsonschema.SchemaError, TypeError, ValueError) as exc:
+        raise ValueError(f'unusable tool schema: {exc}') from exc
     if not errors:
         return None
     error = errors[0]
@@ -229,8 +226,6 @@ def invalid_schema_tool_call_count(ctx: SignalContext) -> SignalResult:
     try:
         import jsonschema  # noqa: F401
     except ImportError:
-        from evaluatorq.signals.models import SignalResult
-
         return SignalResult(
             name='invalid_schema_tool_call_count',
             group='B',
@@ -246,7 +241,17 @@ def invalid_schema_tool_call_count(ctx: SignalContext) -> SignalResult:
         if not isinstance(schema, dict):
             continue
         args = record.call.arguments
-        violation = 'arguments are not valid JSON' if RAW_ARGUMENTS_KEY in args else _schema_violation(schema, args)
+        try:
+            schema_violation = _schema_violation(schema, args)
+        except ValueError as exc:
+            detail = f'{record.call.function_name}: {exc}'
+            return SignalResult(
+                name='invalid_schema_tool_call_count',
+                group='B',
+                no_basis=detail,
+                preconditions=[*pcs, Precondition(name='tool schemas valid', met=False, detail=detail)],
+            )
+        violation = 'arguments are not valid JSON' if RAW_ARGUMENTS_KEY in args else schema_violation
         if violation and violation != 'jsonschema unavailable':
             evidence.append(_call_ev(record, f'{record.call.function_name}: {violation}'))
     return result('invalid_schema_tool_call_count', 'B', len(evidence), evidence, pcs)
@@ -263,30 +268,7 @@ def _shell_family(record: CallRecord, ctx: SignalContext) -> str | None:
     if ctx.config.tool_role(record.call.function_name) != 'bash':
         return None
     command = _arguments(record).get('command', _arguments(record).get('cmd'))
-    if not isinstance(command, str) or not command.strip():
-        return None
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|')
-        lexer.whitespace_split = True
-        lexer.commenters = '#'
-        tokens = list(lexer)
-    except ValueError:
-        return None
-    while tokens and _ASSIGNMENT.fullmatch(tokens[0]):
-        tokens.pop(0)
-    if len(tokens) >= 3 and tokens[0] == 'cd' and tokens[2] == '&&':
-        tokens = tokens[3:]
-    if not tokens or tokens[0] in {';', '&&', '||', '|'}:
-        return None
-    executable = tokens[0].rsplit('/', 1)[-1]
-    if (
-        executable in _CLIS
-        and len(tokens) > 1
-        and tokens[1] not in {';', '&&', '||', '|'}
-        and not tokens[1].startswith('-')
-    ):
-        return f'{executable} {tokens[1]}'
-    return executable
+    return shell_command_family(command)
 
 
 def consecutive_same_tool_max(ctx: SignalContext) -> SignalResult:

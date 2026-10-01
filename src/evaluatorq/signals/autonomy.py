@@ -9,12 +9,16 @@ from typing import Any
 
 from evaluatorq.formats._shared import atif_content_text, parse_iso
 from evaluatorq.signals.models import Evidence, Group, Precondition, SignalFn, SignalResult, result
-from evaluatorq.signals.preconditions import subagent_linkage
+from evaluatorq.signals.preconditions import subagent_linkage, timestamps, tool_timestamps
 from evaluatorq.signals.walk import CallRecord, SignalContext, WalkedStep, invocation, llm_times, tool_times
 
 
+def _all_agent_steps(ctx: SignalContext) -> list[WalkedStep]:
+    return [entry for entry in ctx.walked if entry.step.source == 'agent']
+
+
 def _agent_steps(ctx: SignalContext) -> list[WalkedStep]:
-    return [entry for entry in ctx.walked if entry.step.source == 'agent' and entry.step.llm_call_count != 0]
+    return [entry for entry in _all_agent_steps(ctx) if entry.step.llm_call_count != 0]
 
 
 def _users(ctx: SignalContext) -> list[WalkedStep]:
@@ -26,7 +30,9 @@ def _calls_at(ctx: SignalContext, entry: WalkedStep) -> list[CallRecord]:
 
 
 def _steps_per_agent(entry: WalkedStep, ctx: SignalContext) -> int:
-    return 1 + len(_calls_at(ctx, entry)) if entry.step.source == 'agent' and entry.step.llm_call_count != 0 else 0
+    if entry.step.source != 'agent':
+        return 0
+    return int(entry.step.llm_call_count != 0) + len(_calls_at(ctx, entry))
 
 
 def _segments(ctx: SignalContext) -> list[tuple[WalkedStep, list[WalkedStep]]]:
@@ -38,11 +44,7 @@ def _segments(ctx: SignalContext) -> list[tuple[WalkedStep, list[WalkedStep]]]:
         finish_at = positions[id(users[index + 1])] if index + 1 < len(users) else len(ctx.walked)
         segments.append((
             start,
-            [
-                entry
-                for entry in ctx.walked[begin_at + 1 : finish_at]
-                if entry.step.source == 'agent' and entry.step.llm_call_count != 0
-            ],
+            [entry for entry in ctx.walked[begin_at + 1 : finish_at] if entry.step.source == 'agent'],
         ))
     return segments
 
@@ -172,7 +174,7 @@ def human_interruption_count(ctx: SignalContext) -> SignalResult:
 
 
 def subagent_step_share(ctx: SignalContext) -> SignalResult:
-    steps = _agent_steps(ctx)
+    steps = _all_agent_steps(ctx)
     total = sum(_steps_per_agent(entry, ctx) for entry in steps)
     sub = [entry for entry in steps if entry.agent_path]
     numerator = sum(_steps_per_agent(entry, ctx) for entry in sub)
@@ -208,17 +210,17 @@ def parallel_tool_batch_count(ctx: SignalContext) -> SignalResult:
             reason=f'{len(entry.step.tool_calls or [])} calls',
             related_call_ids=[record.call.tool_call_id for record in _calls_at(ctx, entry)],
         )
-        for entry in _agent_steps(ctx)
+        for entry in _all_agent_steps(ctx)
         if len(entry.step.tool_calls or []) > 1
     ]
     return result('parallel_tool_batch_count', 'C', len(evidence), evidence)
 
 
 def max_parallel_tool_calls(ctx: SignalContext) -> SignalResult:
-    maximum = max((len(entry.step.tool_calls or []) for entry in _agent_steps(ctx)), default=0)
+    maximum = max((len(entry.step.tool_calls or []) for entry in _all_agent_steps(ctx)), default=0)
     evidence = [
         _evidence(entry, related_call_ids=[record.call.tool_call_id for record in _calls_at(ctx, entry)])
-        for entry in _agent_steps(ctx)
+        for entry in _all_agent_steps(ctx)
         if maximum > 1 and len(entry.step.tool_calls or []) == maximum
     ]
     return result('max_parallel_tool_calls', 'C', maximum, evidence)
@@ -332,7 +334,13 @@ def _minus(intervals: list[tuple[float, float]], cuts: list[tuple[float, float]]
 def _timing(ctx: SignalContext) -> tuple[dict[str, Any], list[Precondition]]:
     llm, tool, exact_stamps, iso_stamps = _intervals(ctx)
     stamps = [*exact_stamps, *iso_stamps]
-    pcs = [Precondition(name='timestamps', met=bool(stamps), detail=f'{len(stamps)} usable timestamps')]
+    llm_coverage = timestamps(ctx)
+    tool_coverage = tool_timestamps(ctx)
+    pcs = [
+        Precondition(name='usable timestamps', met=bool(stamps), detail=f'{len(stamps)} usable timestamps'),
+        llm_coverage,
+        tool_coverage,
+    ]
     if not stamps or (not llm and not tool):
         pcs.append(Precondition(name='activity intervals', met=False, detail='no LLM or tool interval could be timed'))
         return {}, pcs
@@ -349,6 +357,8 @@ def _timing(ctx: SignalContext) -> tuple[dict[str, Any], list[Precondition]]:
             'tool': _length(_minus(_union(tool), llm_union)),
             'llm_intervals': llm,
             'tool_intervals': tool,
+            'llm_incomplete': llm_coverage.met is not True,
+            'tool_incomplete': tool_coverage.met is not True,
         },
         pcs,
     )
@@ -361,6 +371,9 @@ def _time_signal(name: str, ctx: SignalContext, key: str, kinds: tuple[str, ...]
         if key == 'wall'
         else any(interval[5] for kind in kinds for interval in timing.get(f'{kind}_intervals', []))
     )
+    approximate = approximate or timing.get('llm_incomplete', False)
+    if key != 'llm':
+        approximate = approximate or timing.get('tool_incomplete', False)
     if not timing:
         return result(name, 'C', None, preconditions=pcs, approximate=approximate)
     evidence = [
@@ -390,7 +403,7 @@ def tool_time_ms(ctx: SignalContext) -> SignalResult:
 def max_autonomous_duration_ms(ctx: SignalContext) -> SignalResult:
     segments = _segments(ctx)
     candidates: list[tuple[float, WalkedStep, list[WalkedStep]]] = []
-    pcs = [_has_users(ctx)]
+    pcs = [_has_users(ctx), timestamps(ctx), tool_timestamps(ctx)]
     for start, entries in segments:
         start_time = _step_epoch(start)
         if start_time is None:

@@ -21,6 +21,7 @@ from evaluatorq.signals.walk import (
     llm_times,
     step_model,
     tool_schemas,
+    tool_times,
 )
 
 _MAX_LISTED = 8
@@ -244,32 +245,58 @@ def subagent_linkage(ctx: SignalContext) -> Precondition:
     return pc
 
 
-def has_subagents(ctx: SignalContext) -> Precondition:
+def has_subagents(count: int) -> Precondition:
     """At least one subagent invocation (averages are undefined otherwise)."""
-    walked = ctx.walked
-    n = len({w.agent_path for w in walked if w.agent_path})
-    return Precondition(name='has subagent invocations', met=n > 0, detail=f'{n} subagent invocations')
+    return Precondition(name='has subagent invocations', met=count > 0, detail=f'{count} subagent invocations')
 
 
 def timestamps(ctx: SignalContext) -> Precondition:
-    """LLM steps carry timestamps (timing metrics are omitted without them).
+    """Report whether every LLM step has exact invocation timestamps.
 
     Invocation start and end timestamps meet the check. A step with only an ISO `timestamp` counts as
     `'partial'`: it gives a start but no end, so durations from it are approximate.
     """
     walked = ctx.walked
-    llm = [w for w in walked if is_llm_step(w)]
+    llm = [w for w in walked if w.step.source == 'agent' and w.step.llm_call_count != 0]
+    if not llm:
+        return Precondition(name='LLM timestamp coverage', met=True, detail='no LLM steps', required=False)
     times = [llm_times(w) for w in llm]
     exact = sum(t.start is not None and t.end is not None for t in times)
     any_time = sum(t.start is not None or t.end is not None for t in times)
     if llm and exact == len(llm):
         return Precondition(
-            name='timestamps', met=True, detail=f'{exact} of {len(llm)} agent steps have invocation timestamps'
+            name='LLM timestamp coverage',
+            met=True,
+            detail=f'{exact} of {len(llm)} agent steps have invocation timestamps',
+            required=False,
         )
     if any_time:
         return Precondition(
-            name='timestamps',
+            name='LLM timestamp coverage',
             met='partial',
-            detail=f'{exact} of {len(llm)} agent steps have invocation timestamps, {any_time - exact} only an ISO start',
+            detail=f'{exact} exact, {any_time - exact} partial, {len(llm) - any_time} without timestamps among {len(llm)} agent steps',
+            required=False,
         )
-    return _coverage('timestamps', 0, len(llm), 'agent steps have a timestamp', required=True)
+    return _coverage('LLM timestamp coverage', 0, len(llm), 'agent steps have a timestamp', required=False)
+
+
+def tool_timestamps(ctx: SignalContext) -> Precondition:
+    """Report how many tool calls have a result with usable start and end timestamps."""
+    calls = ctx.calls
+    if not calls:
+        return Precondition(name='tool timestamp coverage', met=True, detail='no tool calls', required=False)
+    exact = 0
+    partial = 0
+    for record in calls:
+        start, end = tool_times(record.result) if record.result is not None else (None, None)
+        if start is not None and end is not None and end >= start:
+            exact += 1
+        elif start is not None or end is not None:
+            partial += 1
+    met: bool | Literal['partial'] = True if exact == len(calls) else ('partial' if exact or partial else False)
+    return Precondition(
+        name='tool timestamp coverage',
+        met=met,
+        detail=f'{exact} exact, {partial} partial, {len(calls) - exact - partial} without timing among {len(calls)} tool calls',
+        required=False,
+    )

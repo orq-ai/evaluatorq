@@ -97,6 +97,22 @@ def test_schema_validation_reports_no_basis_without_optional_dependency(monkeypa
     assert report.no_basis == 'jsonschema is unavailable'
 
 
+def test_unusable_tool_schema_has_no_basis():
+    trajectory = traj(
+        [agent(calls=[call('search', {'query': 'x'}, 'call')], results=[ok()])],
+        tool_definitions=[{
+            'type': 'function',
+            'function': {'name': 'search', 'parameters': {'type': 'not-a-jsonschema-type'}},
+        }],
+    )
+
+    report = _values(trajectory, 'invalid_schema_tool_call_count')['invalid_schema_tool_call_count']
+    assert report.value is None
+    assert 'unusable tool schema' in (report.no_basis or '')
+    assert report.preconditions[-1].name == 'tool schemas valid'
+    assert report.preconditions[-1].met is False
+
+
 def test_command_family_runs_and_oscillation():
     trajectory = traj([
         agent(calls=[call('Bash', {'command': 'git status'}, 'a')], results=[ok()]),
@@ -109,6 +125,16 @@ def test_command_family_runs_and_oscillation():
     assert values['tool_oscillation_count'].value == 1
     assert values['tool_loop_count'].value == 1
     assert values['tool_oscillation_count'].evidence[0].reason == '4-call oscillation: git status ↔ orq traces'
+
+
+def test_command_family_skips_cd_and_environment_prefixes():
+    trajectory = traj([
+        agent(calls=[call('Bash', {'command': 'cd /tmp && FOO=bar git status'}, 'first')]),
+        agent(calls=[call('Bash', {'command': 'cd /tmp && FOO=bar orq traces'}, 'second')]),
+    ])
+
+    report = _values(trajectory, 'consecutive_command_family_max')['consecutive_command_family_max']
+    assert report.value == 1
 
 
 def test_oscillation_of_same_tool_with_different_arguments_is_labeled():

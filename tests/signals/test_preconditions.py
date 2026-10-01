@@ -89,11 +89,11 @@ def test_subagent_checks() -> None:
     linked = traj([agent(calls=[call('Task')], results=[spawned('child')])], subagents=[child])
     walked = context(linked)
     assert pre.subagent_linkage(walked).met is True
-    assert pre.has_subagents(walked).met is True
+    assert pre.has_subagents(1).met is True
     unlinked = traj([agent(calls=[call('Task')], results=[ok()])], subagents=[stray])
     got = pre.subagent_linkage(context(unlinked))
     assert got.met is False
     assert 'Task @step 1' in got.detail and 'stray' in got.detail
     solo = context(traj([agent(calls=[call('Read')], results=[failed()])]))
-    assert pre.has_subagents(solo).met is False
+    assert pre.has_subagents(0).met is False
     assert pre.subagent_linkage(solo).met is True

@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-import re
-import shlex
 from collections import Counter
 from itertools import starmap
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
 
 from evaluatorq.signals import preconditions as pre
-from evaluatorq.signals.models import Evidence, Precondition, SignalFn, SignalResult, result
+from evaluatorq.signals.models import Evidence, SignalFn, SignalResult, result
+from evaluatorq.signals.shell import shell_command_family
 from evaluatorq.signals.walk import SignalContext, WalkedStep, finish_reasons, infer_provider, is_llm_step, step_model
 
 if TYPE_CHECKING:
     from evaluatorq.formats.atif import AtifTrajectory
-
-_CLIS = frozenset({'git', 'orq', 'gh', 'uv', 'docker', 'kubectl', 'npm', 'pnpm', 'yarn', 'bun', 'cargo', 'go'})
-_ASSIGNMENT = re.compile(r'[A-Za-z_][A-Za-z_0-9]*=.*')
 
 
 def _ev(entry: WalkedStep, reason: str = '') -> Evidence:
@@ -210,36 +206,6 @@ def _arguments(call: Any) -> dict[str, Any]:
     return call.arguments if isinstance(call.arguments, dict) and '_raw' not in call.arguments else {}
 
 
-def _shell_family(command: object) -> str | None:
-    if not isinstance(command, str) or not command.strip():
-        return None
-    try:
-        lexer = shlex.shlex(command, posix=True, punctuation_chars=';&|')
-        lexer.whitespace_split = True
-        lexer.commenters = '#'
-        tokens = list(lexer)
-    except ValueError:
-        return None
-    while tokens:
-        if _ASSIGNMENT.fullmatch(tokens[0]):
-            tokens.pop(0)
-        elif len(tokens) >= 3 and tokens[0] == 'cd' and tokens[2] == '&&':
-            tokens = tokens[3:]
-        else:
-            break
-    if not tokens or tokens[0] in {';', '&&', '||', '|'}:
-        return None
-    executable = tokens[0].rsplit('/', 1)[-1]
-    if (
-        executable in _CLIS
-        and len(tokens) > 1
-        and tokens[1] not in {';', '&&', '||', '|'}
-        and not tokens[1].startswith('-')
-    ):
-        return f'{executable} {tokens[1]}'
-    return executable
-
-
 def _role_calls(ctx: SignalContext, role: str):
     return [c for c in ctx.calls if ctx.config.tool_role(c.call.function_name) == role]
 
@@ -247,7 +213,7 @@ def _role_calls(ctx: SignalContext, role: str):
 def bash_command_value_count(ctx: SignalContext) -> SignalResult:
     calls = _role_calls(ctx, 'bash')
     pairs = [
-        (c, _shell_family(_arguments(c.call).get('command', _arguments(c.call).get('cmd'))) or 'unknown command')
+        (c, shell_command_family(_arguments(c.call).get('command', _arguments(c.call).get('cmd'))) or 'unknown command')
         for c in calls
     ]
     return _count(
@@ -354,11 +320,7 @@ def avg_messages_per_subagent_invocation(ctx: SignalContext) -> SignalResult:
     subagents = _subagents(ctx)
     entries = [w for w in ctx.walked if w.agent_path]
     pcs = [
-        Precondition(
-            name='has subagent invocations',
-            met=bool(subagents),
-            detail=f'{len(subagents)} subagent invocations',
-        ),
+        pre.has_subagents(len(subagents)),
         pre.subagent_linkage(ctx),
     ]
     return result(

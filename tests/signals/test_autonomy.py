@@ -84,6 +84,19 @@ def test_parallel_batches_and_human_interruptions() -> None:
     assert interruption.evidence[0].related_call_ids == ['a', 'b']
 
 
+def test_tool_calls_on_zero_llm_step_count_as_work_and_parallel_batch() -> None:
+    trajectory = traj([
+        user(),
+        agent(calls=[call('a', call_id='a'), call('b', call_id='b')], llm_call_count=0),
+    ])
+
+    values = _run(trajectory, 'max_autonomous_steps', 'avg_autonomous_steps', 'parallel_tool_batch_count', 'max_parallel_tool_calls')
+    assert values['max_autonomous_steps'].value == 2
+    assert values['avg_autonomous_steps'].value == 2.0
+    assert values['parallel_tool_batch_count'].value == 1
+    assert values['max_parallel_tool_calls'].value == 2
+
+
 def test_real_orq_fixture_provides_exact_timing() -> None:
     raw = json.loads((FIXTURES / 'otel' / 'orq_agent_subagent.json').read_text())
     trajectory = OtelTrace.from_orq(raw).to_atif()
@@ -143,6 +156,35 @@ def test_iso_timestamps_use_approximate_fallback_intervals() -> None:
 def test_timing_without_timestamps_has_no_basis() -> None:
     values = _run(traj([user(), agent('answer')]), 'wall_time_ms', 'active_time_ms', 'llm_time_ms', 'tool_time_ms')
     assert all(signal.value is None and signal.no_basis is not None for signal in values.values())
+
+
+def test_partial_llm_timing_is_disclosed_on_reported_duration() -> None:
+    trajectory = traj([
+        agent('timed', extra={'invocation': {'start_timestamp': 1.0, 'end_timestamp': 2.0}}),
+        agent('untimed'),
+    ])
+
+    signal = _run(trajectory, 'llm_time_ms')['llm_time_ms']
+    assert signal.value == 1000
+    assert signal.approximate is True
+    assert any(pc.name == 'LLM timestamp coverage' and pc.met == 'partial' for pc in signal.preconditions)
+
+
+def test_missing_tool_timing_is_disclosed_instead_of_exact_zero() -> None:
+    trajectory = traj([
+        agent(
+            calls=[call('search', call_id='c')],
+            results=[ok()],
+            extra={'invocation': {'start_timestamp': 1.0, 'end_timestamp': 2.0}},
+        ),
+        agent('answer', extra={'invocation': {'start_timestamp': 3.0, 'end_timestamp': 4.0}}),
+    ])
+
+    values = _run(trajectory, 'tool_time_ms', 'llm_time_ms')
+    assert values['tool_time_ms'].value == 0
+    assert values['tool_time_ms'].approximate is True
+    assert any(pc.name == 'tool timestamp coverage' and pc.met is False for pc in values['tool_time_ms'].preconditions)
+    assert values['llm_time_ms'].approximate is False
 
 
 def test_max_autonomous_duration_uses_the_longest_timed_root_segment() -> None:
