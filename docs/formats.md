@@ -41,7 +41,7 @@ Chat and Responses also convert directly to each other. Every other pair compose
 
 ## What each conversion loses
 
-Every conversion is lossy in some direction. The loss is never silent for structure: a dropped tool result, message, subagent or history block logs a `loguru` warning. What is dropped without a warning is metadata that has no slot in the target, and each method's `Lost:` list names it.
+Every conversion is lossy in some direction. A dropped tool result, message, subagent or history block logs a `loguru` warning. OTel spans with operations other than `chat`, `execute_tool` and `invoke_agent` are ignored without a warning. Metadata that has no slot in the target is also dropped without a warning; each method's `Lost:` list names it.
 
 - **Chat drops reasoning.** `ResponsesConversation.to_chat()` and `AtifTrajectory.to_chat()` count the reasoning items they discard and warn once. Keep the Responses or ATIF object if you need the reasoning.
 - **Responses items alone merge consecutive agent steps.** Converting to ATIF closes an agent step at a tool result, and at the first output item of each `Response` when `responses` are set. Without responses, two assistant turns with no tool result between them become one step. `ResponsesConversation` checks that each `Response.output` matches the supported model output items (assistant messages, reasoning, function calls, custom tool calls and MCP calls) of `items`, in order, and raises `ValueError` when they disagree; a `Response` built with an empty `output` gets it filled from `items`, one response per run of consecutive output items. Compaction is a transcript marker, so a `Response.output` containing it raises a clear error. Custom tool and MCP calls and custom tool results stay in ATIF step `extra` for the return trip because ATIF has no matching typed call.
@@ -69,9 +69,9 @@ The converters never call `uuid4`. Trace ids, span ids and call ids they have to
 
 ## Real Orq exports
 
-`OtelTrace.from_orq(spans)` takes the raw list of span dicts as Orq returns it (the `v3spans` list) and parses it into typed spans. It handles what real exports look like rather than what the semantic conventions describe: chat-shaped messages keyed by index, the `chat-completion` operation name (read as `chat`), a singular `gen_ai.input.message` on the root span, no `execute_tool` spans, and usage that lives only in the span summary.
+`OtelTrace.from_orq(spans)` takes the raw list of span dicts as Orq returns it (the `v3spans` list) and parses it into typed spans. It handles what real exports look like rather than what the semantic conventions describe: chat-shaped messages keyed by index, the `chat-completion` operation name (read as `chat`), a singular `gen_ai.input.message` or direct `gen_ai.input` and `gen_ai.output` messages on a root span, no `execute_tool` spans, and usage that lives only in the span summary. Orq router output with role `agent` becomes an assistant turn. When a router trace root repeats the same chat input and output as its direct child, conversion reads the child once; distinct calls remain separate.
 
-Attribute values stay whole: messages are parsed into typed parts rather than flattened, so nothing in them is lost on parse.
+Supported message content is parsed into typed parts rather than flattened. Malformed messages or parts are skipped with a warning.
 
 ## Examples
 
@@ -109,12 +109,19 @@ print(json.loads(trajectory.to_json())['schema_version'])  # ATIF-v1.7
 ```python
 from evaluatorq.formats import AtifTrajectory
 
-trajectory = AtifTrajectory.from_json(open('trajectory.json').read())
+trajectory = AtifTrajectory.from_json({
+    'schema_version': 'ATIF-v1.7',
+    'agent': {'name': 'demo', 'version': '1'},
+    'steps': [
+        {'step_id': 1, 'source': 'user', 'message': 'Hi'},
+        {'step_id': 2, 'source': 'agent', 'message': 'Hello.'},
+    ],
+})
 chat = trajectory.to_chat()
-print([message.role for message in chat.messages])
+print([message.role for message in chat.messages])  # ['user', 'assistant']
 ```
 
-`trajectory.json` is any ATIF v1.7 or v1.8 document, such as one from a Harbor run or the output of `trajectory.to_json()` above.
+For a Harbor run or another saved ATIF document, pass the file's text to `AtifTrajectory.from_json` instead of the dict.
 
 ### Responses to OTel
 
@@ -139,25 +146,36 @@ print([span.operation for span in trace.spans])  # ['invoke_agent', 'chat', 'exe
 ```python
 from evaluatorq.formats import OtelTrace
 
+inputs = [{'role': 'user', 'parts': [{'type': 'text', 'content': 'Hi'}]}]
+outputs = [{'role': 'agent', 'parts': [{'type': 'text', 'content': 'Hello.'}]}]
 raw_spans = [
     {
-        'span_id': 's1',
-        'parent_span_id': None,
-        'name': 'chat-completion',
-        'started_at': '2026-04-20T10:00:00Z',
-        'ended_at': '2026-04-20T10:00:02Z',
+        'span_id': 'root',
+        'type': 'trace',
         'attributes': {
-            'gen_ai.operation.name': 'chat-completion',
-            'gen_ai.response.model': 'openai/gpt-5.6-luna',
-            'gen_ai.input.messages': [{'role': 'user', 'parts': [{'type': 'text', 'content': 'Hi'}]}],
-            'gen_ai.output.messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'Hello.'}]}],
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.input': inputs,
+            'gen_ai.output': outputs,
         },
-    }
+    },
+    {
+        'span_id': 'call',
+        'parent_span_id': 'root',
+        'type': 'span.responses',
+        'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.response.model': 'openai/gpt-5.6-luna',
+            'gen_ai.input.messages': inputs,
+            'gen_ai.output.messages': outputs,
+        },
+    },
 ]
 
 trajectory = OtelTrace.from_orq(raw_spans).to_atif()
 print([(step.source, step.message) for step in trajectory.steps])  # [('user', 'Hi'), ('agent', 'Hello.')]
 ```
+
+The root's `type: trace` identifies the wrapper; its child holds the same call, so conversion produces one agent turn.
 
 A trace with no chat span that yields a step raises `ValueError` from `to_atif()`, so check the span list is not empty or tool-only before converting.
 

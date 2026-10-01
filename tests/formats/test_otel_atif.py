@@ -124,6 +124,84 @@ def test_chat_span_without_output_gives_no_agent_step() -> None:
     assert [s.source for s in traj.steps] == ['user']
 
 
+def test_router_chat_agent_output_is_an_assistant_turn() -> None:
+    span = {
+        'span_id': 'router-chat',
+        'type': 'span.chat_completion',
+        'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.input.messages': [_text('user', 'hello')],
+            'gen_ai.output.messages': [_text('agent', 'hi')],
+        },
+    }
+    traj = OtelTrace.from_orq([span]).to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [('user', 'hello'), ('agent', 'hi')]
+
+
+def test_router_responses_root_mirrors_child_only_once() -> None:
+    inputs = [_text('user', 'write hello.py')]
+    outputs = [_text('agent', 'hello.py')]
+    raw = [
+        {
+            'span_id': 'root',
+            'type': 'trace',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input': inputs, 'gen_ai.output': outputs},
+        },
+        {
+            'span_id': 'child',
+            'parent_span_id': 'root',
+            'type': 'span.responses',
+            'attributes': {
+                'gen_ai.operation.name': 'chat',
+                'gen_ai.input.messages': inputs,
+                'gen_ai.output.messages': outputs,
+            },
+        },
+    ]
+    trace = OtelTrace.from_orq(raw)
+    assert trace.spans[0].span_type == 'trace'
+    assert trace.spans[0].input_messages == trace.spans[1].input_messages
+    assert trace.spans[0].output_messages == trace.spans[1].output_messages
+    traj = trace.to_atif()
+    assert [(step.source, step.message) for step in traj.steps] == [('user', 'write hello.py'), ('agent', 'hello.py')]
+
+
+def test_identical_sibling_chat_spans_remain_distinct() -> None:
+    inputs = [_text('user', 'again')]
+    outputs = [_text('assistant', 'same')]
+    raw = [
+        {'span_id': 'root', 'type': 'trace'},
+        {
+            'span_id': 'first', 'parent_span_id': 'root', 'type': 'span.responses',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': inputs, 'gen_ai.output.messages': outputs},
+        },
+        {
+            'span_id': 'second', 'parent_span_id': 'root', 'type': 'span.responses',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': inputs, 'gen_ai.output.messages': outputs},
+        },
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [step.message for step in traj.steps if step.source == 'agent'] == ['same', 'same']
+
+
+def test_router_root_with_distinct_output_remains_a_chat_span() -> None:
+    inputs = [_text('user', 'again')]
+    raw = [
+        {
+            'span_id': 'root', 'type': 'trace',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input': inputs,
+                           'gen_ai.output': [_text('agent', 'first')]},
+        },
+        {
+            'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': inputs,
+                           'gen_ai.output.messages': [_text('agent', 'second')]},
+        },
+    ]
+    traj = OtelTrace.from_orq(raw).to_atif()
+    assert [step.message for step in traj.steps if step.source == 'agent'] == ['first', 'second']
+
+
 def test_per_turn_chat_inputs_are_not_dropped() -> None:
     raw = [
         _chat('c1', [_text('user', 'first')], [_text('assistant', 'answer one')]),
