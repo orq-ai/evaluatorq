@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import json
-from datetime import timezone
+import os
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,7 @@ import pytest
 
 from evaluatorq.formats.otel import (
     OtelGenericPart,
+    OtelSpan,
     OtelTextPart,
     OtelToolCallPart,
     OtelToolCallResponsePart,
@@ -81,6 +84,24 @@ def test_nested_and_flat_attributes_both_accepted() -> None:
     trace = OtelTrace.from_orq(_raw())
     tool = next(s for s in trace.spans if s.span_id == 't1')
     assert tool.attributes['gen_ai.tool.call.id'] == 'call_1'
+
+
+@pytest.mark.parametrize(
+    'output',
+    [
+        {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'hello'}]},
+        {'message': {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'hello'}]}},
+        {'messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'hello'}]}]},
+    ],
+    ids=['direct-message', 'singular-wrapper', 'plural-wrapper'],
+)
+def test_nested_output_message_wrappers_are_parsed(output: dict[str, Any]) -> None:
+    trace = OtelTrace.from_orq([{'span_id': 's', 'attributes': {'gen_ai.output': output}}])
+    parsed = trace.spans[0].output_messages
+    assert parsed is not None
+    assert parsed[0].role == 'assistant'
+    assert isinstance(parsed[0].parts[0], OtelTextPart)
+    assert parsed[0].parts[0].content == 'hello'
 
 
 def test_flatten_attributes() -> None:
@@ -183,6 +204,28 @@ def test_span_without_id_gets_synthetic_id() -> None:
 def test_orphan_parent_is_treated_as_root() -> None:
     trace = OtelTrace.from_orq([{'span_id': 's', 'parent_span_id': 'gone'}])
     assert [s.span_id for s in trace.roots()] == ['s']
+
+
+@pytest.mark.skipif(not hasattr(time, 'tzset'), reason='Changing the process timezone requires time.tzset()')
+def test_ordered_treats_naive_span_times_as_utc(monkeypatch: pytest.MonkeyPatch) -> None:
+    old_tz = os.environ.get('TZ')
+    monkeypatch.setenv('TZ', 'Etc/GMT-12')
+    time.tzset()
+    try:
+        naive_later = OtelSpan(
+            trace_id='t', span_id='naive-later', start_time=datetime.fromisoformat('2026-01-01T01:00:00')
+        )
+        aware_earlier = OtelSpan(
+            trace_id='t', span_id='aware-earlier', start_time=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+        )
+        trace = OtelTrace(spans=[naive_later, aware_earlier])
+        assert [span.span_id for span in trace.roots()] == ['aware-earlier', 'naive-later']
+    finally:
+        if old_tz is None:
+            monkeypatch.delenv('TZ', raising=False)
+        else:
+            monkeypatch.setenv('TZ', old_tz)
+        time.tzset()
 
 
 def _real() -> list[dict[str, Any]]:

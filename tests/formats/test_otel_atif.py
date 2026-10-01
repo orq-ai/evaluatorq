@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -138,6 +139,21 @@ def test_router_chat_agent_output_is_an_assistant_turn() -> None:
     assert [(step.source, step.message) for step in traj.steps] == [('user', 'hello'), ('agent', 'hi')]
 
 
+def test_message_finish_reason_round_trips_through_step_extra() -> None:
+    span = _chat('finish', [_text('user', 'hello')], [{**_text('assistant', 'hi'), 'finish_reason': 'stop'}])
+
+    trajectory = OtelTrace.from_orq([span]).to_atif()
+
+    assert trajectory.steps[1].extra is not None
+    assert trajectory.steps[1].extra['finish_reasons'] == ['stop']
+    round_trip = trajectory.to_otel()
+    chat = next(span for span in round_trip.spans if span.operation == 'chat')
+    assert chat.output_messages is not None and chat.output_messages[0].finish_reason == 'stop'
+    assert chat.attributes['gen_ai.response.finish_reasons'] == ['stop']
+    back = round_trip.to_atif()
+    assert back.steps[1].extra is not None and back.steps[1].extra['finish_reasons'] == ['stop']
+
+
 def test_router_responses_root_mirrors_child_only_once() -> None:
     inputs = [_text('user', 'write hello.py')]
     outputs = [_text('agent', 'hello.py')]
@@ -164,6 +180,132 @@ def test_router_responses_root_mirrors_child_only_once() -> None:
     assert trace.spans[0].output_messages == trace.spans[1].output_messages
     traj = trace.to_atif()
     assert [(step.source, step.message) for step in traj.steps] == [('user', 'write hello.py'), ('agent', 'hello.py')]
+
+
+def test_router_responses_mirror_keeps_prior_agent_tool_turns(caplog: pytest.LogCaptureFixture) -> None:
+    inputs = [
+        _text('user', 'Create and run a file.'),
+        {'role': 'assistant', 'finish_reason': 'tool_calls', 'parts': [
+            {'type': 'tool_call', 'id': 'call-create', 'name': 'Create', 'arguments': {'file': 'hello.py'}}]},
+        {'role': 'tool', 'parts': [
+            {'type': 'tool_call_response', 'id': 'call-create', 'response': 'created hello.py'}]},
+        {'role': 'assistant', 'parts': [
+            {'type': 'tool_call', 'id': 'call-run', 'name': 'Execute', 'arguments': {'command': 'python hello.py'}}]},
+        {'role': 'tool', 'parts': [
+            {'type': 'tool_call_response', 'id': 'call-run', 'response': 'hello'}]},
+        _text('assistant', 'Output: hello'),
+        _text('user', 'Which file did you create?'),
+    ]
+    output = [_text('assistant', 'hello.py')]
+    root_input = {'_value': 'Which file did you create?', 'messages': inputs}
+    root_output = {'_value': [{'type': 'message', 'role': 'assistant', 'content': 'hello.py'}], 'messages': output}
+    child_output = {'type': 'text', 'messages': output}
+    raw = [
+        {
+            'span_id': 'root',
+            'type': 'trace',
+            'attributes': {'gen_ai': {'input': root_input, 'output': root_output}, 'gen_ai.operation.name': 'chat'},
+        },
+        {
+            'span_id': 'router-responses',
+            'parent_span_id': 'root',
+            'type': 'span.responses',
+            'attributes': {
+                'gen_ai.operation.name': 'chat',
+                'gen_ai': {'input': root_input, 'output': child_output},
+            },
+        },
+    ]
+
+    trajectory = OtelTrace.from_orq(raw).to_atif()
+
+    assert [(step.source, step.message) for step in trajectory.steps] == [
+        ('user', 'Create and run a file.'),
+        ('agent', ''),
+        ('agent', ''),
+        ('agent', 'Output: hello'),
+        ('user', 'Which file did you create?'),
+        ('agent', 'hello.py'),
+    ]
+    calls = [step.tool_calls[0] for step in trajectory.steps if step.tool_calls]
+    assert [(call.tool_call_id, call.function_name) for call in calls] == [
+        ('call-create', 'Create'),
+        ('call-run', 'Execute'),
+    ]
+    results = [step.observation.results[0] for step in trajectory.steps if step.observation]
+    assert [(result.source_call_id, result.content) for result in results] == [
+        ('call-create', 'created hello.py'),
+        ('call-run', 'hello'),
+    ]
+    assert trajectory.steps[1].extra is not None
+    assert trajectory.steps[1].extra['finish_reasons'] == ['tool_calls']
+    assert not [record for record in caplog.records if record.levelno >= 30]
+
+
+@pytest.mark.parametrize('boundary_role', ['user', 'system'])
+def test_router_mirrored_result_after_boundary_is_an_orphan_step(
+    boundary_role: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    call = {'role': 'assistant', 'parts': [
+        {'type': 'tool_call', 'id': 'call-old', 'name': 'lookup', 'arguments': {'q': 'old'}}]}
+    inputs = [
+        _text('user', 'First request'),
+        call,
+        _text(boundary_role, 'New context'),
+        {'role': 'tool', 'parts': [
+            {'type': 'tool_call_response', 'id': 'call-old', 'response': 'late result'}]},
+    ]
+    output = [_text('assistant', 'Done')]
+    root_input = {'_value': 'New context', 'messages': inputs}
+    root_output = {'_value': [{'type': 'message', 'role': 'assistant', 'content': 'Done'}], 'messages': output}
+    child_output = {'type': 'text', 'messages': output}
+    raw = [
+        {'span_id': 'root', 'type': 'trace', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input, 'output': root_output}}},
+        {'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input, 'output': child_output}}},
+    ]
+
+    trajectory = OtelTrace.from_orq(raw).to_atif()
+
+    assert [step.source for step in trajectory.steps] == [
+        'user', 'agent', boundary_role if boundary_role == 'user' else 'system', 'agent', 'agent'
+    ]
+    assert trajectory.steps[1].observation is None
+    orphan = trajectory.steps[3].observation
+    assert orphan is not None
+    assert [(result.source_call_id, result.content, result.extra) for result in orphan.results] == [
+        (None, 'late result', {'orphan_call_id': 'call-old'})
+    ]
+    assert 'without a still-valid call' in caplog.text
+
+
+def test_router_mirrored_orphan_before_first_agent_keeps_its_position(caplog: pytest.LogCaptureFixture) -> None:
+    inputs = [
+        {'role': 'tool', 'parts': [
+            {'type': 'tool_call_response', 'id': 'unknown', 'response': 'early result'}]},
+        _text('user', 'Request'),
+    ]
+    output = [_text('assistant', 'Done')]
+    root_input = {'_value': 'Request', 'messages': inputs}
+    root_output = {'_value': [{'type': 'message', 'role': 'assistant', 'content': 'Done'}], 'messages': output}
+    raw = [
+        {'span_id': 'root', 'type': 'trace', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input, 'output': root_output}}},
+        {'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses', 'attributes': {
+            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input,
+                                                        'output': {'type': 'text', 'messages': output}}}},
+    ]
+
+    trajectory = OtelTrace.from_orq(raw).to_atif()
+
+    assert [step.source for step in trajectory.steps] == ['agent', 'user', 'agent']
+    orphan = trajectory.steps[0].observation
+    assert orphan is not None
+    assert [(result.source_call_id, result.content, result.extra) for result in orphan.results] == [
+        (None, 'early result', {'orphan_call_id': 'unknown'})
+    ]
+    assert 'without a still-valid call' in caplog.text
 
 
 def test_router_mirror_ignores_non_transcript_message_metadata() -> None:
@@ -381,7 +523,7 @@ def test_history_before_first_chat_span_is_warned_and_dropped(caplog: pytest.Log
     assert 'history of 1 messages before the first chat span is not converted' in caplog.text
 
 
-def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:
+def test_call_without_id_gets_stable_id_and_no_result_entry(caplog: pytest.LogCaptureFixture) -> None:
     call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'name': 'f', 'arguments': 'not json'}]}
     raw = [_chat('c', [_text('user', 'a')], [call])]
     first = OtelTrace.from_orq(raw).to_atif()
@@ -391,7 +533,43 @@ def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:
     assert step.tool_calls[0].arguments == {}
     assert step.tool_calls[0].extra == {RAW_ARGUMENTS_EXTRA_KEY: 'not json'}
     assert step.observation is None
+    assert "Tool call 'f' arguments are not a JSON object" in caplog.text
+    tool_span = next(span for span in first.to_otel().spans if span.operation == 'execute_tool')
+    assert tool_span.attributes['gen_ai.tool.call.arguments'] == 'not json'
+    round_trip = first.to_otel().to_atif()
+    assert round_trip.steps[1].tool_calls is not None
+    assert round_trip.steps[1].tool_calls[0].extra == {RAW_ARGUMENTS_EXTRA_KEY: 'not json'}
     assert OtelTrace.from_orq(raw).to_atif() == first
+
+
+@pytest.mark.skipif(not hasattr(time, 'tzset'), reason='Changing the process timezone requires time.tzset()')
+def test_tool_span_order_treats_naive_times_as_utc(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    from datetime import datetime, timezone
+
+    from evaluatorq.formats.convert_otel_atif import _by_tool_time
+    from evaluatorq.formats.otel import OtelSpan
+
+    old_tz = os.environ.get('TZ')
+    monkeypatch.setenv('TZ', 'Etc/GMT-12')
+    time.tzset()
+    try:
+        naive_later = OtelSpan(
+            trace_id='t', span_id='naive-later', start_time=datetime.fromisoformat('2026-01-01T01:00:00')
+        )
+        aware_earlier = OtelSpan(
+            trace_id='t', span_id='aware-earlier', start_time=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+        )
+        assert [span.span_id for span in _by_tool_time([naive_later, aware_earlier])] == [
+            'aware-earlier',
+            'naive-later',
+        ]
+    finally:
+        if old_tz is None:
+            monkeypatch.delenv('TZ', raising=False)
+        else:
+            monkeypatch.setenv('TZ', old_tz)
+        time.tzset()
 
 
 def test_raw_arguments_are_written_back_as_the_string() -> None:

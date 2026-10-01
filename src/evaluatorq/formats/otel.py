@@ -253,8 +253,16 @@ class OtelTrace(BaseModel):
 
     @staticmethod
     def _ordered(spans: list[OtelSpan]) -> list[OtelSpan]:
+        def key(span: OtelSpan) -> tuple[bool, float]:
+            if span.start_time is None:
+                return True, 0.0
+            start_time = span.start_time
+            if start_time.tzinfo is None:
+                start_time = start_time.replace(tzinfo=timezone.utc)
+            return False, start_time.timestamp()
+
         # sorted() is stable, so ties keep list order
-        return sorted(spans, key=lambda s: (s.start_time is None, s.start_time.timestamp() if s.start_time else 0.0))
+        return sorted(spans, key=key)
 
     def to_atif(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> AtifTrajectory:
         """Convert to an ATIF trajectory (subagent `invoke_agent` subtrees become subagent trajectories).
@@ -351,7 +359,10 @@ def flatten_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
         if key in _LEAF_ATTRIBUTES:
             return True
         return key in ('gen_ai.input', 'gen_ai.output') and (
-            'role' in value or (bool(value) and all(index.isdigit() for index in value))
+            'role' in value
+            or 'message' in value
+            or 'messages' in value
+            or (bool(value) and all(index.isdigit() for index in value))
         )
 
     def walk(prefix: str, value: dict[str, Any]) -> None:

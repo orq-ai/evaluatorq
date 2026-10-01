@@ -61,7 +61,7 @@ Every conversion is lossy in some direction. A dropped tool result, message, sub
 - **ATIF to Responses emits one `Response` per agent step**, with that step's output items as its `output`, so agent steps stay apart on the way back. Per-call metadata (model, usage, timing) comes from that step; a step without any gets a placeholder that reads back as absent. Responses usage has no unset token count, so an unset one is written as 0 and listed in `Response.metadata['atif_unset_usage']`, which reads back as unset. Step cost, token ids and logprobs have no Responses slot and are dropped with a warning.
 - **ATIF to OTel drops results without a call id and unembedded subagents.** An observation result with no `source_call_id` has no tool message or `execute_tool` span to sit in, and a subagent reference whose trajectory is not embedded has nothing to render. Each logs a warning. User and system steps are all kept: a system step that opens the trajectory becomes the chat spans' `system_instructions`, a later one is a `system` input message, and steps after the last agent turn go into a final `chat` span that has input and no output. A trajectory with no agent step at all, such as a system prompt and one user message, converts the same way.
 - **Multi-part text joins with newlines.** When one message has several text parts and the target holds a single string, every route joins them with `\n` and skips empty parts, so `to_chat()` and `to_atif().to_chat()` give the same text. A tool result with several text parts follows the same rule, so `a` and `b` become `a\nb` in Responses and OTel. Image and file parts in a Responses tool result stay typed in chat; a malformed optional media field is dropped while a valid source remains. Structured tool result lists become JSON text. Image URLs stay typed in ATIF, while files become warned text markers because ATIF has no file part. A Responses text part whose `text` is not a string is dropped with a warning rather than written as a Python repr.
-- **OTel to ATIF reads cumulative and per-turn input.** New user, system and assistant messages become steps when a chat span repeats the full history or holds only the current turn. Edited or truncated history logs a warning naming the span; matching turns are aligned by occurrence and include tool arguments and non-text parts. Unmatched messages on either side of a replayed block remain new steps. A changed, nonempty `system_instructions` value becomes a new system step. A compaction (an OTel `compaction` part or a Responses `compaction` item) becomes a system step with `extra.context_management = {"type": "compaction", "boundary": "replace"}` and its original parts under `extra["evaluatorq.compaction"]`; a Responses compaction item is restored on the return trip. Prior assistant and tool history in the first chat span and extra output choices are dropped with a warning. Spans that are not `chat`, `execute_tool` or `invoke_agent` are ignored.
+- **OTel to ATIF reads cumulative and per-turn input.** New user, system and assistant messages become steps when a chat span repeats the full history or holds only the current turn. Edited or truncated history logs a warning naming the span; matching turns are aligned by occurrence and include tool arguments and non-text parts. Unmatched messages on either side of a replayed block remain new steps. A changed, nonempty `system_instructions` value becomes a new system step. A compaction (an OTel `compaction` part or a Responses `compaction` item) becomes a system step with `extra.context_management = {"type": "compaction", "boundary": "replace"}` and its original parts under `extra["evaluatorq.compaction"]`; a Responses compaction item is restored on the return trip. Prior assistant and tool history in the first chat span is dropped with a warning, except when that span is the child of a mirrored Orq router root: its full input history becomes steps with linked tool results. Extra output choices are dropped with a warning. Spans that are not `chat`, `execute_tool` or `invoke_agent` are ignored.
 - **Tool results with no `tool_call_id` are unlinked.** Chat to Responses warns and cannot attach them.
 
 The per-method `Lost:` list in the [API reference](reference/evaluatorq/formats.md) is the exact inventory for each edge.
@@ -82,13 +82,29 @@ The converters never call `uuid4`. Trace ids, span ids and call ids they have to
 
 ## Real Orq exports
 
-`OtelTrace.from_orq(spans)` takes the raw list of span dicts as Orq returns it (the `v3spans` list) and parses it into typed spans. It handles what real exports look like rather than what the semantic conventions describe: chat-shaped messages keyed by index, the `chat-completion` operation name (read as `chat`), a singular `gen_ai.input.message` or direct `gen_ai.input` and `gen_ai.output` messages on a root span, no `execute_tool` spans, and usage that lives only in the span summary. Orq router output with role `agent` becomes an assistant turn. When a router trace root repeats the same chat input and output as its direct child, conversion reads the child once; distinct calls remain separate.
+`OtelTrace.from_orq(spans)` takes the raw list of span dicts as Orq returns it (the `v3spans` list) and parses it into typed spans. It handles what real exports look like rather than what the semantic conventions describe: chat-shaped messages keyed by index, nested singular or plural message wrappers, the `chat-completion` operation name (read as `chat`), direct `gen_ai.input` and `gen_ai.output` messages on a root span, no `execute_tool` spans, and usage that lives only in the span summary. Orq router output with role `agent` becomes an assistant turn. When a router trace root repeats the same chat input and output as its direct child, conversion reads the child once and keeps the child's earlier assistant turns, tool calls and tool results; distinct calls remain separate.
 
 Attribute values stay whole: supported message content is parsed into typed parts rather than flattened, so nothing in valid messages is lost on parse. Malformed messages or parts are skipped with a warning.
 
 ## Examples
 
 Each snippet is self-contained. They use plain Python objects, so no API key is needed.
+
+### Chat and Responses
+
+```python
+from evaluatorq.contracts import Message
+from evaluatorq.formats import ChatConversation
+
+chat = ChatConversation(messages=[
+    Message(role='user', content='Hi'),
+    Message(role='assistant', content='Hello.'),
+])
+
+responses = chat.to_responses()
+print(responses.items[1]['content'][0]['type'])  # output_text
+print([(message.role, message.content) for message in responses.to_chat().messages])  # [('user', 'Hi'), ('assistant', 'Hello.')]
+```
 
 ### Chat to ATIF
 
@@ -179,7 +195,38 @@ trajectory = OtelTrace.from_orq(raw_spans).to_atif()
 print([(step.source, step.message) for step in trajectory.steps])  # [('user', 'Hi'), ('agent', 'Hello.')]
 ```
 
-Orq router roots can also hold direct `gen_ai.input` and `gen_ai.output` messages, with a child span carrying the same call. The converter reads a repeated root and child call once; distinct child calls remain separate turns. A root span's `type: trace` identifies this wrapper shape.
+Orq router roots can also hold direct `gen_ai.input` and `gen_ai.output` messages, with a child span carrying the same call. A root span's `type: trace` identifies this wrapper shape:
+
+```python
+from evaluatorq.formats import OtelTrace
+
+input_messages = [{'role': 'user', 'parts': [{'type': 'text', 'content': 'Hi'}]}]
+output_messages = [{'role': 'agent', 'parts': [{'type': 'text', 'content': 'Hello.'}]}]
+router_spans = [
+    {
+        'span_id': 'root',
+        'type': 'trace',
+        'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.input': {'messages': input_messages},
+            'gen_ai.output': {'messages': output_messages},
+        },
+    },
+    {
+        'span_id': 'call',
+        'parent_span_id': 'root',
+        'type': 'span.responses',
+        'attributes': {
+            'gen_ai.operation.name': 'chat',
+            'gen_ai.input.messages': input_messages,
+            'gen_ai.output.messages': output_messages,
+        },
+    },
+]
+
+trajectory = OtelTrace.from_orq(router_spans).to_atif()
+print([(step.source, step.message) for step in trajectory.steps])  # [('user', 'Hi'), ('agent', 'Hello.')]
+```
 
 A trace with no chat span that yields a step raises `ValueError` from `to_atif()`, so check the span list is not empty or tool-only before converting.
 
