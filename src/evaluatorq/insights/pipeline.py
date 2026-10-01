@@ -518,7 +518,7 @@ async def insights(  # noqa: C901
         # until after population resolution to construct a client for analysis.
         if population.query is not None:
             ensure_llm_client()
-        if resolved_orq is None:
+        if resolved_orq is None and population.snapshot_path is None:
             resolved_orq = resolve_orq_client()
         _stage(writer, 'population')
         try:

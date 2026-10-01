@@ -677,6 +677,7 @@ def body(
     if snapshot.state == 'completed' and snapshot.compiled is not None:
         export_name = export_filename(snapshot)
         local_filename = shlex.quote(export_name)
+        powershell_filename = "'" + export_name.replace("'", "''") + "'"
         python = (
             'from pathlib import Path\n'
             'from evaluatorq.insights import InsightsPopulation, insights_sync\n\n'
@@ -689,7 +690,8 @@ def body(
             'the Insights wizard; enter the filename there. The examples below expect the downloaded file in your '
             'current directory.</p>'
             f'<p><a class="btn-secondary" href="/find/export.json?export={quote(export_name, safe="")}">Download and save {esc(export_name)}</a></p>'
-            f'<label>CLI</label><pre><code>eq insights --from-finder {esc(local_filename)}</code></pre>'
+            f'<label>CLI (macOS/Linux)</label><pre><code>eq insights --from-finder {esc(local_filename)}</code></pre>'
+            f'<label>CLI (Windows PowerShell)</label><pre><code>eq insights --from-finder {esc(powershell_filename)}</code></pre>'
             f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
         )
     return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}{analyze}'

@@ -354,6 +354,8 @@ def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatc
     rendered_examples = unescape(html)
     assert 'server-side copy is also saved' in html
     assert 'eq insights --from-finder trace-finder-17.json' in rendered_examples
+    assert 'CLI (Windows PowerShell)' in html
+    assert "eq insights --from-finder 'trace-finder-17.json'" in rendered_examples
     assert 'InsightsPopulation.from_finder_export' in html
     assert "Path('trace-finder-17.json')" in rendered_examples
     assert 'insights_sync(population)' in rendered_examples

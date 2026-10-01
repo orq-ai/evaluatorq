@@ -822,6 +822,25 @@ def test_finder_pruning_is_normal_when_no_lease_directory_exists(
     assert all(path.exists() for path in exports[1:])
 
 
+def test_finder_pruning_skips_reference_scan_within_retention_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    for index in range(finder_routes._FINDER_EXPORT_RETENTION):
+        (export_dir / f'trace-finder-{index}.json').write_text('{}', encoding='utf-8')
+
+    monkeypatch.setattr(
+        finder_routes,
+        '_referenced_finder_exports',
+        lambda _export_dir: pytest.fail('reference scan is unnecessary below the retention limit'),
+    )
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert len(list(export_dir.glob('trace-finder-*.json'))) == finder_routes._FINDER_EXPORT_RETENTION
+
+
 def test_finder_export_retention_keeps_recent_and_saved_insights_references(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -999,6 +1018,40 @@ def test_find_facets_menu_reports_unavailable_catalogue(setup_finder, monkeypatc
     response = client.get('/find/facets')
     assert response.status_code == 200
     assert 'Facet values are unavailable' in response.text
+
+
+def test_oauth_facet_catalogue_closes_both_clients(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from evaluatorq.dashboard.auth import DashboardAuth
+
+    _store, client = setup_finder
+    client.get('/find')
+    app = client.app
+    app.state.finder_catalogue_cache = None
+    closed: list[str] = []
+
+    class Llm:
+        async def close(self) -> None:
+            closed.append('llm')
+
+    monkeypatch.setattr(
+        finder_routes,
+        'selected_dashboard_auth',
+        lambda _app: DashboardAuth('cli_oauth', None, 'https://my.orq.ai'),
+    )
+    monkeypatch.setattr(finder_routes, 'build_auth_clients', lambda *_args, **_kwargs: (object(), Llm()))
+    monkeypatch.setattr(finder_routes, 'load_facet_catalogue', AsyncMock(return_value=FacetCatalogue()))
+    async def close_orq(_orq: object) -> None:
+        closed.append('orq')
+
+    monkeypatch.setattr(finder_routes, 'close_orq_client', close_orq)
+
+    result = asyncio.run(finder_routes._load_catalogue(app))
+
+    assert result == FacetCatalogue()
+    assert closed == ['orq', 'llm']
 
 
 def test_find_facets_menu_renders_from_the_submitted_controls(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -173,28 +173,46 @@ class ManifestWriter:
     def __init__(self, manifest: RunManifest, path: Path, *, clock: Callable[[], float] = time.monotonic) -> None:
         self.manifest = manifest
         self.path = path
+        self._persisted_manifest = manifest.model_copy(deep=True)
         self._clock = clock
         self._last_progress_flush: dict[int, float] = {}
 
     def flush(self) -> bool:
         """Persist the latest in-memory state under the manifest lock; False when the disk view lags.
 
-        A run another process already finished (``fail_if_running``, the launcher's reconcile)
-        is terminal on disk, so a still-running writer adopts that record instead of
-        overwriting it.
+        Changes made since this writer's last flush are merged onto the current disk view.
+        This keeps independent updates from a long-lived writer from replacing newer fields.
+        The first terminal status on disk also wins, including when this writer has already
+        changed its local status before flushing.
         """
         with _manifest_lock(self.path):
-            if self.manifest.status == ManifestStatus.RUNNING:
-                on_disk = _read_manifest(self.path)
-                if on_disk is not None and on_disk.status != ManifestStatus.RUNNING:
+            on_disk = _read_manifest(self.path)
+            if on_disk is not None:
+                if (
+                    self._persisted_manifest.status == ManifestStatus.RUNNING
+                    and on_disk.status != ManifestStatus.RUNNING
+                ):
                     logger.warning(
                         'Run manifest {} was already finished as {} by another writer; keeping it',
                         self.path,
                         on_disk.status.value,
                     )
                     self.manifest = on_disk
+                    self._persisted_manifest = on_disk.model_copy(deep=True)
                     return True
-            return _write_atomic(self.manifest, self.path)
+
+                base = self._persisted_manifest.model_dump(mode='python')
+                local = self.manifest.model_dump(mode='python')
+                merged = on_disk.model_copy(deep=True)
+                for field in RunManifest.model_fields:
+                    if local[field] != base[field]:
+                        setattr(merged, field, getattr(self.manifest, field))
+                self.manifest = merged
+
+            if not _write_atomic(self.manifest, self.path):
+                return False
+            self._persisted_manifest = self.manifest.model_copy(deep=True)
+            return True
 
     def _open_stage(self, name: str | None = None, target: str | None = None) -> StageRecord | None:
         """Most-recent still-open stage record matching *name* and *target*.

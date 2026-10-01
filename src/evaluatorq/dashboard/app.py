@@ -36,8 +36,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
+from openai import APIError
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
@@ -292,6 +294,17 @@ async def _auth_status(req: Request) -> JSONResponse:
                 'method': auth.method,
                 'message': f'{auth.label} was rejected. Open Settings to choose or renew a credential.',
             })
+        expected_provider_failure = status_code is not None or isinstance(exc, (httpx.HTTPError, APIError))
+        if not expected_provider_failure:
+            logger.opt(exception=True).error(
+                'Unexpected dashboard auth status probe failure for {}: {}', auth.label, exc
+            )
+            return JSONResponse({
+                'status': 'error',
+                'method': auth.method,
+                'message': 'The authentication check failed unexpectedly. Check the dashboard logs.',
+            })
+        logger.opt(exception=True).warning('Dashboard auth status probe failed for {}: {}', auth.label, exc)
         return JSONResponse({
             'status': 'unavailable',
             'method': auth.method,
@@ -299,11 +312,17 @@ async def _auth_status(req: Request) -> JSONResponse:
         })
     finally:
         if orq is not None:
-            await close_orq_client(orq)
+            try:
+                await close_orq_client(orq)
+            except Exception as exc:
+                logger.opt(exception=True).warning('Could not close dashboard auth Orq client: {}', exc)
         if llm is not None:
             close = getattr(llm, 'close', None)
             if close is not None:
-                await close()
+                try:
+                    await close()
+                except Exception as exc:
+                    logger.opt(exception=True).warning('Could not close dashboard auth LLM client: {}', exc)
     return JSONResponse({'status': 'valid', 'method': auth.method})
 
 
@@ -501,6 +520,8 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     if method is None and 'orq_profile' in form_data:
         method = 'cli_profile' if form_data.get('orq_profile') else 'environment'
     values['orq_auth_method'] = method or current.orq_auth_method
+    if values['orq_auth_method'] != 'cli_profile':
+        values['orq_profile'] = None
     values['orq_profile_host'] = form_data.get('orq_stored_key_host', current.orq_profile_host)
     values['orq_api_key_ciphertext'] = current.orq_api_key_ciphertext
     values['orq_oauth_server'] = form_data.get('orq_oauth_server', current.orq_oauth_server)

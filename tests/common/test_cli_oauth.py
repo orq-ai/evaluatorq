@@ -63,12 +63,49 @@ async def test_cli_classify_post_uses_oauth_request_endpoint(monkeypatch: Any) -
     monkeypatch.setattr(cli_oauth.asyncio, 'create_subprocess_exec', fake_create)
     monkeypatch.setenv('ORQ_API_KEY', 'must-not-be-forwarded')
     _, llm = cli_oauth.build_cli_oauth_clients('https://my.orq.ai')
-    result = await llm.post('/classify', body={'model': 'typesafe/jev-latest', 'state': {}, 'questions': {}}, options={})
+    result = await llm.post(
+        '/classify',
+        body={'model': 'typesafe/jev-latest', 'state': {}, 'questions': {}},
+        options={'headers': {'Authorization': 'Bearer secret-token', 'X-Api-Key': 'secret-key', 'X-Trace': 'trace-1'}},
+    )
 
     assert result.answers == {}
     assert seen['args'][-5:] == ('request', 'POST', '/v3/router/classify', '--force', '--stdin')
+    assert not any('secret-token' in arg or 'secret-key' in arg or 'X-Trace' in arg for arg in seen['args'])
     assert json.loads(seen['process'].received)['model'] == 'typesafe/jev-latest'
     assert 'ORQ_API_KEY' not in seen['env']
+
+
+@pytest.mark.parametrize('source', ['session', 'session-file', 'device-flow', 'future-cli-source'])
+def test_oauth_subject_accepts_authenticated_cli_source(monkeypatch: Any, source: str) -> None:
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
+    monkeypatch.setattr(
+        cli_oauth.subprocess,
+        'run',
+        lambda *_args, **_kwargs: cli_oauth.subprocess.CompletedProcess(
+            args=['orq'], returncode=0,
+            stdout=json.dumps({'authenticated': True, 'source': source, 'user_id': 'user-1'}), stderr='',
+        ),
+    )
+
+    assert cli_oauth.oauth_subject('https://my.orq.ai') == {
+        'user_id': 'user-1', 'workspace': None, 'project': None,
+    }
+
+
+def test_oauth_subject_rejects_unauthenticated_cli(monkeypatch: Any) -> None:
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
+    monkeypatch.setattr(
+        cli_oauth.subprocess,
+        'run',
+        lambda *_args, **_kwargs: cli_oauth.subprocess.CompletedProcess(
+            args=['orq'], returncode=0,
+            stdout=json.dumps({'authenticated': False, 'source': 'device-flow', 'user_id': 'user-1'}), stderr='',
+        ),
+    )
+
+    with pytest.raises(cli_oauth.OrqCLIError, match='sign-in needs attention'):
+        cli_oauth.oauth_subject('https://my.orq.ai')
 
 
 @pytest.mark.asyncio

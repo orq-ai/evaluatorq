@@ -344,11 +344,16 @@ def insights_cmd(
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
         saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
-        selected_profile = resolve_cli_profile(profile if profile is not None else saved_profile)
+        selected_profile = (
+            resolve_cli_profile(profile if profile is not None else saved_profile)
+            if from_snapshot is None or profile is not None
+            else None
+        )
+        finder_export: RunExport | None = None
         if from_finder is not None:
-            _validate_finder_export(from_finder)
+            finder_export = _validate_finder_export(from_finder)
         population = (
-            InsightsPopulation.from_finder_export(from_finder, export=_validate_finder_export(from_finder))
+            InsightsPopulation.from_finder_export(from_finder, export=finder_export)
             if from_finder is not None
             else InsightsPopulation.from_snapshot(from_snapshot)
             if from_snapshot is not None

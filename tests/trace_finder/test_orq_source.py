@@ -379,7 +379,13 @@ async def test_targeted_query_provider_timeout_is_not_treated_as_deadline() -> N
 
 @pytest.mark.asyncio
 async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 1.0)
+    ticks = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.5))
+
+    def monotonic() -> float:
+        return next(ticks, 0.5)
+
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=monotonic))
     traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
     hydration_started = asyncio.Event()
     hydration_timeouts: list[int] = []
@@ -398,7 +404,7 @@ async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest
     assert snapshot.traces == ()
     assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
     assert len(hydration_timeouts) == 1
-    assert 1 <= hydration_timeouts[0] <= 10
+    assert 1 <= hydration_timeouts[0] <= 500
 
 
 @pytest.mark.asyncio

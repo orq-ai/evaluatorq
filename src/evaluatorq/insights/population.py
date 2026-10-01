@@ -360,7 +360,7 @@ async def _resolve_from_filters(pop: InsightsPopulation, *, orq: Orq) -> Resolve
 async def resolve_population(
     pop: InsightsPopulation,
     *,
-    orq: Orq,
+    orq: Orq | None,
     client: AsyncOpenAI | None,
     compiler_model: str,
     classifier_model: str,
@@ -374,14 +374,20 @@ async def resolve_population(
     if pop.snapshot_path is not None:
         resolved = _resolve_from_snapshot(pop)
     elif pop.finder_export is not None:
+        if orq is None:
+            raise PopulationError('a Finder export population requires an Orq client')
         resolved = await _resolve_from_export(pop, orq=orq)
     elif pop.query is not None:
+        if orq is None:
+            raise PopulationError('a query population requires an Orq client')
         if client is None:
             raise PopulationError('a query population requires an LLM client')
         resolved = await _resolve_from_query(
             pop, orq=orq, client=client, compiler_model=compiler_model, classifier_model=classifier_model
         )
     else:
+        if orq is None:
+            raise PopulationError('a filter population requires an Orq client')
         resolved = await _resolve_from_filters(pop, orq=orq)
     try:
         resolved.echo.update(projection_coverage(resolved.traces))

@@ -507,3 +507,40 @@ def test_running_writer_flush_does_not_overwrite_a_failure_written_by_another_pr
 
     assert w.manifest.status == ManifestStatus.ERROR
     assert list_manifests(tmp_path / 'runs')[0].error == 'worker died'
+
+
+def test_terminal_transition_does_not_overwrite_another_writers_terminal_state(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    first = start_manifest(run_id='terminal-race', surface='sim', run_name='r', runs_dir=runs)
+    late = ManifestWriter(first.manifest.model_copy(deep=True), first.path)
+
+    first.complete(report_path='report.json')
+    late.fail('late failure')
+
+    stored = list_manifests(runs)[0]
+    assert stored.status == ManifestStatus.COMPLETED
+    assert stored.report_path == 'report.json'
+    assert late.manifest.status == ManifestStatus.COMPLETED
+
+
+def test_stale_writer_flush_preserves_newer_independent_fields(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    writer = start_manifest(run_id='stale-fields', surface='sim', run_name='before', runs_dir=runs)
+    writer.start_stage('population')
+    stale = ManifestWriter(writer.manifest.model_copy(deep=True), writer.path)
+
+    def add_progress(manifest: RunManifest) -> None:
+        manifest.summary = {'total_results': 3}
+        manifest.stage_labels['population'] = 'Population'
+        manifest.stages[0].completed = 2
+        manifest.stages[0].total = 3
+
+    update_manifest(writer.path, add_progress)
+    stale.manifest.run_name = 'after'
+    assert stale.flush()
+
+    stored = list_manifests(runs)[0]
+    assert stored.run_name == 'after'
+    assert stored.summary == {'total_results': 3}
+    assert stored.stage_labels == {'population': 'Population'}
+    assert (stored.stages[0].completed, stored.stages[0].total) == (2, 3)

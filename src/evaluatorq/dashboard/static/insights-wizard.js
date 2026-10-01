@@ -12,6 +12,8 @@
   const snapshotPreview = document.getElementById('insights-snapshot-preview');
   const facetOptions = document.getElementById('insights-facet-options');
   let facetRequest = null;
+  let snapshotRequest = null;
+  let snapshotTimer = null;
   let facetLoadedWindow = null;
   let step = 1;
 
@@ -138,6 +140,7 @@
     const labels = effectiveLabels(dimensions);
     const populationStage = {
       finder: 'Load Finder matches',
+      snapshot: 'Load local traces',
       query: 'Find matching traces',
       recent: 'Load recent traces'
     }[source];

@@ -262,9 +262,9 @@ class _LLMClient:
         if path != '/classify':
             raise ValueError(f'Unsupported CLI OAuth model endpoint: {path}')
         args = ['request', 'POST', f'/v3/router{path}', '--force']
-        headers = options.get('headers', {}) if isinstance(options, dict) else {}
-        for name, value in headers.items():
-            args.extend(['--header', f'{name}: {value}'])
+        # The CLI owns authentication. Caller headers may contain credentials,
+        # and forwarding them in argv would expose them through process inspection.
+        del options
         result = await self._cli.call(args, _json_value(body))
         if isinstance(result, dict) and 'body' in result and 'status' in result:
             return result['body']
@@ -327,11 +327,7 @@ def oauth_subject(server_url: str) -> dict[str, str | None]:
         data = json.loads(result.stdout)
     except ValueError as exc:
         raise OrqCLIError('The Orq CLI returned an unreadable OAuth identity.') from exc
-    if (
-        not isinstance(data, dict)
-        or not data.get('authenticated')
-        or data.get('source') not in ('session', 'session-file')
-    ):
+    if not isinstance(data, dict) or not data.get('authenticated'):
         raise OrqCLIError('The Orq CLI OAuth sign-in needs attention. Run orq auth login.')
     user_id = data.get('user_id')
     if not isinstance(user_id, str) or not user_id:

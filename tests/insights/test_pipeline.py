@@ -20,7 +20,7 @@ from evaluatorq.insights.models import (
     TraceSummary,
 )
 from evaluatorq.insights.population import ResolvedPopulation
-from evaluatorq.trace_finder.models import TraceRecord
+from evaluatorq.trace_finder.models import Snapshot, TraceRecord
 
 
 def _trace(i: int) -> TraceRecord:
@@ -47,6 +47,30 @@ def test_dimension_failure_count_excludes_run_wide_summary_errors() -> None:
     dimension_failed.errors['dimension:intent'] = 'embedding unavailable'
 
     assert pipeline._dimension_failed_count([summary_failed, dimension_failed], 'intent') == 1
+
+
+@pytest.mark.asyncio
+async def test_local_snapshot_pipeline_does_not_resolve_orq_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    snapshot_path = tmp_path / 'snapshot.json'
+    snapshot_path.write_text(Snapshot(traces=()).model_dump_json(), encoding='utf-8')
+
+    def fail_resolving_orq() -> None:
+        pytest.fail('a local snapshot must not resolve an Orq client')
+
+    monkeypatch.setattr(pipeline, 'resolve_orq_client', fail_resolving_orq)
+
+    run = await pipeline.insights(
+        InsightsPopulation.from_snapshot(snapshot_path),
+        dimensions=(),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+    )
+
+    assert run.status == 'completed'
+    assert run.population['mode'] == 'snapshot'
+    assert run.population['n_scanned'] == 0
 
 
 def _patch_clients(monkeypatch: pytest.MonkeyPatch) -> None:

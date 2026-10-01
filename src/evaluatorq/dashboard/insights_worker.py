@@ -429,6 +429,7 @@ def main() -> int:
                     InsightsPopulation.from_finder_export(snapshot, export=validated_export),
                     _finder_export_source=Path(spec.finder_export),
                     _finder_export_sha256=hashlib.sha256(raw_snapshot).hexdigest(),
+                    coding_analysis=spec.coding_analysis,
                 )
             )
         else:

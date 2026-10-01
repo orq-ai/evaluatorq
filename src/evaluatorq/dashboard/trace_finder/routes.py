@@ -215,6 +215,11 @@ def _prune_finder_exports_locked(export_dir: Path) -> None:
     try:
         files = [path for path in export_dir.glob('trace-finder-*.json') if path.is_file() and not path.is_symlink()]
         files.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+        # With at most the retention limit of exports, every unreferenced file
+        # is retained anyway. Avoid scanning all Insights manifests and leases
+        # on the common download path until pruning could actually remove a file.
+        if len(files) <= _FINDER_EXPORT_RETENTION:
+            return
         retained = _referenced_finder_exports(export_dir)
         if retained is None:
             logger.warning('Skipping Finder export pruning because Insights references could not be verified')
@@ -401,10 +406,11 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
         if expires > now and cached_window == window:
             return catalogue
     orq = None
+    llm = None
     try:
         auth = selected_dashboard_auth(app)
         if auth.method == 'cli_oauth':
-            orq, _ = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+            orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
         else:
             orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
         catalogue = await load_facet_catalogue(
@@ -429,6 +435,11 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
                 await close_orq_client(orq)
             except Exception as exc:  # noqa: BLE001 — cleanup failure must not replace the menu response.
                 logger.opt(exception=True).warning('Could not close the facet catalogue Orq client: {}', exc)
+        if llm is not None:
+            try:
+                await llm.close()
+            except Exception as exc:  # noqa: BLE001 — cleanup failure must not replace the menu response.
+                logger.opt(exception=True).warning('Could not close the facet catalogue LLM client: {}', exc)
     if generation != app.state.finder_generation:
         logger.debug('Discarding facet values loaded for a retired finder configuration')
         return None

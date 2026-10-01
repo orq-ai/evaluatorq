@@ -1516,7 +1516,9 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     export_path = exports / 'finder.json'
     approved_export = _run_export(['approved-trace']).model_dump_json()
     export_path.write_text(approved_export, encoding='utf-8')
-    spec = InsightsLaunchSpec(source='finder', finder_export='finder.json', labels=[], dimensions=['intent'])
+    spec = InsightsLaunchSpec(
+        source='finder', finder_export='finder.json', labels=[], dimensions=['intent'], coding_analysis=True
+    )
 
     export_path.unlink()
     export_path.symlink_to(tmp_path / 'outside.json')
@@ -1546,6 +1548,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
 
     consumed: list[str] = []
     consumed_source: list[Path | None] = []
+    coding_analysis: list[bool] = []
 
     async def capture_population(_payload, population, **kwargs):
         from evaluatorq.common.run_manifest import ManifestWriter
@@ -1555,6 +1558,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
         snapshot = population.finder_export_snapshot()
         assert snapshot is not None
         consumed_source.append(kwargs.get('_finder_export_source'))
+        coding_analysis.append(kwargs.get('coding_analysis', False))
         consumed.extend(snapshot.matched_trace_ids)
         manifest_path = tmp_path / 'runs' / '.manifests' / f'{payload.run_id}.json'
         manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
@@ -1567,6 +1571,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert consumed == ['approved-trace']
     assert snapshot_replacement == [replacement_export]
     assert consumed_source == [export_path]
+    assert coding_analysis == [True]
     assert not payload.finder_export_snapshot.exists()
     assert not reference.exists()
     assert not worker_state_path(tmp_path / 'runs', payload.run_id).exists()

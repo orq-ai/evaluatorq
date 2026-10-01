@@ -406,6 +406,23 @@ def test_rejected_key_returns_safe_startup_toast_message(
     assert 'private value' not in response.text
 
 
+def test_unexpected_auth_status_failure_is_distinguished_from_outage(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr(
+        app_module,
+        'build_auth_clients',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('programming defect')),
+    )
+
+    response = client.get('/auth/status')
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'error'
+    assert 'Check the dashboard logs' in response.json()['message']
+
+
 def test_missing_cli_oauth_sign_in_returns_action_for_startup_toast(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, settings_file: Path
 ) -> None:
@@ -419,6 +436,38 @@ def test_missing_cli_oauth_sign_in_returns_action_for_startup_toast(
 
     assert response.json()['status'] == 'action'
     assert 'CLI OAuth was rejected' in response.json()['message']
+
+
+def test_auth_status_cleanup_closes_both_clients_and_preserves_response(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[str] = []
+
+    class Traces:
+        async def list_facet_values_async(self, **_kwargs: object) -> None:
+            return None
+
+    class Orq:
+        traces = Traces()
+
+    class Llm:
+        async def close(self) -> None:
+            closed.append('llm')
+            raise RuntimeError('llm close failed')
+
+    async def close_orq(_orq: object) -> None:
+        closed.append('orq')
+        raise RuntimeError('orq close failed')
+
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr(app_module, 'build_auth_clients', lambda *_args, **_kwargs: (Orq(), Llm()))
+    monkeypatch.setattr(app_module, 'close_orq_client', close_orq)
+
+    response = client.get('/auth/status')
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'valid'
+    assert closed == ['orq', 'llm']
 
 
 def test_selecting_another_profile_does_not_show_its_scope_before_save(
@@ -458,6 +507,25 @@ def test_saving_profile_clears_legacy_workspace_and_project(
     saved = load_settings(settings_file)
     assert saved.orq_profile == 'staging'
     assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (None, None, None)
+
+
+def test_saving_environment_auth_clears_saved_cli_profile(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
+    save_settings(
+        DashboardSettings.model_validate({'orq_auth_method': 'cli_profile', 'orq_profile': 'staging'}), settings_file
+    )
+
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS,
+        'orq_auth_method': 'environment',
+    }))
+
+    assert response.status_code == 303
+    saved = load_settings(settings_file)
+    assert saved.orq_auth_method == 'environment'
+    assert saved.orq_profile is None
 
 
 def test_saving_a_profile_persists_it_without_changing_environment(
@@ -742,28 +810,21 @@ def test_finder_builds_clients_with_app_profile_not_environment(
     assert os.environ['ORQ_API_KEY'] == 'from-env'
 
 
-def test_apply_clients_use_profile_key_and_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, dict[str, object]]] = []
-    llm_args: list[tuple[object, ...]] = []
+def test_apply_clients_use_resolved_dashboard_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.auth import DashboardAuth
 
-    def fake_orq(api_key: str | None = None, **kwargs: object) -> object:
-        calls.append(('orq', {'api_key': api_key, **kwargs}))
-        return object()
+    auth = DashboardAuth('stored_api_key', 'saved-key', 'https://staging.orq.ai')
+    settings = SimpleNamespace(orq_workspace='workspace-a', orq_project_id='project-a')
+    calls: list[tuple[object, dict[str, object]]] = []
 
-    def fake_llm(*args: object, **kwargs: object) -> SimpleNamespace:
-        llm_args.append(args)
-        calls.append(('llm', kwargs))
-        return SimpleNamespace(client=object())
+    def fake_build(resolved: object, **kwargs: object) -> tuple[object, object]:
+        calls.append((resolved, kwargs))
+        return object(), object()
 
-    monkeypatch.setattr(apply_ui, 'resolve_orq_client', fake_orq)
-    monkeypatch.setattr(apply_ui, 'resolve_llm_client', fake_llm)
+    monkeypatch.setattr('evaluatorq.dashboard.auth.build_auth_clients', fake_build)
+    apply_ui._build_clients(auth, settings)
 
-    apply_ui._build_clients(_profiles()[0])
-
-    assert calls[0][1] == {'api_key': 'key-staging', 'base_url': 'https://staging.orq.ai'}
-    assert calls[1][1]['extra_api_key'] == 'key-staging'
-    assert calls[1][1]['orq_host'] == 'https://staging.orq.ai'
-    assert llm_args == [(None,)]
+    assert calls == [(auth, {'workspace': 'workspace-a', 'project': 'project-a'})]
 
 
 @pytest.mark.asyncio

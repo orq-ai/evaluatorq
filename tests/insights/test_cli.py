@@ -80,13 +80,20 @@ def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
 def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any) -> None:
     path = tmp_path / 'traces.json'
     path.write_text(Snapshot(traces=(make_trace('local'),)).model_dump_json(), encoding='utf-8')
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(settings_path))
+    save_settings(DashboardSettings.model_validate({'orq_profile': 'stale'}), settings_path)
     captured: dict[str, Any] = {}
 
     async def fake_insights(population: Any, **_kwargs: Any) -> Any:
         captured['population'] = population
         return minimal_run
 
-    monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: None)
+    monkeypatch.setattr(
+        cli_module,
+        'resolve_cli_profile',
+        lambda *_args: pytest.fail('a local snapshot must not resolve the saved Orq profile'),
+    )
     monkeypatch.setattr(cli_module, 'insights', fake_insights)
     result = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--dimension', 'intent'])
 
@@ -406,6 +413,13 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
     path.parent.mkdir()
     path.write_text(export.model_dump_json(), encoding='utf-8')
     captured: dict[str, Any] = {}
+    validated: list[RunExport] = []
+    validate_export = cli_module._validate_finder_export
+
+    def track_validation(path: Path) -> RunExport:
+        export = validate_export(path)
+        validated.append(export)
+        return export
 
     async def fake_insights(population: Any, **kwargs: Any) -> Any:
         captured['population'] = population
@@ -413,18 +427,22 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
         return minimal_run
 
     monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    monkeypatch.setattr(cli_module, '_validate_finder_export', track_validation)
 
     result = CliRunner().invoke(_app(), ['insights', '--from-finder', str(path)])
 
     assert result.exit_code == 0, result.output
     assert captured['population'].finder_export == path
     assert captured['population'].finder_export_snapshot() == export
+    assert len(validated) == 1
+    assert captured['population'].finder_export_snapshot() is validated[0]
     assert captured['_finder_export_source'] == path
 
     monkeypatch.chdir(tmp_path)
     relative_result = CliRunner().invoke(_app(), ['insights', '--from-finder', 'finder-exports/valid.json'])
 
     assert relative_result.exit_code == 0, relative_result.output
+    assert len(validated) == 2
     assert captured['_finder_export_source'] == path
 
 
