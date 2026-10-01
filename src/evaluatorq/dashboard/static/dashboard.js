@@ -112,7 +112,7 @@
     const addFilter = evt.target.closest('.finder-controls .add, .model-pick-btn');
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { if (menu !== ownMenu) menu.classList.remove('open'); });
+      closeMenus(ownMenu);
       if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
       addFilter.setAttribute('aria-expanded', ownMenu && ownMenu.classList.contains('open') ? 'true' : 'false');
       return;
@@ -132,9 +132,7 @@
       }
       return;
     }
-    if (!evt.target.closest('.finder-controls .addwrap, .model-pick') && !evt.target.closest('.chip-open')) {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (!evt.target.closest('.finder-controls .addwrap, .model-pick') && !evt.target.closest('.chip-open')) closeMenus();
 
     const remove = evt.target.closest('[data-finder-remove]');
     if (!remove) return;
@@ -151,7 +149,15 @@
     remove.closest('.chip').remove();
   });
 
-  // Settings model menu: write the pick into the field's hidden input and show it on the button.
+  function closeMenus(except) {
+    document.querySelectorAll('.finder-facets.open').forEach(function (menu) {
+      if (menu === except) return;
+      menu.classList.remove('open');
+      const trigger = menu.parentElement.querySelector('.add, .model-pick-btn');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+  }
+
   function pickModel(from, model) {
     const pick = from.closest('.model-pick');
     pick.querySelector('input[type="hidden"]').value = model;
@@ -172,10 +178,8 @@
   });
 
   function closeModelMenu(pick) {
-    pick.querySelector('.finder-facets').classList.remove('open');
-    const button = pick.querySelector('.model-pick-btn');
-    button.setAttribute('aria-expanded', 'false');
-    button.focus();
+    closeMenus();
+    pick.querySelector('.model-pick-btn').focus();
   }
 
   function showFacet(item) {
@@ -226,9 +230,7 @@
   });
 
   document.addEventListener('keydown', function (evt) {
-    if (evt.key === 'Escape') {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (evt.key === 'Escape') closeMenus();
     if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
     const query = evt.target.closest('#finder-query-form textarea[name="query"]');
     if (!query) return;

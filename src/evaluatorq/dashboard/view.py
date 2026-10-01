@@ -27,6 +27,7 @@ from datetime import datetime
 from itertools import starmap
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
@@ -795,12 +796,20 @@ def _scope_settings_rows(scope: OrqScope, *, workspace: str, chosen_project: str
     return ''.join(rows)
 
 
-def _model_control(name: str, label: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
+MODEL_FIELDS = {
+    'compiler_model': 'Compiler model',
+    'classifier_model': 'Classifier model',
+    'apply_model': 'Apply-recommendations model',
+}
+
+
+def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
     """A two-level model menu (provider, then model) with a Custom free-text entry.
 
     Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
     Without a catalogue the field stays a plain text box.
     """
+    label = MODEL_FIELDS[name]
     if not groups:
         return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
     known = any(value in ids for ids in groups.values())
@@ -834,8 +843,8 @@ def _model_control(name: str, label: str, value: str, groups: Mapping[str, Seque
             f'<div class="facet-sub" data-facet-sub="{esc(key)}" hidden><div class="hd">{esc(provider)}</div>{body}</div>'
         )
     return (
-        f'<span class="model-pick"><input type="hidden" id="{esc(name)}" name="{esc(name)}" value="{esc(value)}">'
-        f'<button type="button" class="model-pick-btn" aria-haspopup="true" aria-expanded="false">{esc(value) or "Choose a model"}</button>'
+        f'<span class="model-pick"><input type="hidden" name="{esc(name)}" value="{esc(value)}">'
+        f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false">{esc(value) or "Choose a model"}</button>'
         f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>'
     )
 
@@ -849,14 +858,12 @@ def settings_body(
     preview: bool = False,
     profiles: Sequence[Any] = (),
     scope: OrqScope | None = None,
-    model_choices: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> str:
     """Render editable finder settings above the read-only runtime configuration.
 
     ``profiles`` are the orq CLI's credential profiles; when there are any, an
-    Advanced block offers them as the credentials the dashboard uses.
-    ``model_choices`` maps a model field to its workspace models grouped by
-    provider; a field without choices stays a free-text box.
+    Advanced block offers them as the credentials the dashboard uses. Model fields
+    render as text boxes and swap in their workspace menu once it has loaded.
     """
     if settings is None:
         from evaluatorq.trace_finder.settings import effective_settings
@@ -868,17 +875,15 @@ def settings_body(
         value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
         return '' if value is None else str(value)
 
-    fields = (
-        ('compiler_model', 'Compiler model'),
-        ('classifier_model', 'Classifier model'),
-        ('apply_model', 'Apply-recommendations model'),
-    )
-    model_choices = model_choices or {}
+    profile_query = urlencode({'profile': setting_value('orq_profile')})
     field_rows: list[str] = []
-    for name, label in fields:
+    for name, label in MODEL_FIELDS.items():
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
-        control = _model_control(name, label, setting_value(name), model_choices.get(name, {}))
+        control = (
+            f'<span hx-get="/settings/models?field={name}&amp;{esc(profile_query)}" hx-trigger="load" '
+            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {})}</span>'
+        )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
             f'<span class="config-val">{control}{error_html}</span></div>'

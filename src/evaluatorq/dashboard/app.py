@@ -62,10 +62,12 @@ from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.trace_finder.routes import initialize_finder_settings, register_finder_routes
 from evaluatorq.dashboard.view import (
+    MODEL_FIELDS,
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
     filter_fragment,
     landing_body,
+    model_control,
     redteam_overview_body,
     render_filter_form,
     report_actions,
@@ -265,31 +267,39 @@ async def _settings(req: Request) -> NotStr:
         preview='profile' in req.query_params,
         profiles=profiles,
         scope=scope,
-        model_choices=await _model_choices(profile),
     )
     return NotStr(page('Settings', body, active_nav='settings'))
 
 
-async def _model_choices(profile: OrqProfile | None) -> dict[str, dict[str, list[str]]]:
-    """Workspace models per settings field, grouped by provider; ``{}`` without a usable credential."""
-    if profile is not None and '*' in profile.api_key:
-        return {}
-    try:
-        resolved = resolve_llm_client(
-            extra_api_key=profile.api_key if profile else None,
-            orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
-            require_orq=True,
-            max_retries=0,
-        )
-    except (ImportError, ValueError):
-        return {}
-    try:
-        chat = await models_by_provider(resolved.client)
-        classify = await models_by_provider(resolved.client, classify=True)
-    finally:
-        if resolved.owned:
-            await resolved.client.close()
-    return {'compiler_model': chat, 'classifier_model': classify, 'apply_model': chat}
+async def _settings_models(req: Request) -> NotStr:
+    """One settings model field as its workspace menu, or as the text box when there is no catalogue."""
+    field = req.query_params.get('field', '')
+    if field not in MODEL_FIELDS:
+        return NotStr('')
+    value = req.query_params.get(field, '')
+    name = req.query_params.get('profile', '')
+    profiles = await asyncio.to_thread(list_orq_profiles) if name else []
+    profile = next((p for p in profiles if p.name == name), None)
+    groups: dict[str, list[str]] = {}
+    # A named profile that is gone or redacted must not fall back to the env workspace's models.
+    usable = profile is not None and '*' not in profile.api_key if name else True
+    if usable:
+        try:
+            resolved = resolve_llm_client(
+                extra_api_key=profile.api_key if profile else None,
+                orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+                require_orq=True,
+                max_retries=0,
+            )
+        except (ImportError, ValueError):
+            resolved = None
+        if resolved is not None:
+            try:
+                groups = await models_by_provider(resolved.client, classify=field == 'classifier_model')
+            finally:
+                if resolved.owned:
+                    await resolved.client.close()
+    return NotStr(model_control(field, value, groups))
 
 
 async def _save_settings(req: Request) -> Response | NotStr:
@@ -355,7 +365,6 @@ async def _save_settings(req: Request) -> Response | NotStr:
             errors=errors,
             profiles=profiles,
             scope=scope,
-            model_choices=await _model_choices(selected_profile),
         )
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
@@ -746,6 +755,7 @@ def register_report_routes(app: FastHTML) -> None:
     app.get('/')(_index)
     app.get('/settings')(_settings)
     app.post('/settings')(_save_settings)
+    app.get('/settings/models')(_settings_models)
     app.get('/search')(_search)
     app.get('/r/{rid}')(_report_view)
     app.get('/r/{rid}/sim/agent-card')(_sim_agent_card)

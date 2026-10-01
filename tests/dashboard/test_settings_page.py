@@ -763,26 +763,46 @@ def test_facet_menu_degrades_when_provider_fails(
 _CHOICES = {'openai': ['openai/gpt-5.6-luna'], 'typesafe': ['typesafe/jev-latest']}
 
 
-def test_model_fields_offer_workspace_models_grouped_by_provider(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def choices(_profile: object) -> dict[str, dict[str, list[str]]]:
-        return {name: _CHOICES for name in ('compiler_model', 'classifier_model', 'apply_model')}
-
-    monkeypatch.setattr(app_module, '_model_choices', choices)
-    save_settings(
-        DashboardSettings(
-            compiler_model='openai/gpt-5.6-luna', classifier_model='my/finetune', window_days=7, limit=500, parallelism=100
-        )
-    )
-
+def test_settings_page_renders_model_fields_before_the_catalogue_loads(client: TestClient) -> None:
     html = client.get('/settings').text
 
-    assert '<input type="hidden" id="compiler_model" name="compiler_model" value="openai/gpt-5.6-luna">' in html
+    assert '<span hx-get="/settings/models?field=compiler_model&amp;profile=" hx-trigger="load"' in html
+    assert '<input id="compiler_model" name="compiler_model" type="text"' in html
+
+
+def test_model_field_offers_workspace_models_grouped_by_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def choices(_client: object, *, classify: bool = False) -> dict[str, list[str]]:
+        return _CHOICES
+
+    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    html = client.get('/settings/models', params={'field': 'compiler_model', 'compiler_model': 'openai/gpt-5.6-luna'}).text
+
+    assert '<input type="hidden" name="compiler_model" value="openai/gpt-5.6-luna">' in html
+    assert '<button type="button" id="compiler_model" class="model-pick-btn"' in html
     assert '<div class="hd">openai</div>' in html
     assert 'data-model="openai/gpt-5.6-luna" aria-pressed="true">gpt-5.6-luna</button>' in html
+
+    custom = client.get('/settings/models', params={'field': 'classifier_model', 'classifier_model': 'my/finetune'}).text
     # A saved model the workspace does not list opens under Custom, text filled in.
-    assert '<input class="model-custom" type="text" value="my/finetune"' in html
+    assert '<input class="model-custom" type="text" value="my/finetune"' in custom
+
+
+def test_model_field_ignores_a_missing_profile_rather_than_using_the_environment(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def choices(_client: object, *, classify: bool = False) -> dict[str, list[str]]:
+        return _CHOICES
+
+    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    html = client.get('/settings/models', params={'field': 'compiler_model', 'profile': 'gone'}).text
+
+    assert 'Custom…' not in html
 
 
 def test_model_menu_submits_its_hidden_value(client: TestClient, settings_file: Path) -> None:
@@ -792,11 +812,12 @@ def test_model_menu_submits_its_hidden_value(client: TestClient, settings_file: 
     assert json.loads(settings_file.read_text())['compiler_model'] == 'my/own-model'
 
 
-def test_model_fields_stay_free_text_without_a_catalogue(client: TestClient) -> None:
-    html = client.get('/settings').text
+def test_model_field_stays_free_text_without_a_catalogue(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
 
-    assert '<input id="compiler_model" name="compiler_model" type="text"' in html
-    assert 'Custom…' not in html
+    html = client.get('/settings/models', params={'field': 'compiler_model', 'compiler_model': 'x/y'}).text
+
+    assert html.startswith('<input id="compiler_model" name="compiler_model" type="text" value="x/y"')
 
 
 @pytest.mark.asyncio

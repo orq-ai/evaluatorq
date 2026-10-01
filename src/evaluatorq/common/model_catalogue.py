@@ -52,8 +52,9 @@ if TYPE_CHECKING:
 class _ModelInfoFields(NamedTuple):
     """Field layout for `ModelInfo`; see that class for the contract."""
 
-    input_cost_per_1k: float
-    output_cost_per_1k: float
+    # ``None`` when the catalogue lists the model without a usable USD price.
+    input_cost_per_1k: float | None
+    output_cost_per_1k: float | None
     provider: str
     supports_responses: bool
     # Accepted ``reasoning.effort`` values. ``None`` means the catalogue does not say
@@ -82,8 +83,8 @@ class ModelInfo(_ModelInfoFields):
 
     def __new__(  # noqa: PYI034 — a NamedTuple subclass really does construct the subclass
         cls,
-        input_cost_per_1k: float,
-        output_cost_per_1k: float,
+        input_cost_per_1k: float | None,
+        output_cost_per_1k: float | None,
         provider: str,
         supports_responses: bool,  # noqa: FBT001 — positional to match the tuple field order
         reasoning_efforts: frozenset[str] | None = None,
@@ -223,6 +224,19 @@ async def get_model_info(model: str, client: AsyncOpenAI | None = None) -> Model
     return await _lookup(model, client)
 
 
+def _usd_price(entry: dict[str, object], side: str) -> float | None:
+    """The entry's ``<side>_cost`` per 1k tokens in USD, or ``None`` when it has no usable one."""
+    cost = entry.get(f'{side}_cost')
+    # bool is an int subclass: `input_cost: true` would otherwise price at $1.00/1k.
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+        return None
+    # Currency is '' on most entries and 'usd' on the rest; only a stated non-USD
+    # price is refused, so the common empty case still prices.
+    if str(entry.get(f'{side}_currency') or '') not in {'', 'usd'}:
+        return None
+    return float(cost)
+
+
 def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:
     """One entry's ``metadata`` mapping, or ``{}`` when it is any other shape.
 
@@ -284,21 +298,11 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         if not isinstance(entry, dict):
             continue
         model_id, provider = entry.get('model_id'), entry.get('provider')
-        inp, out = entry.get('input_cost'), entry.get('output_cost')
         if not isinstance(model_id, str) or not isinstance(provider, str):
             continue
-        # bool is an int subclass: `input_cost: true` would otherwise price at $1.00/1k.
-        if isinstance(inp, bool) or isinstance(out, bool):
-            continue
-        if not isinstance(inp, (int, float)) or not isinstance(out, (int, float)):
-            continue
-        if inp < 0 or out < 0:
-            continue
-        # Currency is '' on most entries and 'usd' on the rest; only a stated
-        # non-USD price is skipped, so the common empty case still prices.
-        currencies = {str(entry.get('input_currency') or ''), str(entry.get('output_currency') or '')}
-        if currencies - {'', 'usd'}:
-            continue
+        inp, out = _usd_price(entry, 'input'), _usd_price(entry, 'output')
+        if inp is None or out is None:
+            inp = out = None
         metadata = _entry_metadata(entry)
         classify_flag = metadata.get('supports_classify')
         if classify_flag is not None and not isinstance(classify_flag, bool):
@@ -309,8 +313,8 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
                 classify_flag,
             )
         info = ModelInfo(
-            input_cost_per_1k=float(inp),
-            output_cost_per_1k=float(out),
+            input_cost_per_1k=inp,
+            output_cost_per_1k=out,
             provider=provider,
             # `metadata` is provider-shaped and has arrived as a list; `.get` on a
             # non-mapping took the whole catalogue down rather than one model.
@@ -565,7 +569,7 @@ async def price_usage(
     served = served_model if served_model and served_model.split('/', 1)[-1] != model.split('/', 1)[-1] else None
     served_info = await _lookup(served, client) if served is not None else None
     served_is_router = served is not None and _names_router(served, served_info)
-    if served_info is not None and not served_is_router:
+    if served_info is not None and not served_is_router and served_info.input_cost_per_1k is not None:
         logger.debug('Pricing the call at {}, which served the request for {}', served, model)
         info = served_info
     else:
@@ -593,6 +597,9 @@ async def price_usage(
     # ponytail: flat input rate — cached-read and cache-write tokens are billed at a
     # discount/premium the catalogue does not expose, so a cache-heavy call reads
     # slightly high. Split the rate here if /v2/models ever publishes the tiers.
+    if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
+        logger.debug('Model {} is listed without a USD price; call stays unpriced', model)
+        return usage
     input_cost = usage.input_tokens / 1000 * info.input_cost_per_1k
     output_cost = usage.output_tokens / 1000 * info.output_cost_per_1k
     return usage.model_copy(
