@@ -46,6 +46,9 @@ function loadDashboard({
     getElementById(id) { return elements.get(id) || null; },
     querySelector: query,
     querySelectorAll: queryAll,
+    createElement() {
+      return { style: {}, dataset: {}, append() {}, replaceChildren() {} };
+    },
     activeElement: null,
   };
   const window = {
@@ -379,4 +382,39 @@ test('drawer history restores a prior view and closes after its exit animation',
   assert.equal(app.history.state.simDrawer.id, 'alice');
   dialog.close(); // Native Escape closes the dialog directly.
   assert.equal(app.history.state, null);
+});
+
+test('trajectory tooltip stays within narrow and wide containers', () => {
+  const tip = {
+    hidden: true,
+    style: {},
+    append() {},
+    replaceChildren() {},
+    get offsetWidth() { return Math.min(320, Number.parseFloat(this.style.maxWidth) || 320); },
+  };
+  const seg = {
+    className: 'msg',
+    dataset: { tvKind: 'Message', tvN: '1', tvTok: '10 tokens', tvP: 'hello', tvTools: '' },
+    getBoundingClientRect() { return { left: 220, bottom: 20, width: 10 }; },
+  };
+  let containerWidth = 250;
+  const tv = {
+    querySelector() { return tip; },
+    getBoundingClientRect() { return { left: 0, top: 0, width: containerWidth }; },
+  };
+  const app = loadDashboard();
+  app.documentEvents.emit('mouseover', {
+    target: { closest(selector) { return selector.includes('.tv-segs') ? seg : tv; } },
+  });
+
+  assert.equal(tip.hidden, false);
+  assert.equal(tip.style.maxWidth, '234px');
+  assert.equal(tip.style.left, '8px');
+
+  containerWidth = 600;
+  app.documentEvents.emit('mouseover', {
+    target: { closest(selector) { return selector.includes('.tv-segs') ? seg : tv; } },
+  });
+  assert.equal(tip.style.maxWidth, '584px');
+  assert.equal(tip.style.left, '65px');
 });

@@ -1193,7 +1193,11 @@
     tip.append(h, sub, pre, foot);
     tip.hidden = false;
     const box = tv.getBoundingClientRect(); const r = seg.getBoundingClientRect();
-    const left = Math.min(Math.max(8, r.left - box.left + r.width / 2 - 160), box.width - 328);
+    const padding = 8;
+    tip.style.maxWidth = Math.max(0, box.width - padding * 2) + 'px';
+    const width = tip.offsetWidth || Math.min(320, box.width - padding * 2);
+    const maxLeft = Math.max(padding, box.width - width - padding);
+    const left = Math.min(Math.max(padding, r.left - box.left + r.width / 2 - width / 2), maxLeft);
     tip.style.left = left + 'px';
     tip.style.top = (r.bottom - box.top + 10) + 'px';
   });
