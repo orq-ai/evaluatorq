@@ -6,16 +6,16 @@ Read this page when you parse a report in code, in CI or from an agent. It does 
 
 ## Where the report lands
 
-The same model is serialised in every case. What changes is the file name and a few extra top-level keys.
+The same model is serialised in every case. What changes is the file name, a few extra top-level keys and, in `detail` mode, how complete the report is.
 
 | You ran | File | Extra keys beyond `RedTeamReport` |
 |---|---|---|
 | `red_team()` or `evaluatorq redteam run` with the default `save="final"` and no artifacts directory | `.evaluatorq/runs/<name>_<YYYYmmdd_HHMMSS>.json` | `run_name`, `saved_at`, and, so the run can be replayed, `datapoints`, `run_config` and `replay_version` |
 | `save="final"` with `artifacts_dir=` / `--artifacts-dir` | `<dir>/03_summary_report.json`, plus the `.evaluatorq/runs/` copy above | `saved_at` |
-| `save="detail"` with an artifacts directory | `01_all_datapoints.json` (`01_datapoints.json` for `static`), `02_attack_results.json` and `03_summary_report.json` in that directory, plus the `.evaluatorq/runs/` copy | `01` and `02` wrap their payload as `{"saved_at": ..., "data": [...]}`; `02` holds a list of `RedTeamResult` |
+| `save="detail"` with an artifacts directory | `01_all_datapoints.json` (`01_datapoints.json` for `static`), `02_attack_results.json` and `03_summary_report.json` in that directory, plus the `.evaluatorq/runs/` copy | `01` and `02` wrap their payload as `{"saved_at": ..., "data": [...]}`; `02` holds the raw evaluatorq job rows (`data_point`, `job_results`, `evaluator_scores`), not `RedTeamResult`; read results from `03` |
 | `evaluatorq redteam run --report out.json` | `out.json` | none |
 
-`save="none"` writes nothing. The replay keys are only present when the run had datapoints to record. The `.evaluatorq/runs/` files are what `evaluatorq redteam runs`, the dashboard and `previous_run=` read.
+In `detail` mode, `03` is written before recommendations and the executive summary run, so it has no `focus_area_recommendations`, `executive_summary` or `post_processing_token_usage`, and its `token_usage_total` leaves out that spend. Read the `.evaluatorq/runs/` copy for those. `save="none"` writes nothing. The replay keys are only present when the run had datapoints to record. The `.evaluatorq/runs/` files are what `evaluatorq redteam runs`, the dashboard and `previous_run=` read.
 
 ## The shape
 
@@ -50,7 +50,7 @@ RedTeamReport:
 
 ## Reading one result
 
-This is one result from a saved run, trimmed of null fields and token counts:
+This is one result from a saved run, trimmed of most null fields and of token counts:
 
 ```json
 {
@@ -93,7 +93,11 @@ A `null` verdict is not a pass. Code that tests `if not result.vulnerable` count
 
 `attack` says what was tried. `vulnerability` is the atomic identifier, and `category` is the OWASP code it maps to. `strategy_name` and `objective` are filled for dynamic attacks only. `source` records where the attack came from: a dataset, a template, or an LLM-generated strategy.
 
+`agent` identifies the tested target with its key, model name and display name; each value can be `null` when the target does not provide it. `agent_contexts` holds richer per-agent context, keyed by agent key.
+
 `evaluation.raw_output` holds the judge's verbatim reply. It is for debugging; parse the verdict from `passed` and `explanation`, not from there.
+
+`focus_area_recommendations` contains the generated remediation advice when recommendations are enabled. `applied_recommendations` contains recommendation strings already applied to an agent through `reports.apply`; it is empty when none have been applied.
 
 ## Reading the summary
 

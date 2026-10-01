@@ -516,14 +516,16 @@ class TurnMetrics(BaseModel):
 
 class SimulationResult(BaseModel):
     messages: list[Message] = Field(
-        description='The conversation transcript, simulated user and target turns in order.'
+        description='The conversation transcript in order: simulated-user turns, target replies (with tool_calls), '
+        "and a role='tool' row for each tool result."
     )
     terminated_by: TerminatedBy = Field(description='Why the conversation stopped: judge, max_turns, timeout or error.')
     reason: str = Field(description='Human-readable explanation of the termination.')
     goal_achieved: bool = Field(description="Whether the judge found the scenario's goal reached.")
     goal_completion_score: float = Field(description='Judge estimate 0-1 of how much of the goal was reached.')
     rules_broken: list[str] = Field(
-        description='Ids (criteria_<n>) of the scenario criteria that failed. See metadata["criteria_meta"] for detail.'
+        description='Ids (criteria_<n>) of the scenario criteria that failed, when criteria_verified is True; '
+        'otherwise the free-text list from the judge, passed through. See metadata["criteria_meta"] for detail.'
     )
     turn_count: int = Field(description='Target replies in the transcript.')
     token_usage: TokenUsage = Field(description='Tokens spent on this conversation, summed over every call.')
@@ -535,8 +537,8 @@ class SimulationResult(BaseModel):
     turn_metrics: list[TurnMetrics] = Field(description='Per-turn judge scores and token usage.')
     metadata: dict[str, Any] = Field(
         default_factory=dict,
-        description='Persona and scenario names, criteria_meta (id-keyed criteria verdicts), datapoint_id, '
-        'evaluator_scores and evaluator_errors. A convention, not a schema: keys may be absent.',
+        description='Persona, scenario and criteria detail, evaluator scores, and error/error_type on failed '
+        'results. A convention, not a schema: keys may be absent. The output reference guide lists every key.',
     )
     criteria_results: dict[str, bool] | None = Field(
         default=None,
@@ -558,7 +560,9 @@ class SimulationResult(BaseModel):
         'component scores and weights; custom evaluator raw output is retained too. The field is included '
         'in saved SimulationRun and JSONL result exports. Empty when no evaluator provided structured output.',
     )
-    total_turns: int | None = None
+    total_turns: int | None = Field(
+        default=None, description='Legacy field not populated by simulation runs; read turn_count.'
+    )
     thread_id: str | None = Field(
         default=None,
         description='Orq observability thread id for this conversation (deterministic: f"{run_id}:{index}"). '

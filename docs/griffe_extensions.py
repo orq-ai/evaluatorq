@@ -47,8 +47,10 @@ class FieldDescriptionDocstrings(griffe.Extension):
     ``description=`` on the result models (most of them, in ``redteam/contracts.py``)
     is missing from the API reference. An explicit attribute docstring wins.
 
-    Only literal strings are read. A description built from a constant
-    (``description=_RATE_NONE_DOC``) stays unrendered rather than importing the module.
+    The description is a string literal or a bare module-level constant holding one
+    (``description=_RATE_NONE_DOC``); anything else stays unrendered rather than
+    importing the module. Matched on the bare name ``Field``, so ``pydantic.Field(...)``
+    or an aliased import is not recognised.
     """
 
     def on_attribute_instance(self, *, attr: griffe.Attribute, **kwargs: object) -> None:  # noqa: ARG002
@@ -57,10 +59,28 @@ class FieldDescriptionDocstrings(griffe.Extension):
             return
         for arg in value.arguments:
             if isinstance(arg, griffe.ExprKeyword) and arg.name == "description":
-                try:
-                    text = ast.literal_eval(str(arg.value))
-                except (ValueError, SyntaxError):
-                    return
-                if isinstance(text, str):
-                    attr.docstring = griffe.Docstring(text, parent=attr)
+                text = _literal(arg.value, attr.module)
+                if text is not None:
+                    attr.docstring = griffe.Docstring(_escape_html(text), parent=attr)
                 return
+
+
+def _literal(expr: object, module: griffe.Module) -> str | None:
+    """The string ``expr`` evaluates to, following one bare name to a module-level constant."""
+    if isinstance(expr, griffe.ExprName):
+        constant = module.members.get(expr.name)
+        if not isinstance(constant, griffe.Attribute) or constant.value is None:
+            return None
+        expr = constant.value
+    try:
+        text = ast.literal_eval(str(expr))
+    except (ValueError, SyntaxError):
+        return None
+    return text if isinstance(text, str) else None
+
+
+def _escape_html(text: str) -> str:
+    """Escape ``<`` and ``>`` outside code spans, so ``criteria_<n>`` is not swallowed as an HTML tag."""
+    parts = text.split("`")
+    parts[::2] = [part.replace("<", "&lt;").replace(">", "&gt;") for part in parts[::2]]
+    return "`".join(parts)

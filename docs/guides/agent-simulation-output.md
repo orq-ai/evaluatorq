@@ -39,7 +39,7 @@ SimulationRun:
     token_usage, token_usage_known
     evaluator_details                     # structured evaluator output
     metadata                              # persona, scenario, criteria, evaluator scores
-    total_turns, thread_id, response_traces
+    thread_id, response_traces
 ```
 
 ## Reading one result
@@ -76,10 +76,10 @@ This result is trimmed from a saved run. The transcript, turn metrics and token 
 |---|---|
 | `judge` | The judge ended it: the goal was reached, a must-not-happen criterion occurred, or the judge's own reply could not be parsed and it stopped for safety. `reason` says which. |
 | `max_turns` | It hit the turn cap without the judge ending it. The goal was not reached in the turns allowed, so `goal_achieved` is usually `false`; whether that fails your gate is your call. Criteria are still scored. |
-| `timeout` | A target call timed out and its retries ran out. |
-| `error` | A target call failed for any other reason and its retries ran out. `reason` says how. |
+| `timeout` | A target call, or the whole conversation, ran out of time. `reason` describes the failure; `metadata["error_type"]` identifies its exception type. |
+| `error` | A target call failed after its retries, or the run itself raised (the simulated user, the judge, or setup before the first turn). `reason` describes the failure; `metadata["error_type"]` identifies its exception type. |
 
-The criteria verdicts come in three places. `metadata["criteria_meta"]` is the one to read: one entry per criterion, keyed by a stable id (`criteria_0`, `criteria_1`, and so on), with its text, type, pass or fail, and the judge's evidence. `criteria_results` maps each criterion's *description* to pass or fail, so two criteria with the same description collapse into one key. `rules_broken` lists the ids of criteria that failed.
+The criteria verdicts come in three places. `metadata["criteria_meta"]` is the one to read: one entry per criterion, keyed by a stable id (`criteria_0`, `criteria_1`, and so on), with its text, type, pass or fail, and the judge's evidence. `criteria_results` maps each criterion's *description* to pass or fail, so two criteria with the same description collapse into one key. `rules_broken` lists the ids of criteria that failed when `criteria_verified` is true; otherwise it is the judge's own free-text list, passed through.
 
 `passed: true` means the criterion was met, whatever its type. For a must-happen criterion, the behaviour occurred. For a must-not-happen criterion, the behaviour did not occur. In the example, `"Agent asks for unnecessary personal information": true` means the agent did not ask.
 
@@ -97,6 +97,9 @@ Check `criteria_verified` before trusting `criteria_results`. When it is `false`
 | `evaluator_scores` | evaluator name to numeric score, for this conversation |
 | `evaluator_errors` | evaluator name to the reason its score was unusable, when one failed |
 | `target_model` | the model the target used, when the client knows it |
+| `error`, `error_type` | why the conversation failed, on `error` and `timeout` results |
+| `timeout` | the time limit in seconds, when the conversation hit it |
+| `token_usage_unknown` | `true` when a failed conversation's usage could not be collected |
 
 `turn_metrics` has one entry per turn with the judge's `response_quality`, `hallucination_risk`, `tone_appropriateness` and `factual_accuracy` (each 0 to 1, or `null` when not scored), its reasoning, and that turn's token usage.
 
@@ -108,7 +111,9 @@ Check `criteria_verified` before trusting `criteria_results`. When it is `false`
 
 `datapoints` holds the persona and scenario objects each conversation ran, which `results` keeps only by name. It is `null` on runs saved before replay existed, and those runs cannot be replayed.
 
-`recommendations` lists suggested fixes for failed conversations. Each entry points back to its result with `result_index`.
+`recommendations` lists suggested fixes for failed conversations, or is `null` when none were generated. Each entry points back to its result with `result_index`. `applied_suggestions` holds the suggestion strings already applied to the agent, so the dashboard marks them and a later apply skips them.
+
+`agent_info` is a snapshot of an Orq agent's configuration at run time: `key`, `id`, `role`, `description`, `model` and `tools`, never its instructions. It is `null` for targets that are not Orq agents.
 
 ## Load a saved run
 
@@ -148,7 +153,7 @@ jq -r '.results[] | select(.goal_achieved == false) | "\(.metadata.persona) / \(
 
 ## Gate CI on a run
 
-This exits non-zero when any conversation missed its goal, failed a criterion, or has criteria the judge never audited:
+This exits non-zero when any conversation errored or timed out, missed its goal, failed a criterion, or has a criterion the judge never audited:
 
 ```python
 import sys
@@ -162,11 +167,15 @@ run = SimulationRun.model_validate_json(latest.read_text())
 problems = []
 for i, r in enumerate(run.results):
     name = f'#{i} {r.metadata.get("persona")} / {r.metadata.get("scenario")}'
-    if not r.goal_achieved:
+    if r.terminated_by.value in ('error', 'timeout'):
+        problems.append(f'{name}: {r.terminated_by.value}: {r.reason}')
+    elif not r.goal_achieved:
         problems.append(f'{name}: goal not achieved ({r.terminated_by.value}: {r.reason})')
     for c in r.metadata.get('criteria_meta') or []:
         if not c['passed']:
             problems.append(f'{name}: failed {c["id"]} {c["description"]}')
+        elif c.get('audited') is False:
+            problems.append(f'{name}: {c["id"]} never audited')
     if r.criteria_verified is not True:
         problems.append(f'{name}: criteria not verified')
 
@@ -174,7 +183,7 @@ print('\n'.join(problems) or 'ok')
 sys.exit(1 if problems else 0)
 ```
 
-`criteria_meta` is the complete list of failed criteria, so `rules_broken` adds nothing to this check. `criteria_verified is not True` also fails runs saved before the field existed, where it is `null`: a gate that must never pass silently should treat "not recorded" as unverified. Drop the `goal_achieved` check if your scenarios are exploratory and a conversation that runs out of turns is acceptable.
+`criteria_meta` is the complete list of failed criteria, so `rules_broken` adds nothing to this check. `criteria_verified is not True` also fails runs saved before the field existed, where it is `null`: a gate that must never pass silently should treat "not recorded" as unverified. Drop the `goal_achieved` branch if your scenarios are exploratory and a conversation that runs out of turns is acceptable; keep the `terminated_by` branch, or a dead target passes.
 
 ## Runs from older versions
 
