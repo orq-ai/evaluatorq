@@ -104,6 +104,21 @@ def test_nested_output_message_wrappers_are_parsed(output: dict[str, Any]) -> No
     assert parsed[0].parts[0].content == 'hello'
 
 
+def test_nested_input_singular_message_wrapper_is_parsed() -> None:
+    trace = OtelTrace.from_orq([{
+        'span_id': 's',
+        'attributes': {
+            'gen_ai.input': {'message': {'role': 'user', 'parts': [{'type': 'text', 'content': 'hello'}]}},
+        },
+    }])
+
+    parsed = trace.spans[0].input_messages
+    assert parsed is not None
+    assert parsed[0].role == 'user'
+    assert isinstance(parsed[0].parts[0], OtelTextPart)
+    assert parsed[0].parts[0].content == 'hello'
+
+
 def test_flatten_attributes() -> None:
     assert flatten_attributes({'gen_ai': {'a': {'b': 1}}, 'x.y': 2}) == {'gen_ai.a.b': 1, 'x.y': 2}
 
