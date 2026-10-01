@@ -58,7 +58,7 @@ def _calls(source: str) -> list[tuple[int, str]]:
     ]
 
 
-_PYRIGHT_SUPPRESSION = re.compile(r'#\s*pyright:\s*ignore(?:\[[^]]*\])?')
+_PYRIGHT_DIRECTIVE = re.compile(r'#\s*pyright\s*:')
 _TY_IGNORE = re.compile(r'#\s*ty:\s*ignore(?:\[([^]]*)\])?')
 _PROTECTED_TY_RULES = frozenset({'unused-ignore-comment', 'ignore-comment-unknown-rule'})
 
@@ -103,7 +103,7 @@ def _ty_checked_python_files() -> list[Path]:
 
 
 def _forbidden_type_suppressions(source: str) -> list[int]:
-    """Return lines containing Pyright suppressions or blanket ty ignores."""
+    """Return lines containing Pyright directives or forbidden ty ignores."""
     forbidden: list[int] = []
     for token in tokenize.generate_tokens(io.StringIO(source).readline):
         if token.type != tokenize.COMMENT:
@@ -115,7 +115,7 @@ def _forbidden_type_suppressions(source: str) -> list[int]:
             else set()
         )
         if (
-            _PYRIGHT_SUPPRESSION.search(token.string)
+            _PYRIGHT_DIRECTIVE.search(token.string)
             or (ty_match is not None and ty_match.group(1) is None)
             or bool(selectors & _PROTECTED_TY_RULES)
         ):
@@ -127,12 +127,15 @@ def test_ty_suppression_detector_actually_fires() -> None:
     pyright = '# py' + 'right: ignore'
     assert _forbidden_type_suppressions(f'value = bad  {pyright}[reportArgumentType]') == [1]
     assert _forbidden_type_suppressions(f'value = bad  {pyright}') == [1]
+    assert _forbidden_type_suppressions('# pyright: reportArgumentType=false') == [1]
+    assert _forbidden_type_suppressions('# pyright: strict') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty:' + ' ignore') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty: ignore[unused-ignore-comment]') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty: ignore[ignore-comment-unknown-rule]') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty: ignore[invalid-argument-type, unused-ignore-comment]') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty: ignore[invalid-argument-type]') == []
     assert _forbidden_type_suppressions('value = "# pyright: ignore"') == []
+    assert _forbidden_type_suppressions('value = "# pyright: reportArgumentType=false"') == []
     assert _forbidden_type_suppressions('value = "# ty: ignore"') == []
     assert _forbidden_type_suppressions('# prose mentions ty without an ignore directive') == []
 
@@ -154,7 +157,7 @@ def test_ty_checked_files_have_no_forbidden_suppressions() -> None:
         for lineno in _forbidden_type_suppressions(path.read_text(encoding='utf-8'))
     ]
     assert not hits, (
-        'Forbidden type-checker suppression in ty checked roots: '
+        'Forbidden type-checker directive in ty checked roots: '
         + ', '.join(hits)
         + '. Remove Pyright suppression comments and give every ty ignore an exact rule selector.'
     )
