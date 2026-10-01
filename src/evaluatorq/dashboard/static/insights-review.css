@@ -358,7 +358,9 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--border-default
 .sheet .facet-options .finder-facets .facet-sub input[type="checkbox"]{flex:none;width:16px;min-width:16px;height:16px;margin:0;padding:0;appearance:auto;accent-color:var(--teal-600)}
 .sheet .facet-options .finder-facets .facet-sub label span{min-width:0;overflow-wrap:anywhere}
 .sheet .facet-options .finder-facets .facet-search{width:calc(100% - 12px);max-width:100%}
-.sheet .facet-options .insights-selected-facets{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%;margin-top:7px}
+.sheet .facet-options .insights-selected-facets{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;max-width:100%}
+.sheet .insights-selected-facets .chip b{padding:0 6px 0 10px;background:transparent;border-right:0}
+.sheet .insights-selected-facets .chip .v{padding:0 8px 0 0}
 .sheet .seg{flex-wrap:nowrap;min-width:0;overflow:hidden}
 .sheet .seg button{min-width:0;padding-right:clamp(2px,1vw,8px);padding-left:clamp(2px,1vw,8px);font-size:clamp(10px,1.7vw,12px);white-space:nowrap}
 .sheet [role="alert"]{max-width:100%;line-height:1.45}
