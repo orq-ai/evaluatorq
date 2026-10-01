@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from evaluatorq.common.orq_client import OrqProfile
@@ -82,6 +83,60 @@ def test_settings_expose_validated_ai_limits(client: TestClient) -> None:
     assert 'id="limit" name="limit" type="number" min="1" max="5000"' in html
     assert 'id="parallelism" name="parallelism" type="number" min="1" max="200"' in html
     assert '<option value="immediate" selected>Just proceed</option>' in html
+
+
+@pytest.mark.asyncio
+async def test_settings_route_keeps_event_loop_responsive_during_cli_slug_lookup(
+    settings_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard import orq_scope, orq_workspace
+
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
+    monkeypatch.delenv('ORQ_WORKSPACE_SLUG', raising=False)
+    monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: ())
+    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: OrqScope())
+    monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: '/usr/bin/orq')
+    lookup_started = threading.Event()
+    release_lookup = threading.Event()
+    loop_ticks = 0
+
+    def discover_session(profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        assert profile is None and use_cli_session is True
+        lookup_started.set()
+        assert release_lookup.wait(timeout=2)
+        return OrqScope(workspace_key='orq-research')
+
+    monkeypatch.setattr(orq_scope, 'discover_orq_scope', discover_session)
+    app = build_app(roots=[tmp_path])
+    request = Request({
+        'type': 'http',
+        'method': 'GET',
+        'path': '/settings',
+        'query_string': b'',
+        'headers': [],
+        'app': app,
+    })
+
+    async def heartbeat() -> None:
+        nonlocal loop_ticks
+        while not release_lookup.is_set():
+            loop_ticks += 1
+            await asyncio.sleep(0.01)
+
+    release_timer = threading.Timer(0.2, release_lookup.set)
+    release_timer.start()
+    heartbeat_task = asyncio.create_task(heartbeat())
+    try:
+        response = await app_module._settings(request)
+    finally:
+        release_lookup.set()
+        release_timer.cancel()
+        await heartbeat_task
+
+    assert lookup_started.is_set()
+    assert loop_ticks >= 2
+    assert 'Settings' in str(response)
 
 
 def test_ai_limits_reject_out_of_range_values(client: TestClient, settings_file: Path) -> None:
