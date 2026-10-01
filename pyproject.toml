@@ -242,6 +242,38 @@ reportGeneralTypeIssues = "none"
 reportMissingTypeArgument = "none"
 reportReturnType = "none"
 
+[tool.ty.src]
+include = [ "src", "tests", "*.py", "docs/hooks.py" ]
+exclude = [ "examples", "scripts", ".venv" ]
+
+[tool.ty.environment]
+python-version = "3.10"
+python-platform = "all"
+
+[tool.ty.rules]
+ignore-comment-unknown-rule = "error"
+unused-ignore-comment = "error"
+unused-type-ignore-comment = "error"
+unused-awaitable = "error"
+
+[[tool.ty.overrides]]
+include = [ "src/evaluatorq/dashboard" ]
+
+  [tool.ty.overrides.rules]
+  invalid-argument-type = "ignore"
+  invalid-return-type = "ignore"
+  invalid-type-form = "ignore"
+  unresolved-attribute = "ignore"
+
+[[tool.ty.overrides]]
+include = [ "tests/dashboard" ]
+
+  [tool.ty.overrides.rules]
+  invalid-argument-type = "ignore"
+  invalid-return-type = "ignore"
+  not-iterable = "ignore"
+  unresolved-attribute = "ignore"
+
 [project]
 name = "evaluatorq"
 dynamic = ["version"]
@@ -359,6 +391,7 @@ dev = [
   "pytest-asyncio>=1.2.0",
   "pytest-timeout>=2.3.0",
   "basedpyright>=1.21.0",
+  "ty==0.0.84",
   "ruff>=0.14.3",
   "orq-ai-sdk>=4.14",
   "anthropic>=0.75.0",
