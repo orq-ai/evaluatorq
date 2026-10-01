@@ -1566,7 +1566,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
         assert kwargs['coding_analysis'] is True
         return SimpleNamespace(status='completed')
 
-    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: DashboardSettings())
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: DashboardSettings.model_validate({}))
     monkeypatch.setattr(
         insights_worker,
         'resolve_dashboard_auth',
