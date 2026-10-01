@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Generic Orq-format LLM judge — canonical, do not write another judge loop.
 
 Renders an evaluator template, calls an OpenAI-compatible chat completion, and
@@ -562,7 +563,7 @@ async def _responses_judge(
             value=parsed.value,
             explanation=parsed.explanation,
             abstain=bool(getattr(parsed, 'abstain', False)),
-        )  # pyright: ignore[reportAttributeAccessIssue]
+        )
     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
 
 

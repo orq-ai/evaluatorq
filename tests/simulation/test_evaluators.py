@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false
 """Tests for simulation evaluators."""
 
 import copy
@@ -255,7 +256,7 @@ class TestSimulationScoringConfig:
 
     def test_unknown_field_is_rejected(self):
         with pytest.raises(ValueError, match="Extra inputs are not permitted"):
-            SimulationScoringConfig(turn_efficiency_cliff=((2, 1.0),))  # pyright: ignore[reportCallIssue]
+            SimulationScoringConfig(turn_efficiency_cliff=((2, 1.0),))  # ty: ignore[unknown-argument]
 
     def test_get_evaluator_binds_the_config(self):
         config = SimulationScoringConfig(turn_efficiency_cliffs=((12, 1.0),))

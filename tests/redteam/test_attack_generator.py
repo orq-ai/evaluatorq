@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Unit tests for attack prompt generation."""
 
 from unittest.mock import AsyncMock, MagicMock
@@ -196,7 +197,7 @@ def _make_strategy(**overrides: object) -> AttackStrategy:
         'turn_type': TurnType.SINGLE,
         'objective_template': 'Test',
     }
-    return AttackStrategy(**(defaults | overrides))  # pyright: ignore[reportArgumentType]
+    return AttackStrategy(**(defaults | overrides))  # ty: ignore[invalid-argument-type]
 
 
 def _mock_llm_client(analysis: ToolAnalysis) -> AsyncMock:

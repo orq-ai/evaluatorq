@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 from __future__ import annotations
 
 import pytest
@@ -305,7 +306,7 @@ def test_validate_aggregator_rejects_kind_mismatch() -> None:
     with pytest.raises(ValueError, match='numeric-only'):
         validate_aggregator('median', VerdictKind.CATEGORICAL)
     with pytest.raises(ValueError, match='Unknown aggregator'):
-        validate_aggregator('banana', VerdictKind.CATEGORICAL)  # pyright: ignore[reportArgumentType]
+        validate_aggregator('banana', VerdictKind.CATEGORICAL)  # ty: ignore[invalid-argument-type]
     # None and callables always pass
     validate_aggregator(None, VerdictKind.NUMERIC)
     validate_aggregator(lambda votes: None, VerdictKind.CATEGORICAL)

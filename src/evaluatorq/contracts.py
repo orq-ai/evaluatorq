@@ -1,3 +1,4 @@
+# pyright: reportMissingSuperCall=false
 """Shared types used across evaluatorq subpackages."""
 
 from __future__ import annotations
@@ -133,7 +134,7 @@ if sys.version_info >= (3, 11):
 else:
     from enum import Enum
 
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
+    class StrEnum(str, Enum):
         """String enum compatible with Python 3.10."""
 
 
@@ -683,7 +684,8 @@ class Usage(BaseModel):
         # runtime via the validation aliases above, but a static type checker only
         # sees the declared field names. Declare the constructor explicitly so call
         # sites passing either spelling type-check cleanly.
-        def __init__(  # pyright: ignore[reportMissingSuperCall]
+
+        def __init__(
             self,
             *,
             input_tokens: int = ...,
@@ -1193,7 +1195,7 @@ class AgentResponse(BaseModel):
 
     if TYPE_CHECKING:
 
-        def __init__(  # pyright: ignore[reportMissingSuperCall]
+        def __init__(
             self,
             *,
             output: list[OutputMessage] | None = None,

@@ -341,7 +341,7 @@ async def generate_dynamic_datapoints(
 
     empty_categories = [cat for cat in categories if not all_category_strategies.get(cat)]
     if empty_categories:
-        filtering_metadata['_unresolved_categories'] = empty_categories
+        filtering_metadata['_unresolved_categories'] = empty_categories  # ty: ignore[invalid-assignment]
 
     logger.debug(f'Generated {len(datapoints)} dynamic datapoints across {len(categories)} categories')
     return datapoints, filtering_metadata
@@ -375,7 +375,7 @@ def _register_job_target(
     if target_memory_id is not None and memory_entity_ids is not None:
         memory_entity_ids.append(target_memory_id)
     if hasattr(target, 'model') and agent_context.model:
-        object.__setattr__(target, 'model', agent_context.model)  # type: ignore[misc]
+        object.__setattr__(target, 'model', agent_context.model)
 
 
 def _effective_max_turns(strategy: AttackStrategy, max_turns: int) -> int:

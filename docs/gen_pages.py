@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import mkdocs_gen_files
+import mkdocs_gen_files  # ty: ignore[unresolved-import]
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "evaluatorq"
@@ -150,7 +150,7 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
     """
     import sys
 
-    obj = vars(mod).get(name)  # type: ignore[arg-type]
+    obj = vars(mod).get(name)
     if obj is not None:
         return obj
     full = f"{parent_dotted}.{name}"

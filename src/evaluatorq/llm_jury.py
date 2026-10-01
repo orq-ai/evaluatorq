@@ -1,3 +1,4 @@
+# pyright: reportInvalidTypeForm=false
 from __future__ import annotations
 
 import itertools
@@ -102,7 +103,7 @@ def _build_verdict_model(
         judge writes its reasoning before committing to a verdict.
     """
     if verdict_kind == 'categorical':
-        value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # type: ignore[valid-type]
+        value_annotation = bool if labels is None else typing.Literal[tuple(labels)]  # ty: ignore[invalid-type-form]
         description = _labels_description(label_descriptions)
     else:  # numeric
         value_annotation = float
@@ -111,9 +112,8 @@ def _build_verdict_model(
     # Create model dynamically
     class VerdictModel(BaseModel):
         explanation: str = Field(default='', description='Explanation for the verdict')
-        value: value_annotation = (  # type: ignore  # pyright: ignore[reportInvalidTypeForm]
-            Field(description=description) if description is not None else Field()
-        )
+
+        value: value_annotation = Field(description=description) if description is not None else Field()
 
     return VerdictModel
 

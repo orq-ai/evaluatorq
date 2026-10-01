@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """A classify model is judged on the Orq router's /classify endpoint."""
 
 from __future__ import annotations
@@ -79,7 +80,7 @@ def _client(*post_results: Any) -> Any:
 def _rate_limit() -> RateLimitError:
     return RateLimitError(
         'slow down',
-        response=SimpleNamespace(status_code=429, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=SimpleNamespace(status_code=429, headers={}, request=None),  # ty: ignore[invalid-argument-type]
         body={'error': {'message': 'slow down'}},
     )
 
@@ -92,7 +93,7 @@ async def _judge(
     retry_count: int = 0,
     api: str = 'responses',
 ) -> Any:
-    cfg = LLMCallConfig(model=model, api=api, retry_count=retry_count)  # pyright: ignore[reportArgumentType]
+    cfg = LLMCallConfig(model=model, api=api, retry_count=retry_count)  # ty: ignore[invalid-argument-type]
     return await run_judge(
         client=client,
         model=model,
@@ -789,4 +790,5 @@ async def test_a_readable_usage_block_still_lands_on_the_span():
 def test_a_criteria_shape_the_endpoint_would_reject_is_refused_locally(kwargs: dict[str, Any]):
     """Rejected before the call is paid for, not after a 400."""
     with pytest.raises(ValidationError):
-        ClassifyQuestion(instructions='q', state='s', **kwargs)  # pyright: ignore[reportArgumentType]
+
+        ClassifyQuestion(instructions='q', state='s', **kwargs)

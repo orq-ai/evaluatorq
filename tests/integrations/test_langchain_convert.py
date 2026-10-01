@@ -1,3 +1,4 @@
+# pyright: reportAssignmentType=false, reportAttributeAccessIssue=false, reportGeneralTypeIssues=false
 """Tests for LangChain -> OpenResponses conversion (convert_to_open_responses)."""
 
 from __future__ import annotations
@@ -69,7 +70,8 @@ def test_unhashable_str_subclass_message_type_is_converted(caplog: pytest.LogCap
     """
 
     class UnhashableStr(str):
-        __hash__ = None  # pyright: ignore[reportAssignmentType]
+
+        __hash__ = None
 
     logger_name = 'evaluatorq.integrations.langchain_integration.convert'
     with caplog.at_level(logging.WARNING, logger=logger_name):
@@ -79,7 +81,7 @@ def test_unhashable_str_subclass_message_type_is_converted(caplog: pytest.LogCap
 
     def _without_ids(items: object) -> list[dict[str, object]]:
         # Message ids are random per call, so compare everything else.
-        return [{k: v for k, v in item.items() if k != 'id'} for item in items or []]  # pyright: ignore[reportAttributeAccessIssue, reportGeneralTypeIssues]
+        return [{k: v for k, v in item.items() if k != 'id'} for item in items or []]  # ty: ignore[not-iterable]
 
     assert _without_ids(result.get('input')) == _without_ids(plain.get('input'))
     assert result.get('input')

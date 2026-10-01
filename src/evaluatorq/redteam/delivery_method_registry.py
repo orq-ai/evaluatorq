@@ -1,3 +1,4 @@
+# pyright: reportConstantRedefinition=false
 """Delivery-method registry — the single source of truth for delivery methods.
 
 Mirrors `evaluatorq.redteam.vulnerability_registry`: a canonical set (the
@@ -105,7 +106,8 @@ _missing = sorted(delivery_method_str(m) for m in set(DeliveryMethod) - set(DELI
 if _missing:
     raise RuntimeError(f'Missing DELIVERY_METHOD_CATEGORY entries for: {_missing}')
 
-DELIVERY_METHOD_CATEGORY = types.MappingProxyType(dict(DELIVERY_METHOD_CATEGORY))  # pyright: ignore[reportConstantRedefinition]
+
+DELIVERY_METHOD_CATEGORY = types.MappingProxyType(dict(DELIVERY_METHOD_CATEGORY))
 
 # Registered custom methods: value -> category. Seeded empty; the enum members
 # are always known without being listed here. ``register_delivery_method``

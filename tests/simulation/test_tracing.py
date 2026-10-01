@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportOptionalMemberAccess=false
 """Integration test verifying OTel span output for the simulation module.
 
 Uses an in-memory span exporter to capture real spans and validate names,
@@ -519,13 +520,14 @@ async def test_nested_spans_share_trace(span_collector: CollectingExporter):
     llm = _find(span_collector, 'chat openai/gpt-4o')
 
     # All four spans share the same trace_id
-    trace_ids = {pipeline.context.trace_id, run.context.trace_id, turn.context.trace_id, llm.context.trace_id}  # pyright: ignore[reportOptionalMemberAccess]
+
+    trace_ids = {pipeline.context.trace_id, run.context.trace_id, turn.context.trace_id, llm.context.trace_id}
     assert len(trace_ids) == 1
 
     # Parent chain: llm → turn → run → pipeline → root
-    assert llm.parent.span_id == turn.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
-    assert turn.parent.span_id == run.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
-    assert run.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
+    assert llm.parent.span_id == turn.context.span_id  # ty: ignore[unresolved-attribute]
+    assert turn.parent.span_id == run.context.span_id  # ty: ignore[unresolved-attribute]
+    assert run.parent.span_id == pipeline.context.span_id  # ty: ignore[unresolved-attribute]
     assert pipeline.parent is None
 
 
@@ -641,21 +643,22 @@ async def test_end_to_end_simulation_produces_full_span_tree(
     # Hierarchy: each turn span is a child of run, which is a child of pipeline
     pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     run = _find(span_collector, 'orq.simulation.run')
-    assert run.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
+    assert run.parent.span_id == pipeline.context.span_id  # ty: ignore[unresolved-attribute]
 
     turn_spans = [s for s in span_collector.spans if s.name == 'orq.simulation.turn']
     for t in turn_spans:
-        assert t.parent.span_id == run.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
+        assert t.parent.span_id == run.context.span_id  # ty: ignore[unresolved-attribute]
 
     # target_call spans are children of their turn
     for tc in [s for s in span_collector.spans if s.name == 'orq.simulation.target_call']:
-        assert any(tc.parent.span_id == t.context.span_id for t in turn_spans)  # pyright: ignore[reportOptionalMemberAccess]
+        assert any(tc.parent.span_id == t.context.span_id for t in turn_spans)  # ty: ignore[unresolved-attribute]
 
     # Each turn span carries its own judgment's verdict, in turn order. The
     # judge returns terminate=False then terminate=True, so a turn span that
     # read the wrong turn's judgment (or the run-level fold instead of the
     # per-turn one) would swap these two rows.
-    turn_attrs = [_attrs(t) for t in sorted(turn_spans, key=lambda s: _attrs(s)['orq.simulation.turn'])]  # pyright: ignore[reportArgumentType]
+
+    turn_attrs = [_attrs(t) for t in sorted(turn_spans, key=lambda s: _attrs(s)['orq.simulation.turn'])]
     assert [a['orq.simulation.should_terminate'] for a in turn_attrs] == [False, True]
     assert [a['orq.simulation.goal_achieved'] for a in turn_attrs] == [False, True]
     assert [a['orq.simulation.goal_completion_score'] for a in turn_attrs] == [0.5, 1.0]
@@ -670,7 +673,8 @@ async def test_end_to_end_simulation_produces_full_span_tree(
 
     # Pretty-print the span tree for visual inspection
     print('\n=== Captured span tree (smoke test) ===')
-    by_id = {s.context.span_id: s for s in span_collector.spans}  # pyright: ignore[reportOptionalMemberAccess]
+
+    by_id = {s.context.span_id: s for s in span_collector.spans}
     children: dict[int | None, list[ReadableSpan]] = {}
     for s in span_collector.spans:
         parent_id = s.parent.span_id if s.parent else None
@@ -688,7 +692,8 @@ async def test_end_to_end_simulation_produces_full_span_tree(
         )
         hints = ' '.join(f'{k.split(".")[-1]}={attrs[k]}' for k in hint_keys if k in attrs)
         print(f'{"  " * depth}- {node.name}' + (f'  [{hints}]' if hints else ''))
-        for child in children.get(node.context.span_id, []):  # pyright: ignore[reportOptionalMemberAccess]
+
+        for child in children.get(node.context.span_id, []):
             _print(child, depth + 1)
 
     for root in children.get(None, []):
@@ -939,7 +944,7 @@ async def test_traceparent_injected_into_first_message_generation_call(
     assert 'traceparent' in headers, f'expected traceparent in {headers}'
     llm = _find(span_collector, 'responses test')
     parent = _find(span_collector, 'orq.simulation.first_message_generation')
-    assert llm.parent.span_id == parent.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
+    assert llm.parent.span_id == parent.context.span_id  # ty: ignore[unresolved-attribute]
 
 
 @pytest.mark.asyncio
@@ -1002,8 +1007,8 @@ async def test_generated_datapoint_first_message_has_simulation_span(
     pipeline = _find(span_collector, 'Evaluatorq - Agent Simulation')
     first_msg = _find(span_collector, 'orq.simulation.first_message_generation')
     llm = _find(span_collector, 'responses test')
-    assert first_msg.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
-    assert llm.parent.span_id == first_msg.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
+    assert first_msg.parent.span_id == pipeline.context.span_id  # ty: ignore[unresolved-attribute]
+    assert llm.parent.span_id == first_msg.context.span_id  # ty: ignore[unresolved-attribute]
 
 
 @pytest.mark.asyncio
@@ -1300,7 +1305,7 @@ async def test_concurrent_runs_share_pipeline_parent(
     runs = [s for s in span_collector.spans if s.name == 'orq.simulation.run']
     assert len(runs) == 2
     for r in runs:
-        assert r.parent.span_id == pipeline.context.span_id  # pyright: ignore[reportOptionalMemberAccess]
+        assert r.parent.span_id == pipeline.context.span_id  # ty: ignore[unresolved-attribute]
 
 
 @pytest.mark.asyncio
@@ -1468,7 +1473,7 @@ async def test_batched_first_message_generation_uses_one_span(
 
     llm_spans = [s for s in span_collector.spans if s.name == 'responses test']
     assert len(llm_spans) == 6
-    assert all(s.parent.span_id == gen_spans[0].context.span_id for s in llm_spans)  # pyright: ignore[reportOptionalMemberAccess]
+    assert all(s.parent.span_id == gen_spans[0].context.span_id for s in llm_spans)  # ty: ignore[unresolved-attribute]
 
 
 @pytest.mark.asyncio

@@ -49,7 +49,7 @@ def read_json(path_str: str, mtime_ns: int) -> dict[str, object]:
         json.JSONDecodeError: When the file content is not valid JSON.
         OSError: When the file cannot be read.
     """
-    return json.loads(Path(path_str).read_text(encoding='utf-8'))  # type: ignore[return-value]
+    return json.loads(Path(path_str).read_text(encoding='utf-8'))
 
 
 def read_json_cached(path: Path) -> dict[str, object]:

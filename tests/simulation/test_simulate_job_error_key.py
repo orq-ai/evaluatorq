@@ -64,7 +64,7 @@ async def _run_job(result: SimulationResult) -> dict[str, Any]:
     async def fake_run(*_args: Any, **_kwargs: Any) -> SimulationResult:
         return result
 
-    runner._run_with_timeout = fake_run  # type: ignore[method-assign]  # noqa: SLF001
+    runner._run_with_timeout = fake_run  # noqa: SLF001
     return await job_fn(data, 0)
 
 

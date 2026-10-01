@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Unit tests for capability classifier."""
 
 from unittest.mock import AsyncMock, MagicMock
@@ -241,7 +242,7 @@ async def test_both_classifier_calls_forward_the_attacker_reasoning_effort():
     seen: list[str | None] = []
 
     async def _record(**kwargs: object) -> tuple[MagicMock, None]:
-        seen.append(kwargs.get('reasoning_effort'))  # pyright: ignore[reportArgumentType]
+        seen.append(kwargs.get('reasoning_effort'))  # ty: ignore[invalid-argument-type]
         model = kwargs.get('response_model')
         if model is ResourceCapabilityInference:
             return _mock_resource_response(), None

@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """The user's line opens the turn it belongs to, not the tail of the previous one."""
 
 import pytest
@@ -54,8 +55,8 @@ async def test_user_simulator_runs_at_the_head_of_each_later_turn():
     runner = SimulationRunner(
         target=target,
         max_turns=3,
-        user_simulator=_RecordingSimulator(log),  # pyright: ignore[reportArgumentType]
-        judge=_NeverTerminatingJudge(),  # pyright: ignore[reportArgumentType]
+        user_simulator=_RecordingSimulator(log),  # ty: ignore[invalid-argument-type]
+        judge=_NeverTerminatingJudge(),  # ty: ignore[invalid-argument-type]
     )
     try:
         result = await runner.run(

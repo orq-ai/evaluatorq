@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Pure pieces of container mode: options, argv, env selection, run_args checks."""
 
 from __future__ import annotations
@@ -59,7 +60,7 @@ def test_options_frozen_and_workdir_absolute() -> None:
         assert DockerOptions(workdir=workdir).workdir == workdir
     opts = DockerOptions()
     with pytest.raises(pydantic.ValidationError):
-        opts.image = 'x'  # pyright: ignore[reportAttributeAccessIssue]
+        opts.image = 'x'  # ty: ignore[invalid-assignment]
 
 
 @pytest.mark.parametrize('name_prefix', ['', '.', '..', '../evq-leak', '../../evq-leak', 'a/b', 'a\\b', '-task', '_task'])

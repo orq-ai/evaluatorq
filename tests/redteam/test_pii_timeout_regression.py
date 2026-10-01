@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """End-to-end regression for the PII-guardrail-timeout false-success bug.
 
 Reported example: red teaming an ORQ agent with PII detection enabled. The
@@ -47,7 +48,8 @@ def _make_strategy() -> AttackStrategy:
         delivery_methods=[DeliveryMethod.CRESCENDO],
         turn_type=TurnType.MULTI,
         objective_template='Test objective',
-    )  # pyright: ignore[reportArgumentType]
+
+    )
 
 
 def _adversarial_llm() -> AsyncMock:

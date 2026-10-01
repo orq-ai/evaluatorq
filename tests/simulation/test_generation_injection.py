@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportCallIssue=false
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -145,7 +146,7 @@ async def test_generate_and_simulate_rejects_target_callback(monkeypatch):
     with pytest.raises(TypeError, match="target_callback"):
         await generate_and_simulate(
             agent_description="a test agent",
-            target_callback=lambda messages: "ok",  # pyright: ignore[reportCallIssue]
+            target_callback=lambda messages: "ok",  # ty: ignore[unknown-argument]
             num_personas=1,
             num_scenarios=1,
             generation_client=injected,
@@ -214,7 +215,7 @@ async def test_sim_model_is_the_public_param(monkeypatch):
         "model": "x",
     }
     with pytest.raises(TypeError):
-        await simulate(**bad_kwargs)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        await simulate(**bad_kwargs)  # ty: ignore[invalid-argument-type]
 
 
 def _make_datapoint(dp_id: str = "dp-0") -> SimulationDatapoint:
@@ -405,7 +406,7 @@ async def test_generate_and_simulate_does_not_close_injected_generation_client(m
     from openai import AsyncOpenAI
 
     injected = AsyncOpenAI(api_key="sk-test", base_url="https://example.test/v1")
-    injected.close = AsyncMock()  # type: ignore[method-assign]
+    injected.close = AsyncMock()
 
     with (
         patch(

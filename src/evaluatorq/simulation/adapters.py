@@ -1,3 +1,4 @@
+# pyright: reportFunctionMemberAccess=false
 """Convenience adapters for creating simulation targets.
 
 These helpers create callables for the ``target=`` parameter from common agent sources,
@@ -60,7 +61,7 @@ def from_orq_deployment(
 
     # Carry the key so the run-metadata label can render "deployment:<key>",
     # symmetric to how an AgentTarget exposes `agent_key`.
-    callback.deployment_key = agent_key  # pyright: ignore[reportFunctionMemberAccess]
+    callback.deployment_key = agent_key  # ty: ignore[unresolved-attribute]
     return callback
 
 

@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportAssignmentType=false
 """CLI for evaluatorq agent simulation.
 
 Three execution verbs:
@@ -178,7 +179,7 @@ def _resolve_target(
         )
     from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
-    return OpenAIModelTarget(model=openai_model)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    return OpenAIModelTarget(model=openai_model)  # ty: ignore[invalid-argument-type]
 
 
 def _require_orq_api_key(flag: str) -> None:
@@ -1726,7 +1727,7 @@ def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
             run = None
         if run is not None:
             return list(run.results), list(run.recommendations or [])
-    results: list[SimulationResult] = parse_jsonl(content, cls=SimulationResult)  # pyright: ignore[reportAssignmentType]
+    results: list[SimulationResult] = parse_jsonl(content, cls=SimulationResult)  # ty: ignore[invalid-assignment]
     return results, []
 
 
@@ -1951,7 +1952,7 @@ def upload_dataset(
 
     # ponytail: single bulk create; chunk if a set ever exceeds the API's array cap.
     # rows are plain dicts matching the SDK's CreateDatasetItem TypedDict shape.
-    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=rows)  # pyright: ignore[reportArgumentType]
+    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=rows)  # ty: ignore[invalid-argument-type]
 
     base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
     typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')

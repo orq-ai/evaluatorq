@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Provider fallback diagnostics must not echo request content into logs."""
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ def test_rejection_message_names_schema_clue_without_logging_provider_body() -> 
     secret = 'private customer transcript\nFAKE LOG ENTRY'
     error = BadRequestError(
         'invalid request',
-        response=SimpleNamespace(status_code=400, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=SimpleNamespace(status_code=400, headers={}, request=None),  # ty: ignore[invalid-argument-type]
         body={'error': {'message': f'Invalid schema for response_format: oneOf is not permitted. {secret}'}},
     )
 

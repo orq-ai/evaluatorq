@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false
 """``llm_config`` reaches every simulation-side LLM call.
 
 The temperature default was unset repo-wide (`LLMCallConfig.temperature` is
@@ -690,7 +691,7 @@ def test_the_simulation_config_refuses_the_removed_model_keyword() -> None:
     from evaluatorq.simulation._config import SimulationConfig
 
     with pytest.raises(ValidationError):
-        SimulationConfig(model='chosen/model')  # pyright: ignore[reportCallIssue]
+        SimulationConfig(model='chosen/model')  # ty: ignore[unknown-argument]
 
 
 def test_no_public_entry_point_still_takes_sim_model() -> None:

@@ -130,7 +130,7 @@ _PAGE_SIZES = (5, 10, 25)  # selectable rows-per-page options
 def _coerce_page_size(raw: str | int | None) -> int:
     """Clamp an incoming page-size to an allowed option; bad input → default."""
     try:
-        n = int(raw)  # type: ignore[arg-type]
+        n = int(raw)
     except (ValueError, TypeError):
         return _PAGE_SIZE
     return n if n in _PAGE_SIZES else _PAGE_SIZE

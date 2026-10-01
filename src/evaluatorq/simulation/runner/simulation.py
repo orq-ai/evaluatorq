@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportAssignmentType=false
 """Simulation runner for orchestrating agent conversations."""
 
 from __future__ import annotations
@@ -901,17 +902,13 @@ class SimulationRunner:
             # Shallow-copy isolates _custom_system_prompt mutations from concurrent
             # run_batch tasks. Reset _usage to a fresh TokenUsage — shallow copy
             # keeps the same reference, which would cross-contaminate per-sim counts.
-            user_simulator: UserSimulatorAgent = copy.copy(self._injected_user_simulator)  # pyright: ignore[reportAssignmentType]
+            user_simulator: UserSimulatorAgent = copy.copy(self._injected_user_simulator)  # ty: ignore[invalid-assignment]
             user_simulator.reset_usage()
             if _implements(user_simulator, _USER_SIMULATOR_METHODS):
                 try:
                     user_simulator.update_context(
-                        persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
-                        if persona
-                        else None,
-                        scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
-                        if scenario
-                        else None,
+                        persona_context=build_persona_system_prompt(persona) if persona else None,
+                        scenario_context=build_scenario_user_context(scenario) if scenario else None,
                     )
                 except Exception as ctx_err:
                     raise RuntimeError(
@@ -930,7 +927,7 @@ class SimulationRunner:
             import copy
 
             # Isolate per-sim state — see user_simulator comment above.
-            judge: JudgeAgent = copy.copy(self._injected_judge)  # pyright: ignore[reportAssignmentType]
+            judge: JudgeAgent = copy.copy(self._injected_judge)  # ty: ignore[invalid-assignment]
             judge.reset_usage()
             # Without this the judge sees "No specific criteria defined" and scores 0.0.
             if _implements(judge, _CONTEXTUAL_JUDGE_METHODS):
@@ -1124,9 +1121,9 @@ class SimulationRunner:
             turn_metrics=sinks.turn_metrics,
             token_usage=sinks.token_usage,
             token_usage_known=sinks.token_usage_known,
-            criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
+            criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,
             criteria_verified=criteria_tracker.verified,
-            metadata=judge_metadata,  # type: ignore[union-attr]
+            metadata=judge_metadata,
         )
 
     async def _run_inner(
@@ -1142,7 +1139,7 @@ class SimulationRunner:
         conversation_target: AgentTarget | None = None,
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""
-        system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
+        system_prompt = build_datapoint_system_prompt(persona, scenario)  # ty: ignore[invalid-argument-type]
         user_simulator, judge = self._resolve_simulator_and_judge(
             persona=persona,
             scenario=scenario,

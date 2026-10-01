@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Tests for FunctionCall._serialize_arguments and arguments_dict.
 
 Covers the fallback / failure branches:
@@ -18,7 +19,8 @@ from evaluatorq.openresponses.convert_models import FunctionCall
 
 class TestSerializeArguments:
     def test_dict_args_serialized_to_json_string(self):
-        fc = FunctionCall(name="lookup", call_id="c1", arguments={"q": "x", "n": 1})  # pyright: ignore[reportArgumentType]
+
+        fc = FunctionCall(name="lookup", call_id="c1", arguments={"q": "x", "n": 1})
         assert json.loads(fc.arguments) == {"q": "x", "n": 1}
 
     def test_string_args_pass_through_unchanged(self):
@@ -27,7 +29,8 @@ class TestSerializeArguments:
 
     def test_non_serializable_uses_default_str(self):
         dt = datetime(2024, 1, 1, 12, 0, 0)
-        fc = FunctionCall(name="lookup", call_id="c1", arguments={"when": dt})  # pyright: ignore[reportArgumentType]
+
+        fc = FunctionCall(name="lookup", call_id="c1", arguments={"when": dt})
         parsed = json.loads(fc.arguments)
         assert "when" in parsed
         assert "2024-01-01" in parsed["when"]

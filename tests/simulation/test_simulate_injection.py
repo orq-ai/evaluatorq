@@ -1,3 +1,4 @@
+# pyright: reportCallIssue=false, reportPrivateUsage=false, reportUnknownLambdaType=false
 """Tests for injected target/user_simulator params and update_context propagation.
 
 Verifies:
@@ -108,7 +109,8 @@ def _make_runner_with_mocks(
     max_turns: int = 1,
 ) -> SimulationRunner:
     """Build a SimulationRunner with a target callable."""
-    resolved_target = target or (lambda msgs: "agent reply")  # pyright: ignore[reportUnknownLambdaType]
+
+    resolved_target = target or (lambda msgs: "agent reply")
     return SimulationRunner(
         target=resolved_target,
         model=model,
@@ -202,7 +204,7 @@ class TestDeprecatedTargetCallback:
 
         with pytest.raises(TypeError, match="target_callback"):
             await simulate(
-                target_callback=legacy_target,  # pyright: ignore[reportCallIssue]
+                target_callback=legacy_target,  # ty: ignore[unknown-argument]
                 datapoints=[dp],
                 llm_config=LLMCallConfig(model="test"),
                 max_turns=1,
@@ -238,7 +240,7 @@ class TestSimulateAutoRoutesAgentTarget:
 
         original_cls = runner_mod.SimulationRunner
 
-        class CapturingRunner(original_cls):  # type: ignore[valid-type]
+        class CapturingRunner(original_cls):
             def __init__(self, **kwargs: Any) -> None:
                 resolved.update(kwargs)
                 super().__init__(
@@ -402,7 +404,8 @@ class TestInjectedJudgeReceivesScenarioContext:
         assert "The order was late" in judge.system_prompt
         assert "No specific criteria defined" not in judge.system_prompt
         # The copy the runner makes must not share the caller's list.
-        assert judge._criteria is not criteria  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+
+        assert judge._criteria is not criteria  # noqa: SLF001
 
     @pytest.mark.asyncio
     async def test_injected_judge_is_given_the_scenario(self, monkeypatch: pytest.MonkeyPatch):
@@ -498,4 +501,5 @@ class TestInvalidUserSimulatorRaisesTypeError:
 
 def _make_runner_that_captures(kw: dict[str, Any]) -> SimulationRunner:
     """Placeholder — not actually used in the test above."""
-    return SimulationRunner(target=kw.get("target", lambda m: "ok"))  # pyright: ignore[reportUnknownLambdaType]
+
+    return SimulationRunner(target=kw.get("target", lambda m: "ok"))

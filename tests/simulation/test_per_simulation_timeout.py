@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """simulate()'s per-row path bypasses SimulationRunner.run_batch entirely, so
 its own timeout wrapper (_run_with_timeout) never fired for a caller of
 simulate() -- a stalled conversation had no wall-clock bound beyond per-call
@@ -93,8 +94,8 @@ async def test_per_simulation_timeout_s_unset_leaves_simulate_unaffected(monkeyp
         datapoints=[_datapoint()],
         target=_fast_target,
         max_turns=1,
-        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-        judge=_StubJudge(),  # pyright: ignore[reportArgumentType]
+        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
+        judge=_StubJudge(),  # ty: ignore[invalid-argument-type]
         upload_results=False,
         executive_summary=False,
     )
@@ -116,8 +117,8 @@ async def test_per_simulation_timeout_s_terminates_a_stalled_conversation(monkey
         target_agent_timeout_ms=60_000,
         max_target_retries=0,
         per_simulation_timeout_s=0.2,
-        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-        judge=_StubJudge(),  # pyright: ignore[reportArgumentType]
+        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
+        judge=_StubJudge(),  # ty: ignore[invalid-argument-type]
         upload_results=False,
         executive_summary=False,
         # The subject here is the wall clock, not the exit gate: a timed-out row

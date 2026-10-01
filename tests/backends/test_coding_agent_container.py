@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Container mode against a fake docker binary. No daemon needed."""
 
 from __future__ import annotations
@@ -504,7 +505,7 @@ async def test_kill_group_uses_taskkill_without_killpg(monkeypatch: pytest.Monke
 
     monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
     monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
-    await coding_agent_module.kill_group(SimpleNamespace(returncode=None, pid=4242))  # pyright: ignore[reportArgumentType]
+    await coding_agent_module.kill_group(SimpleNamespace(returncode=None, pid=4242))  # ty: ignore[invalid-argument-type]
     assert calls == [['taskkill', '/T', '/F', '/PID', '4242']]
 
 
@@ -518,7 +519,7 @@ async def test_kill_group_kills_agent_process_when_taskkill_fails(monkeypatch: p
     monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
     monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
     proc = SimpleNamespace(returncode=None, pid=4242, kill=lambda: killed.append(4242))
-    await coding_agent_module.kill_group(proc)  # pyright: ignore[reportArgumentType]
+    await coding_agent_module.kill_group(proc)  # ty: ignore[invalid-argument-type]
     assert killed == [4242]
 
 

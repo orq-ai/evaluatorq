@@ -1,3 +1,4 @@
+# pyright: reportIncompatibleMethodOverride=false
 """Built-in evaluators for agent simulation.
 
 These evaluators assess simulation results using a scorer pattern
@@ -327,7 +328,7 @@ class ConversationQualityScore(float):
         super().__init__()
         self.breakdown: dict[str, dict[str, float]] = breakdown
 
-    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # ty: ignore[invalid-method-override]
         return (float(self), self.breakdown)
 
 

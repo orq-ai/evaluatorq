@@ -1,3 +1,4 @@
+# pyright: reportIncompatibleMethodOverride=false
 """Red-team runner ↔ lifecycle-manifest integration: a run must never stay
 'running' once it has finished, whatever fails and wherever."""
 
@@ -109,7 +110,7 @@ async def test_sync_user_hook_warns_but_composite_does_not_misfire() -> None:
     class SyncHook(DefaultHooks):
         # Sync override of the now-async on_confirm — intentional (this is what
         # trips warn_if_sync_hooks).
-        def on_confirm(self, payload: Any) -> bool:  # pyright: ignore[reportIncompatibleMethodOverride]
+        def on_confirm(self, payload: Any) -> bool:  # ty: ignore[invalid-method-override]
             return True
 
         async def on_complete(self, report: Any, **_kw: Any) -> None:

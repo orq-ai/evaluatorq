@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Run-store persistence for agent simulation.
 
 Shared by the CLI (`evaluatorq sim run`) and the SDK (`simulate` /
@@ -211,8 +212,8 @@ def build_simulation_run(
     return SimulationRun(
         run_name=run_name,
         created_at=datetime.now(tz=timezone.utc),
-        mode=mode,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-        target_kind=target_kind,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        mode=mode,  # ty: ignore[invalid-argument-type]
+        target_kind=target_kind,  # ty: ignore[invalid-argument-type]
         target=target,
         target_model=target_model,
         max_turns=max_turns,

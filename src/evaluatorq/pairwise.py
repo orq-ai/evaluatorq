@@ -883,7 +883,7 @@ def _pairwise_observations(
                 failures += 1
             out.append(
                 RepetitionObservation(
-                    ordering=cast("Literal['ab', 'ba']", ordering),
+                    ordering=cast("Literal['ab', 'ba']", ordering),  # ty: ignore[redundant-cast]
                     repetition=i,
                     verdict=verdict,
                     explanation=rep.explanation,

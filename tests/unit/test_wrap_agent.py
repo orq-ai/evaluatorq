@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportPrivateUsage=false
 """Unit tests for wrap_langchain_agent / wrap_langgraph_agent."""
 
 from __future__ import annotations
@@ -43,8 +44,10 @@ pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
 
 from evaluatorq.integrations.langchain_integration.wrap_agent import (  # noqa: E402
-    _extract_messages_from_data,  # pyright: ignore[reportPrivateUsage]
-    _normalize_message,  # pyright: ignore[reportPrivateUsage]
+
+    _extract_messages_from_data,
+
+    _normalize_message,
     wrap_langchain_agent,
     wrap_langgraph_agent,
 )
@@ -291,7 +294,7 @@ class TestWrapAgentDoesNotBlockLoop:
                 return {"messages": []}
 
         agent = SlowAgent()
-        job = wrap_langchain_agent(agent, name="t")  # pyright: ignore[reportArgumentType]
+        job = wrap_langchain_agent(agent, name="t")  # ty: ignore[invalid-argument-type]
         data = DataPoint(inputs={"prompt": "hi"})
 
         await asyncio.wait_for(asyncio.gather(job(data, 0), job(data, 1)), timeout=2.0)

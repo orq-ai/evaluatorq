@@ -825,7 +825,7 @@ def test_filtered_view_rolls_up_once(saved: tuple[Path, Path], monkeypatch: pyte
     def counting(comparisons: list[PairwiseComparison], **kwargs: object) -> object:
         nonlocal calls
         calls += 1
-        return real(comparisons, **kwargs)  # type: ignore[arg-type]
+        return real(comparisons, **kwargs)
 
     monkeypatch.setattr(pw_run_mod, 'build_report', counting)
     body = ADAPTERS['pairwise'].body_from_results(run, list(run.entries[:2]))

@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """BT-sigma aggregation over pairwise jury runs.
 
 Pins the integration contract: the default report is byte-identical to before,
@@ -67,7 +68,7 @@ def test_unknown_aggregation_raises() -> None:
 
 def test_invalid_vote_is_rejected_at_the_public_model_boundary() -> None:
     with pytest.raises(ValidationError):
-        PairwiseVote(model='judge', vote='unexpected')  # pyright: ignore[reportArgumentType]
+        PairwiseVote(model='judge', vote='unexpected')  # ty: ignore[invalid-argument-type]
 
 
 def test_bt_sigma_downweights_noisy_judges_and_flips_consensus() -> None:

@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """CLI for evaluatorq red teaming."""
 
 from __future__ import annotations
@@ -664,7 +665,7 @@ def run(
     try:
         report = asyncio.run(
             red_team(
-                target=targets,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+                target=targets,  # ty: ignore[invalid-argument-type]
                 llm_config=config,
                 name=name,
                 mode=mode,
@@ -751,7 +752,7 @@ def run(
 
 def _import_hf_download() -> Any:
     try:
-        from huggingface_hub import hf_hub_download
+        from huggingface_hub import hf_hub_download  # ty: ignore[unresolved-import]
     except ImportError:
         typer.echo(
             'huggingface-hub not installed. Install with: uv add "evaluatorq[redteam]" '

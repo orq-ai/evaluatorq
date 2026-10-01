@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false, reportIndexIssue=false
 """The six frozen argv vectors (three agents times two launchers) and flag placement."""
 
 from __future__ import annotations
@@ -129,7 +130,7 @@ def test_system_prompt_not_a_flag_for_codex_or_opencode() -> None:
 def test_orq_launch_options_is_frozen() -> None:
     opts = OrqLaunchOptions()
     with pytest.raises(pydantic.ValidationError):
-        opts.mcp = False  # pyright: ignore[reportAttributeAccessIssue]
+        opts.mcp = False  # ty: ignore[invalid-assignment]
 
 
 def test_orq_launch_options_keeps_positional_constructor_and_value_semantics() -> None:
@@ -154,12 +155,12 @@ def test_container_clone_reapplies_implicit_agent_defaults() -> None:
 def test_agents_registry_is_read_only() -> None:
     assert isinstance(AGENTS, types.MappingProxyType)
     with pytest.raises(TypeError):
-        AGENTS['x'] = AGENTS['claude']  # pyright: ignore[reportIndexIssue]
+        AGENTS['x'] = AGENTS['claude']  # ty: ignore[invalid-assignment]
 
 
 def test_agent_spec_is_frozen() -> None:
     with pytest.raises(pydantic.ValidationError):
-        AGENTS['claude'].binary = 'x'  # pyright: ignore[reportAttributeAccessIssue]
+        AGENTS['claude'].binary = 'x'  # ty: ignore[invalid-assignment]
 
 
 def test_parsed_turn_stays_mutable() -> None:

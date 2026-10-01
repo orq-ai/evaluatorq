@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Dataset export/import utilities for JSONL format."""
 
 from __future__ import annotations
@@ -174,7 +175,7 @@ def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T | dict[str, 
         try:
             data = json.loads(trimmed)
             if cls is not None and hasattr(cls, 'model_validate'):
-                results.append(cls.model_validate(data))  # pyright: ignore[reportAttributeAccessIssue]
+                results.append(cls.model_validate(data))  # ty: ignore[call-non-callable]
             else:
                 results.append(data)
         except json.JSONDecodeError:

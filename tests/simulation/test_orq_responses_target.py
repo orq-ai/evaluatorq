@@ -1,3 +1,4 @@
+# pyright: reportUnknownLambdaType=false
 """Tests for OrqResponsesTarget (stateless target backed by the Responses API).
 
 After RES-877 Task 9 the target is fully stateless:
@@ -1022,7 +1023,8 @@ class TestOrqResponsesTargetClose:
         owned_client.close = AsyncMock()
         monkeypatch.setattr(
             target_mod, "build_simulation_client",
-            lambda _client, **_: (owned_client, True),  # pyright: ignore[reportUnknownLambdaType]
+
+            lambda _client, **_: (owned_client, True),
         )
         t = OrqResponsesTarget(LLMCallConfig(model="m", api="responses"))
 
@@ -1048,7 +1050,8 @@ class TestOrqResponsesTargetClose:
         owned_client.close = AsyncMock()
         monkeypatch.setattr(
             target_mod, "build_simulation_client",
-            lambda _client, **_: (owned_client, True),  # pyright: ignore[reportUnknownLambdaType]
+
+            lambda _client, **_: (owned_client, True),
         )
         t = OrqResponsesTarget(LLMCallConfig(model="m", api="responses"))
 
@@ -1065,7 +1068,8 @@ class TestOrqResponsesTargetClose:
         owned_client.close = AsyncMock()
         monkeypatch.setattr(
             target_mod, "build_simulation_client",
-            lambda _client, **_: (owned_client, True),  # pyright: ignore[reportUnknownLambdaType]
+
+            lambda _client, **_: (owned_client, True),
         )
 
         async with OrqResponsesTarget(LLMCallConfig(model="m", api="responses")) as t:

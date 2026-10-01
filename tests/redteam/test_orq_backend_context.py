@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Agent-context retrieval must survive provider metadata it cannot model (RES-1177).
 
 An orq POC died in the ``context_retrieval`` stage before a single attack was
@@ -220,7 +221,7 @@ def test_skills_tolerates_bad_shapes(raw, expected):
 def test_key_is_not_coerced():
     """Identity is strict: a bad key must fail, not resolve to something plausible."""
     with pytest.raises(ValidationError):
-        AgentContext(key=_Unset())  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        AgentContext(key=_Unset())  # ty: ignore[invalid-argument-type]
 
 
 def test_resolve_context_degrades_on_validation_error(monkeypatch):

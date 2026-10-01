@@ -362,7 +362,7 @@ class LangGraphTarget(AgentTarget):
                 self._warned_unknown_callbacks = True
             new_callbacks = [existing, collector]
 
-        new_config: RunnableConfig = {**base_config, 'callbacks': new_callbacks}
+        new_config: RunnableConfig = {**base_config, 'callbacks': new_callbacks}  # ty: ignore[invalid-argument-type]
 
         prev_count = self._prev_msg_count
         usage: TokenUsage | None = None
@@ -441,7 +441,7 @@ class LangGraphTarget(AgentTarget):
             return self._agent_context
 
         tools = _introspect_tools(self._graph)
-        memory_stores = _introspect_memory_stores(self._graph, self.memory_entity_id)
+        memory_stores = _introspect_memory_stores(self._graph, self.memory_entity_id)  # ty: ignore[invalid-argument-type]
 
         return AgentContext(
             key=self._key,

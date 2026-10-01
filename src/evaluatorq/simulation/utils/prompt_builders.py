@@ -126,7 +126,7 @@ def build_scenario_user_context(scenario: Scenario) -> str:
     emotion_text = _EMOTION_INSTRUCTIONS.get(
         (scenario.starting_emotion or 'neutral')
         if isinstance(scenario.starting_emotion, str)
-        else (scenario.starting_emotion.value if scenario.starting_emotion else 'neutral'),
+        else (scenario.starting_emotion.value if scenario.starting_emotion else 'neutral'),  # ty: ignore[redundant-condition]
         '',
     )
 

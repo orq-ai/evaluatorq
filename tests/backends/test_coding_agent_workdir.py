@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Per-clone temp workdir copied from the source, skills symlinked, removed on close()."""
 
 from __future__ import annotations
@@ -37,7 +38,8 @@ def test_workdir_is_lazy_then_copied_per_clone(tmp_path: Path) -> None:
 def test_skills_symlinked_into_agent_dir(tmp_path: Path) -> None:
     skill = _skill(tmp_path, 'grill-me')
     for agent, rel in (('claude', '.claude/skills'), ('codex', '.agents/skills'), ('opencode', '.agents/skills')):
-        target = CodingAgentTarget(agent, skills=[skill])  # pyright: ignore[reportArgumentType]
+
+        target = CodingAgentTarget(agent, skills=[skill])
         link = target._ensure_workdir() / rel / 'grill-me'
         assert link.is_symlink() and link.resolve() == skill.resolve()
         assert (link / 'SKILL.md').exists()
@@ -124,7 +126,7 @@ def test_orq_options_under_direct_warn() -> None:
 
 def test_unknown_agent_raises() -> None:
     with pytest.raises(ValueError, match='gemini'):
-        CodingAgentTarget('gemini')  # pyright: ignore[reportArgumentType]
+        CodingAgentTarget('gemini')  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.asyncio

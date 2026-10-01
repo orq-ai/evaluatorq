@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """`scoring=` must survive the whole trip from the public entry point to the score.
 
 `tests/simulation/test_evaluators.py` already covers the two ends of that trip:
@@ -148,8 +149,8 @@ async def _run_simulate(scoring: SimulationScoringConfig | None) -> SimulationRe
         max_turns=10,  # well above TURNS_UNTIL_GOAL: the judge ends the run, not the cap
         evaluator_names=["turn_efficiency", "conversation_quality", "goal_achieved"],
         scoring=scoring,
-        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-        judge=_GoalReachedAfterNTurns(),  # pyright: ignore[reportArgumentType]
+        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
+        judge=_GoalReachedAfterNTurns(),  # ty: ignore[invalid-argument-type]
         upload_results=False,
         executive_summary=False,
     )
@@ -242,8 +243,8 @@ async def test_generate_and_simulate_threads_scoring_to_the_scorer(monkeypatch):
             max_turns=10,
             evaluator_names=["turn_efficiency"],
             scoring=STEEP_SCORING,
-            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-            judge=_GoalReachedAfterNTurns(),  # pyright: ignore[reportArgumentType]
+            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
+            judge=_GoalReachedAfterNTurns(),  # ty: ignore[invalid-argument-type]
             upload_results=False,
             executive_summary=False,
         )

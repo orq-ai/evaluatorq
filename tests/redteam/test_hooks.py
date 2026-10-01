@@ -539,7 +539,7 @@ class TestProtocolCompliance:
             def on_stage_end(self, stage: str, meta: dict[str, Any]) -> None:
                 pass
 
-            def on_confirm(self, payload) -> bool:
+            def on_confirm(self, payload) -> bool:  # ty: ignore[invalid-method-override, unused-ignore-comment]
                 return True
 
             def on_complete(self, report) -> None:
@@ -564,7 +564,7 @@ class TestHooksIntegration:
         from evaluatorq.redteam.runner import red_team
 
         class FalseConfirmHooks(DefaultHooks):
-            def on_confirm(self, payload) -> bool:
+            def on_confirm(self, payload) -> bool:  # ty: ignore[invalid-method-override]
                 return False
 
         with patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid') as mock_dynamic:
@@ -605,7 +605,7 @@ class TestHooksIntegration:
         from evaluatorq.redteam.runner import red_team
 
         class ExplodingHooks(DefaultHooks):
-            def on_stage_start(self, stage: str, meta: dict[str, Any]) -> None:
+            def on_stage_start(self, stage: str, meta: dict[str, Any]) -> None:  # ty: ignore[invalid-method-override]
                 raise ValueError('Hook exploded!')
 
         with patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid') as mock_dynamic:

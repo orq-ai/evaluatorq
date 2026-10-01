@@ -1,3 +1,4 @@
+# pyright: reportOptionalMemberAccess=false
 """Unified red teaming runner that dispatches to dynamic/static/hybrid pipelines."""
 
 from __future__ import annotations
@@ -850,7 +851,7 @@ def _resolve_vulns_and_categories(
                 logger.info(
                     'Category %s is scored by the %s evaluator and reported under %s.',
                     c,
-                    v.value,  # pyright: ignore[reportOptionalMemberAccess] - v is not None here
+                    v.value,  # ty: ignore[unresolved-attribute]
                     primary,
                 )
     else:
@@ -1601,7 +1602,7 @@ async def red_team(
     ):
         async with _redteam_root_scope(
             tracing_context.run_id,
-            pipeline_attributes,
+            pipeline_attributes,  # ty: ignore[invalid-argument-type]
             tracing_context.parent_context,
         ) as pipeline_span:
             report, metrics = await _dispatch_pipeline(
@@ -2543,7 +2544,7 @@ async def _retrieve_agent_contexts(
         at_deduped_label = agent_target_labels[id(at)]
         if callable(get_ctx):
             try:
-                at_ctx = await cast('Any', get_ctx())
+                at_ctx = await cast('Any', get_ctx())  # ty: ignore[redundant-cast]
             except Exception as exc:
                 raise RuntimeError(
                     f'Failed to retrieve agent context from {type(at).__name__}.get_agent_context(): {exc}. '
@@ -4660,7 +4661,7 @@ async def _run_static(
         resolved_hooks.on_stage_start(
             PipelineStage.ATTACK_EXECUTION,
             {
-                'num_datapoints': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
+                'num_datapoints': len(data) if isinstance(data, list) else 0,
                 'targets': all_target_labels,
             },
         )

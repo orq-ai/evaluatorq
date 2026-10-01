@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Tests for llm_client parameter threading through all red teaming call sites.
 
 Verifies that when a custom llm_client is provided, it is used instead of
@@ -107,7 +108,7 @@ class TestResolveBackendLlmClient:
         custom_client = MagicMock(spec=AsyncOpenAI)
         backend = resolve_backend('openai', llm_client=custom_client)
         # The OpenAIBackend stores the client directly as _client
-        assert backend._client is custom_client  # pyright: ignore[reportAttributeAccessIssue]
+        assert backend._client is custom_client  # ty: ignore[unresolved-attribute]
 
     @patch('evaluatorq.redteam.backends.openai.create_async_llm_client')
     def test_openai_backend_falls_back_to_create(self, mock_create):
@@ -116,7 +117,7 @@ class TestResolveBackendLlmClient:
         mock_create.return_value = MagicMock(spec=AsyncOpenAI)
         backend = resolve_backend('openai', llm_client=None)
         mock_create.assert_called_once()
-        assert backend._client is mock_create.return_value  # pyright: ignore[reportAttributeAccessIssue]
+        assert backend._client is mock_create.return_value  # ty: ignore[unresolved-attribute]
 
 
 # ---------------------------------------------------------------------------

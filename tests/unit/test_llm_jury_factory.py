@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -104,7 +105,7 @@ def test_validation_aggregator_kind_mismatch():
     with pytest.raises(ValueError, match="numeric-only"):
         llm_jury(name="x", criteria="c", aggregator="median")
     with pytest.raises(ValueError, match="Unknown aggregator"):
-        llm_jury(name="x", criteria="c", aggregator="banana")  # pyright: ignore[reportArgumentType]
+        llm_jury(name="x", criteria="c", aggregator="banana")  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.asyncio
@@ -253,7 +254,7 @@ async def test_scorer_inconclusive_when_all_judges_abstain():
 async def test_scorer_does_not_count_false_abstain_as_vulnerable():
     verdict_model = create_model('AbstainingVerdict', value=(bool, ...), explanation=(str, ...), abstain=(bool, ...))
     message = MagicMock(
-        parsed=verdict_model(value=False, explanation='uncertain', abstain=True),
+        parsed=verdict_model(value=False, explanation='uncertain', abstain=True),  # ty: ignore[pydantic-discarded-extra-argument]
         refusal=None,
     )
     completion = MagicMock(choices=[MagicMock(message=message, finish_reason='stop')], usage=None)

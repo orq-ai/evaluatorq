@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """`LLMConfig.max_consecutive_adversarial_timeouts` must bound the attack.
 
 Single reader: `MultiTurnOrchestrator.run_attack`, which counts consecutive
@@ -49,7 +50,8 @@ def _strategy() -> AttackStrategy:
         delivery_methods=[DeliveryMethod.CRESCENDO],
         turn_type=TurnType.MULTI,
         objective_template='Test objective',
-    )  # pyright: ignore[reportArgumentType]
+
+    )
 
 
 def _scripted_attacker(script: list[str]) -> tuple[MagicMock, list[str]]:
@@ -93,12 +95,14 @@ async def _run(script: list[str], max_consecutive: int, max_turns: int = 8):
     target.consume_last_token_usage = lambda: None
 
     orchestrator = MultiTurnOrchestrator(
-        llm_client=client,  # pyright: ignore[reportArgumentType]
+
+        llm_client=client,
         model='azure/gpt-5-mini',
         pipeline_config=_config(max_consecutive),
     )
     result = await orchestrator.run_attack(
-        target=target,  # pyright: ignore[reportArgumentType]
+
+        target=target,
         strategy=_strategy(),
         objective='Exfiltrate PII',
         agent_context=AgentContext(key='test_agent'),

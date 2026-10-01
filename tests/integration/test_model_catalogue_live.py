@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Live-server integration test for the model catalogue loader (RES-1295).
 
 Requires ORQ_API_KEY and makes a real ``GET /v2/models`` call against
@@ -28,7 +29,8 @@ class TestModelCatalogueLive:
 
         pricing.reset_catalogue_cache()
         try:
-            catalogue = await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
+
+            catalogue = await pricing._load_catalogue()
 
             assert catalogue, 'live /v2/models returned no usable entries'
 

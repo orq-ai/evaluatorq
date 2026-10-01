@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportPrivateUsage=false
 """RES-1308: scenario criteria must be able to fail.
 
 Before the per-criterion audit existed, pass/fail was inferred from the absence of
@@ -180,7 +181,8 @@ def test_continue_conversation_reports_mid_run_violation():
             ],
         },
     )
-    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    judgment = judge._parse_judgment(result)
     assert judgment.rules_broken == ['criteria_1']  # must_happen not yet met is not a violation
     assert [(v.criterion_id, v.occurred) for v in judgment.criteria_verdicts or []] == [
         ('criteria_0', False),
@@ -202,7 +204,8 @@ def test_judge_safety_terminate_carries_no_audit(result: LLMResult):
     criterion. They must leave ``criteria_verdicts`` at ``None`` so the runner marks
     the run unverified — a malfunctioning judge scoring a perfect 1.0 is the
     RES-1308 bug wearing a different hat."""
-    judgment = _judge()._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    judgment = _judge()._parse_judgment(result)
     assert judgment.should_terminate is True
     assert judgment.rules_broken == []
     assert judgment.criteria_verdicts is None
@@ -222,7 +225,8 @@ def test_finish_conversation_derives_rules_broken_from_the_audit_alone():
             'criteria_verdicts': [{'criterion_id': 'criteria_1', 'occurred': True, 'evidence': 'a plan'}],
         },
     )
-    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    judgment = judge._parse_judgment(result)
     assert judgment.rules_broken == ['criteria_1']
 
 
@@ -230,7 +234,8 @@ def test_missing_verdicts_parse_to_none_not_empty(caplog):
     judge = _judge()
     result = _llm_result('finish_conversation', {'reason': 'r', 'goal_achieved': True, 'rules_broken': [], 'goal_completion_score': 1.0})
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert judgment.criteria_verdicts is None
     assert 'criteria_verdicts' in caplog.text
 
@@ -253,7 +258,8 @@ def test_malformed_verdict_entries_are_dropped_with_a_warning(caplog):
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert [(v.criterion_id, v.occurred) for v in judgment.criteria_verdicts or []] == [('criteria_1', True)]
     assert 'malformed' in caplog.text
 
@@ -267,7 +273,8 @@ def test_a_wholly_unusable_verdicts_payload_is_unknown_not_empty(caplog):
         {'reason': 'r', 'goal_completion_score': 0.0, 'criteria_verdicts': 'all fine'},
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert judgment.criteria_verdicts is None
     assert 'unusable as a whole' in caplog.text
 
@@ -280,7 +287,8 @@ def test_an_empty_audit_survives_as_audited_and_does_not_become_none():
         'continue_conversation',
         {'reason': 'r', 'goal_completion_score': 0.5, 'criteria_verdicts': []},
     )
-    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    judgment = judge._parse_judgment(result)
     assert judgment.criteria_verdicts == []
 
 
@@ -300,7 +308,8 @@ def test_verdicts_outside_the_scenario_criteria_are_dropped_at_parse_time(caplog
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert [v.criterion_id for v in judgment.criteria_verdicts or []] == ['criteria_1']
     assert 'out-of-range' in caplog.text
 
@@ -320,7 +329,8 @@ def test_duplicate_verdict_ids_are_collapsed_with_a_warning(caplog):
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert [(v.criterion_id, v.occurred) for v in judgment.criteria_verdicts or []] == [('criteria_1', True)]
     assert 'duplicate' in caplog.text
 
@@ -339,7 +349,8 @@ def test_verdicts_come_back_sorted_by_criterion_index():
             ],
         },
     )
-    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    judgment = judge._parse_judgment(result)
     assert [v.criterion_id for v in judgment.criteria_verdicts or []] == ['criteria_0', 'criteria_1']
 
 
@@ -356,7 +367,8 @@ def test_unusable_goal_completion_score_falls_back_to_zero_and_keeps_the_audit(c
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert judgment.goal_completion_score == 0.0
     assert 'goal_completion_score' in caplog.text
     assert judgment.rules_broken == ['criteria_1']  # the audit survived
@@ -379,7 +391,8 @@ def test_a_salvage_that_saves_nothing_is_unknown_not_an_empty_audit(caplog):
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert judgment.criteria_verdicts is None
     assert 'unknown, not an empty audit' in caplog.text
 
@@ -398,7 +411,8 @@ def test_a_non_string_reason_is_coerced_instead_of_discarding_the_audit(caplog):
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
     assert judgment.should_terminate is False  # not a safety termination
     assert judgment.reason == '42'
     assert judgment.rules_broken == ['criteria_1']  # the audit survived
@@ -418,7 +432,8 @@ def test_an_achieved_finish_without_a_score_reads_as_complete(payload: dict[str,
     An explicit null lands in `model_fields_set`, which used to skip the 1.0 fallback
     and score an achieved goal 0.0."""
     judge = _judge()
-    judgment = judge._parse_judgment(_llm_result('finish_conversation', payload))  # pyright: ignore[reportPrivateUsage]
+
+    judgment = judge._parse_judgment(_llm_result('finish_conversation', payload))
     assert judgment.goal_achieved is True
     assert judgment.goal_completion_score == 1.0
 
@@ -442,7 +457,8 @@ def test_a_boolean_score_is_not_read_as_a_number():
         'continue_conversation',
         {'reason': 'r', 'goal_completion_score': 0.5, 'response_quality': True},
     )
-    judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+    judgment = judge._parse_judgment(result)
     assert judgment.response_quality is None
 
 
@@ -530,8 +546,8 @@ async def _run(
     runner = SimulationRunner(
         target=target,
         max_turns=max_turns,
-        user_simulator=_FakeSimulator(),  # pyright: ignore[reportArgumentType]
-        judge=_FakeJudge(script, terminate=terminate, broken=broken),  # pyright: ignore[reportArgumentType]
+        user_simulator=_FakeSimulator(),  # ty: ignore[invalid-argument-type]
+        judge=_FakeJudge(script, terminate=terminate, broken=broken),  # ty: ignore[invalid-argument-type]
     )
     try:
         return await runner.run(persona=_persona(), scenario=_scenario())
@@ -662,8 +678,8 @@ async def test_runner_tells_the_judge_which_criteria_have_settled():
     runner = SimulationRunner(
         target=target,
         max_turns=4,
-        user_simulator=_FakeSimulator(),  # pyright: ignore[reportArgumentType]
-        judge=judge,  # pyright: ignore[reportArgumentType]
+        user_simulator=_FakeSimulator(),  # ty: ignore[invalid-argument-type]
+        judge=judge,  # ty: ignore[invalid-argument-type]
     )
     try:
         await runner.run(persona=_persona(), scenario=_scenario())
@@ -698,7 +714,8 @@ def test_settled_criteria_are_excluded_from_the_audit_but_stay_in_the_prompt():
     assert judge.system_prompt == before
     assert 'criteria_0' in before and 'criteria_1' in before
 
-    note = judge._settled_note()  # pyright: ignore[reportPrivateUsage]
+
+    note = judge._settled_note()
     assert note.count('ALREADY CONFIRMED') == 1
     assert 'criteria_0' in note and 'criteria_1' not in note
 
@@ -713,8 +730,10 @@ def test_mark_settled_rebinds_so_a_shallow_copy_cannot_leak_between_runs():
     clone = copy.copy(original)
     clone.mark_settled({'criteria_0', 'criteria_1'})
 
-    assert original._settled == frozenset({'criteria_0'})  # pyright: ignore[reportPrivateUsage]
-    assert clone._settled == frozenset({'criteria_0', 'criteria_1'})  # pyright: ignore[reportPrivateUsage]
+
+    assert original._settled == frozenset({'criteria_0'})
+
+    assert clone._settled == frozenset({'criteria_0', 'criteria_1'})
 
 
 def test_empty_audit_is_silent_once_every_criterion_is_settled(caplog):
@@ -724,7 +743,8 @@ def test_empty_audit_is_silent_once_every_criterion_is_settled(caplog):
     judge.mark_settled({'criteria_0', 'criteria_1'})
     result = _llm_result('continue_conversation', {'reason': 'r', 'goal_completion_score': 0.5})
     with caplog.at_level('WARNING'):
-        judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judge._parse_judgment(result)
     assert 'no criteria_verdicts' not in caplog.text
 
 
@@ -793,7 +813,8 @@ def test_an_empty_audit_while_criteria_are_unsettled_warns(caplog):
         {'reason': 'r', 'goal_completion_score': 0.5, 'criteria_verdicts': []},
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
 
     assert judgment.criteria_verdicts == []  # still distinct from None on the wire
     assert 'empty criteria_verdicts list' in caplog.text
@@ -826,7 +847,8 @@ def test_every_verdict_dropped_against_the_scenario_is_unknown_not_empty(caplog)
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
 
     assert judgment.criteria_verdicts is None
     assert 'unknown, not an empty audit' in caplog.text
@@ -847,7 +869,8 @@ def test_a_non_canonical_criterion_id_is_dropped_at_parse_time(caplog):
         },
     )
     with caplog.at_level('WARNING'):
-        judgment = judge._parse_judgment(result)  # pyright: ignore[reportPrivateUsage]
+
+        judgment = judge._parse_judgment(result)
 
     assert judgment.criteria_verdicts is None
     assert 'non-canonical-id' in caplog.text
@@ -892,8 +915,8 @@ async def _run_until_target_dies(script: list[dict[str, bool] | None], *, die_on
         target=target,
         max_turns=6,
         max_target_retries=0,
-        user_simulator=_FakeSimulator(),  # pyright: ignore[reportArgumentType]
-        judge=_FakeJudge(script, terminate=False),  # pyright: ignore[reportArgumentType]
+        user_simulator=_FakeSimulator(),  # ty: ignore[invalid-argument-type]
+        judge=_FakeJudge(script, terminate=False),  # ty: ignore[invalid-argument-type]
     )
     try:
         return await runner.run(persona=_persona(), scenario=_scenario())

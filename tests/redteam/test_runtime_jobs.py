@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Unit tests for runtime/jobs.py."""
 
 # ruff: noqa: S101
@@ -304,7 +305,7 @@ class TestCreateDeploymentJob:
         deployments = MagicMock()
         deployments.invoke_async = AsyncMock(return_value=completion)
         module = ModuleType('orq_ai_sdk')
-        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
+        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # ty: ignore[unresolved-attribute]
         monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
@@ -338,12 +339,12 @@ class TestCreateDeploymentJob:
         from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         module = ModuleType('orq_ai_sdk')
-        module.Orq = MagicMock(return_value=MagicMock(deployments=MagicMock()))  # pyright: ignore[reportAttributeAccessIssue]
+        module.Orq = MagicMock(return_value=MagicMock(deployments=MagicMock()))  # ty: ignore[unresolved-attribute]
         monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
         monkeypatch.setenv('ORQ_BASE_URL', 'https://staging.orq.ai')
 
         create_deployment_job(deployment_key='test-deployment')
 
-        module.Orq.assert_called_once_with(api_key='test-key', server_url='https://staging.orq.ai')  # pyright: ignore[reportAttributeAccessIssue]
 
+        module.Orq.assert_called_once_with(api_key='test-key', server_url='https://staging.orq.ai')

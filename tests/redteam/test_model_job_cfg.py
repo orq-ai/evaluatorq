@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """``create_deployment_job`` must consume the ``LLMConfig`` it is handed, not the defaults.
 
 ``_create_job_for_target`` threads a per-run ``cfg`` into ``create_deployment_job``
@@ -54,7 +55,7 @@ class TestDeploymentLegReadsCfg:
     @staticmethod
     def _install_sdk(monkeypatch: pytest.MonkeyPatch, deployments: MagicMock) -> None:
         module = ModuleType('orq_ai_sdk')
-        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
+        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # ty: ignore[unresolved-attribute]
         monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 

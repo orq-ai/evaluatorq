@@ -1,3 +1,4 @@
+# pyright: reportOptionalOperand=false
 """Usage cost breakdown: extraction from Orq Responses v3 usage, span recording."""
 
 from unittest.mock import MagicMock
@@ -53,8 +54,8 @@ def test_arithmetic_carries_cost_breakdown():
     a = Usage.extract(V3_USAGE)
     assert a is not None
     total = a + a
-    assert total.input_cost == a.input_cost * 2  # pyright: ignore[reportOptionalOperand]
-    assert total.total_cost == a.total_cost * 2  # pyright: ignore[reportOptionalOperand]
+    assert total.input_cost == a.input_cost * 2  # ty: ignore[unsupported-operator]
+    assert total.total_cost == a.total_cost * 2  # ty: ignore[unsupported-operator]
     assert total.cache_creation_tokens == 1024
     delta = total - a
     assert delta.total_cost == a.total_cost

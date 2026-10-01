@@ -140,7 +140,7 @@ def apply_perturbation(message: str, perturbation_type: PerturbationType) -> str
     if not message:
         return message
     fn = _PERTURBATION_FNS[perturbation_type]
-    return fn(message)  # type: ignore[operator]
+    return fn(message)
 
 
 def apply_random_perturbation(message: str) -> tuple[str, PerturbationType]:

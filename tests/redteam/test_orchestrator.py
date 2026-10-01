@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false, reportPrivateUsage=false
 """Unit tests for the multi-turn orchestrator."""
 
 import asyncio
@@ -33,7 +34,7 @@ from evaluatorq.redteam.traces import TraceStart
 try:
     from evaluatorq.redteam.backends.orq import ORQAgentTarget
 except ImportError:
-    ORQAgentTarget = None  # type: ignore[assignment,misc]
+    ORQAgentTarget = None
 
 
 @pytest.mark.skipif(ORQAgentTarget is None, reason='orq-ai-sdk not installed')
@@ -49,7 +50,8 @@ class TestORQAgentTarget:
             orq_client=mock_client,
         )
         assert target.agent_key == 'test_agent'
-        assert target._task_id is None  # pyright: ignore[reportPrivateUsage]
+
+        assert target._task_id is None
 
     def test_new(self):
         """Test that new() returns a fresh instance with clean state."""
@@ -59,9 +61,11 @@ class TestORQAgentTarget:
             agent_key='test_agent',
             orq_client=mock_client,
         )
-        target._task_id = 'some_task_id'  # pyright: ignore[reportPrivateUsage]
+
+        target._task_id = 'some_task_id'
         fresh = target.new()
-        assert fresh._task_id is None  # pyright: ignore[reportPrivateUsage]
+
+        assert fresh._task_id is None
         assert target._task_id == 'some_task_id'  # original untouched
 
     @pytest.mark.asyncio
@@ -94,7 +98,8 @@ class TestORQAgentTarget:
             result = await target.respond([Message(role='user', content='Hello')])
 
         assert result.text == 'Agent response'
-        assert target._task_id == 'task_123'  # pyright: ignore[reportPrivateUsage]
+
+        assert target._task_id == 'task_123'
 
     @pytest.mark.asyncio
     async def test_respond_extracts_executed_tool_calls(self):
@@ -175,7 +180,8 @@ class TestORQAgentTarget:
             agent_key='test_agent',
             orq_client=mock_client,
         )
-        target._task_id = 'task_123'  # Simulate existing conversation  # pyright: ignore[reportPrivateUsage]
+
+        target._task_id = 'task_123'  # Simulate existing conversation
 
         with patch('asyncio.to_thread', new_callable=AsyncMock) as mock_to_thread:
             mock_to_thread.return_value = mock_response
@@ -620,7 +626,7 @@ def _make_strategy(**overrides: object) -> AttackStrategy:
         'objective_template': 'Test objective',
     }
     defaults.update(overrides)
-    return AttackStrategy(**defaults)  # pyright: ignore[reportArgumentType]
+    return AttackStrategy(**defaults)  # ty: ignore[invalid-argument-type]
 
 
 class TestTimeoutHandling:
@@ -867,7 +873,7 @@ class TestOrchestratorSanitization:
             nonlocal call_count
             call_count += 1
             msgs = kwargs.get('messages', [])
-            captured_messages.append(list(msgs))  # pyright: ignore[reportArgumentType]
+            captured_messages.append(list(msgs))  # ty: ignore[invalid-argument-type]
             return first_response if call_count == 1 else second_response
 
         mock_llm.chat.completions.create = AsyncMock(side_effect=capture_create)

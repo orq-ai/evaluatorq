@@ -89,18 +89,18 @@ class AsyncSpyHooks(SpyHooks):
     in the real runner (not just sync). Reuses SpyHooks' recording/query helpers.
     """
 
-    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:  # ty: ignore[invalid-method-override]
         self.calls.append(('on_stage_start', stage, meta))
 
-    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:  # ty: ignore[invalid-method-override]
         self.calls.append(('on_stage_end', stage, meta))
 
-    async def on_confirm(self, payload: ConfirmPayload) -> bool:
+    async def on_confirm(self, payload: ConfirmPayload) -> bool:  # ty: ignore[invalid-method-override]
         self.calls.append(('on_confirm', payload))
         self.received_confirm_payload = payload
         return self.confirm_result
 
-    async def on_complete(
+    async def on_complete(  # ty: ignore[invalid-method-override]
         self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
     ) -> None:
         self.calls.append(('on_complete', report, output_dir))
@@ -1140,12 +1140,12 @@ class TestSpyHooksProtocol:
 
     def test_on_confirm_returns_true_by_default(self) -> None:
         spy = SpyHooks()
-        result = spy.on_confirm({})  # type: ignore[arg-type]
+        result = spy.on_confirm({})
         assert result is True
 
     def test_on_confirm_returns_false_when_configured(self) -> None:
         spy = SpyHooks(confirm_result=False)
-        result = spy.on_confirm({})  # type: ignore[arg-type]
+        result = spy.on_confirm({})
         assert result is False
 
     def test_on_complete_records_report_and_output_dir(self) -> None:

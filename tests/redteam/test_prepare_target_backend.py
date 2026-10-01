@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Tests for the make_agent_backend helper and its wiring inside _prepare_target.
 
 Test approach
@@ -97,7 +98,7 @@ class TestMakeAgentBackend:
 
         target = hybrid.create_target("my-agent")
         # OrqResponsesTarget stores the model in its config
-        assert target.config.model == "agent/my-agent"  # pyright: ignore[reportAttributeAccessIssue]
+        assert target.config.model == "agent/my-agent"  # ty: ignore[unresolved-attribute]
 
     @pytest.mark.asyncio
     async def test_resolve_context_delegates_to_orq_backend_with_bare_key(self):
@@ -181,4 +182,5 @@ class TestExecBackendRequiresOrq:
         backend = OpenResponsesBackend(client=None)
         target = backend.create_target("agent/my-agent")
 
-        assert client_routes_through_orq(target._client) is True  # pyright: ignore[reportAttributeAccessIssue]
+
+        assert client_routes_through_orq(target._client) is True

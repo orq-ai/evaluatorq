@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import re
+import tomllib  # ty: ignore[unresolved-import]
 from functools import cache
 from pathlib import Path
 from typing import TypeGuard
@@ -21,6 +22,7 @@ from typing import TypeGuard
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / 'src' / 'evaluatorq'
+REPO_ROOT = SRC.parents[1]
 
 # Attribute suffixes that mean "an LLM API call happened here".
 LLM_CALL_SUFFIXES = (
@@ -53,6 +55,59 @@ def _calls(source: str) -> list[tuple[int, str]]:
         for node in ast.walk(ast.parse(source))
         if isinstance(node, ast.Call)
     ]
+
+
+_PYRIGHT_SUPPRESSION = re.compile(r'#\s*pyright:\s*ignore(?:\[[^]]*\])?')
+_BLANKET_TY_IGNORE = re.compile(r'#\s*ty:\s*ignore(?!\s*\[)')
+
+
+def _ty_checked_python_files() -> list[Path]:
+    """Return Python files covered by ``tool.ty.src.include``.
+
+    The guardrail follows the checker configuration instead of maintaining a
+    second list that can drift when the checked surface changes.
+    """
+    config = tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
+    includes: list[str] = config['tool']['ty']['src']['include']
+    files: set[Path] = set()
+    for pattern in includes:
+        candidate = REPO_ROOT / pattern
+        if candidate.is_dir():
+            files.update(candidate.rglob('*.py'))
+        else:
+            files.update(REPO_ROOT.glob(pattern))
+    return sorted(files)
+
+
+def _forbidden_type_suppressions(source: str) -> list[int]:
+    """Return lines containing Pyright suppressions or blanket ty ignores."""
+    return [
+        lineno
+        for lineno, line in enumerate(source.splitlines(), start=1)
+        if _PYRIGHT_SUPPRESSION.search(line) or _BLANKET_TY_IGNORE.search(line)
+    ]
+
+
+def test_ty_suppression_detector_actually_fires() -> None:
+    pyright = '# py' + 'right: ignore'
+    assert _forbidden_type_suppressions(f'value = bad  {pyright}[reportArgumentType]') == [1]
+    assert _forbidden_type_suppressions(f'value = bad  {pyright}') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty:' + ' ignore') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[invalid-argument-type]') == []
+    assert _forbidden_type_suppressions('# prose mentions ty without an ignore directive') == []
+
+
+def test_ty_checked_files_have_no_forbidden_suppressions() -> None:
+    hits = [
+        f'{path.relative_to(REPO_ROOT)}:{lineno}'
+        for path in _ty_checked_python_files()
+        for lineno in _forbidden_type_suppressions(path.read_text(encoding='utf-8'))
+    ]
+    assert not hits, (
+        'Forbidden type-checker suppression in ty checked roots: '
+        + ', '.join(hits)
+        + '. Remove Pyright suppression comments and give every ty ignore an exact rule selector.'
+    )
 
 
 @cache

@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """BOPS-839: multi-part multi-modal content (image + file) in openresponses models."""
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ def test_input_image_content_file_id_only() -> None:
 def test_input_image_content_detail_choices() -> None:
     assert InputImageContent(type="input_image", image_url="https://x", detail="low").detail == "low"
     with pytest.raises(ValidationError):
-        InputImageContent(type="input_image", image_url="https://x", detail="ultra")  # pyright: ignore[reportArgumentType]
+        InputImageContent(type="input_image", image_url="https://x", detail="ultra")  # ty: ignore[invalid-argument-type]
 
 
 def test_input_file_content_all_optional() -> None:

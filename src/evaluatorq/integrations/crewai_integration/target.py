@@ -41,7 +41,7 @@ from evaluatorq.contracts import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from crewai import Crew
+    from crewai import Crew  # ty: ignore[unresolved-import]
 
 logger = logging.getLogger(__name__)
 

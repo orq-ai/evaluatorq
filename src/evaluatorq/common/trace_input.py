@@ -412,7 +412,7 @@ def _parse_exchange(
     input_messages, _input_format = sides[0]
     output_messages, _output_format = sides[1]
     formats = {fmt for found, fmt in sides if found}
-    message_format = cast(
+    message_format = cast(  # ty: ignore[redundant-cast]
         '_TRACE_MESSAGE_FORMAT | None', next(iter(formats)) if len(formats) == 1 else ('mixed' if formats else None)
     )
     return input_messages, output_messages, message_format

@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeArgument=false
 import logging
 import socket
 import threading
@@ -102,7 +103,8 @@ def _reset_reasoning_rejectors():
     reset_responses_rejectors()
 
 
-class _OfflineCatalogues(dict):  # pyright: ignore[reportMissingTypeArgument]
+
+class _OfflineCatalogues(dict):
     """A catalogue cache that reports every host as already-fetched-and-empty."""
 
     def get(self, key, default=None):

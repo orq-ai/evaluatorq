@@ -1,3 +1,4 @@
+# pyright: reportAttributeAccessIssue=false
 """Unit tests for redteam backends: base.py, openai.py, orq.py."""
 
 from __future__ import annotations
@@ -31,19 +32,19 @@ def _make_exc(
     if response_status_code is not None:
         mock_response = MagicMock()
         mock_response.status_code = response_status_code
-        exc.response = mock_response  # pyright: ignore[reportAttributeAccessIssue]
+        exc.response = mock_response  # ty: ignore[unresolved-attribute]
     if status_code is not None:
-        exc.status_code = status_code  # pyright: ignore[reportAttributeAccessIssue]
+        exc.status_code = status_code  # ty: ignore[unresolved-attribute]
     if status is not None:
-        exc.status = status  # pyright: ignore[reportAttributeAccessIssue]
+        exc.status = status  # ty: ignore[unresolved-attribute]
     if code is not None:
-        exc.code = code  # pyright: ignore[reportAttributeAccessIssue]
+        exc.code = code  # ty: ignore[unresolved-attribute]
     if error_code is not None:
-        exc.error_code = error_code  # pyright: ignore[reportAttributeAccessIssue]
+        exc.error_code = error_code  # ty: ignore[unresolved-attribute]
     if type_attr is not None:
-        exc.type = type_attr  # pyright: ignore[reportAttributeAccessIssue]
+        exc.type = type_attr  # ty: ignore[unresolved-attribute]
     if body is not None:
-        exc.body = body  # pyright: ignore[reportAttributeAccessIssue]
+        exc.body = body  # ty: ignore[unresolved-attribute]
     return exc
 
 
@@ -110,7 +111,7 @@ class TestExtractStatusCode:
         exc = _make_exc(message="error")
         mock_response = MagicMock()
         mock_response.status_code = 99
-        exc.response = mock_response  # pyright: ignore[reportAttributeAccessIssue]
+        exc.response = mock_response  # ty: ignore[unresolved-attribute]
         # No other code present → should return None
         assert extract_status_code(exc) is None
 
@@ -516,7 +517,7 @@ class TestORQExtractToolCallItems:
         _item.parts = [_part]
         second_resp.output = [_item]
 
-        async def fake_to_thread(fn, **kwargs):  # type: ignore[return]
+        async def fake_to_thread(fn, **kwargs):
             return fn(**kwargs)
 
         with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
@@ -544,7 +545,7 @@ class TestORQExtractToolCallItems:
         _item.parts = [_part]
         second_resp.output = [_item]
 
-        async def fake_to_thread(fn, **kwargs):  # type: ignore[return]
+        async def fake_to_thread(fn, **kwargs):
             return fn(**kwargs)
 
         with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):
@@ -572,7 +573,7 @@ class TestORQExtractToolCallItems:
         _item.parts = [_part]
         second_resp.output = [_item]
 
-        async def fake_to_thread(fn, **kwargs):  # type: ignore[return]
+        async def fake_to_thread(fn, **kwargs):
             return fn(**kwargs)
 
         with patch("evaluatorq.redteam.backends.orq.asyncio.to_thread", side_effect=fake_to_thread):

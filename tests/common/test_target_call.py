@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 from __future__ import annotations
 
 import asyncio
@@ -122,7 +123,8 @@ async def test_map_error_none_falls_back_to_default():
     t = _Target([RuntimeError('weird')])
     r = await call_target_with_retry(
         t, [Message(role='user', content='q')], target_agent_timeout_ms=1000, max_target_retries=0,
-        map_error=lambda exc: None,  # pyright: ignore[reportArgumentType]
+
+        map_error=lambda exc: None,
     )
     assert r.succeeded is False
     assert r.error is not None

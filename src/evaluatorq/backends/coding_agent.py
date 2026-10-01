@@ -1,3 +1,4 @@
+# pyright: reportMissingTypeArgument=false, reportUnsafeMultipleInheritance=false
 """Run a local coding-agent CLI (Claude Code, Codex CLI, OpenCode) as an ``AgentTarget``.
 
 Each ``respond()`` renders the whole transcript into one prompt, runs a fresh agent process in a
@@ -102,9 +103,7 @@ class CodingAgentError(Exception):
         self.kill_reason = kill_reason
 
 
-class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheritance]
-    CodingAgentError, NonRetryableTargetError
-):
+class CodingAgentUnavailableError(CodingAgentError, NonRetryableTargetError):
     """Non-retryable codes: ``cli.not_found``, ``cli.timeout``, ``cli.prompt_too_long``,
     ``cli.agent_not_found``, ``cli.image_missing``, ``cli.container_start``, and ``cli.unsafe_shim``. Retrying these
     outcomes repeats the same failure, so the retry loop stops.
@@ -769,7 +768,8 @@ class CodingAgentTarget(AgentTarget):
         self._container_finalizer: weakref.finalize[Any, Any] | None = (
             weakref.finalize(self, release_containers_if_owner, self._creator_pid, self._owned) if container else None
         )
-        self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
+
+        self._finalizer: weakref.finalize | None = None
         self._proc: asyncio.subprocess.Process | None = None
 
     @property
@@ -786,7 +786,7 @@ class CodingAgentTarget(AgentTarget):
             asyncio.to_thread(subprocess.run, argv, capture_output=True, text=True, timeout=timeout_s, check=False)
         )
         try:
-            return await asyncio.shield(operation)
+            return await asyncio.shield(operation)  # ty: ignore[invalid-return-type]
         except asyncio.CancelledError:
             # `to_thread` cannot stop subprocess.run. Wait for its bounded result before allowing cleanup
             # to issue `rm`, so a slow `docker run` cannot create a container after cleanup has passed.

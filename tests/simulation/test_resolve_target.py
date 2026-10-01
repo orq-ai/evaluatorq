@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Unit tests for the SDK target resolution (string / AgentTarget / callable)."""
 
 from __future__ import annotations
@@ -73,7 +74,7 @@ def test_empty_string_raises() -> None:
 
 def test_non_callable_target_raises() -> None:
     with pytest.raises(TypeError, match="Unsupported target type"):
-        _resolve_target(123)  # pyright: ignore[reportArgumentType]
+        _resolve_target(123)  # ty: ignore[invalid-argument-type]
 
 
 def test_agent_target_gets_memory_entity_id() -> None:

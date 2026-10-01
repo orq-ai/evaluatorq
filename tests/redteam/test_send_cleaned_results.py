@@ -1,3 +1,4 @@
+# pyright: reportArgumentType=false
 """Tests for _send_cleaned_results URL persistence on the report."""
 
 from __future__ import annotations
@@ -30,7 +31,8 @@ def _make_response(rows_created: int = 1, url: str | None = "https://orq.example
 
 
 def _make_report() -> RedTeamReport:
-    return RedTeamReport(  # pyright: ignore[reportArgumentType]
+
+    return RedTeamReport(
         created_at=datetime.now(tz=timezone.utc),
         description="test",
         pipeline=Pipeline.DYNAMIC,
@@ -46,7 +48,8 @@ def _make_report() -> RedTeamReport:
 def _make_result() -> DataPointResult:
     return DataPointResult(
         data_point=DataPoint(inputs={"x": 1}),
-        job_results=[JobResult(job_name="j", output="ok")],  # pyright: ignore[reportArgumentType]
+
+        job_results=[JobResult(job_name="j", output="ok")],
     )
 
 
@@ -276,7 +279,8 @@ async def test_all_rows_stripped_warns_and_records_zero_uploaded() -> None:
     report = _make_report()
     stripped = DataPointResult(
         data_point=DataPoint(inputs={"x": 1}),
-        job_results=[JobResult(job_name="j", output=None)],  # pyright: ignore[reportArgumentType]
+
+        job_results=[JobResult(job_name="j", output=None)],
     )
     lines: list[str] = []
     handler_id = _logger.add(lambda m: lines.append(str(m)), level="WARNING", format="{message}")
@@ -389,7 +393,8 @@ def _make_empty_result() -> DataPointResult:
     """A row whose only job output is None — stripped during cleaning."""
     return DataPointResult(
         data_point=DataPoint(inputs={"x": 2}),
-        job_results=[JobResult(job_name="j", output=None)],  # pyright: ignore[reportArgumentType]
+
+        job_results=[JobResult(job_name="j", output=None)],
     )
 
 
