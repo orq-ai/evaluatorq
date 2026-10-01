@@ -418,12 +418,14 @@ def _parse_exchange(
     return input_messages, output_messages, message_format
 
 
-def _span_id(span: dict[str, Any], index: int) -> str:
+def span_id_of(span: dict[str, Any], index: int) -> str:
+    """Return a raw span dict's id, or a synthetic `__span_<index>` when it has none."""
     value = span.get('span_id') or span.get('_id') or span.get('id')
     return str(value) if value else f'__span_{index}'
 
 
-def _parent_id(span: dict[str, Any]) -> str | None:
+def parent_span_id_of(span: dict[str, Any]) -> str | None:
+    """Return a raw span dict's parent id, or None for a root (missing or empty parent)."""
     value = span.get('parent_span_id') or span.get('parent_id')
     return str(value) if value else None
 
@@ -528,7 +530,7 @@ def _evaluator_subtree_ids(indexed: list[tuple[str, dict[str, Any], int]]) -> se
     """Return evaluator span IDs together with every descendant span ID."""
     children: dict[str | None, list[str]] = defaultdict(list)
     for span_id, span, _ in indexed:
-        children[_parent_id(span)].append(span_id)
+        children[parent_span_id_of(span)].append(span_id)
     evaluator_ids = {span_id for span_id, span, _ in indexed if _is_evaluator(span)}
     queue = deque(evaluator_ids)
     while queue:
@@ -554,7 +556,7 @@ def _trace_from_spans(
     """
     if not spans:
         return _failed_trace(trace_id, 'the trace has no spans.', requested_span_id=requested_span_id)
-    indexed = [(_span_id(span, index), span, index) for index, span in enumerate(spans)]
+    indexed = [(span_id_of(span, index), span, index) for index, span in enumerate(spans)]
     by_id = {span_id: span for span_id, span, _ in indexed}
     evaluator_ids = _evaluator_subtree_ids(indexed)
     if requested_span_id is not None:
@@ -597,7 +599,7 @@ def _trace_from_spans(
             if candidate_input or candidate_output:
                 selected = current_id, span, candidate_input, candidate_output, candidate_format
                 break
-            current_id = _parent_id(span)
+            current_id = parent_span_id_of(span)
         if selected is not None:
             selected_id, selected_span, input_messages, output_messages, message_format = selected
         else:
