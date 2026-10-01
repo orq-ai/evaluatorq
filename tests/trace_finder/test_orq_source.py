@@ -19,6 +19,7 @@ from evaluatorq.trace_finder.orq_source import (
     _conversation_messages,
     build_oql,
 )
+from evaluatorq.trace_finder.rows import TraceRow
 
 UTC = timezone.utc
 START = datetime(2026, 9, 20, tzinfo=UTC)
@@ -982,6 +983,25 @@ async def test_hydrate_rows_warns_and_keeps_summary_if_reported_reply_is_unavail
     assert records['partial'] is not None
     assert records['partial'].messages == ({'role': 'user', 'content': 'short question'},)
     assert any('report output tokens but their hydrated spans contain no visible reply' in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_uses_typed_output_tokens_when_raw_usage_is_missing() -> None:
+    traces = FakeTraces({})
+    source = make_source(FakeOrq(traces))
+    row = TraceRow(
+        trace_id='typed-fallback',
+        started_at=START,
+        ended_at=START,
+        models=('openai/gpt-5.6-luna',),
+        tokens_out=5,
+        raw={'trace_id': 'typed-fallback', 'messages': user_messages('question'), 'models': ['openai/gpt-5.6-luna']},
+    )
+
+    records = await source.hydrate_rows((row,))
+
+    assert records['typed-fallback'] is not None
+    assert len(traces.list_span_calls) == 1
 
 
 @pytest.mark.asyncio
