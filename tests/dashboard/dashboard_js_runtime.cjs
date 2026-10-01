@@ -34,7 +34,10 @@ function classList() {
 function loadDashboard({
   elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces', dateClass = Date,
 } = {}) {
-  const body = Object.assign(emitter(), { appendChild() {} });
+  const body = Object.assign(emitter(), {
+    children: [],
+    appendChild(child) { this.children.push(child); child.parentNode = this; },
+  });
   const documentEvents = emitter();
   const windowEvents = emitter();
   const scheduled = new Map();
@@ -57,6 +60,9 @@ function loadDashboard({
         addEventListener(name, callback) {
           if (!listeners.has(`close:${name}`)) listeners.set(`close:${name}`, []);
           listeners.get(`close:${name}`).push(callback);
+        },
+        click() {
+          for (const callback of listeners.get('close:click') || []) callback({ target: closeButton });
         },
       };
       const element = {
@@ -128,10 +134,13 @@ function frozenDate(now) {
 function requestBody(form, includedById) {
   const includedForms = form.hxInclude.split(',').map(selector => includedById.get(selector.trim().slice(1)));
   assert.ok(includedForms.every(Boolean), 'every hx-include selector should resolve to a form/control group');
-  const fields = [...form.elements, ...includedForms.flatMap(included => included.elements)];
+  const fields = [...new Set([...form.elements, ...includedForms.flatMap(included => included.elements)])];
   const params = new URLSearchParams();
   for (const field of fields) {
-    if (field.name && !field.disabled) params.append(field.name, field.value);
+    if (!field.name || field.disabled || field.form && field.form !== form &&
+        !includedForms.some(included => included.id === field.form.id)) continue;
+    if (['checkbox', 'radio'].includes(field.type) && !field.checked) continue;
+    params.append(field.name, field.value);
   }
   return params;
 }
@@ -156,11 +165,18 @@ function submitExplorerQuery({ mode, seconds = '900', now, start, end }) {
   const explorerElements = [from, fromTime, to, toTime, rangeMode, rangeSeconds, rangeFromOffset, rangeToOffset];
   const controls = { id: 'finder-controls', elements: fields };
   const explorerForm = { id: 'explorer-load-form', elements: explorerElements };
+  explorerElements.forEach(control => { control.form = explorerForm; });
+  const unchecked = { ...input('include_archived', 'yes'), type: 'checkbox', checked: false, form: explorerForm };
+  const checked = { ...input('include_errors', 'yes'), type: 'checkbox', checked: true, form: explorerForm };
+  explorerForm.elements.push(unchecked, checked);
   const queryForm = {
     id: 'finder-query-form',
     hxInclude: '#finder-controls, #explorer-load-form',
     elements: [input('query', 'slow traces'), input('scope', 'new'), input('mode', 'immediate')],
   };
+  queryForm.elements.forEach(control => { control.form = queryForm; });
+  const unrelatedForm = { id: 'unrelated-form' };
+  controls.elements.push({ ...input('foreign', 'wrong form'), form: unrelatedForm });
   const elements = new Map([
     ['explorer-load-form', explorerForm], ['explorer-from', from], ['explorer-from-time', fromTime],
     ['explorer-to', to], ['explorer-to-time', toTime],
@@ -236,6 +252,12 @@ test('trace shortcuts respect editable targets, modifiers, modal state, and rout
   assert.equal(guideEvent.defaultPrevented, true);
   const guide = app.document.querySelector('#finder-shortcut-guide');
   assert.equal(guide.open, true);
+  assert.ok(app.body.children.includes(guide));
+  guide.querySelector('[data-shortcut-guide-close]').click();
+  assert.equal(guide.open, false);
+  assert.equal(guide.querySelector('[data-shortcut-guide-close]').focused, true);
+  assert.equal(press('?').defaultPrevented, true);
+  assert.equal(guide.open, true);
   assert.equal(press('/').defaultPrevented, false);
   assert.equal(press('Escape').defaultPrevented, true);
   assert.equal(guide.open, false);
@@ -282,6 +304,10 @@ test('trace Ask AI submits custom bounds and endpoint timezone offsets', () => {
   assert.equal(app.body.get('to_time'), '11:45:30');
   assert.equal(app.body.get('range_mode'), 'exact');
   assert.equal(app.body.get('query'), 'slow traces');
+  assert.deepEqual(app.body.getAll('from'), ['2026-09-30']);
+  assert.deepEqual(app.body.getAll('include_archived'), []);
+  assert.deepEqual(app.body.getAll('include_errors'), ['yes']);
+  assert.deepEqual(app.body.getAll('foreign'), []);
 });
 
 test('trace Ask AI refreshes a relative range at submit time and submits it', () => {
