@@ -1339,23 +1339,25 @@ def span_tree(  # noqa: C901
 
     entries: dict[str, object] = {}
     order: list[str] = []
+    span_ids: dict[str, str] = {}
+    first_node_by_span_id: dict[str, str] = {}
     for index, span in enumerate(spans):
         span_id = text(span, 'span_id') or text(span, 'id') or f'unknown-{index}'
-        entries[span_id] = span
-        order.append(span_id)
+        node_id = f'node-{index}'
+        entries[node_id] = span
+        order.append(node_id)
+        span_ids[node_id] = span_id
+        first_node_by_span_id.setdefault(span_id, node_id)
     children: dict[str, list[str]] = {span_id: [] for span_id in order}
     roots: list[str] = []
     for span_id in order:
         parent = text(entries[span_id], 'parent_span_id') or text(entries[span_id], 'parent_id')
-        if parent in children and parent != span_id:
-            children[parent].append(span_id)
+        parent_node = first_node_by_span_id.get(parent)
+        if parent_node is not None and parent_node != span_id:
+            children[parent_node].append(span_id)
         else:
             roots.append(span_id)
-    error_ids = {
-        text(span, 'span_id') or text(span, 'id')
-        for span in spans
-        if is_error_span(span) and (text(span, 'span_id') or text(span, 'id'))
-    }
+    error_ids = {node_id for node_id in order if is_error_span(entries[node_id])}
     errors = [span_id for span_id in order if span_id in error_ids]
     first_error = errors[0] if errors else None
     ancestors: set[str] = set()
@@ -1397,7 +1399,7 @@ def span_tree(  # noqa: C901
         if failed and not isinstance(message, str):
             message = 'No status message available.'
         link = trace_link_button(
-            trace_span_url(trace_id, text(span, 'span_id') or text(span, 'id'), experiment_url),
+            trace_span_url(trace_id, span_ids[span_id], experiment_url),
             'Orq ↗',
             onclick='event.stopPropagation()',
         )

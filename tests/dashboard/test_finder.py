@@ -128,7 +128,9 @@ class FakeStore:
         self.started_dimensions: tuple[CompiledQuery, ...] | None = None
         self.start_wait: bool | None = None
 
-    async def compile(self, request: Any, *, wait: bool = True, table: Any = None) -> RunSnapshot:
+    async def compile(
+        self, request: Any, *, wait: bool = True, table: Any = None, source_generation: Any = None
+    ) -> RunSnapshot:
         self.compile_request = request
         self.compile_wait = wait
         state = 'awaiting_review' if request.mode == 'review' else 'classifying'

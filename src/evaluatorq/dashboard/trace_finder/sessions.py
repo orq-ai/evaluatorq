@@ -70,6 +70,7 @@ class TraceSessionRegistry:
         self._monotonic = monotonic
         self._lock = asyncio.Lock()
         self._entries: dict[str, _SessionEntry] = {}
+        self._capacity_waiters: set[asyncio.Future[None]] = set()
 
     async def get(self, session_id: str, factory: Any, *, request_state: Any | None = None) -> Any | None:
         """Return one session's store, creating it once without holding the registry lock."""
@@ -77,6 +78,12 @@ class TraceSessionRegistry:
             now = self._monotonic()
             async with self._lock:
                 entry, retired = self._entry_for(session_id, now)
+                waiter = None
+                if entry is None:
+                    # Futures belong to their creating loop; waking them thread-safely
+                    # keeps the registry usable by apps with more than one ASGI loop.
+                    waiter = asyncio.get_running_loop().create_future()
+                    self._capacity_waiters.add(waiter)
                 if entry is not None and request_state is not None:
                     active_entries = request_state.setdefault('trace_session_entries', [])
                     if not any(active is entry for active in active_entries):
@@ -84,7 +91,14 @@ class TraceSessionRegistry:
                         active_entries.append(entry)
             await _close_stores(retired)
             if entry is None:
-                return None
+                if waiter is None:
+                    raise RuntimeError('A full session registry must have a capacity waiter.')
+                try:
+                    await waiter
+                finally:
+                    async with self._lock:
+                        self._capacity_waiters.discard(waiter)
+                continue
 
             async with entry.create_lock:
                 async with self._lock:
@@ -148,8 +162,15 @@ class TraceSessionRegistry:
                 entry.retired = True
             if entry.retired and entry.active_requests == 0:
                 store, entry.store = entry.store, None
+            self._wake_capacity_waiters()
         if store is not None:
             await _close_stores([store])
+
+    def _wake_capacity_waiters(self) -> None:
+        waiters, self._capacity_waiters = self._capacity_waiters, set()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.get_loop().call_soon_threadsafe(_resolve_waiter, waiter)
 
     async def detach_all(self) -> list[Any]:
         """Remove every entry, deferring active stores until their request leases end."""
@@ -162,6 +183,7 @@ class TraceSessionRegistry:
                 if entry.store is not None and entry.active_requests == 0:
                     stores.append(entry.store)
                     entry.store = None
+            self._wake_capacity_waiters()
         return stores
 
     async def close_all(self) -> None:
@@ -173,7 +195,13 @@ class TraceSessionRegistry:
             for entry in entries:
                 entry.retired = True
                 entry.store = None
+            self._wake_capacity_waiters()
         await _close_stores(stores)
+
+
+def _resolve_waiter(waiter: asyncio.Future[None]) -> None:
+    if not waiter.done():
+        waiter.set_result(None)
 
 
 async def _close_stores(stores: list[Any]) -> None:

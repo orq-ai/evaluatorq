@@ -33,6 +33,7 @@ function classList() {
 
 function loadDashboard({
   elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces', dateClass = Date,
+  htmx = null,
 } = {}) {
   const body = Object.assign(emitter(), {
     children: [],
@@ -87,6 +88,7 @@ function loadDashboard({
   };
   const window = {
     location: { pathname },
+    htmx,
     addEventListener: windowEvents.addEventListener,
     setTimeout(callback) {
       const id = nextTimer++;
@@ -156,7 +158,9 @@ function submitExplorerQuery({ mode, seconds = '900', now, start, end }) {
   const fromTime = input('from_time', start.slice(11), 'explorer-from-time');
   const to = input('to', end.slice(0, 10), 'explorer-to');
   const toTime = input('to_time', end.slice(11), 'explorer-to-time');
-  toTime.setCustomValidity = () => {};
+  fromTime.setCustomValidity = message => { fromTime.validationMessage = message; };
+  fromTime.reportValidity = () => {};
+  toTime.setCustomValidity = message => { toTime.validationMessage = message; };
   toTime.reportValidity = () => {};
   const rangeMode = input('range_mode', mode);
   const rangeSeconds = input('range_seconds', seconds);
@@ -202,7 +206,7 @@ function submitExplorerQuery({ mode, seconds = '900', now, start, end }) {
   };
   app.documentEvents.emit('submit', evt);
   const body = requestBody(queryForm, new Map([['finder-controls', controls], ['explorer-load-form', explorerForm]]));
-  return { app, body, evt, fields, queryForm };
+  return { app, body, evt, fields, queryForm, fromTime, toTime };
 }
 
 function keyEvent(key, options = {}) {
@@ -570,3 +574,125 @@ test('trajectory tooltip stays within narrow and wide containers', () => {
   assert.equal(tip.style.maxWidth, '584px');
   assert.equal(tip.style.left, '65px');
 });
+
+test('pending explorer control waits for its own form settle and coalesces a second control click', () => {
+  let submits = 0;
+  const form = { id: 'explorer-load-form', requestSubmit() { submits += 1; } };
+  const filterButton = { setAttribute() {} };
+  const first = { getAttribute: () => '/traces?limit=25' };
+  const second = { getAttribute: () => '/traces?limit=50' };
+  const elements = new Map([['explorer-load-form', form]]);
+  const calls = [];
+  const app = loadDashboard({
+    elements,
+    htmx: { config: {}, ajax(method, url) { calls.push([method, url]); } },
+    query(selector) {
+      return selector === '[data-explorer-filters]' ? filterButton : null;
+    },
+    queryAll() { return []; },
+  });
+  app.body.emit('change', { target: { closest: selector => selector === '.finder-facets' ? {} : null, matches: () => false } });
+  const clickControl = control => {
+    const event = {
+      target: { closest: selector => selector === '[hx-get][hx-target="#explorer-results"]' ? control : null },
+      preventDefault() { this.prevented = true; },
+      stopPropagation() { this.stopped = true; },
+    };
+    app.documentEvents.emit('click', event);
+    return event;
+  };
+  clickControl(first);
+  assert.equal(submits, 1);
+
+  const requestConfig = {};
+  app.body.emit('htmx:beforeRequest', { detail: { elt: form, requestConfig } });
+  app.body.emit('htmx:afterSettle', {
+    detail: { target: { id: 'explorer-results' }, elt: { id: 'unrelated-control' }, requestConfig: {} },
+  });
+  assert.deepEqual(calls, []);
+
+  const secondClick = clickControl(second);
+  assert.equal(secondClick.prevented, true);
+  app.body.emit('htmx:afterSettle', {
+    detail: { target: { id: 'explorer-results' }, elt: form, requestConfig },
+  });
+  assert.deepEqual(calls, [['GET', '/traces?limit=50']]);
+});
+
+function withNewYorkTime(callback) {
+  const previous = process.env.TZ;
+  process.env.TZ = 'America/New_York';
+  try {
+    callback();
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+}
+
+test('explorer submission rejects a nonexistent local time during the spring DST jump', () => withNewYorkTime(() => {
+  const { app, evt, fromTime } = submitExplorerQuery({
+    mode: 'exact',
+    now: '2026-03-08T12:00:00',
+    start: '2026-03-08T02:30:00',
+    end: '2026-03-08T04:00:00',
+  });
+  assert.equal(evt.prevented, true);
+  assert.equal(evt.stopped, true);
+  assert.equal(fromTime.validationMessage, 'Enter a valid local time');
+  assert.ok(app);
+}));
+
+function invalidExplorerRangeFixture() {
+  const validity = {};
+  const reports = [];
+  const field = (id, value) => ({
+    id, value,
+    setCustomValidity(message) { validity[id] = message; },
+    reportValidity() { reports.push(id); return !validity[id]; },
+  });
+  const from = field('explorer-from', '2026-03-08');
+  const fromTime = field('explorer-from-time', '02:30:00');
+  const to = field('explorer-to', '2026-03-08');
+  const toTime = field('explorer-to-time', '04:00:00');
+  const form = { id: 'explorer-load-form' };
+  const mode = { value: 'exact' };
+  const app = loadDashboard({
+    elements: new Map([
+      ['explorer-load-form', form], ['explorer-from', from], ['explorer-from-time', fromTime],
+      ['explorer-to', to], ['explorer-to-time', toTime],
+    ]),
+    query: selector => selector === '[data-explorer-range-mode]' ? mode : null,
+    queryAll: selector => selector === '[data-explorer-tz]' ? [] : [],
+  });
+  return { app, form, fromTime, toTime, validity, reports };
+}
+
+test('direct explorer load rejects nonexistent local time and reports the invalid field', () => withNewYorkTime(() => {
+  const { app, form, fromTime, validity, reports } = invalidExplorerRangeFixture();
+  const event = {
+    target: form,
+    preventDefault() { this.prevented = true; },
+    stopImmediatePropagation() { this.stopped = true; },
+  };
+  app.documentEvents.emit('submit', event);
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.equal(validity[fromTime.id], 'Enter a valid local time');
+  assert.deepEqual(reports, [fromTime.id]);
+}));
+
+test('Apply filters rejects nonexistent local time before the hx-post can submit', () => withNewYorkTime(() => {
+  const { app, fromTime, validity, reports } = invalidExplorerRangeFixture();
+  const button = { closest: selector => selector === '[hx-post="/find/load"]' ? button : null };
+  const event = {
+    target: button,
+    preventDefault() { this.prevented = true; },
+    stopImmediatePropagation() { this.stopped = true; },
+  };
+  app.documentEvents.emit('click', event);
+  assert.equal(event.prevented, true);
+  assert.equal(event.stopped, true);
+  assert.equal(validity[fromTime.id], 'Enter a valid local time');
+  assert.deepEqual(reports, [fromTime.id]);
+}));

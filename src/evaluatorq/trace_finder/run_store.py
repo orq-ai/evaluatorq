@@ -117,6 +117,7 @@ class RunStore:
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        source_generation: Callable[[], int | None] | None = None,
     ) -> RunSnapshot:
         """Compile, select the population, and stage or start the requested run.
 
@@ -135,6 +136,7 @@ class RunStore:
             traces=traces,
             traces_limited=traces_limited,
             table=table,
+            source_generation=source_generation,
         )
 
     async def start(
@@ -154,6 +156,7 @@ class RunStore:
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        source_generation: Callable[[], int | None] | None = None,
     ) -> RunSnapshot:
         generation, staged_traces = await self._begin(
             request,
@@ -169,6 +172,7 @@ class RunStore:
             traces=traces,
             traces_limited=traces_limited,
             table=table,
+            source_generation=source_generation,
         )
         if wait:
             return await work
@@ -254,6 +258,7 @@ class RunStore:
         traces: Callable[[], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         traces_limited: Callable[[int], Awaitable[tuple[TraceRecord, ...]]] | None = None,
         table: Callable[[PopulationRequest], Awaitable[tuple[TraceRecord, ...]]] | None = None,
+        source_generation: Callable[[], int | None] | None = None,
     ) -> RunSnapshot:
         # The table narrows with the run only while it still shows the rows this run was asked about.
         explorer_generation = (
@@ -354,6 +359,15 @@ class RunStore:
                         else traces or (lambda: table(population))  # pyright: ignore[reportOptionalCall]
                     )
                     loaded_traces = await self._load_owned(generation, loader)
+                    exact_source_generation = explorer_generation
+                    # A fresh table load records its exact ExplorerView generation in
+                    # the route callback; a within-results load uses the generation
+                    # captured before its trace IDs were selected.
+                    if source_generation is not None:
+                        exact_source_generation = source_generation()
+                    async with self._lock:
+                        if generation == self._generation and self._snapshot.state == 'compiling':
+                            self._snapshot = replace(self._snapshot, explorer_generation=exact_source_generation)
                     self._report_loaded(generation, len(loaded_traces or ()), len(loaded_traces or ()))
                     # Loaded rows skip the Orq query, so apply the question's generated filters here
                     # and to the table only for within-results runs.

@@ -292,6 +292,7 @@ class RunSnapshot:
     """A frozen progress view; public reads detach nested mutable values from the owner."""
 
     generation: int = 0
+    explorer_generation: int | None = None
     state: RunState = 'idle'
     phase: RunPhase | None = None
     request: RunRequest | None = None

@@ -184,6 +184,7 @@
   // On /traces the Filters button opens the facet menu itself; picks apply with one reload when it closes.
   let filtersDirty = false;
   let pendingExplorerControl = null;
+  let explorerControlRequest = null;
   function loadExplorer() {
     const form = document.getElementById('explorer-load-form');
     if (form && form.requestSubmit) form.requestSubmit();
@@ -214,11 +215,17 @@
   // A control click applies the pending facet edits first, then repeats the
   // selected rows request so its choice is applied to the newly loaded rows.
   document.addEventListener('click', function (evt) {
-    if (!filtersDirty) return;
     const control = evt.target.closest('[hx-get][hx-target="#explorer-results"]');
     if (!control) return;
     const url = control.getAttribute('hx-get');
     if (!url) return;
+    if (pendingExplorerControl) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      pendingExplorerControl = url;
+      return;
+    }
+    if (!filtersDirty) return;
     evt.preventDefault();
     evt.stopPropagation();
     pendingExplorerControl = url;
@@ -235,17 +242,28 @@
   }
   document.body.addEventListener('htmx:afterSettle', function (evt) {
     const target = evt.detail?.target;
-    if (!pendingExplorerControl || target?.id !== 'explorer-results') return;
+    if (!pendingExplorerControl || target?.id !== 'explorer-results' ||
+        evt.detail?.elt !== document.getElementById('explorer-load-form') ||
+        evt.detail?.requestConfig !== explorerControlRequest) return;
     const loadFailed = !!document.querySelector('#explorer-results .finder-form-error');
+    explorerControlRequest = null;
     if (loadFailed) {
       pendingExplorerControl = null;
       return;
     }
     runPendingExplorerControl();
   });
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    if (pendingExplorerControl && evt.detail?.elt === document.getElementById('explorer-load-form')) {
+      explorerControlRequest = evt.detail.requestConfig;
+    }
+  });
   ['htmx:sendError', 'htmx:responseError', 'htmx:timeout'].forEach(function (name) {
     document.body.addEventListener(name, function (evt) {
-      if (evt.detail?.elt?.id === 'explorer-load-form') pendingExplorerControl = null;
+      if (evt.detail?.elt?.id === 'explorer-load-form') {
+        pendingExplorerControl = null;
+        explorerControlRequest = null;
+      }
     });
   });
   // A swap of the whole filter row (Load, Clear, a new run) replaces the menu and its unsaved ticks with it.
@@ -836,7 +854,52 @@
     const timeInput = document.getElementById('explorer-' + name + '-time');
     if (!dateInput || !timeInput || !dateInput.value || !timeInput.value) return null;
     const local = new Date(dateInput.value + 'T' + timeInput.value);
-    return Number.isNaN(local.getTime()) ? null : String(local.getTimezoneOffset());
+    if (Number.isNaN(local.getTime())) return null;
+    const pad = (value) => String(value).padStart(2, '0');
+    const roundTrip = local.getFullYear() + '-' + pad(local.getMonth() + 1) + '-' + pad(local.getDate()) +
+      'T' + pad(local.getHours()) + ':' + pad(local.getMinutes());
+    if (roundTrip !== dateInput.value + 'T' + timeInput.value.slice(0, 5)) return null;
+    return String(local.getTimezoneOffset());
+  }
+  function explorerValidateLocalRange() {
+    const dateTime = (name) => {
+      const date = document.getElementById('explorer-' + name)?.value;
+      const time = document.getElementById('explorer-' + name + '-time')?.value;
+      return date && time ? date + 'T' + time : '';
+    };
+    const start = dateTime('from'), end = dateTime('to');
+    const fromTime = document.getElementById('explorer-from-time');
+    const toTime = document.getElementById('explorer-to-time');
+    if (fromTime) fromTime.setCustomValidity('');
+    if (toTime) toTime.setCustomValidity('');
+    const startDate = start ? new Date(start) : null;
+    const endDate = end ? new Date(end) : null;
+    const localPartsMatch = (value, date) => {
+      if (!date || Number.isNaN(date.getTime())) return false;
+      const pad = (part) => String(part).padStart(2, '0');
+      return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+        'T' + pad(date.getHours()) + ':' + pad(date.getMinutes()) === value.slice(0, 16);
+    };
+    let invalidField = null, message = '';
+    if (!start || !end) {
+      invalidField = !start ? fromTime : toTime;
+      message = 'Enter both ends of the time range';
+    } else if (!localPartsMatch(start, startDate)) {
+      invalidField = fromTime;
+      message = 'Enter a valid local time';
+    } else if (!localPartsMatch(end, endDate)) {
+      invalidField = toTime;
+      message = 'Enter a valid local time';
+    } else if (startDate >= endDate) {
+      invalidField = toTime;
+      message = 'End must be after start';
+    }
+    if (invalidField) {
+      invalidField.setCustomValidity(message);
+      invalidField.reportValidity();
+      return null;
+    }
+    return { start, end, startDate, endDate };
   }
   function explorerUpdateOffsets() {
     ['from', 'to'].forEach((name) => {
@@ -955,11 +1018,22 @@
     const form = evt.target;
     if (!form || form.id !== 'explorer-load-form') return;
     explorerRefreshRelativeRange();
+    if (!explorerValidateLocalRange()) {
+      pendingExplorerControl = null;
+      explorerControlRequest = null;
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+    }
   }, true);
   // Apply filters only sends its own hx-post, bypassing the form submit event.
   // Refresh relative dates before htmx gathers the request parameters.
   document.addEventListener('click', function (evt) {
-    if (evt.target.closest('[hx-post="/find/load"]')) explorerRefreshRelativeRange();
+    if (!evt.target.closest('[hx-post="/find/load"]')) return;
+    explorerRefreshRelativeRange();
+    if (!explorerValidateLocalRange()) {
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+    }
   }, true);
   document.addEventListener('submit', function (evt) {
     const form = evt.target;
@@ -969,24 +1043,13 @@
     const rows = document.getElementById('explorer-rows');
     const limit = document.getElementById('finder-limit-query');
     if (rows && limit) limit.value = rows.value;
-    const dateTime = (name) => {
-      const date = document.getElementById('explorer-' + name)?.value;
-      const time = document.getElementById('explorer-' + name + '-time')?.value;
-      return date && time ? date + 'T' + time : '';
-    };
-    const start = dateTime('from'), end = dateTime('to');
-    const endTime = document.getElementById('explorer-to-time');
-    if (!start || !end || start >= end) {
-      if (endTime) {
-        endTime.setCustomValidity(!start || !end ? 'Enter both ends of the time range' : 'End must be after start');
-        endTime.reportValidity();
-      }
+    const range = explorerValidateLocalRange();
+    if (!range) {
       evt.preventDefault();
       evt.stopImmediatePropagation();
       return;
     }
-    if (endTime) endTime.setCustomValidity('');
-    const startDate = new Date(start), endDate = new Date(end);
+    const { start, end, startDate, endDate } = range;
     document.querySelectorAll('#finder-controls [data-new-range]').forEach((field) => {
       if (field.name === 'new_from') field.value = start;
       else if (field.name === 'new_to') field.value = end;

@@ -806,8 +806,10 @@ def test_traces_csv_exports_filtered_sorted_visible_rows_across_pages(explorer_c
 def test_traces_csv_matches_rendered_matched_only_rows_across_pages(explorer_client) -> None:
     store, _, client = explorer_client
     verdicts = {f'trace-{i:04d}': i % 2 == 0 for i in range(250)}
-    store.snapshot_value = _judged_snapshot(verdicts=verdicts)
     _load(client)
+    store.snapshot_value = _judged_snapshot(
+        verdicts=verdicts, explorer_generation=asyncio.run(store.explorer.view()).generation
+    )
 
     rendered = client.get('/find/rows?matched_only=1&sort=tokens_in&dir=desc&page=0')
     exported = client.get('/traces/export.csv')
@@ -839,10 +841,30 @@ def test_traces_csv_hides_dimension_columns_before_first_classifier_result(explo
     assert all(dimension.name not in headers for dimension in store.snapshot_value.dimensions or ())
 
 
+def test_traces_csv_ignores_ai_results_from_previous_explorer_load(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    store.snapshot_value = replace(
+        _judged_snapshot(verdicts={'trace-0000': True}),
+        explorer_generation=1,
+        trace_ids=tuple(row.trace_id for row in _rows(250)),
+    )
+    _load(client)
+
+    response = client.get('/traces/export.csv')
+    headers = next(csv.reader(io.StringIO(response.text, newline='')))
+
+    assert response.status_code == 200
+    assert 'AI match' not in headers
+
+
 def test_traces_csv_keeps_completed_match_first_table_order(explorer_client) -> None:
     store, _, client = explorer_client
-    store.snapshot_value = _judged_snapshot(verdicts={'trace-0249': True, 'trace-0000': False})
     _load(client)
+    store.snapshot_value = _judged_snapshot(
+        verdicts={'trace-0249': True, 'trace-0000': False},
+        explorer_generation=asyncio.run(store.explorer.view()).generation,
+    )
 
     rendered = client.get('/find/rows')
     exported = client.get('/traces/export.csv')
@@ -856,6 +878,65 @@ def test_traces_csv_keeps_completed_match_first_table_order(explorer_client) -> 
     assert len(exported_ids) == 250
     assert exported_ids[0] == visible_ids[0] == 'trace-0249'
     assert exported_ids[:PAGE_ROWS] == visible_ids
+
+
+def test_traces_csv_retries_when_explorer_view_changes_during_snapshot_read(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    explorer = store.explorer
+    current_view = explorer.view
+    stale_generation_view: ExplorerView | None = None
+    calls = 0
+
+    async def interleaved_view() -> ExplorerView:
+        nonlocal calls, stale_generation_view
+        actual = await current_view()
+        calls += 1
+        if calls == 1:
+            stale_row = actual.rows[0].model_copy(update={'trace_id': 'trace-stale-generation'})
+            stale_generation_view = replace(actual, generation=actual.generation - 1, rows=(stale_row,))
+            return stale_generation_view
+        return actual
+
+    async def snapshot_with_current_ids() -> Any:
+        actual = await store.snapshot()
+        current = await current_view()
+        return replace(
+            actual,
+            within_results=True,
+            explorer_generation=current.generation,
+            trace_ids=tuple(row.trace_id for row in _rows(250)),
+        )
+
+    explorer.view = interleaved_view
+    store.snapshot_for_render = snapshot_with_current_ids
+    response = client.get('/traces/export.csv')
+    exported = response.text
+
+    assert stale_generation_view is not None
+    assert response.status_code == 200
+    assert 'trace-stale-generation' not in exported
+
+
+def test_traces_csv_uses_reset_snapshot_when_run_changes_during_pairing(explorer_client) -> None:
+    store, _, client = explorer_client
+    _load(client)
+    previous = replace(
+        _judged_snapshot(verdicts={'trace-0000': True}),
+        trace_ids=tuple(row.trace_id for row in _rows(250)),
+    )
+    reset = replace(previous, generation=previous.generation + 1, results={}, dimensions=None)
+    snapshots = iter((previous, reset, reset, reset))
+
+    async def interleaved_snapshot() -> Any:
+        return next(snapshots, reset)
+
+    store.snapshot_for_render = interleaved_snapshot
+    response = client.get('/traces/export.csv')
+    headers = next(csv.reader(io.StringIO(response.text, newline='')))
+
+    assert response.status_code == 200
+    assert 'AI match' not in headers
 
 
 def test_traces_toolbar_offers_csv_download(explorer_client) -> None:
@@ -1082,6 +1163,7 @@ def _judged_snapshot(**kwargs: Any) -> Any:
         task=ClassifyQuestion(kind='choice', instructions='Judge.', criteria={'yes': 'x', 'no': 'y'}, state={}),
         selection=ValueSelection(kind='values', values=('yes',)),
     )
+    kwargs.setdefault('explorer_generation', 1)
     return RunSnapshot(state='completed', within_results=True, results=results, dimensions=(dimension,), **kwargs)
 
 
@@ -2201,7 +2283,8 @@ def test_ask_within_results_keeps_filters_and_uses_loaded_rows(explorer_client) 
     captured: dict[str, Any] = {}
 
     async def compile(
-        request: Any, *, wait: bool = True, traces: Any = None, traces_limited: Any = None, table: Any = None
+        request: Any, *, wait: bool = True, traces: Any = None, traces_limited: Any = None, table: Any = None,
+        source_generation: Any = None,
     ) -> Any:
         captured['request'] = request
         captured['traces'] = traces
@@ -2240,7 +2323,9 @@ def test_ask_new_search_reloads_the_table_with_the_searched_population(explorer_
     store, source, client = explorer_client
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+    async def compile(
+        request: Any, *, wait: bool = True, traces: Any = None, table: Any = None, source_generation: Any = None
+    ) -> Any:
         captured['table'] = table
         return store.snapshot_value
 
@@ -2264,7 +2349,9 @@ def test_ask_new_search_uses_calendar_range(explorer_client) -> None:
     store, _, client = explorer_client
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+    async def compile(
+        request: Any, *, wait: bool = True, traces: Any = None, table: Any = None, source_generation: Any = None
+    ) -> Any:
         captured['request'] = request
         return store.snapshot_value
 
@@ -2295,7 +2382,9 @@ def test_ask_new_search_uses_toolbar_range_and_rows_cap(explorer_client) -> None
     store, _, client = explorer_client
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+    async def compile(
+        request: Any, *, wait: bool = True, traces: Any = None, table: Any = None, source_generation: Any = None
+    ) -> Any:
         captured['request'] = request
         return store.snapshot_value
 
@@ -2326,7 +2415,9 @@ def test_ask_new_search_uses_carried_explorer_range_and_offsets(explorer_client)
     store, _, client = explorer_client
     captured: dict[str, Any] = {}
 
-    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+    async def compile(
+        request: Any, *, wait: bool = True, traces: Any = None, table: Any = None, source_generation: Any = None
+    ) -> Any:
         captured['request'] = request
         return store.snapshot_value
 
@@ -2405,7 +2496,8 @@ def test_large_within_run_is_forced_through_review(explorer_client) -> None:
     captured: dict[str, Any] = {}
 
     async def compile(
-        request: Any, *, wait: bool = True, traces: Any = None, traces_limited: Any = None, table: Any = None
+        request: Any, *, wait: bool = True, traces: Any = None, traces_limited: Any = None, table: Any = None,
+        source_generation: Any = None,
     ) -> Any:
         captured['request'] = request
         return store.snapshot_value
@@ -2840,6 +2932,33 @@ def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() ->
     tree = span_tree('trace', [*chain, *cycle])
     assert tree.count('fd-span-row') == 2002
     assert 'span-1999' in tree and 'cycle-a' in tree and 'cycle-b' in tree
+
+
+def test_span_tree_preserves_duplicate_ids_and_marks_the_error_node() -> None:
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    tree = span_tree(
+        'trace',
+        [
+            {'span_id': 'root', 'name': 'root'},
+            {'span_id': 'duplicate', 'parent_span_id': 'root', 'name': 'first duplicate', 'status': 'ok'},
+            {
+                'span_id': 'duplicate',
+                'parent_span_id': 'root',
+                'name': 'second duplicate',
+                'status': 'error',
+                'status_message': 'raw error message',
+            },
+        ],
+        first_error_message='selected error message',
+    )
+
+    assert tree.count('fd-span-row') == 3
+    rows = re.findall(r'<div class="fd-span-row([^\"]*)">.*?<b[^>]*>(.*?)</b>', tree, re.DOTALL)
+    assert rows == [('', 'root'), ('', 'first duplicate'), (' fd-span-error fd-span-first-error', 'second duplicate')]
+    assert tree.count('class="fd-span-message"') == 1
+    assert 'selected error message' in tree
+    assert 'raw error message' not in tree
 
 
 

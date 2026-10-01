@@ -135,10 +135,12 @@ async def test_capacity_with_only_active_entries_preserves_them_until_release() 
     assert await registry.get(
         'session-a', lambda: asyncio.sleep(0, result=store), request_state=request_state
     ) is store
-    assert await registry.get('session-b', lambda: asyncio.sleep(0, result=Store('other'))) is None
+    replacement = Store('other')
+    waiting = asyncio.create_task(registry.get('session-b', lambda: asyncio.sleep(0, result=replacement)))
+    await asyncio.sleep(0)
+    assert not waiting.done()
     assert store.closed is False
 
     await registry.release(request_state['trace_session_entries'][0])
-    replacement = Store('replacement')
-    assert await registry.get('session-b', lambda: asyncio.sleep(0, result=replacement)) is replacement
+    assert await asyncio.wait_for(waiting, timeout=1) is replacement
     assert store.closed is True

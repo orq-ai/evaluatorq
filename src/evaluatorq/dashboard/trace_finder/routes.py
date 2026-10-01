@@ -739,9 +739,26 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         explorer = store.explorer if store is not None else None
         if store is None or explorer is None:
             return Response('Trace table is unavailable.', status_code=503, media_type='text/plain')
-        view = await explorer.view()
-        snapshot = await store.snapshot_for_render()
-        active_snapshot = snapshot if snapshot.within_results else None
+        # Read the explorer on both sides of the run snapshot. A load/reset during
+        # the snapshot read must not pair different table generations in this export.
+        for _ in range(3):
+            view = await explorer.view()
+            snapshot = await store.snapshot_for_render()
+            confirmed_view = await explorer.view()
+            confirmed_snapshot = await store.snapshot_for_render()
+            if (view.generation, view.version) == (
+                confirmed_view.generation,
+                confirmed_view.version,
+            ) and snapshot.generation == confirmed_snapshot.generation:
+                snapshot = confirmed_snapshot
+                break
+        else:
+            return Response('Trace results changed while preparing the export. Retry the download.', status_code=409)
+        source_ids = set(snapshot.trace_ids)
+        snapshot_matches_view = (
+            not (snapshot.results or snapshot.dimensions) or snapshot.explorer_generation == view.generation
+        ) and (not source_ids or all(row.trace_id in source_ids for row in view.rows))
+        active_snapshot = snapshot if snapshot.within_results and snapshot_matches_view else None
         results = active_snapshot.results if active_snapshot is not None else None
         dimensions = (
             tuple(dimension.name for dimension in (active_snapshot.dimensions or ()))
@@ -852,12 +869,15 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                     wait=False,
                     traces=loaded_traces,
                     traces_limited=loaded_traces_limited,
+                    source_generation=lambda: explorer_view.generation,
                 )
             else:
                 request = _run_request(form, settings)
                 explorer = store.explorer if req.state.finder_surface != 'search' else None
+                loaded_table_generation: int | None = None
 
                 async def load_table(population: PopulationRequest) -> tuple[TraceRecord, ...]:
+                    nonlocal loaded_table_generation
                     if explorer is None:
                         raise RuntimeError('The trace table is unavailable.')
                     end = population.end or datetime.now(timezone.utc)
@@ -873,9 +893,15 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                     )
                     if view.state == 'failed':
                         raise RuntimeError(view.error or 'Trace table loading failed.')
+                    loaded_table_generation = view.generation
                     return await hydrate_explorer_rows([row.trace_id for row in view.rows])
 
-                snapshot = await store.compile(request, wait=False, table=load_table if explorer is not None else None)
+                snapshot = await store.compile(
+                    request,
+                    wait=False,
+                    table=load_table if explorer is not None else None,
+                    source_generation=lambda: loaded_table_generation,
+                )
         except (ValidationError, ValueError, TypeError) as exc:
             current_snapshot = await store.snapshot()
             return _html(
