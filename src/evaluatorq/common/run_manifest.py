@@ -23,6 +23,8 @@ from __future__ import annotations
 import contextlib
 import operator
 import os
+import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +55,114 @@ def _manifests_dir(runs_dir: Path) -> Path:
     return runs_dir / MANIFESTS_DIR_NAME
 
 
+@contextlib.contextmanager
+def _manifest_lock(path: Path) -> Iterator[None]:
+    """Hold a cross-process advisory lock on ``<path>.lock`` for one read-modify-write.
+
+    Several processes can write one run's manifest (the run itself, the dashboard launcher,
+    the insights worker's failure path), and an unguarded read-modify-write loses whichever
+    update lands first. The lock lives in a sibling file because the manifest is replaced
+    atomically, which would orphan a lock held on the manifest's own inode. The lock file is
+    never deleted, for the same reason. A lock that cannot be taken is logged and skipped:
+    manifest bookkeeping must never break a run.
+    """
+    lock_path = path.with_name(f'{path.name}.lock')
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open('a+b')
+    except OSError as exc:
+        logger.warning('Could not open manifest lock {}: {}; writing without it', lock_path, exc)
+        yield
+        return
+    locked = False
+    try:
+        try:
+            if sys.platform == 'win32':
+                import msvcrt
+
+                while not locked:
+                    try:
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                        locked = True
+                    except OSError:  # noqa: PERF203 — LK_LOCK gives up after ~10s; keep waiting
+                        continue
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                locked = True
+        except OSError as exc:
+            logger.warning('Could not lock manifest {}: {}; writing without it', path, exc)
+        yield
+    finally:
+        # Closing the handle releases the lock on both platforms.
+        handle.close()
+
+
+def _write_atomic(manifest: RunManifest, path: Path) -> bool:
+    """Write *manifest* to *path* via temp file + atomic rename; False on disk failure."""
+    manifest.updated_at = datetime.now(tz=timezone.utc)
+    # Write to a temp file in the same dir then atomically rename over the
+    # target, so a SIGKILL mid-write can never leave truncated JSON that the
+    # reader would silently drop (the whole point of the manifest is to
+    # surface crashed runs). Best-effort: on failure clean up the temp file.
+    tmp = path.with_name(f'{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(manifest.model_dump_json(indent=2), encoding='utf-8')
+        os.replace(tmp, path)  # noqa: PTH105 — atomic rename is the whole point
+        return True
+    except OSError as exc:
+        logger.warning('Failed to write run manifest {}: {}; later transitions will retry', path, exc)
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        return False
+
+
+def _read_manifest(path: Path) -> RunManifest | None:
+    try:
+        return RunManifest.model_validate_json(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        logger.warning('Could not read run manifest {}: {}', path, exc)
+        return None
+
+
+def update_manifest(path: Path, mutate: Callable[[RunManifest], None]) -> RunManifest | None:
+    """Read, mutate and atomically rewrite the manifest at *path* under the cross-process lock.
+
+    Use this instead of read-then-`ManifestWriter` anywhere a second process may be writing the
+    same run: the read happens inside the lock, so a concurrent update to another field is
+    kept rather than overwritten. Returns the written manifest, or ``None`` when the file is
+    missing, unreadable or the write failed (each logged).
+    """
+    with _manifest_lock(path):
+        manifest = _read_manifest(path)
+        if manifest is None:
+            return None
+        mutate(manifest)
+        return manifest if _write_atomic(manifest, path) else None
+
+
+def fail_if_running(path: Path, error: str, stage: Any = None) -> bool:
+    """Mark the manifest at *path* errored unless another writer already finished it.
+
+    The status check and the write share one lock, so a run that completes between the
+    caller's own read and this write is not clobbered. Returns True when this call failed it.
+    """
+    failed = False
+
+    def apply(manifest: RunManifest) -> None:
+        nonlocal failed
+        if manifest.status == ManifestStatus.RUNNING:
+            ManifestWriter(manifest, path)._apply_fail(error, stage)  # noqa: SLF001
+            failed = True
+
+    return update_manifest(path, apply) is not None and failed
+
+
 class ManifestWriter:
     """Holds one manifest and flushes it to disk on each transition.
 
@@ -67,23 +177,24 @@ class ManifestWriter:
         self._last_progress_flush: dict[int, float] = {}
 
     def flush(self) -> bool:
-        """Persist the latest in-memory state; return False when the disk view still lags."""
-        self.manifest.updated_at = datetime.now(tz=timezone.utc)
-        # Write to a temp file in the same dir then atomically rename over the
-        # target, so a SIGKILL mid-write can never leave truncated JSON that the
-        # reader would silently drop (the whole point of the manifest is to
-        # surface crashed runs). Best-effort: on failure clean up the temp file.
-        tmp = self.path.with_name(f'{self.path.name}.{os.getpid()}.tmp')
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(self.manifest.model_dump_json(indent=2), encoding='utf-8')
-            os.replace(tmp, self.path)  # noqa: PTH105 — atomic rename is the whole point
-            return True
-        except OSError as exc:
-            logger.warning('Failed to write run manifest {}: {}; later transitions will retry', self.path, exc)
-            with contextlib.suppress(OSError):
-                tmp.unlink(missing_ok=True)
-            return False
+        """Persist the latest in-memory state under the manifest lock; False when the disk view lags.
+
+        A run another process already finished (``fail_if_running``, the launcher's reconcile)
+        is terminal on disk, so a still-running writer adopts that record instead of
+        overwriting it.
+        """
+        with _manifest_lock(self.path):
+            if self.manifest.status == ManifestStatus.RUNNING:
+                on_disk = _read_manifest(self.path)
+                if on_disk is not None and on_disk.status != ManifestStatus.RUNNING:
+                    logger.warning(
+                        'Run manifest {} was already finished as {} by another writer; keeping it',
+                        self.path,
+                        on_disk.status.value,
+                    )
+                    self.manifest = on_disk
+                    return True
+            return _write_atomic(self.manifest, self.path)
 
     def _open_stage(self, name: str | None = None, target: str | None = None) -> StageRecord | None:
         """Most-recent still-open stage record matching *name* and *target*.
@@ -202,6 +313,11 @@ class ManifestWriter:
     def fail(self, error: str, stage: Any = None) -> None:
         if self.manifest.status != ManifestStatus.RUNNING:
             return  # terminal transitions are idempotent — first one wins
+        self._apply_fail(error, stage)
+        self.flush()
+
+    def _apply_fail(self, error: str, stage: Any = None) -> None:
+        """Mutate the in-memory manifest into the errored state without touching disk."""
         now = datetime.now(tz=timezone.utc)
         # Close every still-open stage as errored (R2). A stage that already
         # finished stays 'completed' — never relabel a succeeded stage (R1).
@@ -218,7 +334,6 @@ class ManifestWriter:
         self.manifest.status = ManifestStatus.ERROR
         self.manifest.error = error
         self.manifest.ended_at = now
-        self.flush()
 
 
 def start_manifest(

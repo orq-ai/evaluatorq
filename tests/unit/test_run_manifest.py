@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -12,8 +14,10 @@ from pydantic import ValidationError
 from evaluatorq.common import run_manifest
 from evaluatorq.common.run_manifest import (
     ManifestWriter,
+    fail_if_running,
     list_manifests,
     start_manifest,
+    update_manifest,
 )
 from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, RunSummary
 
@@ -454,3 +458,52 @@ def test_complete_stamps_the_summary_version(tmp_path: Path) -> None:
 
     m = list_manifests(runs)[0]
     assert m.summary_version == RUN_SUMMARY_VERSION
+
+
+def test_concurrent_updates_to_different_fields_both_persist(tmp_path: Path) -> None:
+    w = start_manifest(run_id='race', surface='sim', run_name='before', runs_dir=tmp_path / 'runs')
+    first_inside = threading.Event()
+
+    def slow_report_path(m: RunManifest) -> None:
+        first_inside.set()
+        time.sleep(0.3)  # hold the read-modify-write open so the other writer overlaps it
+        m.report_path = 'report.json'
+
+    def rename(m: RunManifest) -> None:
+        m.run_name = 'after'
+
+    def second_writer() -> None:
+        first_inside.wait(timeout=5)
+        update_manifest(w.path, rename)
+
+    other = threading.Thread(target=second_writer)
+    other.start()
+    update_manifest(w.path, slow_report_path)
+    other.join(timeout=10)
+
+    [m] = list_manifests(tmp_path / 'runs')
+    assert (m.report_path, m.run_name) == ('report.json', 'after')
+
+
+def test_fail_if_running_does_not_clobber_a_finished_run(tmp_path: Path) -> None:
+    w = start_manifest(run_id='done', surface='sim', run_name='r', runs_dir=tmp_path / 'runs')
+    w.complete(report_path=None, summary=None)
+
+    assert fail_if_running(w.path, 'late failure') is False
+    assert list_manifests(tmp_path / 'runs')[0].status == ManifestStatus.COMPLETED
+
+    running = start_manifest(run_id='live', surface='sim', run_name='r', runs_dir=tmp_path / 'runs')
+    assert fail_if_running(running.path, 'boom', stage='setup') is True
+    stored = next(m for m in list_manifests(tmp_path / 'runs') if m.run_id == 'live')
+    assert (stored.status, stored.error) == (ManifestStatus.ERROR, 'boom')
+
+
+def test_running_writer_flush_does_not_overwrite_a_failure_written_by_another_process(tmp_path: Path) -> None:
+    w = start_manifest(run_id='stale', surface='sim', run_name='r', runs_dir=tmp_path / 'runs')
+    fail_if_running(w.path, 'worker died')
+
+    w.stage_progress('x', 1, 2)  # no open stage: harmless
+    w.flush()
+
+    assert w.manifest.status == ManifestStatus.ERROR
+    assert list_manifests(tmp_path / 'runs')[0].error == 'worker died'

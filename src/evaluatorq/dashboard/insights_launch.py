@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
-from evaluatorq.common.run_manifest import ManifestWriter, start_manifest
+from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
@@ -165,9 +165,8 @@ def reconcile_stale_worker(runs_dir: Path, run_id: str) -> bool:
     ):
         return False
     state = latest_state
-    manifest = latest_manifest
-    ManifestWriter(manifest, manifest_path).fail(
-        'Insights worker stopped before completing the run; start a new run to retry.', stage='worker'
+    fail_if_running(
+        manifest_path, 'Insights worker stopped before completing the run; start a new run to retry.', stage='worker'
     )
     try:
         persisted = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
@@ -457,7 +456,20 @@ except BaseException as exc:
     cleanup_reference()
     cleanup_worker_state()
     if manifest:
+        lock = None
         try:
+            # Same sibling lock as evaluatorq.common.run_manifest: other writers share this file.
+            try:
+                lock = open(manifest + ".lock", "a+b")
+                if os.name == "nt":
+                    import msvcrt
+                    lock.seek(0)
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass
             with open(manifest, encoding="utf-8") as source:
                 data = json.load(source)
             if data.get("status") == "running":
@@ -474,6 +486,9 @@ except BaseException as exc:
                         os.unlink(temporary)
         except BaseException as recovery_error:
             print(f"Could not mark Insights manifest failed: {recovery_error}", file=__import__("sys").stderr)
+        finally:
+            if lock is not None:
+                lock.close()
     raise
 """
 

@@ -14,8 +14,8 @@ from typing import Any
 from loguru import logger
 
 from evaluatorq.common.orq_client import close_orq_client
-from evaluatorq.common.run_manifest import ManifestWriter
-from evaluatorq.contracts import ManifestStatus, RunManifest
+from evaluatorq.common.run_manifest import fail_if_running
+from evaluatorq.contracts import RunManifest
 from evaluatorq.dashboard.auth import auth_identity, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.insights_launch import (
     _MANIFEST_ENV,
@@ -37,13 +37,7 @@ from evaluatorq.trace_finder.settings import effective_settings
 
 
 def _fail_running(path: Path, error: str) -> None:
-    try:
-        manifest = RunManifest.model_validate_json(path.read_text(encoding='utf-8'))
-    except (OSError, ValueError) as exc:
-        logger.warning('Could not update Insights manifest {} after worker failure: {}', path, exc)
-        return
-    if manifest.status == ManifestStatus.RUNNING:
-        ManifestWriter(manifest, path).fail(error, stage='setup')
+    fail_if_running(path, error, stage='setup')
 
 
 def _read_private_snapshot(path: Path) -> bytes:
