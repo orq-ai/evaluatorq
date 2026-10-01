@@ -14,21 +14,6 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 
-@pytest.fixture(autouse=True)
-def _stop_console_bridge_thread():
-    """Stop bridge threads started by a test before pytest replaces its captured streams."""
-    from evaluatorq.dashboard import launch
-
-    previous = launch._console_bridge
-    try:
-        yield
-    finally:
-        current = launch._console_bridge
-        if current is not None and current is not previous:
-            current.sink.stop()
-        launch._console_bridge = previous
-
-
 # ---------------------------------------------------------------------------
 # ensure_fasthtml
 # ---------------------------------------------------------------------------
@@ -426,6 +411,7 @@ def test_reload_worker_reads_local_env(monkeypatch: pytest.MonkeyPatch, tmp_path
     """An already running reloader picks up the workspace slug in a new worker."""
     from evaluatorq.dashboard.launch import build_app_from_env
 
+    monkeypatch.setattr('evaluatorq.dashboard.insights_review_projection.warm_review_projection', lambda: None)
     (tmp_path / '.env').write_text('ORQ_WORKSPACE=orq-research\n')
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
@@ -446,6 +432,7 @@ def test_reload_worker_registers_browser_readiness_route(monkeypatch: pytest.Mon
 
     from evaluatorq.dashboard.launch import build_app_from_env
 
+    monkeypatch.setattr('evaluatorq.dashboard.insights_review_projection.warm_review_projection', lambda: None)
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_LAUNCH_NONCE', 'test-nonce')
     with patch('evaluatorq.dashboard.launch._install_log_bridge'):
         app = build_app_from_env()
