@@ -21,11 +21,11 @@ class _Client:
 async def test_skips_tools_that_already_have_explicit_roles(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    requests: list[tuple[str, dict[str, Any], str]] = []
+    requests: list[tuple[dict[str, Any], str]] = []
 
     async def judge(**kwargs: Any) -> JudgeOutcome:
         question = kwargs['classify']
-        requests.append((question.state['tool_name'], question.state['sample_arguments'], kwargs['model']))
+        requests.append((question.state, kwargs['model']))
         role = 'bash' if question.state['tool_name'] == 'custom_shell' else 'webview'
         return JudgeOutcome(payload=EvaluatorResponsePayload(value=role, explanation='classified'))
 
@@ -47,12 +47,12 @@ async def test_skips_tools_that_already_have_explicit_roles(
 
 
 @pytest.mark.asyncio
-async def test_classifies_unknown_tool_and_uses_first_sample(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: list[tuple[str, dict[str, Any], str]] = []
+async def test_classifies_unknown_tool_without_sending_its_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[tuple[dict[str, Any], str]] = []
 
     async def judge(**kwargs: Any) -> JudgeOutcome:
         question = kwargs['classify']
-        seen.append((question.state['tool_name'], question.state['sample_arguments'], kwargs['model']))
+        seen.append((question.state, kwargs['model']))
         return JudgeOutcome(payload=EvaluatorResponsePayload(value='bash', explanation='classified'))
 
     monkeypatch.setattr('evaluatorq.signals.classify.run_judge', judge)
@@ -63,7 +63,7 @@ async def test_classifies_unknown_tool_and_uses_first_sample(monkeypatch: pytest
     result = await classify_tool_roles([trajectory], config, client=client)
 
     assert result.tool_roles == {'known': 'other', 'custom': 'bash'}
-    assert seen == [('custom', {'cmd': 'first'}, config.classifier.model)]
+    assert seen == [({'tool_name': 'custom'}, config.classifier.model)]
     assert config.tool_roles == {'known': 'other'}
 
 

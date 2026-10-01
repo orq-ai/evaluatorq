@@ -65,10 +65,27 @@ def test_classifier_model_is_read_at_construction(monkeypatch: pytest.MonkeyPatc
 
 def test_bundled_thresholds_load_once() -> None:
     bundled = TagThresholds.bundled()
+    again = TagThresholds.bundled()
     assert bundled.rule_version == 'v3-local-cc-2026-09-29'
     assert bundled.thresholds['error_heavy.tool_error_rate'] == 0.0909
     assert len(bundled.percentiles['tool_error_rate']) == 101
-    assert TagThresholds.bundled() is bundled
+    assert again == bundled
+    assert again is not bundled
+
+
+def test_bundled_thresholds_are_isolated_from_caller_mutation() -> None:
+    bundled = TagThresholds.bundled()
+    expected_threshold = bundled.thresholds['error_heavy.tool_error_rate']
+    expected_percentile = bundled.percentiles['tool_error_rate'][0]
+
+    bundled.thresholds['error_heavy.tool_error_rate'] = 123.0
+    bundled.percentiles['tool_error_rate'][0] = 123.0
+
+    fresh = TagThresholds.bundled()
+    assert fresh.thresholds['error_heavy.tool_error_rate'] == expected_threshold
+    assert fresh.percentiles['tool_error_rate'][0] == expected_percentile
+    assert fresh.thresholds is not bundled.thresholds
+    assert fresh.percentiles['tool_error_rate'] is not bundled.percentiles['tool_error_rate']
 
 
 def test_version_is_suffixed_only_when_customised() -> None:
@@ -92,3 +109,20 @@ def test_cohort_threshold_interpolates_linearly() -> None:
     assert table.cohort_threshold('m', -5) == 0.0
     with pytest.raises(KeyError):
         table.cohort_threshold('missing', 50)
+
+
+@pytest.mark.parametrize(
+    'values',
+    [
+        [],
+        [0.0] * 100,
+        [0.0] * 102,
+        [0.0] * 100 + [float('nan')],
+        [0.0] * 100 + [float('inf')],
+        [1.0] + [0.0] * 100,
+    ],
+    ids=['empty', 'short', 'long', 'nan', 'infinite', 'decreasing'],
+)
+def test_invalid_percentile_tables_are_rejected(values: list[float]) -> None:
+    with pytest.raises(ValidationError, match='percentile table'):
+        TagThresholds(rule_version='custom', thresholds={}, percentiles={'m': values})

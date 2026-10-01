@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import functools
 import json
+import math
 import os
 from importlib import resources
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ErrorDetection = Literal['status', 'status_and_content']
 Canonicalisation = Literal['sorted_keys', 'exact']
@@ -86,6 +88,18 @@ class TagThresholds(BaseModel):
     percentiles: dict[str, list[float]] = Field(default_factory=dict)
     """metric -> its p0..p100 values on the calibration cohort, so a percentile maps to a threshold."""
 
+    @field_validator('percentiles')
+    @classmethod
+    def _validate_percentiles(cls, tables: dict[str, list[float]]) -> dict[str, list[float]]:
+        for metric, values in tables.items():
+            if len(values) != 101:
+                raise ValueError(f'percentile table for {metric!r} must contain exactly 101 values (p0..p100)')
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError(f'percentile table for {metric!r} must contain only finite values')
+            if any(left > right for left, right in pairwise(values)):
+                raise ValueError(f'percentile table for {metric!r} must be nondecreasing')
+        return tables
+
     @classmethod
     def from_published(cls, document: dict[str, Any]) -> TagThresholds:
         """Read the published `tag_thresholds.json` layout, where each threshold is `{"value": ..., "quantile": ...}`."""
@@ -97,8 +111,8 @@ class TagThresholds(BaseModel):
 
     @classmethod
     def bundled(cls) -> TagThresholds:
-        """The thresholds shipped with the package, loaded on first use and cached."""
-        return _bundled_thresholds()
+        """The thresholds shipped with the package, loaded once and returned as a defensive copy."""
+        return _bundled_thresholds().model_copy(deep=True)
 
     def cohort_threshold(self, metric: str, quantile: float) -> float:
         """The metric's value at `quantile` (0-100) in the calibration cohort, linearly interpolated.

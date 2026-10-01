@@ -36,19 +36,21 @@ async def classify_tool_roles(
 ) -> SignalsConfig:
     """Classify unknown tool names with Jev and return a config with merged roles.
 
-    Existing ``tool_roles`` entries always win. Each unknown name is sent once,
-    with the first call's arguments as context. Failed, abstained, or invalid
-    classifications are recorded as ``'other'`` and logged. The resolved client
-    is closed when this function creates it; an injected client remains caller-owned.
+    Existing ``tool_roles`` entries always win. Each unknown name is sent once;
+    tool arguments are not sent to Jev. Failed, abstained, or invalid classifications
+    are recorded as ``'other'`` and logged. The resolved client is closed when this
+    function creates it; an injected client remains caller-owned.
     """
     resolved_config = config or SignalsConfig()
-    samples: dict[str, dict[str, object]] = {}
+    names: list[str] = []
+    seen: set[str] = set()
     for trajectory in trajectories:
         for record in calls(walk(trajectory)):
             name = record.call.function_name
-            if name not in resolved_config.tool_roles:
-                samples.setdefault(name, record.call.arguments)
-    if not samples:
+            if name not in resolved_config.tool_roles and name not in seen:
+                names.append(name)
+                seen.add(name)
+    if not names:
         return resolved_config
 
     resolved_client = None
@@ -58,20 +60,20 @@ async def classify_tool_roles(
             resolved_client = resolve_llm_client(max_retries=0)
             active_client = resolved_client.client
         except Exception as exc:  # noqa: BLE001 - unavailable credentials degrades each requested classification
-            for name in samples:
+            for name in names:
                 logger.warning('Tool role classification failed for tool {}: {}', name, exc)
             return resolved_config.model_copy(
-                update={'tool_roles': {**resolved_config.tool_roles, **dict.fromkeys(samples, 'other')}}
+                update={'tool_roles': {**resolved_config.tool_roles, **dict.fromkeys(names, 'other')}}
             )
 
     roles: dict[str, ToolRole] = {}
     try:
-        for name, arguments in samples.items():
+        for name in names:
             question = ClassifyQuestion(
                 kind='choice',
                 instructions='Choose the role that best describes this tool.',
                 criteria=_ROLE_CRITERIA,
-                state={'tool_name': name, 'sample_arguments': arguments},
+                state={'tool_name': name},
             )
             try:
                 outcome = await run_judge(
