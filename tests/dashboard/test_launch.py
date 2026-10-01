@@ -14,6 +14,21 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 
+@pytest.fixture(autouse=True)
+def _stop_console_bridge_thread():
+    """Stop bridge threads started by a test before pytest replaces its captured streams."""
+    from evaluatorq.dashboard import launch
+
+    previous = launch._console_bridge
+    try:
+        yield
+    finally:
+        current = launch._console_bridge
+        if current is not None and current is not previous:
+            current.sink.stop()
+        launch._console_bridge = previous
+
+
 # ---------------------------------------------------------------------------
 # ensure_fasthtml
 # ---------------------------------------------------------------------------
