@@ -607,14 +607,14 @@ test('pending explorer control waits for its own form settle and coalesces a sec
   const requestConfig = {};
   app.body.emit('htmx:beforeRequest', { detail: { elt: form, requestConfig } });
   app.body.emit('htmx:afterSettle', {
-    detail: { target: { id: 'explorer-results' }, elt: { id: 'unrelated-control' }, requestConfig: {} },
+    detail: { target: { id: 'explorer-results' }, elt: { id: 'explorer-results' }, requestConfig: {} },
   });
   assert.deepEqual(calls, []);
 
   const secondClick = clickControl(second);
   assert.equal(secondClick.prevented, true);
   app.body.emit('htmx:afterSettle', {
-    detail: { target: { id: 'explorer-results' }, elt: form, requestConfig },
+    detail: { target: { id: 'explorer-results' }, elt: { id: 'explorer-results' }, requestConfig },
   });
   assert.deepEqual(calls, [['GET', '/traces?limit=50']]);
 });
