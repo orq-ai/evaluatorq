@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import timezone
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.formats._shared import COMPACTION_EXTRA_KEY, atif_content_text, parse_iso
+from evaluatorq.formats._shared import COMPACTION_EXTRA_KEY, RAW_ARGUMENTS_EXTRA_KEY, atif_content_text, parse_iso
 
 if TYPE_CHECKING:
     from evaluatorq.formats.atif import (
@@ -98,6 +98,12 @@ class LlmTimes:
     start: float | None
     end: float | None
     approximate: bool
+
+
+def raw_tool_arguments(call: AtifToolCall) -> str | None:
+    """Original non-JSON tool argument text carried by the format converter, if any."""
+    raw = (call.extra or {}).get(RAW_ARGUMENTS_EXTRA_KEY)
+    return raw if isinstance(raw, str) else None
 
 
 def is_skipped(step: AtifStep) -> bool:

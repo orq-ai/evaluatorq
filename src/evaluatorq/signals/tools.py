@@ -7,11 +7,10 @@ import re
 from collections import defaultdict
 from typing import Any, Literal
 
-from evaluatorq.formats._shared import RAW_ARGUMENTS_KEY
 from evaluatorq.signals import preconditions as pre
 from evaluatorq.signals.models import Evidence, Precondition, SignalFn, SignalResult, result
 from evaluatorq.signals.shell import shell_command_family
-from evaluatorq.signals.walk import CallRecord, SignalContext, result_text, tool_schemas
+from evaluatorq.signals.walk import CallRecord, SignalContext, raw_tool_arguments, result_text, tool_schemas
 
 
 def _call_ev(record: CallRecord, reason: str = '') -> Evidence:
@@ -87,15 +86,17 @@ def tool_error_rate(ctx: SignalContext) -> SignalResult:
 
 def _arguments(record: CallRecord) -> dict[str, Any]:
     args = record.call.arguments
-    return args if isinstance(args, dict) and RAW_ARGUMENTS_KEY not in args else {}
+    return args if isinstance(args, dict) and raw_tool_arguments(record.call) is None else {}
 
 
 def _canonical(record: CallRecord, ctx: SignalContext) -> str:
+    if (raw := raw_tool_arguments(record.call)) is not None:
+        return 'raw:' + raw
     args = record.call.arguments
     try:
-        return json.dumps(args, sort_keys=ctx.config.canonicalisation == 'sorted_keys', ensure_ascii=False)
+        return 'json:' + json.dumps(args, sort_keys=ctx.config.canonicalisation == 'sorted_keys', ensure_ascii=False)
     except (TypeError, ValueError):
-        return json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        return 'json:' + json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
 
 
 def _fingerprint(record: CallRecord, ctx: SignalContext) -> tuple[str, str]:
@@ -251,7 +252,7 @@ def invalid_schema_tool_call_count(ctx: SignalContext) -> SignalResult:
                 no_basis=detail,
                 preconditions=[*pcs, Precondition(name='tool schemas valid', met=False, detail=detail)],
             )
-        violation = 'arguments are not valid JSON' if RAW_ARGUMENTS_KEY in args else schema_violation
+        violation = 'arguments are not valid JSON' if raw_tool_arguments(record.call) is not None else schema_violation
         if violation and violation != 'jsonschema unavailable':
             evidence.append(_call_ev(record, f'{record.call.function_name}: {violation}'))
     return result('invalid_schema_tool_call_count', 'B', len(evidence), evidence, pcs)

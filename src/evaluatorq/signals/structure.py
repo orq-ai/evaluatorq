@@ -10,7 +10,15 @@ from urllib.parse import urlsplit
 from evaluatorq.signals import preconditions as pre
 from evaluatorq.signals.models import Evidence, SignalFn, SignalResult, result
 from evaluatorq.signals.shell import shell_command_family
-from evaluatorq.signals.walk import SignalContext, WalkedStep, finish_reasons, infer_provider, is_llm_step, step_model
+from evaluatorq.signals.walk import (
+    SignalContext,
+    WalkedStep,
+    finish_reasons,
+    infer_provider,
+    is_llm_step,
+    raw_tool_arguments,
+    step_model,
+)
 
 if TYPE_CHECKING:
     from evaluatorq.formats.atif import AtifTrajectory
@@ -203,7 +211,7 @@ def tool_call_value_count(ctx: SignalContext) -> SignalResult:
 
 
 def _arguments(call: Any) -> dict[str, Any]:
-    return call.arguments if isinstance(call.arguments, dict) and '_raw' not in call.arguments else {}
+    return call.arguments if isinstance(call.arguments, dict) and raw_tool_arguments(call) is None else {}
 
 
 def _role_calls(ctx: SignalContext, role: str):

@@ -9,7 +9,7 @@ from openai.types.responses import Response, ResponseInputItem, ResponseOutputIt
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, ValidationInfo, field_validator
 
 from evaluatorq.formats._ids import content_seed, stable_hex
-from evaluatorq.formats._shared import arguments_text, tool_arguments
+from evaluatorq.formats._shared import atif_tool_arguments, json_arguments_text
 from evaluatorq.openresponses.otel_messages import RESPONSES_ITEM_TYPES
 
 if TYPE_CHECKING:
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from evaluatorq.formats.otel import OtelTrace
 
 _KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message', 'compaction'}
+_MODEL_OUTPUT_TYPES = frozenset({'reasoning', 'function_call', 'custom_tool_call', 'mcp_call'})
 _INPUT_ITEM: TypeAdapter[ResponseInputItem] = TypeAdapter(ResponseInputItem)
 _OUTPUT_ITEM: TypeAdapter[ResponseOutputItem] = TypeAdapter(ResponseOutputItem)
 
@@ -44,9 +45,9 @@ def walk_items(
 
 
 def is_output_item(item: dict[str, Any]) -> bool:
-    """Whether a model call produced this item: an assistant message, a reasoning item or a function call."""
+    """Whether a model call produced this supported item, including custom and MCP tool calls."""
     kind = item_type(item)
-    return kind in ('reasoning', 'function_call') or (kind == 'message' and item.get('role') == 'assistant')
+    return kind in _MODEL_OUTPUT_TYPES or (kind == 'message' and item.get('role') == 'assistant')
 
 
 def output_item(item: dict[str, Any]) -> ResponseOutputItem:
@@ -77,7 +78,8 @@ def output_item(item: dict[str, Any]) -> ResponseOutputItem:
         data.setdefault('id', 'rs_' + stable_hex(seed, length=24))
         data.setdefault('summary', [])
     elif data['type'] == 'function_call' and not isinstance(data.get('arguments'), str):
-        data['arguments'] = arguments_text(tool_arguments(data.get('arguments'), data.get('name')))
+        arguments, raw = atif_tool_arguments(data.get('arguments'), data.get('name'))
+        data['arguments'] = raw if raw is not None else json_arguments_text(arguments)
     try:
         return _OUTPUT_ITEM.validate_python(data)
     except ValidationError as exc:
@@ -152,6 +154,15 @@ class ResponsesConversation(BaseModel):
         items: list[dict[str, Any]] | None = info.data.get('items')
         if responses is None or items is None:
             return responses
+        unsupported = sorted({
+            item.type
+            for response in responses
+            for item in response.output
+            if item.type not in _MODEL_OUTPUT_TYPES and not (item.type == 'message' and item.role == 'assistant')
+        })
+        if unsupported:
+            msg = f'Response.output item types {unsupported} are not supported by ResponsesConversation.responses'
+            raise ValueError(msg)
         turns = output_turns(items)
         typed = {index: output_item(items[index]) for turn in turns for index in turn}
         if all(not response.output for response in responses):

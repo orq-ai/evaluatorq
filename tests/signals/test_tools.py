@@ -59,6 +59,21 @@ def test_duplicate_loops_and_result_sizes():
     assert values['consecutive_same_tool_max'].value == 3
 
 
+def test_raw_argument_provenance_keeps_distinct_failed_parses_apart():
+    def raw_call(text: str, call_id: str):
+        return call('lookup', {}, call_id).model_copy(update={'extra': {'evaluatorq.raw_arguments': text}})
+
+    trajectory = traj([
+        agent(calls=[raw_call('{bad-one', 'a')]),
+        agent(calls=[raw_call('{bad-two', 'b')]),
+        agent(calls=[raw_call('{bad-one', 'c')]),
+    ])
+
+    duplicate = _values(trajectory, 'duplicate_tool_call_count')['duplicate_tool_call_count']
+    assert duplicate.value == 1
+    assert duplicate.evidence[0].call_id == 'c'
+
+
 def test_schema_violation_and_missing_schema_jsonschema_basis():
     schema = {'type': 'object', 'required': ['query'], 'properties': {'query': {'type': 'string'}}}
     trajectory = traj(

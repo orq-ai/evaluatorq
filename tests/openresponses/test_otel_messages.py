@@ -108,6 +108,12 @@ def test_mcp_and_custom_tool_calls_map_to_tool_calls() -> None:
     assert messages[3] == {'role': 'tool', 'parts': [{'type': 'tool_call_response', 'id': 'k1', 'response': 'match'}]}
 
 
+def test_mcp_call_uses_sdk_name_in_input_and_output_messages() -> None:
+    item = {'type': 'mcp_call', 'id': 'm1', 'name': 'search', 'arguments': '{}', 'server_label': 'srv'}
+    assert items_to_input_messages([item])[0]['parts'][0]['name'] == 'search'
+    assert items_to_output_messages([item])[0]['parts'][0]['name'] == 'search'
+
+
 def test_output_messages_carry_finish_reason_and_drop_tool_results() -> None:
     messages = items_to_output_messages(
         [

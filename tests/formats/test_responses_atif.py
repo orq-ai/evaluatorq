@@ -87,6 +87,115 @@ def test_orphan_function_call_output_warns_and_attaches(caplog: pytest.LogCaptur
     assert 'ghost' in caplog.text
 
 
+def test_custom_tool_call_without_call_id_is_skipped_and_roundtrips(caplog: pytest.LogCaptureFixture) -> None:
+    items = [
+        {'type': 'custom_tool_call', 'name': 'lookup', 'input': '{}'},
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'done'}]},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    assert trajectory.steps[0].extra is None
+    assert 'custom_tool_call' in caplog.text and 'no call_id' in caplog.text
+    assert trajectory.to_responses().items[0]['type'] == 'message'
+
+
+def test_orphan_custom_result_after_malformed_call_roundtrips() -> None:
+    items = [
+        {'type': 'custom_tool_call', 'name': 'lookup', 'input': '{}'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c1', 'output': 'result'},
+    ]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.items == [items[-1]]
+    assert conversation.responses is None
+
+
+def test_agent_step_with_only_unmapped_result_does_not_emit_empty_assistant_turn() -> None:
+    items = [{'type': 'custom_tool_call_output', 'call_id': 'orphan', 'output': 'result'}]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.items == items
+    assert conversation.responses is None
+
+
+def test_agent_step_with_only_orphan_function_result_does_not_emit_empty_assistant_turn() -> None:
+    items = [{'type': 'function_call_output', 'call_id': 'orphan', 'output': 'result'}]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.items == []
+    assert conversation.responses is None
+
+
+def test_reasoning_only_agent_step_does_not_emit_empty_assistant_turn() -> None:
+    trajectory = AtifTrajectory.model_validate({
+        'schema_version': 'ATIF-v1.7',
+        'agent': {'name': 'a', 'version': '1'},
+        'steps': [{'step_id': 1, 'source': 'agent', 'message': '', 'reasoning_content': 'think'}],
+    })
+    conversation = trajectory.to_responses()
+    assert [item['type'] for item in conversation.items] == ['reasoning']
+    assert conversation.responses is not None
+    assert [item.type for item in conversation.responses[0].output] == ['reasoning']
+
+
+def test_custom_and_function_results_keep_their_shared_order() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'custom', 'input': '{}'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'first'},
+        {'type': 'function_call_output', 'call_id': 'f', 'output': 'second'},
+    ]
+    roundtrip = ResponsesConversation(items=items).to_atif().to_responses()
+    results = [item for item in roundtrip.items if item['type'] in ('custom_tool_call_output', 'function_call_output')]
+    assert [(item['type'], item.get('output')) for item in results] == [
+        ('custom_tool_call_output', 'first'), ('function_call_output', 'second')
+    ]
+
+
+def test_duplicate_result_order_metadata_warns_and_keeps_all_results(caplog: pytest.LogCaptureFixture) -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'custom', 'input': '{}'},
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'custom'},
+        {'type': 'function_call_output', 'call_id': 'f', 'output': 'function'},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    assert trajectory.steps[0].extra is not None
+    trajectory.steps[0].extra['evaluatorq.responses_result_order'] = [
+        {'type': 'function', 'index': 0}, {'type': 'function', 'index': 0}
+    ]
+    roundtrip = trajectory.to_responses()
+    results = [item for item in roundtrip.items if item['type'] in ('custom_tool_call_output', 'function_call_output')]
+    assert [item['type'] for item in results] == ['function_call_output', 'custom_tool_call_output']
+    assert 'Malformed Responses result order metadata' in caplog.text
+
+
+def test_custom_call_stays_before_function_result_in_response_output() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'f', 'name': 'ordinary', 'arguments': '{}'},
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'custom', 'input': '{}'},
+        {'type': 'function_call_output', 'call_id': 'f', 'output': 'done'},
+    ]
+    conversation = ResponsesConversation(items=items).to_atif().to_responses()
+    assert conversation.responses is not None
+    assert [item.type for item in conversation.responses[0].output] == [
+        'function_call', 'custom_tool_call'
+    ]
+    assert [item['type'] for item in conversation.items] == [
+        'function_call', 'custom_tool_call', 'function_call_output'
+    ]
+
+
+def test_tool_output_after_intervening_user_is_orphaned() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': '{}'},
+        {'type': 'message', 'role': 'user', 'content': 'new question'},
+        {'type': 'function_call_output', 'call_id': 'c', 'output': 'late result'},
+    ]
+    traj = ResponsesConversation(items=items).to_atif()
+    assert [step.source for step in traj.steps] == ['agent', 'user', 'agent']
+    assert traj.steps[0].observation is None
+    assert traj.steps[2].observation is not None
+    result = traj.steps[2].observation.results[0]
+    assert result.source_call_id is None and result.extra == {'orphan_call_id': 'c'}
+
+
 def test_empty_items_raise_value_error() -> None:
     with pytest.raises(ValueError, match='no items'):
         ResponsesConversation(items=[]).to_atif()
@@ -104,9 +213,45 @@ def test_non_json_arguments_survive_via_raw_wrapper(caplog: pytest.LogCaptureFix
         {'type': 'function_call_output', 'call_id': 'c', 'output': 'r'},
     ]
     traj = ResponsesConversation(items=items).to_atif()
-    assert traj.steps[0].tool_calls is not None and traj.steps[0].tool_calls[0].arguments == {'_raw': 'not json'}
+    assert traj.steps[0].tool_calls is not None
+    assert traj.steps[0].tool_calls[0].arguments == {}
+    assert traj.steps[0].tool_calls[0].extra == {'evaluatorq.raw_arguments': 'not json'}
     back = traj.to_responses()
     assert next(i for i in back.items if i['type'] == 'function_call')['arguments'] == 'not json'
+
+
+def test_json_raw_key_arguments_and_typed_tool_output_survive() -> None:
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': '{"_raw":"literal"}'},
+        {'type': 'function_call_output', 'call_id': 'c', 'output': [
+            {'type': 'input_text', 'text': 'found'},
+            {'type': 'input_image', 'image_url': 'https://x/image.png'},
+            {'type': 'input_file', 'file_id': 'file_1'},
+        ]},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    call = trajectory.steps[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    assert call.arguments == {'_raw': 'literal'}
+    result = trajectory.steps[0].observation.results[0]  # pyright: ignore[reportOptionalMemberAccess]
+    assert isinstance(result.content, list)
+    assert [part.type for part in result.content] == ['text', 'image', 'text']
+    back = trajectory.to_responses()
+    call_item = next(item for item in back.items if item['type'] == 'function_call')
+    assert call_item['arguments'] == '{"_raw":"literal"}'
+
+
+def test_nested_raw_sentinel_shaped_json_arguments_do_not_collide() -> None:
+    raw_arguments = '{"_raw":{"evaluatorq_raw_value":"literal"}}'
+    items: list[dict[str, Any]] = [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': raw_arguments},
+        {'type': 'function_call_output', 'call_id': 'c', 'output': 'done'},
+    ]
+    trajectory = ResponsesConversation(items=items).to_atif()
+    call = trajectory.steps[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    assert call.arguments == {'_raw': {'evaluatorq_raw_value': 'literal'}}
+    assert call.extra is None
+    back = trajectory.to_responses()
+    assert next(item for item in back.items if item['type'] == 'function_call')['arguments'] == raw_arguments
 
 
 def test_data_url_image_survives_as_path() -> None:
@@ -367,3 +512,41 @@ def test_compaction_item_becomes_a_marked_system_step(caplog: pytest.LogCaptureF
     assert step.extra == {'context_management': {'type': 'compaction', 'boundary': 'replace'},
                           'evaluatorq.compaction': [compaction]}
     assert 'compaction' not in caplog.text
+
+
+def test_compaction_item_round_trips_through_atif() -> None:
+    compaction = {'type': 'compaction', 'id': 'cmp_1', 'encrypted_content': 'gAAA'}
+    items = [*_ITEMS, compaction, {'type': 'message', 'role': 'user', 'content': 'next'}]
+    back = ResponsesConversation(items=items).to_atif().to_responses()
+    assert back.items[-2:] == items[-2:]
+
+
+def test_compaction_response_output_is_rejected_before_alignment() -> None:
+    compaction = {'type': 'compaction', 'id': 'cmp_1', 'encrypted_content': 'gAAA'}
+    response = Response.model_validate({**_response('gpt-x', None).model_dump(), 'output': [compaction]})
+    with pytest.raises(ValueError, match=r"Response.output item types \['compaction'\] are not supported"):
+        ResponsesConversation(items=[compaction], responses=[response])
+
+
+def test_custom_and_mcp_calls_belong_to_response_and_agent_step() -> None:
+    custom = {'type': 'custom_tool_call', 'call_id': 'c2', 'name': 'search', 'input': 'query'}
+    mcp = {'type': 'mcp_call', 'id': 'mcp_1', 'arguments': '{}', 'name': 'lookup', 'server_label': 'srv'}
+    items = [_ITEMS[0], custom, mcp]
+    conv = ResponsesConversation(items=items, responses=[_response('gpt-x', None)])
+    assert conv.responses is not None
+    assert [item.type for item in conv.responses[0].output] == ['custom_tool_call', 'mcp_call']
+    step = conv.to_atif().steps[1]
+    assert step.source == 'agent' and step.model_name == 'gpt-x'
+    assert step.extra is not None and step.extra['evaluatorq.responses_output_items'] == [custom, mcp]
+    back = conv.to_atif().to_responses()
+    assert back.items[1:] == [custom, mcp]
+
+
+def test_custom_tool_result_round_trips_with_its_call() -> None:
+    call = {'type': 'custom_tool_call', 'call_id': 'c2', 'name': 'search', 'input': 'query'}
+    result = {'type': 'custom_tool_call_output', 'call_id': 'c2', 'output': '/tmp/result'}
+    items = [_ITEMS[0], call, result]
+    traj = ResponsesConversation(items=items).to_atif()
+    step = traj.steps[1]
+    assert step.extra is not None and step.extra['evaluatorq.responses_result_items'] == [result]
+    assert traj.to_responses().items[-2:] == [call, result]

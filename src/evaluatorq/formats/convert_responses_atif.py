@@ -30,15 +30,17 @@ from evaluatorq.contracts import (
 )
 from evaluatorq.formats._ids import content_seed, stable_hex
 from evaluatorq.formats._shared import (
-    arguments_text,
+    COMPACTION_EXTRA_KEY,
+    RAW_ARGUMENTS_EXTRA_KEY,
     atif_content_text,
+    atif_tool_arguments,
     compaction_extra,
     final_metrics,
     join_text,
+    json_arguments_text,
     media_marker,
     parse_iso,
     part_text,
-    tool_arguments,
 )
 from evaluatorq.formats.atif import (
     AtifAgent,
@@ -64,7 +66,9 @@ if TYPE_CHECKING:
     from openai.types.responses import ResponseUsage
 
 _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text'})
-_OUTPUT_ITEM_TYPES = frozenset({'message', 'reasoning', 'function_call'})
+_UNMAPPED_OUTPUTS_KEY = 'evaluatorq.responses_output_items'
+_UNMAPPED_RESULTS_KEY = 'evaluatorq.responses_result_items'
+_RESULT_ORDER_KEY = 'evaluatorq.responses_result_order'
 _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']] = {
     'image/jpeg': 'image/jpeg',
     'image/png': 'image/png',
@@ -87,6 +91,9 @@ class _Draft:
     reasoning: list[dict[str, Any]] = field(default_factory=list)
     calls: list[dict[str, Any]] = field(default_factory=list)
     results: list[dict[str, Any]] = field(default_factory=list)
+    unmapped_outputs: list[dict[str, Any]] = field(default_factory=list)
+    unmapped_results: list[dict[str, Any]] = field(default_factory=list)
+    result_order: list[dict[str, int | str]] = field(default_factory=list)
     seen_result: bool = False
     item: dict[str, Any] | None = None  # the message item of a user/system step
     response: Response | None = None  # the model call that produced an agent step
@@ -145,24 +152,55 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         else:
             logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
 
+    def custom_call(index: int, item: dict[str, Any]) -> None:
+        if isinstance(item.get('call_id'), str) and item['call_id']:
+            current_agent(index).unmapped_outputs.append(item)
+        else:
+            logger.warning('Responses custom_tool_call {!r} has no call_id; skipping it.', item.get('name'))
+
     handlers = {
         'message': message,
         'reasoning': lambda index, item: current_agent(index).reasoning.append(item),
         'function_call': call,
+        'custom_tool_call': custom_call,
+        'mcp_call': lambda index, item: current_agent(index).unmapped_outputs.append(item),
         'function_call_output': lambda _, item: _attach_output(item, drafts),
+        'custom_tool_call_output': lambda _, item: _attach_custom_output(item, drafts),
         'compaction': lambda _, item: drafts.append(_Draft(source='system', item=item)),
     }
     walk_items(items, handlers, 'ATIF')
     return drafts
 
 
+def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
+    call_id = item.get('call_id')
+    for draft in reversed(drafts):
+        if draft.source != 'agent':
+            break
+        if any(call.get('call_id') == call_id for call in draft.unmapped_outputs):
+            draft.unmapped_results.append(item)
+            draft.result_order.append({'type': 'custom', 'index': len(draft.unmapped_results) - 1})
+            draft.seen_result = True
+            return
+    logger.warning('custom_tool_call_output for call_id {!r} matches no custom_tool_call; preserving it.', call_id)
+    last = drafts[-1] if drafts and drafts[-1].source == 'agent' else _Draft(source='agent')
+    if not drafts or last is not drafts[-1]:
+        drafts.append(last)
+    last.unmapped_results.append(item)
+    last.result_order.append({'type': 'custom', 'index': len(last.unmapped_results) - 1})
+    last.seen_result = True
+
+
 def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
     call_id = item.get('call_id')
     output = item.get('output')
-    content = output if isinstance(output, str) else tool_result_to_text(output)
+    content = _tool_output_content(output)
     for draft in reversed(drafts):
-        if draft.source == 'agent' and any(c.get('call_id') == call_id for c in draft.calls):
+        if draft.source != 'agent':
+            break
+        if any(c.get('call_id') == call_id for c in draft.calls):
             draft.results.append({'source_call_id': call_id, 'content': content})
+            draft.result_order.append({'type': 'function', 'index': len(draft.results) - 1})
             draft.seen_result = True
             return
     last = drafts[-1] if drafts else None
@@ -181,7 +219,20 @@ def _attach_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
             call_id,
         )
     last.results.append({'source_call_id': None, 'content': content, 'extra': {'orphan_call_id': call_id}})
+    last.result_order.append({'type': 'function', 'index': len(last.results) - 1})
     last.seen_result = True
+
+
+def _tool_output_content(output: Any) -> str | list[AtifContentPart] | None:
+    """Keep typed Responses tool output as ATIF text/image parts where its schema allows it."""
+    if isinstance(output, str) or output is None:
+        return output
+    if not isinstance(output, list):
+        return tool_result_to_text(output)
+    parts = [_user_part(part) for part in output]
+    if all(part.type == 'text' for part in parts):
+        return join_text(part.text or '' for part in parts)
+    return parts
 
 
 def _assistant_text(content: Any) -> str:
@@ -263,6 +314,13 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
     fc_item_ids = {c['call_id']: c['id'] for c in draft.calls if isinstance(c.get('id'), str)}
     if fc_item_ids:
         extra['fc_item_ids'] = fc_item_ids
+    if draft.unmapped_outputs:
+        extra[_UNMAPPED_OUTPUTS_KEY] = draft.unmapped_outputs
+    if draft.unmapped_results:
+        extra[_UNMAPPED_RESULTS_KEY] = draft.unmapped_results
+    result_types = {entry['type'] for entry in draft.result_order}
+    if len(result_types) > 1:
+        extra[_RESULT_ORDER_KEY] = draft.result_order
     results = [AtifObservationResult(**result) for result in draft.results]
     fields: dict[str, Any] = {}
     if response is not None:
@@ -292,10 +350,12 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
 
 
 def _tool_call(call: dict[str, Any]) -> AtifToolCall:
+    arguments, raw_arguments = atif_tool_arguments(call.get('arguments'), call.get('name'))
     return AtifToolCall(
         tool_call_id=call['call_id'],
         function_name=str(call.get('name') or ''),
-        arguments=tool_arguments(call.get('arguments'), call.get('name')),
+        arguments=arguments,
+        extra={RAW_ARGUMENTS_EXTRA_KEY: raw_arguments} if raw_arguments is not None else None,
     )
 
 
@@ -346,9 +406,10 @@ def _metrics_from_usage(usage: ResponseUsage | None, unset: frozenset[str]) -> A
 
 
 def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
-    """Render an ATIF trajectory as Responses items plus exactly one `Response` per agent step.
+    """Render an ATIF trajectory as Responses items plus one `Response` per agent step with output items.
 
     Each `Response.output` holds the output items of its step (assistant message, reasoning, function calls).
+    A step containing only tool results has no model output and therefore gets no `Response`.
 
     A step without model, metrics or timestamp gets a placeholder (`model=''`, `usage=None`, `created_at=0.0`),
     which `responses_to_atif` reads back as absent. Responses usage has no unset token count, so an unset ATIF
@@ -371,11 +432,28 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
         if step.source == 'agent':
             step_items = _agent_items(step, seed)
             items.extend(step_items)
-            responses.append(_response(step, seed, [output_item(i) for i in step_items if is_output_item(i)]))
+            output = [output_item(i) for i in step_items if is_output_item(i)]
+            if output:
+                responses.append(_response(step, seed, output))
             for name in _UNMAPPED_METRICS:
                 if step.metrics is not None and getattr(step.metrics, name) is not None:
                     unmapped[name] = unmapped.get(name, 0) + 1
         else:
+            extra = step.extra or {}
+            context = extra.get('context_management')
+            compactions = extra.get(COMPACTION_EXTRA_KEY)
+            if isinstance(context, dict) and context.get('type') == 'compaction':
+                restored = (
+                    [item for item in compactions if isinstance(item, dict) and item.get('type') == 'compaction']
+                    if isinstance(compactions, list)
+                    else []
+                )
+                if isinstance(compactions, list) and len(restored) == len(compactions) and restored:
+                    items.extend(restored)
+                    continue
+                logger.warning(
+                    'Compaction step {} has no Responses compaction item; rendering its message.', step.step_id
+                )
             role = 'developer' if (step.extra or {}).get('original_role') == 'developer' else step.source
             content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
             items.extend(messages_to_responses_input([Message(role=role, content=content)]))
@@ -417,14 +495,30 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     calls = [
         StrategyToolCall(
             id=call.tool_call_id,
-            function=FunctionCall(name=call.function_name, arguments=arguments_text(call.arguments)),
+            function=FunctionCall(
+                name=call.function_name,
+                arguments=(
+                    call.extra[RAW_ARGUMENTS_EXTRA_KEY]
+                    if isinstance(call.extra, dict) and isinstance(call.extra.get(RAW_ARGUMENTS_EXTRA_KEY), str)
+                    else json_arguments_text(call.arguments)
+                ),
+            ),
             item_id=item_id if isinstance(item_id := fc_item_ids.get(call.tool_call_id), str) else None,
         )
         for call in step.tool_calls or []
     ]
     names = {call.tool_call_id: call.function_name for call in step.tool_calls or []}
     content = step.message if isinstance(step.message, str) else _atif_parts(step.message)
-    messages = [Message(role='assistant', content=content or None, tool_calls=calls or None)]
+    extra = step.extra or {}
+    has_non_message_output = bool(step.reasoning_content or extra.get(_UNMAPPED_OUTPUTS_KEY))
+    has_tool_results = bool(extra.get(_UNMAPPED_RESULTS_KEY)) or bool(
+        step.observation is not None and step.observation.results
+    )
+    messages = (
+        [Message(role='assistant', content=content or None, tool_calls=calls or None)]
+        if content or calls or not (has_non_message_output or has_tool_results)
+        else []
+    )
     for result in step.observation.results if step.observation else []:
         for ref in result.subagent_trajectory_ref or []:
             logger.warning('subagent {} not representable in Responses', ref.trajectory_id or ref.trajectory_path)
@@ -450,7 +544,68 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
             )
         )
     items.extend(messages_to_responses_input(messages))
+    outputs: list[dict[str, Any]] = []
+    unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
+    if isinstance(unmapped, list):
+        outputs = [item for item in unmapped if isinstance(item, dict) and is_output_item(item)]
+        if len(outputs) != len(unmapped):
+            logger.warning('Step {} has malformed Responses output items; dropping them.', step.step_id)
+        insertion = next(
+            (index for index, item in enumerate(items) if item.get('type') == 'function_call_output'), len(items)
+        )
+        items[insertion:insertion] = outputs
+    results: list[dict[str, Any]] = []
+    raw_results = (step.extra or {}).get(_UNMAPPED_RESULTS_KEY)
+    if isinstance(raw_results, list):
+        results = [
+            item for item in raw_results if isinstance(item, dict) and item.get('type') == 'custom_tool_call_output'
+        ]
+        if len(results) != len(raw_results):
+            logger.warning('Step {} has malformed Responses custom tool results; dropping them.', step.step_id)
+    _order_result_items(items, results, (step.extra or {}).get(_RESULT_ORDER_KEY))
     return items
+
+
+def _order_result_items(items: list[dict[str, Any]], custom_results: list[dict[str, Any]], order: Any) -> None:
+    ordinary = [item for item in items if item.get('type') == 'function_call_output']
+    if not isinstance(order, list):
+        items.extend(custom_results)
+        return
+    expected = {('function', index) for index in range(len(ordinary))} | {
+        ('custom', index) for index in range(len(custom_results))
+    }
+    observed: list[tuple[str, int]] = []
+    for entry in order:
+        if (
+            not isinstance(entry, dict)
+            or entry.get('type') not in ('function', 'custom')
+            or not isinstance(entry.get('index'), int)
+            or isinstance(entry.get('index'), bool)
+        ):
+            observed = []
+            break
+        observed.append((entry['type'], entry['index']))
+    if len(observed) != len(expected) or set(observed) != expected:
+        logger.warning('Malformed Responses result order metadata; restoring function results before custom results.')
+        items[:] = [item for item in items if item.get('type') != 'function_call_output']
+        insertion = next(
+            (index for index, item in enumerate(items) if item.get('type') == 'custom_tool_call_output'), len(items)
+        )
+        items[insertion:insertion] = [*ordinary, *custom_results]
+        return
+    combined: list[dict[str, Any]] = []
+    for entry in order:
+        if not isinstance(entry, dict) or not isinstance(entry.get('index'), int):
+            continue
+        index = entry['index']
+        if entry.get('type') == 'function' and 0 <= index < len(ordinary):
+            combined.append(ordinary[index])
+        elif entry.get('type') == 'custom' and 0 <= index < len(custom_results):
+            combined.append(custom_results[index])
+    if len(combined) != len(ordinary) + len(custom_results):
+        combined = [*ordinary, *custom_results]
+    items[:] = [item for item in items if item.get('type') != 'function_call_output']
+    items.extend(combined)
 
 
 def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Response:

@@ -33,10 +33,16 @@ def test_explicit_error_status_is_required_only_for_status_detection() -> None:
 
 
 def test_args_parseable_flags_raw_arguments() -> None:
-    recs = context(traj([agent(calls=[call('A', {'_raw': '{oops'}, 'a'), call('B', {'x': 1}, 'b')])]))
+    raw = call('A', {}, 'a').model_copy(update={'extra': {'evaluatorq.raw_arguments': '{oops'}})
+    recs = context(traj([agent(calls=[raw, call('B', {'_raw': '{valid JSON key}'}, 'b')])]))
     got = pre.args_parseable(recs)
     assert got.met == 'partial'
     assert 'A @step 1' in got.detail
+
+
+def test_literal_raw_key_is_parseable() -> None:
+    recs = context(traj([agent(calls=[call('A', {'_raw': 'literal'}, 'a')])]))
+    assert pre.args_parseable(recs).met is True
 
 
 def test_result_content_available_reads_the_truncation_marker() -> None:

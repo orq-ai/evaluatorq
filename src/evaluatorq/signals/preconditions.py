@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections import Counter
 from typing import Literal
 
-from evaluatorq.formats._shared import RAW_ARGUMENTS_KEY
 from evaluatorq.signals.models import Precondition
 from evaluatorq.signals.walk import (
     CallRecord,
@@ -19,6 +18,7 @@ from evaluatorq.signals.walk import (
     infer_provider,
     is_llm_step,
     llm_times,
+    raw_tool_arguments,
     step_model,
     tool_schemas,
     tool_times,
@@ -105,11 +105,11 @@ def explicit_error_status(ctx: SignalContext) -> Precondition:
 
 
 def args_parseable(ctx: SignalContext) -> Precondition:
-    """Arguments parse as a JSON object; unparseable ones (`{'_raw': text}`) are compared as raw strings."""
+    """Arguments parse as a JSON object; unparseable ones carry original text in tool-call extra."""
     calls = ctx.calls
     if not calls:
         return Precondition(name='arguments parse as JSON', met=True, detail='no tool calls', required=False)
-    bad = [r for r in calls if set(r.call.arguments) == {RAW_ARGUMENTS_KEY}]
+    bad = [r for r in calls if raw_tool_arguments(r.call) is not None]
     return _coverage(
         'arguments parse as JSON',
         len(calls) - len(bad),
