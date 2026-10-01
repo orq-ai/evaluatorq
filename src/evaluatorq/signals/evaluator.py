@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -31,7 +32,7 @@ def to_trajectory(output: Any) -> AtifTrajectory | None:
             return output.to_atif()
         if isinstance(output, list) and all(isinstance(item, (dict, Message)) for item in output):
             return ChatConversation(messages=output).to_atif()
-        if isinstance(output, dict) and 'messages' in output:
+        if isinstance(output, Mapping) and 'messages' in output:
             messages = output['messages']
             if isinstance(messages, list) and all(isinstance(item, (dict, Message)) for item in messages):
                 return ChatConversation(messages=messages).to_atif()

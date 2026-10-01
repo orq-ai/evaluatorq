@@ -162,9 +162,19 @@ def cache_read_token_share(ctx: SignalContext) -> SignalResult:
         w.step.metrics.prompt_tokens for w in entries if w.step.metrics and w.step.metrics.prompt_tokens is not None
     )
     cached = sum(w.step.metrics.cached_tokens or 0 for w in entries if w.step.metrics)
+    cached_within_prompt = all(
+        (w.step.metrics.cached_tokens or 0) <= (w.step.metrics.prompt_tokens or 0)
+        for w in entries
+        if w.step.metrics and w.step.metrics.prompt_tokens is not None
+    )
     pcs = [
         pre.token_usage_complete(ctx),
         pre.Precondition(name='has input tokens', met=prompt > 0, detail=f'{prompt} prompt tokens'),
+        pre.Precondition(
+            name='cached tokens do not exceed prompt tokens',
+            met=cached_within_prompt,
+            detail='cached token usage exceeds prompt token usage' if not cached_within_prompt else '',
+        ),
     ]
     evidence = [
         _ev(w, f'{w.step.metrics.cached_tokens or 0} cached of {w.step.metrics.prompt_tokens} prompt tokens')

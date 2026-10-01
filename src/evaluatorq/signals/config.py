@@ -176,6 +176,14 @@ class SignalsConfig(BaseModel):
     tag_thresholds: TagThresholds | None = None
     classifier: ClassifierConfig = Field(default_factory=ClassifierConfig)
 
+    @field_validator('tag_percentiles')
+    @classmethod
+    def _validate_tag_percentiles(cls, values: dict[str, float]) -> dict[str, float]:
+        for key, value in values.items():
+            if not 0 <= value <= 100:
+                raise ValueError(f'tag percentile for {key!r} must be between 0 and 100')
+        return values
+
     @classmethod
     def from_file(cls, path: str | Path) -> SignalsConfig:
         """Read a JSON config. The file may set any subset of fields; the rest keep their defaults.

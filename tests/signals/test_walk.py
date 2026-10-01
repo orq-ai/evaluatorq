@@ -37,6 +37,36 @@ def test_walk_nests_subagents_of_subagents() -> None:
     assert _ids(walk(root)) == [((), 1, 0), (('child',), 1, 1), (('child', 'grand'), 1, 2)]
 
 
+def test_walk_keeps_same_id_subagents_in_separate_branches() -> None:
+    first_leaf = traj([agent('first leaf')], trajectory_id='shared')
+    second_leaf = traj([agent('second leaf')], trajectory_id='shared')
+    first = traj(
+        [agent(calls=[call('d')], results=[spawned('shared')])],
+        trajectory_id='first',
+        subagents=[first_leaf],
+    )
+    second = traj(
+        [agent(calls=[call('d')], results=[spawned('shared')])],
+        trajectory_id='second',
+        subagents=[second_leaf],
+    )
+    root = traj(
+        [agent(calls=[call('d')], results=[spawned('first')]), agent(calls=[call('d')], results=[spawned('second')])],
+        subagents=[first, second],
+    )
+
+    walked = walk(root)
+    assert _ids(walked) == [
+        ((), 1, 0),
+        (('first',), 1, 1),
+        (('first', 'shared'), 1, 2),
+        ((), 2, 0),
+        (('second',), 1, 1),
+        (('second', 'shared'), 1, 2),
+    ]
+    assert [entry.step.message for entry in walked if entry.depth == 2] == ['first leaf', 'second leaf']
+
+
 def test_walk_appends_unreferenced_subagents_flagged_at_depth_one() -> None:
     stray = traj([agent('lost')], trajectory_id='stray')
     root = traj([user(), agent('a')], subagents=[stray])

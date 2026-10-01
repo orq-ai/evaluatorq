@@ -54,6 +54,12 @@ def test_direct_construction_replaces_tool_roles() -> None:
     assert SignalsConfig(tool_roles={'x': 'bash'}).tool_roles == {'x': 'bash'}
 
 
+@pytest.mark.parametrize('value', [-0.1, 100.1, float('nan'), float('inf')])
+def test_tag_percentiles_must_be_within_percent_range(value: float) -> None:
+    with pytest.raises(ValidationError, match='between 0 and 100'):
+        SignalsConfig(tag_percentiles={'error_heavy.tool_error_rate': value})
+
+
 def test_classifier_model_is_read_at_construction(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('EVALUATORQ_CLASSIFIER_MODEL', raising=False)
     assert ClassifierConfig().model == 'typesafe/jev-latest'

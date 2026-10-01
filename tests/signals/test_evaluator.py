@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import UserDict
 from typing import Any, cast
 
 import pytest
@@ -44,6 +45,7 @@ def test_to_trajectory_accepts_supported_inputs() -> None:
     assert to_trajectory(otel) is not None
     assert to_trajectory([message.model_dump(exclude_none=True) for message in messages]) is not None
     assert to_trajectory({'messages': messages}) is not None
+    assert to_trajectory(UserDict({'messages': messages})) is not None
 
 
 def test_to_trajectory_returns_none_for_unsupported_or_malformed_output() -> None:

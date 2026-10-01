@@ -68,7 +68,7 @@ print([evaluator['name'] for evaluator in evaluators])
 
 Each `SignalResult` carries a value, step and call evidence, preconditions, and an `approximate` flag. Evidence identifies the ATIF step and, for tool-call measurements, the call id; `agent_path` identifies the root or subagent trajectory. A failed precondition is recorded explicitly. If the signal cannot be computed, `no_basis` explains why and its value is `None`.
 
-Some signals can be approximated when a trace lacks precise timestamps. For example, an ATIF step timestamp may locate the beginning of a model call even when the OTel span has no start and end pair. The result keeps that value marked `approximate=True`. Compaction and copied-context steps are excluded from step and call measurements; embedded subagent trajectories still contribute to depth and invocation counts.
+Some signals can be approximated when a trace lacks precise timestamps. For example, consecutive model-call step timestamps can bound an approximate model interval when OTel spans lack start and end pairs. The result keeps that value marked `approximate=True`. Compaction and copied-context steps are excluded from step and call measurements; embedded subagent trajectories still contribute to depth and invocation counts.
 
 ## Inputs and coverage
 
@@ -145,9 +145,9 @@ The groups separate measurements by the kind of trajectory behavior they describ
 | `max_parallel_tool_calls` | Largest parallel tool-call batch. | Tool calls grouped by step |
 | `wall_time_ms` | Elapsed time across the recorded run. | Start and end timestamps |
 | `active_time_ms` | Time spent in recorded model and tool operations. | Model and tool timing |
-| `llm_time_ms` | Time spent in model calls. | Model call start and end timestamps |
+| `llm_time_ms` | Time spent in model calls. | Model call bounds or consecutive model-call step timestamps |
 | `tool_time_ms` | Tool time that does not overlap model-call time. | Tool result start and end timestamps |
-| `max_autonomous_duration_ms` | Longest autonomous segment duration. | User and agent steps with timing |
+| `max_autonomous_duration_ms` | Longest root-agent segment duration between user messages. | Root user and agent steps with timing |
 
 ### D — Tags
 

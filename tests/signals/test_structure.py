@@ -33,6 +33,15 @@ def test_token_totals_remove_cached_tokens_and_compute_peak_prompt() -> None:
     assert report.values()['provider_count'] == 2
 
 
+def test_cached_usage_above_prompt_usage_has_no_basis() -> None:
+    report = compute_signals(
+        traj([agent(model='openai/gpt-4.1', metrics=AtifMetrics(prompt_tokens=10, cached_tokens=12, completion_tokens=1))])
+    )
+    result = report.results['cache_read_token_share']
+    assert result.value is None
+    assert 'cached tokens do not exceed prompt tokens' in (result.no_basis or '')
+
+
 def test_tool_value_signals_parse_command_hosts_and_skills() -> None:
     calls = [call('Bash', {'command': 'FOO=bar cd /tmp && git status --short'}, 'b1'),
              call('WebFetch', {'url': 'https://Example.COM/path'}, 'w1'),

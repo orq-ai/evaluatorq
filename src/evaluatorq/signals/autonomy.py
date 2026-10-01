@@ -257,7 +257,8 @@ def _llm_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], lis
             exact_stamps.append(end)
         if current is not None:
             iso_stamps.append(current)
-        if entry.step.source == 'agent' and entry.step.llm_call_count != 0:
+        is_llm_step = entry.step.source == 'agent' and entry.step.llm_call_count != 0
+        if is_llm_step:
             if start is not None and end is not None and end >= start:
                 llm.append((start, end, entry, 'llm', None, False))
             elif (
@@ -268,7 +269,7 @@ def _llm_intervals(ctx: SignalContext) -> tuple[list[Interval], list[float], lis
                 and current >= prior[entry.agent_path]
             ):
                 llm.append((prior[entry.agent_path], current, entry, 'llm', None, True))
-        if current is not None:
+        if is_llm_step and current is not None:
             prior[entry.agent_path] = current
     return llm, exact_stamps, iso_stamps
 
@@ -366,14 +367,16 @@ def _timing(ctx: SignalContext) -> tuple[dict[str, Any], list[Precondition]]:
 
 def _time_signal(name: str, ctx: SignalContext, key: str, kinds: tuple[str, ...]) -> SignalResult:
     timing, pcs = _timing(ctx)
-    approximate = (
-        timing.get('wall_approximate', False)
-        if key == 'wall'
-        else any(interval[5] for kind in kinds for interval in timing.get(f'{kind}_intervals', []))
-    )
-    approximate = approximate or timing.get('llm_incomplete', False)
-    if key != 'llm':
-        approximate = approximate or timing.get('tool_incomplete', False)
+    if key == 'wall':
+        approximate = (
+            timing.get('wall_approximate', False)
+            or timing.get('llm_incomplete', False)
+            or timing.get('tool_incomplete', False)
+        )
+    else:
+        approximate = any(interval[5] for kind in kinds for interval in timing.get(f'{kind}_intervals', [])) or any(
+            timing.get(f'{kind}_incomplete', False) for kind in kinds
+        )
     if not timing:
         return result(name, 'C', None, preconditions=pcs, approximate=approximate)
     evidence = [
@@ -405,6 +408,7 @@ def max_autonomous_duration_ms(ctx: SignalContext) -> SignalResult:
     candidates: list[tuple[float, WalkedStep, list[WalkedStep]]] = []
     pcs = [_has_users(ctx), timestamps(ctx), tool_timestamps(ctx)]
     for start, entries in segments:
+        entries = [entry for entry in entries if not entry.agent_path]
         start_time = _step_epoch(start)
         if start_time is None:
             continue

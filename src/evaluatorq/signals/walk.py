@@ -122,11 +122,10 @@ def walk(trajectory: AtifTrajectory) -> list[WalkedStep]:
     referenced only from a skipped step (compaction or copied context) counts as unreferenced, so it is
     unlinked too.
     """
-    registry: dict[str, AtifTrajectory] = {}
-    _collect(trajectory, registry)
-    placed: set[str] = set()
-    if trajectory.trajectory_id is not None:
-        placed.add(trajectory.trajectory_id)
+    registry: dict[str, list[AtifTrajectory]] = {}
+    embedded: list[AtifTrajectory] = []
+    _collect(trajectory, registry, embedded)
+    placed: set[int] = {id(trajectory)}
     out: list[WalkedStep] = []
 
     def visit(current: AtifTrajectory, path: tuple[str, ...], depth: int, *, unlinked: bool) -> None:
@@ -137,25 +136,31 @@ def walk(trajectory: AtifTrajectory) -> list[WalkedStep]:
             out.append(WalkedStep(step, path, depth, current, unlinked))
             for ref in _refs(step):
                 sub_id = ref.trajectory_id
-                sub = local.get(sub_id) or registry.get(sub_id) if sub_id else None
-                if sub is None or sub_id is None or sub_id in placed:
+                if sub_id is None:
                     continue
-                placed.add(sub_id)
+                candidates = registry.get(sub_id, [])
+                sub = local.get(sub_id) or next((item for item in candidates if id(item) not in placed), None)
+                if sub is None or id(sub) in placed:
+                    continue
+                placed.add(id(sub))
                 visit(sub, (*path, sub_id), depth + 1, unlinked=unlinked)
 
     visit(trajectory, (), 0, unlinked=False)
-    for sub_id, sub in registry.items():
-        if sub_id not in placed:
-            placed.add(sub_id)
-            visit(sub, (sub_id,), 1, unlinked=True)
+    for sub in embedded:
+        if id(sub) not in placed and sub.trajectory_id is not None:
+            placed.add(id(sub))
+            visit(sub, (sub.trajectory_id,), 1, unlinked=True)
     return out
 
 
-def _collect(trajectory: AtifTrajectory, registry: dict[str, AtifTrajectory]) -> None:
+def _collect(
+    trajectory: AtifTrajectory, registry: dict[str, list[AtifTrajectory]], embedded: list[AtifTrajectory]
+) -> None:
     for sub in trajectory.subagent_trajectories or []:
-        if sub.trajectory_id is not None and sub.trajectory_id not in registry:
-            registry[sub.trajectory_id] = sub
-            _collect(sub, registry)
+        if sub.trajectory_id is not None:
+            registry.setdefault(sub.trajectory_id, []).append(sub)
+            embedded.append(sub)
+            _collect(sub, registry, embedded)
 
 
 def _refs(step: AtifStep) -> list[AtifSubagentRef]:

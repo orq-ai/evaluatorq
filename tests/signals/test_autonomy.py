@@ -7,8 +7,9 @@ from pathlib import Path
 
 from evaluatorq.formats.otel import OtelTrace
 from evaluatorq.signals import compute_signals
+from evaluatorq.signals.autonomy import llm_time_ms, max_autonomous_duration_ms, tool_time_ms
 
-from .conftest import agent, call, ok, spawned, traj, user
+from .conftest import agent, call, context, ok, spawned, traj, user
 
 FIXTURES = Path(__file__).parent.parent / 'formats' / 'fixtures'
 
@@ -147,9 +148,9 @@ def test_iso_timestamps_use_approximate_fallback_intervals() -> None:
     values = _run(trajectory, 'wall_time_ms', 'active_time_ms', 'llm_time_ms', 'tool_time_ms')
     assert values['wall_time_ms'].value == 5000
     assert values['wall_time_ms'].approximate is True
-    assert values['llm_time_ms'].value == 5000
+    assert values['llm_time_ms'].value == 3000
     assert values['tool_time_ms'].value == 0
-    assert values['active_time_ms'].value == 5000
+    assert values['active_time_ms'].value == 3000
     assert all(signal.approximate for signal in values.values())
 
 
@@ -168,6 +169,58 @@ def test_partial_llm_timing_is_disclosed_on_reported_duration() -> None:
     assert signal.value == 1000
     assert signal.approximate is True
     assert any(pc.name == 'LLM timestamp coverage' and pc.met == 'partial' for pc in signal.preconditions)
+
+
+def test_llm_fallback_uses_previous_llm_step_not_user_or_tool_step() -> None:
+    trajectory = traj([
+        agent('first', timestamp='2026-01-01T00:00:01Z'),
+        _timed_user('2026-01-01T00:00:03Z'),
+        agent(
+            calls=[call('search')],
+            timestamp='2026-01-01T00:00:04Z',
+            llm_call_count=0,
+        ),
+        agent('second', timestamp='2026-01-01T00:00:05Z'),
+    ])
+
+    signal = llm_time_ms(context(trajectory))
+    assert signal.value == 4000
+    assert signal.approximate is True
+
+
+def test_tool_timing_approximation_ignores_incomplete_llm_timing() -> None:
+    trajectory = traj([
+        agent(
+            'partly timed',
+            calls=[call('search', call_id='c')],
+            results=[ok(start_timestamp=3.2, end_timestamp=3.5)],
+            extra={'invocation': {'start_timestamp': 1.0, 'end_timestamp': 2.0}},
+        ),
+        agent('untimed'),
+    ])
+
+    signal = tool_time_ms(context(trajectory))
+    assert signal.value == 300
+    assert signal.approximate is False
+
+
+def test_max_autonomous_duration_excludes_nested_subagent_timestamps() -> None:
+    child = traj([agent('child answer', timestamp='2026-01-01T00:00:20Z')], trajectory_id='child')
+    trajectory = traj(
+        [
+            _timed_user('2026-01-01T00:00:00Z'),
+            agent(
+                calls=[call('delegate')],
+                results=[spawned('child')],
+                timestamp='2026-01-01T00:00:01Z',
+            ),
+        ],
+        subagents=[child],
+    )
+
+    signal = max_autonomous_duration_ms(context(trajectory))
+    assert signal.value == 1000
+    assert signal.evidence[0].related == [((), 2)]
 
 
 def test_missing_tool_timing_is_disclosed_instead_of_exact_zero() -> None:
