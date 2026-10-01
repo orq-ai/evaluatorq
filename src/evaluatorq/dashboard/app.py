@@ -487,17 +487,22 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
     # Tabbed body for the known surfaces; the interactive panels live inside
     # their tabs, so they are no longer appended separately.
-    if surface == 'sim':
-        from evaluatorq.dashboard.view import sim_run_compare_control
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        # Same choice list as the overview picker (sim only, no error runs,
-        # capped); the control itself drops the current run from the options.
-        choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-        body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
-    elif surface == 'redteam':
-        body_html = report_tabs.redteam_report_tabs(rid, report_obj)
-    else:
-        body_html = adapter.body(report_obj)
+    with cli_slug_render_scope():
+        if surface == 'sim':
+            from evaluatorq.dashboard.view import sim_run_compare_control
+
+            # Same choice list as the overview picker (sim only, no error runs,
+            # capped); the control itself drops the current run from the options.
+            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+            body_html = report_tabs.sim_report_tabs(
+                rid, report_obj, compare_html=sim_run_compare_control(rid, choices)
+            )
+        elif surface == 'redteam':
+            body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+        else:
+            body_html = adapter.body(report_obj)
 
     opts = filter_def.options(report_obj)
     total_results = len(filter_def.results(report_obj))
@@ -569,15 +574,18 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
     # Render the tabbed body from the filtered results so the static tab
     # content (tables, charts) tracks the filter, not just the HTMX panels.
-    if surface == 'sim':
-        body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
-    elif surface == 'redteam':
-        from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        filtered_report = rebuild_filtered_report(report_obj, filtered)
-        body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
-    else:
-        body_html = adapter.body_from_results(report_obj, filtered)
+    with cli_slug_render_scope():
+        if surface == 'sim':
+            body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
+        elif surface == 'redteam':
+            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+
+            filtered_report = rebuild_filtered_report(report_obj, filtered)
+            body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
+        else:
+            body_html = adapter.body_from_results(report_obj, filtered)
 
     form_html = render_filter_form(
         rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))

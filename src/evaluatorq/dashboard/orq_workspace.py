@@ -14,23 +14,48 @@ from __future__ import annotations
 
 import os
 import shutil
+from contextlib import contextmanager
+from contextvars import ContextVar
 from time import monotonic
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from loguru import logger
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 DEFAULT_BASE_URL = 'https://my.orq.ai'
 _cli_slug_cache: dict[tuple[str | None, str | None, bool], tuple[float, str | None]] = {}
+_render_cli_slug_cache: ContextVar[dict[tuple[str | None, str | None], str | None] | None] = ContextVar(
+    'render_cli_slug_cache', default=None
+)
+
+
+@contextmanager
+def cli_slug_render_scope() -> Iterator[None]:
+    """Reuse CLI-session slug discovery for one render, then discard it."""
+    token = _render_cli_slug_cache.set({})
+    try:
+        yield
+    finally:
+        _render_cli_slug_cache.reset(token)
 
 
 def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> str | None:
-    """Cache credential-matched CLI discovery so rendering links does not run a CLI command per row."""
+    """Cache credential lookups and reuse CLI-session discovery within one render."""
     key = (profile, fingerprint, use_cli_session)
+    render_cache = _render_cli_slug_cache.get() if use_cli_session else None
+    if render_cache is not None and (profile, fingerprint) in render_cache:
+        return render_cache[profile, fingerprint]
     cached = _cli_slug_cache.get(key) if not use_cli_session else None
     if cached is not None and cached[0] > monotonic():
         return cached[1]
 
-    return _discover_cli_slug(profile, fingerprint, use_cli_session=use_cli_session)
+    slug = _discover_cli_slug(profile, fingerprint, use_cli_session=use_cli_session)
+    if render_cache is not None:
+        render_cache[profile, fingerprint] = slug
+    return slug
 
 
 def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool) -> str | None:
