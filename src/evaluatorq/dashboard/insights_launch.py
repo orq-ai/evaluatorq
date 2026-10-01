@@ -49,9 +49,9 @@ def _set_private_file_mode(descriptor: int, mode: int) -> None:
     """Apply POSIX file permissions; Windows uses the containing directory ACL.
 
     Windows does not expose ``os.fchmod`` and does not implement POSIX mode
-    bits as access control. Private worker files are created inside their
-    private application or temporary directories, so their access inherits
-    that directory's Windows ACL.
+    bits as access control. Windows access therefore depends on the ACL
+    inherited from the containing application or temporary directory; this
+    helper does not set or inspect that ACL.
     """
     if os.name != 'nt':
         os.fchmod(descriptor, mode)
