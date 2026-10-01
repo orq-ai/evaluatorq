@@ -169,7 +169,7 @@ def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0, use_
             use_cli_session=use_cli_session,
         )
         rows = listing.get('workspaces') if listing else None
-        if profile and not isinstance(rows, list):
+        if profile and (not isinstance(rows, list) or not rows):
             rows = _profile_workspace_rows(profile, workspace_id, timeout, deadline, use_cli_session=use_cli_session)
     except (TypeError, ValueError, TimeoutError) as exc:
         return OrqScope(error=str(exc))

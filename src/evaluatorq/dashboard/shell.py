@@ -33,18 +33,18 @@ _SIDEBAR_TOGGLE_SCRIPT = (
     "(function(){try{if(localStorage.getItem('eq-sidebar-collapsed')==='1')"
     "document.documentElement.classList.add('sidebar-collapsed');}catch(e){}})();"
     'function eqToggleSidebar(){'
-    "var c=document.documentElement.classList.toggle('sidebar-collapsed');"
+    "const c=document.documentElement.classList.toggle('sidebar-collapsed');"
     "try{localStorage.setItem('eq-sidebar-collapsed',c?'1':'0');}catch(e){}}"
     "document.addEventListener('keydown',function(e){"
     "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='b')"
     '{e.preventDefault();eqToggleSidebar();}});'
     'function eqFinderTab(el,id){'
-    "var root=el.closest('.rt-drawer');if(!root)return;"
+    "const root=el.closest('.rt-drawer');if(!root)return;"
     "root.querySelectorAll('.fd-tabs [data-panel]').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
-    "var panels=root.querySelectorAll('.fd-technical .fd-panel');if(!panels.length)panels=root.querySelectorAll('.fd-panel');"
+    "let panels=root.querySelectorAll('.fd-technical .fd-panel');if(!panels.length)panels=root.querySelectorAll('.fd-panel');"
     'panels.forEach(function(panel){panel.hidden=panel.id!==id;});}'
     'function eqFinderTraceTab(el,id){'
-    "var root=el.closest('.fd-traces');if(!root)return;"
+    "const root=el.closest('.fd-traces');if(!root)return;"
     "root.querySelectorAll('.fd-tabs button').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
     "root.querySelectorAll(':scope > .fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
     # Non-Mac shows "Ctrl B" instead of the ⌘B glyph on the hotkey hint.
@@ -60,12 +60,12 @@ _AUTH_TOAST_SCRIPT = (
     "document.addEventListener('DOMContentLoaded',function(){"
     "fetch('/auth/status',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(s){"
     "if(s.status==='valid')return;"
-    "var id='eq-auth-toast:'+s.method+':'+s.status+':'+s.message;"
+    "const id='eq-auth-toast:'+s.method+':'+s.status+':'+s.message;"
     "try{if(sessionStorage.getItem(id))return;sessionStorage.setItem(id,'1');}catch(e){}"
-    "var toast=document.getElementById('eq-auth-toast');if(!toast)return;"
+    "const toast=document.getElementById('eq-auth-toast');if(!toast)return;"
     "toast.querySelector('.eq-auth-toast-message').textContent=s.message;"
     "toast.hidden=false;toast.classList.toggle('is-warning',s.status==='unavailable');"
-    'var close=function(){toast.hidden=true};'
+    'const close=function(){toast.hidden=true};'
     "toast.querySelector('button').addEventListener('click',close,{once:true});"
     'setTimeout(close,12000);'
     '}).catch(function(){});});'

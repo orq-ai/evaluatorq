@@ -562,15 +562,6 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
         override = os.environ.get(env_name, '').strip()
         if override and values[name] == override:
             values[name] = getattr(current, name)
-    for name, env_name in (
-        ('limit', 'EVALUATORQ_FINDER_LIMIT'),
-        ('parallelism', 'EVALUATORQ_FINDER_PARALLELISM'),
-    ):
-        override = os.environ.get(env_name, '').strip()
-        if override and str(form_data.get(name, '')) == override:
-            values[name] = getattr(current, name)
-        else:
-            values[name] = form_data.get(name, getattr(current, name))
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
     method = form_data.get('orq_auth_method')
     if method is None and 'orq_profile' in form_data:
@@ -586,6 +577,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    # Finder limits are per-run controls, so the settings form keeps their saved defaults.
     values.update(
         window_days=current.window_days,
         limit=current.limit,

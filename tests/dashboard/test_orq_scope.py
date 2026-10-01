@@ -171,6 +171,25 @@ def test_profile_workspace_lookup_reads_later_pages(monkeypatch) -> None:
     assert any('--starting-after' in args for args in calls)
 
 
+def test_profile_workspace_lookup_falls_back_when_workspace_list_is_empty(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
+        calls.append(args)
+        if args[:2] == ['projects', 'list']:
+            return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
+        if args == ['workspace', 'list']:
+            return {'workspaces': []}
+        return {'data': [{'id': 'workspace-a', 'key': 'target'}], 'has_more': False}
+
+    monkeypatch.setattr(orq_scope, '_cli_json', cli)
+
+    scope = orq_scope.discover_orq_scope('research')
+
+    assert scope.workspace_key == 'target'
+    assert ['workspaces', 'list', '--limit', '200'] in calls
+
+
 def test_scope_discovery_has_one_deadline_across_project_and_workspace_pages(monkeypatch) -> None:
     times = iter((0.0, 0.0, 5.0, 11.0, 16.0))
     monkeypatch.setattr(orq_scope, 'monotonic', lambda: next(times))
