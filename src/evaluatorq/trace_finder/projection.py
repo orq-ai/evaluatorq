@@ -51,10 +51,11 @@ def estimate_tokens(serialized: str) -> int:
 
 
 def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> TraceProjection:
-    """Project one complete trace into a newest-first-fitting classifier conversation state.
+    """Project one complete trace into a bounded classifier conversation state.
 
-    When earlier messages do not fit, the payload carries `omitted_earlier_messages` so the
-    model knows it is reading only the tail of the conversation. The key's bytes are reserved
+    The first user message is always kept (truncated if it alone exceeds the budget); the
+    remaining budget is filled newest-first. When messages between the two do not fit, the
+    payload carries `omitted_earlier_messages` so the model knows the middle was dropped. The key's bytes are reserved
     from the budget, so the marker never pushes the projection over `token_budget`.
     """
 
@@ -99,24 +100,45 @@ def _project_within(trace: TraceRecord, token_budget: int) -> TraceProjection:
         raise ValueError('token_budget is too small for required trace status metadata')
 
     units = _projection_units(trace.messages)
-    selected_messages: tuple[dict[str, Any], ...] = ()
+    # The first user request is what the conversation was about; it is always kept, and the
+    # rest of the budget goes to the newest units. Only units between the two are omitted.
+    pinned = next((i for i, unit in enumerate(units) if _is_user_unit(unit)), None)
+    head: tuple[dict[str, Any], ...] = ()  # kept units before the pinned one
+    tail: tuple[dict[str, Any], ...] = ()  # kept units after the pinned one
+    pinned_messages = units[pinned].messages if pinned is not None else ()
     omitted_units: tuple[ProjectionUnit, ...] = ()
     truncated_bytes = 0
 
     for index in range(len(units) - 1, -1, -1):
+        if index == pinned:
+            continue
         unit = units[index]
-        candidate_messages = unit.messages + selected_messages
+        after_pinned = pinned is None or index > pinned
+        candidate_head = head if after_pinned else unit.messages + head
+        candidate_tail = unit.messages + tail if after_pinned else tail
+        candidate_messages = candidate_head + pinned_messages + candidate_tail
         candidate_payload = {'trace_status': trace.status, 'messages': list(candidate_messages)}
         if estimate_tokens(serialize_projection(candidate_payload)) <= token_budget:
-            selected_messages = candidate_messages
+            head, tail = candidate_head, candidate_tail
             continue
 
-        if not selected_messages:
-            selected_messages, truncated_bytes = _tail_truncate_unit(unit, trace.status, token_budget)
+        if not head and not tail and pinned is None:
+            tail, truncated_bytes = _tail_truncate_unit(unit, trace.status, token_budget)
             omitted_units = tuple(units[:index])
         else:
-            omitted_units = tuple(units[: index + 1])
+            omitted_units = tuple(u for i, u in enumerate(units[: index + 1]) if i != pinned)
         break
+
+    if (
+        pinned is not None
+        and estimate_tokens(serialize_projection({'trace_status': trace.status, 'messages': list(pinned_messages)}))
+        > token_budget
+    ):
+        # Even alone the first user message is over budget: truncate it, drop everything else.
+        pinned_messages, truncated_bytes = _tail_truncate_unit(units[pinned], trace.status, token_budget)
+        head = tail = ()
+        omitted_units = tuple(u for i, u in enumerate(units) if i != pinned)
+    selected_messages = head + pinned_messages + tail
 
     payload['messages'] = list(selected_messages)
     serialized = serialize_projection(payload)
@@ -131,6 +153,10 @@ def _project_within(trace: TraceRecord, token_budget: int) -> TraceProjection:
         omitted_messages=omitted_messages,
         omitted_bytes=omitted_bytes + truncated_bytes,
     )
+
+
+def _is_user_unit(unit: ProjectionUnit) -> bool:
+    return bool(unit.messages) and unit.source_messages[0].get('role') == 'user'
 
 
 def _projection_units(messages: tuple[dict[str, Any], ...]) -> tuple[ProjectionUnit, ...]:

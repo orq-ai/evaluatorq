@@ -361,16 +361,49 @@ def _allowed_result_categories() -> set[str]:
     }
 
 
-def test_project_trace_keeps_a_complete_newest_suffix_and_reports_discarded_units() -> None:
-    old_user = {'role': 'user', 'content': 'u' * 500}
+def test_project_trace_keeps_first_user_message_and_newest_suffix_and_reports_the_middle() -> None:
+    first_user = {'role': 'user', 'content': 'First request'}
     old_assistant = {'role': 'assistant', 'content': 'a' * 500}
+    old_user = {'role': 'user', 'content': 'u' * 500}
     newest = {'role': 'user', 'content': 'Newest request'}
 
-    projection = project_trace(_trace(messages=(old_user, old_assistant, newest)), token_budget=300)
+    projection = project_trace(_trace(messages=(first_user, old_assistant, old_user, newest)), token_budget=300)
 
-    assert projection.payload == {'trace_status': 'completed', 'messages': [newest], 'omitted_earlier_messages': 2}
+    assert projection.payload == {
+        'trace_status': 'completed',
+        'messages': [first_user, newest],
+        'omitted_earlier_messages': 2,
+    }
     assert projection.omitted_messages == 2
-    assert projection.omitted_bytes == sum(_serialized_bytes(message) for message in (old_user, old_assistant))
+    assert projection.omitted_bytes == sum(_serialized_bytes(message) for message in (old_assistant, old_user))
+    assert projection.estimated_tokens <= 300
+
+
+def test_first_user_message_survives_when_earlier_system_message_and_long_history_are_dropped() -> None:
+    system = {'role': 'system', 'content': 'You are helpful.'}
+    first_user = {'role': 'user', 'content': 'Please cancel my order'}
+    middle = tuple({'role': 'assistant', 'content': f'step {index} ' + 'x' * 200} for index in range(30))
+    newest = {'role': 'user', 'content': 'thanks'}
+
+    projection = project_trace(_trace(messages=(system, first_user, *middle, newest)), token_budget=1_000)
+
+    messages = projection.payload['messages']
+    assert first_user in messages
+    assert messages[-1] == newest
+    assert messages.index(first_user) < messages.index(newest)
+    assert projection.omitted_messages > 0
+    assert projection.estimated_tokens <= 1_000
+
+
+def test_oversized_first_user_message_is_truncated_within_budget() -> None:
+    first_user = {'role': 'user', 'content': 'u' * 5_000}
+    newest = {'role': 'user', 'content': 'new'}
+
+    projection = project_trace(_trace(messages=(first_user, newest)), token_budget=300)
+
+    assert projection.payload['messages'][0]['role'] == 'user'
+    assert projection.payload['messages'][0]['content'].startswith('[... earlier bytes omitted ...]')
+    assert projection.estimated_tokens <= 300
 
 
 def test_omission_marker_is_surfaced_to_the_model_and_stays_within_budget() -> None:
@@ -395,7 +428,11 @@ def test_dropping_earlier_messages_logs_a_warning() -> None:
     logs: list[str] = []
     sink = logger.add(lambda message: logs.append(str(message)), level='WARNING')
     try:
-        messages = ({'role': 'user', 'content': 'u' * 500}, {'role': 'user', 'content': 'new'})
+        messages = (
+            {'role': 'user', 'content': 'first'},
+            {'role': 'assistant', 'content': 'a' * 500},
+            {'role': 'user', 'content': 'new'},
+        )
         projection = project_trace(_trace(messages=messages), token_budget=300)
     finally:
         logger.remove(sink)
