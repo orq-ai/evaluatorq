@@ -371,6 +371,95 @@ test('open filter dropdown survives a fragment swap', () => {
   assert.equal(replacement.open, false);
 });
 
+test('overlapping explorer OOB swaps restore each captured table state in order', () => {
+  function resultsRoot({ open, left, top, selected, version, sequence, renderKey }) {
+    const detail = { className: 'xr-exact', open };
+    const scroll = { className: 'xr-table-wrap', scrollLeft: left, scrollTop: top };
+    const rows = new Map(['row-first', 'row-second'].map(id => [id, {
+      getAttribute(name) { return name === 'data-tv-row' ? id : null; },
+      classList: classList(),
+    }]));
+    if (selected) rows.get(selected)?.classList.add('sel');
+    const attributes = {
+      'data-view-version': String(version),
+      'data-poll-sequence': String(sequence),
+      'data-render-key': renderKey,
+    };
+    return {
+      id: 'explorer-results',
+      querySelectorAll(selector) {
+        if (selector === 'details') return [detail];
+        if (selector === '.xr-table-wrap, .tv-rows') return [scroll];
+        if (selector === 'input[id], select[id], textarea[id]') return [];
+        return [];
+      },
+      querySelector(selector) {
+        if (selector === '[data-tv-row].sel') return selected ? rows.get(selected) : null;
+        const match = selector.match(/^\[data-tv-row="([^"]+)"\]$/);
+        if (match) return rows.get(match[1]) || null;
+        return null;
+      },
+      contains() { return false; },
+      getAttribute(name) { return attributes[name] ?? null; },
+      setAttribute(name, value) { attributes[name] = String(value); },
+      hasAttribute(name) { return Object.hasOwn(attributes, name); },
+      detail, scroll, rows,
+    };
+  }
+  const elements = new Map();
+  const app = loadDashboard({ elements });
+  const firstRequestTarget = resultsRoot({
+    open: true, left: 4, top: 120, selected: 'row-first', version: 7, sequence: 10, renderKey: 'first',
+  });
+  elements.set('explorer-results', firstRequestTarget);
+
+  // A suppressed duplicate advances the sequence but must not add a saved state.
+  const duplicate = { getAttribute(name) { return ({
+    'data-poll': '', 'data-view-version': '7', 'data-poll-sequence': '11', 'data-render-key': 'first',
+  })[name] ?? null; }, hasAttribute(name) { return name === 'data-poll'; } };
+  const duplicateEvent = { detail: { target: firstRequestTarget, fragment: { firstElementChild: duplicate } } };
+  app.body.emit('htmx:oobBeforeSwap', duplicateEvent);
+  assert.equal(duplicateEvent.detail.shouldSwap, false);
+
+  const firstIncoming = { getAttribute(name) { return ({
+    'data-poll': '', 'data-view-version': '7', 'data-poll-sequence': '12', 'data-render-key': 'second',
+  })[name] ?? null; }, hasAttribute(name) { return name === 'data-poll'; } };
+  app.body.emit('htmx:oobBeforeSwap', {
+    detail: { target: firstRequestTarget, fragment: { firstElementChild: firstIncoming } },
+  });
+
+  const secondRequestTarget = resultsRoot({
+    open: false, left: 19, top: 560, selected: 'row-second', version: 7, sequence: 12, renderKey: 'second',
+  });
+  elements.set('explorer-results', secondRequestTarget);
+  const secondIncoming = { getAttribute(name) { return ({
+    'data-poll': '', 'data-view-version': '7', 'data-poll-sequence': '13', 'data-render-key': 'third',
+  })[name] ?? null; }, hasAttribute(name) { return name === 'data-poll'; } };
+  app.body.emit('htmx:oobBeforeSwap', {
+    detail: { target: secondRequestTarget, fragment: { firstElementChild: secondIncoming } },
+  });
+
+  const firstReplacement = resultsRoot({
+    open: false, left: 0, top: 0, selected: null, version: 7, sequence: 12, renderKey: 'third',
+  });
+  elements.set('explorer-results', firstReplacement);
+  app.body.emit('htmx:oobAfterSwap', { detail: { target: firstReplacement } });
+  assert.equal(firstReplacement.detail.open, true);
+  assert.equal(firstReplacement.scroll.scrollLeft, 4);
+  assert.equal(firstReplacement.scroll.scrollTop, 120);
+  assert.equal(firstReplacement.rows.get('row-first').classList.contains('sel'), true);
+
+  const secondReplacement = resultsRoot({
+    open: true, left: 0, top: 0, selected: null, version: 7, sequence: 13, renderKey: 'fourth',
+  });
+  elements.set('explorer-results', secondReplacement);
+  app.body.emit('htmx:oobAfterSwap', { detail: { target: secondReplacement } });
+  assert.equal(secondReplacement.detail.open, false);
+  assert.equal(secondReplacement.scroll.scrollLeft, 19);
+  assert.equal(secondReplacement.scroll.scrollTop, 560);
+  assert.equal(secondReplacement.rows.get('row-second').classList.contains('sel'), true);
+});
+
 test('drawer history restores a prior view and closes after its exit animation', () => {
   const dialogEvents = emitter();
   const content = { innerHTML: '' };
