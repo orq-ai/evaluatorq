@@ -305,7 +305,7 @@ async def generate_dynamic_datapoints(
         return datapoints, filtering_metadata
 
     # Fallback path: one or more categories could not be resolved to a Vulnerability
-    all_category_strategies, filtering_metadata, _agent_capabilities = await plan_strategies_for_categories(
+    all_category_strategies, planned_filtering_metadata, _agent_capabilities = await plan_strategies_for_categories(
         agent_context=agent_context,
         categories=categories,
         llm_client=llm_client,
@@ -322,6 +322,7 @@ async def generate_dynamic_datapoints(
         delivery_methods=delivery_methods,
         attack_techniques=attack_techniques,
     )
+    fallback_filtering_metadata: dict[str, Any] = dict(planned_filtering_metadata)
 
     datapoints = []
     for category in categories:
@@ -341,10 +342,10 @@ async def generate_dynamic_datapoints(
 
     empty_categories = [cat for cat in categories if not all_category_strategies.get(cat)]
     if empty_categories:
-        filtering_metadata['_unresolved_categories'] = empty_categories  # ty: ignore[invalid-assignment]
+        fallback_filtering_metadata['_unresolved_categories'] = empty_categories
 
     logger.debug(f'Generated {len(datapoints)} dynamic datapoints across {len(categories)} categories')
-    return datapoints, filtering_metadata
+    return datapoints, fallback_filtering_metadata
 
 
 def _trace_seed_from_inputs(inputs: dict[str, Any]) -> tuple[list[Message] | None, TraceStart | None]:

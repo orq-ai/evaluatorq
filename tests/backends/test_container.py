@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Pure pieces of container mode: options, argv, env selection, run_args checks."""
 
 from __future__ import annotations

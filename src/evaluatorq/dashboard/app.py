@@ -35,7 +35,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fasthtml.core import FastHTML, NotStr  # ty: ignore[unresolved-import]
+from fasthtml.core import FastHTML, NotStr
 from loguru import logger
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime

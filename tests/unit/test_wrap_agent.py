@@ -1,7 +1,8 @@
-# pyright: reportArgumentType=false, reportPrivateUsage=false
 """Unit tests for wrap_langchain_agent / wrap_langgraph_agent."""
 
 from __future__ import annotations
+
+import typing
 
 import asyncio
 import threading
@@ -294,7 +295,7 @@ class TestWrapAgentDoesNotBlockLoop:
                 return {"messages": []}
 
         agent = SlowAgent()
-        job = wrap_langchain_agent(agent, name="t")  # ty: ignore[invalid-argument-type]
+        job = wrap_langchain_agent(typing.cast(typing.Any, agent), name="t")
         data = DataPoint(inputs={"prompt": "hi"})
 
         await asyncio.wait_for(asyncio.gather(job(data, 0), job(data, 1)), timeout=2.0)

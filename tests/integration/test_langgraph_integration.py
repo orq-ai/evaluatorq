@@ -1,4 +1,3 @@
-# pyright: reportMissingTypeArgument=false
 """Integration test: LangGraphTarget with a real LangGraph agent using a fake LLM.
 
 This creates a real LangGraph ReAct-style graph but uses FakeListChatModel
@@ -7,6 +6,8 @@ wiring works: graph creation -> invoke -> response extraction -> reset -> clone.
 """
 
 from __future__ import annotations
+
+import typing
 
 import pytest
 
@@ -21,7 +22,7 @@ from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noq
 
 
 
-def _build_echo_graph() -> CompiledStateGraph:
+def _build_echo_graph() -> CompiledStateGraph[typing.Any, typing.Any, typing.Any, typing.Any]:
     """Build a minimal LangGraph that uses a fake LLM to respond."""
     model = FakeListChatModel(responses=["I am a helpful assistant.", "Sure, I can help with that."])
 

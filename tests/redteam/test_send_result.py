@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Unit tests for the SendResult alias (AgentResponse) from evaluatorq.redteam.contracts."""
 
 from __future__ import annotations

@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """CyclicJudge (round-robin) judge assignment for llm_jury and llm_jury_pairwise.
 
 Pins the paper's balanced-design requirement (arXiv:2603.01865): under
@@ -7,6 +6,8 @@ and each judge covers an equal share of the run even under concurrency.
 """
 
 from __future__ import annotations
+
+import typing
 
 import asyncio
 import importlib
@@ -95,7 +96,7 @@ def _datapoint() -> DataPoint:
 
 def test_unknown_assignment_raises():
     with pytest.raises(ValueError, match="unknown assignment"):
-        llm_jury(name="x", criteria="c", judges=["a", "b"], assignment="random")  # ty: ignore[invalid-argument-type]
+        llm_jury(name="x", criteria="c", judges=["a", "b"], assignment=typing.cast(typing.Any, "random"))
 
 
 def test_cyclic_requires_min_successful_judges_1():

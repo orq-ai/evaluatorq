@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Dataset export/import utilities for JSONL format."""
 
 from __future__ import annotations
@@ -7,7 +6,9 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, overload
+
+from pydantic import BaseModel
 
 from evaluatorq.simulation._datapoint_io import _as_obj
 from evaluatorq.simulation.types import (
@@ -158,24 +159,32 @@ def load_datapoints_from_jsonl(input_path: str) -> list[SimulationDatapoint]:
 # ---------------------------------------------------------------------------
 
 
-T = TypeVar('T')
+T = TypeVar('T', bound=BaseModel)
 
 
-def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T | dict[str, Any]]:
+@overload
+def parse_jsonl(content: str, cls: type[T]) -> list[T]: ...
+
+
+@overload
+def parse_jsonl(content: str, cls: None = None) -> list[dict[str, Any]]: ...
+
+
+def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T] | list[dict[str, Any]]:
     """Parse a JSONL string into a list of objects.
 
     If *cls* is a Pydantic ``BaseModel`` subclass, each line will be validated
     through ``model_validate``.  Otherwise lines are returned as plain dicts.
     """
-    results: list[T | dict[str, Any]] = []
+    results: list[Any] = []
     for line in content.split('\n'):
         trimmed = line.strip()
         if not trimmed:
             continue
         try:
             data = json.loads(trimmed)
-            if cls is not None and hasattr(cls, 'model_validate'):
-                results.append(cls.model_validate(data))  # ty: ignore[call-non-callable]
+            if cls is not None:
+                results.append(cls.model_validate(data))
             else:
                 results.append(data)
         except json.JSONDecodeError:

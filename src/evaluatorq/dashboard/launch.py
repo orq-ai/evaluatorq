@@ -27,7 +27,7 @@ from loguru import logger
 def ensure_fasthtml() -> None:
     """Exit with code 1 + install hint when fasthtml or uvicorn are missing."""
     try:
-        import fasthtml  # noqa: F401  # ty: ignore[unresolved-import]
+        import fasthtml  # noqa: F401
         import uvicorn  # noqa: F401
     except ImportError:
         import typer

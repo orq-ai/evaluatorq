@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """RES-1308 reporting half: every surface must agree with `criteria_met_scorer`.
 
 The scorer already refuses to call an unaudited run clean (0.0, with a warning).
@@ -11,6 +10,8 @@ them can render "2/2 criteria met" beside an evaluator column reading
 # ruff: noqa: S101
 
 from __future__ import annotations
+
+import typing
 
 import pytest
 
@@ -255,7 +256,7 @@ def test_a_malformed_audited_value_degrades_to_unknown_with_a_warning() -> None:
     messages: list[str] = []
     sink_id = logger.add(lambda m: messages.append(m), level='WARNING')
     try:
-        result = _result(criteria_meta=_meta(audited='yes'), criteria_verified=True)  # ty: ignore[invalid-argument-type]
+        result = _result(criteria_meta=_meta(audited=typing.cast(typing.Any, 'yes')), criteria_verified=True)
         rows = _criteria_rows(result)
     finally:
         logger.remove(sink_id)
@@ -270,7 +271,7 @@ def test_a_criteria_meta_of_non_mappings_is_an_error_not_a_silent_pass() -> None
     from loguru import logger
 
     result = _result(
-        criteria_meta=['{"id": "criteria_0", "passed": false}', '{"id": "criteria_1", "passed": true}'],  # ty: ignore[invalid-argument-type]
+        criteria_meta=typing.cast(typing.Any, ['{"id": "criteria_0", "passed": false}', '{"id": "criteria_1", "passed": true}']),
         criteria_verified=True,
         criteria_results={'Agent greets the customer': False, 'Agent must not leak the API key': True},
     )
@@ -291,7 +292,7 @@ def test_a_partly_malformed_criteria_meta_is_an_error_even_with_valid_entries() 
     from loguru import logger
 
     meta = [*_meta(audited=True), 'not a mapping']
-    result = _result(criteria_meta=meta, criteria_verified=True)  # ty: ignore[invalid-argument-type]
+    result = _result(criteria_meta=typing.cast(typing.Any, meta), criteria_verified=True)
 
     messages: list[str] = []
     sink_id = logger.add(lambda m: messages.append(m), level='WARNING')
@@ -309,7 +310,7 @@ def test_the_evaluator_detail_marks_a_non_mapping_as_unknown() -> None:
     from evaluatorq.simulation.api import _sim_evaluation_details
 
     result = _result(
-        criteria_meta=['{"id": "criteria_0"}'],  # ty: ignore[invalid-argument-type]
+        criteria_meta=[typing.cast(typing.Any, '{"id": "criteria_0"}')],
         criteria_verified=True,
         criteria_results={'Agent greets the customer': False},
     )
@@ -325,7 +326,7 @@ def test_the_evaluator_detail_reports_mixed_meta_as_unknown() -> None:
     """A valid entry beside malformed metadata is still an unknown verdict."""
     from evaluatorq.simulation.api import _sim_evaluation_details
 
-    result = _result(criteria_meta=[*_meta(audited=True), 'not a mapping'], criteria_verified=True)  # ty: ignore[invalid-argument-type]
+    result = _result(criteria_meta=[*_meta(audited=True), typing.cast(typing.Any, 'not a mapping')], criteria_verified=True)
 
     explanation, passed = _sim_evaluation_details('criteria_met', result)
 
@@ -338,7 +339,7 @@ def test_the_evaluator_detail_reports_mixed_meta_as_unknown() -> None:
 def test_malformed_criteria_meta_surfaces_in_the_errors_report() -> None:
     from evaluatorq.simulation.reports.sections import build_report_sections
 
-    result = _result(criteria_meta=[*_meta(audited=True), 'garbage'], criteria_verified=True)  # ty: ignore[invalid-argument-type]
+    result = _result(criteria_meta=[*_meta(audited=True), typing.cast(typing.Any, 'garbage')], criteria_verified=True)
     sections = build_report_sections([result])
 
     errors = next(section for section in sections if section.kind == 'errors')

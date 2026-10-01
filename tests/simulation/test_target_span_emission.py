@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """Target-call tracing: Responses span type, deployment span, AgentTarget routing.
 
 Each test here guards a defect that shipped silently: a Responses span Orq
@@ -10,6 +9,8 @@ reaching the network.
 # ruff: noqa: S101
 
 from __future__ import annotations
+
+import typing
 
 import importlib
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -134,7 +135,7 @@ class _RecordingTarget(AgentTarget):
 def test_agent_target_passed_as_target_routes_to_target_agent() -> None:
     """Passing an AgentTarget as target= must not wrap it in CallableTarget."""
     agent = _RecordingTarget()
-    runner = SimulationRunner(target=agent)  # ty: ignore[invalid-argument-type]
+    runner = SimulationRunner(target=typing.cast(typing.Any, agent))
 
     assert runner._effective_target is agent  # noqa: SLF001
     assert runner._target is None  # noqa: SLF001

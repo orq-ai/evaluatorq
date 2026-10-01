@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """Coverage for review-surfaced gaps in PR #114.
 
 Groups:

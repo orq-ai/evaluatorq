@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """`LLMConfig.max_consecutive_adversarial_timeouts` must bound the attack.
 
 Single reader: `MultiTurnOrchestrator.run_attack`, which counts consecutive

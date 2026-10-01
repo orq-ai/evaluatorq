@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """End-to-end regression for the PII-guardrail-timeout false-success bug.
 
 Reported example: red teaming an ORQ agent with PII detection enabled. The

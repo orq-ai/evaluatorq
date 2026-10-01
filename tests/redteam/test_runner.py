@@ -1,7 +1,8 @@
-# pyright: reportArgumentType=false, reportIncompatibleMethodOverride=false
 """Tests for the unified red_team() entry point and category helpers."""
 
 from __future__ import annotations
+
+import typing
 
 from datetime import datetime, timezone
 from typing import Any
@@ -29,7 +30,7 @@ def _make_report(target: str = 'agent:test', **kwargs) -> RedTeamReport:
         summary=ReportSummary(),
     )
     defaults.update(kwargs)
-    return RedTeamReport(**defaults)  # ty: ignore[invalid-argument-type]
+    return RedTeamReport(**typing.cast(typing.Any, defaults))
 
 
 def _run_result(report: RedTeamReport) -> tuple[RedTeamReport, RedTeamRunMetrics]:
@@ -309,7 +310,7 @@ class TestConfirmCallback:
         class FalseConfirmHooks(DefaultHooks):
             # Sync override of the now-async DefaultHooks.on_confirm — intentional:
             # exercises the sync-hook compatibility path (driven via await_maybe).
-            def on_confirm(self, payload) -> bool:  # ty: ignore[invalid-method-override]
+            def on_confirm(self, payload) -> Any:
                 return False
 
         with (
@@ -447,7 +448,7 @@ class TestRedTeamWithAgentTarget:
     async def test_invalid_target_type_raises(self):
         """Passing an object that does not implement AgentTarget protocol raises TypeError."""
         with pytest.raises(TypeError, match='Invalid target type'):
-            await red_team(42)  # ty: ignore[invalid-argument-type]
+            await red_team(typing.cast(typing.Any, 42))
 
     @pytest.mark.asyncio
     async def test_invalid_item_in_list_raises(self):
@@ -461,7 +462,7 @@ class TestRedTeamWithAgentTarget:
                 return MockTarget()
 
         with pytest.raises(TypeError, match='Invalid target type'):
-            await red_team([MockTarget(), 42])  # ty: ignore[invalid-argument-type]
+            await red_team([MockTarget(), typing.cast(typing.Any, 42)])
 
 
 class TestEvaluabilityGate:
@@ -894,7 +895,7 @@ class TestSaveDeprecation:
         ):
             # `red_team`'s public annotation is `save: SaveMode`, but the deprecated
             # bool is still accepted at runtime — that mismatch is what this test pins.
-            await red_team([], save=legacy_value)  # ty: ignore[invalid-argument-type]
+            await red_team([], save=typing.cast(typing.Any, legacy_value))
 
         assert pathlib.Path(recorded[0].filename).name == pathlib.Path(__file__).name
 

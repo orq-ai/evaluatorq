@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Structured-output helper with a degrading four-rung chat ladder, shared across domains.
 
 Each rung asks for the same schema in a way the previous rung's provider might
@@ -118,7 +117,7 @@ def _attach_usage(exc: BaseException, usage: TokenUsage | None) -> None:
     if usage is None:
         return
     try:
-        exc.usage = usage  # ty: ignore[unresolved-attribute]
+        cast('Any', exc).usage = usage
     except AttributeError:  # pragma: no cover - defensive, no known such class
         logger.debug('could not attach structured-output usage to %s', type(exc).__name__)
 

@@ -1,4 +1,3 @@
-# pyright: reportMissingSuperCall=false
 """Shared types used across evaluatorq subpackages."""
 
 from __future__ import annotations
@@ -688,25 +687,26 @@ class Usage(BaseModel):
         def __init__(
             self,
             *,
-            input_tokens: int = ...,
-            output_tokens: int = ...,
-            prompt_tokens: int = ...,
-            completion_tokens: int = ...,
-            total_tokens: int = ...,
-            cached_tokens: int = ...,
-            cache_creation_tokens: int = ...,
-            cache_creation_1h_tokens: int = ...,
-            cache_creation_5m_tokens: int = ...,
-            reasoning_tokens: int = ...,
-            input_cost: float | None = ...,
-            prompt_cost: float | None = ...,
-            output_cost: float | None = ...,
-            completion_cost: float | None = ...,
-            total_cost: float | None = ...,
-            cost_usd: float | None = ...,
-            calls: int = ...,
-            priced_calls: int = ...,
-        ) -> None: ...
+            input_tokens: int = 0,
+            output_tokens: int = 0,
+            prompt_tokens: int = 0,
+            completion_tokens: int = 0,
+            total_tokens: int = 0,
+            cached_tokens: int = 0,
+            cache_creation_tokens: int = 0,
+            cache_creation_1h_tokens: int = 0,
+            cache_creation_5m_tokens: int = 0,
+            reasoning_tokens: int = 0,
+            input_cost: float | None = None,
+            prompt_cost: float | None = None,
+            output_cost: float | None = None,
+            completion_cost: float | None = None,
+            total_cost: float | None = None,
+            cost_usd: float | None = None,
+            calls: int = 0,
+            priced_calls: int = 0,
+        ) -> None:
+            super().__init__()
 
     @property
     def prompt_tokens(self) -> int:
@@ -1208,7 +1208,8 @@ class AgentResponse(BaseModel):
             finish_reason: str | None = None,
             refusal: str | None = None,
             error: AgentResponseError | None = None,
-        ) -> None: ...
+        ) -> None:
+            super().__init__()
 
     @model_validator(mode='before')
     @classmethod

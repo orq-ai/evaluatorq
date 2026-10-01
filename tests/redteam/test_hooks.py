@@ -3,7 +3,6 @@
 # This suite deliberately defines sync hook classes (subclassing the now-async
 # DefaultHooks/RichHooks) to exercise the sync-hook compatibility path. The
 # sync-vs-async override mismatch is the point, not a bug.
-# pyright: reportIncompatibleMethodOverride=false
 from __future__ import annotations
 
 import asyncio
@@ -533,16 +532,16 @@ class TestProtocolCompliance:
         from evaluatorq.redteam.hooks import PipelineHooks
 
         class MyHooks:
-            def on_stage_start(self, stage: str, meta: dict[str, Any]) -> None:
+            def on_stage_start(self, stage: str, meta: dict[str, Any]) -> Any:
                 pass
 
-            def on_stage_end(self, stage: str, meta: dict[str, Any]) -> None:
+            def on_stage_end(self, stage: str, meta: dict[str, Any]) -> Any:
                 pass
 
-            def on_confirm(self, payload) -> bool:  # ty: ignore[invalid-method-override, unused-ignore-comment]
+            def on_confirm(self, payload) -> Any:
                 return True
 
-            def on_complete(self, report) -> None:
+            def on_complete(self, report) -> Any:
                 pass
 
         hooks = MyHooks()
@@ -564,7 +563,7 @@ class TestHooksIntegration:
         from evaluatorq.redteam.runner import red_team
 
         class FalseConfirmHooks(DefaultHooks):
-            def on_confirm(self, payload) -> bool:  # ty: ignore[invalid-method-override]
+            def on_confirm(self, payload) -> Any:
                 return False
 
         with patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid') as mock_dynamic:
@@ -605,7 +604,7 @@ class TestHooksIntegration:
         from evaluatorq.redteam.runner import red_team
 
         class ExplodingHooks(DefaultHooks):
-            def on_stage_start(self, stage: str, meta: dict[str, Any]) -> None:  # ty: ignore[invalid-method-override]
+            def on_stage_start(self, stage: str, meta: dict[str, Any]) -> Any:
                 raise ValueError('Hook exploded!')
 
         with patch('evaluatorq.redteam.runner._run_dynamic_or_hybrid') as mock_dynamic:

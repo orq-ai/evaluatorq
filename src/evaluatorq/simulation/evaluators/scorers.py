@@ -1,4 +1,3 @@
-# pyright: reportIncompatibleMethodOverride=false
 """Built-in evaluators for agent simulation.
 
 These evaluators assess simulation results using a scorer pattern
@@ -7,6 +6,7 @@ compatible with evaluatorq integration.
 
 from __future__ import annotations
 
+import typing
 from collections.abc import Callable
 from functools import partial
 
@@ -328,7 +328,7 @@ class ConversationQualityScore(float):
         super().__init__()
         self.breakdown: dict[str, dict[str, float]] = breakdown
 
-    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # ty: ignore[invalid-method-override]
+    def __getnewargs__(self) -> typing.Any:
         return (float(self), self.breakdown)
 
 

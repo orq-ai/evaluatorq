@@ -1,4 +1,3 @@
-# pyright: reportUnknownLambdaType=false
 """Tests for OrqResponsesTarget (stateless target backed by the Responses API).
 
 After RES-877 Task 9 the target is fully stateless:

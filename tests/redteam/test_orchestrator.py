@@ -1,5 +1,6 @@
-# pyright: reportArgumentType=false, reportPrivateUsage=false
 """Unit tests for the multi-turn orchestrator."""
+
+import typing
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -626,7 +627,7 @@ def _make_strategy(**overrides: object) -> AttackStrategy:
         'objective_template': 'Test objective',
     }
     defaults.update(overrides)
-    return AttackStrategy(**defaults)  # ty: ignore[invalid-argument-type]
+    return AttackStrategy(**typing.cast(typing.Any, defaults))
 
 
 class TestTimeoutHandling:
@@ -873,7 +874,7 @@ class TestOrchestratorSanitization:
             nonlocal call_count
             call_count += 1
             msgs = kwargs.get('messages', [])
-            captured_messages.append(list(msgs))  # ty: ignore[invalid-argument-type]
+            captured_messages.append(list(typing.cast(typing.Any, msgs)))
             return first_response if call_count == 1 else second_response
 
         mock_llm.chat.completions.create = AsyncMock(side_effect=capture_create)

@@ -441,7 +441,7 @@ class LangGraphTarget(AgentTarget):
             return self._agent_context
 
         tools = _introspect_tools(self._graph)
-        memory_stores = _introspect_memory_stores(self._graph, self.memory_entity_id)  # ty: ignore[invalid-argument-type]
+        memory_stores = _introspect_memory_stores(self._graph, self.memory_entity_id)
 
         return AgentContext(
             key=self._key,
@@ -494,10 +494,12 @@ def _introspect_tools(graph: CompiledStateGraph[Any, Any, Any, Any]) -> list[Too
     return tools
 
 
-def _introspect_memory_stores(graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str) -> list[MemoryStoreInfo]:
+def _introspect_memory_stores(
+    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str | None
+) -> list[MemoryStoreInfo]:
     """Return a single synthetic memory store entry when a checkpointer is attached."""
     checkpointer = getattr(graph, 'checkpointer', None)
-    if checkpointer is None:
+    if checkpointer is None or thread_id is None:
         return []
     return [
         MemoryStoreInfo(

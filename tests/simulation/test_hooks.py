@@ -1,9 +1,9 @@
-# pyright: reportArgumentType=false
 # This suite deliberately defines sync hook classes (subclassing the now-async
 # DefaultHooks/RichHooks) to exercise the sync-hook compatibility path. The
 # sync-vs-async override mismatch is the point, not a bug.
-# pyright: reportIncompatibleMethodOverride=false
 from __future__ import annotations
+
+import typing
 
 import asyncio
 import io
@@ -77,7 +77,7 @@ def _meta() -> SimulationRunMeta:
 
 def _score(value: object, *, error: str | None = None) -> EvaluatorScore:
     """One evaluatorq evaluator outcome, as `on_evaluator_complete` now receives it."""
-    return EvaluatorScore(evaluator_name='goal_achieved', score=EvaluationResult(value=value), error=error)  # ty: ignore[invalid-argument-type]
+    return EvaluatorScore(evaluator_name='goal_achieved', score=EvaluationResult(value=typing.cast(typing.Any, value)), error=error)
 
 
 def _result() -> SimulationResult:
@@ -155,13 +155,13 @@ class RecordingHooks(DefaultHooks):
         self.completed: list[str] = []
         self.errors: list[tuple[str, str]] = []
 
-    def on_turn_complete(self, datapoint_id, metrics):
+    def on_turn_complete(self, datapoint_id, metrics) -> Any:
         self.turn_events.append((datapoint_id, metrics.turn_number))
 
-    def on_datapoint_complete(self, result):
+    def on_datapoint_complete(self, result) -> Any:
         self.completed.append(result.metadata.get('datapoint_id', '?'))
 
-    def on_datapoint_error(self, datapoint, exception):
+    def on_datapoint_error(self, datapoint, exception) -> Any:
         self.errors.append((datapoint.id, type(exception).__name__))
 
 
@@ -300,15 +300,15 @@ async def test_on_turn_complete_guard_does_not_corrupt_result(datapoint_factory)
     into an error result."""
 
     class RaisingHooks(DefaultHooks):
-        def on_turn_complete(self, datapoint_id, metrics):
+        def on_turn_complete(self, datapoint_id, metrics) -> Any:
             raise RuntimeError('hook boom')
 
     runner = SimulationRunner(
         target=_ok_target,
         model='gpt-4o-mini',
         max_turns=1,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         hooks=RaisingHooks(),
     )
     result = await runner.run(datapoint=datapoint_factory('dp1'))
@@ -328,8 +328,8 @@ async def test_on_datapoint_error_fires_for_raising_target(datapoint_factory):
         target=_boom_target,
         model='gpt-4o-mini',
         max_turns=2,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=False),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=False)),
         hooks=hooks,
     )
     results = await runner.run_batch([datapoint_factory('dp1')], max_turns=2, max_concurrency=1)
@@ -347,8 +347,8 @@ async def test_on_turn_complete_fires_per_turn(datapoint_factory):
         target=_ok_target,
         model='gpt-4o-mini',
         max_turns=3,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=False),  # ty: ignore[invalid-argument-type]  # Never terminates early, so runs all turns.
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=False)),  # Never terminates early, so runs all turns.
         hooks=hooks,
     )
     await runner.run(datapoint=datapoint_factory('dp1'))
@@ -369,8 +369,8 @@ async def test_on_datapoint_error_fires_on_timeout(datapoint_factory):
         target=_slow_target,
         model='gpt-4o-mini',
         max_turns=2,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=False),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=False)),
         hooks=hooks,
     )
     results = await runner.run_batch(
@@ -392,8 +392,8 @@ async def test_concurrency_attribution(datapoint_factory):
         target=_ok_target,
         model='gpt-4o-mini',
         max_turns=2,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         hooks=hooks,
     )
     dps = [datapoint_factory(f'dp{i}') for i in range(3)]
@@ -415,17 +415,17 @@ class RunLevelRecorder(DefaultHooks):
         self.evaluator_events: list[tuple[str, str, object]] = []
         self.run_completed = 0
 
-    def on_confirm(self, meta):
+    def on_confirm(self, meta) -> Any:
         self.confirmed.append(meta['num_datapoints'])
         return True
 
-    def on_run_start(self, meta):
+    def on_run_start(self, meta) -> Any:
         self.run_started.append(meta['num_datapoints'])
 
-    def on_evaluator_complete(self, datapoint_id, name, score, result):
+    def on_evaluator_complete(self, datapoint_id, name, score, result) -> Any:
         self.evaluator_events.append((datapoint_id, name, score.score.value))
 
-    def on_run_complete(self, results):
+    def on_run_complete(self, results) -> Any:
         self.run_completed += 1
 
 
@@ -441,8 +441,8 @@ async def test_simulate_fires_run_level_hooks(datapoint_factory):
         datapoints=[datapoint_factory('dp1'), datapoint_factory('dp2')],
         max_turns=1,
         evaluator_names=['goal_achieved'],
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         hooks=hooks,
     )
     assert hooks.confirmed == [2]  # gate fired with the plan size
@@ -467,13 +467,13 @@ async def test_on_datapoint_start_raise_surfaces_error_and_complete(datapoint_fa
             self.errors: list[tuple[str, str]] = []
             self.completed: list[str | None] = []
 
-        def on_datapoint_start(self, datapoint):
+        def on_datapoint_start(self, datapoint) -> Any:
             raise RuntimeError(f'boom-{datapoint.id}')
 
-        def on_datapoint_error(self, datapoint, exception):
+        def on_datapoint_error(self, datapoint, exception) -> Any:
             self.errors.append((datapoint.id, str(exception)))
 
-        def on_datapoint_complete(self, result):
+        def on_datapoint_complete(self, result) -> Any:
             self.completed.append(result.metadata.get('datapoint_id'))
 
     async def _ok_target(messages):
@@ -485,8 +485,8 @@ async def test_on_datapoint_start_raise_surfaces_error_and_complete(datapoint_fa
         datapoints=[datapoint_factory('dp1')],
         max_turns=1,
         evaluator_names=['goal_achieved'],
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         hooks=hooks,
         exit_on_failure=False,
     )
@@ -508,10 +508,10 @@ async def test_on_confirm_false_aborts_before_running(datapoint_factory):
         def __init__(self) -> None:
             self.run_started = 0
 
-        def on_confirm(self, meta):
+        def on_confirm(self, meta) -> Any:
             return False
 
-        def on_run_start(self, meta):
+        def on_run_start(self, meta) -> Any:
             self.run_started += 1
 
     calls = []
@@ -527,8 +527,8 @@ async def test_on_confirm_false_aborts_before_running(datapoint_factory):
             datapoints=[datapoint_factory('dp1')],
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=hooks,
         )
     assert hooks.run_started == 0
@@ -548,8 +548,8 @@ async def test_hooks_none_is_behaviour_identical(datapoint_factory):
         datapoints=[datapoint_factory('dp1')],
         max_turns=1,
         evaluator_names=['goal_achieved'],
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
     )
     assert len(baseline) == 1
     r = baseline[0]
@@ -579,8 +579,8 @@ async def test_simulate_emits_simulate_stage(datapoint_factory):
         target=_ok_target,
         max_turns=1,
         hooks=Rec(),
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         upload_results=False,
     )
     assert f'start:{SimStage.SIMULATE}' in seen
@@ -605,8 +605,8 @@ async def test_meta_carries_target(datapoint_factory):
         target=_ok_target,
         max_turns=1,
         hooks=Cap(),
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         upload_results=False,
     )
     assert 'target' in captured
@@ -639,10 +639,10 @@ class _RunLevelRecorder(DefaultHooks):
         self.started = False
         self.completed_with: list[SimulationResult] | None = None
 
-    def on_run_start(self, meta) -> None:  # ty: ignore[invalid-method-override]
+    def on_run_start(self, meta) -> Any:
         self.started = True
 
-    def on_run_complete(self, results) -> None:  # ty: ignore[invalid-method-override]
+    def on_run_complete(self, results) -> Any:
         self.completed_with = results
 
 
@@ -657,8 +657,8 @@ async def test_on_run_complete_fires_when_a_datapoint_errors(datapoint_factory):
     results = await simulate(
         datapoints=[dp],
         target=boom,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         max_turns=1,
         evaluator_names=['goal_achieved'],
         hooks=hooks,
@@ -678,7 +678,7 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
     must propagate out of simulate()."""
 
     class _ScoringBoom(_RunLevelRecorder):
-        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:  # ty: ignore[invalid-method-override]
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> Any:
             raise RuntimeError('scoring blew up')
 
     hooks = _ScoringBoom()
@@ -686,8 +686,8 @@ async def test_on_run_complete_fires_when_scoring_raises(datapoint_factory):
         await simulate(
             datapoints=[datapoint_factory('dp-1')],
             target=_ok_target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=hooks,
@@ -704,10 +704,10 @@ async def test_on_stage_end_fires_when_on_run_complete_raises(datapoint_factory)
             super().__init__()
             self.stage_end_error = None
 
-        def on_run_complete(self, results) -> None:
+        def on_run_complete(self, results) -> Any:
             raise RuntimeError('run complete blew up')
 
-        def on_stage_end(self, stage, meta) -> None:  # ty: ignore[invalid-method-override]
+        def on_stage_end(self, stage, meta) -> Any:
             self.stage_end_error = meta['error']
 
     hooks = _CompleteBoom()
@@ -715,8 +715,8 @@ async def test_on_stage_end_fires_when_on_run_complete_raises(datapoint_factory)
         await simulate(
             datapoints=[datapoint_factory('dp-1')],
             target=_ok_target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=hooks,
@@ -733,8 +733,8 @@ async def test_successful_simulation_does_not_inherit_caller_exception(datapoint
             return await simulate(
                 datapoints=[datapoint_factory('dp-1')],
                 target=_ok_target,
-                user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-                judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+                user_simulator=typing.cast(typing.Any, _StubUserSim()),
+                judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
                 max_turns=1,
                 evaluator_names=['goal_achieved'],
             )
@@ -753,15 +753,15 @@ async def test_stage_end_failure_does_not_replace_simulation_failure(datapoint_f
     monkeypatch.setattr(simulation_api, '_simulate_via_evaluatorq', simulation_boom)
 
     class _StageBoom(_RunLevelRecorder):
-        def on_stage_end(self, stage, meta) -> None:  # ty: ignore[invalid-method-override]
+        def on_stage_end(self, stage, meta) -> Any:
             raise RuntimeError('stage end failed')
 
     with pytest.raises(RuntimeError, match='simulation failed'):
         await simulate(
             datapoints=[datapoint_factory('dp-1')],
             target=_ok_target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=_StageBoom(),
@@ -803,7 +803,7 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
             super().__init__()
             self.evaluator_events = []
 
-        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:  # ty: ignore[invalid-method-override]
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> Any:
             self.evaluator_events.append(datapoint_id)
 
     hooks = _EvaluatorRecorder()
@@ -811,8 +811,8 @@ async def test_on_run_complete_gets_partial_results_when_a_row_is_dropped(datapo
         await simulate(
             datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
             target=_ok_target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=hooks,
@@ -847,15 +847,15 @@ async def test_drop_error_survives_evaluator_hook_failure(datapoint_factory, mon
     monkeypatch.setattr(SimulationRunner, 'run', fake_run)
 
     class _EvaluatorBoom(_RunLevelRecorder):
-        def on_evaluator_complete(self, datapoint_id, name, score, result) -> None:  # ty: ignore[invalid-method-override]
+        def on_evaluator_complete(self, datapoint_id, name, score, result) -> Any:
             raise RuntimeError('observer failed')
 
     with pytest.raises(SimulationDroppedError, match='1 of 2 simulation'):
         await simulate(
             datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
             target=_ok_target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=_EvaluatorBoom(),
@@ -890,10 +890,10 @@ async def test_drop_error_survives_on_run_complete_failure(datapoint_factory, mo
             super().__init__()
             self.stage_end_error = None
 
-        def on_run_complete(self, results) -> None:
+        def on_run_complete(self, results) -> Any:
             raise RuntimeError('observer failed')
 
-        def on_stage_end(self, stage, meta) -> None:  # ty: ignore[invalid-method-override]
+        def on_stage_end(self, stage, meta) -> Any:
             self.stage_end_error = meta['error']
 
     hooks = _CompleteBoom()
@@ -901,8 +901,8 @@ async def test_drop_error_survives_on_run_complete_failure(datapoint_factory, mo
         await simulate(
             datapoints=[datapoint_factory('dp-good'), datapoint_factory('dp-bad')],
             target=_ok_target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=hooks,
@@ -928,8 +928,8 @@ async def test_exit_on_failure_raises_for_a_run_that_ended_in_error(datapoint_fa
         await simulate(
             datapoints=[datapoint_factory('dp-dead')],
             target=_ok_target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
         )
@@ -949,8 +949,8 @@ async def test_exit_on_failure_false_warns_instead_of_raising_for_an_error_run(d
     results = await simulate(
         datapoints=[datapoint_factory('dp-dead')],
         target=_ok_target,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         max_turns=1,
         evaluator_names=['goal_achieved'],
         exit_on_failure=False,
@@ -1005,7 +1005,7 @@ async def test_target_closed_when_on_run_complete_raises(datapoint_factory):
             self.closed = True
 
     class _CompleteBoom(_RunLevelRecorder):
-        def on_run_complete(self, results) -> None:
+        def on_run_complete(self, results) -> Any:
             super().on_run_complete(results)
             raise RuntimeError('complete blew up')
 
@@ -1016,8 +1016,8 @@ async def test_target_closed_when_on_run_complete_raises(datapoint_factory):
             datapoints=[datapoint_factory('dp-1')],
 
             target=target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=hooks,
@@ -1033,12 +1033,12 @@ async def test_on_datapoint_start_respects_concurrency(datapoint_factory):
     peak = 0
 
     class _PeakHooks(DefaultHooks):
-        def on_datapoint_start(self, datapoint) -> None:  # ty: ignore[invalid-method-override]
+        def on_datapoint_start(self, datapoint) -> Any:
             nonlocal live, peak
             live += 1
             peak = max(peak, live)
 
-        def on_datapoint_complete(self, result) -> None:  # ty: ignore[invalid-method-override]
+        def on_datapoint_complete(self, result) -> Any:
             nonlocal live
             live -= 1
 
@@ -1050,8 +1050,8 @@ async def test_on_datapoint_start_respects_concurrency(datapoint_factory):
         target=slow_target,
         model='gpt-4o-mini',
         max_turns=1,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         hooks=_PeakHooks(),
     )
     dps = [datapoint_factory(f'dp-{i}') for i in range(6)]
@@ -1078,8 +1078,8 @@ async def test_missing_target_raises_before_on_run_start(datapoint_factory):
     with pytest.raises(ValueError):
         await simulate(
             datapoints=[datapoint_factory('dp-1')],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=hooks,
@@ -1168,8 +1168,8 @@ async def test_simulate_fires_run_level_hooks_async(datapoint_factory):
             datapoints=[datapoint_factory('dp1'), datapoint_factory('dp2')],
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=hooks,
         )
     # Side effects observed -> the async hook actually ran (awaited), not dropped.
@@ -1211,8 +1211,8 @@ async def test_async_on_confirm_false_aborts(datapoint_factory):
             datapoints=[datapoint_factory('dp1')],
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=hooks,
         )
     assert hooks.run_started == 0
@@ -1232,8 +1232,8 @@ async def test_async_on_turn_complete_guard_does_not_corrupt_result(datapoint_fa
         target=_ok_target,
         model='gpt-4o-mini',
         max_turns=1,
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         hooks=AsyncRaisingHooks(),
     )
     result = await runner.run(datapoint=datapoint_factory('dp1'))
@@ -1270,8 +1270,8 @@ async def test_async_target_closed_when_on_run_complete_raises(datapoint_factory
             datapoints=[datapoint_factory('dp-1')],
 
             target=target,
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             max_turns=1,
             evaluator_names=['goal_achieved'],
             hooks=hooks,
@@ -1644,10 +1644,10 @@ async def test_manifest_errors_when_on_run_start_raises(datapoint_factory):
     from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
 
     class BadStart(DefaultHooks):
-        def on_confirm(self, meta):
+        def on_confirm(self, meta) -> Any:
             return True
 
-        def on_run_start(self, meta):
+        def on_run_start(self, meta) -> Any:
             raise RuntimeError('start boom')
 
     async def _ok_target(messages):
@@ -1659,8 +1659,8 @@ async def test_manifest_errors_when_on_run_start_raises(datapoint_factory):
             datapoints=[datapoint_factory('dp1')],
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=BadStart(),
             save=True,
         )

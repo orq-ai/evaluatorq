@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """``LLMCallConfig.extra_body`` is the user seam into the request body.
 
 ``extra_kwargs`` sets top-level SDK call arguments; ``extra_body`` sets fields in
@@ -10,6 +9,8 @@ silently dropped retry hints, and is why ``extra_body`` is rejected inside
 """
 
 from __future__ import annotations
+
+import typing
 
 import pytest
 
@@ -71,7 +72,7 @@ def test_extra_body_is_still_rejected_inside_extra_kwargs(api: str) -> None:
     """
     cfg = LLMCallConfig(model='m', extra_kwargs={'extra_body': {'retry': None}})
     with pytest.raises(ValueError, match='extra_body'):
-        cfg.request_params(api=api, model='m')  # ty: ignore[invalid-argument-type]
+        cfg.request_params(api=typing.cast(typing.Any, api), model='m')
 
 
 def test_single_endpoint_override_warns_only_when_api_was_set(caplog) -> None:

@@ -1,7 +1,8 @@
-# pyright: reportArgumentType=false
 """Judges default to the Orq router's priced Responses endpoint (RES-1295)."""
 
 from __future__ import annotations
+
+import typing
 
 from types import SimpleNamespace
 from typing import Any, cast
@@ -125,7 +126,7 @@ class _Client:
 def _bad_request(message: str) -> BadRequestError:
     return BadRequestError(
         message,
-        response=SimpleNamespace(status_code=400, headers={}, request=None),  # ty: ignore[invalid-argument-type]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=400, headers={}, request=None)),
         body={'error': {'message': message}},
     )
 
@@ -140,7 +141,7 @@ async def _judge(
 ) -> Any:
     cfg = LLMCallConfig(
         model='gpt-5-mini',
-        api=api,  # ty: ignore[invalid-argument-type]
+        api=typing.cast(typing.Any, api),
         max_tokens=256,
         extra_kwargs=extra_kwargs or {},
 
@@ -352,7 +353,7 @@ async def test_a_retry_does_not_re_pay_the_rejected_endpoint():
         client.models.append(kwargs['model'])
         attempts['n'] += 1
         if attempts['n'] == 1:
-            raise APIConnectionError(request=None)  # ty: ignore[invalid-argument-type]
+            raise APIConnectionError(request=typing.cast(typing.Any, None))
         return _chat_reply()
 
     client.chat = SimpleNamespace(completions=SimpleNamespace(parse=chat_parse))

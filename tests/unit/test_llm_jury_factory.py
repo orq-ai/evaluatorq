@@ -1,5 +1,6 @@
-# pyright: reportArgumentType=false
 from __future__ import annotations
+
+import typing
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -105,7 +106,7 @@ def test_validation_aggregator_kind_mismatch():
     with pytest.raises(ValueError, match="numeric-only"):
         llm_jury(name="x", criteria="c", aggregator="median")
     with pytest.raises(ValueError, match="Unknown aggregator"):
-        llm_jury(name="x", criteria="c", aggregator="banana")  # ty: ignore[invalid-argument-type]
+        llm_jury(name="x", criteria="c", aggregator=typing.cast(typing.Any, "banana"))
 
 
 @pytest.mark.asyncio

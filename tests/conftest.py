@@ -1,8 +1,8 @@
-# pyright: reportMissingTypeArgument=false
 import logging
 import socket
 import threading
 import traceback
+import typing
 
 import pytest
 
@@ -104,7 +104,7 @@ def _reset_reasoning_rejectors():
 
 
 
-class _OfflineCatalogues(dict):
+class _OfflineCatalogues(dict[typing.Any, typing.Any]):
     """A catalogue cache that reports every host as already-fetched-and-empty."""
 
     def get(self, key, default=None):

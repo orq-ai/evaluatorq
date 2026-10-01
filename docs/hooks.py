@@ -24,13 +24,13 @@ import fnmatch
 import re
 from typing import TYPE_CHECKING
 
-from mkdocs.exceptions import PluginError  # ty: ignore[unresolved-import]
+from mkdocs.exceptions import PluginError
 
 if TYPE_CHECKING:
-    from mkdocs.config.defaults import MkDocsConfig  # ty: ignore[unresolved-import]
-    from mkdocs.structure.files import Files  # ty: ignore[unresolved-import]
-    from mkdocs.structure.nav import Navigation  # ty: ignore[unresolved-import]
-    from mkdocs.structure.pages import Page  # ty: ignore[unresolved-import]
+    from mkdocs.config.defaults import MkDocsConfig
+    from mkdocs.structure.files import Files
+    from mkdocs.structure.nav import Navigation
+    from mkdocs.structure.pages import Page
 
 # Structural pages that are navigation scaffolding, not documentation content, so they
 # are not expected in the llms.txt catalog (the section-index landings + literate-nav files).

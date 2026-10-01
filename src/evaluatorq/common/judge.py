@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Generic Orq-format LLM judge — canonical, do not write another judge loop.
 
 Renders an evaluator template, calls an OpenAI-compatible chat completion, and

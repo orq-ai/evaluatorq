@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """Orchestrator builds the target transcript across turns — RES-877.
 
 Replaces the per-target _history multi-turn tests: conversation memory now

@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """`LLMConfig.max_objectives_per_llm_call` must drive the objective batching.
 
 The field has exactly one reader — `_call_llm_for_objectives` in

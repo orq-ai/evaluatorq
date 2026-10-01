@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Integration test verifying actual OTel span output for red teaming traces.
 
 Uses an in-memory span exporter to capture real spans and validate
@@ -8,6 +7,8 @@ attribute names, values, and span hierarchy after the tracing refactor.
 # ruff: noqa: S101
 
 from __future__ import annotations
+
+import typing
 
 import json
 import sys
@@ -593,7 +594,7 @@ async def test_static_deployment_job_traces_attack_and_target_call(
     deployments = MagicMock()
     deployments.invoke_async = AsyncMock(return_value=completion)
     module = ModuleType('orq_ai_sdk')
-    module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # ty: ignore[unresolved-attribute]
+    typing.cast(typing.Any, module).Orq = MagicMock(return_value=MagicMock(deployments=deployments))
     monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
@@ -636,7 +637,7 @@ async def test_static_deployment_job_omits_trace_headers_when_propagation_disabl
     deployments = MagicMock()
     deployments.invoke_async = AsyncMock(return_value=completion)
     module = ModuleType('orq_ai_sdk')
-    module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # ty: ignore[unresolved-attribute]
+    typing.cast(typing.Any, module).Orq = MagicMock(return_value=MagicMock(deployments=deployments))
     monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     monkeypatch.setenv('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', 'false')

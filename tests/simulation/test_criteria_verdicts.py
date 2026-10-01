@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false, reportPrivateUsage=false
 """RES-1308: scenario criteria must be able to fail.
 
 Before the per-criterion audit existed, pass/fail was inferred from the absence of
@@ -7,6 +6,8 @@ occurred came back PASS and ``criteria_met`` returned 1.0 on every run.
 """
 
 from __future__ import annotations
+
+import typing
 
 import json
 from types import SimpleNamespace
@@ -546,8 +547,8 @@ async def _run(
     runner = SimulationRunner(
         target=target,
         max_turns=max_turns,
-        user_simulator=_FakeSimulator(),  # ty: ignore[invalid-argument-type]
-        judge=_FakeJudge(script, terminate=terminate, broken=broken),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _FakeSimulator()),
+        judge=typing.cast(typing.Any, _FakeJudge(script, terminate=terminate, broken=broken)),
     )
     try:
         return await runner.run(persona=_persona(), scenario=_scenario())
@@ -678,8 +679,8 @@ async def test_runner_tells_the_judge_which_criteria_have_settled():
     runner = SimulationRunner(
         target=target,
         max_turns=4,
-        user_simulator=_FakeSimulator(),  # ty: ignore[invalid-argument-type]
-        judge=judge,  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _FakeSimulator()),
+        judge=typing.cast(typing.Any, judge),
     )
     try:
         await runner.run(persona=_persona(), scenario=_scenario())
@@ -915,8 +916,8 @@ async def _run_until_target_dies(script: list[dict[str, bool] | None], *, die_on
         target=target,
         max_turns=6,
         max_target_retries=0,
-        user_simulator=_FakeSimulator(),  # ty: ignore[invalid-argument-type]
-        judge=_FakeJudge(script, terminate=False),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _FakeSimulator()),
+        judge=typing.cast(typing.Any, _FakeJudge(script, terminate=False)),
     )
     try:
         return await runner.run(persona=_persona(), scenario=_scenario())

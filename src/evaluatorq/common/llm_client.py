@@ -1,4 +1,3 @@
-# pyright: reportOptionalMemberAccess=false
 """Single source of truth for OpenAI-compatible LLM client resolution.
 
 Both the red-team pipeline (``redteam.backends.registry``) and the simulation
@@ -92,8 +91,8 @@ def resolve_results_base_url(
     ``ORQ_BASE_URL`` / ``default_orq_host`` when no Orq-routed client is given,
     preserving the original env-based behaviour.
     """
-    if client_routes_through_orq(client):
-        host = str(client.base_url).rstrip('/')  # ty: ignore[unresolved-attribute]
+    if client is not None and client_routes_through_orq(client):
+        host = str(client.base_url).rstrip('/')
         return host[: -len(ORQ_ROUTER_SUFFIX)].rstrip('/')
     return os.environ.get('ORQ_BASE_URL', default_orq_host).rstrip('/')
 

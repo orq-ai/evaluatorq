@@ -1,9 +1,10 @@
-# pyright: reportAttributeAccessIssue=false
 """Unit tests for runtime/jobs.py."""
 
 # ruff: noqa: S101
 
 from __future__ import annotations
+
+import typing
 
 import sys
 from types import ModuleType
@@ -305,7 +306,7 @@ class TestCreateDeploymentJob:
         deployments = MagicMock()
         deployments.invoke_async = AsyncMock(return_value=completion)
         module = ModuleType('orq_ai_sdk')
-        module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, module).Orq = MagicMock(return_value=MagicMock(deployments=deployments))
         monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
@@ -339,7 +340,7 @@ class TestCreateDeploymentJob:
         from evaluatorq.redteam.runtime.jobs import create_deployment_job
 
         module = ModuleType('orq_ai_sdk')
-        module.Orq = MagicMock(return_value=MagicMock(deployments=MagicMock()))  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, module).Orq = MagicMock(return_value=MagicMock(deployments=MagicMock()))
         monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
         monkeypatch.setenv('ORQ_API_KEY', 'test-key')
         monkeypatch.setenv('ORQ_BASE_URL', 'https://staging.orq.ai')

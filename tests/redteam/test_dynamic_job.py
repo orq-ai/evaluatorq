@@ -1,4 +1,3 @@
-# pyright: reportUnknownLambdaType=false
 """Unit tests for create_dynamic_redteam_job() and its inner dynamic_job() closure.
 
 Covers:

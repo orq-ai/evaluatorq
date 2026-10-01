@@ -852,10 +852,14 @@ def _pairwise_observations(
     only the collapsed vote (RES-1251)."""
     out: list[RepetitionObservation] = []
     failures = 0
-    for ordering, jv, swapped in (
+    orderings: tuple[
+        tuple[Literal['ab'], JuryVote | None, Literal[False]],
+        tuple[Literal['ba'], JuryVote | None, Literal[True]],
+    ] = (
         ('ab', first_votes.get(model), False),
         ('ba', second_votes.get(model), True),
-    ):
+    )
+    for ordering, jv, swapped in orderings:
         if jv is None:
             continue
         failures += jv.repetitions_failed
@@ -883,7 +887,7 @@ def _pairwise_observations(
                 failures += 1
             out.append(
                 RepetitionObservation(
-                    ordering=cast("Literal['ab', 'ba']", ordering),  # ty: ignore[redundant-cast]
+                    ordering=ordering,
                     repetition=i,
                     verdict=verdict,
                     explanation=rep.explanation,

@@ -1,9 +1,10 @@
-# pyright: reportOptionalSubscript=false
 """chat <-> Responses conversion."""
 
 # ruff: noqa: S101
 
 from __future__ import annotations
+
+import typing
 
 import json
 from typing import Any
@@ -99,7 +100,7 @@ def test_function_call_keeps_nested_raw_key_json_arguments_verbatim() -> None:
     items: list[dict[str, Any]] = [
         {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': raw_arguments},
     ]
-    call = ResponsesConversation(items=items).to_chat().messages[0].tool_calls[0]  # ty: ignore[not-subscriptable]
+    call = typing.cast(typing.Any, ResponsesConversation(items=items).to_chat().messages)[0].tool_calls[0]
     assert call.function.arguments == raw_arguments
 
 

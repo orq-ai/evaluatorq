@@ -79,7 +79,7 @@ class TestDatasetDownloadError:
     """A HuggingFace download failure surfaces a clean DatasetError, not a raw traceback (gripe #1)."""
 
     def test_download_failure_raises_dataset_error(self, monkeypatch):
-        import huggingface_hub  # ty: ignore[unresolved-import]
+        import huggingface_hub
 
         from evaluatorq.redteam.exceptions import DatasetError
         from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge

@@ -1,4 +1,3 @@
-# pyright: reportCallIssue=false, reportPrivateUsage=false, reportUnknownLambdaType=false
 """Tests for injected target/user_simulator params and update_context propagation.
 
 Verifies:
@@ -10,6 +9,8 @@ Verifies:
 """
 
 from __future__ import annotations
+
+import typing
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -203,8 +204,8 @@ class TestDeprecatedTargetCallback:
         dp = _make_datapoint()
 
         with pytest.raises(TypeError, match="target_callback"):
-            await simulate(
-                target_callback=legacy_target,  # ty: ignore[unknown-argument]
+            await typing.cast(typing.Any, simulate)(
+                target_callback=legacy_target,
                 datapoints=[dp],
                 llm_config=LLMCallConfig(model="test"),
                 max_turns=1,

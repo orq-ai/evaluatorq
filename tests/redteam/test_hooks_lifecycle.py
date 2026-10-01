@@ -12,7 +12,6 @@ Test scenarios:
 
 # SpyHooks et al. are sync subclasses of the now-async DefaultHooks, exercising
 # the sync-hook compatibility path; the override mismatch is intentional.
-# pyright: reportIncompatibleMethodOverride=false
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -21,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from evaluatorq.common.async_utils import MaybeAsync
 from evaluatorq.redteam.contracts import (
     AgentContext,
     Pipeline,
@@ -52,20 +52,20 @@ class SpyHooks:
         self.received_complete_report: RedTeamReport | None = None
         self.received_complete_output_dir: str | None = None
 
-    def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> MaybeAsync[None]:
         self.calls.append(('on_stage_start', stage, meta))
 
-    def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
+    def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> MaybeAsync[None]:
         self.calls.append(('on_stage_end', stage, meta))
 
-    def on_confirm(self, payload: ConfirmPayload) -> bool:
+    def on_confirm(self, payload: ConfirmPayload) -> MaybeAsync[bool]:
         self.calls.append(('on_confirm', payload))
         self.received_confirm_payload = payload
         return self.confirm_result
 
     def on_complete(
         self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
-    ) -> None:
+    ) -> MaybeAsync[None]:
         self.calls.append(('on_complete', report, output_dir))
         self.received_complete_report = report
         self.received_complete_output_dir = output_dir
@@ -89,18 +89,18 @@ class AsyncSpyHooks(SpyHooks):
     in the real runner (not just sync). Reuses SpyHooks' recording/query helpers.
     """
 
-    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:  # ty: ignore[invalid-method-override]
+    async def on_stage_start(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         self.calls.append(('on_stage_start', stage, meta))
 
-    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:  # ty: ignore[invalid-method-override]
+    async def on_stage_end(self, stage: PipelineStage | str, meta: dict[str, Any]) -> None:
         self.calls.append(('on_stage_end', stage, meta))
 
-    async def on_confirm(self, payload: ConfirmPayload) -> bool:  # ty: ignore[invalid-method-override]
+    async def on_confirm(self, payload: ConfirmPayload) -> bool:
         self.calls.append(('on_confirm', payload))
         self.received_confirm_payload = payload
         return self.confirm_result
 
-    async def on_complete(  # ty: ignore[invalid-method-override]
+    async def on_complete(
         self, report: RedTeamReport, *, output_dir: str | None = None, auto_save_path: str | None = None
     ) -> None:
         self.calls.append(('on_complete', report, output_dir))

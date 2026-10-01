@@ -1,4 +1,3 @@
-# pyright: reportIncompatibleMethodOverride=false
 """E2E tests for pipeline options: hooks, output artifacts, error handling."""
 
 from __future__ import annotations
@@ -28,7 +27,7 @@ class _CancellingHooks(DefaultHooks):
 
     # Sync override of the now-async DefaultHooks.on_confirm — intentional:
     # exercises the sync-hook compatibility path (driven via await_maybe).
-    def on_confirm(self, payload: ConfirmPayload) -> bool:  # ty: ignore[invalid-method-override]
+    def on_confirm(self, payload: ConfirmPayload) -> Any:
         self.confirm_payload = payload
         return False
 

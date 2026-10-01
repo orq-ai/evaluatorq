@@ -1,4 +1,3 @@
-# pyright: reportAbstractUsage=false, reportImplicitAbstractClass=false
 """Tests for AgentTarget contract after RES-877 Task 9.
 
 The ``send_prompt`` back-compat shim has been removed. ``respond(messages)`` is
@@ -6,6 +5,8 @@ the sole response method; callers own the conversation transcript.
 """
 
 from __future__ import annotations
+
+import typing
 
 import pytest
 
@@ -20,9 +21,9 @@ def test_respond_is_abstract_subclass_without_it_cannot_instantiate():
     """respond is abstract: a subclass that implements only ``new`` is incomplete."""
 
 
-    class _Bare(AgentTarget):
+    class _Bare(typing.cast(typing.Any, AgentTarget)):
         def new(self) -> _Bare:
-            return _Bare()  # ty: ignore[call-non-callable]
+            return typing.cast(typing.Any, _Bare)()
 
     with pytest.raises(TypeError, match="abstract"):
-        _Bare()  # ty: ignore[call-non-callable]
+        typing.cast(typing.Any, _Bare)()

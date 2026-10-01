@@ -123,12 +123,14 @@ def build_scenario_user_context(scenario: Scenario) -> str:
     if format_instruction:
         format_text = f'\n\nMessage Format: {format_instruction}'
 
-    emotion_text = _EMOTION_INSTRUCTIONS.get(
-        (scenario.starting_emotion or 'neutral')
-        if isinstance(scenario.starting_emotion, str)
-        else (scenario.starting_emotion.value if scenario.starting_emotion else 'neutral'),  # ty: ignore[redundant-condition]
-        '',
-    )
+    starting_emotion = scenario.starting_emotion
+    if isinstance(starting_emotion, str):
+        emotion_key = starting_emotion or 'neutral'
+    elif starting_emotion is None:
+        emotion_key = 'neutral'
+    else:
+        emotion_key = starting_emotion.value
+    emotion_text = _EMOTION_INSTRUCTIONS.get(emotion_key, '')
 
     return (
         f'Scenario: {delimit(scenario.name)}\n\n'

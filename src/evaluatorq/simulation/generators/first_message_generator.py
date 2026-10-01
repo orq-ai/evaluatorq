@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """First message generator using LLM."""
 
 from __future__ import annotations

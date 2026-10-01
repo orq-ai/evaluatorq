@@ -1,7 +1,8 @@
-# pyright: reportCallIssue=false, reportPrivateUsage=false
 """Prompt-cache breakpoint placement."""
 
 from __future__ import annotations
+
+import typing
 
 import json
 from unittest.mock import MagicMock
@@ -188,7 +189,7 @@ def test_volatile_tail_has_no_default() -> None:
     """Required keyword on purpose: a caller that rebuilds its last message and
     forgets to say so gets a per-turn write and no read — a bill, not a crash."""
     with pytest.raises(TypeError, match='volatile_tail'):
-        apply_cache_breakpoints([{'role': 'user', 'content': 'hi'}])  # ty: ignore[missing-argument]
+        typing.cast(typing.Any, apply_cache_breakpoints)([{'role': 'user', 'content': 'hi'}])
 
 
 def test_responses_marks_the_end_of_the_prefix() -> None:
@@ -244,7 +245,7 @@ def test_responses_negative_volatile_items_is_rejected() -> None:
 
 def test_responses_volatile_items_has_no_default() -> None:
     with pytest.raises(TypeError, match='volatile_items'):
-        mark_responses_input([{'role': 'user', 'content': 'hi'}])  # ty: ignore[missing-argument]
+        typing.cast(typing.Any, mark_responses_input)([{'role': 'user', 'content': 'hi'}])
 
 
 def test_responses_volatile_items_counts_rendered_items_not_messages() -> None:

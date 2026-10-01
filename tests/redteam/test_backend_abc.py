@@ -1,6 +1,7 @@
-# pyright: reportAbstractUsage=false
 """Tests for Backend ABC in redteam.backends.base."""
 from __future__ import annotations
+
+import typing
 
 import pytest
 
@@ -17,7 +18,7 @@ class _MinimalBackend(Backend):
 
 def test_backend_is_abstract():
     with pytest.raises(TypeError):
-        Backend("x")  # ty: ignore[call-non-callable]
+        typing.cast(typing.Any, Backend)("x")
 
 
 def test_backend_subclass_sets_name():

@@ -1,7 +1,8 @@
-# pyright: reportAttributeAccessIssue=false
 """Unit tests for redteam backends: base.py, openai.py, orq.py."""
 
 from __future__ import annotations
+
+import typing
 
 from typing import Any
 from unittest.mock import MagicMock
@@ -32,19 +33,19 @@ def _make_exc(
     if response_status_code is not None:
         mock_response = MagicMock()
         mock_response.status_code = response_status_code
-        exc.response = mock_response  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).response = mock_response
     if status_code is not None:
-        exc.status_code = status_code  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).status_code = status_code
     if status is not None:
-        exc.status = status  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).status = status
     if code is not None:
-        exc.code = code  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).code = code
     if error_code is not None:
-        exc.error_code = error_code  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).error_code = error_code
     if type_attr is not None:
-        exc.type = type_attr  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).type = type_attr
     if body is not None:
-        exc.body = body  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).body = body
     return exc
 
 
@@ -111,7 +112,7 @@ class TestExtractStatusCode:
         exc = _make_exc(message="error")
         mock_response = MagicMock()
         mock_response.status_code = 99
-        exc.response = mock_response  # ty: ignore[unresolved-attribute]
+        typing.cast(typing.Any, exc).response = mock_response
         # No other code present → should return None
         assert extract_status_code(exc) is None
 

@@ -1,10 +1,10 @@
-# pyright: reportArgumentType=false
 # Exercises the Unit-2b wiring: CompositeSimulationHooks fan-out, the
 # ManifestStageHooks bridge, and the manifest lifecycle (D3 two-stage recording,
 # Dec1 cancel/truthful-error, post-run-failure stage truth). Sync hook classes
 # are deliberate (compat path); the override mismatch is the point.
-# pyright: reportIncompatibleMethodOverride=false
 from __future__ import annotations
+
+import typing
 
 import asyncio
 
@@ -208,7 +208,7 @@ class _FakeWriter:
 
 def test_manifest_stage_hooks_bridge_start_and_end():
     w = _FakeWriter()
-    h: SimulationHooks = ManifestStageHooks(w)  # ty: ignore[invalid-argument-type]
+    h: SimulationHooks = ManifestStageHooks(typing.cast(typing.Any, w))
     asyncio.run(h.on_stage_start(SimStage.GENERATE, {'target': None}))
     err = RuntimeError('x')
     asyncio.run(h.on_stage_end(SimStage.SIMULATE, {'error': err}))
@@ -218,7 +218,7 @@ def test_manifest_stage_hooks_bridge_start_and_end():
 
 def test_manifest_stage_hooks_other_methods_are_noops():
     w = _FakeWriter()
-    h = ManifestStageHooks(w)  # ty: ignore[invalid-argument-type]
+    h = ManifestStageHooks(typing.cast(typing.Any, w))
     assert asyncio.run(h.on_confirm(_meta())) is True
     assert asyncio.run(h.on_run_start(_meta())) is None
     assert asyncio.run(h.on_run_complete([])) is None
@@ -226,7 +226,7 @@ def test_manifest_stage_hooks_other_methods_are_noops():
 
 
 def test_manifest_stage_hooks_satisfies_protocol():
-    assert isinstance(ManifestStageHooks(_FakeWriter()), SimulationHooks)  # ty: ignore[invalid-argument-type]
+    assert isinstance(ManifestStageHooks(typing.cast(typing.Any, _FakeWriter())), SimulationHooks)
 
 
 def test_composite_satisfies_protocol():
@@ -271,8 +271,8 @@ async def test_generate_and_simulate_records_both_stages(datapoint_factory, monk
         target=_ok_target,
         max_turns=1,
         evaluator_names=['goal_achieved'],
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         upload_results=False,
         save=True,
     )
@@ -298,8 +298,8 @@ async def test_bare_simulate_records_only_simulate_stage(datapoint_factory):
         datapoints=[datapoint_factory('dp1')],
         max_turns=1,
         evaluator_names=['goal_achieved'],
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         upload_results=False,
         save=True,
     )
@@ -332,8 +332,8 @@ async def test_decline_after_generate_cancels_and_keeps_generate_completed(datap
             target=_ok_target,
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=Decline(),
             upload_results=False,
             save=True,
@@ -367,8 +367,8 @@ async def test_simulate_phase_failure_marks_simulate_stage_error(datapoint_facto
             datapoints=[datapoint_factory('dp1')],
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             hooks=ScoringBoom(),
             upload_results=False,
             save=True,
@@ -405,8 +405,8 @@ async def test_post_stage_failure_leaves_simulate_stage_completed(datapoint_fact
             datapoints=[datapoint_factory('dp1')],
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             upload_results=False,
             save=True,
         )
@@ -437,8 +437,8 @@ async def test_multiple_user_hooks_fan_out(datapoint_factory):
         datapoints=[datapoint_factory('dp1')],
         max_turns=1,
         evaluator_names=['goal_achieved'],
-        user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-        judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
         hooks=[h1, h2],
         upload_results=False,
     )
@@ -529,8 +529,8 @@ async def test_generate_phase_failure_marks_manifest_error_not_running(datapoint
             target=_ok_target,
             max_turns=1,
             evaluator_names=['goal_achieved'],
-            user_simulator=_StubUserSim(),  # ty: ignore[invalid-argument-type]
-            judge=_StubJudge(terminate=True),  # ty: ignore[invalid-argument-type]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _StubJudge(terminate=True)),
             upload_results=False,
             save=True,
         )

@@ -1,6 +1,7 @@
-# pyright: reportAttributeAccessIssue=false
 """Unit tests for evaluatorq.simulation.cli."""
 from __future__ import annotations
+
+import typing
 
 from collections.abc import Mapping, Sequence
 from typing import IO
@@ -89,7 +90,7 @@ def test_epilog_examples_use_only_real_flags(command: str) -> None:
     import typer
 
     click_group = typer.main.get_command(app)
-    subcommands = click_group.commands  # ty: ignore[unresolved-attribute]
+    subcommands = typing.cast(typing.Any, click_group).commands
 
     def valid_flags(name: str) -> set[str]:
         flags: set[str] = set()
@@ -125,7 +126,7 @@ def test_output_flags_expose_short_aliases(command: str, long: str, short: str) 
     """Guard the self-describing output flags keep both their long and short spellings."""
     import typer
 
-    subcommands = typer.main.get_command(app).commands  # ty: ignore[unresolved-attribute]
+    subcommands = typing.cast(typing.Any, typer.main.get_command(app)).commands
     opts = {opt for param in subcommands[command].params for opt in param.opts}
     assert long in opts, f'{command} missing {long}'
     assert short in opts, f'{command} missing {short}'
@@ -263,7 +264,7 @@ def _stub_run(
     """
     return _build_simulation_run(
         run_name="test-run",
-        mode=mode,
+        mode=typing.cast(typing.Any, mode),
         target_kind="openai_model",
         target="gpt-4o",
         target_model="gpt-4o",

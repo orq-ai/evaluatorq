@@ -17,7 +17,7 @@ import pytest
 
 pytest.importorskip('pydantic_ai')
 
-from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart  # ty: ignore[unresolved-import]
+from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart
 from pydantic import BaseModel
 
 from evaluatorq.contracts import Message, ToolCallOutputItem

@@ -1,7 +1,8 @@
-# pyright: reportAttributeAccessIssue=false, reportIndexIssue=false
 """The six frozen argv vectors (three agents times two launchers) and flag placement."""
 
 from __future__ import annotations
+
+import typing
 
 import types
 from pathlib import Path
@@ -155,7 +156,7 @@ def test_container_clone_reapplies_implicit_agent_defaults() -> None:
 def test_agents_registry_is_read_only() -> None:
     assert isinstance(AGENTS, types.MappingProxyType)
     with pytest.raises(TypeError):
-        AGENTS['x'] = AGENTS['claude']  # ty: ignore[invalid-assignment]
+        typing.cast(typing.Any, AGENTS)['x'] = AGENTS['claude']
 
 
 def test_agent_spec_is_frozen() -> None:

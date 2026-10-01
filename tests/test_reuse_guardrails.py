@@ -13,8 +13,9 @@ not be a way around the rule by accident.
 from __future__ import annotations
 
 import ast
+import io
 import re
-import tomllib  # ty: ignore[unresolved-import]
+import tokenize
 from functools import cache
 from pathlib import Path
 from typing import TypeGuard
@@ -58,7 +59,28 @@ def _calls(source: str) -> list[tuple[int, str]]:
 
 
 _PYRIGHT_SUPPRESSION = re.compile(r'#\s*pyright:\s*ignore(?:\[[^]]*\])?')
-_BLANKET_TY_IGNORE = re.compile(r'#\s*ty:\s*ignore(?!\s*\[)')
+_TY_IGNORE = re.compile(r'#\s*ty:\s*ignore(?:\[([^]]*)\])?')
+_PROTECTED_TY_RULES = frozenset({'unused-ignore-comment', 'ignore-comment-unknown-rule'})
+
+
+def _config_array(config: str, table: str, key: str) -> list[str]:
+    """Read a string array from one TOML table without a TOML dependency."""
+    table_match = re.search(rf'(?ms)^\[{re.escape(table)}\]\n(.*?)(?=^\[|\Z)', config)
+    assert table_match is not None, f'missing [{table}] table'
+    array_match = re.search(rf'(?ms)^{re.escape(key)}\s*=\s*(\[.*?\])', table_match.group(1))
+    assert array_match is not None, f'missing {key} array'
+    value = ast.literal_eval(array_match.group(1))
+    assert isinstance(value, list) and all(isinstance(item, str) for item in value)
+    return value
+
+
+def _is_excluded(relative: Path, patterns: list[str]) -> bool:
+    """Return whether a repository-relative path matches a ty exclude."""
+    relative_text = relative.as_posix()
+    return any(
+        relative_text == pattern or relative_text.startswith(pattern.rstrip('/') + '/') or relative.match(pattern)
+        for pattern in patterns
+    )
 
 
 def _ty_checked_python_files() -> list[Path]:
@@ -67,8 +89,9 @@ def _ty_checked_python_files() -> list[Path]:
     The guardrail follows the checker configuration instead of maintaining a
     second list that can drift when the checked surface changes.
     """
-    config = tomllib.loads((REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8'))
-    includes: list[str] = config['tool']['ty']['src']['include']
+    config = (REPO_ROOT / 'pyproject.toml').read_text(encoding='utf-8')
+    includes = _config_array(config, 'tool.ty.src', 'include')
+    excludes = _config_array(config, 'tool.ty.src', 'exclude')
     files: set[Path] = set()
     for pattern in includes:
         candidate = REPO_ROOT / pattern
@@ -76,16 +99,28 @@ def _ty_checked_python_files() -> list[Path]:
             files.update(candidate.rglob('*.py'))
         else:
             files.update(REPO_ROOT.glob(pattern))
-    return sorted(files)
+    return sorted(path for path in files if not _is_excluded(path.relative_to(REPO_ROOT), excludes))
 
 
 def _forbidden_type_suppressions(source: str) -> list[int]:
     """Return lines containing Pyright suppressions or blanket ty ignores."""
-    return [
-        lineno
-        for lineno, line in enumerate(source.splitlines(), start=1)
-        if _PYRIGHT_SUPPRESSION.search(line) or _BLANKET_TY_IGNORE.search(line)
-    ]
+    forbidden: list[int] = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type != tokenize.COMMENT:
+            continue
+        ty_match = _TY_IGNORE.search(token.string)
+        selectors = (
+            {selector.strip() for selector in ty_match.group(1).split(',')}
+            if ty_match is not None and ty_match.group(1) is not None
+            else set()
+        )
+        if (
+            _PYRIGHT_SUPPRESSION.search(token.string)
+            or (ty_match is not None and ty_match.group(1) is None)
+            or bool(selectors & _PROTECTED_TY_RULES)
+        ):
+            forbidden.append(token.start[0])
+    return forbidden
 
 
 def test_ty_suppression_detector_actually_fires() -> None:
@@ -93,8 +128,23 @@ def test_ty_suppression_detector_actually_fires() -> None:
     assert _forbidden_type_suppressions(f'value = bad  {pyright}[reportArgumentType]') == [1]
     assert _forbidden_type_suppressions(f'value = bad  {pyright}') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty:' + ' ignore') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[unused-ignore-comment]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[ignore-comment-unknown-rule]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # ty: ignore[invalid-argument-type, unused-ignore-comment]') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty: ignore[invalid-argument-type]') == []
+    assert _forbidden_type_suppressions('value = "# pyright: ignore"') == []
+    assert _forbidden_type_suppressions('value = "# ty: ignore"') == []
     assert _forbidden_type_suppressions('# prose mentions ty without an ignore directive') == []
+
+
+def test_ty_checked_files_honor_configured_excludes() -> None:
+    relative = {path.relative_to(REPO_ROOT).as_posix() for path in _ty_checked_python_files()}
+    assert not any(path.startswith(('examples/', 'scripts/', '.venv/')) for path in relative)
+
+
+def test_guardrail_is_python_310_compatible() -> None:
+    source = Path(__file__).read_text(encoding='utf-8')
+    assert 'import toml' + 'lib' not in source
 
 
 def test_ty_checked_files_have_no_forbidden_suppressions() -> None:

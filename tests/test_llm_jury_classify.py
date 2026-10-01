@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """A classify judge (Jev) can be seated on `llm_jury` / `llm_jury_pairwise` panels.
 
 The jury layer never calls ``/classify`` itself: it builds the `ClassifyQuestion` and

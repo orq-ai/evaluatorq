@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Live-server integration test for the model catalogue loader (RES-1295).
 
 Requires ORQ_API_KEY and makes a real ``GET /v2/models`` call against

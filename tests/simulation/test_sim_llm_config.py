@@ -1,4 +1,3 @@
-# pyright: reportCallIssue=false
 """``llm_config`` reaches every simulation-side LLM call.
 
 The temperature default was unset repo-wide (`LLMCallConfig.temperature` is
@@ -8,6 +7,8 @@ surface: one config in at the entry point, honoured at each call site.
 """
 
 from __future__ import annotations
+
+import typing
 
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -691,7 +692,7 @@ def test_the_simulation_config_refuses_the_removed_model_keyword() -> None:
     from evaluatorq.simulation._config import SimulationConfig
 
     with pytest.raises(ValidationError):
-        SimulationConfig(model='chosen/model')  # ty: ignore[unknown-argument]
+        typing.cast(typing.Any, SimulationConfig)(model='chosen/model')
 
 
 def test_no_public_entry_point_still_takes_sim_model() -> None:

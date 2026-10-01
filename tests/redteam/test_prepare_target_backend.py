@@ -1,4 +1,3 @@
-# pyright: reportAttributeAccessIssue=false
 """Tests for the make_agent_backend helper and its wiring inside _prepare_target.
 
 Test approach
@@ -27,6 +26,8 @@ keeping the test hermetic.
 """
 
 from __future__ import annotations
+
+import typing
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -98,7 +99,7 @@ class TestMakeAgentBackend:
 
         target = hybrid.create_target("my-agent")
         # OrqResponsesTarget stores the model in its config
-        assert target.config.model == "agent/my-agent"  # ty: ignore[unresolved-attribute]
+        assert typing.cast(typing.Any, target).config.model == "agent/my-agent"
 
     @pytest.mark.asyncio
     async def test_resolve_context_delegates_to_orq_backend_with_bare_key(self):

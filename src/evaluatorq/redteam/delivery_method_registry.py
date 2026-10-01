@@ -1,4 +1,3 @@
-# pyright: reportConstantRedefinition=false
 """Delivery-method registry — the single source of truth for delivery methods.
 
 Mirrors `evaluatorq.redteam.vulnerability_registry`: a canonical set (the
@@ -80,7 +79,7 @@ def delivery_method_str(value: DeliveryMethod | str) -> str:
 # the import-time completeness check below. The category *values* have no reader yet;
 # they are public (``__all__``, and documented in custom-evaluators-and-frameworks.md)
 # for callers that want to group methods by family.
-DELIVERY_METHOD_CATEGORY: Mapping[DeliveryMethod, str] = {
+_delivery_method_category: dict[DeliveryMethod, str] = {
     DeliveryMethod.DAN: 'persona',
     DeliveryMethod.ROLE_PLAY: 'persona',
     DeliveryMethod.SKELETON_KEY: 'persona',
@@ -102,12 +101,12 @@ DELIVERY_METHOD_CATEGORY: Mapping[DeliveryMethod, str] = {
 # Fail at import, not in CI: a new enum member without a technique family would
 # otherwise ship silently. Frozen afterwards so no caller can mutate the
 # canonical set at runtime (mirrors vulnerability_registry.py).
-_missing = sorted(delivery_method_str(m) for m in set(DeliveryMethod) - set(DELIVERY_METHOD_CATEGORY))
+_missing = sorted(delivery_method_str(m) for m in set(DeliveryMethod) - set(_delivery_method_category))
 if _missing:
     raise RuntimeError(f'Missing DELIVERY_METHOD_CATEGORY entries for: {_missing}')
 
 
-DELIVERY_METHOD_CATEGORY = types.MappingProxyType(dict(DELIVERY_METHOD_CATEGORY))
+DELIVERY_METHOD_CATEGORY: Mapping[DeliveryMethod, str] = types.MappingProxyType(_delivery_method_category)
 
 # Registered custom methods: value -> category. Seeded empty; the enum members
 # are always known without being listed here. ``register_delivery_method``

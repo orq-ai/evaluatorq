@@ -25,7 +25,7 @@ from evaluatorq.contracts import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from pydantic_ai import Agent  # ty: ignore[unresolved-import]
+    from pydantic_ai import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ def _make_part_classifier() -> Callable[[Any], str]:
     ``"ToolReturnPart"`` or ``""``.
     """
     try:
-        from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart  # ty: ignore[unresolved-import]
+        from pydantic_ai.messages import TextPart, ToolCallPart, ToolReturnPart
     except Exception:  # pragma: no cover - defensive
 
         def by_name(part: Any) -> str:

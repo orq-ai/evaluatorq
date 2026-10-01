@@ -1,7 +1,8 @@
-# pyright: reportArgumentType=false, reportPrivateUsage=false, reportUnknownLambdaType=false
 """Orq model catalogue: client-side pricing and model qualification (RES-1295)."""
 
 from __future__ import annotations
+
+import typing
 
 import asyncio
 import logging
@@ -31,7 +32,7 @@ def _catalogue(monkeypatch: pytest.MonkeyPatch):
 
 
 def _usage(**kw: object) -> Usage:
-    return Usage(input_tokens=1000, output_tokens=500, total_tokens=1500, calls=1, priced_calls=0, **kw)  # ty: ignore[invalid-argument-type]
+    return Usage(input_tokens=1000, output_tokens=500, total_tokens=1500, calls=1, priced_calls=0, **typing.cast(typing.Any, kw))
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,3 @@
-# pyright: reportArgumentType=false
 """Tests for _send_cleaned_results URL persistence on the report."""
 
 from __future__ import annotations

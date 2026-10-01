@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-import mkdocs_gen_files  # ty: ignore[unresolved-import]
+import mkdocs_gen_files
 
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src" / "evaluatorq"

@@ -1,4 +1,3 @@
-# pyright: reportInvalidTypeForm=false
 from __future__ import annotations
 
 import itertools
@@ -7,7 +6,7 @@ from functools import partial
 from typing import Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
 from evaluatorq.common.judge import ClassifyQuestion, JudgeOutcome, build_eval_replacements, run_judge
 from evaluatorq.common.jury import (
@@ -109,13 +108,11 @@ def _build_verdict_model(
         value_annotation = float
         description = _levels_description(levels, score_range)
 
-    # Create model dynamically
-    class VerdictModel(BaseModel):
-        explanation: str = Field(default='', description='Explanation for the verdict')
-
-        value: value_annotation = Field(description=description) if description is not None else Field()
-
-    return VerdictModel
+    return create_model(
+        'VerdictModel',
+        explanation=(str, Field(default='', description='Explanation for the verdict')),
+        value=(value_annotation, Field(description=description) if description is not None else Field()),
+    )
 
 
 # ---------------------------------------------------------------------------

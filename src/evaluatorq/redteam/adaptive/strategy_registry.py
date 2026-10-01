@@ -1,4 +1,3 @@
-# pyright: reportConstantRedefinition=false
 """Strategy registry for OWASP-targeted attacks.
 
 This module provides:
@@ -30,14 +29,9 @@ from evaluatorq.redteam.frameworks.owasp_llm import LLM_STRATEGIES
 from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, VULNERABILITY_DEFS
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
 
 # Combined registry of all strategies
-STRATEGY_REGISTRY: Mapping[str, list[AttackStrategy]]
-VULNERABILITY_STRATEGY_REGISTRY: Mapping[Vulnerability, list[AttackStrategy]]
-
 _strategy_registry: dict[str, list[AttackStrategy]] = {
     **ASI_STRATEGIES,
     **LLM_STRATEGIES,

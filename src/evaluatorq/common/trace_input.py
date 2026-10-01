@@ -411,10 +411,13 @@ def _parse_exchange(
             sides.append(([], 'chat_completions'))
     input_messages, _input_format = sides[0]
     output_messages, _output_format = sides[1]
-    formats = {fmt for found, fmt in sides if found}
-    message_format = cast(  # ty: ignore[redundant-cast]
-        '_TRACE_MESSAGE_FORMAT | None', next(iter(formats)) if len(formats) == 1 else ('mixed' if formats else None)
-    )
+    formats: set[_MESSAGE_FORMAT] = {fmt for found, fmt in sides if found}
+    if len(formats) == 1:
+        message_format: _TRACE_MESSAGE_FORMAT | None = next(iter(formats))
+    elif formats:
+        message_format = 'mixed'
+    else:
+        message_format = None
     return input_messages, output_messages, message_format
 
 

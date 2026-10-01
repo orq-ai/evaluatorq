@@ -440,7 +440,7 @@ def ensure_huggingface_available() -> None:
     dynamic leg has completed).
     """
     try:
-        import huggingface_hub  # noqa: F401  # ty: ignore[unresolved-import]
+        import huggingface_hub  # noqa: F401
     except ImportError as e:
         raise ImportError(_HF_MISSING_MSG) from e
 
@@ -454,7 +454,7 @@ def _fetch_from_huggingface(
 ) -> list[DataPoint]:
     """Fetch red team samples from a HuggingFace dataset repository."""
     try:
-        from huggingface_hub import hf_hub_download  # ty: ignore[unresolved-import]
+        from huggingface_hub import hf_hub_download
     except ImportError as e:
         raise ImportError(_HF_MISSING_MSG) from e
 

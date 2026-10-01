@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-import tinycss2  # ty: ignore[unresolved-import]
+import tinycss2
 
 
 def test_dashboard_events() -> None:

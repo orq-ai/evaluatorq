@@ -1,7 +1,8 @@
-# pyright: reportArgumentType=false
 """A classify model is judged on the Orq router's /classify endpoint."""
 
 from __future__ import annotations
+
+import typing
 
 import asyncio
 import json
@@ -80,7 +81,7 @@ def _client(*post_results: Any) -> Any:
 def _rate_limit() -> RateLimitError:
     return RateLimitError(
         'slow down',
-        response=SimpleNamespace(status_code=429, headers={}, request=None),  # ty: ignore[invalid-argument-type]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=429, headers={}, request=None)),
         body={'error': {'message': 'slow down'}},
     )
 
@@ -93,7 +94,7 @@ async def _judge(
     retry_count: int = 0,
     api: str = 'responses',
 ) -> Any:
-    cfg = LLMCallConfig(model=model, api=api, retry_count=retry_count)  # ty: ignore[invalid-argument-type]
+    cfg = LLMCallConfig(model=model, api=typing.cast(typing.Any, api), retry_count=retry_count)
     return await run_judge(
         client=client,
         model=model,
