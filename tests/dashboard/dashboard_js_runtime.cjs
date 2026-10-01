@@ -16,7 +16,7 @@ function emitter() {
       if (!listeners.has(name)) listeners.set(name, []);
       listeners.get(name).push(callback);
     },
-    emit(name, event = {}) {
+    emit(name, event = { detail: { target: null } }) {
       for (const callback of listeners.get(name) || []) callback(event);
     },
   };

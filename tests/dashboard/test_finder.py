@@ -447,6 +447,11 @@ def test_traces_state_is_isolated_between_browser_sessions(monkeypatch: pytest.M
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
     stores: list[FakeStore] = []
 
+    async def warm_catalogue(_app: Any, _window_days: int) -> None:
+        return None
+
+    monkeypatch.setattr(finder_routes, '_warm_catalogue', warm_catalogue)
+
     async def build_store(_app: Any) -> FakeStore:
         store = FakeStore()
         trace_id = f'trace-{len(stores) + 1}'
