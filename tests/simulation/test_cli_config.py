@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -61,9 +62,17 @@ def _invoke(
     return result, fake
 
 
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+
 def _flat(output: str) -> str:
-    """Unwrap the Rich error box, which breaks long messages across lines."""
-    return ' '.join(output.replace('│', ' ').split())
+    """Strip ANSI codes and unwrap the Rich error box, which breaks long messages across lines.
+
+    Typer forces colour when ``GITHUB_ACTIONS`` is set, and the highlighting splits
+    option tokens like ``--input`` into separately coloured runs, so the codes must
+    go before the whitespace is collapsed (same reason as ``test_cli_simulate_validation``).
+    """
+    return ' '.join(_ANSI_RE.sub('', output).replace('│', ' ').split())
 
 
 def _write(tmp_path: Path, payload: dict[str, Any]) -> str:
@@ -269,6 +278,33 @@ def test_a_null_config_value_falls_back_to_the_flag_default() -> None:
     assert result.exit_code == 0, result.output
     assert fake.call_args.kwargs['evaluation_name'] == 'sim'
     assert fake.call_args.kwargs['datapoint_parallelism'] == 10
+
+
+def test_a_null_inline_source_is_not_an_input_source() -> None:
+    payload = {'target': 'agent:x', 'previous_run': 'latest', 'personas': None, 'scenarios': None, 'datapoints': None}
+
+    result, fake = _invoke('simulate', ['--config', '-'], stdin=json.dumps(payload))
+
+    assert result.exit_code == 0, _flat(result.output)
+    fake.assert_called_once()
+
+
+@pytest.mark.parametrize(('save', 'saved'), [(True, 1), (False, 0)])
+def test_config_save_drives_the_cli_auto_save(tmp_path: Path, save: bool, saved: int) -> None:
+    """``save`` is the config twin of ``--no-save``: the CLI writes the run once and the SDK never saves it again."""
+    payload = {'target': 'agent:x', 'previous_run': 'latest', 'save': save}
+    fake = AsyncMock(return_value=_run('simulate'))
+    with (
+        patch('evaluatorq.simulation.api._simulate_run', new=fake),
+        patch('evaluatorq.simulation.cli._resolve_target', return_value=MagicMock()),
+    ):
+        result = runner.invoke(
+            app, ['simulate', '--config', '-', '--no-executive-summary', '--yes'], input=json.dumps(payload)
+        )
+
+    assert result.exit_code == 0, _flat(result.output)
+    assert 'save' not in fake.call_args.kwargs
+    assert len(list((tmp_path / '.evaluatorq').glob('sim-runs/*.json'))) == saved
 
 
 def _datapoints_file(tmp_path: Path) -> str:

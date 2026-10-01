@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, patch
@@ -50,9 +51,17 @@ def _invoke(args: list[str], *, stdin: str | None = None, report: RedTeamReport 
     return result, fake
 
 
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+
 def _flat(output: str) -> str:
-    """Unwrap the Rich error box, which breaks long messages across lines."""
-    return ' '.join(output.replace('│', ' ').split())
+    """Strip ANSI codes and unwrap the Rich error box, which breaks long messages across lines.
+
+    Typer forces colour when ``GITHUB_ACTIONS`` is set, and the highlighting splits
+    option tokens like ``--input`` into separately coloured runs, so the codes must
+    go before the whitespace is collapsed (same reason as ``test_cli_simulate_validation``).
+    """
+    return ' '.join(_ANSI_RE.sub('', output).replace('│', ' ').split())
 
 
 def _write(tmp_path: Path, payload: dict[str, Any]) -> str:

@@ -1018,7 +1018,7 @@ def simulate(
         quiet=quiet,
         yes=yes,
         executive_summary=executive_summary,
-        inline_source=any(field in configured.sdk_overrides for field in _INLINE_SOURCE_FIELDS),
+        inline_source=any(configured.sdk_overrides.get(field) is not None for field in _INLINE_SOURCE_FIELDS),
     )
     hooks = options.hooks
 
