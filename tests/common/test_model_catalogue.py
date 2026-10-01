@@ -132,7 +132,6 @@ def test_parse_catalogue_skips_malformed_entries():
     prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
         [
             {'model_id': 'a', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2},
-            {'model_id': 'b', 'provider': 'openai', 'input_cost': None, 'output_cost': 0.2},
             {'model_id': 'c', 'input_cost': 0.1, 'output_cost': 0.2},
             {'input_cost': 0.1, 'output_cost': 0.2},
             'nonsense',
@@ -236,22 +235,23 @@ def test_parse_catalogue_rejects_non_list_payload():
     assert pricing._parse_catalogue({'data': [{'model_id': 'a', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]}) == {}  # pyright: ignore[reportPrivateUsage]
 
 
-def test_parse_catalogue_skips_bool_cost():
+def test_parse_catalogue_lists_bool_cost_unpriced():
     # bool is an int subclass: input_cost=True must not price at $1.00/1k.
     prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
         [{'model_id': 'a', 'provider': 'openai', 'input_cost': True, 'output_cost': 0.2}]
     )
-    assert prices == {}
+    assert prices['a'].input_cost_per_1k is None
+    assert prices['a'].output_cost_per_1k is None
 
 
-def test_parse_catalogue_skips_negative_cost():
+def test_parse_catalogue_lists_negative_cost_unpriced():
     prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
         [{'model_id': 'a', 'provider': 'openai', 'input_cost': -0.1, 'output_cost': 0.2}]
     )
-    assert prices == {}
+    assert prices['a'].input_cost_per_1k is None
 
 
-def test_parse_catalogue_skips_non_usd_currency_but_prices_empty_and_usd():
+def test_parse_catalogue_lists_non_usd_currency_unpriced_but_prices_empty_and_usd():
     prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
         [
             {
@@ -278,7 +278,8 @@ def test_parse_catalogue_skips_non_usd_currency_but_prices_empty_and_usd():
             },
         ]
     )
-    assert set(_bare(prices)) == {'empty-currency', 'usd-model'}
+    assert {k for k, v in _bare(prices).items() if v.input_cost_per_1k is not None} == {'empty-currency', 'usd-model'}
+    assert prices['eur-model'].input_cost_per_1k is None
 
 
 def test_parse_catalogue_reads_supports_responses_from_metadata():
@@ -299,7 +300,7 @@ def test_parse_catalogue_reads_supports_responses_from_metadata():
 def test_parse_catalogue_warns_when_nonempty_payload_yields_zero_entries(monkeypatch: pytest.MonkeyPatch):
     warnings: list[str] = []
     monkeypatch.setattr(pricing.logger, 'warning', lambda msg, *a, **kw: warnings.append(msg))  # pyright: ignore[reportUnknownLambdaType]
-    prices = pricing._parse_catalogue([{'model_id': 'a', 'provider': 'openai'}])  # missing costs  # pyright: ignore[reportPrivateUsage]
+    prices = pricing._parse_catalogue([{'model_id': 'a'}])  # missing provider  # pyright: ignore[reportPrivateUsage]
     assert prices == {}
     assert any('none parsed' in w for w in warnings)
     # The consequence named is the catalogue's own, not "everything falls back to chat":
@@ -503,7 +504,29 @@ async def test_cache_is_keyed_by_host(monkeypatch: pytest.MonkeyPatch):
     await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
 
     assert len(calls) == 2
-    assert set(pricing._catalogues) == {'https://host-a.example', 'https://host-b.example'}  # pyright: ignore[reportPrivateUsage]
+    assert {host for host, _ in pricing._catalogues} == {'https://host-a.example', 'https://host-b.example'}  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.asyncio
+async def test_catalogue_is_cached_per_credential_on_one_host(monkeypatch: pytest.MonkeyPatch):
+    """Two workspaces on one host enable different models; one must not see the other's list."""
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    calls: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        'AsyncClient',
+        _FakeAsyncClient(
+            calls,
+            lambda: _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]),
+        ),
+    )
+
+    monkeypatch.setenv('ORQ_API_KEY', 'key-workspace-a')
+    await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.setenv('ORQ_API_KEY', 'key-workspace-b')
+    await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
+
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
@@ -855,3 +878,33 @@ async def test_supports_classify_falls_back_to_the_known_set_with_one_warning(ca
 @pytest.mark.usefixtures('_empty_catalogue')
 async def test_supports_classify_false_for_an_unknown_model():
     assert await pricing.supports_classify('someone/unlisted') is False
+
+
+@pytest.mark.asyncio
+async def test_unpriced_model_is_listed_but_its_call_stays_unpriced(monkeypatch: pytest.MonkeyPatch):
+    """A model the workspace offers without a price still appears in the settings picker."""
+    entries = [{'model_id': 'free-chat', 'provider': 'acme', 'model_type': 'chat', 'input_cost': None, 'output_cost': None}]
+    catalogue = pricing._parse_catalogue(entries)  # pyright: ignore[reportPrivateUsage]
+
+    async def load(client: object = None) -> dict[str, ModelInfo]:
+        return catalogue
+
+    monkeypatch.setattr(pricing, '_load_catalogue', load)
+
+    assert await pricing.models_by_provider() == {'acme': ['acme/free-chat']}
+    priced = await pricing.price_usage(_usage(), 'acme/free-chat')
+    assert priced is not None
+    assert priced.total_cost is None
+
+
+@pytest.mark.parametrize('cost', [float('nan'), float('inf'), 10**1000])
+def test_parse_catalogue_lists_non_finite_cost_unpriced(cost: float):
+    prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
+        [{'model_id': 'a', 'provider': 'openai', 'input_cost': cost, 'output_cost': 0.2}]
+    )
+    assert prices['a'].input_cost_per_1k is None
+
+
+def test_model_info_with_one_rate_is_unpriced():
+    info = ModelInfo(0.1, None, 'self', supports_responses=False)
+    assert (info.input_cost_per_1k, info.output_cost_per_1k) == (None, None)

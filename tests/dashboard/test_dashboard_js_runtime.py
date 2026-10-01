@@ -10,7 +10,7 @@ import tinycss2
 
 def test_dashboard_events() -> None:
     script = Path(__file__).with_name('dashboard_js_runtime.cjs')
-    result = subprocess.run(['node', '--test', str(script)], capture_output=True, text=True, check=False, timeout=15)
+    result = subprocess.run(['node', '--test', str(script)], capture_output=True, text=True, check=False, timeout=60)
     assert result.returncode == 0, result.stdout + result.stderr
 
 

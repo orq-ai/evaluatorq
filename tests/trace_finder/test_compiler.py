@@ -50,8 +50,11 @@ def choice_document() -> dict[str, Any]:
     }
 
 
-@pytest.mark.parametrize('label', ['yes', 'true', 'True'])
-def test_noul_text_selection_is_normalized_to_booleans(label: str) -> None:
+@pytest.mark.parametrize(
+    ('label', 'expected'),
+    [('yes', True), ('true', True), ('True', True), ('no', False), ('false', False)],
+)
+def test_noul_text_selection_is_normalized_to_booleans(label: str, expected: bool) -> None:
     document = choice_document()
     document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
     document['dimensions'][0]['selection'] = {'kind': 'values', 'values': [label]}
@@ -61,7 +64,37 @@ def test_noul_text_selection_is_normalized_to_booleans(label: str) -> None:
 
     assert compiled.task.kind == 'noul'
     assert isinstance(compiled.selection, ValueSelection)
-    assert compiled.selection.values == (True,)
+    assert compiled.selection.values == (expected,)
+
+
+@pytest.mark.asyncio
+async def test_compile_query_names_a_non_numeric_plan_error(monkeypatch) -> None:
+    document = choice_document()
+    document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': ['maybe']}
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid query plan') as raised:
+        await compile_query(cast(Any, object()), 'compiler-model', 'frustrated users')
+    assert 'numeric' not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_compile_query_wraps_inconsistent_task_criteria(monkeypatch) -> None:
+    document = choice_document()
+    document['dimensions'][0]['task'].update(choice_criteria=None)
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid query plan'):
+        await compile_query(cast(Any, object()), 'compiler-model', 'pick a label')
 
 
 class FakeStructuredResult:

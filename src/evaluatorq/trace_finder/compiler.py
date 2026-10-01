@@ -322,7 +322,7 @@ async def compile_query(
             return CompiledPlan(dimensions=dimensions, numeric=numeric, unsupported_reason=reason)
         except (ValidationError, ValueError) as exc:
             if attempt:
-                raise CompileError(f'Compiler produced an invalid plan: {exc}') from exc
+                raise CompileError(f'Compiler produced an invalid plan (invalid query plan): {exc}') from exc
             logger.warning('Trace query compiler returned an invalid plan; retrying: {}', exc)
             messages = [
                 *messages,
