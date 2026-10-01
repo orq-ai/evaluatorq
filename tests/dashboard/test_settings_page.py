@@ -829,7 +829,7 @@ _CHOICES = {'openai': ['openai/gpt-5.6-luna'], 'typesafe': ['typesafe/jev-latest
 def test_settings_page_renders_model_fields_before_the_catalogue_loads(client: TestClient) -> None:
     html = client.get('/settings').text
 
-    assert '<span hx-get="/settings/models?field=compiler_model&amp;profile=" hx-trigger="load"' in html
+    assert '<span hx-get="/settings/models?field=compiler_model&amp;profile=&amp;auth_method=environment" hx-trigger="load"' in html
     assert '<input id="compiler_model" name="compiler_model" type="text"' in html
 
 
@@ -866,6 +866,53 @@ def test_model_field_ignores_a_missing_profile_rather_than_using_the_environment
     html = client.get('/settings/models', params={'field': 'compiler_model', 'profile': 'gone'}).text
 
     assert 'Custom…' not in html
+
+
+@pytest.mark.parametrize('method', ['stored_api_key', 'cli_oauth'])
+def test_model_field_uses_selected_authentication(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    calls: list[object] = []
+
+    class FakeLLM:
+        async def close(self) -> None:
+            calls.append('llm closed')
+
+    llm = FakeLLM()
+
+    def selected_auth(settings: DashboardSettings, **_kwargs: object) -> SimpleNamespace:
+        calls.append(settings.orq_auth_method)
+        return SimpleNamespace(method=settings.orq_auth_method, api_key='selected-key', base_url='https://selected.example')
+
+    async def choices(chosen_client: object, *, classify: bool = False) -> dict[str, list[str]]:
+        calls.append((chosen_client, classify))
+        return _CHOICES
+
+    async def close_orq(_client: object) -> None:
+        calls.append('orq closed')
+
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
+    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(app_module, 'close_orq_client', close_orq)
+    if method == 'cli_oauth':
+        monkeypatch.setattr(app_module, 'build_auth_clients', lambda _auth: (object(), llm))
+    else:
+        def resolve_llm(**kwargs: object) -> SimpleNamespace:
+            calls.append(kwargs)
+            return SimpleNamespace(client=llm, owned=True)
+
+        monkeypatch.setattr(app_module, 'resolve_llm_client', resolve_llm)
+
+    html = client.get('/settings/models', params={'field': 'compiler_model', 'auth_method': method}).text
+
+    assert 'data-model="openai/gpt-5.6-luna"' in html
+    assert method in calls
+    assert (llm, False) in calls
+    assert 'llm closed' in calls
+    if method == 'cli_oauth':
+        assert 'orq closed' in calls
+    else:
+        assert any(isinstance(call, dict) and call.get('extra_api_key') == 'selected-key' for call in calls)
 
 
 def test_model_menu_submits_its_hidden_value(client: TestClient, settings_file: Path) -> None:

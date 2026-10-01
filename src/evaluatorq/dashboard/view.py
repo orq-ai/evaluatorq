@@ -818,7 +818,11 @@ def settings_body(  # noqa: C901
         value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
         return '' if value is None else str(value)
 
-    profile_query = urlencode({'profile': setting_value('orq_profile')})
+    profile_params = {
+        'profile': setting_value('orq_profile'),
+        'auth_method': setting_value('orq_auth_method') or 'environment',
+    }
+    profile_query = urlencode(profile_params)
     field_rows: list[str] = []
     for name, label in MODEL_FIELDS.items():
         error = errors.get(name)

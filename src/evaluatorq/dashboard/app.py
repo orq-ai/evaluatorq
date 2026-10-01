@@ -348,27 +348,37 @@ async def _settings_models(req: Request) -> NotStr:
         return NotStr('')
     value = req.query_params.get(field, '')
     name = req.query_params.get('profile', '')
-    profiles = await asyncio.to_thread(list_orq_profiles) if name else []
-    profile = next((p for p in profiles if p.name == name), None)
+    settings = effective_settings()
+    requested_method = req.query_params.get('auth_method')
+    if requested_method in ('environment', 'cli_profile', 'stored_api_key', 'cli_oauth'):
+        settings = settings.model_copy(update={'orq_auth_method': requested_method, 'orq_profile': name or None})
+    elif name:
+        settings = settings.model_copy(update={'orq_auth_method': 'cli_profile', 'orq_profile': name})
+    profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
     groups: dict[str, list[str]] = {}
-    # A named profile that is gone or redacted must not fall back to the env workspace's models.
-    usable = profile is not None and '*' not in profile.api_key if name else True
-    if usable:
-        try:
+    try:
+        auth = resolve_dashboard_auth(settings, profiles=profiles)
+        if auth.method == 'cli_oauth':
+            orq, llm = build_auth_clients(auth)
+            try:
+                groups = await models_by_provider(llm, classify=field == 'classifier_model')
+            finally:
+                await close_orq_client(orq)
+                await llm.close()
+        else:
             resolved = resolve_llm_client(
-                extra_api_key=profile.api_key if profile else None,
-                orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+                extra_api_key=auth.api_key,
+                orq_host=auth.base_url,
                 require_orq=True,
                 max_retries=0,
             )
-        except (ImportError, ValueError):
-            resolved = None
-        if resolved is not None:
             try:
                 groups = await models_by_provider(resolved.client, classify=field == 'classifier_model')
             finally:
                 if resolved.owned:
                     await resolved.client.close()
+    except (ImportError, OSError, RuntimeError, ValueError):
+        pass
     return NotStr(model_control(field, value, groups))
 
 
