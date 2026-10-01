@@ -7,14 +7,27 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from loguru import logger
+
+from evaluatorq.contracts import tool_result_to_text
+
 from .models import TraceProjection, TraceRecord
 
-MAX_TOKEN_BUDGET = 25_000
+MAX_TOKEN_BUDGET = 50_000
 MAX_PROJECTED_TOOL_CALLS = 32
 MAX_TOOL_FIELD_BYTES = 128
 OMISSION_MARKER = '[... earlier bytes omitted ...]'
 REASONING_KEYS = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})
+SUCCESS_STATUSES = frozenset({'completed', 'success', 'succeeded', 'ok'})
+_TOOL_RESULT_CATEGORIES = (
+    ('not_found', ('not found', 'not_found', 'does not exist', 'no such record')),
+    ('permission_denied', ('permission denied', 'forbidden', 'unauthorized', 'access denied')),
+    ('rate_limited', ('rate limit', 'rate_limit', 'too many requests')),
+    ('timeout', ('timed out', 'timeout', 'deadline exceeded')),
+    ('unavailable', ('unavailable', 'connection refused', 'connection reset')),
+    ('invalid_request', ('invalid request', 'invalid argument', 'bad request')),
+)
 
 
 @dataclass(frozen=True)
@@ -38,8 +51,47 @@ def estimate_tokens(serialized: str) -> int:
 
 
 def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> TraceProjection:
-    """Project one complete trace into a newest-first-fitting classifier conversation state."""
+    """Project one complete trace into a bounded classifier conversation state.
 
+    The first user message is always kept (truncated if it alone exceeds the budget); the
+    remaining budget is filled newest-first. When messages between the two do not fit, the
+    payload carries `omitted_earlier_messages` so the model knows the middle was dropped. The key's bytes are reserved
+    from the budget, so the marker never pushes the projection over `token_budget`.
+    """
+
+    projection = _project_within(trace, token_budget)
+    if projection.omitted_messages == 0:
+        return projection
+
+    logger.warning(
+        'trace {} projection dropped {} earlier message(s) ({} bytes) to fit the {} byte budget',
+        trace.trace_id,
+        projection.omitted_messages,
+        projection.omitted_bytes,
+        token_budget,
+    )
+    # Reserve room for the marker using the largest count it could hold, then re-project.
+    key = 'omitted_earlier_messages'
+    reserve = len(_canonical_json({key: len(trace.messages)}).encode('utf-8')) + 1
+    try:
+        reduced = _project_within(trace, token_budget - reserve)
+    except ValueError:
+        logger.warning(
+            'trace {} projection has no room for the omission marker; sending it without one', trace.trace_id
+        )
+        return projection
+    payload = {**reduced.payload, key: reduced.omitted_messages}
+    serialized = serialize_projection(payload)
+    return TraceProjection(
+        payload=payload,
+        serialized=serialized,
+        estimated_tokens=estimate_tokens(serialized),
+        omitted_messages=reduced.omitted_messages,
+        omitted_bytes=reduced.omitted_bytes,
+    )
+
+
+def _project_within(trace: TraceRecord, token_budget: int) -> TraceProjection:
     if not 1 <= token_budget <= MAX_TOKEN_BUDGET:
         raise ValueError(f'token_budget must be between 1 and {MAX_TOKEN_BUDGET}')
 
@@ -48,24 +100,45 @@ def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> T
         raise ValueError('token_budget is too small for required trace status metadata')
 
     units = _projection_units(trace.messages)
-    selected_messages: tuple[dict[str, Any], ...] = ()
+    # The first user request is what the conversation was about; it is always kept, and the
+    # rest of the budget goes to the newest units. Only units between the two are omitted.
+    pinned = next((i for i, unit in enumerate(units) if _is_user_unit(unit)), None)
+    head: tuple[dict[str, Any], ...] = ()  # kept units before the pinned one
+    tail: tuple[dict[str, Any], ...] = ()  # kept units after the pinned one
+    pinned_messages = units[pinned].messages if pinned is not None else ()
     omitted_units: tuple[ProjectionUnit, ...] = ()
     truncated_bytes = 0
 
     for index in range(len(units) - 1, -1, -1):
+        if index == pinned:
+            continue
         unit = units[index]
-        candidate_messages = unit.messages + selected_messages
+        after_pinned = pinned is None or index > pinned
+        candidate_head = head if after_pinned else unit.messages + head
+        candidate_tail = unit.messages + tail if after_pinned else tail
+        candidate_messages = candidate_head + pinned_messages + candidate_tail
         candidate_payload = {'trace_status': trace.status, 'messages': list(candidate_messages)}
         if estimate_tokens(serialize_projection(candidate_payload)) <= token_budget:
-            selected_messages = candidate_messages
+            head, tail = candidate_head, candidate_tail
             continue
 
-        if not selected_messages:
-            selected_messages, truncated_bytes = _tail_truncate_unit(unit, trace.status, token_budget)
+        if not head and not tail and pinned is None:
+            tail, truncated_bytes = _tail_truncate_unit(unit, trace.status, token_budget)
             omitted_units = tuple(units[:index])
         else:
-            omitted_units = tuple(units[: index + 1])
+            omitted_units = tuple(u for i, u in enumerate(units[: index + 1]) if i != pinned)
         break
+
+    if (
+        pinned is not None
+        and estimate_tokens(serialize_projection({'trace_status': trace.status, 'messages': list(pinned_messages)}))
+        > token_budget
+    ):
+        # Even alone the first user message is over budget: truncate it, drop everything else.
+        pinned_messages, truncated_bytes = _tail_truncate_unit(units[pinned], trace.status, token_budget)
+        head = tail = ()
+        omitted_units = tuple(u for i, u in enumerate(units) if i != pinned)
+    selected_messages = head + pinned_messages + tail
 
     payload['messages'] = list(selected_messages)
     serialized = serialize_projection(payload)
@@ -80,6 +153,10 @@ def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> T
         omitted_messages=omitted_messages,
         omitted_bytes=omitted_bytes + truncated_bytes,
     )
+
+
+def _is_user_unit(unit: ProjectionUnit) -> bool:
+    return bool(unit.messages) and unit.source_messages[0].get('role') == 'user'
 
 
 def _projection_units(messages: tuple[dict[str, Any], ...]) -> tuple[ProjectionUnit, ...]:
@@ -119,6 +196,7 @@ def _project_assistant(message: dict[str, Any], results: tuple[dict[str, Any], .
             'name': None,
             'arguments': f'{len(source_calls) - MAX_PROJECTED_TOOL_CALLS} tool calls omitted',
             'status': 'omitted',
+            'result_category': None,
         })
     projected = {
         'role': message.get('role'),
@@ -163,11 +241,17 @@ def _project_content_block(block: Any) -> dict[str, Any]:
         return {'type': 'unknown', 'omitted': 'non-text content'}
     block_type = block.get('type')
     kind = block_type[:80] if isinstance(block_type, str) else 'unknown'
+    if kind == 'tool_result':
+        # Anthropic-shaped tool results ride inside user messages; their bodies are never projected.
+        return {'type': kind, 'omitted': 'tool result body'}
     text = block.get('text')
     if isinstance(text, str):
         return {'type': kind, 'text': text}
     if isinstance(text, dict) and isinstance(text.get('value'), str):
         return {'type': kind, 'text': {'value': text['value']}}
+    content = block.get('content')
+    if isinstance(content, str):
+        return {'type': kind, 'text': content}
     try:
         if len(_canonical_json(block).encode('utf-8')) <= 512:
             return _strip_reasoning(block)
@@ -178,7 +262,13 @@ def _project_content_block(block: Any) -> dict[str, Any]:
 
 def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[str, Any]:
     if not isinstance(call, dict):
-        return {'id': None, 'name': None, 'arguments': _strip_reasoning(call), 'status': 'pending'}
+        return {
+            'id': None,
+            'name': None,
+            'arguments': _strip_reasoning(call),
+            'status': 'pending',
+            'result_category': None,
+        }
 
     function = call.get('function')
     function_data = function if isinstance(function, dict) else {}
@@ -189,7 +279,38 @@ def _project_tool_call(call: Any, results: tuple[dict[str, Any], ...]) -> dict[s
         'name': _bounded_tool_field(function_data.get('name', call.get('name'))),
         'arguments': arguments,
         'status': _tool_call_status(call_id, results),
+        'result_category': _tool_result_category(call_id, results),
     }
+
+
+def _matching_tool_result(call_id: Any, results: tuple[dict[str, Any], ...]) -> dict[str, Any] | None:
+    """Do not pair an idless call with an unrelated idless result."""
+    if not isinstance(call_id, str) or not call_id:
+        return None
+    return next((item for item in results if item.get('tool_call_id') == call_id), None)
+
+
+def _tool_result_category(call_id: Any, results: tuple[dict[str, Any], ...]) -> str | None:
+    """Return only a fixed diagnostic label; provider result bytes are never projected."""
+    result = _matching_tool_result(call_id, results)
+    if result is None:
+        return None
+    if _tool_call_status(call_id, results) != 'error':
+        return None
+    text = tool_result_to_text(result.get('content'))
+    category = _recognized_tool_result_category(text)
+    if category is not None:
+        return category
+    return 'provider_error'
+
+
+def _recognized_tool_result_category(text: str) -> str | None:
+    """Classify broad error hints heuristically; a substring is not a provider verdict."""
+    lowered = text.casefold()
+    return next(
+        (category for category, markers in _TOOL_RESULT_CATEGORIES if any(marker in lowered for marker in markers)),
+        None,
+    )
 
 
 def _bounded_tool_field(value: Any) -> str | None:
@@ -210,15 +331,49 @@ def _parse_arguments(arguments: Any) -> Any:
 
 
 def _tool_call_status(call_id: Any, results: tuple[dict[str, Any], ...]) -> str:
-    result = next((item for item in results if item.get('tool_call_id') == call_id), None)
+    result = _matching_tool_result(call_id, results)
     if result is None:
         return 'pending'
-    status = result.get('status')
-    if isinstance(status, str) and status.casefold() in ERROR_STATUSES:
+    trace_metadata = result.get('trace_finder_metadata')
+    trace_metadata = trace_metadata if isinstance(trace_metadata, dict) else {}
+    otel_result = trace_metadata.get('tool_result')
+    sources = [source for source in (otel_result, result) if isinstance(source, dict)]
+    for source in sources:
+        status = source.get('status')
+        if isinstance(status, str) and status.casefold() in ERROR_STATUSES:
+            return 'error'
+        if source.get('is_error') is True or source.get('error') not in (None, False, ''):
+            return 'error'
+    for source in sources:
+        status = source.get('status')
+        if isinstance(status, str) and status.casefold() in SUCCESS_STATUSES:
+            return 'completed'
+        if source.get('is_error') is False:
+            return 'completed'
+
+    content = tool_result_to_text(result.get('content')).lstrip()
+    return _content_tool_call_status(content) or 'completed'
+
+
+def _content_tool_call_status(content: str) -> str | None:
+    try:
+        decoded = json.loads(content)
+    except (TypeError, ValueError):
+        decoded = None
+    if isinstance(decoded, dict):
+        nested_status = decoded.get('status')
+        if isinstance(nested_status, str) and nested_status.casefold() in ERROR_STATUSES:
+            return 'error'
+        if decoded.get('error') not in (None, False, ''):
+            return 'error'
+        if isinstance(nested_status, str) and nested_status.casefold() in SUCCESS_STATUSES:
+            return 'completed'
+        if decoded.get('is_error') is False:
+            return 'completed'
+    # Some OTel providers encode failure only as a leading plain-text marker.
+    if content.casefold().startswith('error:'):
         return 'error'
-    if result.get('is_error') is True or result.get('error') not in (None, False, ''):
-        return 'error'
-    return 'completed'
+    return None
 
 
 def _tail_truncate_unit(
@@ -281,6 +436,8 @@ def _truncatable_text_lengths(messages: tuple[dict[str, Any], ...]) -> tuple[int
 def _content_text_slots(content: Any) -> list[tuple[dict[str, Any], str]]:
     """Locate text in supported content blocks without treating metadata as prose."""
     slots = []
+    if isinstance(content, dict):
+        content = [content]
     if isinstance(content, list):
         for block in content:
             if not isinstance(block, dict):
@@ -305,7 +462,7 @@ def _truncate_messages(
             if isinstance(content, str):
                 truncated[name], omitted = _tail_truncate_text(content, retained_bytes)
                 omitted_bytes += omitted
-            elif isinstance(content, list):
+            elif isinstance(content, (list, dict)):
                 truncated[name] = deepcopy(content)
                 for container, key in _content_text_slots(truncated[name]):
                     container[key], omitted = _tail_truncate_text(container[key], retained_bytes)

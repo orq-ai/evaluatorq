@@ -14,12 +14,11 @@ from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import apply_ui
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
-from evaluatorq.dashboard.orq_scope import OrqProject, OrqScope
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.trace_finder import FacetCatalogue, RunSnapshot
-from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+from evaluatorq.trace_finder.settings import DashboardSettings, load_settings, save_settings
 
 
 _MODELS = {'compiler_model': 'compiler/custom', 'classifier_model': 'classifier/custom', 'apply_model': 'apply/custom'}
@@ -254,66 +253,37 @@ def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> No
     assert 'Settings saved.' in response.text
 
 
-def test_project_key_scope_is_saved_and_used_for_trace_search(
-    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+def test_environment_auth_ignores_old_and_submitted_scope(
+    settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from evaluatorq.dashboard.trace_links import trace_span_url
-    from evaluatorq.trace_finder.settings import load_settings
+    from evaluatorq.trace_finder.settings import effective_settings
 
-    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
-    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
-    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
-    monkeypatch.delenv('ORQ_WORKSPACE_SLUG', raising=False)
+    save_settings(DashboardSettings.model_validate({
+        'orq_workspace': 'old-workspace',
+        'orq_project_id': 'old-project',
+        'orq_project_name': 'Old project',
+    }), settings_file)
+    monkeypatch.setenv('ORQ_WORKSPACE', 'environment-workspace')
+    fresh = TestClient(build_app(roots=[settings_file.parent]), follow_redirects=False)
 
-    page = client.get('/settings').text
-    assert '<option value="project-bauke" selected>Bauke' in page
-    response = client.post('/settings', data=csrf_data({
+    page = fresh.get('/settings').text
+    assert 'name="orq_workspace"' not in page
+    assert 'name="orq_project_id"' not in page
+    assert 'old-project' not in fresh.get('/find').text
+    assert effective_settings().orq_project_id is None
+    response = fresh.post('/settings', data=csrf_data({
         **_MODELS,
-        'orq_workspace': 'orq-research',
-        'orq_project_id': 'project-bauke',
+        'orq_workspace': 'submitted-workspace',
+        'orq_project_id': 'submitted-project',
     }))
 
     assert response.status_code == 303
     saved = load_settings(settings_file)
-    assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (
-        'orq-research', 'project-bauke', 'Bauke'
-    )
-    assert '/orq-research/traces?' in (trace_span_url('trace-1', 'span-1') or '')
-    run = finder_routes._run_request({'query': 'Frustrated customers'}, saved)
-    assert run.population.facets.project_id == 'project-bauke'
-    assert '<b>Project</b><a href="/settings">Bauke</a>' in client.get('/find').text
-
-
-def test_settings_rejects_project_outside_selected_key(
-    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
-    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
-
-    response = client.post('/settings', data=csrf_data({
-        **_MODELS,
-        'orq_workspace': 'orq-research',
-        'orq_project_id': 'project-other',
-    }))
-
-    assert response.status_code == 422
-    assert 'not available to the selected credential' in response.text
-    assert not settings_file.exists()
-
-
-def test_settings_rejects_workspace_outside_selected_key(
-    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    scope = OrqScope('orq-research', 'research-id', (OrqProject('project-bauke', 'Bauke', 'research-id'),))
-    monkeypatch.setattr(app_module, 'discover_orq_scope', lambda _profile: scope)
-
-    response = client.post('/settings', data=csrf_data({
-        **_MODELS, 'orq_workspace': 'other-workspace', 'orq_project_id': 'project-bauke',
-    }))
-
-    assert response.status_code == 422
-    assert 'does not match the selected credential' in response.text
-    assert not settings_file.exists()
+    assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (None, None, None)
+    assert '/environment-workspace/traces?' in (trace_span_url('trace-1', 'span-1') or '')
+    run = finder_routes._run_request({'query': 'Frustrated customers'}, effective_settings())
+    assert run.population.facets.project_id is None
 
 
 def test_apply_model_uses_saved_setting_then_environment(
@@ -341,66 +311,221 @@ def _profiles() -> tuple[OrqProfile, ...]:
     )
 
 
-def test_settings_page_hides_the_profile_selector_without_cli_profiles(
+def test_settings_page_shows_environment_authentication_without_cli_profiles(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: ())
     html = client.get('/settings').text
-    assert 'name="orq_profile"' not in html
-    assert 'name="orq_workspace"' in html
+    assert '<div class="panel-title">Authentication</div>' in html
+    assert 'name="orq_profile"' in html
+    assert 'name="orq_auth_method" value="environment" checked' in html
+    assert 'name="orq_auth_method" value="cli_oauth"' in html
+    assert 'name="orq_auth_method" value="stored_api_key"' in html
+    assert 'name="orq_workspace"' not in html
+    assert 'name="orq_project_id"' not in html
 
 
-def test_settings_page_offers_cli_profiles_under_advanced(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
     html = client.get('/settings').text
-    assert '<summary>Advanced</summary>' in html
-    assert '<option value="">Environment (ORQ_API_KEY)</option>' in html
+    assert '<div class="panel-title">Authentication</div>' in html
+    assert '<summary>Advanced</summary>' not in html
+    assert 'name="orq_auth_method" value="environment" checked' in html
+    assert 'name="orq_auth_method" value="cli_profile"' in html
     assert '<option value="staging">staging (https://staging.orq.ai)</option>' in html
     assert '<option value="prod">prod</option>' in html
     assert 'key-staging' not in html
-    assert '<details class="settings-advanced" open>' not in html
 
 
-def test_selecting_another_profile_refreshes_its_projects_before_save(
+def test_authentication_choices_keep_method_fields_in_a_shared_second_step(client: TestClient) -> None:
+    html = client.get('/settings').text
+    choices = html.split('<div class="settings-auth-choices"', 1)[1].split('<div class="settings-auth-config">', 1)[0]
+    details = html.split('<div class="settings-auth-config">', 1)[1].split('</form>', 1)[0]
+
+    assert choices.count('class="settings-auth-choice"') == 4
+    assert 'name="orq_profile"' not in choices
+    assert 'name="orq_api_key_entry"' not in choices
+    assert 'data-auth-method="cli_profile"' in details
+    assert 'data-auth-method="cli_oauth"' in details
+    assert 'data-auth-method="stored_api_key"' in details
+
+
+def test_entered_api_key_is_encrypted_and_selected_method_survives_reload(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cryptography.fernet import Fernet
+
+    from evaluatorq.trace_finder.secure_credentials import _encryption_key
+    from evaluatorq.trace_finder.settings import load_settings, read_stored_api_key
+
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY', Fernet.generate_key().decode())
+    _encryption_key.cache_clear()
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS,
+        'orq_auth_method': 'stored_api_key',
+        'orq_api_key_entry': 'entered-secret-for-test',
+        'orq_stored_key_host': 'https://my.orq.ai',
+    }))
+
+    assert response.status_code == 303
+    raw = settings_file.read_text()
+    assert 'entered-secret-for-test' not in raw
+    saved = load_settings(settings_file)
+    assert saved.orq_auth_method == 'stored_api_key'
+    assert read_stored_api_key(saved) == 'entered-secret-for-test'
+    assert 'name="orq_auth_method" value="stored_api_key" checked' in TestClient(build_app(roots=[])).get('/settings').text
+    _encryption_key.cache_clear()
+
+
+def test_missing_environment_key_returns_action_for_startup_toast(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    response = client.get('/auth/status')
+    assert response.json()['status'] == 'action'
+    assert 'ORQ_API_KEY is not set' in response.json()['message']
+    assert 'id="eq-auth-toast"' in client.get('/').text
+
+
+def test_rejected_key_returns_safe_startup_toast_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Unauthorized(Exception):
+        status_code = 401
+
+    def rejected(*_args: object, **_kwargs: object) -> object:
+        raise Unauthorized('provider response includes a private value')
+
+    monkeypatch.setenv('ORQ_API_KEY', 'never-show-this-key')
+    monkeypatch.setattr(app_module, 'build_auth_clients', rejected)
+    response = client.get('/auth/status')
+
+    assert response.json()['status'] == 'action'
+    assert 'was rejected' in response.json()['message']
+    assert 'never-show-this-key' not in response.text
+    assert 'private value' not in response.text
+
+
+def test_unexpected_auth_status_failure_is_distinguished_from_outage(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr(
+        app_module,
+        'build_auth_clients',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError('programming defect')),
+    )
+
+    response = client.get('/auth/status')
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'error'
+    assert 'Check the dashboard logs' in response.json()['message']
+
+
+def test_missing_cli_oauth_sign_in_returns_action_for_startup_toast(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, settings_file: Path
+) -> None:
+    save_settings(DashboardSettings.model_validate({'orq_auth_method': 'cli_oauth'}), settings_file)
+
+    def missing_cli(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError('The orq CLI is not installed. Install it and sign in before using CLI OAuth.')
+
+    monkeypatch.setattr(app_module, 'build_auth_clients', missing_cli)
+    response = client.get('/auth/status')
+
+    assert response.json()['status'] == 'action'
+    assert 'CLI OAuth was rejected' in response.json()['message']
+
+
+def test_auth_status_cleanup_closes_both_clients_and_preserves_response(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    closed: list[str] = []
+
+    class Traces:
+        async def list_facet_values_async(self, **_kwargs: object) -> None:
+            return None
+
+    class Orq:
+        traces = Traces()
+
+    class Llm:
+        async def close(self) -> None:
+            closed.append('llm')
+            raise RuntimeError('llm close failed')
+
+    async def close_orq(_orq: object) -> None:
+        closed.append('orq')
+        raise RuntimeError('orq close failed')
+
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr(app_module, 'build_auth_clients', lambda *_args, **_kwargs: (Orq(), Llm()))
+    monkeypatch.setattr(app_module, 'close_orq_client', close_orq)
+
+    response = client.get('/auth/status')
+
+    assert response.status_code == 200
+    assert response.json()['status'] == 'valid'
+    assert closed == ['orq', 'llm']
+
+
+def test_selecting_another_profile_does_not_show_its_scope_before_save(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     save_settings(DashboardSettings.model_validate({'orq_workspace': 'orq-research', 'orq_project_id': 'project-bauke'}), settings_file)
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
-    monkeypatch.setattr(
-        app_module,
-        'discover_orq_scope',
-        lambda profile: OrqScope(
-            'staging-workspace', 'staging-id', (OrqProject('project-staging', 'Staging', 'staging-id'),)
-        ) if profile == 'staging' else OrqScope(),
-    )
-
     html = client.get('/settings?profile=staging').text
 
-    assert 'Profile preview. Choose a project, then Save to apply.' in html
+    assert 'Profile preview. Save settings to use it.' in html
     assert '<option value="staging" selected>staging' in html
     assert 'https://staging.orq.ai' in html
     assert 'Selected profile API key' in html
-    assert 'name="orq_workspace"' in html
-    assert '<option value="project-staging" selected>Staging' in html
+    assert 'onchange="location.assign' not in html
+    assert 'settings-auth-scope' not in html
+    assert 'project-staging' not in html
     assert 'project-bauke' not in html
     assert json.loads(settings_file.read_text())['orq_project_id'] == 'project-bauke'
 
 
-def test_profile_without_a_resolved_slug_does_not_inherit_environment_workspace(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+def test_saving_profile_clears_legacy_workspace_and_project(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
-    monkeypatch.setattr(
-        app_module,
-        'discover_orq_scope',
-        lambda _profile: OrqScope(None, 'staging-id', (OrqProject('project-staging', 'Staging', 'staging-id'),)),
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_profile', 'orq_profile': 'prod',
+        'orq_workspace': 'old-workspace', 'orq_project_id': 'old-project',
+        'orq_project_name': 'Old project',
+    }), settings_file)
+
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS, 'orq_auth_method': 'cli_profile', 'orq_profile': 'staging',
+        'orq_workspace': 'other-workspace', 'orq_project_id': 'other-project',
+    }))
+
+    assert response.status_code == 303
+    saved = load_settings(settings_file)
+    assert saved.orq_profile == 'staging'
+    assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (None, None, None)
+
+
+def test_saving_environment_auth_clears_saved_cli_profile(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
+    save_settings(
+        DashboardSettings.model_validate({'orq_auth_method': 'cli_profile', 'orq_profile': 'staging'}), settings_file
     )
-    monkeypatch.setenv('ORQ_WORKSPACE', 'orq-research')
 
-    html = client.get('/settings?profile=staging').text
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS,
+        'orq_auth_method': 'environment',
+    }))
 
-    assert 'name="orq_workspace" type="text" value=""' in html
-    assert 'could not verify this workspace slug' in html
+    assert response.status_code == 303
+    saved = load_settings(settings_file)
+    assert saved.orq_auth_method == 'environment'
+    assert saved.orq_profile is None
 
 
 def test_saving_a_profile_persists_it_without_changing_environment(
@@ -419,10 +544,11 @@ def test_saving_a_profile_persists_it_without_changing_environment(
     assert os.environ['ORQ_BASE_URL'] == 'https://env.orq.ai'
     html = client.get('/settings').text
     assert '<option value="prod" selected>prod</option>' in html
-    assert '<details class="settings-advanced" open>' in html
+    assert '<div class="panel-title">Authentication</div>' in html
     assert 'Selected profile API key' in html
     assert 'key-prod' not in html
     assert 'Selected profile host' in html
+    assert 'Uses the API key and host from this local Orq CLI profile.' in html
 
 
 def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -431,6 +557,7 @@ def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient
 
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
     monkeypatch.setenv('ORQ_BASE_URL', 'https://environment.orq.ai')
+    monkeypatch.setenv('ORQ_WORKSPACE', 'staging-workspace')
 
     assert client.post('/settings', data=csrf_data({
         **_MODELS, 'orq_profile': 'staging', 'orq_workspace': 'staging-workspace',
@@ -438,6 +565,7 @@ def test_saving_a_profile_with_a_server_keeps_it_in_app_state(client: TestClient
     assert getattr(client.app, 'state').finder_profile == _profiles()[0]
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.orq.ai'
     assert load_settings().orq_profile_host == 'https://staging.orq.ai'
+    assert load_settings().orq_workspace is None
     assert load_settings().orq_credential_fingerprint == credential_fingerprint('key-staging', 'https://staging.orq.ai')
     assert (trace_span_url('trace-1', 'span-1') or '').startswith('https://staging.orq.ai/')
 
@@ -461,10 +589,12 @@ def test_switching_back_to_environment_clears_app_profile(
     monkeypatch.setenv('ORQ_BASE_URL', 'https://env.orq.ai')
 
     assert client.post('/settings', data=csrf_data({**_MODELS, 'orq_profile': 'staging'})).status_code == 303
+    getattr(client.app, 'state').insights_facet_catalogues = {7: object()}
     assert client.post('/settings', data=csrf_data({**_MODELS, 'orq_profile': ''})).status_code == 303
 
     assert json.loads(settings_file.read_text())['orq_profile'] is None
     assert getattr(client.app, 'state').finder_profile is None
+    assert not hasattr(getattr(client.app, 'state'), 'insights_facet_catalogues')
     assert os.environ['ORQ_API_KEY'] == 'from-env'
     assert os.environ['ORQ_BASE_URL'] == 'https://env.orq.ai'
 
@@ -486,7 +616,8 @@ def test_missing_profile_selector_preserves_saved_choice(
     assert 'Orq profile prod is unavailable' in client.get('/find').text
     html = client.get('/settings').text
     assert '<option value="prod" selected disabled>prod (unavailable)</option>' in html
-    assert '<option value="">Environment (ORQ_API_KEY)</option>' in html
+    assert 'name="orq_auth_method" value="environment"' in html
+    assert 'The saved Orq CLI profile “prod” is unavailable.' in html
 
     assert client.post('/settings', data=csrf_data({**_MODELS, 'orq_profile': ''})).status_code == 303
     assert finder_routes._api_available(app) is True
@@ -679,28 +810,21 @@ def test_finder_builds_clients_with_app_profile_not_environment(
     assert os.environ['ORQ_API_KEY'] == 'from-env'
 
 
-def test_apply_clients_use_profile_key_and_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, dict[str, object]]] = []
-    llm_args: list[tuple[object, ...]] = []
+def test_apply_clients_use_resolved_dashboard_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard.auth import DashboardAuth
 
-    def fake_orq(api_key: str | None = None, **kwargs: object) -> object:
-        calls.append(('orq', {'api_key': api_key, **kwargs}))
-        return object()
+    auth = DashboardAuth('stored_api_key', 'saved-key', 'https://staging.orq.ai')
+    settings = SimpleNamespace(orq_workspace='workspace-a', orq_project_id='project-a')
+    calls: list[tuple[object, dict[str, object]]] = []
 
-    def fake_llm(*args: object, **kwargs: object) -> SimpleNamespace:
-        llm_args.append(args)
-        calls.append(('llm', kwargs))
-        return SimpleNamespace(client=object())
+    def fake_build(resolved: object, **kwargs: object) -> tuple[object, object]:
+        calls.append((resolved, kwargs))
+        return object(), object()
 
-    monkeypatch.setattr(apply_ui, 'resolve_orq_client', fake_orq)
-    monkeypatch.setattr(apply_ui, 'resolve_llm_client', fake_llm)
+    monkeypatch.setattr('evaluatorq.dashboard.auth.build_auth_clients', fake_build)
+    apply_ui._build_clients(auth, settings)
 
-    apply_ui._build_clients(_profiles()[0])
-
-    assert calls[0][1] == {'api_key': 'key-staging', 'base_url': 'https://staging.orq.ai'}
-    assert calls[1][1]['extra_api_key'] == 'key-staging'
-    assert calls[1][1]['orq_host'] == 'https://staging.orq.ai'
-    assert llm_args == [(None,)]
+    assert calls == [(auth, {'workspace': 'workspace-a', 'project': 'project-a'})]
 
 
 @pytest.mark.asyncio
@@ -766,7 +890,7 @@ _CHOICES = {'openai': ['openai/gpt-5.6-luna'], 'typesafe': ['typesafe/jev-latest
 def test_settings_page_renders_model_fields_before_the_catalogue_loads(client: TestClient) -> None:
     html = client.get('/settings').text
 
-    assert '<span hx-get="/settings/models?field=compiler_model&amp;profile=" hx-trigger="load"' in html
+    assert '<span hx-get="/settings/models?field=compiler_model&amp;profile=&amp;auth_method=environment" hx-trigger="load"' in html
     assert '<input id="compiler_model" name="compiler_model" type="text"' in html
 
 
@@ -803,6 +927,53 @@ def test_model_field_ignores_a_missing_profile_rather_than_using_the_environment
     html = client.get('/settings/models', params={'field': 'compiler_model', 'profile': 'gone'}).text
 
     assert 'Custom…' not in html
+
+
+@pytest.mark.parametrize('method', ['stored_api_key', 'cli_oauth'])
+def test_model_field_uses_selected_authentication(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    calls: list[object] = []
+
+    class FakeLLM:
+        async def close(self) -> None:
+            calls.append('llm closed')
+
+    llm = FakeLLM()
+
+    def selected_auth(settings: DashboardSettings, **_kwargs: object) -> SimpleNamespace:
+        calls.append(settings.orq_auth_method)
+        return SimpleNamespace(method=settings.orq_auth_method, api_key='selected-key', base_url='https://selected.example')
+
+    async def choices(chosen_client: object, *, classify: bool = False) -> dict[str, list[str]]:
+        calls.append((chosen_client, classify))
+        return _CHOICES
+
+    async def close_orq(_client: object) -> None:
+        calls.append('orq closed')
+
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
+    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(app_module, 'close_orq_client', close_orq)
+    if method == 'cli_oauth':
+        monkeypatch.setattr(app_module, 'build_auth_clients', lambda _auth: (object(), llm))
+    else:
+        def resolve_llm(**kwargs: object) -> SimpleNamespace:
+            calls.append(kwargs)
+            return SimpleNamespace(client=llm, owned=True)
+
+        monkeypatch.setattr(app_module, 'resolve_llm_client', resolve_llm)
+
+    html = client.get('/settings/models', params={'field': 'compiler_model', 'auth_method': method}).text
+
+    assert 'data-model="openai/gpt-5.6-luna"' in html
+    assert method in calls
+    assert (llm, False) in calls
+    assert 'llm closed' in calls
+    if method == 'cli_oauth':
+        assert 'orq closed' in calls
+    else:
+        assert any(isinstance(call, dict) and call.get('extra_api_key') == 'selected-key' for call in calls)
 
 
 def test_model_menu_submits_its_hidden_value(client: TestClient, settings_file: Path) -> None:

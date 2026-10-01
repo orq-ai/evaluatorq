@@ -311,18 +311,20 @@ def _looks_like_responses(value: Any) -> bool:
     return isinstance(decoded, list) and any(isinstance(item, dict) and is_responses_item(item) for item in decoded)
 
 
-def _parse_messages(
+def detect_message_format(value: Any) -> _MESSAGE_FORMAT:
+    """Detect which supported transcript format `value` uses."""
+    if _looks_like_otel(value):
+        return 'otel_genai'
+    if _looks_like_responses(value):
+        return 'responses'
+    return 'chat_completions'
+
+
+def parse_messages(
     value: Any, *, hinted: _MESSAGE_FORMAT | None = None, default_role: _ROLE
 ) -> tuple[list[Message], _MESSAGE_FORMAT]:
-    detected: _MESSAGE_FORMAT
-    if hinted is not None:
-        detected = hinted
-    elif _looks_like_otel(value):
-        detected = 'otel_genai'
-    elif _looks_like_responses(value):
-        detected = 'responses'
-    else:
-        detected = 'chat_completions'
+    """Parse a supported transcript format into messages and return its format."""
+    detected = hinted if hinted is not None else detect_message_format(value)
     if detected == 'otel_genai':
         return _otel_messages(value, default_role=default_role), detected
     if detected == 'responses':
@@ -400,7 +402,7 @@ def _parse_exchange(
     for side, default_role in side_roles:
         parsed: tuple[list[Message], _MESSAGE_FORMAT] | None = None
         for hinted, value in _message_candidates(span, side):
-            messages, detected = _parse_messages(value, hinted=hinted, default_role=default_role)
+            messages, detected = parse_messages(value, hinted=hinted, default_role=default_role)
             # Content-less messages would stop the search at a shape that merely looked like a conversation.
             if any(message.content or message.tool_calls or message.tool_call_id for message in messages):
                 parsed = messages, detected

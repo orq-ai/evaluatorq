@@ -5,16 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import weakref
 from collections import defaultdict, deque
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from contextlib import suppress
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
+
+from evaluatorq.common.trace_input import detect_message_format, parse_messages
+from evaluatorq.openresponses.otel_messages import is_responses_item
 
 from .facets import _project_names, project_labels
 from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
@@ -37,6 +41,7 @@ PAGE_SIZE = 200
 MAX_SPAN_PAGES = 10
 MAX_SPANS_PER_TRACE = PAGE_SIZE * MAX_SPAN_PAGES
 SDK_TIMEOUT_MS = 30_000
+TARGET_RELOAD_PAGE_BUDGET_SECONDS = 30
 DEFAULT_LOOKBACK = timedelta(days=7)
 CONVERSATION_SPAN_TYPES = frozenset({
     'span.chat_completion',
@@ -48,6 +53,56 @@ EVALUATOR_SPAN_TYPES = frozenset({'span.evaluation_engine', 'span.evaluator'})
 _MAX_CAPTURED_RESPONSES = 128
 _CAPTURE_REGISTRATION_ATTR = '_evaluatorq_trace_finder_capture_registration'
 _CAPTURE_REQUEST: ContextVar[object | None] = ContextVar('trace_finder_capture_request', default=None)
+
+
+class _TargetDeadlineExceeded(asyncio.TimeoutError):
+    """The local targeted-reload budget expired, distinct from a provider timeout."""
+
+
+def _remaining_target_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _TargetDeadlineExceeded
+    return remaining
+
+
+def _request_timeout_ms(deadline: float | None) -> int:
+    if deadline is None:
+        return SDK_TIMEOUT_MS
+    return max(1, min(SDK_TIMEOUT_MS, int(_remaining_target_seconds(deadline) * 1000)))
+
+
+async def _await_target_deadline(awaitable: Awaitable[Any], deadline: float | None) -> Any:
+    if deadline is None:
+        return await awaitable
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        close = getattr(awaitable, 'close', None)
+        if callable(close):
+            close()
+        raise _TargetDeadlineExceeded
+    task = asyncio.ensure_future(awaitable)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=remaining)
+        if done:
+            return task.result()
+        raise _TargetDeadlineExceeded
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+def _empty_target_snapshot(start: datetime, end: datetime) -> Snapshot:
+    return Snapshot(
+        traces=(),
+        capture_metadata={
+            'source': 'orq-oql',
+            'start': start.isoformat(),
+            'end': end.isoformat(),
+            'incomplete_reason': 'target_deadline',
+        },
+    )
 
 
 class OrqSourceError(ValueError):
@@ -200,11 +255,12 @@ class OrqTraceSource:
         *,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None = None,
     ) -> Snapshot:
-        """Load at most 5000 usable traces in deterministic newest-first order."""
+        """Load at most 5000 traces, optionally scanning for specific IDs, newest first."""
 
         try:
-            return await self._load_with_lifecycle(start, end, limit, facets, numeric)
+            return await self._load_with_lifecycle(start, end, limit, facets, numeric, target_trace_ids)
         except OrqSourceError:
             raise
         except Exception as error:
@@ -217,11 +273,12 @@ class OrqTraceSource:
         limit: int,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None,
     ) -> Snapshot:
         if self._owns_client:
             async with self._client:
-                return await self._validated_load(start, end, limit, facets, numeric)
-        return await self._validated_load(start, end, limit, facets, numeric)
+                return await self._validated_load(start, end, limit, facets, numeric, target_trace_ids)
+        return await self._validated_load(start, end, limit, facets, numeric, target_trace_ids)
 
     async def _validated_load(
         self,
@@ -230,6 +287,7 @@ class OrqTraceSource:
         limit: int,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None,
     ) -> Snapshot:
         if limit < 1:
             raise OrqSourceError('limit must be at least 1')
@@ -237,17 +295,36 @@ class OrqTraceSource:
         resolved_start = _aware_bound(start, 'start') if start is not None else resolved_end - DEFAULT_LOOKBACK
         if resolved_start > resolved_end:
             raise OrqSourceError('start must not be after end')
-        return await self._load(resolved_start, resolved_end, min(limit, MAX_LIVE_TRACES), facets, numeric)
+        return await self._load(
+            resolved_start,
+            resolved_end,
+            min(limit, MAX_LIVE_TRACES),
+            facets,
+            numeric,
+            target_trace_ids,
+        )
 
-    async def _load(
+    async def _load(  # noqa: C901 - page, scan, and elapsed-time bounds must guard the same acquisition loop
         self,
         start: datetime,
         end: datetime,
         limit: int,
         facets: FacetSelection,
         numeric: NumericFilters,
+        target_trace_ids: set[str] | frozenset[str] | None = None,
     ) -> Snapshot:
-        project_names = await _project_names(self._client)
+        # Targeted reloads share one elapsed-time budget across project lookup,
+        # OQL pages, and trace hydration. Normal scans retain their existing
+        # per-request timeout behavior.
+        target_deadline = time.monotonic() + TARGET_RELOAD_PAGE_BUDGET_SECONDS if target_trace_ids is not None else None
+        try:
+            project_names = await _await_target_deadline(_project_names(self._client), target_deadline)
+        except _TargetDeadlineExceeded:
+            logger.warning(
+                'targeted trace reload reached its {} second deadline during project lookup',
+                TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+            )
+            return _empty_target_snapshot(start, end)
         oql = build_oql(facets, numeric, project_names)
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
         records: list[TraceRecord] = []
@@ -257,12 +334,23 @@ class OrqTraceSource:
         wrong_project_count = 0
         fallback_count = 0
         scanned_count = 0
-        max_scanned = max(PAGE_SIZE, limit * 5)
+        targets = set(target_trace_ids) if target_trace_ids is not None else None
+        max_scanned = MAX_LIVE_TRACES if targets is not None else max(PAGE_SIZE, limit * 5)
         pages_scanned = 0
         max_pages = max(20, (max_scanned + PAGE_SIZE - 1) // PAGE_SIZE * 2)
         page_token: str | None = None
+        incomplete_reason: str | None = None
 
-        while len(records) < limit:
+        while not _load_target_reached(records, limit, targets):
+            if target_deadline is not None and time.monotonic() >= target_deadline:
+                logger.warning(
+                    'stopped starting targeted trace pages after {} seconds with {} of {} requested trace(s)',
+                    TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+                    len(records),
+                    len(targets or ()),
+                )
+                incomplete_reason = 'target_deadline'
+                break
             if scanned_count >= max_scanned or pages_scanned >= max_pages:
                 logger.warning(
                     'stopped trace search after scanning {} summaries across {} pages for {} usable traces',
@@ -270,16 +358,27 @@ class OrqTraceSource:
                     pages_scanned,
                     limit,
                 )
+                if targets is not None:
+                    incomplete_reason = 'scan_limit'
                 break
             pages_scanned += 1
             if page_token is not None:
                 if page_token in used_tokens:
                     raise OrqSourceError(f'repeated OQL page token {page_token!r}')
                 used_tokens.add(page_token)
-            page_limit = min(PAGE_SIZE, limit - len(records))
+            page_limit = (
+                min(PAGE_SIZE, max_scanned - scanned_count)
+                if targets is not None
+                else min(PAGE_SIZE, limit - len(records))
+            )
             registration = self._registration
             marker = _CAPTURE_REQUEST.set(object()) if registration is not None else None
-            try:
+
+            async def query_page(
+                registration: _CaptureRegistration | None = registration,
+                page_limit: int = page_limit,
+                page_token: str | None = page_token,
+            ) -> tuple[Any, dict[str, Any] | None]:
                 if registration is None:
                     response = await self._client.traces.query_async(
                         from_=start,
@@ -287,20 +386,29 @@ class OrqTraceSource:
                         oql=oql,
                         limit=page_limit,
                         page_token=page_token,
-                        timeout_ms=SDK_TIMEOUT_MS,
+                        timeout_ms=_request_timeout_ms(target_deadline),
                     )
-                    raw_page = self._capture.pop('/traces/query')
-                else:
-                    async with registration.lock_for(asyncio.get_running_loop()):
-                        response = await self._client.traces.query_async(
-                            from_=start,
-                            to=end,
-                            oql=oql,
-                            limit=page_limit,
-                            page_token=page_token,
-                            timeout_ms=SDK_TIMEOUT_MS,
-                        )
-                        raw_page = self._capture.pop('/traces/query')
+                    return response, self._capture.pop('/traces/query')
+                async with registration.lock_for(asyncio.get_running_loop()):
+                    response = await self._client.traces.query_async(
+                        from_=start,
+                        to=end,
+                        oql=oql,
+                        limit=page_limit,
+                        page_token=page_token,
+                        timeout_ms=_request_timeout_ms(target_deadline),
+                    )
+                    return response, self._capture.pop('/traces/query')
+
+            try:
+                response, raw_page = await _await_target_deadline(query_page(), target_deadline)
+            except _TargetDeadlineExceeded:
+                logger.warning(
+                    'targeted trace reload reached its {} second deadline during OQL query',
+                    TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+                )
+                incomplete_reason = 'target_deadline'
+                break
             finally:
                 if marker is not None:
                     _CAPTURE_REQUEST.reset(marker)
@@ -316,11 +424,23 @@ class OrqTraceSource:
             unique_summaries, rejected = _select_summaries(summaries, raw_by_id, seen_trace_ids, facets.project_id)
             wrong_project_count += rejected
 
-            hydrated = await self._hydrate_page(unique_summaries, project_names, semaphore)
+            unique_summaries = _matching_targets(unique_summaries, targets)
+
+            hydrated, hydration_timed_out = await self._hydrate_page(
+                unique_summaries, project_names, semaphore, target_deadline
+            )
+            if hydration_timed_out:
+                logger.warning(
+                    'targeted trace reload reached its {} second deadline during trace hydration',
+                    TARGET_RELOAD_PAGE_BUDGET_SECONDS,
+                )
             fallback_count += sum(result[1] for result in hydrated)
             dropped_count += sum(record is None for record, _ in hydrated)
             records.extend(record for record, _ in hydrated if record is not None)
-            if len(records) >= limit:
+            if hydration_timed_out:
+                incomplete_reason = 'target_deadline'
+                break
+            if targets is None and len(records) >= limit:
                 break
 
             has_more = bool(_field(search, 'has_more'))
@@ -351,13 +471,12 @@ class OrqTraceSource:
         if dropped_count:
             logger.warning('dropped {} trace(s) because messages or timestamps were unusable', dropped_count)
         records.sort(key=lambda record: (record.timestamp, record.trace_id), reverse=True)
+        capture_metadata = {'source': 'orq-oql', 'start': start.isoformat(), 'end': end.isoformat()}
+        if incomplete_reason is not None:
+            capture_metadata['incomplete_reason'] = incomplete_reason
         return Snapshot(
             traces=tuple(records[:limit]),
-            capture_metadata={
-                'source': 'orq-oql',
-                'start': start.isoformat(),
-                'end': end.isoformat(),
-            },
+            capture_metadata=capture_metadata,
         )
 
     async def _hydrate_page(
@@ -365,7 +484,8 @@ class OrqTraceSource:
         summaries: list[tuple[Any, Any, bool]],
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
-    ) -> list[tuple[TraceRecord | None, int]]:
+        deadline: float | None = None,
+    ) -> tuple[list[tuple[TraceRecord | None, int]], bool]:
         tasks = [
             asyncio.create_task(
                 self._hydrate_trace(
@@ -373,13 +493,36 @@ class OrqTraceSource:
                     raw_summary,
                     project_names,
                     semaphore,
+                    deadline,
                     raw_capture_fallback=raw_capture_fallback,
                 )
             )
             for summary, raw_summary, raw_capture_fallback in summaries
         ]
+        if not tasks:
+            return [], False
         try:
-            return await asyncio.gather(*tasks)
+            if deadline is None:
+                return await asyncio.gather(*tasks), False
+            remaining = max(0.0, deadline - time.monotonic())
+            done, pending = await asyncio.wait(tasks, timeout=remaining, return_when=asyncio.FIRST_EXCEPTION)
+            # Calling result() preserves ordinary hydration failures rather than
+            # converting them into partial success at the deadline.
+            completed: list[tuple[TraceRecord | None, int]] = []
+            hydration_timed_out = bool(pending)
+            for task in tasks:
+                if task not in done:
+                    continue
+                try:
+                    completed.append(task.result())
+                except _TargetDeadlineExceeded:
+                    hydration_timed_out = True
+            if not pending:
+                return completed, hydration_timed_out
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            return completed, True
         finally:
             for task in tasks:
                 if not task.done():
@@ -392,6 +535,7 @@ class OrqTraceSource:
         raw_summary: Any,
         project_names: Mapping[str, str],
         semaphore: asyncio.Semaphore,
+        deadline: float | None = None,
         *,
         raw_capture_fallback: bool,
     ) -> tuple[TraceRecord | None, int]:
@@ -403,7 +547,7 @@ class OrqTraceSource:
         trace_id = str(_field(summary, 'trace_id') or _field(summary, 'id') or '')
         if not trace_id:
             return None, fallback_count
-        spans = await self._list_spans(trace_id, semaphore)
+        spans = await self._list_spans(trace_id, semaphore, deadline)
         for span in _eligible_spans(spans):
             span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
             if not span_id:
@@ -411,10 +555,13 @@ class OrqTraceSource:
             async with semaphore:
                 marker = _CAPTURE_REQUEST.set(object()) if self._registration is not None else None
                 try:
-                    response = await self._client.traces.get_span_async(
-                        trace_id=trace_id,
-                        span_id=span_id,
-                        timeout_ms=SDK_TIMEOUT_MS,
+                    response = await _await_target_deadline(
+                        self._client.traces.get_span_async(
+                            trace_id=trace_id,
+                            span_id=span_id,
+                            timeout_ms=_request_timeout_ms(deadline),
+                        ),
+                        deadline,
                     )
                     raw_response = self._capture.pop(f'/traces/{trace_id}/spans/{span_id}')
                 finally:
@@ -431,7 +578,9 @@ class OrqTraceSource:
                 return _record(summary, raw_summary, detail, raw_detail, messages, project_names), fallback_count
         return None, fallback_count
 
-    async def _list_spans(self, trace_id: str, semaphore: asyncio.Semaphore) -> list[Any]:
+    async def _list_spans(
+        self, trace_id: str, semaphore: asyncio.Semaphore, deadline: float | None = None
+    ) -> list[Any]:
         spans: list[Any] = []
         page_token: str | None = None
         used_tokens: set[str] = set()
@@ -441,11 +590,14 @@ class OrqTraceSource:
                 raise OrqSourceError(f'span pagination exceeded {MAX_SPAN_PAGES} pages for trace {trace_id!r}')
             pages += 1
             async with semaphore:
-                response = await self._client.traces.list_spans_async(
-                    trace_id=trace_id,
-                    limit=PAGE_SIZE,
-                    page_token=page_token,
-                    timeout_ms=SDK_TIMEOUT_MS,
+                response = await _await_target_deadline(
+                    self._client.traces.list_spans_async(
+                        trace_id=trace_id,
+                        limit=PAGE_SIZE,
+                        page_token=page_token,
+                        timeout_ms=_request_timeout_ms(deadline),
+                    ),
+                    deadline,
                 )
             spans.extend(_as_list(_field(response, 'data')))
             if len(spans) > MAX_SPANS_PER_TRACE:
@@ -481,6 +633,20 @@ def _select_summaries(
             continue
         selected.append((summary, raw, raw_summary is None))
     return selected, rejected
+
+
+def _load_target_reached(records: list[TraceRecord], limit: int, targets: set[str] | None) -> bool:
+    """Stop at the normal usable-record limit or once every requested ID was hydrated."""
+    if targets is None:
+        return len(records) >= limit
+    return targets.issubset({record.trace_id for record in records})
+
+
+def _matching_targets(summaries: list[tuple[Any, Any, bool]], targets: set[str] | None) -> list[tuple[Any, Any, bool]]:
+    """Keep every summary normally and only requested IDs on targeted reloads."""
+    if targets is None:
+        return summaries
+    return [item for item in summaries if str(_field(item[0], 'trace_id') or _field(item[0], 'id')) in targets]
 
 
 def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Mapping[str, str]) -> str:
@@ -614,21 +780,148 @@ def _conversation_messages(payload: Any) -> list[dict[str, Any]]:
         return []
     attributes = _mapping(payload.get('attributes'))
     gen_ai = _mapping(attributes.get('gen_ai'))
-    direct = _message_list(payload.get('messages'))
+    direct = _normalised_messages(payload.get('messages'))
     if _usable(direct):
         return direct
 
     inputs = [gen_ai.get('input'), attributes.get('gen_ai.input'), payload.get('input')]
     outputs = [gen_ai.get('output'), attributes.get('gen_ai.output'), payload.get('output')]
-    messages = next((parsed for value in inputs if (parsed := _message_list(value, default_role='user'))), [])
+    messages = next((parsed for value in inputs if (parsed := _normalised_messages(value, default_role='user'))), [])
     output_messages = next(
-        (parsed for value in outputs if (parsed := _message_list(value, default_role='assistant'))),
+        (parsed for value in outputs if (parsed := _normalised_messages(value, default_role='assistant'))),
         [],
     )
     for message in output_messages:
         if not messages or message != messages[-1]:
             messages.append(message)
     return messages
+
+
+def _normalised_messages(
+    value: Any, *, default_role: Literal['user', 'assistant'] | None = None
+) -> list[dict[str, Any]]:
+    message_format = detect_message_format(value)
+    mixed_responses = _mixed_chat_parts_and_responses(value, default_role=default_role)
+    if mixed_responses is not None:
+        parsed, _ = parse_messages(mixed_responses, hinted='responses', default_role=default_role or 'user')
+        return [message.to_chat_completion() for message in parsed]
+    if message_format == 'chat_completions' or _has_chat_text_parts(value):
+        messages = _message_list(value, default_role=default_role)
+        # Chat shaped payloads can still carry OTel-style ``parts`` instead of
+        # ``content``. Keep their text usable by downstream chat consumers.
+        for message in messages:
+            parts = message.get('parts')
+            if message.get('content') is None and isinstance(parts, list):
+                text = [
+                    part_text
+                    for part in parts
+                    if isinstance(part, Mapping) and isinstance(part_text := part.get('text'), str)
+                ]
+                if text:
+                    message['content'] = ''.join(text)
+        return messages
+    parsed, _ = parse_messages(value, hinted=message_format, default_role=default_role or 'user')
+    messages = [message.to_chat_completion() for message in parsed]
+    if message_format == 'otel_genai':
+        _attach_otel_tool_result_metadata(messages, value)
+    return messages
+
+
+def _mixed_chat_parts_and_responses(
+    value: Any, *, default_role: Literal['user', 'assistant'] | None
+) -> list[dict[str, Any]] | None:
+    """Bridge text-only chat parts when a payload also contains Responses items."""
+    decoded = _plain(value)
+    if isinstance(decoded, str):
+        try:
+            decoded = json.loads(decoded)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(decoded, Mapping):
+        sides = ('output', 'input') if default_role == 'assistant' else ('input', 'output')
+        decoded = next((decoded[key] for key in ('messages', *sides) if isinstance(decoded.get(key), list)), None)
+    if not isinstance(decoded, list) or not _has_chat_text_parts(decoded):
+        return None
+    if not any(isinstance(item, Mapping) and is_responses_item(dict(item)) for item in decoded):
+        return None
+
+    prepared: list[dict[str, Any]] = []
+    for item in decoded:
+        if not isinstance(item, Mapping):
+            continue
+        message = dict(item)
+        parts = message.get('parts')
+        if message.get('content') is None and isinstance(parts, list):
+            text: list[str] = [
+                part_text
+                for part in parts
+                if isinstance(part, Mapping) and isinstance(part_text := part.get('text'), str)
+            ]
+            if text:
+                message['content'] = ''.join(text)
+        prepared.append(message)
+    return prepared
+
+
+def _attach_otel_tool_result_metadata(messages: list[dict[str, Any]], value: Any) -> None:
+    """Keep explicit OTel tool outcomes in trace-only metadata for projection."""
+    decoded = _plain(value)
+    if isinstance(decoded, str):
+        try:
+            decoded = json.loads(decoded)
+        except json.JSONDecodeError:
+            return
+    if not isinstance(decoded, (dict, list)):
+        return
+
+    outcomes: dict[str, dict[str, Any]] = {}
+    pending = [decoded]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, list):
+            pending.extend(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        parts = item.get('parts')
+        if isinstance(parts, list):
+            for part in parts:
+                if not isinstance(part, dict) or part.get('type') != 'tool_call_response':
+                    continue
+                call_id = part.get('id') or part.get('call_id')
+                if not isinstance(call_id, str) or not call_id:
+                    continue
+                explicit = {key: part[key] for key in ('status', 'is_error', 'error') if key in part}
+                if explicit:
+                    outcomes[call_id] = explicit
+        pending.extend(child for key, child in item.items() if key != 'parts')
+
+    for message in messages:
+        call_id = message.get('tool_call_id')
+        outcome = outcomes.get(call_id) if isinstance(call_id, str) else None
+        if outcome:
+            message['trace_finder_metadata'] = {'tool_result': outcome}
+
+
+def _has_chat_text_parts(value: Any) -> bool:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return False
+    if isinstance(value, dict):
+        value = value.get('messages', [value])
+    if not isinstance(value, list):
+        return False
+    messages_with_parts = [message for message in value if isinstance(message, dict) and 'parts' in message]
+    return bool(messages_with_parts) and all(
+        isinstance(message.get('parts'), list)
+        and all(
+            isinstance(part, dict) and isinstance(part.get('text'), str) and 'content' not in part
+            for part in message['parts']
+        )
+        for message in messages_with_parts
+    )
 
 
 def _message_list(value: Any, *, default_role: str | None = None) -> list[dict[str, Any]]:

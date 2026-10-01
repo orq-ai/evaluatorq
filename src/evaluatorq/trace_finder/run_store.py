@@ -212,8 +212,8 @@ class RunStore:
                 compiled = CompiledQuery.model_validate(plan.compiled.model_dump())
                 population = request.population.model_copy(
                     update={
-                        'facets': _merge_facets(request.population.facets, generated_filters),
-                        'numeric': _merge_numeric(request.population.numeric, plan.numeric),
+                        'facets': merge_facets(request.population.facets, generated_filters),
+                        'numeric': merge_numeric(request.population.numeric, plan.numeric),
                     }
                 )
                 request = request.model_copy(update={'population': population})
@@ -544,7 +544,7 @@ class RunStore:
         return _detach(view) if detach else view
 
 
-def _merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
+def merge_facets(caller: FacetSelection, generated: FacetSelection) -> FacetSelection:
     """Merge facets with caller-supplied non-empty values taking precedence."""
 
     return FacetSelection(
@@ -569,7 +569,7 @@ def _review_explicit(
     })
 
 
-def _merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
+def merge_numeric(caller: NumericFilters, generated: NumericFilters) -> NumericFilters:
     """Merge numeric bounds with each caller-supplied bound taking precedence."""
 
     return NumericFilters(**{

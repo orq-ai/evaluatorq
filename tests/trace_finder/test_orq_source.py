@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace, TracebackType
 from typing import Any, cast
@@ -230,6 +231,248 @@ async def test_loads_pages_newest_first_and_uses_bounded_requests() -> None:
     assert [call['limit'] for call in traces.query_calls] == [3, 1]
     assert all(call['from_'] == START and call['to'] == END for call in traces.query_calls)
     assert all(call['timeout_ms'] == 30_000 for call in traces.query_calls)
+
+
+@pytest.mark.asyncio
+async def test_targeted_load_scans_past_unrelated_summaries_without_hydrating_them() -> None:
+    traces = FakeTraces({
+        None: ([summary('newer-a', messages=[]), summary('newer-b', messages=[])], True, 'page-2'),
+        'page-2': ([summary('pinned', minute=1)], False, None),
+    })
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'pinned'},
+    )
+
+    assert [trace.trace_id for trace in snapshot.traces] == ['pinned']
+    assert [call['page_token'] for call in traces.query_calls] == [None, 'page-2']
+    assert all(call['limit'] == 200 for call in traces.query_calls)
+    assert not traces.list_span_calls
+    assert not traces.get_span_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_load_stops_starting_pages_after_budget_when_id_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    traces = FakeTraces({None: ([summary('unrelated')], True, 'page-2')})
+    ticks = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 31.0))
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'stale'},
+    )
+
+    assert snapshot.traces == ()
+    assert len(traces.query_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_targeted_page_budget_includes_project_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    traces = FakeTraces({})
+    ticks = iter((0.0, 31.0))
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'stale'},
+    )
+
+    assert snapshot.traces == ()
+    assert not traces.query_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_project_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    traces = FakeTraces({})
+    client = FakeOrq(traces)
+    project_started = asyncio.Event()
+
+    async def slow_projects(**kwargs: Any) -> Any:
+        project_started.set()
+        await asyncio.sleep(60)
+
+    client.projects.list_async = slow_projects
+    snapshot = await make_source(client).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+    )
+
+    assert project_started.is_set()
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert not traces.query_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_project_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({})
+    client = FakeOrq(traces)
+
+    async def provider_timeout(**_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError('provider project lookup timed out')
+
+    client.projects.list_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider project lookup timed out') as error:
+        await make_source(client).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    traces = FakeTraces({})
+    query_started = asyncio.Event()
+    query_timeouts: list[int] = []
+
+    async def slow_query(**kwargs: Any) -> Any:
+        query_started.set()
+        query_timeouts.append(kwargs['timeout_ms'])
+        await asyncio.sleep(60)
+
+    traces.query_async = slow_query
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+    )
+
+    assert query_started.is_set()
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert len(query_timeouts) == 1
+    assert 1 <= query_timeouts[0] <= 10
+
+
+@pytest.mark.asyncio
+async def test_targeted_query_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({})
+
+    async def provider_timeout(**_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError('provider query timed out')
+
+    traces.query_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider query timed out') as error:
+        await make_source(FakeOrq(traces)).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 1.0)
+    ticks = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.5))
+
+    def monotonic() -> float:
+        return next(ticks, 0.5)
+
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=monotonic))
+    traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
+    hydration_started = asyncio.Event()
+    hydration_timeouts: list[int] = []
+
+    async def slow_span_list(*, trace_id: str, **kwargs: Any) -> Any:
+        hydration_started.set()
+        hydration_timeouts.append(kwargs['timeout_ms'])
+        await asyncio.sleep(60)
+
+    traces.list_spans_async = slow_span_list
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+    )
+
+    assert hydration_started.is_set()
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert len(hydration_timeouts) == 1
+    assert 1 <= hydration_timeouts[0] <= 500
+
+
+@pytest.mark.asyncio
+async def test_targeted_hydration_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
+
+    async def provider_timeout(*, trace_id: str, **_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError(f'provider span timed out for {trace_id}')
+
+    traces.list_spans_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider span timed out') as error:
+        await make_source(FakeOrq(traces)).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_targeted_hydration_deadline_keeps_completed_traces(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.05)
+    traces = FakeTraces({None: ([summary('fast', messages=[]), summary('slow', messages=[])], False, None)})
+    slow_started = asyncio.Event()
+    slow_cancelled = asyncio.Event()
+    warnings: list[tuple[Any, ...]] = []
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.logger.warning', lambda *args: warnings.append(args))
+
+    async def list_spans(*, trace_id: str, **kwargs: Any) -> Any:
+        traces.list_span_calls.append({'trace_id': trace_id, **kwargs})
+        if trace_id == 'slow':
+            slow_started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                slow_cancelled.set()
+                raise
+        return namespace(data=[span(f'{trace_id}-span', minute=1)], has_more=False, next_page_token=None)
+
+    traces.list_spans_async = list_spans
+    traces.details['fast', 'fast-span'] = detail('fast-span', 'fast conversation', minute=1)
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        2,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'fast', 'slow'},
+    )
+
+    assert slow_started.is_set()
+    assert slow_cancelled.is_set()
+    assert [record.trace_id for record in snapshot.traces] == ['fast']
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert any('during trace hydration' in str(args[0]) for args in warnings)
+
+
+@pytest.mark.asyncio
+async def test_targeted_scan_limit_marks_snapshot_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.MAX_LIVE_TRACES', 1)
+    traces = FakeTraces({None: ([summary('other', messages=user_messages('other'))], True, 'next')})
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+    )
+
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'scan_limit'
+    assert len(traces.query_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -512,7 +755,8 @@ async def test_rejects_repeated_page_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hydration_failure_cancels_other_span_requests() -> None:
+@pytest.mark.parametrize('targeted', [False, True])
+async def test_hydration_failure_cancels_other_span_requests(targeted: bool) -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
@@ -534,7 +778,12 @@ async def test_hydration_failure_cancels_other_span_requests() -> None:
 
     with pytest.raises(OrqSourceError, match='span service unavailable'):
         await make_source(FakeOrq(traces)).load_async(
-            START, END, 2, facets=FacetSelection(), numeric=NumericFilters()
+            START,
+            END,
+            2,
+            facets=FacetSelection(),
+            numeric=NumericFilters(),
+            target_trace_ids={'first', 'second'} if targeted else None,
         )
 
     assert len(traces.list_span_calls) == 2
@@ -677,8 +926,116 @@ def test_conversation_messages_preserves_tool_calls() -> None:
 def test_conversation_messages_preserves_content_parts() -> None:
     parts = [{'type': 'text', 'text': 'part'}]
     assert _conversation_messages({'messages': [{'role': 'user', 'parts': parts}]}) == [
-        {'role': 'user', 'parts': parts}
+        {'role': 'user', 'parts': parts, 'content': 'part'}
     ]
+
+
+LONG = 'Why was my invoice 4411 charged twice? ' * 60
+
+
+def _otel_payload() -> dict[str, Any]:
+    return {
+        'attributes': {
+            'gen_ai': {
+                'input': [{'role': 'user', 'parts': [{'type': 'text', 'content': LONG}]}],
+                'output': [
+                    {
+                        'role': 'assistant',
+                        'parts': [
+                            {
+                                'type': 'tool_call',
+                                'id': 'c1',
+                                'name': 'lookup_invoice',
+                                'arguments': {'id': 4411},
+                            }
+                        ],
+                    },
+                    {
+                        'role': 'tool',
+                        'parts': [
+                            {
+                                'type': 'tool_call_response',
+                                'id': 'c1',
+                                'response': 'Error: invoice service unavailable',
+                            }
+                        ],
+                    },
+                    {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'Your invoice was paid.'}]},
+                ],
+            }
+        }
+    }
+
+
+def test_conversation_messages_normalises_otel_parts() -> None:
+    messages = _conversation_messages(_otel_payload())
+    assert messages[0] == {'role': 'user', 'content': LONG}
+    assert messages[1]['tool_calls'][0]['function']['name'] == 'lookup_invoice'
+    assert messages[2]['role'] == 'tool' and messages[2]['tool_call_id'] == 'c1'
+    assert 'invoice service unavailable' in messages[2]['content']
+    assert messages[3] == {'role': 'assistant', 'content': 'Your invoice was paid.'}
+
+
+def test_conversation_messages_normalises_otel_parts_given_as_json_string() -> None:
+    payload = _otel_payload()
+    payload['attributes']['gen_ai'] = {
+        key: json.dumps(value) for key, value in payload['attributes']['gen_ai'].items()
+    }
+    assert _conversation_messages(payload) == _conversation_messages(_otel_payload())
+
+
+def test_conversation_messages_normalises_responses_items() -> None:
+    payload = {
+        'input': [
+            {'role': 'user', 'content': 'refund order 9'},
+            {'type': 'function_call', 'call_id': 'c9', 'name': 'refund', 'arguments': '{"order": 9}'},
+            {'type': 'function_call_output', 'call_id': 'c9', 'output': 'Error: order not found'},
+        ]
+    }
+    messages = _conversation_messages(payload)
+    assert any(m.get('tool_calls') and m['tool_calls'][0]['function']['name'] == 'refund' for m in messages)
+    assert any(m['role'] == 'tool' and 'order not found' in m['content'] for m in messages)
+
+
+def test_conversation_messages_keeps_responses_calls_beside_chat_parts() -> None:
+    payload = {
+        'input': [
+            {'role': 'user', 'parts': [{'type': 'text', 'text': 'find order 9'}]},
+            {'type': 'function_call', 'call_id': 'c9', 'name': 'lookup_order', 'arguments': '{"id": 9}'},
+            {'type': 'function_call_output', 'call_id': 'c9', 'output': 'order found'},
+        ]
+    }
+
+    messages = _conversation_messages(payload)
+
+    assert messages[0] == {'role': 'user', 'content': 'find order 9'}
+    assert messages[1]['role'] == 'assistant'
+    assert messages[1]['tool_calls'][0]['function']['name'] == 'lookup_order'
+    assert messages[2] == {'role': 'tool', 'tool_call_id': 'c9', 'content': 'order found'}
+
+
+def test_conversation_messages_keeps_mixed_responses_envelope_sides() -> None:
+    payload = {
+        'input': {
+            'input': [
+                {'role': 'user', 'parts': [{'type': 'text', 'text': 'find order 9'}]},
+                {'type': 'function_call_output', 'call_id': 'c9', 'output': 'order found'},
+            ]
+        },
+        'output': {
+            'output': [
+                {'role': 'assistant', 'parts': [{'type': 'text', 'text': 'found it'}]},
+                {'type': 'function_call', 'call_id': 'c10', 'name': 'send_update', 'arguments': '{}'},
+            ]
+        },
+    }
+
+    messages = _conversation_messages(payload)
+
+    assert messages[0] == {'role': 'user', 'content': 'find order 9'}
+    assert messages[1] == {'role': 'tool', 'tool_call_id': 'c9', 'content': 'order found'}
+    assert messages[2] == {'role': 'assistant', 'content': 'found it'}
+    assert messages[3]['tool_calls'][0]['function']['name'] == 'send_update'
 
 
 def namespace(**values: Any) -> SimpleNamespace:

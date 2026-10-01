@@ -1708,6 +1708,7 @@ class ManifestSurface(StrEnum):
 
     SIM = 'sim'
     REDTEAM = 'redteam'
+    INSIGHTS = 'insights'
 
 
 class ManifestStatus(StrEnum):
@@ -1770,6 +1771,19 @@ class StageRecord(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     started_at: datetime
     ended_at: datetime | None = None
+    completed: int | None = Field(default=None, strict=True)
+    total: int | None = Field(default=None, strict=True)
+
+    @model_validator(mode='after')
+    def validate_progress(self) -> StageRecord:
+        """Keep persisted stage progress within its meaningful range."""
+        if self.completed is not None and self.completed < 0:
+            raise ValueError('completed must be non-negative')
+        if self.total is not None and self.total < 0:
+            raise ValueError('total must be non-negative')
+        if self.completed is not None and self.total is not None and self.completed > self.total:
+            raise ValueError('completed must not exceed total')
+        return self
 
     @property
     def duration_seconds(self) -> float | None:
@@ -1787,6 +1801,8 @@ class RunManifest(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     stage: str | None = None  # name of the current / most-recent stage
     stages: list[StageRecord] = Field(default_factory=list)
+    planned_stages: list[str] = Field(default_factory=list)
+    stage_labels: dict[str, str] = Field(default_factory=dict)
     started_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None  # set when the run reaches a terminal status

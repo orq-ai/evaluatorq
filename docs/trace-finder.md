@@ -21,6 +21,13 @@ Open [http://127.0.0.1:8080/find](http://127.0.0.1:8080/find), type a question, 
 
 The finder plans the query once, then spends one classifier call per trace.
 
+1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
+2. The compiler creates one semantic classifier task and extracts numeric constraints for total tokens or duration. At the same time, one classify request selects categorical metadata filters from the live facet catalogue. It normally asks one question per non-empty facet dimension; when your query names multiple available values in one dimension, it asks a yes/no question for each named value in the same round trip.
+3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched.
+4. Orq returns the newest usable traces in the selected window. The finder hydrates conversations when the trace summary does not contain usable messages, and applies the OQL filters before judging. Hydration stops with an error if a trace exceeds ten span pages or 2,000 spans.
+5. Each trace is projected into a bounded classifier state. The projection keeps the newest conversation suffix, tool-call arguments, completion status, and a fixed diagnostic category for a failed paired tool result. It omits tool result bodies, removes reasoning fields, and truncates text from the front when necessary. It keeps at most 32 tool calls per assistant turn and shortens tool-call IDs and names beyond 128 UTF-8 bytes. An oversized structural unit becomes an omission marker when its fields cannot fit. Its `omitted_bytes` count measures content dropped to fit the token budget; it excludes fields removed or shortened by the projection schema.
+6. The classifier classifies each projected trace through evaluatorq. Results stream into the matrix and the included-traces table as each trace finishes.
+
 ```mermaid
 flowchart TD
     Q["Your question"]
@@ -70,7 +77,7 @@ The finder merges the generated filters with any you chose explicitly and builds
 
 ### 3. Project each trace
 
-Each trace becomes a bounded classifier state of at most 25,000 tokens. The projection keeps the **newest** conversation suffix and truncates text from the front when it has to.
+Each trace becomes a bounded classifier state of at most 50,000 serialized UTF-8 bytes. This is a conservative upper bound on tokenizer tokens, not a count from the selected model tokenizer. The projection keeps the **newest** conversation suffix and truncates text from the front when it has to.
 
 ??? info "What the projection keeps and drops"
     - **Keeps** tool-call arguments and completion status.
@@ -103,6 +110,10 @@ The review shows the filter model's selected metadata values separately from the
 
 !!! warning "Nothing is judged until you start it"
     In **Review first** the plan is visible, but no trace is judged until you press **Start classification**. This is the most common reason a run looks stuck.
+
+Use the **Analyze matches** section after a completed run to download its export and see the Python and CLI commands for analyzing only the matched traces. The [Trace Insights guide](insights.md) explains the population, labels, discovered clusters, and saved-run review workflow.
+
+The common failure mode is stopping in **Review first**: the plan is visible, but no trace is judged until you press **Start classification**. If no traces match the compiled filters, the run ends with an explicit error instead of pretending that zero judgments are a successful result. Without `ORQ_API_KEY`, the page stays available but shows that trace finding is unavailable.
 
 ### Filters
 
@@ -181,6 +192,10 @@ The CLI and dashboard also accept minimum and maximum bounds explicitly.
 
 ## Settings and precedence
 
+The dashboard **Settings** page at `/settings` has separate **Models** and **Authentication** sections. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. Models contains the compiler model, classifier model, and apply-recommendations model. The window, trace limit, and parallelism are edited per run in the controls row of the Trace search page; their defaults come from the environment variables below or the saved file. Authentication has no workspace or project selector. Every method searches all projects accessible to its credential unless you choose a project facet for that run. Set `ORQ_WORKSPACE` for trace links when a run has no experiment URL; this is separate from authentication. Pass `--project` to choose a project facet for one `eq find` run.
+
+The **Authentication** section offers four sources for dashboard requests: **Environment** reads `ORQ_API_KEY` and `ORQ_BASE_URL` from the dashboard process without additional fields; **CLI API-key profile** reuses a key and host from `orq auth profile list`; **CLI OAuth** uses the current `orq auth login` session; and **Enter API key** stores a key you provide. Settings remembers the selected method in `.evaluatorq/dashboard-settings.json`. The manually entered key is saved there in encrypted form, while its encryption key stays in macOS Keychain. On other platforms, set `EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY` to a Fernet key. The CLI handles OAuth token storage and refresh; evaluatorq does not copy or read the OAuth token. A short startup toast links to Settings when the selected method needs action or its validity check could not reach Orq; a successful check stays quiet. The check calls Orq's trace-facet endpoint, so it confirms access to that endpoint and does not test model availability. The saved method remains active until you press **Save settings**. If the selected credential is missing or rejected, the dashboard asks you to take action instead of switching to another source. The CLI masks API keys in its JSON output, so evaluatorq reads usable keys from the CLI's private local credential file; profiles without an accessible key remain unavailable. An apply preview must be made again if its credentials change before confirmation. `eq find` supports API-key profiles and environment credentials. An explicit `--profile NAME` overrides the saved choice; without that flag, it uses the saved profile only when **CLI API-key profile** is selected in dashboard Settings, and otherwise uses `ORQ_API_KEY` and `ORQ_BASE_URL`. The dashboard's OAuth and manually entered API-key methods do not change credentials used by `eq find`.
+
 Settings resolve from strongest to weakest:
 
 1. Explicit CLI or dashboard overrides
@@ -229,6 +244,12 @@ When the `orq` CLI exposes API-key profiles (`orq auth profile list`), **Advance
 
 ## CLI reference
 
+`eq find` runs an immediate finder query with a terminal activity indicator, then prints a newest-first table of matched traces and a summary of the full run. Add `--json PATH` to write the completed run export. Pass `--positive-only` to keep only matched trace records in that JSON export; its counts still describe the full run. Pass `--debug` to print progress when it changes, the compiler request and structured output, and the filter and per-trace classifier requests and responses. For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. Debug output includes projected conversation content for every classified trace, even with `--positive-only`, so treat saved logs as trace data. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same finder diagnostics in CLI and dashboard runs.
+
+The command cancels a run that has not finished after two hours. If any trace classification fails, the command exits with status 1 and does not write the JSON file.
+
+Pass `--profile NAME` to use that `orq` CLI profile for both trace retrieval and model calls. It overrides the saved profile and environment credentials. Without the flag, the saved profile applies only when **CLI API-key profile** is selected in Settings; choose **Environment** to use `ORQ_API_KEY` and `ORQ_BASE_URL`. Saved project IDs from older dashboard settings are ignored. Use `--project` to choose a project facet for one run.
+
 `eq find` runs an Immediate finder query with a terminal activity indicator, then prints a newest-first table of matched traces and a summary of the full run.
 
 ```bash
@@ -255,7 +276,7 @@ eq find "customers asking for a refund" --compiler-model openai/gpt-5.6-luna --c
 | `--classifier-model TEXT` | Model that classifies each trace through the Orq router. Default: `typesafe/jev-latest`. |
 | `--json PATH` | Write the completed run export to `PATH`. |
 | `--positive-only` | Keep only matched trace records in `--json` exports; the terminal table already shows matches and keeps its full-run summary. |
-| `--project TEXT` | Project facet; repeatable. Overrides the saved project ID for this run. |
+| `--project TEXT` | Project facet; repeatable. Restricts this run to matching projects. |
 | `--profile TEXT` | Orq CLI credential profile; overrides the saved profile and environment credentials. |
 | `--model TEXT` | Model facet; repeatable. |
 | `--provider TEXT` | Provider facet; repeatable. |
@@ -274,12 +295,14 @@ The facet and numeric options are explicit OQL constraints. The question still s
 
 ## Limits and cost
 
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. Each projected trace is capped at 50,000 serialized UTF-8 bytes, a conservative upper bound on tokenizer tokens rather than a count from the selected model's tokenizer; older conversation units are omitted first when the cap is reached.
+
 | Limit | Value |
 |---|---|
 | Traces per run | 500 by default, at most 5000 usable traces even if a larger limit is supplied |
 | Lookback | 7 days by default, 1–90 |
 | Classifier parallelism | 100 by default, at most 200 |
-| Projection budget | 25,000 tokens per trace, from the serialized UTF-8 estimate; older conversation units go first |
+| Projection budget | 50,000 serialized UTF-8 bytes per trace, a conservative upper bound on tokenizer tokens; older conversation units go first |
 
 One completed run makes **one compiler call + at most one facet-selection call + one classification call per trace**. A 500-trace run therefore makes up to 502 model calls before retries; narrow the limit and window when exploring a large workspace.
 

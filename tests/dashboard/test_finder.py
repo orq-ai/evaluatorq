@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
+import threading
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Literal
 
 import pytest
@@ -87,6 +90,8 @@ def test_review_form_preserves_zero_thresholds() -> None:
 
 class FakeStore:
     def __init__(self) -> None:
+        self.created_at = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        self.finished_at = self.created_at + timedelta(minutes=1)
         self.trace = _trace()
         self.projection = TraceProjection(
             payload={'trace_status': 'ok', 'messages': list(self.trace.messages)},
@@ -123,6 +128,7 @@ class FakeStore:
             total=1,
             active=1 if state == 'classifying' else 0,
             queued=0,
+            created_at=self.created_at,
         )
         return self.snapshot_value
 
@@ -151,6 +157,7 @@ class FakeStore:
             matched=1,
             active=0,
             queued=0,
+            finished_at=self.finished_at,
         )
         return self.snapshot_value
 
@@ -194,6 +201,7 @@ class FakeStore:
             matched=1,
             active=0,
             queued=0,
+            finished_at=self.finished_at,
         )
 
 
@@ -590,15 +598,414 @@ def test_find_trace_drawer_renders_thread_and_classifier_input(setup_finder, mon
     assert 'navigator.clipboard.writeText' in drawer.text
 
 
-def test_find_export_is_404_until_completed_then_downloads_json(setup_finder) -> None:
+def test_find_export_is_404_until_completed_then_downloads_json(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    caller_thread = threading.current_thread()
+    save_threads: list[threading.Thread] = []
+    save_export = finder_routes._save_finder_export
+
+    def track_save_thread(*args: Any) -> None:
+        save_threads.append(threading.current_thread())
+        save_export(*args)
+
+    monkeypatch.setattr(finder_routes, '_save_finder_export', track_save_thread)
     store, client = setup_finder
     assert client.get('/find/export.json').status_code == 404
     client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
     store.complete()
     response = client.get('/find/export.json')
     assert response.status_code == 200
-    assert response.headers['content-disposition'] == 'attachment; filename="trace-finder-1.json"'
+    filename = response.headers['content-disposition'].split('filename="', 1)[1].rstrip('"')
+    assert filename.startswith('trace-finder-1-') and filename.endswith('.json')
+    assert filename in client.get('/find').text
     assert json.loads(response.text)['counts']['matched'] == 1
+    assert (tmp_path / 'finder-exports' / filename).read_text() == response.text
+    assert save_threads and save_threads[0] is not caller_thread
+
+
+def test_find_export_link_rejects_a_newer_run_instead_of_downloading_it(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.trace_finder.export import export_filename
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    store.complete()
+    old_name = export_filename(store.snapshot_value)
+    assert f'href="/find/export.json?export={old_name}"' in client.get('/find').text
+
+    store.snapshot_value = replace(store.snapshot_value, generation=store.snapshot_value.generation + 1)
+    response = client.get(f'/find/export.json?export={old_name}')
+
+    assert response.status_code == 409
+    assert 'Refresh the page' in response.text
+    assert not (tmp_path / 'finder-exports' / old_name).exists()
+
+
+def test_find_export_save_failure_is_visible(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    store.complete()
+
+    def fail_save(*args, **kwargs):
+        raise OSError('read-only store')
+
+    monkeypatch.setattr(finder_routes.tempfile, 'NamedTemporaryFile', fail_save)
+    response = client.get('/find/export.json')
+    assert response.status_code == 500
+    assert 'Could not save Finder export for Insights.' in response.text
+
+
+def test_find_export_survives_non_object_manifest_during_retention(
+    setup_finder, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard.insights_launch import (
+        ensure_private_finder_reference_dir,
+        finder_export_reference_path,
+    )
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    store, client = setup_finder
+    client.post('/find/run', data=csrf_data({'query': 'frustrated customers', 'mode': 'immediate'}))
+    store.complete()
+
+    runs_dir = tmp_path / 'insights-runs'
+    manifest_dir = runs_dir / '.manifests'
+    manifest_dir.mkdir(parents=True)
+    (manifest_dir / 'malformed-run.json').write_text('[]', encoding='utf-8')
+    marker = finder_export_reference_path(runs_dir, 'malformed-run')
+    ensure_private_finder_reference_dir(marker.parent)
+    marker.write_text(json.dumps({'finder_export': 'trace-finder-old.json'}), encoding='utf-8')
+    marker.chmod(0o600)
+
+    response = client.get('/find/export.json')
+
+    assert response.status_code == 200
+    assert json.loads(response.text)['counts']['matched'] == 1
+    assert marker.exists()
+
+
+def test_finder_export_lock_uses_windows_interprocess_lock_when_fcntl_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    operations: list[int] = []
+
+    def locking(descriptor: int, mode: int, length: int) -> None:
+        assert length == 1
+        assert os.lseek(descriptor, 0, os.SEEK_CUR) == 0
+        operations.append(mode)
+
+    monkeypatch.setitem(sys.modules, 'fcntl', None)
+    monkeypatch.setitem(
+        sys.modules,
+        'msvcrt',
+        SimpleNamespace(LK_LOCK=1, LK_UNLCK=2, locking=locking),
+    )
+    export_dir = tmp_path / 'finder-exports'
+
+    with finder_routes._finder_export_lock(export_dir):
+        lock_path = export_dir / '.finder-export.lock'
+        assert lock_path.stat().st_size == 1
+        assert operations == [1]
+
+    assert operations == [1, 2]
+
+
+def test_finder_export_lock_fails_closed_when_windows_lock_cannot_be_acquired(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fail_lock(descriptor: int, mode: int, length: int) -> None:
+        raise OSError('lock failed')
+
+    monkeypatch.setitem(sys.modules, 'fcntl', None)
+    monkeypatch.setitem(
+        sys.modules,
+        'msvcrt',
+        SimpleNamespace(LK_LOCK=1, LK_UNLCK=2, locking=fail_lock),
+    )
+
+    with pytest.raises(OSError, match='lock failed'):
+        with finder_routes._finder_export_lock(tmp_path / 'finder-exports'):
+            pytest.fail('export mutation must not run without the inter-process lock')
+
+
+def test_finder_pruning_skips_when_a_lease_is_malformed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard.insights_launch import (
+        ensure_private_finder_reference_dir,
+        finder_export_reference_path,
+    )
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        # Windows filesystem timestamps have coarser resolution than these
+        # nanosecond increments; whole-second values keep the ordering stable.
+        os.utime(path, (index + 1, index + 1))
+    runs_dir = tmp_path / 'insights-runs'
+    marker = finder_export_reference_path(runs_dir, 'malformed-lease')
+    ensure_private_finder_reference_dir(marker.parent)
+    marker.write_text('{invalid JSON', encoding='utf-8')
+    marker.chmod(0o600)
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert all(path.exists() for path in exports)
+    assert marker.exists()
+
+
+def test_finder_pruning_recovers_after_malformed_lease_expires(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard.insights_launch import ensure_private_finder_reference_dir, finder_export_reference_path
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, (index + 1, index + 1))
+    marker = finder_export_reference_path(tmp_path / 'insights-runs', 'malformed-lease')
+    ensure_private_finder_reference_dir(marker.parent)
+    marker.write_text('{invalid JSON', encoding='utf-8')
+    marker.chmod(0o600)
+    os.utime(marker, (1, 1))
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert not marker.exists()
+    assert not exports[0].exists()
+    assert all(path.exists() for path in exports[1:])
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='chmod does not configure Windows directory ACLs')
+def test_finder_pruning_skips_when_lease_directory_is_unsafe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard.insights_launch import ensure_private_finder_reference_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, (index + 1, index + 1))
+    leases = tmp_path / 'insights-runs' / '.finder-export-leases'
+    ensure_private_finder_reference_dir(leases)
+    leases.chmod(0o755)
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert all(path.exists() for path in exports)
+
+
+def test_finder_pruning_is_normal_when_no_lease_directory_exists(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, (index + 1, index + 1))
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert exports[0].exists() is False
+    assert all(path.exists() for path in exports[1:])
+
+
+def test_finder_pruning_skips_reference_scan_within_retention_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    for index in range(finder_routes._FINDER_EXPORT_RETENTION):
+        (export_dir / f'trace-finder-{index}.json').write_text('{}', encoding='utf-8')
+
+    monkeypatch.setattr(
+        finder_routes,
+        '_referenced_finder_exports',
+        lambda _export_dir: pytest.fail('reference scan is unnecessary below the retention limit'),
+    )
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert len(list(export_dir.glob('trace-finder-*.json'))) == finder_routes._FINDER_EXPORT_RETENTION
+
+
+def test_finder_export_retention_keeps_recent_and_saved_insights_references(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(52)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        path.touch()
+        os.utime(path, (index + 1, index + 1))
+    old_referenced = exports[0]
+    runs_dir = tmp_path / 'insights-runs'
+    runs_dir.mkdir()
+    (runs_dir / 'insights_saved.json').write_text(
+        json.dumps({'population': {'finder_export': str(old_referenced)}}), encoding='utf-8'
+    )
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    remaining = {path.name for path in export_dir.glob('trace-finder-*.json')}
+    assert len(remaining) == 51
+    assert old_referenced.name in remaining
+    assert {path.name for path in exports[-50:]} <= remaining
+
+
+def test_finder_export_retention_keeps_recent_handoff_exports_over_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for path in exports:
+        path.write_text('{}', encoding='utf-8')
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert {path.name for path in export_dir.glob('trace-finder-*.json')} == {path.name for path in exports}
+
+
+def test_finder_export_pruning_cannot_delete_a_concurrent_replacement(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, (index + 1, index + 1))
+    target = exports[0]
+    unlink_started = threading.Event()
+    continue_unlink = threading.Event()
+    save_started = threading.Event()
+    save_finished = threading.Event()
+    original_unlink = Path.unlink
+
+    def pause_target_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == target:
+            unlink_started.set()
+            assert continue_unlink.wait(timeout=5)
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', pause_target_unlink)
+    prune_thread = threading.Thread(target=finder_routes._prune_finder_exports, args=(export_dir,))
+    prune_thread.start()
+    assert unlink_started.wait(timeout=5)
+
+    def save_replacement() -> None:
+        save_started.set()
+        finder_routes._save_finder_export(export_dir, target.name, '{"replacement": true}')
+        save_finished.set()
+
+    save_thread = threading.Thread(target=save_replacement)
+    save_thread.start()
+    assert save_started.wait(timeout=5)
+    assert not save_finished.wait(timeout=0.1)
+    continue_unlink.set()
+    prune_thread.join(timeout=5)
+    save_thread.join(timeout=5)
+
+    assert not prune_thread.is_alive()
+    assert not save_thread.is_alive()
+    assert json.loads(target.read_text(encoding='utf-8')) == {'replacement': True}
+
+
+def test_finder_export_retention_pins_in_flight_insights_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.insights_launch import (
+        ensure_private_finder_reference_dir,
+        finder_export_reference_path,
+    )
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, (index + 1, index + 1))
+    runs_dir = tmp_path / 'insights-runs'
+    writer = start_manifest(run_id='active-run', surface='insights', run_name='active', runs_dir=runs_dir)
+    marker = finder_export_reference_path(runs_dir, 'active-run')
+    ensure_private_finder_reference_dir(marker.parent)
+    marker.write_text(json.dumps({'finder_export': exports[0].name}), encoding='utf-8')
+    marker.chmod(0o600)
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert exports[0].exists()
+    assert marker.exists()
+
+    writer.complete()
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert not exports[0].exists()
+    assert not marker.exists()
+
+
+def test_finder_export_retention_expires_abandoned_in_flight_reference(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.run_manifest import start_manifest
+    from evaluatorq.dashboard.insights_launch import (
+        ensure_private_finder_reference_dir,
+        finder_export_reference_path,
+    )
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    export_dir = tmp_path / 'finder-exports'
+    export_dir.mkdir()
+    exports = [export_dir / f'trace-finder-{index}.json' for index in range(51)]
+    for index, path in enumerate(exports):
+        path.write_text('{}', encoding='utf-8')
+        os.utime(path, (index + 1, index + 1))
+    runs_dir = tmp_path / 'insights-runs'
+    writer = start_manifest(run_id='abandoned-run', surface='insights', run_name='abandoned', runs_dir=runs_dir)
+    marker = finder_export_reference_path(runs_dir, 'abandoned-run')
+    ensure_private_finder_reference_dir(marker.parent)
+    marker.write_text(json.dumps({'finder_export': str(exports[0])}), encoding='utf-8')
+    marker.chmod(0o600)
+    old = datetime.now(timezone.utc).timestamp() - timedelta(days=31).total_seconds()
+    os.utime(writer.path, (old, old))
+
+    finder_routes._prune_finder_exports(export_dir)
+
+    assert not marker.exists()
+    assert not exports[0].exists()
+
+
+def test_find_export_filename_survives_generation_restart_without_overwriting() -> None:
+    from evaluatorq.trace_finder.export import export_filename
+
+    snapshot = RunSnapshot(
+        generation=1,
+        created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        finished_at=datetime(2026, 9, 1, 0, 1, tzinfo=timezone.utc),
+    )
+    first = export_filename(snapshot)
+    second = export_filename(replace(snapshot, created_at=datetime(2026, 9, 2, tzinfo=timezone.utc)))
+
+    assert first != second
+    assert export_filename(snapshot) == first
 
 
 def test_find_facets_menu_reports_unavailable_catalogue(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -611,6 +1018,40 @@ def test_find_facets_menu_reports_unavailable_catalogue(setup_finder, monkeypatc
     response = client.get('/find/facets')
     assert response.status_code == 200
     assert 'Facet values are unavailable' in response.text
+
+
+def test_oauth_facet_catalogue_closes_both_clients(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from evaluatorq.dashboard.auth import DashboardAuth
+
+    _store, client = setup_finder
+    client.get('/find')
+    app = client.app
+    app.state.finder_catalogue_cache = None
+    closed: list[str] = []
+
+    class Llm:
+        async def close(self) -> None:
+            closed.append('llm')
+
+    monkeypatch.setattr(
+        finder_routes,
+        'selected_dashboard_auth',
+        lambda _app: DashboardAuth('cli_oauth', None, 'https://my.orq.ai'),
+    )
+    monkeypatch.setattr(finder_routes, 'build_auth_clients', lambda *_args, **_kwargs: (object(), Llm()))
+    monkeypatch.setattr(finder_routes, 'load_facet_catalogue', AsyncMock(return_value=FacetCatalogue()))
+    async def close_orq(_orq: object) -> None:
+        closed.append('orq')
+
+    monkeypatch.setattr(finder_routes, 'close_orq_client', close_orq)
+
+    result = asyncio.run(finder_routes._load_catalogue(app))
+
+    assert result == FacetCatalogue()
+    assert closed == ['orq', 'llm']
 
 
 def test_find_facets_menu_renders_from_the_submitted_controls(setup_finder, monkeypatch: pytest.MonkeyPatch) -> None:

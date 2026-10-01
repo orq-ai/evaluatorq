@@ -357,19 +357,19 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
     assert os.environ['ORQ_API_KEY'] == 'environment-key'
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.example'
     assert store.request is not None
-    assert store.request.population.facets.project_id == ('project-research' if not use_flag else None)
+    assert store.request.population.facets.project_id is None
 
 
 @pytest.mark.parametrize(
-    ('key', 'host', 'expected_project'),
+    ('key', 'host'),
     [
-        ('saved-key', 'https://saved.example', 'saved-project'),
-        ('different-key', 'https://saved.example', None),
-        ('saved-key', 'https://other.example', None),
+        ('saved-key', 'https://saved.example'),
+        ('different-key', 'https://saved.example'),
+        ('saved-key', 'https://other.example'),
     ],
 )
-def test_find_only_reuses_saved_project_for_matching_environment_credentials(
-    monkeypatch: Any, tmp_path: Path, key: str, host: str, expected_project: str | None
+def test_find_ignores_legacy_saved_project_for_environment_credentials(
+    monkeypatch: Any, tmp_path: Path, key: str, host: str
 ) -> None:
     from evaluatorq.trace_finder import cli as find_cli
     from evaluatorq.trace_finder.settings import DashboardSettings, credential_fingerprint, save_settings
@@ -392,7 +392,7 @@ def test_find_only_reuses_saved_project_for_matching_environment_credentials(
 
     assert result.exit_code == 0, result.output
     assert store.request is not None
-    assert store.request.population.facets.project_id == expected_project
+    assert store.request.population.facets.project_id is None
 
 
 @pytest.mark.parametrize(

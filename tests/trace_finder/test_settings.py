@@ -11,9 +11,12 @@ from evaluatorq.trace_finder.settings import (
     DashboardSettings,
     effective_settings,
     load_settings,
+    read_stored_api_key,
     save_settings,
     settings_path,
+    store_api_key,
 )
+from evaluatorq.trace_finder import secure_credentials
 
 
 def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
@@ -163,3 +166,67 @@ def test_default_settings_match_shared_pipeline_default() -> None:
     settings = DashboardSettings.model_validate({})
     assert settings.compiler_model == DEFAULT_PIPELINE_MODEL
     assert settings.apply_model == DEFAULT_PIPELINE_MODEL
+
+
+def test_old_profile_config_migrates_to_cli_profile_but_explicit_auth_wins() -> None:
+    migrated = DashboardSettings.model_validate({'orq_profile': 'research-bauke'})
+    explicit = DashboardSettings.model_validate(
+        {'orq_profile': 'research-bauke', 'orq_auth_method': 'environment'}
+    )
+
+    assert migrated.orq_auth_method == 'cli_profile'
+    assert explicit.orq_auth_method == 'environment'
+
+
+@pytest.mark.parametrize('method', ['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'])
+def test_legacy_scope_is_ignored_by_effective_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, method: str
+) -> None:
+    path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': method, 'orq_profile': 'research-bauke',
+        'orq_workspace': 'old-workspace', 'orq_project_id': 'old-project',
+        'orq_project_name': 'Old project',
+    }), path)
+
+    settings = effective_settings()
+    assert (settings.orq_workspace, settings.orq_project_id, settings.orq_project_name) == (None, None, None)
+    assert effective_settings({'orq_project_id': 'per-run-project'}).orq_project_id == 'per-run-project'
+
+
+def test_user_api_key_is_encrypted_in_settings_and_can_be_read_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from cryptography.fernet import Fernet
+
+    secure_credentials._encryption_key.cache_clear()
+    monkeypatch.setattr(secure_credentials.sys, 'platform', 'linux')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY', Fernet.generate_key().decode())
+    plain_key = 'orq-secret-test-value'
+
+    settings = store_api_key(DashboardSettings.model_validate({}), plain_key)
+    path = tmp_path / 'settings.json'
+    save_settings(settings, path)
+
+    serialized = path.read_text()
+    assert plain_key not in serialized
+    assert settings.orq_auth_method == 'stored_api_key'
+    assert settings.orq_api_key_ciphertext
+    assert read_stored_api_key(load_settings(path)) == plain_key
+    secure_credentials._encryption_key.cache_clear()
+
+
+def test_encrypted_key_fails_closed_when_encryption_key_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cryptography.fernet import Fernet
+
+    secure_credentials._encryption_key.cache_clear()
+    monkeypatch.setattr(secure_credentials.sys, 'platform', 'linux')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY', Fernet.generate_key().decode())
+    encrypted = store_api_key(DashboardSettings.model_validate({}), 'orq-secret-test-value')
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY', Fernet.generate_key().decode())
+    secure_credentials._encryption_key.cache_clear()
+
+    with pytest.raises(RuntimeError, match='cannot be decrypted'):
+        read_stored_api_key(encrypted)
+    secure_credentials._encryption_key.cache_clear()

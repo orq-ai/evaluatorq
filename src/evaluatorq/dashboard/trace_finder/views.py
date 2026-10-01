@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -12,6 +13,7 @@ from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.trace_finder import classification_legend
+from evaluatorq.trace_finder.export import export_filename
 from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
 
 if TYPE_CHECKING:
@@ -106,16 +108,20 @@ def facet_menu(
     form_id: str = 'finder-query-form',
     selection: FacetSelection | None = None,
     pending: bool = False,
+    include_numeric: bool = True,
 ) -> str:
     """Two-level filter menu: a category list, and a value popout the client opens per category.
 
     ``pending`` renders the menu without values and has it fetch them itself as soon as it lands
-    on the page, so a page render never waits on the Orq facet call.
+    on the page, so a page render never waits on the Orq facet call. Insights uses
+    ``include_numeric=False`` because its population accepts categorical facets only.
     """
     items: list[str] = []
     subs: list[str] = []
     for name, label in FACET_LABELS:
         numeric_facet = name in NUMERIC_FACET_NAMES
+        if numeric_facet and not include_numeric:
+            continue
         selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
         values = tuple(dict.fromkeys((*_facet_values(catalogue, name), *sorted(selected_values))))
         if numeric_facet:
@@ -667,7 +673,28 @@ def body(
         )
     if snapshot.state == 'idle':
         return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}'
-    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}'
+    analyze = ''
+    if snapshot.state == 'completed' and snapshot.compiled is not None:
+        export_name = export_filename(snapshot)
+        local_filename = shlex.quote(export_name)
+        powershell_filename = "'" + export_name.replace("'", "''") + "'"
+        python = (
+            'from pathlib import Path\n'
+            'from evaluatorq.insights import InsightsPopulation, insights_sync\n\n'
+            f'population = InsightsPopulation.from_finder_export(Path({export_name!r}))\n'
+            'run = insights_sync(population)'
+        )
+        analyze = (
+            '<section class="finder-analyze-matches"><h3>Analyze matches</h3>'
+            '<p>Download the completed export to use it with the CLI or Python. A server-side copy is also saved for '
+            'the Insights wizard; enter the filename there. The examples below expect the downloaded file in your '
+            'current directory.</p>'
+            f'<p><a class="btn-secondary" href="/find/export.json?export={quote(export_name, safe="")}">Download and save {esc(export_name)}</a></p>'
+            f'<label>CLI (macOS/Linux)</label><pre><code>eq insights --from-finder {esc(local_filename)}</code></pre>'
+            f'<label>CLI (Windows PowerShell)</label><pre><code>eq insights --from-finder {esc(powershell_filename)}</code></pre>'
+            f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
+        )
+    return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending)}{field(snapshot, api_available=api_available)}{table(snapshot)}{task_panel(snapshot.compiled, editable=False) + filter_output_panel(snapshot) if snapshot.compiled else ""}{analyze}'
 
 
 def page_html(
