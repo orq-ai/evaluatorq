@@ -788,6 +788,42 @@ def test_object_valued_invocation_keeps_times_and_status() -> None:
     assert chat.status == 'error'
 
 
+def test_atif_epoch_seconds_after_numeric_otel_cutoff_keep_their_unit() -> None:
+    future = 10_000_000_001.0
+    trajectory = AtifTrajectory(
+        session_id='future-time',
+        agent=AtifAgent(name='a', version='1'),
+        steps=[
+            AtifStep(
+                step_id=1,
+                source='agent',
+                message='',
+                tool_calls=[AtifToolCall(tool_call_id='c', function_name='lookup', arguments={})],
+                observation=AtifObservation(results=[
+                    AtifObservationResult(
+                        source_call_id='c',
+                        content='done',
+                        extra={'start_timestamp': future + 1, 'end_timestamp': future + 2, 'status': 'ok'},
+                    )
+                ]),
+                extra={'invocation': {'start_timestamp': future, 'end_timestamp': future + 3}},
+            )
+        ],
+    )
+
+    trace = trajectory.to_otel()
+    chat = next(span for span in trace.spans if span.operation == 'chat')
+    tool = next(span for span in trace.spans if span.operation == 'execute_tool')
+    assert chat.start_time is not None and chat.start_time.timestamp() == future
+    assert chat.end_time is not None and chat.end_time.timestamp() == future + 3
+    assert tool.start_time is not None and tool.start_time.timestamp() == future + 1
+    assert tool.end_time is not None and tool.end_time.timestamp() == future + 2
+    back = trace.to_atif()
+    assert back.steps[0].extra is not None and back.steps[0].extra['invocation']['start_timestamp'] == future
+    assert back.steps[0].observation is not None
+    assert back.steps[0].observation.results[0].extra['start_timestamp'] == future + 1
+
+
 def test_multi_part_text_result_joins_with_newlines() -> None:
     traj = AtifTrajectory.model_validate({
         'schema_version': 'ATIF-v1.7', 'agent': {'name': 'a', 'version': '1'},

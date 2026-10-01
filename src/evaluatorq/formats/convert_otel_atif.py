@@ -21,7 +21,8 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, cast
+from datetime import datetime, timezone
+from typing import Any, Literal, cast
 
 from loguru import logger
 
@@ -64,9 +65,6 @@ from evaluatorq.formats.otel import (
     parse_time,
     span_usage,
 )
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 _NO_STEPS = 'OtelTrace has no chat spans; ATIF needs at least one step'
 _UNKNOWN = 'unknown'
@@ -1177,12 +1175,23 @@ def _tool_span(
         parent_span_id=parent_span_id,
         name=f'execute_tool {call.function_name}',
         operation='execute_tool',
-        start_time=parse_time(extra.get('start_timestamp')),
-        end_time=parse_time(extra.get('end_timestamp')),
+        start_time=_atif_time(extra.get('start_timestamp')),
+        end_time=_atif_time(extra.get('end_timestamp')),
         status=cast("Literal['ok', 'error', 'unset']", status),
         error_type=error_type,
         attributes=attributes,
     )
+
+
+def _atif_time(value: object) -> datetime | None:
+    """Read ATIF `extra` epoch seconds without OTel's seconds/milliseconds magnitude guess."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            logger.warning('ATIF timestamp {!r} is out of range; leaving it unset', value)
+            return None
+    return parse_time(value)
 
 
 def _times(step: AtifStep) -> tuple[datetime | None, datetime | None, Literal['ok', 'error', 'unset']]:
@@ -1190,11 +1199,11 @@ def _times(step: AtifStep) -> tuple[datetime | None, datetime | None, Literal['o
     invocation = (step.extra or {}).get('invocation')
     if invocation is None:
         return parse_time(step.timestamp), None, 'unset'
-    start = parse_time(get_field(invocation, 'start_timestamp')) or parse_time(step.timestamp)
+    start = _atif_time(get_field(invocation, 'start_timestamp')) or parse_time(step.timestamp)
     status = get_field(invocation, 'status')
     return (
         start,
-        parse_time(get_field(invocation, 'end_timestamp')),
+        _atif_time(get_field(invocation, 'end_timestamp')),
         cast("Literal['ok', 'error', 'unset']", status) if status in _STATUSES else 'unset',
     )
 
