@@ -46,6 +46,8 @@ from starlette.responses import RedirectResponse, Response
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_catalogue import models_by_provider
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
@@ -64,10 +66,12 @@ from evaluatorq.dashboard.trace_finder.routes import (
 )
 from evaluatorq.dashboard.trace_finder.sessions import TraceSessionMiddleware
 from evaluatorq.dashboard.view import (
+    MODEL_FIELDS,
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
     filter_fragment,
     landing_body,
+    model_control,
     redteam_overview_body,
     render_filter_form,
     report_actions,
@@ -259,8 +263,9 @@ async def _settings(req: Request) -> NotStr:
                 }
             )
     scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
+    profile = next((p for p in profiles if p.name == settings.orq_profile), None)
     body = settings_body(
-        _settings_config(roots, next((p for p in profiles if p.name == settings.orq_profile), None), settings=settings),
+        _settings_config(roots, profile, settings=settings),
         settings,
         saved=req.query_params.get('saved') == '1',
         preview='profile' in req.query_params,
@@ -268,6 +273,37 @@ async def _settings(req: Request) -> NotStr:
         scope=scope,
     )
     return NotStr(page('Settings', body, active_nav='settings'))
+
+
+async def _settings_models(req: Request) -> NotStr:
+    """One settings model field as its workspace menu, or as the text box when there is no catalogue."""
+    field = req.query_params.get('field', '')
+    if field not in MODEL_FIELDS:
+        return NotStr('')
+    value = req.query_params.get(field, '')
+    name = req.query_params.get('profile', '')
+    profiles = await asyncio.to_thread(list_orq_profiles) if name else []
+    profile = next((p for p in profiles if p.name == name), None)
+    groups: dict[str, list[str]] = {}
+    # A named profile that is gone or redacted must not fall back to the env workspace's models.
+    usable = profile is not None and '*' not in profile.api_key if name else True
+    if usable:
+        try:
+            resolved = resolve_llm_client(
+                extra_api_key=profile.api_key if profile else None,
+                orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+                require_orq=True,
+                max_retries=0,
+            )
+        except (ImportError, ValueError):
+            resolved = None
+        if resolved is not None:
+            try:
+                groups = await models_by_provider(resolved.client, classify=field == 'classifier_model')
+            finally:
+                if resolved.owned:
+                    await resolved.client.close()
+    return NotStr(model_control(field, value, groups))
 
 
 async def _save_settings(req: Request) -> Response | NotStr:
@@ -326,7 +362,13 @@ async def _save_settings(req: Request) -> Response | NotStr:
         else:
             settings = settings.model_copy(update={'orq_project_name': None})
     if settings is None or errors:
-        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles, scope=scope)
+        body = settings_body(
+            _settings_config(roots),
+            values,
+            errors=errors,
+            profiles=profiles,
+            scope=scope,
+        )
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     await asyncio.to_thread(save_settings, settings)
@@ -769,6 +811,7 @@ def register_report_routes(app: FastHTML) -> None:
     app.get('/')(_index)
     app.get('/settings')(_settings)
     app.post('/settings')(_save_settings)
+    app.get('/settings/models')(_settings_models)
     app.get('/search')(_search)
     app.get('/r/{rid}')(_report_view)
     app.get('/r/{rid}/sim/agent-card')(_sim_agent_card)

@@ -44,7 +44,7 @@ async def test_captured_judge_rates_still_match_the_live_catalogue() -> None:
     unlisted: list[str] = []
     for router_id in sorted(all_router_ids()):
         live = await get_model_info(router_id)
-        if live is None:
+        if live is None or live.input_cost_per_1k is None or live.output_cost_per_1k is None:
             unlisted.append(router_id)
             continue
         rates = judge_rates(router_id)

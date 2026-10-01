@@ -199,7 +199,9 @@ class WireDimension(BaseModel):
             if task.kind == 'noul' and all(
                 isinstance(value, str) and value.casefold() in _BOOLEAN_LABELS for value in selection_values
             ):
-                logger.warning('trace query compiler returned text labels for a boolean selection; converting them')
+                logger.warning(
+                    'trace query compiler returned {} for a boolean selection; converting them', selection_values
+                )
                 selection_values = tuple(_BOOLEAN_LABELS[str(value).casefold()] for value in selection_values)
             if task.kind == 'choice' and criteria is not None and set(selection_values) == set(criteria):
                 raise ValueError(
@@ -305,20 +307,30 @@ async def compile_query(
         )
         if debug_enabled():
             logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
+
+        error: Exception | None = None
+        error_kind = 'an invalid plan'
         try:
             dimensions, numeric = wire.to_domain()
-            numeric = _tighten_strict_bounds(normalized, numeric)
-            reason = (wire.unsupported_reason or '').strip() or None
-            return CompiledPlan(dimensions=dimensions, numeric=numeric, unsupported_reason=reason)
         except (ValidationError, ValueError) as exc:
-            if attempt:
-                raise CompileError(f'Compiler produced an invalid plan: {exc}') from exc
-            logger.warning('Trace query compiler returned an invalid plan; retrying: {}', exc)
-            messages = [
-                *messages,
-                {'role': 'assistant', 'content': result.raw or wire.model_dump_json()},
-                {'role': 'user', 'content': f'Your plan was invalid: {exc}. Correct it and return a valid plan.'},
-            ]
+            error = exc
+        else:
+            try:
+                numeric = _tighten_strict_bounds(normalized, numeric)
+            except ValidationError as exc:
+                error = exc
+                error_kind = 'contradictory numeric bounds'
+            else:
+                reason = (wire.unsupported_reason or '').strip() or None
+                return CompiledPlan(dimensions=dimensions, numeric=numeric, unsupported_reason=reason)
+        if attempt:
+            raise CompileError(f'Compiler produced {error_kind}: {error}') from error
+        logger.warning('Trace query compiler returned an invalid plan; retrying: {}', error)
+        messages = [
+            *messages,
+            {'role': 'assistant', 'content': result.raw or wire.model_dump_json()},
+            {'role': 'user', 'content': f'Your plan was invalid: {error}. Correct it and return a valid plan.'},
+        ]
     raise AssertionError('unreachable compiler retry state')
 
 
