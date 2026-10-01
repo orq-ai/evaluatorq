@@ -2846,6 +2846,36 @@ def test_span_tree_handles_cycles_and_maximum_pager_depth_without_recursion() ->
 
 
 
+def test_span_tree_discovers_cli_workspace_once_per_render(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard import orq_workspace
+    from evaluatorq.dashboard.orq_scope import OrqScope
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    for variable in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_BASE_URL', 'ORQ_API_KEY'):
+        monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
+    monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: '/usr/bin/orq')
+    slugs = iter(('first-workspace', 'second-workspace'))
+    calls = 0
+
+    def discover(_profile: str | None, *, use_cli_session: bool = False) -> OrqScope:
+        nonlocal calls
+        calls += 1
+        assert use_cli_session is True
+        return OrqScope(workspace_key=next(slugs))
+
+    monkeypatch.setattr('evaluatorq.dashboard.orq_scope.discover_orq_scope', discover)
+    spans = [{'span_id': f'span-{index}', 'name': f'span-{index}'} for index in range(100)]
+
+    first = span_tree('trace', spans)
+    assert first.count('href="https://my.orq.ai/first-workspace/traces/') == 100
+    assert calls == 1
+
+    second = span_tree('trace', spans)
+    assert second.count('href="https://my.orq.ai/second-workspace/traces/') == 100
+    assert calls == 2
+
+
 def test_results_self_poll_answers_out_of_band_and_marks_the_render(explorer_client) -> None:
     _, _, client = explorer_client
     _load(client)
