@@ -232,13 +232,19 @@ def _usd_price(entry: dict[str, object], side: str) -> float | None:
     """The entry's ``<side>_cost`` per 1k tokens in USD, or ``None`` when it has no usable one."""
     cost = entry.get(f'{side}_cost')
     # bool is an int subclass: `input_cost: true` would otherwise price at $1.00/1k.
-    if isinstance(cost, bool) or not isinstance(cost, (int, float)) or not math.isfinite(cost) or cost < 0:
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    try:
+        price = float(cost)
+    except OverflowError:  # a JSON integer too large for a float
+        return None
+    if not math.isfinite(price) or price < 0:
         return None
     # Currency is '' on most entries and 'usd' on the rest; only a stated non-USD
     # price is refused, so the common empty case still prices.
     if str(entry.get(f'{side}_currency') or '') not in {'', 'usd'}:
         return None
-    return float(cost)
+    return price
 
 
 def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:

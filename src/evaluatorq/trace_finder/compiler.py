@@ -243,7 +243,7 @@ async def compile_query(
         logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
     try:
         compiled, numeric = wire.to_domain()
-    except ValidationError as exc:
+    except ValueError as exc:
         raise CompileError(f'Compiler produced an invalid query plan: {exc}') from exc
     try:
         numeric = _tighten_strict_bounds(normalized, numeric)

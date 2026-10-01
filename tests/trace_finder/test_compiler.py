@@ -72,6 +72,20 @@ async def test_compile_query_names_a_non_numeric_plan_error(monkeypatch) -> None
     assert 'numeric' not in str(raised.value)
 
 
+@pytest.mark.asyncio
+async def test_compile_query_wraps_inconsistent_task_criteria(monkeypatch) -> None:
+    document = choice_document()
+    document['task'].update(choice_criteria=None)
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid query plan'):
+        await compile_query(cast(Any, object()), 'compiler-model', 'pick a label')
+
+
 class FakeStructuredResult:
     def __init__(self, parsed: object | None, raw: str = '') -> None:
         self.parsed = parsed

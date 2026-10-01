@@ -897,7 +897,7 @@ async def test_unpriced_model_is_listed_but_its_call_stays_unpriced(monkeypatch:
     assert priced.total_cost is None
 
 
-@pytest.mark.parametrize('cost', [float('nan'), float('inf')])
+@pytest.mark.parametrize('cost', [float('nan'), float('inf'), 10**1000])
 def test_parse_catalogue_lists_non_finite_cost_unpriced(cost: float):
     prices = pricing._parse_catalogue(  # pyright: ignore[reportPrivateUsage]
         [{'model_id': 'a', 'provider': 'openai', 'input_cost': cost, 'output_cost': 0.2}]
