@@ -78,6 +78,8 @@ This runs 3 personas × 3 scenarios for agent simulation and a small hybrid red-
 
 Reviewers need no flag: `.github/CODEOWNERS` requests them on every PR and skips the author. Change that file, not the `gh` invocation, to change who reviews.
 
+**Show visible changes in the PR.** If a change affects anything in the browser, attach screenshots of the changed pages or states and embed them in the PR description. If a change affects the CLI, include fenced before and after snippets in the PR description showing the same command and its output on each version. Cover every user-visible change so a reviewer can see what was done.
+
 **The ticket is named by its id in the PR title, and by nothing else anywhere.** Put it in trailing parentheses after a conventional-commit subject — `docs: unwrap every hard-wrapped markdown file (RES-1495)`. No Linear URL in the title, the body, a comment or a commit message: the id is what a reader greps, quotes in Slack and types into search, and a pasted URL rots the moment a workspace or slug changes while the id never does. Linear links the two directions on its own from the id plus the PR attachment. The cost to know: dropping the `Closes <id>` line means **merging will not close the ticket** — move it yourself, or say so in the PR.
 
 ## Before pushing to a PR
