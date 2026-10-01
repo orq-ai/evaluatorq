@@ -26,10 +26,14 @@ _cli_slug_cache: dict[tuple[str | None, str | None, bool], tuple[float, str | No
 def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> str | None:
     """Cache credential-matched CLI discovery so rendering links does not run a CLI command per row."""
     key = (profile, fingerprint, use_cli_session)
-    cached = _cli_slug_cache.get(key)
+    cached = _cli_slug_cache.get(key) if not use_cli_session else None
     if cached is not None and cached[0] > monotonic():
         return cached[1]
 
+    return _discover_cli_slug(profile, fingerprint, use_cli_session=use_cli_session)
+
+
+def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool) -> str | None:
     from evaluatorq.dashboard.orq_scope import discover_orq_scope
 
     scope = discover_orq_scope(profile, use_cli_session=use_cli_session)
@@ -39,7 +43,8 @@ def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: 
             'Could not resolve the Orq workspace slug from the CLI: {}',
             scope.error or 'the credential has no matching listed workspace',
         )
-    _cli_slug_cache[key] = (monotonic() + (300 if slug and fingerprint else 30), slug)
+    if not use_cli_session:
+        _cli_slug_cache[profile, fingerprint, False] = (monotonic() + (300 if slug and fingerprint else 30), slug)
     return slug
 
 

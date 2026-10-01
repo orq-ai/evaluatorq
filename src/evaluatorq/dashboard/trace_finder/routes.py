@@ -1155,7 +1155,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             error_message = None
         from evaluatorq.dashboard.trace_finder.views import span_tree
 
-        return _html(span_tree(trace_id, spans, first_error_message=error_message))
+        return _html(await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message))
 
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:
@@ -1192,7 +1192,9 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             # htmx does not swap a 4xx body, so a 404 here would leave the click silently doing nothing.
             logger.warning('Find drawer requested trace {} that is not in the current run', trace_id)
             return _html(missing_trace_drawer(trace_id))
-        return _html(drawer(detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'))
+        return _html(await asyncio.to_thread(
+            drawer, detail, msg=msg, row=row, traces_layout=req.query_params.get('surface') == 'traces'
+        ))
 
     @app.get('/find/export.json')
     async def find_export(req: Request) -> Response:

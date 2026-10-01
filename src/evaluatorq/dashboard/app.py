@@ -259,8 +259,14 @@ async def _settings(req: Request) -> NotStr:
                 }
             )
     scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
+    config = await asyncio.to_thread(
+        _settings_config,
+        roots,
+        next((p for p in profiles if p.name == settings.orq_profile), None),
+        settings=settings,
+    )
     body = settings_body(
-        _settings_config(roots, next((p for p in profiles if p.name == settings.orq_profile), None), settings=settings),
+        config,
         settings,
         saved=req.query_params.get('saved') == '1',
         preview='profile' in req.query_params,
@@ -276,7 +282,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
     rejected = request_rejected(req, form_data)
     if rejected:
         roots = _roots(req)
-        body = settings_body(_settings_config(roots), effective_settings(), errors={'form': rejected})
+        config = await asyncio.to_thread(_settings_config, roots)
+        body = settings_body(config, effective_settings(), errors={'form': rejected})
         return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
     roots = _roots(req)
     # Use saved values as the baseline so unchanged environment overrides are not persisted.
@@ -326,7 +333,8 @@ async def _save_settings(req: Request) -> Response | NotStr:
         else:
             settings = settings.model_copy(update={'orq_project_name': None})
     if settings is None or errors:
-        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles, scope=scope)
+        config = await asyncio.to_thread(_settings_config, roots)
+        body = settings_body(config, values, errors=errors, profiles=profiles, scope=scope)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     await asyncio.to_thread(save_settings, settings)
@@ -522,7 +530,7 @@ async def _sim_agent_card(rid: str, req: Request) -> NotStr | Response:
     except Exception as exc:
         logger.warning('Failed to load sim report for agent card {}: {}', path.name, exc)
         return Response('Error loading report', status_code=422, media_type='text/plain')
-    return NotStr(await report_tabs.sim_agent_card_fragment(run))
+    return NotStr(await asyncio.to_thread(report_tabs.sim_agent_card_fragment, run))
 
 
 async def _report_filter(rid: str, req: Request) -> NotStr | Response:
@@ -562,11 +570,12 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
     # Render the tabbed body from the filtered results so the static tab
     # content (tables, charts) tracks the filter, not just the HTMX panels.
     if surface == 'sim':
-        body_html = report_tabs.sim_report_tabs(rid, report_obj, filtered)
+        body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
     elif surface == 'redteam':
         from evaluatorq.redteam.reports.converters import rebuild_filtered_report
 
-        body_html = report_tabs.redteam_report_tabs(rid, rebuild_filtered_report(report_obj, filtered))
+        filtered_report = rebuild_filtered_report(report_obj, filtered)
+        body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
     else:
         body_html = adapter.body_from_results(report_obj, filtered)
 
