@@ -84,8 +84,11 @@ plugins:
           options:
             # Strips `_`-prefixed parameters from rendered signatures — see the
             # module docstring for why `filters` cannot do this.
+            # FieldDescriptionDocstrings renders pydantic Field(description=...) text,
+            # which griffe otherwise ignores.
             extensions:
               - docs/griffe_extensions.py:DropPrivateParameters
+              - docs/griffe_extensions.py:FieldDescriptionDocstrings
             docstring_style: google
             show_source: false
             show_root_heading: false
@@ -141,8 +144,10 @@ plugins:
           - coding-agent-targets.md: Run Claude Code, Codex CLI or OpenCode as the system under test, directly or through orq launch.
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
           - guides/simulation-in-evaluatorq.md: Run a simulation as an evaluatorq job with wrap_simulation_agent(), and score the transcript with your own evaluators.
+          - guides/agent-simulation-output.md: The SimulationResult and SimulationRun output models, where they are written, and how to read them.
           - guides/red-teaming.md: Adaptive OWASP-mapped adversarial security testing for agents.
           - guides/vulnerabilities-and-frameworks.md: How vulnerabilities relate to OWASP category codes, and why they are not the same count.
+          - guides/red-teaming-output.md: The RedTeamReport output model, where it is written, and how to read it.
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
           - classify-judges.md: Use classify models as typed, structured jury seats.
@@ -275,11 +280,13 @@ nav:
       - Agent Simulation:
           - Overview: guides/agent-simulation.md
           - In an evaluatorq Run: guides/simulation-in-evaluatorq.md
+          - Output Reference: guides/agent-simulation-output.md
       - Dashboard: dashboard.md
       - Trace Finder: trace-finder.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Vulnerabilities & Frameworks: guides/vulnerabilities-and-frameworks.md
+          - Output Reference: guides/red-teaming-output.md
           - Custom Evaluators & Frameworks: custom-evaluators-and-frameworks.md
       - LLM as a Jury:
           - Overview: llm-as-a-jury.md
