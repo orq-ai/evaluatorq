@@ -921,6 +921,7 @@
   document.addEventListener('submit', function (evt) {
     const form = evt.target;
     if (!form || form.id !== 'finder-query-form') return;
+    explorerRefreshRelativeRange();
     const rows = document.getElementById('explorer-rows');
     const limit = document.getElementById('finder-limit-query');
     if (rows && limit) limit.value = rows.value;

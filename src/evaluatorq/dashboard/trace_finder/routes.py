@@ -417,7 +417,7 @@ def parse_range(
     def zone_for(value: str | None) -> timezone:
         try:
             return timezone(timedelta(minutes=-int(value or '')))
-        except ValueError:
+        except (OverflowError, ValueError):
             logger.warning('Explorer time range has no usable browser offset {!r}; reading it as UTC', value)
             return timezone.utc
 
@@ -1163,7 +1163,12 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
         if store is None:
             return _html('<p class="finder-empty">Trace finding is unavailable.</p>', status_code=404)
         raw_msg = req.query_params.get('msg', '')
-        msg = int(raw_msg) if raw_msg.isdigit() else None
+        try:
+            msg = int(raw_msg) if raw_msg.isdigit() else None
+        except ValueError:
+            # Python limits decimal string conversion length; an invalid message
+            # selection should open the drawer at its default message.
+            msg = None
         row = await store.explorer.row(trace_id) if store.explorer is not None else None
         snapshot = await store.snapshot()
         detail = await store.trace_detail(trace_id) if row is None or snapshot.within_results else None

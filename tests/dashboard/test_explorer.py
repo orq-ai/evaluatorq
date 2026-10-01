@@ -61,6 +61,11 @@ def test_parse_range_treats_bad_offset_as_utc() -> None:
     assert start.tzinfo == timezone.utc
 
 
+def test_parse_range_treats_overflowing_offset_as_utc() -> None:
+    start, _ = finder_routes.parse_range('2026-09-27T10:00', '2026-09-27T11:00', '999999999999999999999')
+    assert start.tzinfo == timezone.utc
+
+
 def test_calendar_date_and_time_values_keep_seconds_and_timezone() -> None:
     values = finder_routes._range_values({
         'from': '2026-09-27',
@@ -533,6 +538,7 @@ def test_find_page_loads_last_seven_days_without_filters_or_ai(explorer_client) 
     after = datetime.now(timezone.utc)
 
     assert response.status_code == 200
+    assert 'hx-include="#finder-controls, #explorer-load-form"' in response.text
     assert len(source.calls) == 1
     assert asyncio.run(store.explorer.view()).initial_load
     call = source.calls[0]
@@ -1697,6 +1703,12 @@ def test_apply_filters_only_refreshes_relative_range_before_htmx_load() -> None:
     assert 'explorerRefreshRelativeRange();' in js
 
 
+def test_ask_ai_refreshes_relative_range_before_copying_bounds() -> None:
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    submit_handler = js.split("if (!form || form.id !== 'finder-query-form') return;", 1)[1]
+    assert submit_handler.index('explorerRefreshRelativeRange();') < submit_handler.index("const dateTime = (name)")
+
+
 def test_dashboard_js_preserves_open_custom_range_across_results_swaps() -> None:
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     assert 'customRangeWasOpen = !!document.querySelector(\'.xr-exact\')?.open;' in js
@@ -1722,7 +1734,7 @@ def test_traces_facet_menu_submits_and_counts_the_current_loaded_rows(
     assert 'form="explorer-load-form" type="checkbox" name="facet_model" value="gpt-5.6-luna"' in html
     assert '<span class="facet-n" title="Loaded traces">2</span>' in html
     assert (
-        'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls"'
+        'id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" hx-swap="innerHTML" hx-include="#finder-controls, #explorer-load-form"'
         in html
     )
 
@@ -2302,6 +2314,50 @@ def test_ask_new_search_uses_toolbar_range_and_rows_cap(explorer_client) -> None
     assert population.start == datetime(2026, 9, 30, 8, 15, tzinfo=timezone.utc)
     assert population.end == datetime(2026, 9, 30, 9, 45, 30, tzinfo=timezone.utc)
     assert population.limit == 43
+
+
+def test_ask_new_search_uses_carried_explorer_range_and_offsets(explorer_client) -> None:
+    store, _, client = explorer_client
+    captured: dict[str, Any] = {}
+
+    async def compile(request: Any, *, wait: bool = True, traces: Any = None, table: Any = None) -> Any:
+        captured['request'] = request
+        return store.snapshot_value
+
+    store.compile = compile
+    response = client.post(
+        '/find/run',
+        data=csrf_data({
+            'query': 'slow traces',
+            'scope': 'new',
+            'mode': 'immediate',
+            'new_from': '2026-09-30T10:15:00',
+            'new_to': '2026-09-30T11:45:30',
+            'new_from_tz_offset': '-120',
+            'new_to_tz_offset': '-60',
+            'window_days': '7',
+            'limit': '43',
+            'parallelism': '10',
+        }),
+    )
+
+    assert response.status_code == 200
+    population = captured['request'].population
+    assert population.start == datetime(2026, 9, 30, 8, 15, tzinfo=timezone.utc)
+    assert population.end == datetime(2026, 9, 30, 10, 45, 30, tzinfo=timezone.utc)
+
+
+def test_find_search_form_does_not_include_explorer_controls(explorer_client) -> None:
+    _, _, client = explorer_client
+    html = client.get('/find').text
+    assert 'hx-include="#finder-controls, #explorer-load-form"' not in html
+
+
+def test_trace_drawer_handles_msg_beyond_python_int_digit_limit(explorer_client) -> None:
+    _, _, client = explorer_client
+    _load(client)
+    response = client.get(f"/find/trace/trace-0000?msg={'9' * 5000}")
+    assert response.status_code == 200
 
 
 def test_ask_within_results_without_rows_explains(explorer_client) -> None:

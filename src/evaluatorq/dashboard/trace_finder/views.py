@@ -136,7 +136,7 @@ def traces_command_strip(
         '<section class="finder-hero finder-command">'
         f'<p class="finder-command-lede">{esc(COMMAND_LEDE)}</p>'
         '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
-        'hx-swap="innerHTML" hx-include="#finder-controls" hx-disabled-elt="find button">'
+        'hx-swap="innerHTML" hx-include="#finder-controls, #explorer-load-form" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
         f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question, e.g. {esc(COMMAND_EXAMPLES[0])}" '
         f'data-finder-placeholders="{esc(json.dumps(COMMAND_EXAMPLES))}" required{disabled}>'
