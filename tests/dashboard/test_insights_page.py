@@ -44,6 +44,7 @@ def test_insights_header_renders_partial_cost(minimal_run) -> None:
     )
 
     assert 'priced for 1 of 2 calls' in header(run)
+    assert 'excludes trace selection' in header(run)
 
 
 def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_run) -> None:
@@ -53,6 +54,15 @@ def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_ru
     run = minimal_run.model_copy(update={'cost_by_stage': ledger.totals()})
 
     assert 'priced for 1 of 2 calls' in header(run)
+
+
+def test_wizard_says_priority_matrix_needs_customer_satisfaction() -> None:
+    from evaluatorq.dashboard.insights_views import new_run_page
+
+    markup = new_run_page()
+
+    assert 'value="customer_satisfaction"> Customer satisfaction<small>The priority matrix needs this label.</small>' in markup
+    assert 'value="customer_satisfaction" checked' not in markup
 
 
 def test_insights_header_hides_untracked_cost(minimal_run) -> None:
@@ -413,6 +423,30 @@ def test_traces_can_be_filtered_by_cluster(tmp_path, minimal_run, monkeypatch):
     assert response.status_code == 200
     assert 'trace-1' in response.text
     assert 'trace-2' not in response.text
+
+
+def test_traces_route_forwards_crosstab_filters(tmp_path, minimal_run, monkeypatch):
+    from evaluatorq.dashboard import insights_views
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run)
+    seen: dict[str, object] = {}
+
+    def fake_traces(run, **kwargs):
+        seen.update(kwargs)
+        return '<p>ok</p>'
+
+    monkeypatch.setattr(insights_views, 'traces', fake_traces)
+
+    response = TestClient(build_app()).get(
+        '/insights/run-1/traces?row=intent&row_value=a&column=sentiment&column_value=positive'
+    )
+
+    assert response.status_code == 200
+    assert seen['row'] == 'intent'
+    assert seen['row_value'] == 'a'
+    assert seen['column'] == 'sentiment'
+    assert seen['column_value'] == 'positive'
 
 
 def test_labels_without_any_labels_show_empty_state(tmp_path, minimal_run, monkeypatch):

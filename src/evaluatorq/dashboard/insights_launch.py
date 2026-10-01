@@ -672,7 +672,11 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
                 or stat.S_IMODE(directory.st_mode) & 0o022
             ):
                 raise ValueError('Finder export directory has unsafe ownership or permissions.')
-            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            # O_NONBLOCK keeps a FIFO named *.json from blocking this open until a writer appears;
+            # the S_ISREG check below then rejects it.
+            descriptor = os.open(
+                path.name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd
+            )
         else:
             descriptor, windows_directory_identity = _open_windows_approved_regular_file(root, path)
         try:

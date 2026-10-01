@@ -368,9 +368,59 @@ def test_project_trace_keeps_a_complete_newest_suffix_and_reports_discarded_unit
 
     projection = project_trace(_trace(messages=(old_user, old_assistant, newest)), token_budget=300)
 
-    assert projection.payload == {'trace_status': 'completed', 'messages': [newest]}
+    assert projection.payload == {'trace_status': 'completed', 'messages': [newest], 'omitted_earlier_messages': 2}
     assert projection.omitted_messages == 2
     assert projection.omitted_bytes == sum(_serialized_bytes(message) for message in (old_user, old_assistant))
+
+
+def test_omission_marker_is_surfaced_to_the_model_and_stays_within_budget() -> None:
+    messages = tuple({'role': 'user', 'content': f'turn {index} ' + 'x' * 200} for index in range(40))
+
+    projection = project_trace(_trace(messages=messages), token_budget=1_000)
+
+    assert projection.omitted_messages > 0
+    assert f'"omitted_earlier_messages":{projection.omitted_messages}' in projection.serialized
+    assert projection.estimated_tokens <= 1_000
+
+
+def test_no_omission_marker_when_the_whole_trace_fits() -> None:
+    projection = project_trace(_trace(messages=({'role': 'user', 'content': 'hi'},)))
+
+    assert 'omitted_earlier_messages' not in projection.payload
+
+
+def test_dropping_earlier_messages_logs_a_warning() -> None:
+    from loguru import logger
+
+    logs: list[str] = []
+    sink = logger.add(lambda message: logs.append(str(message)), level='WARNING')
+    try:
+        messages = ({'role': 'user', 'content': 'u' * 500}, {'role': 'user', 'content': 'new'})
+        projection = project_trace(_trace(messages=messages), token_budget=300)
+    finally:
+        logger.remove(sink)
+
+    assert projection.estimated_tokens <= 300
+    assert any('dropped 1 earlier message' in line for line in logs)
+
+
+def test_anthropic_tool_result_block_bodies_are_not_projected() -> None:
+    secret = 'SECRET-TOOL-BODY-TOKEN'
+    messages = (
+        {'role': 'user', 'content': 'look it up'},
+        {
+            'role': 'user',
+            'content': [
+                {'type': 'tool_result', 'tool_use_id': 'tu1', 'content': secret},
+                {'type': 'tool_result', 'tool_use_id': 'tu2', 'content': [{'type': 'text', 'text': secret}]},
+            ],
+        },
+    )
+
+    projection = project_trace(_trace(messages=messages))
+
+    assert secret not in projection.serialized
+    assert 'tool result body' in projection.serialized
 
 
 def test_project_trace_tail_truncates_an_oversized_newest_message() -> None:

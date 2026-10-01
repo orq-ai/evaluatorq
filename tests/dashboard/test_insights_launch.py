@@ -1009,11 +1009,30 @@ def test_dashboard_finder_export_is_size_limited(monkeypatch: pytest.MonkeyPatch
         InsightsLaunchSpec(source='finder', finder_export='large.json')
 
 
+@pytest.mark.timeout(10)
+def test_finder_export_fifo_is_rejected_without_blocking(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import os
+
+    if not hasattr(os, 'mkfifo'):
+        pytest.skip('FIFOs are unavailable on this platform')
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    exports = tmp_path / 'finder-exports'
+    exports.mkdir()
+    os.mkfifo(exports / 'pipe.json')
+
+    with pytest.raises(ValidationError, match='regular file'):
+        InsightsLaunchSpec(source='finder', finder_export='pipe.json')
+
+
 def test_finder_insights_launch_records_source_until_run_finishes(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import json
 
+    import tempfile
+
+    # Keep the private Finder snapshot directory inside tmp_path so it is removed with the test.
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
     monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     export_dir = tmp_path / 'finder-exports'
@@ -1593,6 +1612,10 @@ def test_windows_snapshot_read_checks_directory_identity_after_read(
 def test_finder_launch_plan_uses_validated_export_snapshot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from evaluatorq.dashboard import insights_launch
 
+    import tempfile
+
+    # Keep the private Finder snapshot directory inside tmp_path so it is removed with the test.
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
     monkeypatch.setattr(insights_launch, '_worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     exports = tmp_path / 'finder-exports'

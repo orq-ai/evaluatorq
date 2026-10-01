@@ -426,3 +426,25 @@ def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, 
 
     assert relative_result.exit_code == 0, relative_result.output
     assert captured['_finder_export_source'] == path
+
+
+@pytest.mark.asyncio
+async def test_cleanup_failure_does_not_replace_the_insights_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.insights.models import InsightsPopulation
+
+    async def failing_insights(*args: Any, **kwargs: Any) -> None:
+        raise ValueError('the real failure')
+
+    async def failing_close(_client: Any) -> None:
+        raise RuntimeError('close blew up')
+
+    resolved = SimpleNamespace(client=SimpleNamespace(close=AsyncMock(side_effect=RuntimeError('llm close'))), owned=True)
+    monkeypatch.setattr(cli_module, 'insights', failing_insights)
+    monkeypatch.setattr(cli_module, 'resolve_orq_client', lambda *a, **k: object())
+    monkeypatch.setattr(cli_module, 'resolve_llm_client', lambda *a, **k: resolved)
+    monkeypatch.setattr(cli_module, 'close_orq_client', failing_close)
+
+    profile = OrqProfile('p', 'k', None, False)
+    with pytest.raises(ValueError, match='the real failure'):
+        await cli_module._run_insights_with_profile(InsightsPopulation(), profile)
+    resolved.client.close.assert_awaited_once()

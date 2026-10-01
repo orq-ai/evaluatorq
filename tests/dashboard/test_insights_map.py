@@ -318,6 +318,19 @@ def test_priority_chart_contains_quadrant_labels_and_empty_state():
     )
 
 
+def test_priority_chart_keeps_positive_x_domain_when_every_point_has_zero_volume():
+    run = _map_run().model_copy(
+        update={
+            'priority': [
+                PriorityPoint(cluster_id='base-1', name='Cluster 1', volume=0, mean_satisfaction=0.4, error_share=0.5)
+            ]
+        }
+    )
+    html = insights_views.priority_matrix(run)
+
+    assert '"domain": [0, 1.0]' in html
+
+
 def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatch, tmp_path):
     seen_snapshots = []
 
@@ -424,6 +437,13 @@ setTimeout(function () { console.log(JSON.stringify({ renders: renders })); }, 0
     result = subprocess.run(['node', '-e', javascript], capture_output=True, text=True, check=True)
 
     assert json.loads(result.stdout) == {'renders': 0}
+
+
+def test_dashboard_script_has_no_orphaned_tree_map_toggle_handler():
+    source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text(encoding='utf-8')
+
+    assert 'data-insights-view' not in source
+    assert "closest('.insights-dimension')" not in source
 
 
 def test_cluster_detail_returns_content_for_existing_detail_panel():

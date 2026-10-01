@@ -9,6 +9,7 @@ from typing import Annotated, Any, cast
 
 import httpx
 import typer
+from loguru import logger
 from openai import OpenAIError
 from pydantic import ValidationError
 from rich.console import Console
@@ -49,11 +50,16 @@ async def _run_insights_with_profile(
         resolved = resolve_llm_client(extra_api_key=profile.api_key, orq_host=host, require_orq=True, max_retries=0)
         return await insights(population, orq_client=orq, llm_client=resolved.client, **kwargs)
     finally:
+        # Cleanup is best-effort: a close failure must not replace the run's own error.
         try:
             await close_orq_client(orq)
-        finally:
-            if resolved is not None and resolved.owned:
+        except Exception as exc:  # noqa: BLE001 - cleanup must not mask the insights result or error
+            logger.warning('Could not close the Orq client for the Insights run: {}', exc)
+        if resolved is not None and resolved.owned:
+            try:
                 await resolved.client.close()
+            except Exception as exc:  # noqa: BLE001 - cleanup must not mask the insights result or error
+                logger.warning('Could not close the LLM client for the Insights run: {}', exc)
 
 
 def _resolve_labels(values: list[str] | None) -> list[LabelSpec]:

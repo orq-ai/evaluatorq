@@ -309,14 +309,6 @@
       }, 100);
       return;
     }
-    const toggle = evt.target.closest('[data-insights-view]');
-    if (toggle) {
-      const section = toggle.closest('.insights-dimension');
-      const mode = toggle.getAttribute('data-insights-view');
-      section.querySelectorAll('[data-insights-mode]').forEach(function (view) { view.hidden = view.getAttribute('data-insights-mode') !== mode; });
-      section.querySelectorAll('[data-insights-view]').forEach(function (button) { button.classList.toggle('active', button === toggle); });
-      if (mode === 'map') drawInsightsMap(section.querySelector('.insights-map-chart'));
-    }
   });
   document.addEventListener('fullscreenchange', function () {
     const viewer = document.querySelector('.insights-map-fullscreen-viewer');

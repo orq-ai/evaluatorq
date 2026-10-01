@@ -135,6 +135,19 @@ def _dimension_failed_count(traces: list[TraceInsight], dimension: DimensionName
     return sum(key in trace.errors for trace in traces)
 
 
+def _discard_dimension(traces: list[TraceInsight], dimension: DimensionName) -> None:
+    """Drop the partial per-trace output of a dimension whose stage failed.
+
+    `_build_dimension` writes assignments and coordinates onto the traces as it goes, but the
+    dimension's clusters are only persisted when it returns. Without this, a failed dimension
+    would leave traces pointing at cluster ids that no `DimensionResult` contains.
+    """
+    for trace in traces:
+        trace.assignments.pop(dimension, None)
+        trace.coords.pop(dimension, None)
+        trace.errors.pop(f'dimension:{dimension}', None)
+
+
 async def _build_dimension(  # noqa: C901
     dimension: DimensionName,
     traces: list[TraceInsight],
@@ -688,6 +701,7 @@ async def insights(  # noqa: C901
                         _stage_end(writer, stage_name)
                     except Exception as exc:  # noqa: BLE001 - a dimension failure must preserve other dimensions
                         message = str(exc)
+                        _discard_dimension(run.traces, dimension)
                         run.status = 'error'
                         run.stage_failures.append(StageFailure(stage=stage_name, message=message, dimension=dimension))
                         logger.warning('Insights {} stage failed: {}', dimension, message)

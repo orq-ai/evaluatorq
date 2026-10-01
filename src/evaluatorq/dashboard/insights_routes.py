@@ -386,6 +386,10 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 cluster=query.get('cluster'),
                 label=query.get('label'),
                 value=query.get('value'),
+                row=query.get('row'),
+                row_value=query.get('row_value'),
+                column=query.get('column'),
+                column_value=query.get('column_value'),
             )
         )
 

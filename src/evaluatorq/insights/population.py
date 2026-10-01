@@ -188,7 +188,10 @@ async def _load_traces(
     except Exception as error:
         raise PopulationError(f'loading the trace population failed: {error}') from error
     finally:
-        source.close()
+        try:
+            source.close()
+        except Exception as close_error:  # noqa: BLE001 - cleanup must not mask the load result or error
+            logger.warning('Insights population trace source cleanup failed: {}', close_error)
     if target_trace_ids is not None and snapshot.capture_metadata.get('incomplete_reason'):
         raise PopulationError(
             f'reloading Finder export traces was incomplete: {snapshot.capture_metadata["incomplete_reason"]}'

@@ -192,6 +192,34 @@ def test_failed_progress_flush_retries_latest_counts(tmp_path: Path, monkeypatch
     assert (record.completed, record.total) == (2, 3)
 
 
+def test_failed_progress_flush_after_a_success_retries_inside_the_throttle_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='failed-after-ok', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    writer.stage_progress('label', 1, 5)  # succeeds, arms the throttle
+
+    replace = run_manifest.os.replace
+    fail = [True]
+
+    def flaky(*args, **kwargs) -> None:
+        if fail[0]:
+            raise OSError('temporary disk error')
+        replace(*args, **kwargs)
+
+    monkeypatch.setattr(run_manifest.os, 'replace', flaky)
+    now[0] = 2.0
+    writer.stage_progress('label', 2, 5)  # past the window, flush fails
+    fail[0] = False
+    now[0] = 2.1
+    writer.stage_progress('label', 3, 5)  # inside the old window, must still retry
+
+    record = list_manifests(tmp_path)[0].stages[-1]
+    assert (record.completed, record.total) == (3, 5)
+
+
 def test_stage_progress_ignores_invalid_counts_without_persisting_them(tmp_path: Path) -> None:
     started = start_manifest(run_id='invalid-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
     writer = ManifestWriter(started.manifest, started.path)

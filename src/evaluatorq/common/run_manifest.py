@@ -161,6 +161,9 @@ class ManifestWriter:
         if completed >= total or last_flush is None or now - last_flush >= 1.0:
             if self.flush():
                 self._last_progress_flush[record_key] = now
+            else:
+                # Forget the old success so the next callback retries inside the throttle window.
+                self._last_progress_flush.pop(record_key, None)
 
     def complete(self, report_path: str | Path | None = None, summary: RunSummary | None = None) -> None:
         if self.manifest.status != ManifestStatus.RUNNING:

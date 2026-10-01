@@ -214,6 +214,20 @@ def test_nearest_neighbours_caps_at_k_and_excludes_self():
         assert cid not in neighbours
 
 
+def test_nearest_neighbours_rejects_negative_k():
+    with pytest.raises(ValueError, match='k must be non-negative'):
+        nearest_neighbours({0: np.array([1.0, 0.0]), 1: np.array([0.0, 1.0])}, k=-1)
+
+
+@pytest.mark.parametrize('bad', [float('nan'), float('inf')])
+def test_non_finite_vectors_are_rejected_before_linkage(bad):
+    vectors = np.ones((20, 3))
+    vectors[4, 1] = bad
+
+    with pytest.raises(ValueError, match='only finite values'):
+        cluster_two_level(vectors)
+
+
 def test_nearest_neighbours_single_cluster_has_no_neighbours():
     result = nearest_neighbours({0: np.array([1.0, 0.0])}, k=3)
     assert result == {0: []}

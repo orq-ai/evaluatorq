@@ -7,6 +7,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from loguru import logger
+
 from evaluatorq.contracts import tool_result_to_text
 
 from .models import TraceProjection, TraceRecord
@@ -49,8 +51,46 @@ def estimate_tokens(serialized: str) -> int:
 
 
 def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> TraceProjection:
-    """Project one complete trace into a newest-first-fitting classifier conversation state."""
+    """Project one complete trace into a newest-first-fitting classifier conversation state.
 
+    When earlier messages do not fit, the payload carries `omitted_earlier_messages` so the
+    model knows it is reading only the tail of the conversation. The key's bytes are reserved
+    from the budget, so the marker never pushes the projection over `token_budget`.
+    """
+
+    projection = _project_within(trace, token_budget)
+    if projection.omitted_messages == 0:
+        return projection
+
+    logger.warning(
+        'trace {} projection dropped {} earlier message(s) ({} bytes) to fit the {} byte budget',
+        trace.trace_id,
+        projection.omitted_messages,
+        projection.omitted_bytes,
+        token_budget,
+    )
+    # Reserve room for the marker using the largest count it could hold, then re-project.
+    key = 'omitted_earlier_messages'
+    reserve = len(_canonical_json({key: len(trace.messages)}).encode('utf-8')) + 1
+    try:
+        reduced = _project_within(trace, token_budget - reserve)
+    except ValueError:
+        logger.warning(
+            'trace {} projection has no room for the omission marker; sending it without one', trace.trace_id
+        )
+        return projection
+    payload = {**reduced.payload, key: reduced.omitted_messages}
+    serialized = serialize_projection(payload)
+    return TraceProjection(
+        payload=payload,
+        serialized=serialized,
+        estimated_tokens=estimate_tokens(serialized),
+        omitted_messages=reduced.omitted_messages,
+        omitted_bytes=reduced.omitted_bytes,
+    )
+
+
+def _project_within(trace: TraceRecord, token_budget: int) -> TraceProjection:
     if not 1 <= token_budget <= MAX_TOKEN_BUDGET:
         raise ValueError(f'token_budget must be between 1 and {MAX_TOKEN_BUDGET}')
 
@@ -175,6 +215,9 @@ def _project_content_block(block: Any) -> dict[str, Any]:
         return {'type': 'unknown', 'omitted': 'non-text content'}
     block_type = block.get('type')
     kind = block_type[:80] if isinstance(block_type, str) else 'unknown'
+    if kind == 'tool_result':
+        # Anthropic-shaped tool results ride inside user messages; their bodies are never projected.
+        return {'type': kind, 'omitted': 'tool result body'}
     text = block.get('text')
     if isinstance(text, str):
         return {'type': kind, 'text': text}

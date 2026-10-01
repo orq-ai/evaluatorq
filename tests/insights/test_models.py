@@ -15,6 +15,7 @@ from evaluatorq.insights.models import (
     InsightsPopulation,
     InsightsRun,
     LabelAnswer,
+    LabelSpec,
     PriorityPoint,
     TraceInsight,
     TraceSummary,
@@ -296,3 +297,9 @@ def test_insights_config_json_rejects_duplicate_selections() -> None:
     payload = '{"labels": [], "dimensions": ["intent", "intent"]}'
     with pytest.raises(ValidationError, match='dimensions must not contain duplicates'):
         InsightsConfig.model_validate_json(payload)
+
+
+@pytest.mark.parametrize('threshold', [-0.1, 1.1, float('nan'), float('inf')])
+def test_label_spec_rejects_noul_threshold_outside_unit_interval(threshold: float) -> None:
+    with pytest.raises(ValidationError):
+        LabelSpec(name='flag', kind='noul', instructions='x', noul_threshold=threshold)

@@ -35,16 +35,16 @@ def stage_plan(
         else 'Load Finder matches'
         if population.finder_export is not None
         else 'Find matching traces'
-        if population.query
+        if population.query is not None
         else 'Filter recent traces'
         if has_filters
         else 'Load recent traces'
     )
     classify = (
         'Match and classify traces'
-        if population.query and has_labels
+        if population.query is not None and has_labels
         else 'Match traces'
-        if population.query
+        if population.query is not None
         else 'Classify traces'
         if has_labels
         else 'Keep selected traces'

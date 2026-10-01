@@ -330,6 +330,36 @@ async def test_loader_failure_raises_population_error(monkeypatch: pytest.Monkey
         await resolve_population(pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier')
 
 
+@pytest.mark.asyncio
+async def test_cleanup_failure_keeps_the_loaded_traces_and_the_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BadCloseSource(FakeSource):
+        def close(self) -> None:
+            raise RuntimeError('hook unregistration failed')
+
+    monkeypatch.setattr(population_module, 'OrqTraceSource', BadCloseSource)
+    FakeSource.snapshot = Snapshot(traces=(make_trace('t1'),))
+    kwargs: dict[str, Any] = {
+        'start': None,
+        'end': None,
+        'limit': 5,
+        'facets': FacetSelection(),
+        'numeric': NumericFilters(),
+    }
+
+    traces = await population_module._load_traces(_orq(), **kwargs)
+    assert [t.trace_id for t in traces] == ['t1']
+
+    class FailingBadCloseSource(BadCloseSource):
+        async def load_async(self, *args: Any, **kwargs: Any) -> Snapshot:
+            raise RuntimeError('live load failed')
+
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FailingBadCloseSource)
+    with pytest.raises(PopulationError, match='live load failed'):
+        await population_module._load_traces(_orq(), **kwargs)
+
+
 def _run_export(matched_trace_ids: list[str], *, filters: ExportFilters | None = None) -> RunExport:
     return RunExport(
         query='refund requests',

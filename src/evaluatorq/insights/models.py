@@ -37,7 +37,7 @@ class LabelSpec(BaseModel):
     kind: Literal['noul', 'choice', 'score']
     instructions: str
     criteria: dict[str, str | None] | list[str] | None = None
-    noul_threshold: float = 0.5
+    noul_threshold: BoundedRatio = 0.5
 
     def to_question(self, state: dict[str, Any] | str | list[Any]) -> ClassifyQuestion:
         """Build the `/classify` question for this label against `state`, validating the criteria/kind shape."""

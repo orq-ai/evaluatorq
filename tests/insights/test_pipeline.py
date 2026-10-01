@@ -313,6 +313,37 @@ async def test_dimension_failure_keeps_other_dimension_and_writes(
 
 
 @pytest.mark.asyncio
+async def test_failed_dimension_leaves_no_partial_assignments_on_traces(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.insights.models import ClusterAssignment
+
+    _patch_clients(monkeypatch)
+    traces = [_trace(i) for i in range(6)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+    monkeypatch.setattr(pipeline, 'label_traces', _label(traces))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+
+    async def dimension(name, items, *args, **kwargs):
+        if name == 'failure':
+            for item in items:
+                item.assignments[name] = ClusterAssignment(top='failure-t0', base='failure-b0')
+                item.coords[name] = (0.0, 0.0, 0.0)
+            raise RuntimeError('umap exploded')
+        for item in items:
+            item.assignments[name] = ClusterAssignment(top='intent-t0', base='intent-b0')
+        return _dimension_result(name)
+
+    monkeypatch.setattr(pipeline, '_build_dimension', dimension)
+    run = await pipeline.insights(_population(), dimensions=('intent', 'failure'), labels=(), runs_dir=tmp_path)
+
+    assert run.status == 'error'
+    assert 'failure' not in run.dimensions
+    assert all('failure' not in t.assignments and 'failure' not in t.coords for t in run.traces)
+    assert all('intent' in t.assignments for t in run.traces)
+
+
+@pytest.mark.asyncio
 async def test_empty_population_warns_and_skips_dimensions(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_clients(monkeypatch)
     monkeypatch.setattr(pipeline, 'resolve_population', _resolve([]))

@@ -21,3 +21,12 @@ def test_nondefault_limit_is_reported_as_a_population_selection() -> None:
 
     assert stages['population'] == 'Filter recent traces'
     assert stages['label'] == 'Keep selected traces'
+
+
+def test_empty_query_is_still_a_query_population() -> None:
+    population = InsightsPopulation(query='')
+
+    stages = dict(stage_plan(population, labels=(), dimensions=()))
+
+    assert stages['population'] == 'Find matching traces'
+    assert stages['label'] == 'Match traces'

@@ -59,6 +59,8 @@ def nearest_neighbours(cents: dict[int, NDArray[Any]], k: int = 3) -> dict[int, 
     Most similar first. Used by `describe.py` (contrastive examples) and `merge.py`
     (candidate pairs) so both stages agree on which clusters are "nearby".
     """
+    if k < 0:
+        raise ValueError('k must be non-negative')
     ids = sorted(cents)
     result: dict[int, list[int]] = {}
     for cid in ids:
@@ -230,6 +232,29 @@ def _merge_base_into_nearest_sibling(
         del top_labels[victim]
 
 
+def _validate_inputs(
+    vectors: NDArray[Any],
+    max_clusters: int,
+    max_subclusters: int,
+    min_cluster_size: int,
+    outlier_zscore: float | None,
+) -> None:
+    """Reject configuration and vectors that would fail later as an opaque arithmetic or SciPy error."""
+    for name, value in (
+        ('max_clusters', max_clusters),
+        ('max_subclusters', max_subclusters),
+        ('min_cluster_size', min_cluster_size),
+    ):
+        if value < 1:
+            raise ValueError(f'{name} must be positive')
+    if outlier_zscore is not None and (not math.isfinite(outlier_zscore) or outlier_zscore < 0):
+        raise ValueError('outlier_zscore must be non-negative and finite')
+    if vectors.ndim != 2:
+        raise ValueError('vectors must be a two-dimensional matrix')
+    if not np.isfinite(vectors).all():
+        raise ValueError('vectors must contain only finite values')
+
+
 def cluster_two_level(
     vectors: NDArray[Any],
     *,
@@ -243,17 +268,7 @@ def cluster_two_level(
     L2-normalises first. Below `2 * min_cluster_size` points there is too little signal
     to split: everything is one base cluster under one top cluster.
     """
-    for name, value in (
-        ('max_clusters', max_clusters),
-        ('max_subclusters', max_subclusters),
-        ('min_cluster_size', min_cluster_size),
-    ):
-        if value < 1:
-            raise ValueError(f'{name} must be positive')
-    if outlier_zscore is not None and (not math.isfinite(outlier_zscore) or outlier_zscore < 0):
-        raise ValueError('outlier_zscore must be non-negative and finite')
-    if vectors.ndim != 2:
-        raise ValueError('vectors must be a two-dimensional matrix')
+    _validate_inputs(vectors, max_clusters, max_subclusters, min_cluster_size, outlier_zscore)
     n = vectors.shape[0]
     if n == 0:
         return ClusterTree(base_labels=np.empty(0, dtype=int), top_of_base={}, n_base=0, n_top=0)

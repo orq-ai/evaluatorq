@@ -228,7 +228,8 @@ def _cost(run: InsightsRun) -> str:
     text = f' · ${total.total_cost:.4f}'
     if total.cost_is_partial:
         text += f' (priced for {total.priced_calls} of {total.calls} calls)'
-    return text
+    # Population and filter-selection model calls never reach the usage ledger, so the total is a lower bound.
+    return f'{text} · excludes trace selection'
 
 
 def header(run: InsightsRun) -> str:
@@ -877,7 +878,7 @@ def priority_matrix(run: InsightsRun) -> str:
         if len(volumes) % 2
         else sum(volumes[len(volumes) // 2 - 1 : len(volumes) // 2 + 1]) / 2
     )
-    x_max = max_volume * 1.1
+    x_max = max(1.0, max_volume * 1.1)
     x_left = median_volume / 2
     x_right = (median_volume + x_max) / 2
     labels = [
@@ -1344,7 +1345,8 @@ def new_run_page(*, error: str | None = None) -> str:
         '<p>Choose labels for fixed questions and dimensions for discovered groups.</p>'
         '<fieldset><legend>Labels</legend><div class="insights-choice-grid">'
         '<label><input type="checkbox" name="labels" value="sentiment"> Sentiment</label>'
-        '<label><input type="checkbox" name="labels" value="customer_satisfaction"> Customer satisfaction</label>'
+        '<label><input type="checkbox" name="labels" value="customer_satisfaction"> Customer satisfaction'
+        '<small>The priority matrix needs this label.</small></label>'
         '</div></fieldset><fieldset><legend>Dimensions</legend><div class="insights-choice-grid">'
         '<label><input type="checkbox" name="dimensions" value="intent" checked> Intent</label>'
         '<label><input type="checkbox" name="dimensions" value="failure"> Failure</label>'
