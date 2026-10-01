@@ -1,35 +1,82 @@
 # Trace explorer
 
-The dashboard has two trace pages: **Trace search** (`/find`) finds traces from a natural-language question, and **Traces** (`/traces`) browses recent Orq traces before you ask a question. Both pages reuse the same facet menu, filter chips, and trace drawer, while keeping separate tables and classification runs. Traces keeps loaded rows, filters, hydrated conversations, and Ask AI results in server memory keyed to your browser session; sessions expire after 30 minutes idle, may be evicted above 32 active sessions, and clear when the dashboard restarts. Trace search keeps one dashboard-wide result set.
+The dashboard has two trace pages: **Trace search** (`/find`) finds traces from a natural-language question, and **Traces** (`/traces`) browses recent Orq traces before you ask a question. Both pages reuse the same facet menu, filter chips, and trace drawer; each page keeps its own classification run and table for its result type. Traces keeps loaded rows, filters, hydrated conversations, and Ask AI results in server memory keyed to your browser session, which expires after 30 minutes idle, may be evicted when more than 32 sessions are active, and clears when the dashboard restarts; Trace search continues to use one dashboard-wide result set.
 
-Use it to inspect real traffic for a semantic pattern, such as frustrated customers or unsupported claims, without writing a dataset first. To generate *new* conversations against a target, use red teaming or simulation instead.
+Use Traces to inspect recent traffic, browse and sort traces, review token and cost breakdowns, and inspect trajectories or messages. Use Trace search to find traces matching a natural-language question. Use red teaming or simulation to generate new conversations against a target.
 
 ![Trace search after a completed run: 150 traces judged, 63 included, matches listed newest first.](assets/trace-finder/results.png){ .dashboard-shot }
 
-## Start the finder
+## Start the explorer
+
+The dashboard is included in the `dashboard` extra. It needs Orq credentials because it reads live traces and routes model calls through Orq. Set `ORQ_API_KEY` or select an `orq` CLI profile in Settings.
+
+Install the dashboard extra with:
+
+```bash
+uv add 'evaluatorq[dashboard]'
+```
 
 ```bash
 eq dashboard
 ```
 
-Open [http://127.0.0.1:8080/find](http://127.0.0.1:8080/find), type a question, and select **Find traces**. The **Trace search** item in the dashboard sidebar opens the same page.
+Open [http://127.0.0.1:8080/traces](http://127.0.0.1:8080/traces) to browse traces or [http://127.0.0.1:8080/find](http://127.0.0.1:8080/find) to search by question. The dashboard sidebar has separate **Traces** and **Trace search** items. Without `ORQ_API_KEY` or a working saved profile, both pages stay available and explain that trace loading is unavailable. The [`eq find`](#cli-reference) CLI works from the regular install.
 
-!!! note "Before you run it"
-    The dashboard needs the `dashboard` extra (`uv add "evaluatorq[dashboard]"`) and Orq credentials: `ORQ_API_KEY` in the environment or an `orq` CLI profile, because the finder reads live Orq traces and routes model calls through Orq. Without credentials the page still loads but shows that trace finding is unavailable. The [`eq find`](#cli-reference) CLI works from the regular install.
+## Loading traces
 
-## Browse Traces
+When you open `/traces`, the backend begins loading up to 200 trace summaries from the last seven days for that browser session, with no user-entered facet or numeric filters and no AI calls. A project selected in Settings still limits this initial load. The dashboard warms the facet catalogue in parallel. Both requests run asynchronously, so page rendering does not wait for them. This initial load is the default view, so you can browse without setting filters or pressing a button. The compact toolbar shows the active relative range (for example, **Last 7 days**) and a **Rows** control, up to 5000 and defaulting to 200. Open the range menu to choose a preset (`15m`, `1h`, `24h`, `7d`, `30d`) or enter exact **From** and **To** dates and times in your browser's local time. Press **Load** to fetch traces using the selected range, row limit, and filters; loading does not call a model. The status line shows loading progress and then the visible count. If the requested row limit is reached, it says the result may contain more traces and names the cap.
 
-Opening `/traces` asynchronously loads up to 200 trace summaries from the last seven days and warms the facet catalogue; it makes no model calls. A project selected in Settings limits the load. Use the range and **Rows** controls to choose a preset or local **From** and **To** dates, set a cap up to 5000, then select **Load**. Loading shows progress and reports when the cap may have limited the population.
+The initial trace request returns summaries for the table (status, timing, tokens, cost, and models). While summaries load, the dashboard warms trajectory data for the first page of up to 100 rows. The table reports summary completion as soon as those rows arrive; Trajectories shows loading placeholders and polls until its first page is ready. Later pages load trajectory data when you open them, and message content for the drawer loads when you open a row.
 
-The table starts with time, trace or agent, status, model, input and output tokens, cache-read percentage, cost, duration, and AI match. **Columns** also offers provider, product, operation, reasoning tokens, cache writes, session, thread, and trace ID; selections persist in dashboard settings. Sort by a column header to reorder loaded rows without fetching again. **Download CSV** exports the filtered and sorted rows across all pages. The totals strip and **By model** summary reflect the rows currently shown.
+On **Traces**, the totals strip and the compact **By model** summary use the rows currently shown, so errors, AI matches, facets, and within-results narrowing update both. A trace with more than one model counts under each model, but its trace-level cost is left unknown because the total cannot be attributed to one model. Costs also show as unknown when a trace has no cost or when currencies are missing or mixed.
 
-The **Trajectories** view renders captured message parts as colored segments. Turn on **Tool definitions** to show captured tool schemas. Segment token sizes are estimates; provider token totals remain in the table. Click a segment or row to open the drawer at that message. The drawer includes the full thread and span tree; the minimap selects a message locally. On `/traces`, `/` focuses Ask AI, `?` opens shortcuts, `o` opens the Orq link, and `c` copies the trace ID.
+## The table and the Columns menu
 
-Ask AI on **Traces** can classify **Within results**, which uses all loaded rows across tabs and pages, or start a **New search** using the toolbar's time range and row limit. Within-results questions apply their numeric bounds and selected metadata filters to loaded rows first; removing generated filter chips restores rows. New search fetches an independent population. Both use the configured classifier parallelism.
+The default columns are Time, Trace / agent, Status, Model, Tokens in, Tokens out, Cache read %, Cost, Duration, and AI match. **AI match** appears once an Ask AI run starts and shows `—` for rows without a judgment. When a run judges loaded rows, it splits that column into one column per classifier dimension, each headed by the dimension's name. The **Columns ▾** menu in the toolbar lists every available column — also Name, Provider, Product, Operation, Reasoning tokens, Cache writes, Session, Thread, and Trace ID — and your choice is saved immediately to the dashboard settings file as `explorer_columns`, so it persists across reloads and processes. On Traces, choose **Download CSV** to export every row in the current filtered and sorted set across all pages, using the selected columns.
 
-## How a query becomes matches
+Results page at 100 rows per page; the pager below the table shows `Page X of Y`.
 
-The finder plans the query once and creates zero to three classifier dimensions. Traces with dimensions get one call per trace that evaluates all of them; a zero-dimension plan makes no per-trace classifier calls.
+On **Traces**, each known duration keeps its numeric value and adds a small bar scaled to the longest trace in the current filtered and sorted set. Durations at or above that set's nearest-rank p95 receive a warm tint, including ties; both the scale and threshold stay the same as you move between pages. Unknown durations remain `—`, and no p95 tint appears when the set has no known durations.
+
+## Sorting
+
+Click a column header to sort by it; clicking again flips the direction. Sorting only reorders the rows already loaded — it never triggers a new fetch. Pressing **Load** keeps the selected tab and sort and returns to the first page. Rows missing a value for the sorted column sink to the bottom regardless of sort direction, so switching from ascending to descending never surfaces an unset value at the top.
+
+## How tokens in and cache read % are computed
+
+Token counts come from the Orq router's usage rollup. The router counts cache reads and writes **inside** `prompt_tokens` for both OpenAI and Anthropic, so Tokens in is normally the router's `prompt_tokens` as-is. A span instrumented outside the router (native Anthropic usage) reports cache tokens **excluded** from `prompt_tokens` instead; the explorer detects that case — `cached + cache_write > prompt_tokens` — and falls back to `prompt_tokens + cached + cache_write` as the input count for that row. Cache read % is cache-read tokens divided by all input tokens. Cache writes count toward the input total but never toward the cache-read numerator. The percentage reads `—` when tokens in is zero or unknown.
+
+## Trajectories view
+
+The **Trajectories** toggle in the toolbar switches the table to a per-trace bar: each conversation renders as one horizontal bar made of coloured segments, one per captured message part. Segments are coloured by kind — `system`, `user`, `assistant`, `reasoning`, `call` (tool call), `result` (tool result) — with an unrecognized part type drawn as `other` (a hatched pattern). A captured system prompt appears as a `system` segment. Turn on **Tool definitions** above the bars to add one purple block per trace for schemas captured on its selected span; hover over it for the definition count and estimated size. The toggle starts off. Message segments estimate tokens as text length divided by 4, and the tool block estimates serialized schema length divided by 4. These estimates are not exact provider tokenization or a complete account of model input; the exact provider input and output totals remain in their own column. The axis uses the p95 of the visible blocks on the current page, so turning on tool definitions or changing pages can change its scale. Bars above that scale are capped and marked. If the page has no visible blocks, the axis uses a fixed 1,000-token scale, shown in its tooltip. The legend's percentages describe the visible estimated blocks on the page. Each row also shows its duration and a text status pill. Traces without conversation text get a labelled `No messages available` placeholder. Hovering a message segment shows a dark tooltip with its message index and position (`n / N`), its kind, its estimated token count, and a preview of its content; hovering does not dim other rows. Clicking a message segment (or a table row) opens the message drawer at that exact message.
+
+## The message drawer, minimap and message stripes
+
+![The trace drawer on the Raw result tab, with trace and span IDs, project, model, and the included verdict.](assets/trace-finder/drawer.png){ .dashboard-shot }
+
+Clicking a trajectory segment or a table row opens the drawer for that trace, scrolled and expanded to the message you clicked — the thread panel scrolls to center it without moving the page itself. Each message in **Full thread** is stripe-coloured on its left edge by the same kind used in Trajectories, and the selected message is highlighted. A minimap strip mirrors the trace's segments; clicking a minimap segment moves the selection to that message locally, without a new request to the server. A table row click (with no segment) opens the drawer at message 1.
+
+On `/traces`, if a trace has no messages, the drawer shows a labelled empty state. If a trace's full messages can't be loaded — for example a loaded-but-not-classified row whose hydration failed — the drawer explains that the messages could not be loaded and suggests opening the trace in Orq instead. Its **Spans** tab remains available and loads the trace's span tree when opened, including status, duration, token totals and Orq links for spans with safe IDs. The optional **Error details** column directs failed rows to **Spans**, and the drawer header shows the trace duration. For the first errored span, the tree also shows the raw Orq status message when that detail is available. Trace IDs, metadata, classifier input and raw result sit under the collapsed **Technical details** section. The `/find` drawer keeps its tabbed layout.
+
+On `/traces`, press `/` to focus and select Ask AI, `?` to open the keyboard shortcut guide, and, while a trace drawer is open, `o` to activate its **Open in Orq** link or `c` to copy its trace ID. **Escape** closes the guide or drawer. Letter shortcuts are ignored while a text field or native details menu has focus, when Ctrl, Alt or Command is held, and while another modal is open.
+
+## Ask AI: within results or as a new search
+
+Above the table, **Ask AI** plans a natural-language question and creates zero to three classifier dimensions. Traces with dimensions get one classifier call per trace that evaluates them all; a zero-dimension plan makes no per-trace classifier calls:
+
+1. You enter a question, such as `Conversations over 20k tokens where the customer was frustrated.`
+2. The compiler extracts numeric constraints for total tokens or duration and creates between zero and three classifier dimensions: short-named questions to ask of each trace, such as **Frustrated** or **Refund**. It creates no dimension only when every part of the question is a numeric bound or an exact metadata value; descriptive phrases such as `coding agents` become dimensions because they require reading the trace. A question that filters alone can answer, such as `Any traces above 50k tokens`, gets no dimension, and then no trace is sent to the classifier at all. At the same time, one classify request selects categorical metadata filters from the live facet catalogue. Boolean selections accept either `yes`/`no` or `true`/`false` labels.
+3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched. A model or provider filter drops the base filter, because a bare model call is itself a `generate_content` trace and would otherwise never match.
+4. The classifier judges each projected trace through evaluatorq, asking every dimension in one classify call per trace. A trace is included only when it matches every dimension. Results stream into one table column per dimension as each trace finishes, including the final poll after the run ends. With zero dimensions, every trace the filters keep is included without a classifier call.
+
+Each trace is projected into a bounded classifier state before judgment: the projection keeps the newest conversation suffix, preserves tool-call arguments and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary. Ask AI does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable that tracing.
+
+On **Traces**, Ask AI can classify traces already loaded in the table or search a new population. The finder creates zero to three dimensions; when dimensions exist, each selected trace gets one call that evaluates them all.
+
+On **Traces**, choose the population Ask AI should classify:
+
+- **Within results** classifies every trace already loaded in the table, including rows outside the selected tab or page. It is selected after the first automatic load succeeds and after later loads; if a load returns no rows, asking within results explains that you must load traces first. During loading and classification, the progress line shows live counts and a thin progress bar; the corner status badge is hidden while the run is working. Before classifying, it applies the filters your question implies to the loaded rows: token and duration bounds, so "above 50k tokens" drops smaller rows, and the metadata values the filter model picks, such as a model, status or agent. A row with no token or duration value is dropped when that bound is set. The table narrows to the same rows, and the question's filters appear as chips, in the **Filters** count and in the **Filters** menu, so removing a chip brings the other loaded rows back. If those filters drop every loaded row, the table shows zero rows and the run completes with a notice that names the filter and nearest loaded value, such as `None of the 190 loaded traces have at least 50,001 tokens (the largest has 18,411). Try New search to look beyond the loaded rows.` At most the configured AI trace limit is judged; rows past it show as not judged. AI answers stay on their rows when you reload the table, change filters or change the time range, until you press **Clear AI results**. Runs above 500 traces require review before classification.
+- **New search** searches the time range currently shown in the Traces toolbar, up to its **Rows** limit, independently of the rows already loaded. It then reloads the table with the searched traces so the AI match column, quick views, drawer and trajectories show the run’s results. Relative ranges such as **15m** and **1h**, as well as exact **From** and **To** dates, apply to the new search. The progress line shows how many traces have loaded out of the requested maximum while the search runs. The configured parallelism default still applies. The separate **Trace search** page (`/find`) has per-run window, limit, and parallelism controls.
 
 ```mermaid
 flowchart TD
@@ -90,7 +137,7 @@ Each trace becomes a bounded classifier state of at most 25,000 tokens. The proj
 
 ### 4. Classify
 
-The compiler creates zero to three named classifier dimensions, each a short question about a trace. Descriptive phrases such as “coding agents” become dimensions; a question answered entirely by numeric bounds or exact metadata values can have none. The classifier asks all dimensions in one call per projected trace, and a trace is included only when every dimension matches. Results stream into the dot field and the included-traces table as each trace finishes, with one column per dimension. With zero dimensions, filtered traces are included without per-trace classifier calls.
+When dimensions exist, the classifier evaluates all dimensions for each projected trace in one call through evaluatorq. A trace is included only when every dimension matches; results stream into the search results as each trace finishes. A zero-dimension plan includes traces that pass its filters without classifier calls.
 
 !!! tip "The population is fixed per run"
     The population is chosen before per-trace judging begins. Changing a finder control does nothing until you submit the form again, which starts a new run.
@@ -98,67 +145,28 @@ The compiler creates zero to three named classifier dimensions, each a short que
 !!! info "What leaves your machine"
     The finder does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable it.
 
-## Dashboard workflow
 
-### Immediate or Review first
+On **Trace search**, the review panel (shown in **Review first**) gains an **Apply filters only** button below the plan, so you can load the reviewed population into the table without spending a classifier call — the classify button itself is labelled with the trace count it is about to judge.
 
-| Mode | What happens |
-|---|---|
-| **Immediate** | Compiles the dimensions, loads the population, and classifies each trace when dimensions exist. A zero-dimension plan includes traces that pass its filters without per-trace classifier calls. |
-| **Review first** | Stops after compilation and population selection, so you can edit the question, dimensions and their match rules, and filters before classification starts. |
+Filter chips generated by the classifier (rather than chosen explicitly by you) are marked with a small **AI** badge, so it's clear which filters you set and which the model picked.
 
-![Review first: the compiled classifier dimensions and filter model's selections, waiting for classification to start.](assets/trace-finder/review.png){ .dashboard-shot }
+### Reading results
 
-The review shows the filter model's selected metadata values separately from the classifier dimensions and their match rules. Open **View structured LLM output** to see its complete structured response, including the dimensions it left unfiltered. If filter selection fails, the review shows the error and keeps your explicit filters.
+![Review first: the compiled classifier dimensions and filter model selections, waiting for classification to start.](assets/trace-finder/review.png){ .dashboard-shot }
 
-!!! warning "Nothing is judged until you start it"
-    In **Review first** the plan is visible, but no trace is judged until you press **Start classification**. This is the most common reason a run looks stuck.
+The status line shows trace loading progress or the number of traces loaded. During Ask AI loading and classification, it also shows live counts and a thin progress bar, while the corner status badge is hidden. A zero-dimension plan with no filters warns when words beyond numeric phrasing are not covered, for example `Only the numeric bounds were applied. No AI question or filter covers "coding agents", so rephrase the question or use Review to add one.` When a run finishes, the progress line leads with the answer, for example `6 of 196 traces match “angry customer”`, followed by a **Show only these** button that switches the table to the **AI matches** quick view, and the classifier model the run used (the dashboard does not track a per-run cost). An AI match is a trace the classifier judged a match; rows that only passed filters read **Kept by filters** and never count as AI matches. Matched rows and their drawers show only the classifier score when available; no extra model call generates commentary. Asking a question Ask AI cannot answer, such as a total, average or ranking, ends the run early with a neutral **Can't answer** state and the reason, and no counts. Running Ask AI keeps the view you are in, Table or Trajectories. The table keeps the loaded population visible; use the **AI match** column or the **AI matches** quick view to find matching judgments. **All**, **Errors**, and **AI matches** switch the table population shown. Click a table row or trajectory segment to open its drawer. **Full thread** shows the source conversation; click a message heading to fold or unfold it. In **Trace search**, **Classifier input** shows the exact bounded projection sent for judgment, and **Raw result** shows the stored evaluator result. On **Traces**, technical details keep trace metadata but omit the raw classifier result; the verdict can still show its score. The drawer also shows the trace and span IDs, metadata, verdict, and an **Open in Orq** link when the dashboard has a saved workspace slug, an environment override, or an authenticated Orq CLI that can find the credential's workspace.
 
-### Filters
+The **Top 10%** menu picks the top tenth, at least one, of the loaded traces, largest first: **Slowest traces** use duration, **Costliest traces** use cost, **Token-heavy traces** use input plus output tokens over every turn, and **Largest context** uses the prompt tokens of the trace's leading model call. Conversation views group loaded traces by thread id, or session id when there is no thread id: **Costliest conversations** sum cost over the conversation, **Token-heavy conversations** sum input plus output tokens over the conversation, and **Longest conversations** rank by the largest message count among their traces because a trace's final call carries the whole history. Longest conversations fetches every loaded trace's messages first, so the first use after a load can take a while. Traces that do not report a metric are left out rather than counted as zero. Choosing a view clears any column sort.
+
+When a run completes, choose **Download JSON** to export the query, the classifier dimensions (name, task and match rule for each), filters, selected trace metadata, each trace's per-dimension answers, the combined match, and errors. The export's `schema_version` is `2`; version 1 had a single top-level `task` and `selection` and one `value` per trace. The export does not include source messages or the classifier projection.
+
+On **Trace search**, the common failure mode is stopping in **Review first**: the plan is visible, but no trace is judged until you press the classify button. If no traces match the compiled filters, the run ends with an explicit error instead of pretending that zero judgments are a successful result.
+
+## Filter chips
 
 ![The + Filter menu with the Model category open, listing live values from the workspace.](assets/trace-finder/filter-menu.png){ .dashboard-shot }
 
-- **+ Filter** opens the categories: project, agent, model, provider, status, product, trace type, tool, tokens, and duration. Hover a category to see its live values, then scroll or search within them.
-- Values are ordered by the frequency Orq reports, most frequent first. The menu says when more values exist beyond the fetched limit.
-- Values load in the background after the page renders, and reload when you change the window.
-- After a submit, chips above the field show every filter in play, whether the classifier picked it or you did. When no run is in progress, click a chip to change its value or its ✕ to drop it.
-
-!!! note "Your filters win"
-    For the same facet or numeric bound, an explicit value takes precedence over a generated one; generated values fill only what you left empty. The classifier's picks apply to that run only: the next question starts from your own filters, while a reviewed start keeps the whole population.
-
-### Reading the dot field
-
-Every dot is one trace in the selected population, including non-matches and failed judgments. The included-traces table below contains only successful matches, newest first.
-
-| Dot | Meaning |
-|---|---|
-| Hollow | Waiting |
-| Pulsing | Being classified |
-| Colored, still | Finished; color follows the task's legend |
-| Failure mark | Judgment failed |
-
-A pulsing progress message shows while the finder plans the search, loads traces, or starts classification after review. The dots appear once the population is loaded. Submitting, starting a reviewed task, changing the window, cancelling, and resetting each show feedback while their request is pending.
-
-### Inspecting a trace
-
-Click a dot or a table row to open its drawer. A loading badge shows while the details are fetched.
-
-![The trace drawer on the Raw result tab, with trace and span IDs, project, model, and the included verdict.](assets/trace-finder/drawer.png){ .dashboard-shot }
-
-| Tab | Shows |
-|---|---|
-| **Full thread** | The source conversation. Click a message heading to fold or unfold it. |
-| **Classifier input** | The exact bounded projection sent for judgment. |
-| **Raw result** | The stored evaluator result. |
-
-The drawer also shows the trace and span IDs, metadata, the verdict, and an **Open in Orq** link when the dashboard has a workspace configured.
-
-### Exporting a run
-
-When a run completes, **Download JSON** exports the query, compiled task, filters, selected trace metadata (including each trace's agent and tool names), verdicts, and errors. The export does not include source messages or the classifier projection.
-
-!!! failure "Zero traces is an error"
-    If no traces match the compiled filters, the run ends with an explicit error rather than reporting zero judgments as a success.
+Filter chips in the toolbar show the categorical and numeric filters in play, whether the classifier picked them or you did — a chip the classifier generated carries the **AI** badge described above. Whenever no run is in progress, click a chip to reopen its category and change the value, or its ✕ to drop it; the next submit uses the edited set. On **Traces**, the toolbar's **Filters** button (it shows the active count, as in **Filters · 2**) opens the category list directly; the table reloads once when you close the menu after picking values, and at once when you drop a chip with ✕. Reloading makes no AI calls. On **Trace search**, **+ Filter** opens the same category list for project, agent, model, provider, status, product, trace type, tool, tokens, and duration; hovering a category opens its live values beside the list. Scroll or search within a category's returned values. Orq supplies each value's frequency; the menu orders the returned values from most to least frequent and says when more values exist beyond the fetched limit. The facet catalogue starts warming in the background as the initial trace summaries load. The filter menu uses the warmed values and refreshes them when you change the window. For the same facet or numeric bound, an explicit value takes precedence over the generated value; generated values fill only facets and bounds you leave empty before OQL runs. The classifier's picks apply to that run only: the next question starts from the filters you set yourself, while a reviewed start keeps the whole population.
 
 ## Facets and numeric ranges
 
@@ -191,12 +199,12 @@ The CLI and dashboard also accept minimum and maximum bounds explicitly.
 
 ## Settings and precedence
 
-Settings resolve from strongest to weakest:
+The dashboard **Settings** page at `/settings` has editable fields for the compiler model, classifier model, apply-recommendations model, and **Ask AI on traces**. That last setting controls what Ask AI on **Traces** does after it compiles your question: **Just proceed** (the default) classifies straight away, and **Review first** stops on the compiled plan until you press the classify button. Within results over more than 500 loaded traces always stops for review. Save the form to persist them in `.evaluatorq/dashboard-settings.json`, or point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file. Environment variables take precedence over saved defaults. On **Traces**, choose the time range and row limit in the toolbar; **New search** uses that range and row limit, while **Within results** classifies every loaded trace across tabs and pages. The separate **Trace search** page has per-run window, limit, and parallelism controls. **Advanced** also lets you save the Orq workspace slug for trace links and choose a project for the dashboard's trace loading. The project menu comes from `orq projects list` under the active credential; a project key normally exposes one project, and a broader key can expose more. The saved project ID limits the dashboard's Orq trace query, even when another project has the same name, and the active project appears beside the Traces filters. Leave **All accessible projects** selected to search across the key's scope. If the CLI cannot resolve the workspace slug, enter the slug from your Orq URL. The `eq find` CLI uses the saved project ID when its current key and API host match the credentials used to save that project; pass `--project` to choose a project facet for that run instead.
 
-1. Explicit CLI or dashboard overrides
-2. Environment variables
-3. The saved JSON file
-4. Built-in defaults
+When the `orq` CLI exposes API-key profiles (`orq auth profile list`), **Advanced** lets you choose one for the dashboard's trace loading, Ask AI, and apply flow in place of `ORQ_API_KEY` and `ORQ_BASE_URL`. Settings stores one active profile, workspace, and project together. Changing the profile clears the previous workspace and project in the preview and reloads choices from the new credential; the saved bundle remains active until you press **Save**. The CLI masks keys in its JSON output, so evaluatorq reads the real key from the CLI's private local credential file without writing it to dashboard settings. If that file is unavailable or has permissions that expose it to other users, the masked profile remains disabled. Choosing **Environment** uses the process environment without changing it; an exported `ORQ_API_KEY` takes precedence over `.env`. If a saved profile is unavailable, the dashboard blocks Orq requests and shows the missing profile in Settings. An apply preview must be made again if its credentials change before confirmation. `eq find` uses the saved profile by default, including its API key and host for both trace retrieval and model calls. An explicit `--profile NAME` overrides that choice. Choose **Environment** in Settings to make `eq find` use `ORQ_API_KEY` and `ORQ_BASE_URL`; none of these choices changes the process environment.
+
+Settings resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. On Trace search, window, limit, and parallelism are set per run in its controls row; Settings edits the model defaults and Ask AI review mode. On Traces, the toolbar range and row limit drive New search, while Ask AI on traces uses the saved Just proceed or Review first mode.
+
 
 Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
@@ -205,49 +213,24 @@ Invalid environment integers are ignored with a warning; invalid saved settings 
 | Compiler model | `openai/gpt-5.6-luna` | `EVALUATORQ_COMPILER_MODEL` |
 | Classifier model | `typesafe/jev-latest` | `EVALUATORQ_CLASSIFIER_MODEL` |
 | Apply-recommendations model | `openai/gpt-5.6-luna` | `EVALUATORQ_APPLY_MODEL` |
-| Search window | 7 days (1–90) | `EVALUATORQ_FINDER_WINDOW_DAYS` |
-| Trace limit | 500 (max 5000) | `EVALUATORQ_FINDER_LIMIT` |
-| Classifier parallelism | 100 (max 200) | `EVALUATORQ_FINDER_PARALLELISM` |
+| Trace search window default | 7 days (1–90) | `EVALUATORQ_FINDER_WINDOW_DAYS` |
+| Trace search limit default | 500 (max 5000) | `EVALUATORQ_FINDER_LIMIT` |
+| Trace search parallelism default | 100 (max 200) | `EVALUATORQ_FINDER_PARALLELISM` |
 
-`eq dashboard` accepts `--compiler-model`, `--classifier-model`, `--window-days`, `--limit`, and `--parallelism`; they apply to finder runs started by that dashboard process.
-
-### Settings page
-
-The dashboard **Settings** page at `/settings` edits the compiler, classifier, and apply-recommendations models. **Save** persists them in `.evaluatorq/dashboard-settings.json`; point `EVALUATORQ_DASHBOARD_SETTINGS` at another JSON file to move it. The window, trace limit, and parallelism are edited per run in the Trace search controls row; their defaults come from the environment or the saved file.
-
-### Workspace and project
-
-**Advanced** saves the Orq workspace slug for trace links and a project for dashboard Trace search.
-
-- The project menu comes from `orq projects list` under the active credential. A project key normally exposes one project; a broader key can expose more.
-- The saved project ID limits the dashboard's trace query, even when another project has the same name. The active project appears beside the Trace search filters.
-- Leave **All accessible projects** selected to search across the key's scope.
-- If the CLI cannot resolve the workspace slug, enter the slug from your Orq URL.
-
-### Credential profiles
-
-When the `orq` CLI exposes API-key profiles (`orq auth profile list`), **Advanced** lets you pick one for the trace finder and apply flow in place of `ORQ_API_KEY` and `ORQ_BASE_URL`.
-
-- Settings stores one active profile, workspace, and project together. Changing the profile clears the previous workspace and project in the preview and reloads choices from the new credential; the saved bundle stays active until you press **Save**.
-- The CLI masks keys in its JSON output, so evaluatorq reads the real key from the CLI's private local credential file without writing it to dashboard settings. If that file is unavailable or readable by other users, the profile stays disabled.
-- **Environment** uses the process environment without changing it; an exported `ORQ_API_KEY` takes precedence over `.env`.
-- If a saved profile is unavailable, the dashboard blocks Orq requests and shows the missing profile in Settings.
-- An apply preview must be made again if its credentials change before confirmation.
-
-!!! note "`eq find` follows the saved profile"
-    `eq find` uses the saved profile by default, for both trace retrieval and model calls. `--profile NAME` overrides it; choose **Environment** in Settings to make `eq find` use `ORQ_API_KEY` and `ORQ_BASE_URL`. None of these choices changes the process environment. A saved project ID limits the CLI population only while the profile, key, and API host still match the saved selection; after rotating a key or changing hosts, save the project again, or pass `--project` for one run.
+The dashboard command accepts `--compiler-model`, `--classifier-model`, `--window-days`, `--limit`, and `--parallelism`; these override defaults for finder runs started by that process. Trace search lets you set the window, limit, and parallelism for each run.
 
 ## CLI reference
 
-`eq find` runs an Immediate finder query with a terminal activity indicator, then prints a newest-first table of matched traces and a summary of the full run.
+`eq find` runs an immediate finder query — the same compile-and-classify pipeline as **New search** — with a terminal activity indicator, then prints a newest-first table of matched traces and a summary of the full run. The CLI has no explorer table, trajectories view, or drawer; it is the classification pipeline only.
+
+Pass `--profile NAME` to use that `orq` CLI profile for both trace retrieval and model calls. It overrides the saved profile and environment credentials. Without the flag, the saved profile applies; choose **Environment** in Settings to use `ORQ_API_KEY` and `ORQ_BASE_URL`. A saved project ID limits the CLI trace population only while the profile, key, and API host still match the saved selection. If you rotate a key or change hosts, save the project again in Settings; use `--project` to choose a project facet for one run.
 
 ```bash
 export ORQ_API_KEY=...
 eq find "customers asking for a refund" --compiler-model openai/gpt-5.6-luna --classifier-model typesafe/jev-latest --window-days 7 --limit 500 --parallelism 100 --json finder.json
 ```
 
-- `--json PATH` writes the completed run export; add `--positive-only` to keep only matched records (counts still describe the full run).
-- `--debug` prints progress when it changes, the compiler request and structured output, and the filter and per-trace classifier requests and responses. For a small diagnostic run: `eq find "mentions a refund" --limit 10 --debug`. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.
+For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.
 
 !!! warning "Debug output contains trace data"
     Debug output includes projected conversation content for every classified trace, even with `--positive-only`. Treat saved logs as trace data.
@@ -280,18 +263,15 @@ eq find "customers asking for a refund" --compiler-model openai/gpt-5.6-luna --c
 | `--duration-ms-max INTEGER` (`>= 0`) | Maximum trace duration in milliseconds. |
 | `--help`, `-h` | Show the command help. |
 
-The facet and numeric options are explicit OQL constraints. The question still supplies the semantic classifier task and can add generated facet or numeric constraints.
+The facet and numeric options are explicit OQL constraints. The question supplies zero to three semantic classifier dimensions and can also produce generated facet or numeric constraints.
 
 ## Limits and cost
 
 | Limit | Value |
 |---|---|
-| Traces per run | 500 by default, at most 5000 usable traces even if a larger limit is supplied |
-| Lookback | 7 days by default, 1–90 |
+| Traces per search | 500 by default, up to 5000 usable traces; Traces can load up to 5000 rows |
+| Search lookback | 7 days by default, 1–90 days |
 | Classifier parallelism | 100 by default, at most 200 |
 | Projection budget | 25,000 tokens per trace, from the serialized UTF-8 estimate; older conversation units go first |
 
-One completed run makes **one compiler call + at most one facet-selection call + one classification call per trace when the plan has dimensions**. All dimensions for a trace share that call; a zero-dimension plan makes no per-trace calls. A 500-trace run therefore makes up to 502 model calls before retries; narrow the limit and window when exploring a large workspace.
-
-- If a facet lookup fails, the run warns and skips generated categorical filters. Your explicit filters and semantic classification still run.
-- When Orq reports more facet values than the fetched limit, the finder warns and uses the returned values ranked by frequency.
+Loading the Traces table makes no model calls. Ask AI within results classifies up to the configured AI trace limit (default 500). A search makes one compiler call, at most one facet-selection call, and one classification call per selected trace when the plan has dimensions; a zero-dimension plan makes no per-trace calls. A 500-trace run therefore makes up to 502 model calls before retries. Narrow the limit and window when exploring a large workspace. If a facet lookup fails, the run warns and skips generated categorical filters; explicit filters and semantic classification still run. When Orq reports more facet values than the fetched limit, the finder warns and uses the returned values ranked by frequency.

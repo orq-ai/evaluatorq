@@ -259,7 +259,6 @@
   }
   document.body.addEventListener('htmx:afterSwap', filterRowReplaced);
   document.body.addEventListener('htmx:oobAfterSwap', filterRowReplaced);
-
   function closeMenus(except) {
     document.querySelectorAll('.finder-facets.open').forEach(function (menu) {
       if (menu === except) return;
