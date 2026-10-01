@@ -795,6 +795,33 @@ def _scope_settings_rows(scope: OrqScope, *, workspace: str, chosen_project: str
     return ''.join(rows)
 
 
+CUSTOM_MODEL_OPTION = '__custom__'
+
+
+def _model_control(name: str, label: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
+    """A provider-grouped model dropdown with a "Custom…" free-text escape, or a text box without a catalogue."""
+    if not groups:
+        return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
+    known = any(value in ids for ids in groups.values())
+    options = ''.join(
+        f'<optgroup label="{esc(provider)}">'
+        + ''.join(
+            f'<option value="{esc(model)}"{" selected" if model == value else ""}>'
+            f'{esc(model.removeprefix(provider + "/"))}</option>'
+            for model in ids
+        )
+        + '</optgroup>'
+        for provider, ids in groups.items()
+    )
+    options += f'<option value="{CUSTOM_MODEL_OPTION}"{"" if known else " selected"}>Custom…</option>'
+    return (
+        f'<select id="{esc(name)}" name="{esc(name)}" '
+        f'onchange="this.nextElementSibling.hidden=this.value!==\'{CUSTOM_MODEL_OPTION}\'">{options}</select>'
+        f'<input name="{esc(name)}_custom" type="text" value="{"" if known else esc(value)}" '
+        f'placeholder="provider/model" aria-label="{esc(label)} (custom)"{" hidden" if known else ""}>'
+    )
+
+
 def settings_body(
     config: list[tuple[str, str | list[str]]],
     settings: Any | None = None,
@@ -804,11 +831,14 @@ def settings_body(
     preview: bool = False,
     profiles: Sequence[Any] = (),
     scope: OrqScope | None = None,
+    model_choices: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> str:
     """Render editable finder settings above the read-only runtime configuration.
 
     ``profiles`` are the orq CLI's credential profiles; when there are any, an
     Advanced block offers them as the credentials the dashboard uses.
+    ``model_choices`` maps a model field to its workspace models grouped by
+    provider; a field without choices stays a free-text box.
     """
     if settings is None:
         from evaluatorq.trace_finder.settings import effective_settings
@@ -821,18 +851,19 @@ def settings_body(
         return '' if value is None else str(value)
 
     fields = (
-        ('compiler_model', 'Compiler model', 'text'),
-        ('classifier_model', 'Classifier model', 'text'),
-        ('apply_model', 'Apply-recommendations model', 'text'),
+        ('compiler_model', 'Compiler model'),
+        ('classifier_model', 'Classifier model'),
+        ('apply_model', 'Apply-recommendations model'),
     )
+    model_choices = model_choices or {}
     field_rows: list[str] = []
-    for name, label, input_type in fields:
+    for name, label in fields:
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
+        control = _model_control(name, label, setting_value(name), model_choices.get(name, {}))
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
-            f'<span class="config-val"><input id="{esc(name)}" name="{esc(name)}" type="{input_type}" '
-            f'value="{esc(setting_value(name))}" required>{error_html}</span></div>'
+            f'<span class="config-val">{control}{error_html}</span></div>'
         )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     if preview:

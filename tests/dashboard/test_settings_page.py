@@ -758,3 +758,68 @@ def test_facet_menu_degrades_when_provider_fails(
 
     assert asyncio.run(finder_routes._load_catalogue(app)) is None
     assert app.state.finder_catalogue_cache[2] is None
+
+
+_CHOICES = {'openai': ['openai/gpt-5.6-luna'], 'typesafe': ['typesafe/jev-latest']}
+
+
+def test_model_fields_offer_workspace_models_grouped_by_provider(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def choices(_profile: object) -> dict[str, dict[str, list[str]]]:
+        return {name: _CHOICES for name in ('compiler_model', 'classifier_model', 'apply_model')}
+
+    monkeypatch.setattr(app_module, '_model_choices', choices)
+    save_settings(DashboardSettings(compiler_model='openai/gpt-5.6-luna', classifier_model='my/finetune', window_days=7, limit=500, parallelism=100))
+
+    html = client.get('/settings').text
+
+    assert '<optgroup label="openai"><option value="openai/gpt-5.6-luna" selected>gpt-5.6-luna</option>' in html
+    # A saved model the workspace does not list stays editable as a custom value.
+    assert 'name="classifier_model_custom" type="text" value="my/finetune"' in html
+    assert 'name="compiler_model_custom" type="text" value="" placeholder="provider/model" aria-label="Compiler model (custom)" hidden' in html
+
+
+def test_custom_model_option_saves_the_free_text(client: TestClient, settings_file: Path) -> None:
+    response = client.post(
+        '/settings',
+        data=csrf_data({**_MODELS, 'compiler_model': '__custom__', 'compiler_model_custom': 'my/own-model'}),
+    )
+
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['compiler_model'] == 'my/own-model'
+
+
+def test_model_fields_stay_free_text_without_a_catalogue(client: TestClient) -> None:
+    html = client.get('/settings').text
+
+    assert '<input id="compiler_model" name="compiler_model" type="text"' in html
+    assert 'Custom…' not in html
+
+
+@pytest.mark.asyncio
+async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common import model_catalogue
+
+    payload = [
+        {'model_id': 'gpt-5.6-luna', 'provider': 'openai', 'model_developer': 'openai', 'model_type': 'chat', 'input_cost': 1, 'output_cost': 1},
+        {'model_id': 'gpt-5.6-luna', 'provider': 'azure', 'model_developer': 'openai', 'model_type': 'chat', 'input_cost': 1, 'output_cost': 1},
+        {'model_id': 'text-embedding-4', 'provider': 'openai', 'model_type': 'embedding', 'input_cost': 1, 'output_cost': 0},
+        {'model_id': 'z-ai/glm-5.3-flash', 'provider': 'tensorix', 'model_type': 'chat', 'input_cost': 1, 'output_cost': 1, 'metadata': {'supports_classify': True}},
+        {'model_id': 'jev-latest', 'provider': 'typesafe', 'model_type': 'classify', 'input_cost': 1, 'output_cost': 1, 'metadata': {'supports_classify': True}},
+    ]
+
+    async def load(_client: object = None) -> dict[str, object]:
+        return model_catalogue._parse_catalogue(payload)
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', load)
+
+    assert await model_catalogue.models_by_provider() == {
+        'azure': ['azure/gpt-5.6-luna'],
+        'openai': ['openai/gpt-5.6-luna'],
+        'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
+    }
+    assert await model_catalogue.models_by_provider(classify=True) == {
+        'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
+        'typesafe': ['typesafe/jev-latest'],
+    }

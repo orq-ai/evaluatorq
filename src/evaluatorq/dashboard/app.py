@@ -46,6 +46,8 @@ from starlette.responses import RedirectResponse, Response
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
+from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_catalogue import models_by_provider
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
@@ -60,6 +62,7 @@ from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
 from evaluatorq.dashboard.trace_finder.routes import initialize_finder_settings, register_finder_routes
 from evaluatorq.dashboard.view import (
+    CUSTOM_MODEL_OPTION,
     RUN_PAGE_SIZES,
     SURFACE_LABELS,
     filter_fragment,
@@ -255,15 +258,39 @@ async def _settings(req: Request) -> NotStr:
                 }
             )
     scope = await asyncio.to_thread(discover_orq_scope, settings.orq_profile)
+    profile = next((p for p in profiles if p.name == settings.orq_profile), None)
     body = settings_body(
-        _settings_config(roots, next((p for p in profiles if p.name == settings.orq_profile), None), settings=settings),
+        _settings_config(roots, profile, settings=settings),
         settings,
         saved=req.query_params.get('saved') == '1',
         preview='profile' in req.query_params,
         profiles=profiles,
         scope=scope,
+        model_choices=await _model_choices(profile),
     )
     return NotStr(page('Settings', body, active_nav='settings'))
+
+
+async def _model_choices(profile: OrqProfile | None) -> dict[str, dict[str, list[str]]]:
+    """Workspace models per settings field, grouped by provider; ``{}`` without a usable credential."""
+    if profile is not None and '*' in profile.api_key:
+        return {}
+    try:
+        resolved = resolve_llm_client(
+            extra_api_key=profile.api_key if profile else None,
+            orq_host=(profile.server or DEFAULT_ORQ_BASE_URL) if profile else None,
+            require_orq=True,
+            max_retries=0,
+        )
+    except (ImportError, ValueError):
+        return {}
+    try:
+        chat = await models_by_provider(resolved.client)
+        classify = await models_by_provider(resolved.client, classify=True)
+    finally:
+        if resolved.owned:
+            await resolved.client.close()
+    return {'compiler_model': chat, 'classifier_model': classify, 'apply_model': chat}
 
 
 async def _save_settings(req: Request) -> Response | NotStr:
@@ -323,7 +350,14 @@ async def _save_settings(req: Request) -> Response | NotStr:
         else:
             settings = settings.model_copy(update={'orq_project_name': None})
     if settings is None or errors:
-        body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles, scope=scope)
+        body = settings_body(
+            _settings_config(roots),
+            values,
+            errors=errors,
+            profiles=profiles,
+            scope=scope,
+            model_choices=await _model_choices(selected_profile),
+        )
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
     await asyncio.to_thread(save_settings, settings)
@@ -351,6 +385,10 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values: dict[str, object] = {
         name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
     }
+    for name, value in list(values.items()):
+        # The model dropdown's "Custom…" option hands over to its free-text box.
+        if value == CUSTOM_MODEL_OPTION:
+            values[name] = form_data.get(f'{name}_custom', '')
     for name, env_name in (
         ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
         ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),

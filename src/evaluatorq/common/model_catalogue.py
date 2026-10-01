@@ -61,6 +61,8 @@ class _ModelInfoFields(NamedTuple):
     # Whether the model serves the router's ``/classify`` endpoint rather than a
     # chat/responses one. Last and defaulted so the positional call sites keep working.
     supports_classify: bool = False
+    # The catalogue's ``model_type`` (``chat``, ``embedding``, ``tts``, …); ``''`` when unstated.
+    model_type: str = ''
 
 
 class ModelInfo(_ModelInfoFields):
@@ -85,6 +87,7 @@ class ModelInfo(_ModelInfoFields):
         supports_responses: bool,  # noqa: FBT001 — positional to match the tuple field order
         reasoning_efforts: frozenset[str] | None = None,
         supports_classify: bool = False,  # noqa: FBT001, FBT002 — positional to match the tuple field order
+        model_type: str = '',
     ) -> ModelInfo:
         """Normalize an empty ``reasoning_efforts`` to ``None``.
 
@@ -105,6 +108,7 @@ class ModelInfo(_ModelInfoFields):
             supports_responses,
             reasoning_efforts or None,
             supports_classify,
+            model_type,
         )
 
 
@@ -313,6 +317,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             supports_responses=bool(metadata.get('supports_responses_api')),
             reasoning_efforts=_parse_reasoning_efforts(entry),
             supports_classify=classify_flag is True,
+            model_type=str(entry.get('model_type') or ''),
         )
         models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)
@@ -395,6 +400,26 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         _catalogues[host] = _parse_catalogue(payload)
         logger.debug('Loaded catalogue for {} models from {}', len(_catalogues[host]), host)
         return _catalogues[host]
+
+
+async def models_by_provider(client: AsyncOpenAI | None = None, *, classify: bool = False) -> dict[str, list[str]]:
+    """Catalogue ids as ``provider/model``, grouped by provider, both levels sorted.
+
+    ``classify=True`` lists the models that serve ``/classify``; otherwise the chat
+    models. Empty when the catalogue is unavailable, so a caller can fall back to
+    free text.
+    """
+    # `_parse_catalogue` files each entry under its bare and its qualified key with
+    # the same ModelInfo object; the qualified key is the longer of the two.
+    qualified: dict[int, tuple[ModelInfo, str]] = {}
+    for key, info in (await _load_catalogue(client)).items():
+        if key.startswith(f'{info.provider}/') and len(key) > len(qualified.get(id(info), (info, ''))[1]):
+            qualified[id(info)] = (info, key)
+    grouped: dict[str, list[str]] = {}
+    for info, key in qualified.values():
+        if info.supports_classify if classify else info.model_type == 'chat':
+            grouped.setdefault(info.provider, []).append(key)
+    return {provider: sorted(ids) for provider, ids in sorted(grouped.items())}
 
 
 def _names_router(model_id: str, info: ModelInfo | None) -> bool:
