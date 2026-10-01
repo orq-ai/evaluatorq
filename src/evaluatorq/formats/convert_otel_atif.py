@@ -237,7 +237,9 @@ def _build(
     """Build the trajectory of one scope, or None when it yields no step."""
     scope = _collect(trace, tops)
     by_id = {span.span_id: span for span in trace.spans}
-    chats = _by_start([span for span in scope.members if span.operation == 'chat'])
+    chats = _by_start([
+        span for span in scope.members if span.operation == 'chat' and not _mirrored_router_root(trace, span)
+    ])
     drafts, new_inputs = _chat_steps(chats, by_id)
     _attach_results(drafts, scope.members, chats, new_inputs)
     subagents = _subagents(trace, scope, drafts, session_id, trajectory_id, by_id)
@@ -262,6 +264,48 @@ def _build(
         extra=_carried(agent_span, _TRAJECTORY_EXTRA),
         subagent_trajectories=subagents or None,
     )
+
+
+def _mirrored_router_root(trace: OtelTrace, span: OtelSpan) -> bool:
+    """Skip an Orq trace wrapper when its direct child holds the same router chat call."""
+    if span.span_type != 'trace' or span.output_messages is None:
+        return False
+    mirrored = any(
+        child.operation == 'chat'
+        and _same_transcript(child.input_messages, span.input_messages)
+        and _same_transcript(child.output_messages, span.output_messages)
+        and _same_parts(child.system_instructions, span.system_instructions)
+        for child in trace.children(span.span_id)
+    )
+    if mirrored:
+        logger.info('Router trace span {} mirrors a child chat span; reading the child once', span.span_id)
+    return mirrored
+
+
+def _same_transcript(left: list[OtelMessage] | None, right: list[OtelMessage] | None) -> bool:
+    """Compare conversation content, excluding message ids, names and finish metadata."""
+    if left is None or right is None:
+        return left is right
+    return len(left) == len(right) and all(
+        _normalized_role(a.role) == _normalized_role(b.role) and _same_parts(a.parts, b.parts)
+        for a, b in zip(left, right, strict=True)
+    )
+
+
+def _same_parts(left: list[OtelPart] | None, right: list[OtelPart] | None) -> bool:
+    if left is None or right is None:
+        return left is right
+    return len(left) == len(right) and all(
+        _semantic_part(a) == _semantic_part(b) for a, b in zip(left, right, strict=True)
+    )
+
+
+def _semantic_part(part: OtelPart) -> dict[str, Any]:
+    """Keep known part fields and the full payload of an unknown part for mirror comparison."""
+    payload = part.model_dump(mode='json', exclude_none=True)
+    if isinstance(part, OtelGenericPart):
+        return payload
+    return {key: value for key, value in payload.items() if key in type(part).model_fields}
 
 
 def _final_metrics(steps: list[AtifStep], agent_span: OtelSpan | None) -> AtifFinalMetrics | None:
@@ -375,7 +419,7 @@ def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
 
 def _signature(message: OtelMessage) -> tuple[str, str, tuple[str, ...]]:
     """Compare message role, normalised text, and every non-reasoning part's semantic payload."""
-    role = 'system' if message.role == 'developer' else message.role
+    role = _normalized_role(message.role)
     text = _WHITESPACE.sub(
         ' ', join_text(part.content for part in message.parts if isinstance(part, OtelTextPart))
     ).strip()
@@ -385,6 +429,14 @@ def _signature(message: OtelMessage) -> tuple[str, str, tuple[str, ...]]:
         if not isinstance(part, (OtelTextPart, OtelReasoningPart))
     )
     return role, text, payloads
+
+
+def _normalized_role(role: str) -> str:
+    if role == 'developer':
+        return 'system'
+    if role == 'agent':
+        return 'assistant'
+    return role
 
 
 def _compaction_part(part: OtelPart) -> bool:
@@ -426,9 +478,9 @@ def _history(messages: list[OtelMessage], *, first: bool) -> list[_Draft]:
             drafts.append(_compaction_step(message))
         elif message.role in ('system', 'developer', 'user'):
             drafts.append(_message_step(message))
-        elif first and message.role in ('assistant', 'tool'):
+        elif first and message.role in ('assistant', 'agent', 'tool'):
             history += 1
-        elif message.role == 'assistant':
+        elif message.role in ('assistant', 'agent'):
             drafts.append(_input_agent_step(message))
         elif message.role != 'tool':
             logger.warning('Skipping chat input message with role {!r}: ATIF has no such step source', message.role)
@@ -487,7 +539,7 @@ def _split_text(parts: list[OtelPart], where: str) -> tuple[list[str], dict[str,
 
 def _agent_step(chat: OtelSpan, by_id: dict[str, OtelSpan]) -> _Draft | None:
     outputs = chat.output_messages or []
-    message = next((m for m in outputs if m.role == 'assistant'), None)
+    message = next((m for m in outputs if m.role in ('assistant', 'agent')), None)
     if message is None:
         if outputs:
             logger.warning('Chat span {} has no assistant output message; it gives no agent step', chat.span_id)
@@ -686,8 +738,6 @@ def _attach_results(
                 None,
             )
             part = responses[found][1] if found is not None else None
-            if found is not None:
-                used_parts.add(found)
             span = _take_tool_span(
                 call.tool_call_id,
                 by_call,
@@ -701,6 +751,8 @@ def _attach_results(
             call_extra = _carried(span, _TOOL_CALL_EXTRA)
             if call_extra is not None:
                 calls[n] = call.model_copy(update={'extra': {**(call.extra or {}), **call_extra}})
+            if found is not None:
+                used_parts.add(found)
             result = _result(call_id=call.tool_call_id, span=span, part=part)
             if result is not None:
                 response_order = found if found is not None else len(responses) + n
@@ -910,8 +962,8 @@ def atif_to_otel(traj: AtifTrajectory) -> OtelTrace:
 
     Lost, with a warning per kind: observation results with no `source_call_id` (no tool message or span
     holds them), results on user and system steps, and subagent refs that are not embedded. Lost silently:
-    the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`,
-    `agent.extra`, user and system step timestamps and `extra` (other than `original_role`), `llm_call_count`,
+    the root `trajectory_id` (it only seeds the ids), `notes`, `agent.model_name`, `agent.extra`, user and system step
+    timestamps and `extra` (other than `original_role`), `llm_call_count`,
     `is_copied_context`, and metrics `extra` other than `reasoning_tokens`.
     """
     trace_id = stable_hex(_seed(traj), 'trace', length=32)
