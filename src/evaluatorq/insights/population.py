@@ -68,7 +68,7 @@ class ResolvedPopulation:
     """The traces an insights run will label and cluster, plus provenance for the run JSON's `population` echo."""
 
     traces: list[TraceRecord]
-    compiled: CompiledQuery | None
+    compiled: tuple[CompiledQuery, ...] | None
     echo: dict[str, Any]
     n_scanned: int
 
@@ -256,7 +256,14 @@ async def _resolve_from_query(
     echo: dict[str, Any] = {
         'mode': 'query',
         'query': pop.query,
-        'compiled_task': plan.compiled.task.instructions,
+        'compiled_dimensions': [
+            {
+                'name': dimension.name,
+                'task': dimension.task.instructions,
+                'selection': dimension.selection.model_dump(mode='json'),
+            }
+            for dimension in plan.dimensions
+        ],
         'facets': merged_facets.model_dump(mode='json'),
         'generated_facets': generated_facets.model_dump(mode='json'),
         'numeric': merged_numeric.model_dump(mode='json'),
@@ -266,7 +273,7 @@ async def _resolve_from_query(
         'limit': pop.limit,
         'filter_selection_error': filter_error,
     }
-    return ResolvedPopulation(traces=list(traces), compiled=plan.compiled, echo=echo, n_scanned=len(traces))
+    return ResolvedPopulation(traces=list(traces), compiled=plan.dimensions, echo=echo, n_scanned=len(traces))
 
 
 async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> ResolvedPopulation:

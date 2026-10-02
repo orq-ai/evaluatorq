@@ -55,6 +55,8 @@ class TraceRecord(BaseModel):
     trace_type: str
     agent_name: str = ''
     tool_names: tuple[str, ...] = ()
+    tool_definition_count: int = Field(default=0, ge=0)
+    tool_definition_tokens: int = Field(default=0, ge=0)
     total_tokens: int | None = Field(default=None, ge=0)
     duration_ms: int | None = Field(default=None, ge=0)
     capture_metadata: dict[str, Any] = Field(default_factory=dict)
@@ -81,20 +83,34 @@ class TraceProjection(BaseModel):
     omitted_bytes: int = Field(ge=0, description='Bytes omitted to fit the token budget; excludes schema projection.')
 
 
-class TraceClassification(BaseModel):
-    """One terminal EvaluatorQ classification, including its source result."""
+class DimensionAnswer(BaseModel):
+    """The classifier's verdict for one dimension of one trace."""
 
     model_config = ConfigDict(frozen=True)
 
-    trace_id: str
-    span_id: str
     value: bool | float | str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     probabilities: dict[str, float] | None = None
     matched: bool = False
     error: str | None = None
     summary: str | None = None
-    raw_result: dict[str, Any]
+
+
+class TraceClassification(BaseModel):
+    """One trace's terminal result: an answer per dimension, matched only when every dimension matched.
+
+    A run with no dimensions answers from its filters alone, so each of its traces is matched
+    with no answers.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    trace_id: str
+    span_id: str
+    answers: tuple[DimensionAnswer, ...] = ()
+    matched: bool = False
+    error: str | None = None
+    raw_result: dict[str, Any] = Field(default_factory=dict)
 
 
 class Snapshot(BaseModel):
@@ -214,11 +230,28 @@ class ThresholdSelection(BaseModel):
 SelectionRule = Annotated[ValueSelection | ThresholdSelection, Field(discriminator='kind')]
 
 
+MAX_DIMENSIONS = 3
+
+# One rule, sent verbatim to both the filter selector and the compiler, so the two planners cannot
+# disagree about whether a phrase is a metadata filter or a judgment of the conversation.
+FILTER_OR_JUDGMENT_RULE = """Metadata filter or conversation judgment:
+- Use a metadata filter only for an exact value the user literally names (a project, model, provider, agent, tool, product or trace type) or for an explicit trace status request ("failed traces", "status error", "errored traces").
+- Anything that needs reading what happened in the conversation is a conversation judgment: a tool call failed or returned an error, the agent gave up, the user was frustrated, a hallucination, a refusal. Never also map it onto a status filter or any other metadata value.
+- When a word could be either ("errors", "issues"), make it a conversation judgment and add no status filter, unless the user says status, failed trace or errored trace.
+- Aggregate questions (totals, averages, counts, rankings) cannot be answered by finding traces: use no filter and no judgment.
+Examples:
+- "failed traces" -> status filter; no judgment.
+- "tool errors" -> judgment "a tool call returned an error"; no status filter.
+- "gpt-5 traces where the user is angry" -> model filter gpt-5 and judgment "the user is angry".
+- "which model costs the most?" -> nothing; it is an aggregate question."""
+
+
 class CompiledQuery(BaseModel):
-    """A semantic classifier task and its validated inclusion rule."""
+    """One classifier dimension: a short column name, a semantic task and its validated inclusion rule."""
 
     model_config = ConfigDict(frozen=True)
 
+    name: str = Field(default='AI match', min_length=1, max_length=40)
     task: ClassifyQuestion
     selection: SelectionRule
 
@@ -259,20 +292,25 @@ class RunSnapshot:
     """A frozen progress view; public reads detach nested mutable values from the owner."""
 
     generation: int = 0
+    explorer_generation: int | None = None
     state: RunState = 'idle'
     phase: RunPhase | None = None
     request: RunRequest | None = None
-    compiled: CompiledQuery | None = None
+    within_results: bool = False
+    dimensions: tuple[CompiledQuery, ...] | None = None
     explicit_filters: FacetSelection = field(default_factory=FacetSelection)
     explicit_numeric: NumericFilters = field(default_factory=NumericFilters)
     generated_filters: FacetSelection = field(default_factory=FacetSelection)
     generated_numeric: NumericFilters = field(default_factory=NumericFilters)
     filter_response: ClassifyResponse | None = None
     filter_selection_error: str | None = None
+    plan_warning: str | None = None
     trace_ids: tuple[str, ...] = ()
     traces: tuple[TraceRecord, ...] = ()
     results: Mapping[str, TraceClassification] = field(default_factory=lambda: MappingProxyType({}))
     projections: Mapping[str, TraceProjection] = field(default_factory=lambda: MappingProxyType({}))
+    loaded: int = 0
+    to_load: int = 0
     total: int = 0
     completed: int = 0
     failed: int = 0
@@ -299,7 +337,7 @@ class TraceDetail:
     trace: TraceRecord
     projection: TraceProjection | None
     classification: TraceClassification | None
-    compiled: CompiledQuery | None = None
+    dimensions: tuple[CompiledQuery, ...] | None = None
 
 
 def validate_compiled_query(task: ClassifyQuestion, selection: SelectionRule) -> None:

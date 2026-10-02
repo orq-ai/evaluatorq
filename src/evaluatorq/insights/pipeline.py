@@ -532,7 +532,7 @@ async def insights(  # noqa: C901
             run.population = {
                 **resolved.echo,
                 'n_scanned': resolved.n_scanned,
-                'n_matched': len(resolved.traces) if resolved.compiled is None else 0,
+                'n_matched': len(resolved.traces) if not resolved.compiled else 0,
                 'n_failed_match': 0,
             }
             if _finder_export_source is not None and population.finder_export is not None:
@@ -595,18 +595,18 @@ async def insights(  # noqa: C901
             )
             original_by_id = {trace.trace_id: trace for trace in run.traces}
             retained_trace_ids: set[str] = set()
-            n_matched = len(outcomes) if resolved.compiled is None else 0
+            n_matched = len(outcomes) if not resolved.compiled else 0
             n_failed_match = 0
             for outcome in outcomes:
-                if resolved.compiled is not None and outcome.matched is False:
+                if resolved.compiled and outcome.matched is False:
                     continue
-                if resolved.compiled is not None:
+                if resolved.compiled:
                     if outcome.matched is True:
                         n_matched += 1
                     else:
                         n_failed_match += 1
                 item = original_by_id[outcome.trace.trace_id]
-                if resolved.compiled is not None and outcome.matched is None:
+                if resolved.compiled and outcome.matched is None:
                     message = outcome.error or 'population match could not be determined'
                     item.errors['match'] = message
                     run.warnings.append(
@@ -627,7 +627,7 @@ async def insights(  # noqa: C901
             run.population['n_failed_match'] = n_failed_match
             all_label_failed = (
                 bool(outcomes)
-                and bool(specs or resolved.compiled is not None)
+                and bool(specs or resolved.compiled)
                 and all(outcome.error is not None for outcome in outcomes)
             )
             label_error = 'every label request failed' if all_label_failed else None
@@ -637,7 +637,7 @@ async def insights(  # noqa: C901
                 logger.warning('Insights label stage failed: {}', label_error)
             _stage_end(writer, 'label', label_error)
 
-            if label_error and resolved.compiled is None:
+            if label_error and not resolved.compiled:
                 skipped_message = 'skipped because every label request failed'
                 _stage(writer, 'summary')
                 _stage_end(writer, 'summary', skipped_message)
@@ -648,7 +648,7 @@ async def insights(  # noqa: C901
                     _stage_end(writer, stage_name, skipped_message)
                     run.warnings.append(f'{stage_name} stage {skipped_message}')
 
-            if run.traces and not (label_error and resolved.compiled is None):
+            if run.traces and not (label_error and not resolved.compiled):
                 _stage(writer, 'summary')
                 summaries = await summarize_traces(
                     [outcome.trace for outcome in outcomes if outcome.trace.trace_id in retained_trace_ids],

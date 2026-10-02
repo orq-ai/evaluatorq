@@ -20,6 +20,7 @@ from evaluatorq.insights.presets import CONCERNING, USER_FRUSTRATION
 from evaluatorq.trace_finder.export import (
     ExportCounts,
     ExportFilters,
+    ExportDimension,
     ExportNumericFilters,
     ExportTask,
     ExportTimes,
@@ -396,8 +397,7 @@ def test_invalid_finder_exports_are_usage_errors_without_running_pipeline(tmp_pa
 def test_valid_finder_export_reaches_pipeline(tmp_path: Path, monkeypatch: Any, minimal_run: Any) -> None:
     export = RunExport(
         query='refund requests',
-        task=ExportTask(kind='choice', instructions='classify', state={}, noul_threshold=0.5),
-        selection=ExportValuesSelection(kind='values', values=('refunds',)),
+        dimensions=(ExportDimension(name='intent', task=ExportTask(kind='choice', instructions='classify', state={}, noul_threshold=0.5), selection=ExportValuesSelection(kind='values', values=('refunds',))),),
         generated_filters=ExportFilters(),
         filters=ExportFilters(),
         generated_numeric=ExportNumericFilters(),

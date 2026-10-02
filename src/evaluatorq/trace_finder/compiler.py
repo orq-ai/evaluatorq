@@ -5,15 +5,24 @@ from __future__ import annotations
 import json
 import re
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, field_validator
 
 from evaluatorq.common.structured_output import generate_structured
 
 from .debug import enabled as debug_enabled
-from .models import CompiledQuery, LegendItem, NumericFilters, ThresholdSelection, ValueSelection
+from .models import (
+    FILTER_OR_JUDGMENT_RULE,
+    MAX_DIMENSIONS,
+    CompiledQuery,
+    LegendItem,
+    NumericFilters,
+    ThresholdSelection,
+    ValueSelection,
+)
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -47,16 +56,34 @@ _STRICT_DURATION_MAX = re.compile(
     re.IGNORECASE,
 )
 
-COMPILER_INSTRUCTIONS = """Compile the user's request into one semantic classification task.
+COMPILER_INSTRUCTIONS = f"""Compile the user's request into zero to three semantic classification dimensions.
 
-Generate only a semantic task and its matching selection rule. Never generate, infer, or
-filter by metadata facets such as project, model, provider, status, product, trace type, or time.
-The task judges one complete conversation; do not generate state. The adapter supplies it later.
+Each dimension is one conversation judgment, shown to the user as its own table column, and a
+trace matches only when every dimension matches. A separate filter step applies metadata filters
+under the same rule you follow:
+
+{FILTER_OR_JUDGMENT_RULE}
+
+Return an empty dimensions list only when every part of the request is a metadata filter, a token
+or duration bound (extracted below), or an aggregate question. Any descriptive phrase about what
+the trace is or does needs a dimension, even when it sounds like a category:
+"coding agents over 50k tokens" needs a dimension for "coding agent" plus tokens_min 50001,
+because no metadata field says which traces are coding agents. Use one dimension for one
+judgment and never split a single judgment across several; use two or three only when the
+request combines separate judgments. Never add more than three.
+
+Set unsupported_reason to one short sentence naming what cannot be answered when the request asks
+for an aggregate (a total, average, count or ranking); otherwise null.
+
+Give each dimension a name of one to three words for its column header, such as "Frustrated" or
+"Unsupported claim". Generate only its semantic task and matching selection rule. Never generate,
+infer, or filter by metadata facets inside a dimension.
+Each task judges one complete conversation; do not generate state. The adapter supplies it later.
 Use choice_criteria as a list of label/description objects for choice, otherwise null.
 Use score_criteria as a list of ordered descriptions for score, otherwise null.
 Set noul_threshold to a probability in [0, 1] (0.5 unless another cutoff is needed).
 
-Choose exactly one task kind:
+Choose exactly one task kind per dimension:
 - choice: provide two to five meaningful, unique labels with exhaustive, non-overlapping
   descriptions; selection.kind is values and every selected value is one of those labels.
 - noul: provide a binary semantic judgment; selection.kind is values and its values are booleans.
@@ -64,17 +91,23 @@ Choose exactly one task kind:
   selection.kind is threshold with an inclusive gte or lte value from 0.0 to 1.0.
 
 Write precise task instructions and criteria that directly answer the user's semantic request.
+The selection lists only answers that satisfy the request: the traces the user is searching for.
+Never select a neutral, none, neither, other, normal, or appropriate label, or every label. For
+negated requests such as "does not behave", "fails to", or "without X", select the failure or
+absence label, not the healthy one. For noul, select [true] when true means the requested thing.
 
 Extract numeric constraints on total tokens and duration into numeric. Bounds are inclusive integer
 counts, so strict phrases must move by one unit: "over 20k tokens" → tokens_min: 20001 and
 "slower than 30 seconds" → duration_ms_min: 30001. Likewise "under 20k tokens" → tokens_max:
-19999. Keep all four numeric fields
-null when the query does not mention a token or duration constraint. Never extract project, model,
-provider, status, product, trace type, agent, or tool constraints; the classifier handles those."""
+19999. A bare count with no unit ("above 50k") means total tokens. Keep all four numeric fields
+null when the query does not mention a token or duration constraint."""
 
 
 class CompileError(RuntimeError):
     """The compiler did not return an OpenAI structured-output document."""
+
+
+_BOOLEAN_LABELS = MappingProxyType({'yes': True, 'true': True, 'no': False, 'false': False})
 
 
 class WireCriterion(BaseModel):
@@ -134,17 +167,27 @@ class WireThresholdSelection(BaseModel):
 WireSelection = WireValueSelection | WireThresholdSelection
 
 
-class CompilerWireQuery(BaseModel):
-    """Strict response format converted into the separately validated domain models."""
+class WireDimension(BaseModel):
+    """One strict classifier dimension: its column name, task and inclusion rule."""
 
     model_config = ConfigDict(extra='forbid')
 
+    name: str = Field(min_length=1, max_length=40)
     task: WireTask
     selection: WireSelection
-    numeric: WireNumeric
 
-    def to_domain(self) -> tuple[CompiledQuery, NumericFilters]:
-        """Convert the wire document into the shared semantic and numeric contracts."""
+    @field_validator('name')
+    @classmethod
+    def require_nonblank_name(cls, value: str) -> str:
+        """Names are column labels and must remain meaningful after whitespace is removed."""
+
+        name = value.strip()
+        if not name:
+            raise ValueError('dimension name must not be blank')
+        return name
+
+    def to_domain(self) -> CompiledQuery:
+        """Convert one wire dimension into the validated domain dimension."""
 
         task = self.task
         criteria: dict[str, str] | list[str] | None = None
@@ -163,19 +206,29 @@ class CompilerWireQuery(BaseModel):
 
         if isinstance(self.selection, WireValueSelection):
             selection_values = self.selection.values
-            words = {'yes': True, 'true': True, 'no': False, 'false': False}
             if task.kind == 'noul' and all(
-                isinstance(value, str) and value.lower() in words for value in selection_values
+                isinstance(value, str) and value.casefold() in _BOOLEAN_LABELS for value in selection_values
             ):
                 logger.warning(
                     'trace query compiler returned {} for a boolean selection; converting them', selection_values
                 )
-                selection_values = tuple(words[str(value).lower()] for value in selection_values)
+                selection_values = tuple(_BOOLEAN_LABELS[str(value).casefold()] for value in selection_values)
+            if task.kind == 'choice' and criteria is not None and set(selection_values) == set(criteria):
+                raise ValueError(
+                    f"dimension '{self.name}': selection must list only the answers the user is looking for, "
+                    'not every label'
+                )
+            if task.kind == 'noul' and set(selection_values) == {True, False}:
+                raise ValueError(
+                    f"dimension '{self.name}': selection must list only the answers the user is looking for, "
+                    'not both true and false'
+                )
             selection: ValueSelection | ThresholdSelection = ValueSelection(kind='values', values=selection_values)
         else:
             selection = ThresholdSelection.model_validate(self.selection.model_dump())
 
-        compiled = CompiledQuery.model_validate({
+        return CompiledQuery.model_validate({
+            'name': self.name,
             'task': {
                 'kind': task.kind,
                 'instructions': task.instructions,
@@ -185,17 +238,39 @@ class CompilerWireQuery(BaseModel):
             },
             'selection': selection,
         })
+
+
+class CompilerWireQuery(BaseModel):
+    """Strict response format converted into the separately validated domain models."""
+
+    model_config = ConfigDict(extra='forbid')
+
+    dimensions: list[WireDimension]
+    numeric: WireNumeric
+    unsupported_reason: str | None = Field(max_length=200)
+
+    def to_domain(self) -> tuple[tuple[CompiledQuery, ...], NumericFilters]:
+        """Convert the wire document into the shared semantic and numeric contracts."""
+
+        dimensions = self.dimensions
+        if len(dimensions) > MAX_DIMENSIONS:
+            raise ValueError(f'compiler returned {len(dimensions)} dimensions; maximum is {MAX_DIMENSIONS}')
+        names = [dimension.name.casefold() for dimension in dimensions]
+        if len(names) != len(set(names)):
+            raise ValueError('dimension names must be unique')
         numeric = NumericFilters.model_validate(self.numeric.model_dump())
-        return compiled, numeric
+        return tuple(dimension.to_domain() for dimension in dimensions), numeric
 
 
 class CompiledPlan(BaseModel):
-    """A compiled semantic task together with its pre-source numeric filters."""
+    """The compiled classifier dimensions (zero to three) together with their pre-source numeric filters."""
 
     model_config = ConfigDict(frozen=True, extra='forbid')
 
-    compiled: CompiledQuery
+    dimensions: tuple[CompiledQuery, ...] = Field(max_length=MAX_DIMENSIONS)
     numeric: NumericFilters
+    # Set when the question asks for an aggregate (total, average, ranking) that finding traces cannot answer.
+    unsupported_reason: str | None = None
 
 
 async def compile_query(
@@ -205,7 +280,7 @@ async def compile_query(
     *,
     cfg: LLMCallConfig | None = None,
 ) -> CompiledPlan:
-    """Use shared structured output to compile one semantic trace query."""
+    """Use shared structured output to compile a question into numeric bounds and zero to three classifier dimensions."""
 
     normalized = query.strip()
     if not normalized:
@@ -219,37 +294,54 @@ async def compile_query(
         logger.debug(
             'Trace finder compiler request model={} messages={}', model, json.dumps(messages, ensure_ascii=False)
         )
-    result = await generate_structured(
-        client,
-        model=model,
-        messages=messages,
-        response_format=CompilerWireQuery,
-        max_tokens=2000,
-        label='trace_finder.compile',
-        api='responses',
-        config=cfg,
-    )
-    if result.parsed is None:
-        if debug_enabled():
-            logger.debug('Trace finder compiler response model={} raw={}', model, result.raw)
-        raise CompileError(f'Compiler returned no structured task. Raw: {result.raw[:300]}')
+    for attempt in range(2):
+        result = await generate_structured(
+            client,
+            model=model,
+            messages=messages,
+            response_format=CompilerWireQuery,
+            max_tokens=2000,
+            label='trace_finder.compile',
+            api='responses',
+            config=cfg,
+        )
+        if result.parsed is None:
+            if debug_enabled():
+                logger.debug('Trace finder compiler response model={} raw={}', model, result.raw)
+            raise CompileError(f'Compiler returned no structured task. Raw: {result.raw[:300]}')
 
-    wire = (
-        result.parsed
-        if isinstance(result.parsed, CompilerWireQuery)
-        else CompilerWireQuery.model_validate(result.parsed)
-    )
-    if debug_enabled():
-        logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
-    try:
-        compiled, numeric = wire.to_domain()
-    except ValueError as exc:
-        raise CompileError(f'Compiler produced an invalid query plan: {exc}') from exc
-    try:
-        numeric = _tighten_strict_bounds(normalized, numeric)
-    except ValidationError as exc:
-        raise CompileError(f'Compiler produced contradictory numeric bounds: {exc}') from exc
-    return CompiledPlan(compiled=compiled, numeric=numeric)
+        wire = (
+            result.parsed
+            if isinstance(result.parsed, CompilerWireQuery)
+            else CompilerWireQuery.model_validate(result.parsed)
+        )
+        if debug_enabled():
+            logger.debug('Trace finder compiler response model={} output={}', model, wire.model_dump_json())
+
+        error: Exception | None = None
+        error_kind = 'an invalid plan'
+        try:
+            dimensions, numeric = wire.to_domain()
+        except (ValidationError, ValueError) as exc:
+            error = exc
+        else:
+            try:
+                numeric = _tighten_strict_bounds(normalized, numeric)
+            except ValidationError as exc:
+                error = exc
+                error_kind = 'contradictory numeric bounds'
+            else:
+                reason = (wire.unsupported_reason or '').strip() or None
+                return CompiledPlan(dimensions=dimensions, numeric=numeric, unsupported_reason=reason)
+        if attempt:
+            raise CompileError(f'Compiler produced {error_kind}: {error}') from error
+        logger.warning('Trace query compiler returned an invalid plan; retrying: {}', error)
+        messages = [
+            *messages,
+            {'role': 'assistant', 'content': result.raw or wire.model_dump_json()},
+            {'role': 'user', 'content': f'Your plan was invalid: {error}. Correct it and return a valid plan.'},
+        ]
+    raise AssertionError('unreachable compiler retry state')
 
 
 def _tighten_strict_bounds(query: str, numeric: NumericFilters) -> NumericFilters:

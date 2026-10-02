@@ -345,7 +345,8 @@ def test_completed_finder_run_shows_runnable_analyze_matches_examples(monkeypatc
     monkeypatch.setattr(finder_views, 'table', lambda *_args, **_kwargs: '')
     monkeypatch.setattr(finder_views, 'task_panel', lambda *_args, **_kwargs: '')
     monkeypatch.setattr(finder_views, 'filter_output_panel', lambda *_args, **_kwargs: '')
-    snapshot = SimpleNamespace(state='completed', compiled=object(), generation=17)
+    monkeypatch.setattr(finder_views, 'run_status', lambda *_args, **_kwargs: '')
+    snapshot = SimpleNamespace(state='completed', dimensions=(object(),), generation=17)
     html = finder_views.body(snapshot, object())
 
     assert 'Analyze matches' in html

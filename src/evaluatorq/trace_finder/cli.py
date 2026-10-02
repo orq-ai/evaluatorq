@@ -31,6 +31,7 @@ from .debug import enabled as debug_enabled
 from .export import export_json
 from .filter_selector import FilterSelectionError
 from .models import (
+    DimensionAnswer,
     FacetSelection,
     NumericFilters,
     PopulationRequest,
@@ -165,7 +166,8 @@ def _progress_key(snapshot: RunSnapshot) -> tuple[str, int, int, int, int]:
 
 def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
     table = Table(title='Matched traces')
-    for column in ('Trace ID', 'Verdict', 'Confidence', 'Project', 'Model', 'Time'):
+    names = tuple(dimension.name for dimension in snapshot.dimensions or ())
+    for column in ('Trace ID', *names, 'Project', 'Model', 'Time'):
         table.add_column(column)
     traces = {trace.trace_id: trace for trace in snapshot.traces}
     matches: list[tuple[Any, TraceClassification]] = [
@@ -174,12 +176,10 @@ def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
         if result.matched and result.error is None and trace_id in traces
     ]
     for trace, result in sorted(matches, key=lambda item: item[0].timestamp, reverse=True):
-        confidence = '—' if result.confidence is None else f'{result.confidence:.2f}'
-        verdict = '—' if result.value is None else str(result.value)
+        verdicts = (_verdict(answer) for answer in result.answers)
         table.add_row(
             trace.trace_id,
-            verdict,
-            confidence,
+            *verdicts,
             trace.project,
             trace.model,
             trace.timestamp.isoformat(timespec='seconds'),
@@ -189,6 +189,11 @@ def _print_matches(console: Console, snapshot: RunSnapshot) -> None:
     else:
         console.print('No matching traces.')
     console.print(f'Summary: {snapshot.matched:,} matched of {snapshot.total:,}; {snapshot.failed:,} failed.')
+
+
+def _verdict(answer: DimensionAnswer) -> str:
+    value = '—' if answer.value is None else str(answer.value)
+    return value if answer.confidence is None else f'{value} ({answer.confidence:.2f})'
 
 
 async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot:
@@ -361,10 +366,11 @@ def find(
             asyncio.run(_close_clients(resolved, orq))
 
     if snapshot.state != 'completed' or snapshot.failed:
-        detail = snapshot.error or (
-            f'Find run completed with {snapshot.failed} failed classifications.'
-            if snapshot.failed
-            else f'Find run ended in {snapshot.state}.'
+        detail = (
+            snapshot.error
+            or (f'Find run completed with {snapshot.failed} failed classifications.' if snapshot.failed else None)
+            or snapshot.plan_warning
+            or f'Find run ended in {snapshot.state}.'
         )
         emit_error(detail)
         raise typer.Exit(code=1)

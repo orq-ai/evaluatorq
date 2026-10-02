@@ -172,7 +172,7 @@ async def test_all_labels_answered_and_matched(monkeypatch: pytest.MonkeyPatch) 
     outcomes = await label_traces(
         [trace],
         labels=[SENTIMENT],
-        compiled=INTENT_MATCH,
+        compiled=(INTENT_MATCH,),
         client=_client(),
         model='typesafe/jev-latest',
     )
@@ -185,6 +185,31 @@ async def test_all_labels_answered_and_matched(monkeypatch: pytest.MonkeyPatch) 
     assert outcome.answers['sentiment'].confidence == 0.9
     assert outcome.answers['sentiment'].probabilities == {'positive': 0.9}
     assert outcome.answers['sentiment'].error is None
+
+
+@pytest.mark.asyncio
+async def test_multiple_population_dimensions_must_all_match(monkeypatch: pytest.MonkeyPatch) -> None:
+    second = INTENT_MATCH.model_copy(update={'name': 'customer sentiment'})
+
+    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        assert set(request.questions) == {'__match_0__', '__match_1__'}
+        return ClassifyOutcome(
+            response=ClassifyResponse(
+                answers={
+                    '__match_0__': ClassifyAnswer(type='choice', choice='billing'),
+                    '__match_1__': ClassifyAnswer(type='choice', choice='technical'),
+                }
+            )
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    outcomes = await label_traces(
+        [make_trace('t1')], labels=[], compiled=(INTENT_MATCH, second),
+        client=_client(), model='typesafe/jev-latest',
+    )
+
+    assert outcomes[0].matched is False
+    assert outcomes[0].answers == {}
 
 
 @pytest.mark.asyncio
@@ -205,7 +230,7 @@ async def test_missing_label_answer_fails_only_that_label(monkeypatch: pytest.Mo
     outcomes = await label_traces(
         [trace],
         labels=[SENTIMENT],
-        compiled=INTENT_MATCH,
+        compiled=(INTENT_MATCH,),
         client=_client(),
         model='typesafe/jev-latest',
     )
@@ -228,7 +253,7 @@ async def test_outcome_failure_fails_every_answer_and_clears_match(monkeypatch: 
     outcomes = await label_traces(
         [trace],
         labels=[SENTIMENT],
-        compiled=INTENT_MATCH,
+        compiled=(INTENT_MATCH,),
         client=_client(),
         model='typesafe/jev-latest',
     )
