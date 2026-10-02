@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import datetime, timezone
@@ -14,7 +15,7 @@ from typer.testing import CliRunner
 
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.cli import app
-from evaluatorq.simulation.run_config import GenerateAndSimulateRunConfig, SimulateRunConfig
+from evaluatorq.simulation.run_config import GenerateAndSimulateCliConfig, SimulateCliConfig
 from evaluatorq.simulation.types import SimulationRun
 
 if TYPE_CHECKING:
@@ -49,17 +50,24 @@ def _run(mode: Literal['run', 'simulate', 'generate']) -> SimulationRun:
     )
 
 
-def _invoke(
+def _invoke_raw(
     command: str, args: list[str], *, stdin: str | None = None, env: dict[str, str] | None = None
 ) -> tuple[Any, AsyncMock]:
+    """Invoke with the run function faked and exactly ``args`` on the command line."""
     internal = '_simulate_run' if command == 'simulate' else '_generate_and_simulate_run'
     fake = AsyncMock(return_value=_run('simulate' if command == 'simulate' else 'run'))
     with (
         patch(f'evaluatorq.simulation.api.{internal}', new=fake),
         patch('evaluatorq.simulation.cli._resolve_target', return_value=MagicMock()),
     ):
-        result = runner.invoke(app, [command, *args, *QUIET], input=stdin, env=env)
+        result = runner.invoke(app, [command, *args], input=stdin, env=env)
     return result, fake
+
+
+def _invoke(
+    command: str, args: list[str], *, stdin: str | None = None, env: dict[str, str] | None = None
+) -> tuple[Any, AsyncMock]:
+    return _invoke_raw(command, [*args, *QUIET], stdin=stdin, env=env)
 
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
@@ -108,7 +116,7 @@ def test_simulate_takes_inline_personas_and_scenarios_as_its_input_source(tmp_pa
     kwargs = fake.call_args.kwargs
     assert kwargs['personas'][0].name == 'Impatient'
     assert kwargs['scenarios'][0].goal == 'Get a refund'
-    assert kwargs['datapoints'] is None
+    assert 'datapoints' not in kwargs
     assert kwargs['max_turns'] == 4
     # Public keyword names in the file, internal names at the run function.
     assert kwargs['evaluation_description'] == 'nightly'
@@ -124,7 +132,7 @@ def test_two_input_sources_inside_the_config_still_conflict(tmp_path: Path) -> N
     assert result.exit_code == 2
     flat = _flat(result.output)
     assert 'Provide exactly one of --input' in flat
-    assert 'inline datapoints/personas/scenarios in --config' in flat
+    assert 'inline personas/scenarios in --config' in flat
     fake.assert_not_called()
 
 
@@ -163,7 +171,9 @@ def test_llm_config_blob_model_is_kept_when_sim_model_is_not_passed() -> None:
 
 
 def test_llm_config_typo_is_rejected() -> None:
-    result, fake = _invoke('simulate', ['--from-run', 'latest', '--target', 'agent:x', '--llm-config', '{"temprature": 1}'])
+    result, fake = _invoke(
+        'simulate', ['--from-run', 'latest', '--target', 'agent:x', '--llm-config', '{"temprature": 1}']
+    )
 
     assert result.exit_code == 2
     assert 'temprature' in _flat(result.output)
@@ -216,40 +226,16 @@ def test_run_reaches_generate_and_simulate_keywords_without_a_flag(tmp_path: Pat
     assert kwargs['llm_config'].reasoning_effort == 'low'
 
 
-def test_every_run_config_field_reaches_the_run_function(tmp_path: Path) -> None:
-    """A field the command maps and also forwards would raise a duplicate-keyword error at call time."""
+def test_config_only_fields_reach_the_run_function_under_the_sdk_names(tmp_path: Path) -> None:
     payload: dict[str, Any] = {
-        'run_name': 'r',
         'target': 'agent:x',
-        'memory_entity_id': 'm',
-        'max_turns': 2,
-        'llm_config': {'model': 'm/m'},
-        'evaluator_names': ['goal_achieved'],
-        'scoring': {},
-        'datapoint_parallelism': 2,
-        'llm_parallelism': 3,
-        'target_agent_timeout_ms': 1000,
-        'max_target_retries': 1,
-        'target_reasoning_effort': 'low',
-        'max_tool_result_chars': 100,
-        'per_simulation_timeout_s': 5.0,
+        'agent_description': 'bot',
         'upload_results': False,
         'experiment_description': 'd',
         'orq_folder_path': 'A/B',
         'raise_on_execution_failure': None,
-        'save': False,
         'report_path': str(tmp_path / 'report.json'),
-        'executive_summary': False,
-        'recommendations': False,
-        'agent_description': 'bot',
-        'num_personas': 1,
-        'num_scenarios': 1,
-        'edge_case_percentage': 0.1,
-        'persona_seeds': ['p'],
-        'scenario_seeds': ['s'],
-        'generation_instructions': 'g',
     }
-    assert set(payload) == set(GenerateAndSimulateRunConfig.model_fields)
 
     result, fake = _invoke('run', ['--config', _write(tmp_path, payload)])
 
@@ -259,6 +245,8 @@ def test_every_run_config_field_reaches_the_run_function(tmp_path: Path) -> None
     assert kwargs['evaluation_description'] == 'd'
     assert kwargs['orq_results_path'] == 'A/B'
     assert 'exit_on_failure' not in kwargs
+    assert 'report' not in kwargs
+    assert 'report_path' not in kwargs
     assert (tmp_path / 'report.json').exists()
 
 
@@ -270,14 +258,14 @@ def test_json_prints_only_the_simulation_run_on_stdout() -> None:
     assert 'Using for generations' in result.stderr
 
 
-def test_a_null_config_value_falls_back_to_the_flag_default() -> None:
+def test_a_null_config_value_is_unset_so_the_sdk_default_applies() -> None:
     payload = {'target': 'agent:x', 'previous_run': 'latest', 'run_name': None, 'datapoint_parallelism': None}
 
     result, fake = _invoke('simulate', ['--config', '-'], stdin=json.dumps(payload))
 
     assert result.exit_code == 0, result.output
-    assert fake.call_args.kwargs['evaluation_name'] == 'sim'
-    assert fake.call_args.kwargs['datapoint_parallelism'] == 10
+    assert 'evaluation_name' not in fake.call_args.kwargs
+    assert 'datapoint_parallelism' not in fake.call_args.kwargs
 
 
 def test_a_null_inline_source_is_not_an_input_source() -> None:
@@ -289,36 +277,77 @@ def test_a_null_inline_source_is_not_an_input_source() -> None:
     fake.assert_called_once()
 
 
-@pytest.mark.parametrize(('save', 'saved'), [(True, 1), (False, 0)])
-def test_config_save_drives_the_cli_auto_save(tmp_path: Path, save: bool, saved: int) -> None:
-    """``save`` is the config twin of ``--no-save``: the CLI writes the run once and the SDK never saves it again."""
-    payload = {'target': 'agent:x', 'previous_run': 'latest', 'save': save}
-    fake = AsyncMock(return_value=_run('simulate'))
-    with (
-        patch('evaluatorq.simulation.api._simulate_run', new=fake),
-        patch('evaluatorq.simulation.cli._resolve_target', return_value=MagicMock()),
-    ):
-        result = runner.invoke(
-            app, ['simulate', '--config', '-', '--no-executive-summary', '--yes'], input=json.dumps(payload)
-        )
+def test_save_is_on_by_default_and_reaches_the_sdk() -> None:
+    result, fake = _invoke_raw('simulate', ['--from-run', 'latest', '--target', 'agent:x', '--yes'])
 
     assert result.exit_code == 0, _flat(result.output)
-    assert 'save' not in fake.call_args.kwargs
-    assert len(list((tmp_path / '.evaluatorq').glob('sim-runs/*.json'))) == saved
+    assert fake.call_args.kwargs['save'] is True
+
+
+@pytest.mark.parametrize(
+    ('payload', 'flags', 'saved'),
+    [
+        ({}, ['--no-save'], False),
+        ({'save': False}, [], False),
+        ({'save': True}, ['--no-save'], False),
+        ({'save': False}, ['--save'], True),
+    ],
+    ids=['--no-save', 'config save=false', '--no-save beats config', '--save beats config'],
+)
+def test_save_follows_the_flag_then_the_config_then_the_cli_default(
+    payload: dict[str, Any], flags: list[str], saved: bool
+) -> None:
+    stdin = json.dumps({'target': 'agent:x', 'previous_run': 'latest', **payload})
+
+    result, fake = _invoke_raw('simulate', ['--config', '-', '--yes', '--no-executive-summary', *flags], stdin=stdin)
+
+    assert result.exit_code == 0, _flat(result.output)
+    assert fake.call_args.kwargs['save'] is saved
+
+
+@pytest.mark.parametrize('command', ['simulate', 'run'])
+def test_without_a_config_the_sdk_receives_the_cli_defaults_and_nothing_else(command: str) -> None:
+    args = ['--from-run', 'latest'] if command == 'simulate' else ['--agent-description', 'bot']
+
+    result, fake = _invoke_raw(command, [*args, '--target', 'agent:x', '--yes'])
+
+    assert result.exit_code == 0, _flat(result.output)
+    kwargs = fake.call_args.kwargs
+    assert kwargs['save'] is True
+    assert kwargs['recommendations'] is True
+    assert kwargs['executive_summary'] is True
+    for unset in ('datapoint_parallelism', 'max_turns', 'evaluation_name', 'llm_config', 'llm_parallelism'):
+        assert unset not in kwargs
+
+
+@pytest.mark.parametrize('command', ['simulate', 'run'])
+def test_explicit_flags_at_their_default_values_still_win_over_the_config(command: str) -> None:
+    base = {'target': 'agent:x', 'max_turns': 3, 'datapoint_parallelism': 2, 'recommendations': False}
+    base.update({'previous_run': 'latest'} if command == 'simulate' else {'agent_description': 'bot'})
+
+    result, fake = _invoke(
+        command,
+        ['--config', '-', '--max-turns', '10', '--datapoint-parallelism', '10', '--recommendations'],
+        stdin=json.dumps(base),
+    )
+
+    assert result.exit_code == 0, _flat(result.output)
+    kwargs = fake.call_args.kwargs
+    assert kwargs['max_turns'] == 10
+    assert kwargs['datapoint_parallelism'] == 10
+    assert kwargs['recommendations'] is True
 
 
 def _datapoints_file(tmp_path: Path) -> str:
     from evaluatorq.simulation.types import SimulationDatapoint
 
-    datapoint = SimulationDatapoint.model_validate(
-        {
-            'id': 'dp-1',
-            'persona': PERSONA,
-            'scenario': SCENARIO,
-            'user_system_prompt': 'You are a customer.',
-            'first_message': 'Hi',
-        }
-    )
+    datapoint = SimulationDatapoint.model_validate({
+        'id': 'dp-1',
+        'persona': PERSONA,
+        'scenario': SCENARIO,
+        'user_system_prompt': 'You are a customer.',
+        'first_message': 'Hi',
+    })
     path = tmp_path / 'dp.jsonl'
     path.write_text(datapoint.model_dump_json(), encoding='utf-8')
     return str(path)
@@ -352,34 +381,98 @@ def test_a_target_flag_replaces_the_config_target(tmp_path: Path) -> None:
     assert fake.call_args.kwargs['datapoints'][0].id == 'dp-1'
 
 
-def test_a_target_flag_replaces_the_config_target_on_run() -> None:
-    stdin = json.dumps({'target': 'agent:prod', 'agent_description': 'bot'})
+_EVERY_INPUT = {
+    'datapoints': [
+        {
+            'id': 'cfg-dp',
+            'persona': PERSONA,
+            'scenario': SCENARIO,
+            'user_system_prompt': 'You are a customer.',
+            'first_message': 'Hi',
+        }
+    ],
+    'personas': [PERSONA],
+    'scenarios': [SCENARIO],
+    'dataset_id': 'ds_cfg',
+    'experiment_id': 'exp_cfg',
+    'experiment_run_id': 'run_cfg',
+    'previous_run': 'prev_cfg',
+}
 
-    result, _, resolver = _invoke_real_target('run', ['--config', '-', '--vercel-url', 'https://x.test/api'], stdin=stdin)
 
-    assert result.exit_code == 0, result.output
-    assert resolver.call_args.kwargs['target'] is None
-    assert resolver.call_args.kwargs['vercel_url'] == 'https://x.test/api'
+@pytest.mark.parametrize(
+    ('flag', 'field'),
+    [
+        ('--input', 'datapoints'),
+        ('--dataset-id', 'dataset_id'),
+        ('--experiment-id', 'experiment_id'),
+        ('--from-run', 'previous_run'),
+    ],
+)
+def test_each_input_flag_replaces_every_config_input_source(tmp_path: Path, flag: str, field: str) -> None:
+    """Whichever trigger flag is passed, the file's other inputs (and its experiment_run_id) are dropped."""
+    value = _datapoints_file(tmp_path) if flag == '--input' else 'from-flag'
 
-
-def test_an_input_flag_replaces_every_config_input_source(tmp_path: Path) -> None:
-    payload = {'target': 'agent:x', 'dataset_id': 'ds_1', 'experiment_run_id': 'run_1', 'personas': [PERSONA]}
-
-    result, fake = _invoke('simulate', ['--config', '-', '--input', _datapoints_file(tmp_path)], stdin=json.dumps(payload))
+    result, fake = _invoke(
+        'simulate',
+        ['--config', '-', flag, value],
+        stdin=json.dumps({'target': 'agent:x', **_EVERY_INPUT}),
+        env={'ORQ_API_KEY': 'k'},
+    )
 
     assert result.exit_code == 0, result.output
     kwargs = fake.call_args.kwargs
-    assert kwargs['dataset_id'] is None
-    assert kwargs['experiment_run_id'] is None
-    assert 'personas' not in kwargs
-    assert kwargs['datapoints'][0].id == 'dp-1'
+    assert set(kwargs) & set(_EVERY_INPUT) == {field}
+
+
+def test_the_input_flag_loads_the_jsonl_into_datapoints(tmp_path: Path) -> None:
+    result, fake = _invoke('simulate', ['--input', _datapoints_file(tmp_path), '--target', 'agent:x'])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['datapoints'][0].id == 'dp-1'
+
+
+@pytest.mark.parametrize(
+    ('flag', 'value', 'target_kwarg'),
+    [
+        ('--target', 'agent:new', 'agent:new'),
+        ('--vercel-url', 'https://x.test/api', None),
+        ('--openai-model', 'gpt-x', None),
+    ],
+)
+@pytest.mark.parametrize('command', ['simulate', 'run'])
+def test_each_target_flag_replaces_the_config_target(
+    command: str, flag: str, value: str, target_kwarg: str | None
+) -> None:
+    config = (
+        {'target': 'agent:prod', 'agent_description': 'bot'}
+        if command == 'run'
+        else {'target': 'agent:prod', 'previous_run': 'latest'}
+    )
+    stdin = json.dumps(config)
+    resolver = MagicMock(return_value=MagicMock())
+    internal = '_simulate_run' if command == 'simulate' else '_generate_and_simulate_run'
+    fake = AsyncMock(return_value=_run('simulate' if command == 'simulate' else 'run'))
+    with (
+        patch(f'evaluatorq.simulation.api.{internal}', new=fake),
+        patch('evaluatorq.simulation.cli._resolve_target', new=resolver),
+    ):
+        result = runner.invoke(app, [command, '--config', '-', flag, value, *QUIET], input=stdin)
+
+    assert result.exit_code == 0, result.output
+    assert resolver.call_args.kwargs['target'] == target_kwarg
+    assert 'target' in fake.call_args.kwargs
+    assert fake.call_args.kwargs['target'] is resolver.return_value
 
 
 def test_experiment_run_id_flag_narrows_the_config_experiment() -> None:
     payload = {'target': 'agent:x', 'experiment_id': 'exp_1'}
 
     result, fake = _invoke(
-        'simulate', ['--config', '-', '--experiment-run-id', 'run_2'], stdin=json.dumps(payload), env={'ORQ_API_KEY': 'k'}
+        'simulate',
+        ['--config', '-', '--experiment-run-id', 'run_2'],
+        stdin=json.dumps(payload),
+        env={'ORQ_API_KEY': 'k'},
     )
 
     assert result.exit_code == 0, result.output
@@ -389,7 +482,9 @@ def test_experiment_run_id_flag_narrows_the_config_experiment() -> None:
 
 def test_two_target_flags_on_the_command_line_still_conflict() -> None:
     result, fake, _ = _invoke_real_target(
-        'simulate', ['--config', '-', '--target', 'agent:x', '--openai-model', 'gpt-x'], stdin='{"previous_run": "latest"}'
+        'simulate',
+        ['--config', '-', '--target', 'agent:x', '--openai-model', 'gpt-x'],
+        stdin='{"previous_run": "latest"}',
     )
 
     assert result.exit_code == 2
@@ -419,9 +514,9 @@ def test_json_on_run() -> None:
 @pytest.mark.parametrize(
     ('args', 'title'),
     [
-        ([], SimulateRunConfig.__name__),
-        (['--input'], SimulateRunConfig.__name__),
-        (['--command', 'run'], GenerateAndSimulateRunConfig.__name__),
+        ([], SimulateCliConfig.__name__),
+        (['--input'], SimulateCliConfig.__name__),
+        (['--command', 'run'], GenerateAndSimulateCliConfig.__name__),
         (['--output'], SimulationRun.__name__),
     ],
 )
@@ -430,3 +525,59 @@ def test_schema(args: list[str], title: str) -> None:
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)['title'] == title
+
+
+def test_a_missing_datapoints_file_is_a_bad_parameter() -> None:
+    result, fake = _invoke('simulate', ['--input', 'absent.jsonl', '--target', 'agent:x'])
+
+    assert result.exit_code == 2
+    assert 'Datapoints file not found: absent.jsonl' in _flat(result.output)
+    fake.assert_not_called()
+
+
+def test_an_empty_datapoints_file_is_a_bad_parameter(tmp_path: Path) -> None:
+    empty = tmp_path / 'empty.jsonl'
+    empty.write_text('', encoding='utf-8')
+
+    result, fake = _invoke('simulate', ['--input', str(empty), '--target', 'agent:x'])
+
+    assert result.exit_code == 2
+    assert 'No datapoints loaded from' in _flat(result.output)
+    fake.assert_not_called()
+
+
+CLI_OWNED = {'target', 'memory_entity_id', 'report_path'}
+
+
+@pytest.mark.parametrize(
+    ('cfg_model', 'impl_name', 'fake_name', 'impl_kwargs'),
+    [
+        (SimulateCliConfig, '_simulate_impl', '_simulate_run', {}),
+        (GenerateAndSimulateCliConfig, '_run_impl', '_generate_and_simulate_run', {'agent_description': 'bot'}),
+    ],
+)
+def test_every_config_field_reaches_the_run_function_or_is_cli_owned(
+    cfg_model: type[Any], impl_name: str, fake_name: str, impl_kwargs: dict[str, Any]
+) -> None:
+    """A field added to the config model cannot be dropped silently: it is forwarded or declared CLI-owned."""
+    from evaluatorq.simulation import cli
+    from evaluatorq.simulation.run_config import to_internal_kwargs
+
+    sentinel = object()
+    resolved_target = object()
+    cfg = cfg_model.model_construct(**{name: sentinel for name in cfg_model.model_fields})
+    fake = AsyncMock(return_value=_run('simulate'))
+    with patch(f'evaluatorq.simulation.api.{fake_name}', new=fake):
+        asyncio.run(getattr(cli, impl_name)(cfg, target=resolved_target, hooks=None, **impl_kwargs))
+
+    received = fake.call_args.kwargs
+    for field in cfg_model.model_fields:
+        (internal,) = to_internal_kwargs({field: sentinel})
+        if field == 'target':
+            assert received[internal] is resolved_target
+        elif field in CLI_OWNED:
+            assert internal not in received, field
+        elif field == 'agent_description':
+            assert received[internal] == impl_kwargs['agent_description']  # the CLI's resolved value wins
+        else:
+            assert received[internal] is sentinel, field
