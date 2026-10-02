@@ -139,15 +139,7 @@ def test_review_payload_preserves_ui_trace_identity_scores_errors_and_tool_stats
     assert second['tools'] == second['skills'] == second['commands'] == {}
     assert _mapping(payload['activity'])['shell_tools'] == sorted(SHELL_TOOLS)
     assert _mapping(payload['run'])['cost'] is None
-    rerun = _mapping(payload['rerun'])
-    assert rerun['name'] == 'Review test'
-    assert rerun['source'] == 'snapshot'
-    assert rerun['limit'] == 2
-    assert rerun['dimensions'] == ['intent']
-    assert rerun['labels'] == ['user_frustration']
-    assert [spec['name'] for spec in rerun['custom_labels']] == ['failed_question']
-    assert rerun['source_path'] is None
-    assert rerun['fresh_selection_required'] is True
+    assert 'rerun' not in payload
     json.dumps(payload)
 
 
@@ -170,18 +162,6 @@ def test_review_payload_normalizes_coding_scores_from_legacy_full_bundle():
     row = _trace_rows(build_review_payload(run))[0]
 
     assert row['l'] == {'user_corrections': ['2']}
-
-
-def test_rerun_payload_retains_available_file_source_path(tmp_path):
-    source = tmp_path / 'snapshot.json'
-    source.write_text('{}', encoding='utf-8')
-    run = _run([]).model_copy(update={'population': {'mode': 'snapshot', 'snapshot_path': str(source)}})
-
-    rerun = _mapping(build_review_payload(run)['rerun'])
-
-    assert rerun['source'] == 'snapshot'
-    assert rerun['source_path'] == str(source)
-    assert rerun['fresh_selection_required'] is False
 
 
 def test_legacy_run_without_tool_stats_is_explicitly_unmeasured():

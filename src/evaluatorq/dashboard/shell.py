@@ -240,7 +240,7 @@ def page(
             f'<style>\n{css}\n</style>\n<style>\n{EDITORIAL_CSS}\n</style>\n'
             f'<style>\n{DASHBOARD_CSS}\n</style>\n{scripts}'
             '<link rel="stylesheet" href="/static/insights-review.css">\n'
-            '<script src="/static/insights-run-common.js" defer></script>\n'
+            '<script src="/static/insights-run-form.js" defer></script>\n'
             '<script src="/static/insights-review.js" defer></script>\n</head>\n'
             '<body class="eq-dashboard eq-insights-review">\n'
             f'{_SIDEBAR_TOGGLE_SCRIPT}<div class="app-shell">{sidebar}'
