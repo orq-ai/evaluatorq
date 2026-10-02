@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pytest
 
 from evaluatorq.common.model_catalogue import ModelInfo
-from evaluatorq.common.run_manifest import start_manifest
+from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.contracts import ManifestStatus, StageRecord
 from evaluatorq.insights import estimate, summarize, transcript
 from evaluatorq.insights.estimate import (
@@ -19,6 +20,7 @@ from evaluatorq.insights.estimate import (
     TraceBound,
     estimate_run,
     stage_seconds,
+    StageTiming,
     trace_bound,
 )
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
@@ -66,10 +68,10 @@ def _estimate(
     question_count: int = 1,
     coding: bool = False,
     prices: dict[str, ModelInfo | None] | None = None,
-    seconds: Mapping[str, float] | None = None,
+    seconds: Mapping[str, StageTiming] | None = None,
     parallelism: int = 10,
-    seconds_parallelism: int | None = None,
     query: bool = False,
+    sentiment_selected: bool = False,
 ) -> RunEstimate:
     return estimate_run(
         bound=bound or TraceBound(n=100, exact=True, basis='x'),
@@ -81,7 +83,7 @@ def _estimate(
         seconds=seconds or {},
         parallelism=parallelism,
         query=query,
-        seconds_parallelism=seconds_parallelism,
+        sentiment_selected=sentiment_selected,
     )
 
 
@@ -150,8 +152,116 @@ def test_token_constants_follow_the_caps_they_derive_from() -> None:
 
 def test_a_changed_cap_moves_the_estimate(monkeypatch: pytest.MonkeyPatch) -> None:
     before = _row(_estimate(), 'summary').cost_high
-    monkeypatch.setattr(estimate, 'TOKENS_PER_TRACE', {**TOKENS_PER_TRACE, 'summary': (1, 1)})
-    assert _row(_estimate(), 'summary').cost_high != before
+    monkeypatch.setattr(summarize, 'SUMMARY_MAX_TOKENS', summarize.SUMMARY_MAX_TOKENS * 2)
+    try:
+        reloaded = importlib.reload(estimate)
+        after = reloaded.estimate_run(
+            bound=TraceBound(n=100, exact=True, basis='x'),
+            dimensions=('intent',),
+            question_count=1,
+            coding=False,
+            models=MODELS,
+            prices=_prices(),
+            seconds={},
+            parallelism=10,
+            query=False,
+        )
+    finally:
+        monkeypatch.undo()
+        importlib.reload(estimate)
+    assert _row(after, 'summary').cost_high != before
+
+
+def test_the_sentiment_dimension_adds_one_label_answer_unless_already_selected() -> None:
+    _, answer = TOKENS_PER_TRACE['label']
+    plain = _row(_estimate(dimensions=('intent',)), 'label')
+    added = _row(_estimate(dimensions=('sentiment',)), 'label')
+    selected = _row(_estimate(dimensions=('sentiment',), sentiment_selected=True), 'label')
+    assert added.tokens_out == plain.tokens_out + answer
+    assert selected.tokens_out == plain.tokens_out
+
+
+def test_a_question_source_counts_the_population_match_answer() -> None:
+    _, answer = TOKENS_PER_TRACE['label']
+    assert _row(_estimate(query=True), 'label').tokens_out == _row(_estimate(), 'label').tokens_out + answer
+    only_match = _row(_estimate(query=True, question_count=0), 'label')
+    assert only_match.tokens_out == answer
+
+
+def test_the_coding_label_row_says_it_is_an_upper_bound() -> None:
+    row = _row(_estimate(coding=True), 'label_coding')
+    assert 'upper bound' in row.basis
+
+
+def test_no_earlier_manifests_leaves_time_unknown_but_cost_given(tmp_path: Path) -> None:
+    result = _estimate(seconds=stage_seconds(tmp_path))
+    assert result.seconds_high is None
+    assert result.seconds_low is None
+    assert result.cost_high is not None
+    assert result.time_note == 'estimated after your first run'
+
+
+def test_time_is_seconds_times_traces_scaled_by_the_parallelism_ratio() -> None:
+    seconds = {'label': StageTiming(5.0, 1, 3), 'summary': StageTiming(20.0, 1, 3)}
+    base = _estimate(seconds=seconds, parallelism=10, dimensions=())
+    assert base.seconds_high == pytest.approx(100 * (5.0 + 20.0) / 10)
+    faster = _estimate(seconds=seconds, parallelism=20, dimensions=())
+    assert faster.seconds_high == pytest.approx(_f(base.seconds_high) / 2)
+    assert base.time_note is None
+
+
+def test_a_stage_without_timing_makes_time_partial_and_is_named() -> None:
+    result = _estimate(seconds={'summary': StageTiming(1.0, 1, 1)}, dimensions=('intent',))
+    assert result.time_partial is True
+    assert any('dimension:intent' in unknown for unknown in result.unknowns)
+
+
+def test_time_from_runs_without_recorded_parallelism_is_unscaled_and_says_so() -> None:
+    seconds = {'summary': StageTiming(2.0, None, 1)}
+    slow = _estimate(seconds=seconds, parallelism=10, dimensions=(), question_count=0)
+    fast = _estimate(seconds=seconds, parallelism=100, dimensions=(), question_count=0)
+    assert slow.seconds_high == fast.seconds_high == pytest.approx(200.0)
+    assert slow.time_note is not None
+    assert 'parallelism' in slow.time_note
+
+
+def _manifest_with_parallelism(directory: Path, run_id: str, parallelism: int | None, seconds: float) -> None:
+    writer = start_manifest(
+        run_id=run_id, surface='insights', run_name=run_id, runs_dir=directory, parallelism=parallelism
+    )
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    writer.manifest.stages.append(
+        StageRecord(
+            name='summary',
+            status=ManifestStatus.COMPLETED,
+            started_at=start,
+            ended_at=start + timedelta(seconds=seconds),
+            completed=100,
+            total=100,
+        )
+    )
+    writer.flush()
+
+
+def test_runs_at_different_parallelism_normalise_to_one_figure(tmp_path: Path) -> None:
+    _manifest_with_parallelism(tmp_path, 'a', 10, 100)
+    _manifest_with_parallelism(tmp_path, 'b', 20, 50)
+    timing = stage_seconds(tmp_path)['summary']
+    assert timing.parallelism == 1
+    assert timing.seconds == pytest.approx(10.0)
+    assert timing.runs == 2
+
+
+def test_runs_without_recorded_parallelism_give_an_unscaled_median(tmp_path: Path) -> None:
+    _manifest_with_parallelism(tmp_path, 'a', None, 100)
+    timing = stage_seconds(tmp_path)['summary']
+    assert timing.parallelism is None
+    assert timing.seconds == pytest.approx(1.0)
+
+
+def test_a_recorded_parallelism_survives_the_manifest_round_trip(tmp_path: Path) -> None:
+    _manifest_with_parallelism(tmp_path, 'a', 7, 10)
+    assert list_manifests(tmp_path)[0].parallelism == 7
 
 
 def test_cost_is_traces_times_tokens_times_each_stages_own_price() -> None:
@@ -246,32 +356,12 @@ def test_stage_seconds_is_the_median_per_trace_across_manifests(tmp_path: Path) 
     _manifest_with_stages(tmp_path, 'b', {'summary': (300, 100)})
     _manifest_with_stages(tmp_path, 'c', {'summary': (200, 100)})
     seconds = stage_seconds(tmp_path)
-    assert seconds['summary'] == pytest.approx(2.0)
-    assert seconds['label'] == pytest.approx(0.5)
+    assert seconds['summary'].seconds == pytest.approx(2.0)
+    assert seconds['label'].seconds == pytest.approx(0.5)
+    assert seconds['summary'].parallelism is None
 
 
 def test_stage_seconds_ignores_stages_without_a_recorded_total(tmp_path: Path) -> None:
     _manifest_with_stages(tmp_path, 'a', {'dimension:intent': (40, 0), 'summary': (10, 10)})
     assert set(stage_seconds(tmp_path)) == {'summary'}
 
-
-def test_no_earlier_manifests_leaves_time_unknown_but_cost_given(tmp_path: Path) -> None:
-    result = _estimate(seconds=stage_seconds(tmp_path))
-    assert result.seconds_high is None
-    assert result.seconds_low is None
-    assert result.cost_high is not None
-    assert result.time_note == 'estimated after your first run'
-
-
-def test_time_is_seconds_times_traces_scaled_by_the_parallelism_ratio() -> None:
-    seconds = {'label': 0.5, 'summary': 2.0}
-    base = _estimate(seconds=seconds, parallelism=10, seconds_parallelism=10, dimensions=())
-    assert base.seconds_high == pytest.approx(100 * (0.5 + 2.0))
-    faster = _estimate(seconds=seconds, parallelism=20, seconds_parallelism=10, dimensions=())
-    assert faster.seconds_high == pytest.approx(_f(base.seconds_high) / 2)
-
-
-def test_a_stage_without_timing_makes_time_partial_and_is_named() -> None:
-    result = _estimate(seconds={'summary': 1.0}, seconds_parallelism=10, dimensions=('intent',))
-    assert result.time_partial is True
-    assert any('dimension:intent' in unknown for unknown in result.unknowns)

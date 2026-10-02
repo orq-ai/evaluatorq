@@ -1060,6 +1060,7 @@ def launch_insights(
         runs_dir=runs_dir,
         planned_stages=[name for name, _ in plan],
         stage_labels=dict(plan),
+        parallelism=spec.parallelism,
     )
     snapshot_path: Path | None = None
     reference_path: Path | None = None

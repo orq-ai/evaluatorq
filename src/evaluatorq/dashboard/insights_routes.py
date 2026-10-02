@@ -20,6 +20,11 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.auth import auth_identity
+from evaluatorq.dashboard.insights_estimate_views import (
+    render_compact_estimate,
+    render_estimate,
+    render_estimate_unavailable,
+)
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
 from evaluatorq.dashboard.insights_review_data import build_review_payload
 from evaluatorq.dashboard.insights_review_views import review_page
@@ -53,17 +58,21 @@ from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
 from evaluatorq.dashboard.security import csrf_token, request_rejected
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 from evaluatorq.dashboard.view import model_control
+from evaluatorq.insights.estimate import StageModels, estimate_run, stage_seconds, trace_bound
 from evaluatorq.insights.models import InsightsRun, label_key
 from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
+from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from evaluatorq.common.model_catalogue import ModelInfo
     from evaluatorq.contracts import RunManifest
     from evaluatorq.dashboard.auth import DashboardAuth
+    from evaluatorq.insights.estimate import RunEstimate
 
 
 def _entries(
@@ -124,6 +133,55 @@ def _validation_message(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         return '; '.join(error['msg'].removeprefix('Value error, ') for error in exc.errors())
     return str(exc)
+
+
+async def _estimate(app: Any, spec: InsightsLaunchSpec) -> RunEstimate:
+    """The traces, cost and time a run with *spec* would use, from the catalogue, prices and earlier runs."""
+    finder_count: int | None = None
+    snapshot_count: int | None = None
+    catalogue = FacetCatalogue()
+    if spec.source == 'finder':
+        raw = spec.validated_finder_export_snapshot()
+        finder_count = None if raw is None else len(RunExport.model_validate_json(raw).matched_trace_ids)
+    elif spec.source == 'snapshot':
+        try:
+            snapshot_count = (await asyncio.to_thread(preview_snapshot, spec.snapshot_path))['n_traces']
+        except PopulationError as exc:
+            logger.warning('Could not count the traces in the local file for the estimate: {}', exc)
+    else:
+        loaded, _, _ = await _catalogue(app, spec.window_days)
+        catalogue = loaded or FacetCatalogue()
+    bound = trace_bound(
+        spec.source,
+        catalogue=catalogue,
+        facets=spec.facets,
+        limit=spec.limit,
+        finder_count=finder_count,
+        snapshot_count=snapshot_count,
+    )
+    models = StageModels(summary=spec.summary_model, classifier=spec.classifier_model, embedding=spec.embedding_model)
+    prices: dict[str, ModelInfo | None] = {}
+    try:
+        auth = selected_dashboard_auth(app)
+    except (RuntimeError, ValueError) as exc:
+        logger.warning('No Orq catalogue for the Insights estimate prices: {}', exc)
+    else:
+        chosen = sorted({models.summary, models.classifier, models.embedding})
+        entries = await asyncio.gather(*(catalogue_entry(auth, model) for model in chosen))
+        prices = dict(zip(chosen, entries, strict=True))
+    seconds = await asyncio.to_thread(stage_seconds, get_insights_runs_dir())
+    return estimate_run(
+        bound=bound,
+        dimensions=spec.dimension_names(),
+        question_count=len(spec.labels) + len(spec.custom_labels),
+        coding=spec.coding_enabled,
+        models=models,
+        prices=prices,
+        seconds=seconds,
+        parallelism=spec.parallelism,
+        query=spec.source == 'query',
+        sentiment_selected='sentiment' in spec.labels,
+    )
 
 
 async def _model_rejection(auth: DashboardAuth, spec: InsightsLaunchSpec) -> str | None:
@@ -335,14 +393,27 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
 
     @app.get('/insights/new/plan')
     async def insights_new_plan(req: Request) -> Response:
-        def plan() -> str:
+        compact = req.query_params.get('compact') == '1'
+
+        def validated() -> tuple[InsightsLaunchSpec, list[tuple[str, str]]]:
             spec = InsightsLaunchSpec.model_validate(RunFormValues.from_form(req.query_params).launch_fields())
-            return render_plan(spec, spec.stages())
+            return spec, [] if compact else spec.stages()
 
         try:
-            return _html(await asyncio.to_thread(plan))
+            spec, stages = await asyncio.to_thread(validated)
         except (ValidationError, ValueError, TypeError) as exc:
-            return _html(f'<p class="insights-error" role="alert">{esc(_validation_message(exc))}</p>', 422)
+            message = _validation_message(exc)
+            if compact:
+                return _html(render_estimate_unavailable(message))
+            return _html(f'<p class="insights-error" role="alert">{esc(message)}</p>', 422)
+        estimate = await _estimate(req.app, spec)
+        if compact:
+            return _html(render_compact_estimate(estimate))
+        return _html(
+            f'<div data-part="estimate">{render_estimate(estimate, stages)}</div>'
+            f'<div data-part="compact">{render_compact_estimate(estimate)}</div>'
+            f'<div data-part="plan">{render_plan(spec, stages)}</div>'
+        )
 
     @app.get('/insights/facets')
     async def insights_facets(req: Request) -> Response:
