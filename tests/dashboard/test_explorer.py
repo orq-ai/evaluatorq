@@ -2615,6 +2615,16 @@ def test_facet_menu_counts_sort_values_with_catalogue_order_breaking_ties() -> N
     assert 'value="delta"><span>delta</span><span class="facet-n" title="Traces in the last 7 days">0</span>' in html
 
 
+def test_facet_menu_shows_no_badge_for_an_uncounted_value_of_a_truncated_facet() -> None:
+    from evaluatorq.dashboard.facet_picker import render_facet_menu
+
+    catalogue = FacetCatalogue(model=('alpha', 'delta'), truncated_facets=frozenset({'model'}))
+    html = render_facet_menu(catalogue, form_id='finder-query-form', counts={'model': {'alpha': 4}}, count_note='n')
+
+    assert 'value="alpha"><span>alpha</span><span class="facet-n" title="n">4</span>' in html
+    assert 'value="delta"><span>delta</span></label>' in html
+
+
 def test_facet_menu_counts_skip_facets_without_counts_and_escape_the_note() -> None:
     from evaluatorq.dashboard.facet_picker import render_facet_menu
 

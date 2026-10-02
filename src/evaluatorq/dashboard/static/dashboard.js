@@ -556,6 +556,7 @@
   function pickModel(from, model) {
     const pick = from.closest('.model-pick');
     pick.querySelector('input[type="hidden"]').value = model;
+    pick.querySelector('input[type="hidden"]').dispatchEvent(new Event('change', { bubbles: true }));
     const button = pick.querySelector('.model-pick-btn');
     if (from.hasAttribute('data-rich')) button.innerHTML = from.innerHTML;
     else button.textContent = model || 'Choose a model';

@@ -5,6 +5,8 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from loguru import logger
+
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.model_catalogue import ModelInfo, ModelKind, get_model_info, models_by_provider
 from evaluatorq.common.orq_client import close_orq_client
@@ -49,7 +51,8 @@ async def model_groups(auth: DashboardAuth, kind: ModelKind) -> dict[str, list[s
     try:
         async with _catalogue_client(auth) as client:
             return await models_by_provider(client, kind=kind)
-    except (ImportError, OSError, RuntimeError, ValueError):
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.warning('Orq model catalogue unavailable for {} models ({}): {}', kind, type(exc).__name__, exc)
         return {}
 
 
@@ -58,5 +61,6 @@ async def catalogue_entry(auth: DashboardAuth, model: str) -> ModelInfo | None:
     try:
         async with _catalogue_client(auth) as client:
             return await get_model_info(model, client)
-    except (ImportError, OSError, RuntimeError, ValueError):
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.warning('Orq model catalogue unavailable for {} ({}): {}', model, type(exc).__name__, exc)
         return None

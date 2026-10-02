@@ -41,20 +41,26 @@ def _facet_values(catalogue: FacetCatalogue | None, name: str) -> tuple[str, ...
     return tuple(getattr(catalogue, name, ()))
 
 
-def _counted_values(values: tuple[str, ...], counts: Mapping[str, int]) -> tuple[tuple[str, ...], dict[str, int]]:
+def _counted_values(
+    values: tuple[str, ...], counts: Mapping[str, int], *, truncated: bool = False
+) -> tuple[tuple[str, ...], dict[str, int | None]]:
     """Order values by count, most first, and resolve each one's count.
 
     A value matches its exact key first, then any key equal ignoring case. Count keys no value matches
     are appended, so values only the counts carry still show. ``sorted`` is stable, so ties keep the
-    catalogue order.
+    catalogue order. A value without an entry counts 0, unless the facet is ``truncated``: Orq then
+    left out values it did not rank, so the count is unknown (``None``) and sorts last.
     """
     folded: dict[str, int] = {}
     for key, count in counts.items():
         folded[key.casefold()] = folded.get(key.casefold(), 0) + count
     known = {value.casefold() for value in values}
     values = (*values, *(key for key in counts if key.casefold() not in known))
-    resolved = {value: counts[value] if value in counts else folded.get(value.casefold(), 0) for value in values}
-    return tuple(sorted(values, key=lambda value: -resolved[value])), resolved
+    missing = None if truncated else 0
+    resolved: dict[str, int | None] = {
+        value: counts[value] if value in counts else folded.get(value.casefold(), missing) for value in values
+    }
+    return tuple(sorted(values, key=lambda value: -(resolved[value] or 0))), resolved
 
 
 def render_facet_menu(
@@ -74,9 +80,10 @@ def render_facet_menu(
     """Two-level filter menu: a category list, and a value pop-out the client opens per category.
 
     ``counts`` maps a facet to a count per value: each value shows its count, values sort by it, and a
-    value without an entry shows 0. A facet missing from ``counts`` shows no counts. ``count_note`` is
-    plain text saying what the number counts; ``count_title`` is the badge tooltip and defaults to the
-    note. ``list_note_html`` and ``container_attrs`` are trusted, caller-built HTML.
+    value without an entry shows 0 (no badge when the facet is truncated, since its count is unknown).
+    A facet missing from ``counts`` shows no counts. ``count_note`` is plain text saying what the number
+    counts; ``count_title`` is the badge tooltip and defaults to the note. ``list_note_html`` and
+    ``container_attrs`` are trusted, caller-built HTML.
     """
     title = count_title or count_note
     title_attr = f' title="{esc(title)}"' if title else ''
@@ -101,12 +108,17 @@ def render_facet_menu(
         else:
             count = len(selected_values)
             facet_counts = counts.get(name) if counts is not None else None
-            resolved: dict[str, int] | None = None
+            resolved: dict[str, int | None] | None = None
             if facet_counts is not None:
-                values, resolved = _counted_values(values, facet_counts)
+                truncated = catalogue is not None and name in catalogue.truncated_facets
+                values, resolved = _counted_values(values, facet_counts, truncated=truncated)
             options = ''.join(
                 f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}><span>{esc(value)}</span>'
-                + (f'<span class="facet-n"{title_attr}>{resolved[value]:,}</span>' if resolved is not None else '')
+                + (
+                    f'<span class="facet-n"{title_attr}>{resolved[value]:,}</span>'
+                    if resolved is not None and resolved[value] is not None
+                    else ''
+                )
                 + '</label>'
                 for value in values
             )
