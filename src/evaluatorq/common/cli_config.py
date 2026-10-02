@@ -58,29 +58,37 @@ def explicitly_set(ctx: click.Context, param: str) -> bool:
     return source is not None and source not in _IMPLICIT_SOURCES
 
 
+# Marks ``Flag.path`` as omitted, so it defaults to ``param``. ``None`` is a real value ("no config field").
+_PATH_IS_PARAM: Any = object()
+
+
 @dataclass(frozen=True)
 class Flag:
     """A command-line flag that sets one field of a run config.
 
-    ``path`` is the dotted field path, e.g. ``'llm_config.attacker.model'``. ``None`` marks a flag with no
-    config field of its own, such as ``--vercel-url``, which builds a target object outside the config.
+    ``path`` is the dotted field path, e.g. ``'llm_config.attacker.model'``. It defaults to ``param``, the
+    common case of a flag named after its field. ``None`` marks a flag with no config field of its own, such
+    as ``--vercel-url``, which builds a target object outside the config.
     ``to_value`` turns the parsed flag value into the field value. ``replaces`` names top-level fields the
     flag's choice supersedes: passing the flag drops them from the config file, so ``--dataset-id`` replaces a
     file's ``"datapoints"`` instead of colliding with it in the "exactly one source" check.
     """
 
     param: str
-    path: str | None
+    path: str | None = _PATH_IS_PARAM
     to_value: Callable[[Any], Any] | None = None
     replaces: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.path is _PATH_IS_PARAM:
+            object.__setattr__(self, 'path', self.param)
 
 
 def json_flag(param: str, path: str, model: type[BaseModel], *, flag: str) -> Flag:
     """A flag whose value is a JSON object validated against ``model``, merged into the field at ``path``."""
 
     def to_value(raw: str) -> dict[str, Any]:
-        parse_json_model(raw, model, flag=flag)
-        return cast('dict[str, Any]', json.loads(raw))
+        return parse_json_config(raw, model, flag=flag)
 
     return Flag(param, path, to_value=to_value)
 
@@ -132,34 +140,37 @@ def _read_source(source: str, *, flag: str) -> tuple[str, str]:
         return Path(source).read_text(encoding='utf-8'), source
     except OSError as exc:
         raise typer.BadParameter(f'cannot read {source}: {exc.strerror or exc}', param_hint=flag) from exc
+    except UnicodeDecodeError as exc:
+        raise typer.BadParameter(f'cannot read {source}: not UTF-8 text', param_hint=flag) from exc
 
 
-def parse_json_model(raw: str, model: type[ModelT], *, flag: str, origin: str | None = None) -> ModelT:
-    """Validate a JSON document against ``model``, rejecting unknown keys at every depth.
+def parse_json_config(raw: str, model: type[BaseModel], *, flag: str, origin: str | None = None) -> dict[str, Any]:
+    """Parse a JSON document, validate it against ``model`` and return the parsed dict.
 
-    The top level is rejected by the model's own ``extra='forbid'``. Nested models such as ``LLMCallConfig``
-    ignore unknown keys, so a misspelt ``"temprature"`` would otherwise vanish; those are checked here.
+    Unknown keys are rejected at every depth. The top level is rejected by the model's own ``extra='forbid'``.
+    Nested models such as ``LLMCallConfig`` ignore unknown keys, so a misspelt ``"temprature"`` would otherwise
+    vanish; those are checked here. The document's own JSON is returned, not the validated model re-dumped: a
+    field whose serialization alias differs from its validation name would otherwise be silently dropped.
     """
     where = f'{origin}: ' if origin else ''
     try:
-        parsed = model.model_validate_json(raw)
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise typer.BadParameter(f'{where}{exc}', param_hint=flag) from exc
+    try:
+        model.model_validate(data)
     except ValidationError as exc:
         raise typer.BadParameter(f'{where}{exc}', param_hint=flag) from exc
-    unknown = _unknown_keys(model, json.loads(raw), path='')
+    unknown = _unknown_keys(model, data, path='')
     if unknown:
         raise typer.BadParameter(f'{where}unknown key(s): {", ".join(unknown)}', param_hint=flag)
-    return parsed
+    return cast('dict[str, Any]', data)
 
 
-def load_config(source: str, model: type[ModelT], *, flag: str = '--config') -> dict[str, Any]:
-    """Read ``source`` (a path, or ``-`` for stdin), validate it against ``model`` and return its parsed JSON.
-
-    The document's own JSON is returned, not the validated model re-dumped: a field whose serialization alias
-    differs from its validation name would otherwise be silently dropped by the final validation.
-    """
+def load_config(source: str, model: type[BaseModel], *, flag: str = '--config') -> dict[str, Any]:
+    """Read ``source`` (a path, or ``-`` for stdin), validate it against ``model`` and return its parsed JSON."""
     raw, origin = _read_source(source, flag=flag)
-    parse_json_model(raw, model, flag=flag, origin=origin)
-    return cast('dict[str, Any]', json.loads(raw))
+    return parse_json_config(raw, model, flag=flag, origin=origin)
 
 
 def _set_path(target: dict[str, Any], path: str, value: Any) -> None:

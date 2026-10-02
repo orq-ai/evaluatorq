@@ -263,36 +263,49 @@ def _cli_default(field: str) -> Any:
     return RedTeamCliConfig.model_fields[field].default
 
 
-def _single_or_list(targets: list[str]) -> str | list[str]:
-    return targets[0] if len(targets) == 1 else list(targets)
-
+# What ``--from-run`` replays from the stored run, so ``red_team()`` rejects each of these alongside
+# ``previous_run`` (``runner.py``'s "replay decides the cases" check). Passing it drops them from the file.
+_REPLAY_FIELDS = (
+    'mode',
+    'dataset',
+    'categories',
+    'vulnerabilities',
+    'strategies',
+    'datapoints',
+    'attack_techniques',
+    'delivery_methods',
+    'max_per_category',
+    'max_dynamic_datapoints',
+    'max_static_datapoints',
+)
 
 # Order matters: later rows win for a shared field, so the narrow LLM flags beat ``--llm-config`` and
-# ``-q`` beats ``-v``. Each row names the `RedTeamCliConfig` field the click parameter sets.
+# ``-q`` beats ``-v``. A row names the `RedTeamCliConfig` field the click parameter sets, by default the
+# parameter's own name.
 _RUN_FLAGS: tuple[Flag, ...] = (
-    Flag('target', 'target', to_value=_single_or_list),
-    Flag('name', 'name'),
-    Flag('mode', 'mode'),
-    Flag('categories', 'categories'),
-    Flag('vulnerabilities', 'vulnerabilities'),
-    Flag('strategies', 'strategies'),
-    Flag('delivery_methods', 'delivery_methods'),
-    Flag('max_turns', 'max_turns'),
-    Flag('max_per_category', 'max_per_category'),
-    Flag('attacker_instructions', 'attacker_instructions'),
-    Flag('datapoint_parallelism', 'datapoint_parallelism'),
-    Flag('llm_parallelism', 'llm_parallelism'),
-    Flag('generate_strategies', 'generate_strategies'),
-    Flag('generated_strategy_count', 'generated_strategy_count'),
-    Flag('max_dynamic_datapoints', 'max_dynamic_datapoints'),
-    Flag('max_static_datapoints', 'max_static_datapoints'),
-    Flag('cleanup_memory', 'cleanup_memory'),
-    Flag('dataset', 'dataset'),
-    Flag('from_run', 'previous_run'),
-    Flag('artifacts_dir', 'artifacts_dir'),
-    Flag('save', 'save'),
+    Flag('target'),
+    Flag('name'),
+    Flag('mode'),
+    Flag('categories'),
+    Flag('vulnerabilities'),
+    Flag('strategies'),
+    Flag('delivery_methods'),
+    Flag('max_turns'),
+    Flag('max_per_category'),
+    Flag('attacker_instructions'),
+    Flag('datapoint_parallelism'),
+    Flag('llm_parallelism'),
+    Flag('generate_strategies'),
+    Flag('generated_strategy_count'),
+    Flag('max_dynamic_datapoints'),
+    Flag('max_static_datapoints'),
+    Flag('cleanup_memory'),
+    Flag('dataset', replaces=('datapoints', 'previous_run')),
+    Flag('from_run', 'previous_run', replaces=_REPLAY_FIELDS),
+    Flag('artifacts_dir'),
+    Flag('save'),
     Flag('executive_summary', 'generate_executive_summary'),
-    Flag('recommendations', 'recommendations'),
+    Flag('recommendations'),
     Flag('system_prompt', 'target_config.system_prompt'),
     json_flag('llm_config_json', 'llm_config', LLMConfig, flag='--llm-config'),
     Flag('attack_model', 'llm_config.attacker.model'),
@@ -308,20 +321,21 @@ _RUN_FLAGS: tuple[Flag, ...] = (
 )
 
 
-def _validate_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
-    """Flatten and validate the resolved config's data-selection fields.
+def _normalise_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
+    """Split CSV values, collapse a one-item ``target`` list and reject unknown names.
 
-    Requires a target. Raises ``typer.BadParameter`` on an unknown vulnerability ID or an unknown
+    Splits comma-separated ``categories``, ``vulnerabilities``, ``strategies`` and delivery methods
+    (``-s a,b`` == ``-s a -s b``), and collapses a one-item ``target`` list to its string. Requires a
+    target. Raises ``typer.BadParameter`` on an unknown vulnerability ID or an unknown
     strategy name. An unknown delivery method is deliberately not fatal: it is
     kept as a literal string so a dataset's custom delivery method stays
-    filterable, and a warning is echoed to stderr.
+    filterable, and a warning is echoed to stderr. The result is built with ``model_copy``, which does not
+    re-validate.
     """
     if not cfg.target:
         raise typer.BadParameter('provide --target, or set "target" in --config.', param_hint="'--target'")
-    target = _single_or_list(cfg.target) if isinstance(cfg.target, list) else cfg.target
+    target = cfg.target[0] if isinstance(cfg.target, list) and len(cfg.target) == 1 else cfg.target
 
-    # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
-    # Done before validation so the checks below see individual tokens.
     strategies = _split_csv(cfg.strategies)
     from evaluatorq.redteam.delivery_method_registry import (
         delivery_method_str,
@@ -336,7 +350,6 @@ def _validate_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
     categories = _split_csv(cfg.categories)
     vulnerabilities = _split_csv(cfg.vulnerabilities)
 
-    # Validate vulnerability IDs early for a clean error message
     if vulnerabilities:
         from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
 
@@ -347,8 +360,6 @@ def _validate_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
                     f'Unknown vulnerability ID: {v!r}. Valid IDs: {sorted(vi.value for vi in Vulnerability)}'
                 )
 
-    # Validate strategy names early: must be a registered strategy or a
-    # runtime-generated name (generated_* prefix). Mirrors --vulnerability.
     if strategies:
         from evaluatorq.redteam.adaptive.strategy_registry import known_strategy_names
 
@@ -386,7 +397,6 @@ def _validate_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
             'delivery_methods': resolved_delivery_methods,
             'categories': categories,
             'vulnerabilities': vulnerabilities,
-            'llm_config': cfg.llm_config or LLMConfig(),
         }
     )
 
@@ -634,7 +644,10 @@ def run(
             '--verbose',
             '-v',
             count=True,
-            help='Increase verbosity (-v per-attack progress + info logs, -vv debug logs).',
+            help=(
+                'Increase verbosity (-v per-attack progress + info logs, -vv debug logs). The CLI defaults to '
+                f'{_cli_default("verbosity")}, a summary progress bar; red_team() defaults to silent.'
+            ),
         ),
     ] = 0,
     quiet: Annotated[  # noqa: FBT002
@@ -706,13 +719,11 @@ def run(
     ] = False,
 ) -> None:
     """Run red teaming against one or more targets."""
-    # Typer converts each value (str -> Path, str -> enum) only when it calls this function, so
-    # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = resolve_config(ctx, RedTeamCliConfig, _RUN_FLAGS, cli_args, config_source=config_source)
     _configure_logging(cfg.verbosity - 1)
-    cfg = _validate_run_config(cfg)
+    cfg = _normalise_run_config(cfg)
     targets: str = cfg.target if isinstance(cfg.target, str) else ', '.join(cfg.target or ())
 
     from evaluatorq.common.replay import ReplayError

@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path  # noqa: TC003 — pydantic resolves field annotations at runtime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001 — pydantic resolves field annotations at runtime
 from evaluatorq.simulation._config import (
@@ -45,17 +45,17 @@ class _SharedRunConfig(BaseModel):
     run_name: str | None = None
     target: str | None = None
     memory_entity_id: str | None = None
-    max_turns: int | None = None
+    max_turns: int | None = Field(default=None, ge=1)
     llm_config: LLMCallConfig | None = None
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None
-    datapoint_parallelism: int | None = None
+    datapoint_parallelism: int | None = Field(default=None, ge=1)
     llm_parallelism: int | None = None
-    target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS
-    max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES
+    target_agent_timeout_ms: int = Field(default=DEFAULT_TARGET_AGENT_TIMEOUT_MS, gt=0)
+    max_target_retries: int = Field(default=DEFAULT_MAX_TARGET_RETRIES, ge=0)
     target_reasoning_effort: str | None = None
-    max_tool_result_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS
-    per_simulation_timeout_s: float | None = None
+    max_tool_result_chars: int = Field(default=DEFAULT_MAX_TOOL_RESULT_CHARS, gt=0)
+    per_simulation_timeout_s: float | None = Field(default=None, gt=0)
     upload_results: bool = True
     experiment_description: str | None = None
     orq_folder_path: str | None = None
@@ -82,8 +82,8 @@ class GenerateAndSimulateRunConfig(_SharedRunConfig):
     """Keyword arguments of `generate_and_simulate` that JSON can express. ``target`` takes the string forms only."""
 
     agent_description: str | None = None
-    num_personas: int = 5
-    num_scenarios: int = 5
+    num_personas: int = Field(default=5, ge=1)
+    num_scenarios: int = Field(default=5, ge=1)
     edge_case_percentage: float | None = None
     persona_seeds: list[str] | None = None
     scenario_seeds: list[str] | None = None

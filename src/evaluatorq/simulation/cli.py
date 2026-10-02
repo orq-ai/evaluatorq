@@ -57,7 +57,7 @@ from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
-from evaluatorq.common.run_manifest import list_manifests
+from evaluatorq.common.run_manifest import read_manifest
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.simulation.run_config import (
@@ -65,7 +65,7 @@ from evaluatorq.simulation.run_config import (
     SimulateCliConfig,
     to_internal_kwargs,
 )
-from evaluatorq.simulation.types import DEFAULT_MAX_TURNS, DEFAULT_MODEL
+from evaluatorq.simulation.types import DEFAULT_MAX_TURNS, DEFAULT_MODEL, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
@@ -533,8 +533,8 @@ def _run_default(field: str) -> Any:
 
 
 _NAME_HELP = (
-    'Run name. Unset unless passed: the SDK then saves the run as "sim" and names an uploaded experiment '
-    'simulation-<timestamp>-<id>.'
+    f'Run name. Unset unless passed: the SDK then saves the run as "{DEFAULT_RUN_NAME}" and names an uploaded '
+    'experiment simulation-<timestamp>-<id>.'
 )
 _DATAPOINT_PARALLELISM_HELP = f'Concurrent simulations. Defaults to {DEFAULT_DATAPOINT_PARALLELISM}.'
 _LLM_PARALLELISM_HELP = (
@@ -591,19 +591,19 @@ def _resolve_cli_config(
 # config field the click parameter sets. ``--target``, ``--vercel-url`` and ``--openai-model`` each replace the
 # file's ``target``; the last two build the target object outside the config, so they have no path.
 _SHARED_FLAGS: tuple[Flag, ...] = (
-    Flag('target', 'target', replaces=('target',)),
+    Flag('target'),
     Flag('vercel_url', None, replaces=('target',)),
     Flag('openai_model', None, replaces=('target',)),
     Flag('memory_entity', 'memory_entity_id'),
-    Flag('report_path', 'report_path'),
+    Flag('report_path'),
     Flag('name', 'run_name'),
-    Flag('max_turns', 'max_turns'),
-    Flag('datapoint_parallelism', 'datapoint_parallelism'),
-    Flag('llm_parallelism', 'llm_parallelism'),
+    Flag('max_turns'),
+    Flag('datapoint_parallelism'),
+    Flag('llm_parallelism'),
     Flag('evaluator', 'evaluator_names'),
-    Flag('save', 'save'),
-    Flag('recommendations', 'recommendations'),
-    Flag('executive_summary', 'executive_summary'),
+    Flag('save'),
+    Flag('recommendations'),
+    Flag('executive_summary'),
     json_flag('llm_config_json', 'llm_config', LLMCallConfig, flag='--llm-config'),
     Flag('sim_model', 'llm_config.model'),
 )
@@ -622,22 +622,22 @@ _INPUT_FIELDS = (
 
 _SIMULATE_FLAGS: tuple[Flag, ...] = (
     *_SHARED_FLAGS,
-    Flag('datapoints', 'datapoints', to_value=_load_datapoints, replaces=_INPUT_FIELDS),
-    Flag('dataset_id', 'dataset_id', replaces=_INPUT_FIELDS),
-    Flag('experiment_id', 'experiment_id', replaces=_INPUT_FIELDS),
-    Flag('experiment_run_id', 'experiment_run_id'),
+    Flag('datapoints', to_value=_load_datapoints, replaces=_INPUT_FIELDS),
+    Flag('dataset_id', replaces=_INPUT_FIELDS),
+    Flag('experiment_id', replaces=_INPUT_FIELDS),
+    Flag('experiment_run_id'),
     Flag('from_run', 'previous_run', replaces=_INPUT_FIELDS),
 )
 
 _RUN_FLAGS: tuple[Flag, ...] = (
     *_SHARED_FLAGS,
-    Flag('agent_description', 'agent_description'),
-    Flag('num_personas', 'num_personas'),
-    Flag('num_scenarios', 'num_scenarios'),
+    Flag('agent_description'),
+    Flag('num_personas'),
+    Flag('num_scenarios'),
     Flag('persona_seed', 'persona_seeds'),
     Flag('scenario_seed', 'scenario_seeds'),
-    Flag('generation_instructions', 'generation_instructions'),
-    Flag('target_reasoning_effort', 'target_reasoning_effort'),
+    Flag('generation_instructions'),
+    Flag('target_reasoning_effort'),
 )
 
 # Config fields the CLI consumes itself: ``target`` and ``memory_entity_id`` become the resolved target object
@@ -745,10 +745,8 @@ def _validate_input_sources(ctx: typer.Context, cfg: SimulateCliConfig) -> None:
 
 def _saved_run_path(run: SimulationRun) -> Path | None:
     """Where the SDK saved ``run``, from its run manifest; ``None`` when it was not saved."""
-    for manifest in list_manifests(_get_sim_runs_dir()):
-        if manifest.run_id == run.run_id:
-            return Path(manifest.report_path) if manifest.report_path else None
-    return None
+    manifest = read_manifest(_get_sim_runs_dir(), run.run_id) if run.run_id else None
+    return Path(manifest.report_path) if manifest is not None and manifest.report_path else None
 
 
 def _finish_run(
@@ -1014,8 +1012,6 @@ def simulate(
     Every option above can also come from --config, a JSON file of simulate() keyword arguments, which
     additionally accepts inline "datapoints", or "personas" and "scenarios", as the input source.
     """
-    # Typer converts each value (str -> Path, str -> enum) only when it calls this function, so
-    # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = _resolve_cli_config(ctx, SimulateCliConfig, _SIMULATE_FLAGS, cli_args, config_source)
@@ -1315,8 +1311,6 @@ def run(
     Every option above can also come from --config, a JSON file of generate_and_simulate() keyword arguments,
     which additionally reaches the ones without a flag, such as "edge_case_percentage".
     """
-    # Typer converts each value (str -> Path, str -> enum) only when it calls this function, so
-    # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
     cfg = _resolve_cli_config(ctx, GenerateAndSimulateCliConfig, _RUN_FLAGS, cli_args, config_source)

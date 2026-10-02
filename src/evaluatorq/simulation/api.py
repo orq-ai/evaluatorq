@@ -33,7 +33,7 @@ from evaluatorq.simulation._config import (
     sim_llm_config,
 )
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
@@ -640,7 +640,7 @@ async def _simulate_run(
                     hooks,
                     save=save,
                     run_id=run_id,
-                    run_name=evaluation_name or 'sim',
+                    run_name=evaluation_name or DEFAULT_RUN_NAME,
                     run_output=report,
                 )
                 # Outer manifest guard (FIX 1): _simulate_core owns the terminal
@@ -1098,7 +1098,7 @@ async def _generate_and_simulate_run(
                     hooks,
                     save=save,
                     run_id=run_id,
-                    run_name=evaluation_name or 'sim',
+                    run_name=evaluation_name or DEFAULT_RUN_NAME,
                     run_output=report,
                 )
                 # Outer manifest guard (FIX 1): the terminal manifest calls live in
@@ -2066,7 +2066,7 @@ async def _simulate_core(
             if agent_key and agent_key != 'agent':
                 agent_info = await fetch_agent_info(agent_key)
         run = build_simulation_run(
-            run_name=evaluation_name or 'sim',
+            run_name=evaluation_name or DEFAULT_RUN_NAME,
             mode='simulate' if caller == 'simulate' else 'run',
             target_kind=target_kind,
             target=target_name,

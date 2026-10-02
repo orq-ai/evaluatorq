@@ -144,7 +144,7 @@ def test_without_config_red_team_gets_the_cli_defaults() -> None:
     assert kwargs['datapoint_parallelism'] is None
     assert kwargs['max_turns'] is None
     assert kwargs['name'] is None
-    assert kwargs['llm_config'] == LLMConfig()
+    assert kwargs['llm_config'] is None
     assert kwargs['verbosity'] == 1
     assert kwargs['generate_strategies'] is True
     assert kwargs['cleanup_memory'] is True
@@ -174,6 +174,41 @@ def test_a_missing_config_file_is_a_usage_error(tmp_path: Path) -> None:
     assert result.exit_code == 2
     assert 'cannot read' in _flat(result.output)
     fake.assert_not_called()
+
+
+def test_a_non_utf8_config_file_is_a_usage_error_not_a_traceback(tmp_path: Path) -> None:
+    path = tmp_path / 'run.json'
+    path.write_bytes(b'\xff\xfe{"target": "agent:x"}')
+
+    result, fake = _invoke(['--config', str(path)])
+
+    assert result.exit_code == 2
+    assert 'not UTF-8 text' in _flat(result.output)
+    assert 'Traceback' not in result.output
+    fake.assert_not_called()
+
+
+def test_from_run_replaces_the_config_file_data_selection(tmp_path: Path) -> None:
+    payload = {'target': 'agent:x', 'categories': ['ASI01'], 'mode': 'hybrid', 'max_per_category': 3}
+
+    result, fake = _invoke(['--config', _write(tmp_path, payload), '--from-run', 'latest'])
+
+    assert result.exit_code == 0, result.output
+    kwargs = fake.call_args.kwargs
+    assert kwargs['previous_run'] == 'latest'
+    assert kwargs['categories'] is None
+    assert kwargs['mode'] is None
+    assert kwargs['max_per_category'] is None
+
+
+def test_dataset_flag_replaces_the_config_file_datapoints(tmp_path: Path) -> None:
+    payload = {'target': 'agent:x', 'datapoints': [{'inputs': {'category': 'ASI01'}}]}
+
+    result, fake = _invoke(['--config', _write(tmp_path, payload), '--dataset', 'ds_1'])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['dataset'] == 'ds_1'
+    assert fake.call_args.kwargs['datapoints'] is None
 
 
 def test_target_is_required_from_the_flag_or_the_config(tmp_path: Path) -> None:

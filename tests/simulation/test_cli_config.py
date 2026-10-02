@@ -196,6 +196,32 @@ def test_simulate_rejects_unknown_keys(tmp_path: Path, payload: dict[str, Any], 
     fake.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ('command', 'field', 'value'),
+    [
+        ('simulate', 'max_turns', 0),
+        ('simulate', 'datapoint_parallelism', 0),
+        ('simulate', 'target_agent_timeout_ms', 0),
+        ('simulate', 'max_target_retries', -1),
+        ('simulate', 'max_tool_result_chars', 0),
+        ('simulate', 'per_simulation_timeout_s', 0),
+        ('run', 'num_personas', 0),
+        ('run', 'num_scenarios', 0),
+    ],
+)
+def test_a_config_value_below_its_bound_is_a_usage_error_naming_the_field(
+    tmp_path: Path, command: str, field: str, value: int
+) -> None:
+    base = {'previous_run': 'latest'} if command == 'simulate' else {'agent_description': 'bot'}
+    payload = {'target': 'agent:x', **base, field: value}
+
+    result, fake = _invoke(command, ['--config', _write(tmp_path, payload)])
+
+    assert result.exit_code == 2
+    assert field in _flat(result.output)
+    fake.assert_not_called()
+
+
 def test_run_reaches_generate_and_simulate_keywords_without_a_flag(tmp_path: Path) -> None:
     config = _write(
         tmp_path,
