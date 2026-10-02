@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import typing
-
 import tempfile
+import typing
 from pathlib import Path
 
 import pytest

@@ -10,9 +10,8 @@ reaching the network.
 
 from __future__ import annotations
 
-import typing
-
 import importlib
+import typing
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

@@ -1,16 +1,14 @@
 from __future__ import annotations
 
+import importlib
 import typing
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import create_model
 
-import importlib
-
 from evaluatorq.common import judge as judge_mod
-from evaluatorq.common.judge import JudgeOutcome, EvaluatorResponsePayload
+from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
 from evaluatorq.llm_jury import llm_jury
 from evaluatorq.types import DataPoint
 

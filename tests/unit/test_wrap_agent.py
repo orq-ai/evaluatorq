@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import typing
-
 import asyncio
 import threading
+import typing
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from evaluatorq.types import DataPoint
-
 
 # ---------------------------------------------------------------------------
 # Helpers — mock agent & convert
@@ -45,14 +43,11 @@ pytest.importorskip("langchain_core")
 pytest.importorskip("langgraph")
 
 from evaluatorq.integrations.langchain_integration.wrap_agent import (  # noqa: E402
-
     _extract_messages_from_data,
-
     _normalize_message,
     wrap_langchain_agent,
     wrap_langgraph_agent,
 )
-
 
 # ---------------------------------------------------------------------------
 # _extract_messages_from_data tests

@@ -1,7 +1,6 @@
 """Unit tests for attack prompt generation."""
 
 import typing
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

@@ -10,9 +10,8 @@ Covers the fallback / failure branches:
 
 from __future__ import annotations
 
-import typing
-
 import json
+import typing
 from datetime import datetime
 
 from evaluatorq.openresponses.convert_models import FunctionCall

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import typing
-
 import asyncio
 import logging
+import typing
 
 import httpx
 import pytest

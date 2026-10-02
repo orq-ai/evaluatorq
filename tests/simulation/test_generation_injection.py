@@ -4,10 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import AgentContext
+from evaluatorq.contracts import AgentContext, LLMCallConfig
 from evaluatorq.simulation.api import generate, generate_and_simulate, simulate
 from evaluatorq.simulation.types import CommunicationStyle, Judgment, Persona, Scenario, SimulationDatapoint
-from evaluatorq.contracts import LLMCallConfig
 
 
 def _persona() -> Persona:

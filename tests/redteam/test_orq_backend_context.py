@@ -10,9 +10,8 @@ unreachable agent still must.
 
 from __future__ import annotations
 
-import typing
-
 import asyncio
+import typing
 from types import SimpleNamespace
 
 import pytest

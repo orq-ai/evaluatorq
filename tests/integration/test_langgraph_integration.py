@@ -21,7 +21,6 @@ from evaluatorq.contracts import Message  # noqa: E402
 from evaluatorq.integrations.langgraph_integration import LangGraphTarget  # noqa: E402
 
 
-
 def _build_echo_graph() -> CompiledStateGraph[typing.Any, typing.Any, typing.Any, typing.Any]:
     """Build a minimal LangGraph that uses a fake LLM to respond."""
     model = FakeListChatModel(responses=["I am a helpful assistant.", "Sure, I can help with that."])

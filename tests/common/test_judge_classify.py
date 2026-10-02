@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import typing
-
 import asyncio
 import json
 import logging
+import typing
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -18,9 +17,7 @@ from pydantic import ValidationError
 
 import evaluatorq
 from evaluatorq.common import judge as judge_mod
-from evaluatorq.common import llm_call
-from evaluatorq.common import model_catalogue
-from evaluatorq.common import tracing
+from evaluatorq.common import llm_call, model_catalogue, tracing
 from evaluatorq.common.judge import (
     ClassifyOutcome,
     ClassifyQuestion,

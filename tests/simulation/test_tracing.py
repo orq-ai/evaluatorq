@@ -6,16 +6,15 @@ attributes, and hierarchy of the simulation tracing helpers.
 
 from __future__ import annotations
 
-import typing
-
 import json
+import typing
 from typing import Any
 from unittest.mock import patch
 
 import pytest
-from evaluatorq.contracts import LLMCallConfig
 from opentelemetry.sdk.trace import ReadableSpan
 
+from evaluatorq.contracts import LLMCallConfig
 from tests.simulation.conftest import CollectingExporter, new_collector
 from tests.simulation.conftest import span_attrs as _attrs
 

@@ -4,14 +4,20 @@
 
 from __future__ import annotations
 
-import typing
-
 import json
+import typing
 from typing import Any
 
 import pytest
 
-from evaluatorq.contracts import FunctionCall, InputFileContent, InputImageContent, InputTextContent, Message, StrategyToolCall
+from evaluatorq.contracts import (
+    FunctionCall,
+    InputFileContent,
+    InputImageContent,
+    InputTextContent,
+    Message,
+    StrategyToolCall,
+)
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.responses import ResponsesConversation
 

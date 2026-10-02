@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import typing
-
 from types import SimpleNamespace
 
 from openai import BadRequestError

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import typing
-
 import json
+import typing
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +15,6 @@ from evaluatorq.common.prompt_cache import (
     mark_responses_input,
     responses_volatile_items,
 )
-
 from evaluatorq.common.tracing import _serialize_messages
 from evaluatorq.simulation.types import Message
 

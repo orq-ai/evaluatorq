@@ -8,7 +8,6 @@ mocked at the ``generate_structured`` layer so no network/key is needed.
 from __future__ import annotations
 
 import typing
-
 from typing import Any, cast
 
 import pytest

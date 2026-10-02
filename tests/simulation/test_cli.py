@@ -1,16 +1,13 @@
 """Unit tests for evaluatorq.simulation.cli."""
 from __future__ import annotations
 
-import typing
-
-from collections.abc import Mapping, Sequence
-from typing import IO
-
 import json
 import sys
+import typing
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -32,6 +29,7 @@ from evaluatorq.simulation.cli import (
 )
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
+
 
 class _OfflineCliRunner(CliRunner):
     """CliRunner that keeps these tests off the network by default.
@@ -2126,13 +2124,13 @@ def test_export_md_includes_stored_recommendations(tmp_path):
     """eq sim export --format md renders a run JSON's stored suggestions."""
     import json as _json
 
+    from evaluatorq.contracts import Message, TokenUsage
     from evaluatorq.simulation.types import (
         SimulationRecommendation,
         SimulationResult,
         SimulationRun,
         TerminatedBy,
     )
-    from evaluatorq.contracts import Message, TokenUsage
 
     result = SimulationResult(
         messages=[Message(role="user", content="hi"), Message(role="assistant", content="yo")],
@@ -2184,8 +2182,8 @@ def test_export_md_includes_stored_recommendations(tmp_path):
 def test_export_html_format(tmp_path):
     """eq sim export --format html writes a self-contained HTML report."""
     results = tmp_path / "results.jsonl"
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
     from evaluatorq.contracts import Message, TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
     r = SimulationResult(
         messages=[Message(role="user", content="hi")],

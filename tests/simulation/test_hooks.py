@@ -3,10 +3,9 @@
 # sync-vs-async override mismatch is the point, not a bug.
 from __future__ import annotations
 
-import typing
-
 import asyncio
 import io
+import typing
 import warnings
 from contextlib import asynccontextmanager
 from typing import Any

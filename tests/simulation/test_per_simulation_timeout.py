@@ -6,9 +6,8 @@ LLM/target timeouts (F4). per_simulation_timeout_s closes that gap.
 
 from __future__ import annotations
 
-import typing
-
 import asyncio
+import typing
 from typing import Any
 
 # ruff: noqa: S101
@@ -22,6 +21,8 @@ from evaluatorq.simulation.types import (
     Scenario,
     SimulationDatapoint,
     TerminatedBy,
+)
+from evaluatorq.simulation.types import (
     TokenUsage as _TU,
 )
 

@@ -4,9 +4,8 @@
 # are deliberate (compat path); the override mismatch is the point.
 from __future__ import annotations
 
-import typing
-
 import asyncio
+import typing
 
 import pytest
 
@@ -15,8 +14,8 @@ from evaluatorq.simulation.hooks import (
     CompositeSimulationHooks,
     DefaultHooks,
     ManifestStageHooks,
-    SimulationHooks,
     SimStage,
+    SimulationHooks,
     SimulationRunMeta,
 )
 from evaluatorq.simulation.types import (
@@ -26,7 +25,6 @@ from evaluatorq.simulation.types import (
     Scenario,
     SimulationDatapoint,
 )
-
 
 # ---------------------------------------------------------------------------
 # Shared harness (self-contained; mirrors tests/simulation/test_hooks.py)

@@ -13,7 +13,6 @@ fallback paths.
 from __future__ import annotations
 
 import typing
-
 from types import SimpleNamespace
 from typing import Any
 

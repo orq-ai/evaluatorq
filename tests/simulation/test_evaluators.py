@@ -1,9 +1,8 @@
 """Tests for simulation evaluators."""
 
-import typing
-
 import copy
 import pickle
+import typing
 from typing import Any
 
 import pytest

@@ -16,9 +16,8 @@ back to ``PIPELINE_CONFIG`` fails here.
 
 from __future__ import annotations
 
-import typing
-
 import sys
+import typing
 from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock

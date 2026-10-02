@@ -7,10 +7,9 @@ and each judge covers an equal share of the run even under concurrency.
 
 from __future__ import annotations
 
-import typing
-
 import asyncio
 import importlib
+import typing
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from unittest.mock import MagicMock, patch

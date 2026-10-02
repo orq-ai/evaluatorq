@@ -6,9 +6,8 @@ calling create_async_llm_client(), and that the env var priority is correct.
 
 from __future__ import annotations
 
-import typing
-
 import asyncio
+import typing
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -228,10 +227,10 @@ class TestCreateOWASPEvaluatorLlmClient:
     @patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category')
     @patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_async_llm_client')
     async def test_scorer_uses_custom_client(self, mock_create, mock_get_eval):
+        from types import SimpleNamespace
+
         from evaluatorq import DataPoint, EvaluationResult
         from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-        from types import SimpleNamespace
 
         custom_client = AsyncMock(spec=AsyncOpenAI)
         mock_response = MagicMock()

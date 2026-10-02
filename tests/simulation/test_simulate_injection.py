@@ -11,15 +11,13 @@ Verifies:
 from __future__ import annotations
 
 import typing
-
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from evaluatorq.contracts import TokenUsage
+from evaluatorq.contracts import LLMCallConfig, TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.types import (
     CommunicationStyle,
     Message,

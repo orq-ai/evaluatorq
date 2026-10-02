@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import typing
-
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from evaluatorq.contracts import Message
-
 
 # ---------------------------------------------------------------------------
 # Helpers

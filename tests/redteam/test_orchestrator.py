@@ -1,8 +1,7 @@
 """Unit tests for the multi-turn orchestrator."""
 
-import typing
-
 import asyncio
+import typing
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,10 +10,14 @@ from evaluatorq.contracts import (
     AgentResponse,
     AgentResponseError,
     ConversationHistoryMode,
+    InputImageContent,
     Message,
     TextOutputItem,
     ToolCallOutputItem,
-    InputImageContent,
+)
+from evaluatorq.redteam.adaptive.orchestrator import (
+    ADVERSARIAL_SYSTEM_PROMPT,
+    MultiTurnOrchestrator,
 )
 from evaluatorq.redteam.contracts import (
     AgentContext,
@@ -24,10 +27,6 @@ from evaluatorq.redteam.contracts import (
     SendResult,
     TokenUsage,
     TurnType,
-)
-from evaluatorq.redteam.adaptive.orchestrator import (
-    ADVERSARIAL_SYSTEM_PROMPT,
-    MultiTurnOrchestrator,
 )
 from evaluatorq.redteam.exceptions import RedTeamError
 from evaluatorq.redteam.traces import TraceStart

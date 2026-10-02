@@ -7,9 +7,8 @@ occurred came back PASS and ``criteria_met`` returned 1.0 on every run.
 
 from __future__ import annotations
 
-import typing
-
 import json
+import typing
 from types import SimpleNamespace
 
 import pytest

@@ -1,7 +1,6 @@
 """Unit tests for capability classifier."""
 
 import typing
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

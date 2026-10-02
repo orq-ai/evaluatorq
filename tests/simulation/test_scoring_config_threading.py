@@ -16,7 +16,6 @@ applied" and "the field was dropped on the floor" are indistinguishable otherwis
 from __future__ import annotations
 
 import typing
-
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -33,6 +32,8 @@ from evaluatorq.simulation.types import (
     SimulationDatapoint,
     SimulationResult,
     TerminatedBy,
+)
+from evaluatorq.simulation.types import (
     TokenUsage as _TU,
 )
 

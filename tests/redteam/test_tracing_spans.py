@@ -8,10 +8,9 @@ attribute names, values, and span hierarchy after the tracing refactor.
 
 from __future__ import annotations
 
-import typing
-
 import json
 import sys
+import typing
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -986,10 +985,9 @@ async def test_orq_agent_target_emits_one_llm_span_per_create(span_collector: _C
     several priced calls. Usage belongs on those per-call spans only — a total
     on the parent would double-count when the sink aggregates.
     """
-    from tests.redteam.test_backend_send_prompt_with_usage import _make_orq_response
-
     from evaluatorq.redteam.backends.orq import ORQAgentTarget
     from evaluatorq.redteam.contracts import Message
+    from tests.redteam.test_backend_send_prompt_with_usage import _make_orq_response
 
     pending = MagicMock()
     pending.id = 'tool-call-001'

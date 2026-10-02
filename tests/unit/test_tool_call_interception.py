@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import typing
-
 import json
+import typing
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from evaluatorq.common.template_engine import render_template
 from evaluatorq.redteam.backends.base import _coerce_to_agent_response
 from evaluatorq.redteam.contracts import (
     AgentResponse,
@@ -20,9 +20,7 @@ from evaluatorq.redteam.contracts import (
     ToolCallOutputItem,
     Turn,
 )
-from evaluatorq.common.template_engine import render_template
 from evaluatorq.redteam.judge import build_eval_replacements
-
 
 # ---------------------------------------------------------------------------
 # _coerce_to_agent_response
@@ -227,6 +225,7 @@ class TestLangGraphToolCallExtraction:
     async def test_extracts_tool_calls_from_ai_messages(self) -> None:
         pytest.importorskip('langgraph')
         from langchain_core.messages import AIMessage
+
         from evaluatorq.integrations.langgraph_integration import LangGraphTarget
 
         ai_msg = AIMessage(

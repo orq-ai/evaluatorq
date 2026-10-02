@@ -9,18 +9,17 @@ surface: one config in at the entry point, honoured at each call site.
 from __future__ import annotations
 
 import typing
-
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.common.structured_output import UNSET
+from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.agents.base import AgentConfig, _config_from_agent_config
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
-from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.generators import (
     FirstMessageGenerator,
     PersonaGenerator,

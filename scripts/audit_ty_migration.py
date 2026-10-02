@@ -116,9 +116,14 @@ LIMITED_MARKERS = (
 )
 
 
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
 def _load(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text())
-    assert isinstance(value, dict)
+    _require(isinstance(value, dict), f'{path} must contain a JSON object')
     return value
 
 
@@ -171,23 +176,23 @@ def verify_upstream(baseline: dict[str, Any]) -> None:
     mapping = _download(ty['mapping_url'])
     rules = _download(ty['rules_url'])
     defaults = _download(based['defaults_url'])
-    assert _sha256(mapping) == ty['mapping_sha256'], 'pinned ty mapping source changed'
-    assert _sha256(rules) == ty['rules_sha256'], 'pinned ty rule source changed'
-    assert _sha256(defaults) == based['defaults_sha256'], 'pinned BasedPyright source changed'
+    _require(_sha256(mapping) == ty['mapping_sha256'], 'pinned ty mapping source changed')
+    _require(_sha256(rules) == ty['rules_sha256'], 'pinned ty rule source changed')
+    _require(_sha256(defaults) == based['defaults_sha256'], 'pinned BasedPyright source changed')
 
     levels = _recommended_levels(defaults)
     levels.update(based['global_rules'])
     active = {rule for rule, level in levels.items() if level != 'none'}
-    assert active == set(based['active_diagnostics']), 'BasedPyright active-rule snapshot drifted'
+    _require(active == set(based['active_diagnostics']), 'BasedPyright active-rule snapshot drifted')
     cells = _mapping_cells(mapping, active)
-    assert cells == baseline['mapping_cells'], 'ty migration mapping snapshot drifted'
+    _require(cells == baseline['mapping_cells'], 'ty migration mapping snapshot drifted')
     required = {
         rule
         for replacements in cells.values()
         for replacement in replacements
         for rule in re.findall(r'\[`([^`]+)`\]\[ty-', replacement)
     }
-    assert _rule_defaults(rules, required) == ty['rule_defaults'], 'ty default-level snapshot drifted'
+    _require(_rule_defaults(rules, required) == ty['rule_defaults'], 'ty default-level snapshot drifted')
 
 
 def _selector_matches(code: str, selectors: list[str]) -> bool:
@@ -294,12 +299,21 @@ def audit(*, baseline_path: Path = BASELINE) -> dict[str, set[str]]:
     baseline = _load(baseline_path)
     config = _project_config()
     workflow = (ROOT / '.github/workflows/ci.yml').read_text()
-    assert baseline['schema'] == 1
-    assert f'ty=={baseline["ty"]["version"]}' in config['dependency-groups']['dev']
+    _require(baseline['schema'] == 1, f'unsupported baseline schema {baseline["schema"]!r}')
+    _require(
+        f'ty=={baseline["ty"]["version"]}' in config['dependency-groups']['dev'],
+        'pyproject dev group does not pin the baseline ty version',
+    )
     locked = tomllib.loads((ROOT / 'uv.lock').read_text())
     ty_packages = [package for package in locked['package'] if package['name'] == 'ty']
-    assert [package['version'] for package in ty_packages] == [baseline['ty']['version']]
-    assert len(re.findall(r'(?m)^\s*run:\s*uv run ruff check src\s*$', workflow)) == 1
+    _require(
+        [package['version'] for package in ty_packages] == [baseline['ty']['version']],
+        'uv.lock ty version does not match the baseline',
+    )
+    _require(
+        len(re.findall(r'(?m)^\s*run:\s*uv run ruff check src\s*$', workflow)) == 1,
+        'ci.yml must contain exactly one `uv run ruff check src` step',
+    )
 
     actual: dict[str, tuple[str, str]] = {}
     classified = {classification: set() for classification in EXPECTED}
@@ -307,9 +321,15 @@ def audit(*, baseline_path: Path = BASELINE) -> dict[str, set[str]]:
         classification, surface = _classification_and_surface(diagnostic, replacements, baseline, config)
         classified[classification].add(diagnostic)
         actual[diagnostic] = (classification, surface)
-    assert classified == EXPECTED, 'effective diagnostic classification changed'
-    assert set().union(*classified.values()) == set(baseline['basedpyright']['active_diagnostics'])
-    assert sum(len(diagnostics) for diagnostics in classified.values()) == len(actual)
+    _require(classified == EXPECTED, 'effective diagnostic classification changed')
+    _require(
+        set().union(*classified.values()) == set(baseline['basedpyright']['active_diagnostics']),
+        'classified diagnostics do not match the active BasedPyright set',
+    )
+    _require(
+        sum(len(diagnostics) for diagnostics in classified.values()) == len(actual),
+        'a diagnostic was classified more than once',
+    )
     return classified
 
 

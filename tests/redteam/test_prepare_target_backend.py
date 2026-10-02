@@ -28,7 +28,6 @@ keeping the test hermetic.
 from __future__ import annotations
 
 import typing
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,7 +35,6 @@ import pytest
 from evaluatorq.redteam.backends.base import HybridAgentBackend
 from evaluatorq.redteam.backends.openresponses import OpenResponsesBackend
 from evaluatorq.redteam.backends.registry import make_agent_backend
-
 
 # ---------------------------------------------------------------------------
 # Helpers
