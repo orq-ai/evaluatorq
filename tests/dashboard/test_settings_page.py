@@ -14,6 +14,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
+from evaluatorq.dashboard import model_choices
 from evaluatorq.dashboard import apply_ui
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
 from evaluatorq.dashboard.trace_finder.search_views import search_page_html
@@ -1105,10 +1106,10 @@ def test_settings_page_renders_model_fields_before_the_catalogue_loads(client: T
 def test_model_field_offers_workspace_models_grouped_by_provider(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def choices(_client: object, *, classify: bool = False) -> dict[str, list[str]]:
+    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
         return _CHOICES
 
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
     html = client.get('/settings/models', params={'field': 'compiler_model', 'compiler_model': 'openai/gpt-5.6-luna'}).text
@@ -1126,10 +1127,10 @@ def test_model_field_offers_workspace_models_grouped_by_provider(
 def test_model_field_ignores_a_missing_profile_rather_than_using_the_environment(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def choices(_client: object, *, classify: bool = False) -> dict[str, list[str]]:
+    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
         return _CHOICES
 
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
     html = client.get('/settings/models', params={'field': 'compiler_model', 'profile': 'gone'}).text
@@ -1153,30 +1154,30 @@ def test_model_field_uses_selected_authentication(
         calls.append(settings.orq_auth_method)
         return SimpleNamespace(method=settings.orq_auth_method, api_key='selected-key', base_url='https://selected.example')
 
-    async def choices(chosen_client: object, *, classify: bool = False) -> dict[str, list[str]]:
-        calls.append((chosen_client, classify))
+    async def choices(chosen_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+        calls.append((chosen_client, kind))
         return _CHOICES
 
     async def close_orq(_client: object) -> None:
         calls.append('orq closed')
 
     monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
-    monkeypatch.setattr(app_module, 'close_orq_client', close_orq)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'close_orq_client', close_orq)
     if method == 'cli_oauth':
-        monkeypatch.setattr(app_module, 'build_auth_clients', lambda _auth: (object(), llm))
+        monkeypatch.setattr(model_choices, 'build_auth_clients', lambda _auth: (object(), llm))
     else:
         def resolve_llm(**kwargs: object) -> SimpleNamespace:
             calls.append(kwargs)
             return SimpleNamespace(client=llm, owned=True)
 
-        monkeypatch.setattr(app_module, 'resolve_llm_client', resolve_llm)
+        monkeypatch.setattr(model_choices, 'resolve_llm_client', resolve_llm)
 
     html = client.get('/settings/models', params={'field': 'compiler_model', 'auth_method': method}).text
 
     assert 'data-model="openai/gpt-5.6-luna"' in html
     assert method in calls
-    assert (llm, False) in calls
+    assert (llm, 'chat') in calls
     assert 'llm closed' in calls
     if method == 'cli_oauth':
         assert 'orq closed' in calls
@@ -1221,7 +1222,7 @@ async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: p
         'openai': ['openai/gpt-5.6-luna'],
         'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
     }
-    assert await model_catalogue.models_by_provider(classify=True) == {
+    assert await model_catalogue.models_by_provider(kind='classify') == {
         'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
         'typesafe': ['typesafe/jev-latest'],
     }
