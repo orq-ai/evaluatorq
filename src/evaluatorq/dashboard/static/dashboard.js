@@ -545,13 +545,16 @@
   function pickModel(from, model) {
     const pick = from.closest('.model-pick');
     pick.querySelector('input[type="hidden"]').value = model;
-    pick.querySelector('.model-pick-btn').textContent = model || 'Choose a model';
+    const button = pick.querySelector('.model-pick-btn');
+    if (from.hasAttribute('data-rich')) button.innerHTML = from.innerHTML;
+    else button.textContent = model || 'Choose a model';
     pick.querySelectorAll('.model-option').forEach(function (other) {
       other.classList.toggle('is-selected', other === from);
       other.setAttribute('aria-pressed', other === from ? 'true' : 'false');
     });
     pick.querySelectorAll('.facet-item .count').forEach(function (tick) { tick.remove(); });
-    const owner = pick.querySelector('.facet-item[data-facet="' + from.closest('.facet-sub').getAttribute('data-facet-sub') + '"]');
+    const sub = from.closest('.facet-sub');
+    const owner = sub && pick.querySelector('.facet-item[data-facet="' + sub.getAttribute('data-facet-sub') + '"]');
     if (owner && model) owner.querySelector('.chev').insertAdjacentHTML('beforebegin', '<span class="count">✓</span>');
     if (from.classList.contains('model-option')) closeModelMenu(pick);
   }
