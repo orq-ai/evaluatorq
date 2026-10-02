@@ -222,32 +222,12 @@ class JuryPreset(BaseModel):
 BALANCED_TRIO = JuryPreset(
     name='Balanced Trio',
     judges=(
-        # Held by claude-haiku-4-5 until the age check went in (2026-08-25) and
-        # named what the frontier checks structurally cannot see: Anthropic has
-        # shipped no small model since October 2025, so no in-family upgrade
-        # was ever going to be found and the seat aged 314 days in silence. It
-        # was also the weakest buy in the library: at the rungs each card is
-        # ranked on, 29.6 at a $2.00 blend beside luna on this same panel at
-        # 51.2 for $0.45. The only argument for
-        # keeping it was an Anthropic vote, and this panel is sold on three
-        # families rather than three brands, which deepseek satisfies at 43.1
-        # for $0.544 while taking the panel from $6.11 to $4.64.
         'deepseek/deepseek-v4-pro',
-        # Held by gpt-5.4-mini until the general-purpose luna card landed
-        # (2026-08): same OpenAI lineage, 21.4 index points stronger at their
-        # ceilings (51.2 against 29.8) at a quarter of the price.
         'openai/gpt-5.6-luna',
-        # Reseated from gemini-3.5-flash on the 2026-08-25 re-capture, and a
-        # trade rather than an upgrade: at their ceilings the successor is a
-        # tenth of a point behind (50.1 against 50.2), so neither dominates the
-        # other. It is seated for the price, $3.00 against $3.375 blended, and
-        # for reaching that index at one rung where its predecessor needs its
-        # top one.
         'google/gemini-3.6-flash',
     ),
-    # Same lineage as the seat it backs, on purpose: a retirement is usually a
-    # version bump, and flash keeps the panel at three families where a
-    # fourth-vendor reserve would quietly reshape it.
+    # Same lineage as the seat it backs, so a promotion keeps the panel at three
+    # families.
     reserve_judges=('deepseek/deepseek-flash',),
     use_when='Default subjective eval. Three families, three error surfaces.',
     estimated_cost_per_1k=17.56,
@@ -256,21 +236,8 @@ BALANCED_TRIO = JuryPreset(
 STRONG_JURY = JuryPreset(
     name='Strong Jury',
     judges=(
-        # Held by claude-opus-5 until Opus 5.5 (2026-09-22): same lineage, $4/$20
-        # against $5/$25.
         'anthropic/claude-opus-5-5',
-        # Held by gpt-5.4 on a number that turned out to be measured at the
-        # wrong operating point: the 51.4 this seat was defended with is
-        # gpt-5.4's xhigh score, while its default effort is `none`, where it
-        # scores 27.7 against the same price. The 2026-08-25 re-capture carries
-        # per-effort indices, and at their ceilings sol is the strongest OpenAI
-        # model in the garden, 58.9 against that same 51.4. This jury is bought
-        # for judgment quality,
-        # so it pays the $8.00 blend.
         'openai/gpt-5.6-sol',
-        # Reseated from gemini-3.1-pro-preview by the in-family frontier check,
-        # then from gemini-3.5-flash on the re-capture, on the same reading as
-        # Balanced Trio: level at the ceiling, cheaper per call.
         'google/gemini-3.6-flash',
     ),
     reserve_judges=('deepseek/deepseek-v4-pro',),
@@ -281,19 +248,8 @@ STRONG_JURY = JuryPreset(
 OPEN_WEIGHT_PORTABLE = JuryPreset(
     name='Open-Weight / Portable',
     judges=(
-        # Held by gpt-oss-120b until the family entered NEVER_SEAT (PR #330
-        # review, 2026-08-24); the panel's own reserve steps up.
         'deepseek/deepseek-v4-pro',
-        # Held by kimi-k2.6 until ranking moved to card ceilings (2026-09-03).
-        # That card reads a headline of 44.2 taken at effort `none` beside a
-        # `none` rung of 34.6: it scores the same rung twice, differently, so
-        # nothing can be seated on it and `seatable` now refuses it. K3 is the
-        # replacement rather than a cheaper open-weight lineage because the
-        # only ones available are dominated here: qwen3.6-27b scores 37.1 at
-        # $1.20 against deepseek-v4-pro's 43.1 at $0.544, and a dominated judge
-        # is dead weight. It nearly doubles the panel, $5.57 to $10.29, which
-        # is the price of not seating a self-contradicting card. Served from
-        # baseten because the Moonshot account 429s.
+        # Served from baseten because the Moonshot account 429s.
         'baseten/kimi-k3',
         'zai/glm-5.2',
     ),
@@ -321,21 +277,10 @@ EU_REGION = JuryPreset(
 SINGLE_PROVIDER_TRIO = JuryPreset(
     name='Single-Provider Trio',
     judges=(
-        # Held by gpt-5.4 until the re-capture showed its 51.4 was an xhigh
-        # score against a default-effort price (27.7 at the effort we are
-        # billed for, below its own nano). sol is the real top of the lineup.
         'openai/gpt-5.6-sol',
         'openai/gpt-5.6-terra',
-        # Held by gpt-5.4-mini and gpt-5.4-nano while luna only existed as
-        # EU-pinned endpoints. The general-purpose luna card landed in the
-        # garden 2026-08 (same weights as the EU twin, index 38.1, $0.45
-        # blended) and dominates both minis outright.
         'openai/gpt-5.6-luna',
     ),
-    # gpt-5-mini held the reserve until ranking moved to card ceilings
-    # (2026-09-03): its card reads minimal 14.3, medium 30.9, high 25.3, so
-    # more effort scores lower and there is no rung to rank it at. It is in
-    # NON_MONOTONE_LADDERS and nano, the next cheap OpenAI card, takes the role.
     reserve_judges=('openai/gpt-5.4-nano',),
     use_when=(
         'Workspaces locked to one provider contract. The three real tiers of '
@@ -368,21 +313,18 @@ ESTIMATED_COMPLETION_TOKENS = 1500
 # panel, and each entry names the one thing that has to be true for it to ship.
 WITHHELD_PRESETS: dict[str, str] = {
     'Cheap Aggregate': (
-        'Held back 2026-09-07, not retired. Five small judges across five '
-        'lineages concluding on three of five at $2.56 per 1k, and the panel '
-        'the volume story is built on. One seat does not vote: '
-        '`minimax/MiniMax-M2.7` answers a `json_schema` response format with '
-        'prose, and the fallback that would resend the schema as instructions '
-        'sits behind `except BadRequestError`, so it never fires on a 200 that '
-        'simply has the wrong shape. The model itself complies when the schema '
-        'reaches it as instructions. That leaves four voting seats, an even '
-        'panel, which is the one shape `_panel_is_well_formed` exists to '
-        'reject, passing only because the validator counts declared seats and '
-        'not voting ones. Seating the named reserve is not a fix either: '
-        'zai/glm-5.2 costs $2.76 per 1k for that seat alone and takes the panel '
-        'to $4.69, past Balanced Trio, which is the whole reason the panel '
-        'exists gone. Ships the day the judge path falls back on an '
-        'unparseable 200 as well as on a rejected request.'
+        'Not shipped yet. Five small judges across five lineages, concluding on '
+        'three of five. One seat does not vote: `minimax/MiniMax-M2.7` answers a '
+        '`json_schema` response format with prose, and the fallback that would '
+        'resend the schema as instructions sits behind `except BadRequestError`, '
+        'so it never fires on a 200 that simply has the wrong shape. The model '
+        'itself complies when the schema reaches it as instructions. That leaves '
+        'four voting seats, an even panel, which `_panel_is_well_formed` exists '
+        'to reject and passes only because it counts declared seats rather than '
+        'voting ones. Seating the reserve, `zai/glm-5.2`, is not a fix: at $8.70 '
+        'per 1k for that seat alone it defeats a budget panel. Ships once the '
+        'judge path falls back on an unparseable 200 as well as on a rejected '
+        'request.'
     ),
 }
 
@@ -391,17 +333,10 @@ WITHHELD_PRESETS: dict[str, str] = {
 # costs a written line here and `get_preset` hands it back by name.
 DROPPED_PRESETS: dict[str, str] = {
     'Value Trio': (
-        'Retired 2026-08-24. Sold as the budget panel, but the blend repricing '
-        'left Cheap Aggregate cheaper on the table ($2.73 vs $2.86 per 1k) with '
-        'five judges to its three, and the 2026-08-18 probe measured Value Trio '
-        '83% over its own table. '
-        'The overage was prose length, not reasoning: neither of the two '
-        'expensive judges reports a reasoning token. glm-5-maas held 63% of '
-        'the measured cost writing 556 to 567 tokens every time, and MiniMax '
-        'M2.7 held 32% ranging 345 to 1,780 across repeats of one prompt. '
-        'A budget preset that is neither cheapest on paper nor close to its paper '
-        'in practice has no seat to hold: budget traffic goes to Cheap '
-        'Aggregate, vendor independence to Open-Weight / Portable.'
+        'Retired. A budget panel whose measured cost ran far above its published '
+        'figure, because two of its judges wrote long prose verdicts. Use '
+        'Balanced Trio for a default panel, or Open-Weight / Portable for vendor '
+        'independence.'
     ),
 }
 
