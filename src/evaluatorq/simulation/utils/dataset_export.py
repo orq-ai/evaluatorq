@@ -167,10 +167,10 @@ def parse_jsonl(content: str, cls: type[T]) -> list[T]: ...
 
 
 @overload
-def parse_jsonl(content: str, cls: None = None) -> list[dict[str, Any]]: ...
+def parse_jsonl(content: str, cls: type[Any] | None = None) -> list[dict[str, Any]]: ...
 
 
-def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T] | list[dict[str, Any]]:
+def parse_jsonl(content: str, cls: type[Any] | None = None) -> list[Any]:
     """Parse a JSONL string into a list of objects.
 
     If *cls* is a Pydantic ``BaseModel`` subclass, each line will be validated
@@ -183,7 +183,7 @@ def parse_jsonl(content: str, cls: type[T] | None = None) -> list[T] | list[dict
             continue
         try:
             data = json.loads(trimmed)
-            if cls is not None:
+            if cls is not None and issubclass(cls, BaseModel):
                 results.append(cls.model_validate(data))
             else:
                 results.append(data)

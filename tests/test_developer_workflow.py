@@ -185,12 +185,19 @@ def _assert_canonical_matrix(check_job: str) -> None:
     assert not any(re.match(r'^        (?:include|exclude)\s*:', line) for line in matrix.splitlines())
 
 
+def _assert_blocking_check_shell(check_job: str) -> None:
+    defaults = _yaml_block(check_job, 'defaults:', indent=4)
+    run_defaults = _yaml_block(defaults, 'run:', indent=6)
+    assert run_defaults.splitlines() == ['      run:', '        shell: bash']
+
+
 def _assert_ci_typecheck_contract(workflow: str) -> None:
     jobs = _yaml_block(workflow, 'jobs:', indent=0)
     check_job = _yaml_block(jobs, 'check:', indent=2)
     expected_name = "    name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})"
     assert expected_name in check_job.splitlines()
     _assert_canonical_matrix(check_job)
+    _assert_blocking_check_shell(check_job)
     assert not any(re.match(r'^    if\s*:', line) for line in check_job.splitlines())
     _assert_failure_enforcing(check_job, indent=4)
 
@@ -213,6 +220,7 @@ def _assert_ci_test_contract(workflow: str) -> None:
     check_job = _yaml_block(jobs, 'check:', indent=2)
     assert not any(re.match(r'^    if\s*:', line) for line in check_job.splitlines())
     _assert_canonical_matrix(check_job)
+    _assert_blocking_check_shell(check_job)
     _assert_failure_enforcing(check_job, indent=4)
     steps = _yaml_block(check_job, 'steps:', indent=4)
     matching_steps = [
@@ -531,6 +539,16 @@ def test_ci_keeps_full_non_integration_test_commands() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
 
     _assert_ci_test_contract(workflow)
+
+
+def test_ci_contracts_reject_a_failure_suppressing_default_shell() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow.replace('        shell: bash', '        shell: bash {0} || true', 1)
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+    with pytest.raises(AssertionError):
+        _assert_ci_test_contract(mutated)
 
 
 @pytest.mark.parametrize(
