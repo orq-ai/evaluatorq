@@ -97,7 +97,8 @@ def resolve_config(
     Flags apply in ``flags`` order and deep-merge into their own path, so ``--attack-model`` keeps the rest of
     a configured ``llm_config``, and a narrow flag listed after ``--llm-config`` wins over it for its field.
     ``cli_args`` holds the command's converted arguments: click's ``ctx.params`` still has raw strings. A
-    field nothing sets takes ``model``'s default, and ``null`` anywhere means unset.
+    field nothing sets takes ``model``'s default. ``null`` is accepted only where the field allows ``None``,
+    which every SDK keyword whose default is ``None`` does, so there it reads as "unset".
     """
     data: dict[str, Any] = {}
     if config_source is not None:
