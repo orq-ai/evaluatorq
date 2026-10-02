@@ -121,7 +121,8 @@ function loadDashboard({
   };
   vm.runInNewContext(source, {
     document, window, history, location: { hash: '' },
-    FormData: class {}, Event: class {}, Date: dateClass, CSS: { escape: value => value },
+    FormData: class {}, Date: dateClass, CSS: { escape: value => value },
+    Event: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
   });
   return { body, document, documentEvents, window, history, entries, scheduled, intervals };
 }
@@ -700,3 +701,26 @@ test('Apply filters rejects nonexistent local time before the hx-post can submit
   assert.equal(validity[fromTime.id], 'Enter a valid local time');
   assert.deepEqual(reports, [fromTime.id]);
 }));
+
+test('Picking a model from a list tells the form the hidden value changed', () => {
+  const app = loadDashboard();
+  const events = [];
+  const hidden = { value: '', dispatchEvent(event) { events.push([event.type, event.bubbles, this.value]); } };
+  const button = { textContent: '', focus() {} };
+  const sub = { getAttribute: () => 'model' };
+  const classes = { contains: () => true, toggle() {} };
+  const option = {
+    classList: classes,
+    getAttribute: name => (name === 'data-model' ? 'gpt-5.6-luna' : null),
+    setAttribute() {},
+    closest: selector => ({ '.model-pick .model-option': option, '.model-pick': pick, '.facet-sub': sub })[selector] ?? null,
+  };
+  const pick = {
+    querySelector: selector => ({ 'input[type="hidden"]': hidden, '.model-pick-btn': button })[selector] ?? null,
+    querySelectorAll: () => [],
+  };
+  const target = { closest: selector => (selector === '.model-pick .model-option' ? option : null) };
+  app.body.emit('click', { target });
+  assert.equal(hidden.value, 'gpt-5.6-luna');
+  assert.deepEqual(events, [['change', true, 'gpt-5.6-luna']]);
+});

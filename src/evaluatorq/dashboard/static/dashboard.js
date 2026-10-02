@@ -556,6 +556,7 @@
   function pickModel(from, model) {
     const pick = from.closest('.model-pick');
     pick.querySelector('input[type="hidden"]').value = model;
+    pick.querySelector('input[type="hidden"]').dispatchEvent(new Event('change', { bubbles: true }));
     pick.querySelector('.model-pick-btn').textContent = model || 'Choose a model';
     pick.querySelectorAll('.model-option').forEach(function (other) {
       other.classList.toggle('is-selected', other === from);

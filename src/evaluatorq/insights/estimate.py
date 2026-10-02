@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from evaluatorq.insights.models import DimensionName
     from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
 
-TraceSource = Literal['recent', 'question', 'finder', 'snapshot']
+TraceSource = Literal['recent', 'query', 'finder', 'snapshot']
 
 # `transcript.py` sizes VIEW_BUDGET characters at about 25k tokens, "near 3 characters a token".
 CHARS_PER_TOKEN = 3
