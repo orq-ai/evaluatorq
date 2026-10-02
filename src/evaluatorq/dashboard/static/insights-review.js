@@ -754,7 +754,7 @@ function renderCompare() {
     html += `<tr><th class="rh"><div><i style="background:${r.color}"></i><span>${esc(r.name)}</span></div><small>${eligible.length} eligible</small></th>`;
     cols.forEach((c, j) => {
       const n = eligible.filter(c.test).length, share = eligible.length ? n / eligible.length : 0;
-      html += n ? `<td data-r="${esc(r.id)}" data-j="${j}" tabindex="0" role="button" aria-label="${n} of ${eligible.length} eligible traces, ${Math.round(share * 100)} percent, ${esc(r.name)} by ${esc(c.label)}" title="${n} of ${eligible.length} traces with both values">${n}<small>${Math.round(share * 100)}% · ${eligible.length}</small></td>` : `<td class="z" title="No traces with both values">·</td>`;
+      html += n ? `<td data-r="${esc(r.id)}" data-j="${j}" tabindex="0" role="button" style="background:${hexA(c.color, (.12 + share * .4).toFixed(2))}" aria-label="${n} of ${eligible.length} eligible traces, ${Math.round(share * 100)} percent, ${esc(r.name)} by ${esc(c.label)}" title="${n} of ${eligible.length} traces with both values">${n}<small>${Math.round(share * 100)}% · ${eligible.length}</small></td>` : `<td class="z" title="No traces with both values">·</td>`;
     });
     html += '</tr>';
   });

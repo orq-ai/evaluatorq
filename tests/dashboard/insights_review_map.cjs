@@ -75,7 +75,15 @@ vm.runInContext(source.slice(compareStart, compareEnd), context);
 context.renderCompare();
 assert.match(compareCanvas.innerHTML, /2 eligible<\/small>/, 'traces missing either compared value leave the denominator');
 assert.match(compareCanvas.innerHTML, /100% · 2/, 'cell share uses only traces with both values');
+assert.match(compareCanvas.innerHTML, /style="background:rgba\(46,189,133,0\.52\)"/, 'a full-share cell receives a strong tint from its column');
 assert.match(compareCanvas.innerHTML, /No traces with both values/, 'zero cells explain missing intersections');
+
+context.S.cmp = 'err';
+context.T = Array.from({length: 8}, (_, index) => ({id: `span:${index}`, has_summary: true, errors: index === 0 ? ['error'] : []}));
+context.bases = () => [{id: 'intent-a', name: 'Intent A', color: '#111111', members: new Set(context.T.map(trace => trace.id))}];
+context.renderCompare();
+assert.match(compareCanvas.innerHTML, /style="background:rgba\(223,83,37,0\.17\)"[^>]*>1<small>13% · 8/, 'a 13% error cell uses a light error tint');
+assert.match(compareCanvas.innerHTML, /style="background:rgba\(41,157,143,0\.47\)"[^>]*>7<small>88% · 8/, 'an 88% no-error cell uses a stronger success tint');
 
 const folded = context.categoryColumns(Array.from({length: 12}, (_, index) => ({
   label: `value-${index}`,
