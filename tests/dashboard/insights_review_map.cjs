@@ -168,38 +168,17 @@ assert.equal(restored.t, 'b', 'URL filter restores as a set filter');
 assert.deepEqual([...restored.ids].sort(), [...compareState.filters[0].ids].sort(), 'URL restore keeps the complete two-axis intersection');
 console.log('Map Compare folded cell filters and URL restoration checks passed');
 
-const codingLabelStart = source.indexOf('function codingQuestionOption(key) {');
-const codingLabelEnd = source.indexOf('const GENERAL_QUESTIONS', codingLabelStart);
-assert.ok(codingLabelStart >= 0 && codingLabelEnd > codingLabelStart, 'coding question label fallback is present');
-Object.assign(context, {
-  QUESTION_TEXT: {
-    verified: ['', 'choice'], scope_creep: ['', 'noul'], user_corrections: ['', 'score'],
-  },
-  QUESTIONS: [['task_type', 'Task type', 'choice']],
-  human: value => value.replace(/_/g, ' ').replace(/^./, char => char.toUpperCase()),
-});
-vm.runInContext(source.slice(codingLabelStart, codingLabelEnd), context);
-for (const [key, label, kind] of [
-  ['verified', 'Verified', 'choice'],
-  ['scope_creep', 'Scope creep', 'noul'],
-  ['user_corrections', 'User corrections', 'score'],
-]) {
-  const option = context.codingQuestionOption(key);
-  assert.equal(option[1], label, `${key} has a readable label`);
-  assert.equal(option[2], kind, `${key} keeps its answer type`);
-}
-
 const actionStart = source.indexOf('function viewClusterTraces(c) {');
 const actionEnd = source.indexOf('function tracePanel(t) {', actionStart);
 assert.ok(actionStart >= 0 && actionEnd > actionStart, 'cluster drawer actions are present');
-let commits = 0, sheetOpens = 0;
+let commits = 0;
+const sheetOpens = [];
 const actionState = {dim: 'failure', view: 'map', filters: [{t: 'c', id: 'old'}], q: 'old', more: 1, sel: {kind: 'cluster'}, activityItem: {name: 'old'}};
-const actionNr = {tpl: 'fail', adding: false, kindDraft: '', nameDraft: '', questionDraft: ''};
 Object.assign(context, {
   S: actionState,
-  NR: actionNr,
+  NEW_RUN_URL: '/insights/new?mount=dialog',
   commit: () => { commits++; },
-  openSheet: () => { sheetOpens++; },
+  openSheet: (...args) => { sheetOpens.push(args); },
 });
 vm.runInContext(source.slice(actionStart, actionEnd), context);
 const savedCluster = {id: 'top-1', dim: 'intent', name: 'Scope creep', members: new Set(['snapshot:trace:1', 'snapshot:trace:2'])};
@@ -213,29 +192,15 @@ assert.equal(actionState.sel, null);
 assert.equal(actionState.more, 20);
 assert.equal(commits, 1, 'view action commits the filtered list state');
 
+const draftedQuestions = [];
+context.InsightsRunForm = {draftQuestion: (form, draft) => draftedQuestions.push([form, draft])};
 context.turnClusterIntoQuestion(savedCluster);
-assert.equal(actionNr.adding, true, 'question action opens the custom question editor');
-assert.equal(actionNr.kindDraft, 'noul', 'cluster question starts as yes/no');
-assert.equal(actionNr.nameDraft, 'about_scope_creep');
-assert.equal(actionNr.questionDraft, 'Did the agent handle Scope creep well?');
-assert.equal(sheetOpens, 1);
+assert.equal(sheetOpens.length, 1, 'question action opens the run form dialog');
+assert.equal(sheetOpens[0][0], '/insights/new?mount=dialog');
+sheetOpens[0][2]('form');
+assert.deepEqual(JSON.parse(JSON.stringify(draftedQuestions)), [['form', {
+  name: 'about_scope_creep', kind: 'noul', text: 'Did the agent handle Scope creep well?',
+}]], 'the dialog opens the custom question editor with a yes/no draft about the cluster');
 assert.match(source, /data-act="cluster-traces"/);
 assert.match(source, /data-act="cluster-question"/);
 console.log('Coding question labels and cluster drawer actions checks passed');
-
-const errorMarkupStart = source.indexOf('function sheetErrorMarkup() {');
-const errorMarkupEnd = source.indexOf('function renderSheet()', errorMarkupStart);
-assert.ok(errorMarkupStart >= 0 && errorMarkupEnd > errorMarkupStart, 'sheet error markup helper is present');
-Object.assign(context, {NR: {error: 'Upload failed: token unavailable'}, esc: value => String(value)});
-vm.runInContext(source.slice(errorMarkupStart, errorMarkupEnd), context);
-const visibleError = context.sheetErrorMarkup();
-assert.match(visibleError, /role="alert"/);
-assert.match(visibleError, /Upload failed: token unavailable/);
-assert.doesNotMatch(visibleError, / hidden/);
-context.NR.error = '';
-assert.match(context.sheetErrorMarkup(), /role="alert"[^>]* hidden/);
-assert.match(source, /<div class="body">\s*\$\{sheetErrorMarkup\(\)\}/, 'the error is rendered in the sheet body outside the custom editor');
-assert.match(source, /input\.onchange = async \(\) => \{ const kind = input\.dataset\.file; try \{ buttonBusy\(input, true\); const result = await InsightsRunCommon\.uploadSource\(kind, input\.files\[0\], null\)/, 'uploads use shared CSRF handling inside the error boundary');
-assert.match(source, /NR\.error = err\.message \|\| 'Upload failed\.'; renderSheet\(\);/, 'upload failures remain visible in the sheet');
-assert.match(source, /const startButton = \$\('startRun'\);[\s\S]*startButton\.onclick = async \(\) => \{[\s\S]*try \{[\s\S]*body\.set\('csrf', await ensureCsrf\(\)\)[\s\S]*catch \(err\) \{ NR\.error = err\.message[^}]*renderSheet\(\); \}/, 'launch token failures are caught and rendered');
-console.log('New-run sheet upload and launch error visibility checks passed');

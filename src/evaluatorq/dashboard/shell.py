@@ -235,6 +235,7 @@ def page(
         A complete HTML document string starting with ``<!DOCTYPE html>``.
     """
     css = load_css()
+
     nav_key = _resolve_nav(active_surface, active_nav)
     sidebar = _sidebar_html(nav_key)
     scripts = ''.join(str(a) for a in head_assets())
