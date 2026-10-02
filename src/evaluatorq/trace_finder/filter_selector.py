@@ -15,7 +15,7 @@ from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.contracts import LLMCallConfig
 
 from .debug import enabled as debug_enabled
-from .models import FACET_NAMES, FacetCatalogue, FacetSelection
+from .models import FACET_NAMES, FILTER_OR_JUDGMENT_RULE, FacetCatalogue, FacetSelection
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 FILTER_TIMEOUT_MS = 30_000
 NO_FILTER_LABEL = 'none'
 MAX_FILTER_QUESTIONS = 100
+# "tool errors" once became status = error, which emptied the population before any judgment ran.
+_STATUS_NOTE = (
+    ' Status is the recorded trace status, not an error inside the conversation: "tool errors" or "errors" '
+    f'alone are {NO_FILTER_LABEL!r}.'
+)
 
 
 class FilterSelectionError(RuntimeError):
@@ -79,7 +84,8 @@ async def select_filters_with_response(
             f'trace filter selection needs {len(questions)} questions; maximum is {MAX_FILTER_QUESTIONS}'
         )
 
-    request = ClassifyRequest(state={'query': normalized}, questions=questions)
+    # The rule travels once in the shared state rather than in each of up to 100 questions.
+    request = ClassifyRequest(state={'query': normalized, 'rule': FILTER_OR_JUDGMENT_RULE}, questions=questions)
     call_cfg = cfg if cfg is not None else LLMCallConfig(model=model, timeout_ms=FILTER_TIMEOUT_MS)
     if debug_enabled():
         logger.debug(
@@ -151,7 +157,8 @@ def _questions_for_catalogue(
                     instructions=(
                         f'Does the query explicitly request {name.replace("_", " ")} value {value!r}? '
                         'Answer yes when it is one of several requested alternatives. '
-                        'Do not infer a metadata constraint from the semantic task.'
+                        'Follow the rule in state: answer no when the value is only implied by what '
+                        'happened in the conversation.'
                     ),
                     state={},
                 )
@@ -163,7 +170,9 @@ def _questions_for_catalogue(
             instructions=(
                 f'Identify the {name.replace("_", " ")} value explicitly requested by the user query. '
                 f'Choose {NO_FILTER_LABEL!r} when the query does not constrain this dimension. '
-                'Do not infer a metadata constraint from the semantic classification request.'
+                f'Follow the rule in state: choose {NO_FILTER_LABEL!r} when the value is only implied by what '
+                'happened in the conversation, or when the query is an aggregate question.'
+                + (_STATUS_NOTE if name == 'status' else '')
             ),
             criteria={label: _choice_description(name, value) for label, value in choice_map.items()},
             state={},

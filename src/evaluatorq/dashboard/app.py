@@ -64,7 +64,11 @@ from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
-from evaluatorq.dashboard.trace_finder.routes import initialize_finder_settings, register_finder_routes
+from evaluatorq.dashboard.trace_finder.routes import (
+    initialize_finder_settings,
+    register_finder_routes,
+)
+from evaluatorq.dashboard.trace_finder.sessions import TraceSessionMiddleware
 from evaluatorq.dashboard.view import (
     MODEL_FIELDS,
     RUN_PAGE_SIZES,
@@ -407,11 +411,11 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     rejected = request_rejected(req, form_data)
     if rejected:
         roots = _roots(req)
-        body = settings_body(_settings_config(roots), effective_settings(), errors={'form': rejected})
+        config = await asyncio.to_thread(_settings_config, roots)
+        body = settings_body(config, effective_settings(), errors={'form': rejected})
         return Response(page('Settings', body, active_nav='settings'), status_code=403, media_type='text/html')
     roots = _roots(req)
-    # Window, limit and parallelism are tuned per run on the Trace search page; the form only carries models.
-    # Carry them over from the saved file, not the effective view, so env overrides never get persisted.
+    # Use saved values as the baseline so unchanged environment overrides are not persisted.
     current = load_settings()
     values = _submitted_settings_values(form_data, current)
     profiles = await asyncio.to_thread(list_orq_profiles)
@@ -489,21 +493,64 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
             logger.warning(
                 'Saved Orq profile {} is unavailable; select another profile or Environment', settings.orq_profile
             )
-        old_store = getattr(req.app.state, 'finder_store', None)
+        old_search_store = getattr(req.app.state, 'finder_search_store', None)
+        old_session_stores = await req.app.state.trace_sessions.detach_all()
+        old_legacy_store = getattr(req.app.state, 'finder_store', None)
+        old_warmup = getattr(req.app.state, 'finder_catalogue_warmup', None)
         req.app.state.finder_settings = effective_settings()
         req.app.state.finder_generation += 1
-        for state_name in ('finder_store', 'finder_catalogue_cache', 'insights_facet_catalogues'):
+        for state_name in (
+            'finder_store',
+            'finder_search_store',
+            'finder_catalogue_cache',
+            'finder_catalogue_warmup',
+            'insights_facet_catalogues',
+        ):
             if hasattr(req.app.state, state_name):
                 delattr(req.app.state, state_name)
-    if old_store is not None:
-        # Retire the old store after removing it from app state so new requests cannot acquire it.
-        await old_store.close()
+    await _cancel_background_task(old_warmup[2] if old_warmup is not None else None)
+    # Retire stores after removing them from app state so new requests cannot acquire them.
+    await _close_finder_stores(*old_session_stores, old_legacy_store, old_search_store)
     req.app.state.finder_unavailable_reason = None
     return RedirectResponse('/settings?saved=1', status_code=303)
 
 
+async def _cancel_background_task(task: asyncio.Task[Any] | None) -> None:
+    if task is not None and not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _close_finder_stores(*stores: Any) -> None:
+    active_stores = [store for store in stores if store is not None]
+    closing = asyncio.gather(*(store.close() for store in active_stores), return_exceptions=True)
+    try:
+        results = await asyncio.shield(closing)
+    except asyncio.CancelledError:
+        results = await closing
+        _log_finder_store_close_failures(active_stores, results)
+        raise
+    _log_finder_store_close_failures(active_stores, results)
+    cancellation = next((result for result in results if isinstance(result, asyncio.CancelledError)), None)
+    if cancellation is not None:
+        raise cancellation
+    fatal = next(
+        (result for result in results if isinstance(result, BaseException) and not isinstance(result, Exception)), None
+    )
+    if fatal is not None:
+        raise fatal
+
+
+def _log_finder_store_close_failures(stores: list[Any], results: list[Any]) -> None:
+    for store, result in zip(stores, results, strict=True):
+        if isinstance(result, Exception):
+            logger.opt(exception=(type(result), result, result.__traceback__)).warning(
+                'Could not close retired finder store {}: {}', type(store).__name__, result
+            )
+
+
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
-    """Keep environment model overrides out of the saved file when the form was unchanged."""
+    """Keep unchanged environment overrides out of the saved file."""
     values: dict[str, object] = {
         name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
     }
@@ -529,7 +576,14 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_workspace'] = None
     values['orq_project_id'] = None
     values['orq_project_name'] = None
-    values.update(window_days=current.window_days, limit=current.limit, parallelism=current.parallelism)
+    values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    # Finder limits are per-run controls, so the settings form keeps their saved defaults.
+    values.update(
+        window_days=current.window_days,
+        limit=current.limit,
+        parallelism=current.parallelism,
+        explorer_columns=current.explorer_columns,
+    )
     return values
 
 
@@ -587,17 +641,20 @@ def _report_view(rid: str, req: Request) -> NotStr | Response:
 
     # Tabbed body for the known surfaces; the interactive panels live inside
     # their tabs, so they are no longer appended separately.
-    if surface == 'sim':
-        from evaluatorq.dashboard.view import sim_run_compare_control
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        # Same choice list as the overview picker (sim only, no error runs,
-        # capped); the control itself drops the current run from the options.
-        choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
-        body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
-    elif surface == 'redteam':
-        body_html = report_tabs.redteam_report_tabs(rid, report_obj)
-    else:
-        body_html = adapter.body(report_obj)
+    with cli_slug_render_scope():
+        if surface == 'sim':
+            from evaluatorq.dashboard.view import sim_run_compare_control
+
+            # Same choice list as the overview picker (sim only, no error runs,
+            # capped); the control itself drops the current run from the options.
+            choices = [(c.id, c.name) for c in library.scan(roots) if c.surface == 'sim' and not c.error][:100]
+            body_html = report_tabs.sim_report_tabs(rid, report_obj, compare_html=sim_run_compare_control(rid, choices))
+        elif surface == 'redteam':
+            body_html = report_tabs.redteam_report_tabs(rid, report_obj)
+        else:
+            body_html = adapter.body(report_obj)
 
     opts = filter_def.options(report_obj)
     total_results = len(filter_def.results(report_obj))
@@ -669,14 +726,18 @@ async def _report_filter(rid: str, req: Request) -> NotStr | Response:
 
     # Render the tabbed body from the filtered results so the static tab
     # content (tables, charts) tracks the filter, not just the HTMX panels.
-    if surface == 'sim':
-        body_html = report_tabs.sim_report_tabs(rid, report_obj, filtered)
-    elif surface == 'redteam':
-        from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 
-        body_html = report_tabs.redteam_report_tabs(rid, rebuild_filtered_report(report_obj, filtered))
-    else:
-        body_html = adapter.body_from_results(report_obj, filtered)
+    with cli_slug_render_scope():
+        if surface == 'sim':
+            body_html = await asyncio.to_thread(report_tabs.sim_report_tabs, rid, report_obj, filtered)
+        elif surface == 'redteam':
+            from evaluatorq.redteam.reports.converters import rebuild_filtered_report
+
+            filtered_report = rebuild_filtered_report(report_obj, filtered)
+            body_html = await asyncio.to_thread(report_tabs.redteam_report_tabs, rid, filtered_report)
+        else:
+            body_html = adapter.body_from_results(report_obj, filtered)
 
     form_html = render_filter_form(
         rid, surface or '', new_opts, selections, shown=len(filtered), total=len(filter_def.results(report_obj))
@@ -907,10 +968,17 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
         try:
             yield
         finally:
+            warmup = getattr(runtime.state, 'finder_catalogue_warmup', None)
+            await _cancel_background_task(warmup[2] if warmup is not None else None)
+            await runtime.state.trace_sessions.close_all()
             store = getattr(runtime.state, 'finder_store', None)
             if store is not None:
                 await store.close()
                 del runtime.state.finder_store
+            search_store = getattr(runtime.state, 'finder_search_store', None)
+            if search_store is not None:
+                await search_store.close()
+                del runtime.state.finder_search_store
 
     app = FastHTML(
         surreal=False,
@@ -921,6 +989,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     )
     app.state.roots = roots
     initialize_finder_settings(app)
+    app.add_middleware(TraceSessionMiddleware, app_state=app.state)
     app.get('/auth/status')(_auth_status)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for

@@ -41,6 +41,11 @@ if TYPE_CHECKING:
 
 MATCH_KEY = '__match__'
 
+
+def _match_key(index: int, count: int) -> str:
+    return MATCH_KEY if count == 1 else f'{MATCH_KEY[:-2]}_{index}__'
+
+
 # Only these two kinds carry a live `error_exc` we can safely re-raise for `with_retry`
 # to classify; PARSE/UNKNOWN failures are not transient and must not be retried.
 _RETRYABLE_ERROR_KINDS = frozenset({JudgeError.TIMEOUT, JudgeError.API_CONNECTION, JudgeError.API_STATUS})
@@ -216,7 +221,7 @@ def _read_answers(
 ) -> dict[str, LabelAnswer]:
     read: dict[str, LabelAnswer] = {}
     for name, question in questions.items():
-        if name == MATCH_KEY:
+        if name == MATCH_KEY or name.startswith('__match_'):
             continue
         answer = answers.get(name)
         if answer is None:
@@ -239,11 +244,42 @@ def _read_answers(
     return read
 
 
+def _population_match(
+    trace: TraceRecord,
+    questions: dict[str, ClassifyQuestion],
+    raw: dict[str, ClassifyAnswer],
+    keys: Sequence[str],
+    compiled: Sequence[CompiledQuery],
+) -> bool | None:
+    """Return true only when every selected dimension matches; unreadable answers stay unknown."""
+    matches: list[bool] = []
+    for key, dimension in zip(keys, compiled, strict=True):
+        answer = raw.get(key)
+        if answer is None:
+            logger.warning(
+                'Insights label classify reply for trace {} is missing population-match answer {!r}',
+                trace.trace_id,
+                dimension.name,
+            )
+            continue
+        mapped = _map_answer(questions[key], answer)
+        if mapped.error is not None:
+            logger.warning(
+                'Insights label classify population-match answer for trace {} dimension {!r} is unreadable: {}',
+                trace.trace_id,
+                dimension.name,
+                mapped.error,
+            )
+            continue
+        matches.append(matches_selection(mapped.value, dimension))
+    return all(matches) if len(matches) == len(compiled) else None
+
+
 async def _label_one(
     trace: TraceRecord,
     *,
     labels: Sequence[LabelSpec],
-    compiled: CompiledQuery | None,
+    compiled: Sequence[CompiledQuery] | None,
     client: AsyncOpenAI,
     model: str,
     cfg: LLMCallConfig,
@@ -297,8 +333,12 @@ async def _label_one(
     state = conversation_view(trace)
     conversation_specs = [*labels, *(conversation_coding if is_coding else ())]
     questions: dict[str, ClassifyQuestion] = {spec.name: spec.to_question(state) for spec in conversation_specs}
-    if compiled is not None:
-        questions[MATCH_KEY] = compiled.task.model_copy(update={'state': state})
+    match_keys: list[str] = []
+    if compiled:
+        for index, dimension in enumerate(compiled):
+            key = _match_key(index, len(compiled))
+            match_keys.append(key)
+            questions[key] = dimension.task.model_copy(update={'state': state})
 
     async def conversation_call() -> tuple[dict[str, ClassifyAnswer] | None, str | None]:
         if not questions:
@@ -355,22 +395,8 @@ async def _label_one(
     answers.update(_read_answers(trace, questions, raw))
 
     matched: bool | None = None
-    if compiled is not None:
-        match_answer = raw.get(MATCH_KEY)
-        if match_answer is None:
-            logger.warning(
-                'Insights label classify reply for trace {} is missing the population-match answer', trace.trace_id
-            )
-        else:
-            mapped_match = _map_answer(questions[MATCH_KEY], match_answer)
-            if mapped_match.error is not None:
-                logger.warning(
-                    'Insights label classify population-match answer for trace {} is unreadable: {}',
-                    trace.trace_id,
-                    mapped_match.error,
-                )
-            else:
-                matched = matches_selection(mapped_match.value, compiled)
+    if compiled:
+        matched = _population_match(trace, questions, raw, match_keys, compiled)
 
     return LabelOutcome(trace=trace, answers=answers, matched=matched, error=None)
 
@@ -379,7 +405,7 @@ async def label_traces(
     traces: Sequence[TraceRecord],
     *,
     labels: Sequence[LabelSpec],
-    compiled: CompiledQuery | None,
+    compiled: Sequence[CompiledQuery] | None,
     client: AsyncOpenAI,
     model: str,
     parallelism: int = 100,

@@ -683,7 +683,7 @@ def test_cluster_panel_has_description_and_example_trace_link(tmp_path, minimal_
     assert response.status_code == 200
     assert 'Traces about general requests.' in response.text
     assert 'trace-1' in response.text
-    assert 'example-workspace/traces?query=' in response.text
+    assert 'example-workspace/traces/(trace:trace-1//span:span-1)' in response.text
     assert 'href="/insights/run-1/trace?trace_id=trace-1&amp;span_id=span-1"' in response.text
 
 

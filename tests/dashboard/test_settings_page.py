@@ -3,17 +3,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import apply_ui
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
+from evaluatorq.dashboard.trace_finder.search_views import search_page_html
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
@@ -61,12 +64,37 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
             'window_days': '14',
             'limit': '42',
             'parallelism': '7',
+            'ask_ai_mode': 'review',
         }),
     )
 
     assert response.status_code == 303
     assert response.headers['location'] == '/settings?saved=1'
     assert 'compiler/custom' in settings_file.read_text()
+    saved = json.loads(settings_file.read_text())
+    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
+    assert saved['parallelism'] == DashboardSettings.model_fields['parallelism'].default
+    assert saved['ask_ai_mode'] == 'review'
+
+
+def test_ai_limits_are_per_run_trace_search_controls(client: TestClient) -> None:
+    settings_html = client.get('/settings').text
+    search_html = search_page_html(RunSnapshot(), DashboardSettings.model_validate({}), api_available=False)
+
+    assert 'name="limit"' not in settings_html
+    assert 'name="parallelism"' not in settings_html
+    assert 'name="limit"' in search_html
+    assert 'name="parallelism"' in search_html
+    assert '<option value="immediate" selected>Just proceed</option>' in settings_html
+
+
+def test_settings_ignores_per_run_ai_limits(client: TestClient, settings_file: Path) -> None:
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'limit': '5001', 'parallelism': '201'}))
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
+    assert saved['parallelism'] == DashboardSettings.model_fields['parallelism'].default
 
 
 def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None:
@@ -86,7 +114,7 @@ def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None
     )
 
 
-def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings_file: Path) -> None:
+def test_invalid_hidden_numeric_field_is_ignored(client: TestClient, settings_file: Path) -> None:
     response = client.post(
         '/settings',
         data=csrf_data({
@@ -98,8 +126,15 @@ def test_numeric_fields_are_not_taken_from_the_form(client: TestClient, settings
     )
 
     assert response.status_code == 303
-    saved = json.loads(settings_file.read_text())
-    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
+    assert json.loads(settings_file.read_text())['limit'] == DashboardSettings.model_fields['limit'].default
+
+
+def test_submitted_settings_keep_saved_explorer_columns() -> None:
+    current = DashboardSettings.model_validate({'explorer_columns': ('model', 'cost')})
+
+    values = app_module._submitted_settings_values({}, current)
+
+    assert values['explorer_columns'] == ('model', 'cost')
 
 
 def test_environment_overrides_are_not_persisted_by_save(
@@ -115,6 +150,20 @@ def test_environment_overrides_are_not_persisted_by_save(
     saved = json.loads(settings_file.read_text())
     assert saved['limit'] == DashboardSettings.model_fields['limit'].default
     assert getattr(client.app, 'state').finder_settings.limit == 42
+
+
+def test_unchanged_environment_numeric_overrides_are_not_persisted(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '42')
+    monkeypatch.setenv('EVALUATORQ_FINDER_PARALLELISM', '9')
+
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'limit': '42', 'parallelism': '9'}))
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['limit'] == DashboardSettings.model_fields['limit'].default
+    assert saved['parallelism'] == DashboardSettings.model_fields['parallelism'].default
 
 
 def test_unchanged_environment_model_overrides_are_not_persisted(
@@ -168,20 +217,29 @@ def test_blank_model_is_rejected(client: TestClient) -> None:
 def test_saving_settings_invalidates_initialized_finder_store(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     models: list[str] = []
+    closed: list[str] = []
 
     class Store:
+        explorer = None
+
+        def __init__(self, name: str = 'explorer') -> None:
+            self.name = name
+
         async def snapshot(self) -> RunSnapshot:
             return RunSnapshot()
 
         async def close(self) -> None:
-            return None
+            closed.append(self.name)
 
     async def build_store(app: Any) -> Store:
         models.append(app.state.finder_settings.compiler_model)
-        return Store()
+        return Store(f'store-{len(models)}')
 
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
     assert client.get('/find').status_code == 200
+    assert client.get('/traces').status_code == 200
+    second_browser = TestClient(client.app, raise_server_exceptions=True)
+    assert second_browser.get('/traces').status_code == 200
 
     response = client.post(
         '/settings',
@@ -195,45 +253,191 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
         }),
     )
     assert response.status_code == 303
+    assert len(closed) == 3
+    assert len(set(closed)) == 3
+    state = getattr(client.app, 'state')
+    assert not hasattr(state, 'finder_store')
+    assert not hasattr(state, 'finder_search_store')
+    assert client.get('/find/rows').status_code == 200
+    assert models[-1] == 'new/compiler'
     assert client.get('/find').status_code == 200
     assert models[-1] == 'new/compiler'
 
 
-def test_dashboard_shutdown_closes_finder_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    closed: list[bool] = []
+@pytest.mark.asyncio
+async def test_trace_store_created_during_settings_save_uses_new_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: ())
+    monkeypatch.setattr(finder_routes, '_api_available', lambda _app: True)
+    app = build_app(roots=[tmp_path])
+    detached = threading.Event()
+    allow_settings_update = threading.Event()
+    stale_build_started = threading.Event()
+    models: list[str] = []
+    stores: list[Any] = []
 
     class Store:
+        explorer = None
+
+        def __init__(self, model: str) -> None:
+            self.model = model
+            self.closed = False
+
         async def snapshot(self) -> RunSnapshot:
             return RunSnapshot()
 
         async def close(self) -> None:
-            closed.append(True)
+            self.closed = True
+
+    async def build_store(runtime: Any) -> Store:
+        model = runtime.state.finder_settings.compiler_model
+        models.append(model)
+        if detached.is_set():
+            stale_build_started.set()
+        store = Store(model)
+        stores.append(store)
+        return store
+
+    monkeypatch.setattr(finder_routes, '_build_store', build_store)
+    original_detach = app.state.trace_sessions.detach_all
+
+    async def pause_after_detach() -> list[Any]:
+        result = await original_detach()
+        detached.set()
+        await asyncio.to_thread(allow_settings_update.wait, 10)
+        return result
+
+    monkeypatch.setattr(app.state.trace_sessions, 'detach_all', pause_after_detach)
+    with TestClient(app, follow_redirects=False) as client:
+        first_page = await asyncio.to_thread(client.get, '/traces')
+        assert first_page.status_code == 200
+        assert models == [app.state.finder_settings.compiler_model]
+
+        save_request = asyncio.create_task(
+            asyncio.to_thread(
+                client.post,
+                '/settings',
+                data=csrf_data({
+                    'compiler_model': 'new/compiler',
+                    'classifier_model': 'classifier/custom',
+                    'apply_model': 'apply/custom',
+                    'window_days': '14',
+                    'limit': '42',
+                    'parallelism': '7',
+                }),
+            )
+        )
+        assert await asyncio.to_thread(detached.wait, 2)
+        traces_request = asyncio.create_task(asyncio.to_thread(client.get, '/traces'))
+        try:
+            await asyncio.sleep(0.05)
+            assert not stale_build_started.is_set()
+        finally:
+            allow_settings_update.set()
+
+        save_response, traces_response = await asyncio.gather(save_request, traces_request)
+        assert save_response.status_code == 303, save_response.text.split('role="status">')[-1].split('</p>')[0]
+        assert traces_response.status_code == 200
+        assert len(models) == 2
+        assert models[0] != 'new/compiler'
+        assert models[1] == 'new/compiler'
+        assert stores[0].closed is True
+        assert stores[1].closed is False
+        assert (await asyncio.to_thread(client.get, '/traces')).status_code == 200
+        assert len(models) == 2
+
+
+@pytest.mark.asyncio
+async def test_closing_finder_stores_continues_after_one_close_fails() -> None:
+    closed: list[str] = []
+
+    class Store:
+        def __init__(self, name: str, *, fail: bool = False) -> None:
+            self.name = name
+            self.fail = fail
+
+        async def close(self) -> None:
+            closed.append(self.name)
+            if self.fail:
+                raise RuntimeError(f'{self.name} close failed')
+
+    await app_module._close_finder_stores(Store('broken', fail=True), Store('healthy'), None)
+
+    assert set(closed) == {'broken', 'healthy'}
+
+
+@pytest.mark.asyncio
+async def test_closing_finder_stores_finishes_cleanup_before_reraising_cancellation() -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    closed: list[str] = []
+
+    class Store:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def close(self) -> None:
+            started.set()
+            await release.wait()
+            closed.append(self.name)
+
+    closing = asyncio.create_task(app_module._close_finder_stores(Store('first'), Store('second')))
+    await started.wait()
+    closing.cancel()
+    await asyncio.sleep(0)
+    assert not closing.done()
+    release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+
+    assert set(closed) == {'first', 'second'}
+
+
+def test_dashboard_shutdown_closes_finder_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[str] = []
+
+    class Store:
+        explorer = None
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def snapshot(self) -> RunSnapshot:
+            return RunSnapshot()
+
+        async def close(self) -> None:
+            closed.append(self.name)
+
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    app = build_app(roots=[tmp_path])
+    stores = iter((Store('explorer'), Store('search')))
 
     async def build_store(_app: Any) -> Store:
-        return Store()
+        return next(stores)
 
-    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
-    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
-    app = build_app(roots=[tmp_path])
     with TestClient(app) as client:
+        assert client.get('/traces').status_code == 200
         assert client.get('/find').status_code == 200
 
-    assert closed == [True]
+    assert sorted(closed) == ['explorer', 'search']
 
 
 def test_settings_page_shows_saved_values(client: TestClient, settings_file: Path) -> None:
-    save_settings(
-        DashboardSettings(
-            compiler_model='saved/compiler',
-            classifier_model='saved/classifier',
-            apply_model='saved/apply',
-            window_days=11,
-            limit=123,
-            parallelism=19,
-        ),
-        settings_file,
+    settings = DashboardSettings(
+        compiler_model='saved/compiler',
+        classifier_model='saved/classifier',
+        apply_model='saved/apply',
+        window_days=11,
+        limit=123,
+        parallelism=19,
     )
+    save_settings(settings, settings_file)
 
     response = client.get('/settings')
 
@@ -244,6 +448,10 @@ def test_settings_page_shows_saved_values(client: TestClient, settings_file: Pat
     assert 'name="window_days"' not in response.text
     assert 'name="limit"' not in response.text
     assert 'name="parallelism"' not in response.text
+
+    search_html = search_page_html(RunSnapshot(), settings, api_available=False)
+    assert 'name="limit" type="number" min="1" max="5000" value="123"' in search_html
+    assert 'name="parallelism" type="number" min="1" max="200" value="19"' in search_html
 
 
 def test_saved_confirmation_is_rendered_after_redirect(client: TestClient) -> None:
@@ -281,7 +489,7 @@ def test_environment_auth_ignores_old_and_submitted_scope(
     assert response.status_code == 303
     saved = load_settings(settings_file)
     assert (saved.orq_workspace, saved.orq_project_id, saved.orq_project_name) == (None, None, None)
-    assert '/environment-workspace/traces?' in (trace_span_url('trace-1', 'span-1') or '')
+    assert '/environment-workspace/traces/(trace:trace-1//span:span-1)' in (trace_span_url('trace-1', 'span-1') or '')
     run = finder_routes._run_request({'query': 'Frustrated customers'}, effective_settings())
     assert run.population.facets.project_id is None
 
@@ -845,9 +1053,9 @@ async def test_concurrent_finder_requests_construct_one_store(
         return store
 
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
-    first = asyncio.create_task(finder_routes._store(app))
+    first = asyncio.create_task(finder_routes._store(app, session_id='session-id'))
     await entered.wait()
-    second = asyncio.create_task(finder_routes._store(app))
+    second = asyncio.create_task(finder_routes._store(app, session_id='session-id'))
     release.set()
 
     assert await asyncio.gather(first, second) == [store, store]

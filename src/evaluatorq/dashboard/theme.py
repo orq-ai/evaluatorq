@@ -113,6 +113,12 @@ EDITORIAL_CSS = """
     --chart-grid:  #e8e6e1;
     --chart-track: #ece9e4;
     --chart-axis:  #9d9ba4;
+    --traj-system:    #8c8a91;
+    --traj-user:      #25232e;
+    --traj-assistant: #4da296;
+    --traj-reasoning: #a6d3cc;
+    --traj-call:      #ff9747;
+    --traj-result:    #c4c2bd;
 
     /* Type — Orq brand fonts (self-hosted above), system fallbacks. */
     --font-display: 'Kurrent', Georgia, 'Times New Roman', ui-serif, serif;

@@ -16,6 +16,7 @@ from evaluatorq.insights.population import PopulationError, resolve_population
 from evaluatorq.trace_finder.compiler import CompiledPlan
 from evaluatorq.trace_finder.export import (
     ExportCounts,
+    ExportDimension,
     ExportFilters,
     ExportNumericFilters,
     ExportTask,
@@ -232,7 +233,7 @@ async def test_query_path_merges_explicit_facets_and_numeric_over_generated(monk
     )
 
     async def fake_compile_query(client: Any, model: str, query: str, *, cfg: Any = None) -> CompiledPlan:
-        return CompiledPlan(compiled=compiled_query, numeric=NumericFilters(tokens_min=5, tokens_max=100))
+        return CompiledPlan(dimensions=(compiled_query,), numeric=NumericFilters(tokens_min=5, tokens_max=100))
 
     async def fake_load_facet_catalogue(orq: Any, *, start: Any, end: Any, limit: int) -> FacetCatalogue:
         return FacetCatalogue()
@@ -256,7 +257,8 @@ async def test_query_path_merges_explicit_facets_and_numeric_over_generated(monk
         pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
     )
 
-    assert resolved.compiled == compiled_query
+    assert resolved.compiled == (compiled_query,)
+    assert resolved.echo['compiled_dimensions'][0]['name'] == 'AI match'
     call = FakeSource.calls[0]
     assert call['facets'].agent_name == frozenset({'explicit-bot'})
     assert call['facets'].model == frozenset({'gpt-5'})
@@ -280,7 +282,7 @@ async def test_query_path_degrades_when_filter_selection_fails(
     )
 
     async def fake_compile_query(client: Any, model: str, query: str, *, cfg: Any = None) -> CompiledPlan:
-        return CompiledPlan(compiled=compiled_query, numeric=NumericFilters())
+        return CompiledPlan(dimensions=(compiled_query,), numeric=NumericFilters())
 
     async def unavailable_catalogue(orq: Any, *, start: Any, end: Any, limit: int) -> FacetCatalogue:
         raise RuntimeError('facet service unavailable')
@@ -297,7 +299,7 @@ async def test_query_path_degrades_when_filter_selection_fails(
             pop, orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
         )
 
-    assert resolved.compiled == compiled_query
+    assert resolved.compiled == (compiled_query,)
     assert resolved.echo['filter_selection_error'] == 'facet service unavailable'
     assert 'facet service unavailable' in caplog.text
 
@@ -366,8 +368,7 @@ async def test_cleanup_failure_keeps_the_loaded_traces_and_the_original_error(
 def _run_export(matched_trace_ids: list[str], *, filters: ExportFilters | None = None) -> RunExport:
     return RunExport(
         query='refund requests',
-        task=ExportTask(kind='choice', instructions='classify', criteria={'billing': 'billing help'}, state={}, noul_threshold=0.5),
-        selection=ExportValuesSelection(kind='values', values=('billing',)),
+        dimensions=(ExportDimension(name='intent', task=ExportTask(kind='choice', instructions='classify', criteria={'billing': 'billing help'}, state={}, noul_threshold=0.5), selection=ExportValuesSelection(kind='values', values=('billing',))),),
         generated_filters=ExportFilters(),
         filters=filters if filters is not None else ExportFilters(agent_name=('support-bot',)),
         generated_numeric=ExportNumericFilters(),

@@ -260,8 +260,8 @@ def drawer(
     footer_html = f'<div class="rt-drawer-footer">{footer}</div>' if footer else ''
     return (
         f'{overlay}'
-        '<aside class="rt-drawer" role="dialog" aria-modal="true">'
-        f'<div class="rt-drawer-head"><h3 class="rt-drawer-title">{title}</h3>{close}</div>'
+        f'<aside class="rt-drawer" role="dialog" aria-modal="true" aria-labelledby="{drawer_id}-title" tabindex="-1">'
+        f'<div class="rt-drawer-head"><h3 class="rt-drawer-title" id="{drawer_id}-title">{title}</h3>{close}</div>'
         f'<div class="rt-drawer-body">{body}</div>'
         f'{footer_html}'
         '</aside>'

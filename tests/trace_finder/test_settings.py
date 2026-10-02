@@ -168,6 +168,13 @@ def test_default_settings_match_shared_pipeline_default() -> None:
     assert settings.apply_model == DEFAULT_PIPELINE_MODEL
 
 
+def test_explorer_columns_round_trip_and_unknown_keys_drop(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    save_settings(DashboardSettings.model_validate({'explorer_columns': ('model', 'cost')}), path)
+    assert load_settings(path).explorer_columns == ('model', 'cost')
+
+    path.write_text('{"explorer_columns": ["model", "gone"]}', encoding='utf-8')
+    assert load_settings(path).explorer_columns == ('model',)
 def test_old_profile_config_migrates_to_cli_profile_but_explicit_auth_wins() -> None:
     migrated = DashboardSettings.model_validate({'orq_profile': 'research-bauke'})
     explicit = DashboardSettings.model_validate(

@@ -35,6 +35,7 @@ class DashboardSettings(BaseModel):
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
+    ask_ai_mode: Literal['immediate', 'review'] = 'immediate'
     orq_auth_method: Literal['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'] = 'environment'
     orq_api_key_ciphertext: str | None = None
     orq_oauth_server: str | None = None
@@ -44,6 +45,20 @@ class DashboardSettings(BaseModel):
     orq_workspace: str | None = None
     orq_project_id: str | None = None
     orq_project_name: str | None = None
+    explorer_columns: tuple[str, ...] | None = None
+
+    @field_validator('explorer_columns', mode='after')
+    @classmethod
+    def drop_unknown_columns(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """Drop unknown saved columns with a warning instead of rejecting all settings."""
+        if value is None:
+            return None
+        from .columns import COLUMNS
+
+        unknown = [key for key in value if key not in COLUMNS]
+        if unknown:
+            logger.warning('Dropping unknown explorer column(s) {} from dashboard settings', ', '.join(unknown))
+        return tuple(key for key in value if key in COLUMNS)
 
     @model_validator(mode='before')
     @classmethod
