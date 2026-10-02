@@ -7,7 +7,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from loguru import logger
 from pydantic import ValidationError
@@ -19,10 +19,18 @@ from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.auth import auth_identity
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
+from evaluatorq.dashboard.insights_review_data import build_review_payload
+from evaluatorq.dashboard.insights_review_views import review_page
+from evaluatorq.dashboard.insights_uploads import (
+    UploadRequestTooLargeError,
+    cleanup_expired_uploads,
+    limit_request_body,
+    receive_upload,
+    store_upload,
+)
 from evaluatorq.dashboard.insights_views import (
     TABS,
     facet_options,
-    full_page,
     map_payload,
     new_run_page,
     overview_page,
@@ -35,7 +43,7 @@ from evaluatorq.dashboard.insights_views import (
 )
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
-from evaluatorq.insights.models import InsightsRun
+from evaluatorq.insights.models import InsightsRun, label_key
 from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.trace_finder.facets import load_facet_catalogue
@@ -104,6 +112,44 @@ def _html(content: str, status_code: int = 200, media_type: str = 'text/html') -
 
 def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> tuple[Path, InsightsRun | str] | None:
     return loaded.get(run_id)
+
+
+def _review_hash(run: InsightsRun, tab: str, query: Any) -> str:
+    """Translate a legacy tab and its compatible filters into the review URL state."""
+    view = {'map': 'map', 'crosstab': 'compare'}.get(tab, 'themes')
+    dimensions = run.dimensions
+    dimension = query.get('dimension')
+    if dimension not in dimensions:
+        dimension = next(iter(dimensions), '')
+    state: dict[str, str] = {}
+    if dimension:
+        state['dim'] = dimension
+    state['view'] = view
+    filters: list[str] = []
+    cluster_id = query.get('cluster')
+    if cluster_id:
+        cluster = (
+            next((item for item in dimensions[dimension].clusters if item.id == cluster_id), None)
+            if dimension in dimensions
+            else None
+        )
+        if cluster is not None:
+            filters.append(f'c:{quote(cluster.id, safe="-_~")}')
+    label_name, label_value = query.get('label'), query.get('value')
+    label = next((item for item in run.config.labels if item.name == label_name), None)
+    if label is not None and label_value:
+        valid_value = any(
+            trace.labels[label_name].error is None
+            and trace.labels[label_name].value is not None
+            and label_key(label, trace.labels[label_name].value) == label_value
+            for trace in run.traces
+            if label_name in trace.labels
+        )
+        if valid_value:
+            filters.append(f'l:{quote(label_name, safe="-_~")}:{quote(label_value, safe="-_~")}')
+    if filters:
+        state['f'] = '|'.join(filters)
+    return '#' + urlencode(state, quote_via=quote, safe='-_.!~*()')
 
 
 _CatalogueResult = tuple[FacetCatalogue | None, str | None, bool]
@@ -219,6 +265,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
     @app.get('/insights')
     def insights_home() -> Response:
         directory = get_insights_runs_dir()
+        cleanup_expired_uploads(directory)
         entries, loaded, manifests = _entries(directory)
         runs = {run_id: item[1] for run_id, item in loaded.items() if isinstance(item[1], InsightsRun)}
         return _html(overview_page(entries, runs, manifests))
@@ -250,6 +297,52 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             )
         )
 
+    @app.post('/insights/uploads')
+    async def insights_upload(req: Request) -> Response:
+        cleanup_expired_uploads(get_insights_runs_dir())
+        limit_request_body(req)
+        try:
+            form = await req.form()
+        except UploadRequestTooLargeError as exc:
+            return Response(json.dumps({'error': str(exc)}), status_code=413, media_type='application/json')
+        except Exception as exc:  # noqa: BLE001 — malformed multipart input is a client error
+            logger.warning('Could not parse Insights source upload: {}', exc)
+            return Response(
+                json.dumps({'error': 'Could not read the uploaded file.'}),
+                status_code=422,
+                media_type='application/json',
+            )
+        try:
+            rejected = request_rejected(req, form)
+            if rejected:
+                return Response(json.dumps({'error': rejected}), status_code=403, media_type='application/json')
+            kind = str(form.get('kind', ''))
+            if kind not in ('finder', 'snapshot'):
+                return Response(
+                    json.dumps({'error': 'Choose a Finder export or trace snapshot.'}),
+                    status_code=422,
+                    media_type='application/json',
+                )
+            upload = form.get('file')
+            if upload is None or not hasattr(upload, 'read') or not getattr(upload, 'filename', ''):
+                return Response(
+                    json.dumps({'error': 'Choose a JSON file to upload.'}),
+                    status_code=422,
+                    media_type='application/json',
+                )
+            try:
+                contents = await receive_upload(upload, kind)
+                path = await asyncio.to_thread(store_upload, get_insights_runs_dir(), contents, kind)
+            except OverflowError as exc:
+                return Response(json.dumps({'error': str(exc)}), status_code=413, media_type='application/json')
+            except (OSError, ValueError) as exc:
+                return Response(json.dumps({'error': str(exc)}), status_code=422, media_type='application/json')
+            return Response(
+                json.dumps({'kind': kind, 'path': str(path)}), status_code=201, media_type='application/json'
+            )
+        finally:
+            await form.close()
+
     @app.post('/insights/snapshot-preview')
     async def insights_snapshot_preview(req: Request) -> Response:
         form = await req.form()
@@ -274,7 +367,11 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         directory = get_insights_runs_dir()
         if rejected:
             return _html(new_run_page(error=rejected), 403)
+        custom_labels_raw = str(form.get('custom_labels_json', '[]'))
         try:
+            custom_labels = json.loads(custom_labels_raw)
+            if not isinstance(custom_labels, list):
+                raise TypeError('Custom questions must be a JSON list.')
             spec = await asyncio.to_thread(
                 InsightsLaunchSpec.model_validate,
                 {
@@ -283,17 +380,22 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                     'query': form.get('query', ''),
                     'finder_export': form.get('finder_export', ''),
                     'snapshot_path': form.get('snapshot_path', ''),
+                    'source_name': form.get('source_name', ''),
                     'window_days': form.get('window_days', 7),
                     'limit': form.get('limit', 100),
                     'facets': {name: form.getlist(f'facet_{name}') for name in FACET_NAMES},
                     'parallelism': form.get('parallelism', 20),
                     'labels': form.getlist('labels'),
+                    'coding_labels': form.getlist('coding_labels'),
+                    'custom_labels': custom_labels,
                     'dimensions': form.getlist('dimensions'),
                     'coding_analysis': form.get('coding_analysis') == 'on',
                 },
             )
-        except ValidationError as exc:
-            message = '; '.join(error['msg'] for error in exc.errors())
+        except (ValidationError, ValueError, TypeError) as exc:
+            message = (
+                '; '.join(error['msg'] for error in exc.errors()) if isinstance(exc, ValidationError) else str(exc)
+            )
             return _html(new_run_page(error=message), 422)
         try:
             auth = selected_dashboard_auth(req.app)
@@ -306,7 +408,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         return RedirectResponse(f'/insights/{quote(run_id, safe="")}', status_code=303)
 
     @app.get('/insights/{run_id}')
-    def insights_run(run_id: str) -> Response:
+    def insights_run(req: Request, run_id: str) -> Response:
         directory = get_insights_runs_dir()
         _, loaded, manifests = _entries(directory)
         resolved = _resolve(run_id, loaded)
@@ -314,17 +416,44 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             return _html('<h1>Insights run not found</h1>', 404)
         _, run = resolved
         if isinstance(run, InsightsRun):
-            return _html(full_page(run, manifest=manifests.get(run.run_id)))
+            return _html(
+                review_page(run, manifest=manifests.get(run.run_id), rerun=req.query_params.get('rerun') == '1')
+            )
         if run in ('running', 'error', 'cancelled', 'completed') and run_id in manifests:
             return _html(running_page(run_id, manifests[run_id].run_name, manifests[run_id]))
         return _html(unreadable_page(str(run)))
+
+    @app.get('/insights/{run_id}/review-data.json')
+    def insights_review_data(run_id: str) -> Response:
+        _, loaded, _ = _entries(get_insights_runs_dir())
+        resolved = _resolve(run_id, loaded)
+        if resolved is None:
+            return Response(
+                json.dumps({'error': 'Insights run not found'}),
+                status_code=404,
+                media_type='application/json',
+                headers={'Cache-Control': 'no-store'},
+            )
+        _, run = resolved
+        if not isinstance(run, InsightsRun):
+            return Response(
+                json.dumps({'error': f'Insights run is unreadable: {run}'}),
+                status_code=422,
+                media_type='application/json',
+                headers={'Cache-Control': 'no-store'},
+            )
+        return Response(
+            json.dumps(build_review_payload(run), ensure_ascii=False, separators=(',', ':')),
+            media_type='application/json',
+            headers={'Cache-Control': 'no-store'},
+        )
 
     @app.get('/insights/{run_id}/tab/{tab}')
     def insights_tab(req: Request, run_id: str, tab: str) -> Response:
         if tab not in TABS:
             return _html('<p class="insights-empty">Unknown Insights tab.</p>', 404)
         directory = get_insights_runs_dir()
-        _, loaded, manifests = _entries(directory)
+        _, loaded, _ = _entries(directory)
         resolved = _resolve(run_id, loaded)
         if resolved is None or not isinstance(resolved[1], InsightsRun):
             return _html('<p class="insights-empty">Insights run not found.</p>', 404)
@@ -335,14 +464,16 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         }
         if req.headers.get('HX-Request', '').casefold() == 'true':
             return _html(tab_content(resolved[1], tab, query=query) + tabs(resolved[1], tab, oob=True))
-        return _html(
-            full_page(
-                resolved[1],
-                active_tab=tab,
-                query=query,
-                manifest=manifests.get(resolved[1].run_id),
-            )
-        )
+        fragment = _review_hash(resolved[1], tab, req.query_params)
+        return RedirectResponse(f'/insights/{quote(resolved[1].run_id, safe="")}{fragment}', status_code=302)
+
+    @app.get('/insights/{run_id}/rerun')
+    def insights_rerun(run_id: str) -> Response:
+        _, loaded, _ = _entries(get_insights_runs_dir())
+        resolved = _resolve(run_id, loaded)
+        if resolved is None or not isinstance(resolved[1], InsightsRun):
+            return _html('<p class="insights-empty">Insights run not found.</p>', 404)
+        return RedirectResponse(f'/insights/{quote(resolved[1].run_id, safe="")}?rerun=1', status_code=302)
 
     @app.get('/insights/{run_id}/cluster/{cluster_id}')
     def insights_cluster(run_id: str, cluster_id: str) -> Response:

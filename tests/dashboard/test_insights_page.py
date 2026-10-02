@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from datetime import datetime, timezone
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from starlette.testclient import TestClient
@@ -16,7 +19,7 @@ from starlette.testclient import TestClient
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, StageRecord, Usage
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.insights_views import TABS, cluster_detail, failures, header, labels, progress, trace_detail_page, traces
+from evaluatorq.dashboard.insights_views import TABS, cluster_detail, failures, header, labels, new_run_page, progress, trace_detail_page, traces
 from evaluatorq.insights.models import (
     Cluster,
     ClusterAssignment,
@@ -45,6 +48,35 @@ def test_insights_header_renders_partial_cost(minimal_run) -> None:
 
     assert 'priced for 1 of 2 calls' in header(run)
     assert 'excludes trace selection' in header(run)
+
+
+def test_insights_review_activity_synthetic_contract() -> None:
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    script = Path(__file__).with_name('insights_review_activity.cjs')
+    subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
+
+
+def test_insights_review_dimensionless_run_and_safe_tooltips() -> None:
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    script = Path(__file__).with_name('insights_review_dimensionless.cjs')
+    subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
+
+
+def test_insights_run_common_contract() -> None:
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    script = Path(__file__).with_name('insights_run_common.cjs')
+    subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
+
+
+def test_new_run_page_loads_shared_logic_before_wizard() -> None:
+    html = new_run_page()
+
+    common_script = html.index('/static/insights-run-common.js')
+    wizard_script = html.index('/static/insights-wizard.js')
+    assert common_script < wizard_script
 
 
 def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_run) -> None:
@@ -100,6 +132,102 @@ def test_run_page_shows_projection_coverage_for_loaded_traces(minimal_run: Insig
     assert '1 of 2 traces exceed' in notice
     assert '3 of 10 whole messages omitted (30.0%)' in notice
     assert '120,000 bytes' in notice and '65,000 bytes' in notice
+
+
+def test_saved_run_uses_redesign_and_python_owned_actions(tmp_path, minimal_run, monkeypatch):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run)
+    client = TestClient(build_app())
+
+    response = client.get('/insights/run-1')
+
+    assert response.status_code == 200
+    assert 'insights-review-root' in response.text
+    assert 'href="/insights">Insights</a>' in response.text
+    assert 'href="/insights/run-1/export.json">Export</a>' in response.text
+    assert 'href="/insights/run-1?rerun=1">Re-run</a>' in response.text
+    rerun_page = client.get('/insights/run-1?rerun=1')
+    assert 'data-rerun="true"' in rerun_page.text
+    rerun = client.get('/insights/run-1/rerun', follow_redirects=False)
+    assert rerun.status_code == 302
+    assert rerun.headers['location'] == '/insights/run-1?rerun=1'
+
+
+@pytest.mark.parametrize(
+    ('tab', 'query', 'fragment'),
+    [
+        ('dimensions', '', '#dim=intent&view=themes'),
+        ('labels', '', '#dim=intent&view=themes'),
+        ('traces', 'dimension=intent&cluster=base-1', '#dim=intent&view=themes&f=c%3Abase-1'),
+        ('priority', 'dimension=bogus&cluster=bad', '#dim=intent&view=themes'),
+        ('map', 'dimension=intent', '#dim=intent&view=map'),
+        ('crosstab', 'dimension=intent', '#dim=intent&view=compare'),
+    ],
+)
+def test_legacy_tab_navigation_redirects_to_review(tmp_path, minimal_run, monkeypatch, tab, query, fragment):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run)
+    suffix = f'?{query}' if query else ''
+
+    response = TestClient(build_app()).get(f'/insights/run-1/tab/{tab}{suffix}', follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers['location'] == f'/insights/run-1{fragment}'
+
+
+def test_legacy_tab_redirect_keeps_valid_label_filter_and_discards_invalid_values(
+    tmp_path, minimal_run, monkeypatch
+):
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run)
+    client = TestClient(build_app())
+
+    valid = client.get(
+        '/insights/run-1/tab/labels?dimension=intent&label=sentiment&value=positive', follow_redirects=False
+    )
+    invalid = client.get(
+        '/insights/run-1/tab/labels?dimension=intent&label=sentiment&value=unknown', follow_redirects=False
+    )
+
+    assert valid.headers['location'] == '/insights/run-1#dim=intent&view=themes&f=l%3Asentiment%3Apositive'
+    assert invalid.headers['location'] == '/insights/run-1#dim=intent&view=themes'
+
+
+def test_launch_route_passes_selected_coding_and_custom_labels(monkeypatch):
+    import re
+    from unittest.mock import patch
+
+    from evaluatorq.dashboard.auth import DashboardAuth
+    from evaluatorq.insights.presets import CODING_LABELS
+
+    client = TestClient(build_app())
+    page = client.get('/insights/new')
+    token = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert token is not None
+    custom = {'name': 'custom_question', 'kind': 'noul', 'instructions': 'Did the agent answer?'}
+    data = {
+        'csrf': token.group(1),
+        'source': 'recent',
+        'dimensions': 'intent',
+        'coding_labels': [CODING_LABELS[1].name],
+        'custom_labels_json': json.dumps([custom]),
+    }
+    with (
+        patch(
+            'evaluatorq.dashboard.insights_routes.selected_dashboard_auth',
+            return_value=DashboardAuth('environment', 'key', 'https://my.orq.ai'),
+        ),
+        patch('evaluatorq.dashboard.insights_routes.launch_insights', return_value='run-1') as launch,
+    ):
+        response = client.post('/insights/runs', data=data, follow_redirects=False)
+        malformed = client.post('/insights/runs', data={**data, 'custom_labels_json': '{'}, follow_redirects=False)
+
+    assert response.status_code == 303
+    spec = launch.call_args.args[0]
+    assert spec.coding_labels == [CODING_LABELS[1].name]
+    assert [label.name for label in spec.custom_labels] == ['custom_question']
+    assert malformed.status_code == 422
+    assert 'role="alert"' in malformed.text
 
 
 def test_projection_warning_is_not_repeated_below_coverage(minimal_run: InsightsRun) -> None:
@@ -273,6 +401,189 @@ def _write_run(base, run: InsightsRun, name: str = 'insights_fixture.json'):
     return path
 
 
+def test_review_page_has_mock_shell_and_no_trace_data(minimal_run: InsightsRun) -> None:
+    from evaluatorq.dashboard.insights_review_views import review_page
+
+    html = review_page(minimal_run, None)
+
+    for element_id in ('header', 'heads', 'fbar', 'tabs', 'canvas', 'tlist', 'drawer', 'sheet'):
+        assert f'id="{element_id}"' in html
+    assert 'data-review-url="/insights/run-1/review-data.json"' in html
+    assert 'Loading run insights' in html
+    assert 'Could not load this run' in html
+    assert 'What is the refund policy?' not in html
+    assert 'insights-review.css' in html and 'insights-run-common.js' in html and 'insights-review.js' in html
+
+
+def test_review_data_route_returns_complete_uncached_payload(tmp_path, monkeypatch, minimal_run: InsightsRun) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    many = minimal_run.model_copy(update={
+        'traces': [
+            minimal_run.traces[index % len(minimal_run.traces)].model_copy(
+                update={'trace_id': f'trace-{index}', 'span_id': f'span-{index}'}
+            )
+            for index in range(5000)
+        ]
+    })
+    _write_run(tmp_path, many)
+
+    response = TestClient(build_app()).get('/insights/run-1/review-data.json')
+
+    assert response.status_code == 200
+    assert response.headers['cache-control'] == 'no-store'
+    assert len(response.json()['traces']) == 5000
+
+
+def test_review_data_route_reports_missing_and_unreadable_runs(tmp_path, monkeypatch, minimal_run: InsightsRun) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _write_run(tmp_path, minimal_run, 'insights_unreadable.json').write_text('{', encoding='utf-8')
+    client = TestClient(build_app())
+
+    missing = client.get('/insights/missing/review-data.json')
+    unreadable = client.get('/insights/insights_unreadable/review-data.json')
+
+    assert missing.status_code == 404 and missing.json()['error'] == 'Insights run not found'
+    assert unreadable.status_code == 422 and 'unreadable' in unreadable.json()['error'].lower()
+    assert missing.headers['cache-control'] == 'no-store'
+
+
+def test_default_dashboard_page_does_not_enable_review_shell() -> None:
+    from evaluatorq.dashboard.shell import page
+
+    html = page('Same title', '<p>Same body</p>')
+
+    assert 'eq-insights-review' not in html
+    assert 'insights-review.css' not in html
+    assert 'insights-review.js' not in html
+
+
+def test_review_page_escapes_the_run_id_in_same_origin_data_url(minimal_run: InsightsRun) -> None:
+    from evaluatorq.dashboard.insights_review_views import review_page
+
+    html = review_page(minimal_run.model_copy(update={'run_id': 'run & <one>'}), None)
+
+    assert 'data-review-url="/insights/run%20%26%20%3Cone%3E/review-data.json"' in html
+
+
+def test_review_page_does_not_embed_trace_link_template(monkeypatch, minimal_run: InsightsRun) -> None:
+    from evaluatorq.dashboard.insights_review_views import review_page
+
+    monkeypatch.setenv('ORQ_WORKSPACE', 'safe workspace')
+    monkeypatch.setenv('ORQ_UI_BASE_URL', 'https://orq.example')
+    html = review_page(minimal_run, None)
+
+    assert 'data-orq-template=' not in html
+    assert 'EVALQTRACEPLACEHOLDER' not in html
+    assert 'EVALQSPANPLACEHOLDER' not in html
+    assert 'trace-1' not in html
+
+
+def test_review_client_escapes_saved_ids_and_labels_partial_cost(minimal_run: InsightsRun) -> None:
+    from pathlib import Path
+
+    from evaluatorq.dashboard.insights_review_data import build_review_payload
+
+    script = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/insights-review.js').read_text(encoding='utf-8')
+    hostile_id = 'trace" onmouseover="alert(1)'
+    saved = minimal_run.model_copy(update={
+        'traces': [minimal_run.traces[0].model_copy(update={'trace_id': hostile_id})],
+        'cost_by_stage': {
+            'summary': Usage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=0.25, calls=3, priced_calls=1)
+        },
+    })
+    payload = build_review_payload(saved)
+    run_data = cast(dict[str, Any], payload['run'])
+    trace_data = cast(list[dict[str, Any]], payload['traces'])
+
+    assert trace_data[0]['trace_id'] == hostile_id
+    assert run_data['cost'] == 0.25
+    assert run_data['cost_is_partial'] is True
+    assert run_data['cost_by_stage_details']['summary'] == {
+        'cost': 0.25, 'is_partial': True, 'priced_calls': 1, 'calls': 3,
+    }
+    assert 'data-t="${esc(t.id)}"' in script
+    assert 'data-t="${esc(id)}"' in script
+    assert 'data-c="${esc(c.id)}"' in script
+    assert 'data-go="${esc(k.id)}"' in script
+    assert 'data-backto="${esc(S.sel.prev.id)}"' in script
+    assert 'data-t="${t.id}"' not in script
+    assert 'data-c="${c.id}"' not in script
+    assert 'run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(3)}`' in script
+    assert "stageCost.is_partial ? 'Partial cost: ' : ''" in script
+    assert "stageCost?.cost == null" in script
+
+
+def test_review_client_uses_full_trace_keys_and_label_score_keys() -> None:
+    from pathlib import Path
+
+    script = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/insights-review.js').read_text(encoding='utf-8')
+
+    assert "function encodeTraceKey(id)" in script
+    assert "map(encodeTraceKey).join('.')" in script
+    assert "i.slice(0, 8)" not in script
+    assert "return lvals(l).includes(key) ? key : null" in script
+    assert "const lnum = (_name, v) => +v" in script
+    assert "history.pushState(null, '', h)" in script
+    assert "addEventListener('popstate', () => { fromUrl(); render(); })" in script
+    assert 'const traceUrl = safeTraceUrl(t.trace_url);' in script
+    assert 'const orqUrl = safeOrqUrl(t.orq_url);' in script
+    assert 'function safeTraceUrl(value)' in script
+    assert 'function safeOrqUrl(value)' in script
+
+
+def test_review_trace_links_reject_unsafe_url_schemes() -> None:
+    import subprocess
+    from pathlib import Path
+
+    script = Path(__file__).with_name('insights_review_url.cjs')
+    subprocess.run(['node', str(script)], check=True)
+
+
+def test_new_run_sheet_starts_with_empty_source_selection() -> None:
+    from pathlib import Path
+
+    script = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/insights-review.js').read_text(encoding='utf-8')
+
+    assert 'Choose a Finder export JSON file.' in script
+    assert 'Choose a trace snapshot JSON file.' in script
+    assert 'trace-finder-42.json' not in script
+    assert 'sample100-trace-snapshot.json' not in script
+    assert '42 matched traces' not in script
+    assert 'Agent: Claude Code' not in script
+    assert "NR.src === 'finder' ? 42" not in script
+
+
+def test_review_fallback_payloads_keep_the_same_page_structure(minimal_run: InsightsRun) -> None:
+    from pathlib import Path
+
+    from evaluatorq.dashboard.insights_review_data import build_review_payload
+    from evaluatorq.dashboard.insights_review_views import review_page
+
+    no_labels = minimal_run.model_copy(update={
+        'config': minimal_run.config.model_copy(update={'labels': []}),
+        'labels': {},
+        'traces': [trace.model_copy(update={'labels': {}}) for trace in minimal_run.traces],
+    })
+    partial = minimal_run.model_copy(update={'status': 'error', 'warnings': ['A stage failed.']})
+    no_summaries = minimal_run.model_copy(update={
+        'traces': [trace.model_copy(update={'summary': None}) for trace in minimal_run.traces]
+    })
+    runs = [minimal_run, no_labels, partial, no_summaries]
+    script = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/insights-review.js').read_text(encoding='utf-8')
+
+    for run in runs:
+        page_html = review_page(run, None)
+        for element_id in ('header', 'heads', 'fbar', 'tabs', 'canvas', 'tlist', 'drawer', 'sheet'):
+            assert f'id="{element_id}"' in page_html
+        assert list(build_review_payload(run)['dims']) == ['intent']
+    assert build_review_payload(no_labels)['labels'] == []
+    assert cast(dict[str, Any], build_review_payload(partial)['run'])['status'] == 'error'
+    assert all(not trace['has_summary'] for trace in build_review_payload(no_summaries)['traces'])
+    assert 'No usable label results' in script
+    assert 'Summaries unavailable for' in script
+    assert 'Partial run' in script
+
+
 def test_empty_insights_overview_points_to_new_run(tmp_path, monkeypatch):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
 
@@ -330,19 +641,14 @@ def test_insights_overview_opens_a_dedicated_run_page(tmp_path, minimal_run, mon
 
     detail = client.get('/insights/run-1')
     assert detail.status_code == 200
-    assert 'href="/insights">← All Insights runs</a>' in detail.text
-    assert 'insights-rail' not in detail.text
-    assert 'Population' in detail.text
-    assert 'refund policy' in detail.text
-    assert 'support-bot' in detail.text
-    assert 'tokens ≥' in detail.text
-    assert '2026-08-25T00:00:00+00:00' in detail.text
-    assert '2026-09-01T00:00:00+00:00' in detail.text
-    assert '25 Aug 2026, 00:00 UTC' in detail.text
-    assert 'Models used' in detail.text
-    assert '500' in detail.text
-    assert 'sentiment' in detail.text
-    assert 'General requests' in detail.text
+    assert 'insights-review-root' in detail.text
+    data = client.get('/insights/run-1/review-data.json').json()
+    assert data['run']['population']['query'] == 'refund policy'
+    assert data['run']['population']['facets']['agent_name'] == ['support-bot']
+    assert data['run']['population']['limit'] == 500
+    assert data['run']['created'] == '2026-09-01T00:00:00Z'
+    assert 'sentiment' in [label['name'] for label in data['labels']]
+    assert data['dims']['intent']['clusters'][1]['name'] == 'General requests'
 
 
 def test_error_run_shows_failure_stage_and_failed_trace_note(tmp_path, minimal_run, monkeypatch):
@@ -356,13 +662,15 @@ def test_error_run_shows_failure_stage_and_failed_trace_note(tmp_path, minimal_r
     )
     _write_run(tmp_path, failed)
 
-    response = TestClient(build_app()).get('/insights/run-1')
+    client = TestClient(build_app())
+    response = client.get('/insights/run-1')
+    data = client.get('/insights/run-1/review-data.json').json()
 
     assert response.status_code == 200
-    assert 'Run failed; results may be partial.' in response.text
-    assert 'dimension:failure' in response.text
-    assert 'embedding service unavailable' in response.text
-    assert '1 trace had a label, summary, match, or dimension error.' in response.text
+    assert data['run']['status'] == 'error'
+    assert data['run']['stage_failures'][0]['stage'] == 'dimension:failure'
+    assert data['run']['stage_failures'][0]['message'] == 'embedding service unavailable'
+    assert data['run']['counts']['n_failed_traces'] == 1
 
 
 def test_cluster_panel_has_description_and_example_trace_link(tmp_path, minimal_run, monkeypatch):
@@ -385,7 +693,7 @@ def test_trace_id_opens_its_saved_insights_detail(tmp_path, minimal_run, monkeyp
     _write_run(tmp_path, minimal_run)
     client = TestClient(build_app())
 
-    table = client.get('/insights/run-1/tab/traces')
+    table = client.get('/insights/run-1/tab/traces', headers={'HX-Request': 'true'})
     detail = client.get('/insights/run-1/trace?trace_id=trace-1&span_id=span-1')
     missing = client.get('/insights/run-1/trace?trace_id=trace-1&span_id=missing')
 
@@ -461,13 +769,14 @@ def test_labels_without_any_labels_show_empty_state(tmp_path, minimal_run, monke
     _write_run(tmp_path, no_labels)
 
     client = TestClient(build_app())
-    response = client.get('/insights/run-1/tab/labels')
+    response = client.get('/insights/run-1/tab/labels', follow_redirects=False)
     run_page = client.get('/insights/run-1')
+    data = client.get('/insights/run-1/review-data.json').json()
 
-    assert response.status_code == 200
-    assert 'No labels in this run' in response.text
-    assert '<span class="insights-group-label">Labels</span>' not in run_page.text
-    assert '<span class="insights-muted">No labels</span>' not in run_page.text
+    assert response.status_code == 302
+    assert response.headers['location'] == '/insights/run-1#dim=intent&view=themes'
+    assert data['labels'] == []
+    assert 'insights-review-root' in run_page.text
 
 
 def test_traces_show_active_filter_chips_and_clear_filter_navigation(tmp_path, minimal_run, monkeypatch):
@@ -475,18 +784,17 @@ def test_traces_show_active_filter_chips_and_clear_filter_navigation(tmp_path, m
     _write_run(tmp_path, minimal_run)
 
     response = TestClient(build_app()).get(
-        '/insights/run-1/tab/traces?dimension=intent&cluster=base-1&label=sentiment&value=positive'
+        '/insights/run-1/tab/traces?dimension=intent&cluster=base-1&label=sentiment&value=positive',
+        follow_redirects=False,
     )
 
-    assert response.status_code == 200
-    assert 'intent = General requests' in response.text
-    assert 'sentiment = positive' in response.text
-    assert 'Clear filters' in response.text
-    assert 'href="/insights/run-1/tab/traces"' in response.text
-    assert 'trace-1' in response.text
+    assert response.status_code == 302
+    assert response.headers['location'] == (
+        '/insights/run-1#dim=intent&view=themes&f=c%3Abase-1%7Cl%3Asentiment%3Apositive'
+    )
 
 
-def test_tab_route_serves_full_page_on_navigation_and_fragment_for_htmx(tmp_path, minimal_run, monkeypatch):
+def test_tab_route_redirects_navigation_and_keeps_fragment_for_htmx(tmp_path, minimal_run, monkeypatch):
     from evaluatorq.dashboard import insights_routes
 
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
@@ -502,15 +810,13 @@ def test_tab_route_serves_full_page_on_navigation_and_fragment_for_htmx(tmp_path
     monkeypatch.setattr(insights_routes, '_entries', counted_entries)
     client = TestClient(build_app())
 
-    page_response = client.get('/insights/run-1/tab/labels')
+    page_response = client.get('/insights/run-1/tab/labels', follow_redirects=False)
     assert entries_calls == 1
     fragment_response = client.get('/insights/run-1/tab/labels', headers={'HX-Request': 'true'})
     assert entries_calls == 2
 
-    assert page_response.status_code == 200
-    assert page_response.text.startswith('<!DOCTYPE html>')
-    assert 'class="insights-tab active" href="/insights/run-1/tab/labels"' in page_response.text
-    assert 'insights-label-grid' in page_response.text
+    assert page_response.status_code == 302
+    assert page_response.headers['location'] == '/insights/run-1#dim=intent&view=themes'
     assert fragment_response.status_code == 200
     assert not fragment_response.text.startswith('<!DOCTYPE html>')
     assert 'insights-label-grid' in fragment_response.text
@@ -591,6 +897,6 @@ def test_completed_run_shows_escaped_run_warnings(tmp_path, minimal_run, monkeyp
     response = TestClient(build_app()).get('/insights/run-1')
 
     assert response.status_code == 200
-    assert 'Run warnings' in response.text
-    assert 'Small sentiment group: &lt;script&gt;alert(1)&lt;/script&gt;' in response.text
-    assert warning not in response.text
+    assert response.status_code == 200
+    assert 'insights-review-root' in response.text
+    assert TestClient(build_app()).get('/insights/run-1/review-data.json').json()['run']['warnings'] == [warning]

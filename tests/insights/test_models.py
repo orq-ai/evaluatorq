@@ -78,6 +78,16 @@ def test_run_round_trips_json(minimal_run: InsightsRun) -> None:
     assert InsightsRun.model_validate_json(minimal_run.model_dump_json()) == minimal_run
 
 
+@pytest.mark.parametrize('instructions', ['', 'x' * 2001])
+def test_saved_run_loads_legacy_label_instruction_lengths(minimal_run: InsightsRun, instructions: str) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['config']['labels'][0]['instructions'] = instructions
+
+    loaded = InsightsRun.model_validate(payload)
+
+    assert loaded.config.labels[0].instructions == instructions
+
+
 def test_run_rejects_naive_created_at(minimal_run: InsightsRun) -> None:
     payload = minimal_run.model_dump(mode='json')
     payload['created_at'] = '2026-09-01T00:00:00'
@@ -127,6 +137,37 @@ def test_saved_run_accepts_requested_coding_labels(minimal_run: InsightsRun) -> 
     }
 
     assert InsightsRun.model_validate_json(json.dumps(payload)).traces[0].labels['task_type'].value == 'bugfix'
+
+
+def test_saved_run_accepts_selected_coding_labels_and_gate(minimal_run: InsightsRun) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['config']['coding_labels'] = [
+        {'name': 'task_type', 'kind': 'choice', 'instructions': 'Classify the task.', 'criteria': {'bugfix': 'Fix a bug'}}
+    ]
+    payload['traces'][0]['labels']['coding_agent'] = {
+        'value': True, 'confidence': None, 'probabilities': None, 'error': None
+    }
+    payload['traces'][0]['labels']['task_type'] = {
+        'value': 'bugfix', 'confidence': None, 'probabilities': None, 'error': None
+    }
+
+    run = InsightsRun.model_validate_json(json.dumps(payload))
+
+    assert run.traces[0].labels['coding_agent'].value is True
+    assert run.traces[0].labels['task_type'].value == 'bugfix'
+
+
+def test_saved_run_rejects_unselected_coding_label(minimal_run: InsightsRun) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['config']['coding_labels'] = [
+        {'name': 'task_type', 'kind': 'choice', 'instructions': 'Classify the task.', 'criteria': {'bugfix': 'Fix a bug'}}
+    ]
+    payload['traces'][0]['labels']['unfixed_error'] = {
+        'value': True, 'confidence': None, 'probabilities': None, 'error': None
+    }
+
+    with pytest.raises(ValidationError, match="unconfigured label 'unfixed_error'"):
+        InsightsRun.model_validate(payload)
 
 
 @pytest.mark.parametrize('probability', [0.0, 1.0, 0, 1])
@@ -291,6 +332,25 @@ def test_insights_config_rejects_duplicate_labels_and_dimensions() -> None:
         InsightsConfig(labels=[spec, spec], dimensions=['intent'])
     with pytest.raises(ValidationError, match='dimensions must not contain duplicates'):
         InsightsConfig(labels=[], dimensions=['intent', 'intent'])
+
+
+def test_insights_config_rejects_regular_and_coding_label_name_collision() -> None:
+    from evaluatorq.insights.models import LabelSpec
+
+    regular = LabelSpec(name='task_type', kind='noul', instructions='Is this a task?')
+    coding = LabelSpec(name='task_type', kind='choice', instructions='Classify the task.')
+
+    with pytest.raises(ValidationError, match='labels and coding_labels must have unique names'):
+        InsightsConfig(labels=[regular], coding_labels=[coding], dimensions=['intent'])
+
+
+def test_insights_config_rejects_duplicate_coding_label_names() -> None:
+    from evaluatorq.insights.models import LabelSpec
+
+    coding = LabelSpec(name='task_type', kind='choice', instructions='Classify the task.')
+
+    with pytest.raises(ValidationError, match='coding_labels must have unique names'):
+        InsightsConfig(labels=[], coding_labels=[coding, coding], dimensions=['intent'])
 
 
 def test_insights_config_json_rejects_duplicate_selections() -> None:

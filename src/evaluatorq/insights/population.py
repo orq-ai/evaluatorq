@@ -32,6 +32,7 @@ into a `StageFailure` for the `'population'` stage.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -124,7 +125,8 @@ def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
     """Read a complete local snapshot; this path makes no Orq or model calls."""
     assert pop.snapshot_path is not None  # noqa: S101 - guarded by the caller's dispatch
     try:
-        snapshot = Snapshot.model_validate_json(pop.snapshot_path.read_text(encoding='utf-8'))
+        raw = pop.snapshot_path.read_bytes()
+        snapshot = Snapshot.model_validate_json(raw)
     except (OSError, ValueError) as error:
         raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
     traces = list(snapshot.traces)
@@ -134,6 +136,7 @@ def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
         echo={
             'mode': 'snapshot',
             'snapshot_path': str(pop.snapshot_path),
+            'snapshot_sha256': hashlib.sha256(raw).hexdigest(),
             'limit': len(traces),
         },
         n_scanned=len(traces),

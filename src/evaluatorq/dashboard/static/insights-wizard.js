@@ -2,6 +2,7 @@
 (function () {
   const form = document.getElementById('insights-new-form');
   if (!form) return;
+  const common = window.InsightsRunCommon;
   const sections = Array.from(form.querySelectorAll('[data-step]'));
   const stepLabels = Array.from(document.querySelectorAll('.insights-wizard-steps span'));
   const back = form.querySelector('[data-wizard-back]');
@@ -72,14 +73,14 @@
     const request = new AbortController();
     request.windowDays = windowDays;
     facetRequest = request;
-    const params = new URLSearchParams({ window_days: windowDays });
-    if (forced) params.set('retry', '1');
+    const facets = {};
     facetOptions.querySelectorAll('input[name^="facet_"]:checked').forEach(function (input) {
-      params.append(input.name, input.value);
+      if (!facets[input.name]) facets[input.name] = [];
+      facets[input.name].push(input.value);
     });
     setFacetLoading(true);
     try {
-      const response = await fetch('/insights/facets?' + params.toString(), { signal: request.signal });
+      const response = await common.requestFacets(windowDays, facets, request.signal, forced);
       if (!response.ok) throw new Error('Facet values could not be loaded for this window.');
       const markup = await response.text();
       if (facetRequest !== request) return;
@@ -113,11 +114,8 @@
     snapshotRequest = request;
     snapshotPreview.textContent = 'Measuring projected input…';
     if (step === 3) updatePreview();
-    const body = new FormData();
-    body.set('csrf', form.elements.csrf.value);
-    body.set('snapshot_path', path);
     try {
-      const response = await fetch('/insights/snapshot-preview', { method: 'POST', body, signal: request.signal });
+      const response = await common.requestSnapshotPreview(path, await common.csrfToken(form), request.signal);
       const html = await response.text();
       if (snapshotRequest !== request) return false;
       snapshotPreview.innerHTML = html;
@@ -220,13 +218,30 @@
 
   function validateStep() {
     const source = selected('source')[0];
-    if (step === 1 && source === 'query' && !form.elements.query.value.trim()) return 'Enter a question to find matching traces.';
-    if (step === 1 && source === 'finder' && !form.elements.finder_export.value.trim()) return 'Enter a Finder JSON path.';
-    if (step === 1 && source === 'snapshot' && !form.elements.snapshot_path.value.trim()) return 'Enter a trace snapshot JSON path.';
-    if (step === 1 && source !== 'finder' && source !== 'snapshot' && (!form.elements.window_days.checkValidity() || !form.elements.limit.checkValidity())) return 'Enter a valid window and trace limit.';
-    if (step === 1 && source !== 'finder' && source !== 'snapshot' && facetOptions.getAttribute('aria-busy') === 'true') return 'Wait for the facet values to load.';
-    if (step === 2 && !selected('labels').length && !selected('dimensions').length && !form.elements.coding_analysis.checked) return 'Select at least one label or dimension.';
-    if (step === 2 && !form.elements.parallelism.checkValidity()) return 'Enter a valid parallel request count.';
+    if (step === 1) {
+      const issue = common.validateSource({
+        source: source,
+        query: form.elements.query.value,
+        finderPath: form.elements.finder_export.value,
+        snapshotPath: form.elements.snapshot_path.value,
+        windowValid: source === 'finder' || source === 'snapshot' ? undefined : form.elements.window_days.checkValidity(),
+        limitValid: source === 'finder' || source === 'snapshot' ? undefined : form.elements.limit.checkValidity(),
+        facetsLoading: source !== 'finder' && source !== 'snapshot' && facetOptions.getAttribute('aria-busy') === 'true',
+      });
+      if (issue === 'query') return 'Enter a question to find matching traces.';
+      if (issue === 'finder') return 'Enter a Finder JSON path.';
+      if (issue === 'snapshot') return 'Enter a trace snapshot JSON path.';
+      if (issue === 'window') return 'Enter a valid window and trace limit.';
+      if (issue === 'facets') return 'Wait for the facet values to load.';
+    }
+    if (step === 2) {
+      const issue = common.validateSelection({
+        selectionCount: selected('labels').length + selected('dimensions').length + Number(form.elements.coding_analysis.checked),
+        parallelismValid: form.elements.parallelism.checkValidity(),
+      });
+      if (issue === 'selection') return 'Select at least one label or dimension.';
+      if (issue === 'parallelism') return 'Enter a valid parallel request count.';
+    }
     return '';
   }
 

@@ -286,6 +286,7 @@ async def _label_one(
     semaphore: asyncio.Semaphore,
     usage: UsageLedger | None = None,
     coding: bool = False,
+    coding_labels: Sequence[LabelSpec] | None = None,
 ) -> LabelOutcome:
     """Label one trace.
 
@@ -296,6 +297,16 @@ async def _label_one(
     the coding labels unasked and says so in a warning; it never guesses yes.
     """
     answers: dict[str, LabelAnswer] = {}
+    selected_coding = (
+        list(coding_labels)
+        if coding_labels is not None
+        else [
+            *CODING_CONVERSATION_LABELS,
+            *CODING_TOOL_LABELS,
+        ]
+    )
+    conversation_coding = [spec for spec in selected_coding if spec in CODING_CONVERSATION_LABELS]
+    tool_coding = [spec for spec in selected_coding if spec in CODING_TOOL_LABELS]
     is_coding = False
     if coding:
         detected, _ = await _ask(
@@ -320,7 +331,7 @@ async def _label_one(
             )
 
     state = conversation_view(trace)
-    conversation_specs = [*labels, *(CODING_CONVERSATION_LABELS if is_coding else ())]
+    conversation_specs = [*labels, *(conversation_coding if is_coding else ())]
     questions: dict[str, ClassifyQuestion] = {spec.name: spec.to_question(state) for spec in conversation_specs}
     match_keys: list[str] = []
     if compiled:
@@ -347,7 +358,7 @@ async def _label_one(
         return outcome.response.answers, None
 
     async def tool_call() -> dict[str, LabelAnswer]:
-        if not is_coding:
+        if not is_coding or not tool_coding:
             return {}
         chunks = tool_activity_chunks(trace)
         asked = await asyncio.gather(
@@ -355,7 +366,7 @@ async def _label_one(
                 _ask(
                     trace,
                     chunk,
-                    CODING_TOOL_LABELS,
+                    tool_coding,
                     client=client,
                     model=model,
                     cfg=cfg,
@@ -367,8 +378,7 @@ async def _label_one(
             )
         )
         return {
-            spec.name: _merge_chunks(spec.name, [answers[spec.name] for answers, _ in asked])
-            for spec in CODING_TOOL_LABELS
+            spec.name: _merge_chunks(spec.name, [answers[spec.name] for answers, _ in asked]) for spec in tool_coding
         }
 
     (raw, error), tool_answers = await asyncio.gather(conversation_call(), tool_call())
@@ -403,6 +413,7 @@ async def label_traces(
     on_progress: Callable[[int, int], None] | None = None,
     usage: UsageLedger | None = None,
     coding: bool = False,
+    coding_labels: Sequence[LabelSpec] | None = None,
 ) -> list[LabelOutcome]:
     """Label every trace, bounded by `parallelism` concurrent `/classify` calls.
 
@@ -436,6 +447,7 @@ async def label_traces(
                 semaphore=semaphore,
                 usage=usage,
                 coding=coding,
+                coding_labels=coding_labels,
             )
         except Exception as exc:  # noqa: BLE001 - an unexpected trace shape must not fail the whole pass
             message = str(exc) or type(exc).__name__

@@ -1367,6 +1367,7 @@ def new_run_page(*, error: str | None = None) -> str:
         '<div class="insights-wizard-actions"><button type="button" data-wizard-back>Back</button>'
         '<button type="button" data-wizard-next>Continue</button>'
         '<button type="submit" data-wizard-start>Start run</button></div>'
-        f'</form></div></div><script src="/static/insights-wizard.js?v={_wizard_js_version()}" defer></script>'
+        f'</form></div></div><script src="/static/insights-run-common.js" defer></script>'
+        f'<script src="/static/insights-wizard.js?v={_wizard_js_version()}" defer></script>'
     )
     return page('New Insights run', body, active_nav='insights', back_html=_back_to_runs())

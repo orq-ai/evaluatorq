@@ -210,6 +210,7 @@ def page(
     active_nav: str | None = None,
     actions_html: str = '',
     back_html: str = '',
+    shell_variant: str | None = None,
 ) -> str:
     """Render a complete HTML page in the dashboard sidebar shell.
 
@@ -228,6 +229,24 @@ def page(
         A complete HTML document string starting with ``<!DOCTYPE html>``.
     """
     css = load_css()
+    if shell_variant == 'insights-review':
+        nav_key = _resolve_nav(active_surface, active_nav)
+        sidebar = _sidebar_html(nav_key)
+        scripts = ''.join(str(a) for a in head_assets())
+        return (
+            '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+            f'{_favicon_link()}<title>{esc(title)} | evaluatorq</title>\n'
+            f'<style>\n{css}\n</style>\n<style>\n{EDITORIAL_CSS}\n</style>\n'
+            f'<style>\n{DASHBOARD_CSS}\n</style>\n{scripts}'
+            '<link rel="stylesheet" href="/static/insights-review.css">\n'
+            '<script src="/static/insights-run-common.js" defer></script>\n'
+            '<script src="/static/insights-review.js" defer></script>\n</head>\n'
+            '<body class="eq-dashboard eq-insights-review">\n'
+            f'{_SIDEBAR_TOGGLE_SCRIPT}<div class="app-shell">{sidebar}'
+            f'<div class="app-main"><main class="app-content insights-review-content">{body_html}</main></div>'
+            '</div></body></html>\n'
+        )
     nav_key = _resolve_nav(active_surface, active_nav)
     sidebar = _sidebar_html(nav_key)
     scripts = ''.join(str(a) for a in head_assets())

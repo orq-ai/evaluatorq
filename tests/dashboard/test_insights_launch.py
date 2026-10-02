@@ -1508,16 +1508,24 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
 ) -> None:
     from evaluatorq.dashboard import insights_worker
     from evaluatorq.dashboard.insights_launch import _REQUEST_ENV, read_launch_payload, worker_state_path
+    from evaluatorq.trace_finder.settings import DashboardSettings
 
     monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_identity', lambda _pid: 'test:1')
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     exports = tmp_path / 'finder-exports'
     exports.mkdir()
     export_path = exports / 'finder.json'
     approved_export = _run_export(['approved-trace']).model_dump_json()
     export_path.write_text(approved_export, encoding='utf-8')
     spec = InsightsLaunchSpec(
-        source='finder', finder_export='finder.json', labels=[], dimensions=['intent'], coding_analysis=True
+        source='finder',
+        finder_export='finder.json',
+        source_name='my-export.json',
+        labels=[],
+        coding_labels=['task_type', 'verified'],
+        dimensions=['intent'],
+        coding_analysis=True,
     )
 
     export_path.unlink()
@@ -1548,7 +1556,25 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
 
     consumed: list[str] = []
     consumed_source: list[Path | None] = []
-    coding_analysis: list[bool] = []
+    forwarded: list[dict[str, object]] = []
+    forwarded_specs: list[InsightsLaunchSpec] = []
+    selected_auth_runner = insights_worker._run_with_selected_auth
+
+    async def fake_insights(*_args, **kwargs):
+        from types import SimpleNamespace
+
+        assert kwargs['coding_analysis'] is True
+        return SimpleNamespace(status='completed')
+
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: DashboardSettings.model_validate({}))
+    monkeypatch.setattr(
+        insights_worker,
+        'resolve_dashboard_auth',
+        lambda _settings: DashboardAuth('environment', 'test-key', 'https://my.orq.ai'),
+    )
+    monkeypatch.setattr(insights_worker, 'build_auth_clients', lambda *_args, **_kwargs: (object(), object()))
+    monkeypatch.setattr(insights_worker, 'close_orq_client', AsyncMock())
+    monkeypatch.setattr(insights_worker, 'insights', fake_insights)
 
     async def capture_population(_payload, population, **kwargs):
         from evaluatorq.common.run_manifest import ManifestWriter
@@ -1558,8 +1584,10 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
         snapshot = population.finder_export_snapshot()
         assert snapshot is not None
         consumed_source.append(kwargs.get('_finder_export_source'))
-        coding_analysis.append(kwargs.get('coding_analysis', False))
+        forwarded.append(kwargs)
+        forwarded_specs.append(_payload.spec)
         consumed.extend(snapshot.matched_trace_ids)
+        assert await selected_auth_runner(_payload, population, **kwargs)
         manifest_path = tmp_path / 'runs' / '.manifests' / f'{payload.run_id}.json'
         manifest = RunManifest.model_validate_json(manifest_path.read_text(encoding='utf-8'))
         ManifestWriter(manifest, manifest_path).complete()
@@ -1571,7 +1599,10 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert consumed == ['approved-trace']
     assert snapshot_replacement == [replacement_export]
     assert consumed_source == [export_path]
-    assert coding_analysis == [True]
+    assert forwarded_specs[0].coding_analysis is True
+    assert forwarded[0]['_source_name'] == 'my-export.json'
+    assert forwarded_specs[0].coding_labels == ['task_type', 'verified']
+    assert 'coding_analysis' not in forwarded[0]
     assert not payload.finder_export_snapshot.exists()
     assert not reference.exists()
     assert not worker_state_path(tmp_path / 'runs', payload.run_id).exists()

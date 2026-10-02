@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq import __version__
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
@@ -414,21 +415,34 @@ async def insights(  # noqa: C901
     parallelism: int = 100,
     cache: bool = True,
     coding_analysis: bool = False,
+    coding_labels: Sequence[str] | None = None,
     run_name: str | None = None,
     runs_dir: Path | None = None,
     _run_id: str | None = None,
     _finder_export_source: Path | None = None,
     _finder_export_sha256: str | None = None,
+    _source_name: str | None = None,
     _on_saved: Callable[[Path], None] | None = None,
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
 ) -> InsightsRun:
     """Run trace Insights and persist the partial or complete result with a manifest.
 
-    `coding_analysis` adds a coding-agent check per trace and, for the traces it
-    answers yes for, the coding labels in `presets.CODING_LABELS`.
+    `coding_analysis` retains the legacy full coding bundle. `coding_labels`
+    selects a subset of coding labels while keeping the coding-agent gate.
     """
     specs = _label_specs(labels, dimensions)  # resolve unknown presets before client construction or I/O
+    coding_by_name = {spec.name: spec for spec in CODING_LABELS[1:]}
+    if coding_analysis or coding_labels is None:
+        selected_coding = list(CODING_LABELS[1:]) if coding_analysis else []
+    else:
+        if len(set(coding_labels)) != len(coding_labels):
+            raise ValueError('Insights coding labels must have unique names')
+        unknown = set(coding_labels) - set(coding_by_name)
+        if unknown:
+            raise ValueError(f'unknown Insights coding label(s): {", ".join(sorted(unknown))}')
+        selected_coding = [coding_by_name[name] for name in coding_labels]
+    coding_enabled = coding_analysis or (coding_labels is not None and bool(selected_coding))
     for limit_name, limit_value in (
         ('max_clusters', max_clusters),
         ('max_subclusters', max_subclusters),
@@ -456,8 +470,10 @@ async def insights(  # noqa: C901
         priority_dimension=priority_dimension,
         cache=cache,
         coding_analysis=coding_analysis,
+        coding_labels=selected_coding,
     )
     run = InsightsRun(
+        evaluatorq_version=__version__,
         run_id=run_id,
         run_name=name,
         created_at=now,
@@ -475,7 +491,7 @@ async def insights(  # noqa: C901
     )
     plan = stage_plan(
         population,
-        [*specs, *(CODING_LABELS if coding_analysis else ())],
+        [*specs, *(CODING_LABELS[:1] if coding_enabled else ()), *selected_coding],
         dimensions,
         priority_dimension=priority_dimension,
     )
@@ -539,6 +555,8 @@ async def insights(  # noqa: C901
                 run.population['finder_export'] = str(_finder_export_source)
                 if _finder_export_sha256 is not None:
                     run.population['finder_export_sha256'] = _finder_export_sha256
+            if _source_name:
+                run.population['source_name'] = _source_name
             truncated = resolved.echo.get('n_projection_truncated', 0)
             if truncated:
                 trace_noun = 'trace' if len(resolved.traces) == 1 else 'traces'
@@ -591,7 +609,8 @@ async def insights(  # noqa: C901
                 parallelism=parallelism,
                 usage=ledger,
                 on_progress=lambda done, total: writer.stage_progress('label', done, total),
-                coding=coding_analysis,
+                coding=coding_enabled,
+                coding_labels=selected_coding,
             )
             original_by_id = {trace.trace_id: trace for trace in run.traces}
             retained_trace_ids: set[str] = set()
@@ -710,7 +729,9 @@ async def insights(  # noqa: C901
             elif not run.traces:
                 run.warnings.append('population is empty')
                 logger.warning('Insights population is empty after match filtering')
-        run.labels = _label_results(run.traces, [*specs, *(CODING_LABELS if coding_analysis else ())])
+        run.labels = _label_results(
+            run.traces, [*specs, *(CODING_LABELS[:1] if coding_enabled else ()), *selected_coding]
+        )
         run.counts = {
             'n_traces': len(run.traces),
             'n_failed_traces': sum(bool(trace.errors) for trace in run.traces),

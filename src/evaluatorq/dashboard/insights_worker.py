@@ -20,7 +20,6 @@ from evaluatorq.dashboard.auth import auth_identity, build_auth_clients, resolve
 from evaluatorq.dashboard.insights_launch import (
     _MANIFEST_ENV,
     _SNAPSHOT_ENV,
-    MAX_FINDER_EXPORT_BYTES,
     InsightsLaunchPayload,
     _open_windows_approved_regular_file,
     _windows_directory_identity,
@@ -29,6 +28,11 @@ from evaluatorq.dashboard.insights_launch import (
     start_worker_heartbeat,
     validate_private_finder_reference,
     worker_state_path,
+)
+from evaluatorq.dashboard.insights_uploads import (
+    MAX_INSIGHTS_UPLOAD_BYTES,
+    cleanup_uploaded_source,
+    is_uploaded_source,
 )
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
@@ -90,12 +94,12 @@ def _read_private_snapshot(path: Path) -> bytes:
             raise ValueError('Finder export snapshot must be a private regular file')
         with os.fdopen(descriptor, 'rb') as snapshot_file:
             descriptor = None
-            contents = snapshot_file.read(MAX_FINDER_EXPORT_BYTES + 1)
+            contents = snapshot_file.read(MAX_INSIGHTS_UPLOAD_BYTES + 1)
         if os.name == 'nt' and (
             windows_directory_identity is None or _windows_directory_identity(path.parent) != windows_directory_identity
         ):
             raise ValueError('Finder export snapshot directory changed while reading the file.')
-        if len(contents) > MAX_FINDER_EXPORT_BYTES:
+        if len(contents) > MAX_INSIGHTS_UPLOAD_BYTES:
             raise ValueError('Missing or oversized validated Finder export snapshot')
         return contents
     finally:
@@ -389,6 +393,8 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             labels=spec.label_specs(),
             dimensions=spec.dimension_names(),
             parallelism=spec.parallelism,
+            coding_analysis=spec.coding_analysis,
+            coding_labels=None if spec.coding_analysis else spec.coding_labels,
             run_name=payload.run_name,
             runs_dir=payload.runs_dir,
             _run_id=payload.run_id,
@@ -402,6 +408,15 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
         close = getattr(llm, 'close', None)
         if close is not None:
             await close()
+
+
+def _cleanup_consumed_upload(runs_dir: Path, source: str, finder_export: str, snapshot_path: str) -> None:
+    """Delete only a route-owned source artifact after its pipeline attempt."""
+    source_value = finder_export if source == 'finder' else snapshot_path
+    if source_value:
+        source_path = Path(source_value)
+        if is_uploaded_source(runs_dir, source_path):
+            cleanup_uploaded_source(runs_dir, source_path)
 
 
 def main() -> int:
@@ -429,12 +444,12 @@ def main() -> int:
                     InsightsPopulation.from_finder_export(snapshot, export=validated_export),
                     _finder_export_source=Path(spec.finder_export),
                     _finder_export_sha256=hashlib.sha256(raw_snapshot).hexdigest(),
-                    coding_analysis=spec.coding_analysis,
+                    _source_name=spec.source_name or None,
                 )
             )
         else:
             completed = asyncio.run(
-                _run_with_selected_auth(payload, spec.population(), coding_analysis=spec.coding_analysis)
+                _run_with_selected_auth(payload, spec.population(), _source_name=spec.source_name or None)
             )
     except Exception as exc:  # noqa: BLE001 — record any failure before the pipeline owns its manifest
         logger.exception('Dashboard Insights worker failed')
@@ -456,6 +471,10 @@ def main() -> int:
             _cleanup_snapshot(unvalidated_snapshot)
         if payload is not None and payload.spec.source == 'finder':
             _cleanup_finder_reference(payload.runs_dir, payload.run_id)
+        if payload is not None:
+            _cleanup_consumed_upload(
+                payload.runs_dir, payload.spec.source, payload.spec.finder_export, payload.spec.snapshot_path
+            )
         elif payload is None and manifest_env:
             _cleanup_finder_reference_for_manifest(Path(manifest_env))
         state_run_id = payload.run_id if payload is not None else Path(manifest_env).stem if manifest_env else None

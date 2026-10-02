@@ -12,6 +12,7 @@ from html import unescape
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from starlette.testclient import TestClient
@@ -166,6 +167,44 @@ def test_map_json_shape_palette_noise_diamond_and_numeric_label(tmp_path, monkey
     assert {point['trace_id']: point for point in choice['points']}['trace-9']['symbol'] == 'diamond'
 
 
+def test_review_projection_payload_uses_full_trace_keys_and_keeps_3d_endpoint(tmp_path, monkeypatch):
+    from evaluatorq.dashboard import insights_review_data
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setattr(
+        insights_review_data,
+        'review_xy',
+        lambda saved, _dimension: {
+            f'{trace.trace_id}:{trace.span_id}': (float(index), float(index + 1))
+            for index, trace in enumerate(saved.traces, start=1)
+        },
+    )
+    run = _map_run()
+    run.traces.append(run.traces[0].model_copy(update={'span_id': 'span-1-second'}))
+    payload = insights_review_data.build_review_payload(run)
+
+    map_states = cast('dict[str, object]', payload['map_states'])
+    traces = cast('list[dict[str, object]]', payload['traces'])
+    assert map_states['intent'] == {'available': True, 'reason': None, 'n_points': 11}
+    assert traces[0]['id'] == 'trace-1:span-1'
+    assert cast('dict[str, object]', traces[0]['xy'])['intent'] == [1.0, 2.0]
+    assert traces[-1]['id'] == 'trace-1:span-1-second'
+    assert cast('dict[str, object]', traces[-1]['xy'])['intent'] == [11.0, 12.0]
+
+    _write_run(tmp_path, run)
+    legacy = TestClient(build_app()).get('/insights/map-run/map.json?dimension=intent').json()
+    assert {'x', 'y', 'z'} <= set(legacy['points'][0])
+
+
+def test_review_url_back_navigation_resets_omitted_map_and_compare_options():
+    if shutil.which('node') is None:
+        pytest.skip('Node.js is unavailable')
+    script = Path(__file__).with_name('insights_review_map.cjs')
+    result = subprocess.run(['node', str(script)], capture_output=True, text=True, check=True, cwd=Path(__file__).parents[2])
+    assert 'URL state restoration checks passed' in result.stdout
+    assert 'Map Compare folded cell filters and URL restoration checks passed' in result.stdout
+
+
 def test_map_tab_switches_projections_and_colours_by_other_dimensions(tmp_path, monkeypatch):
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     run = _map_run()
@@ -192,7 +231,7 @@ def test_map_tab_switches_projections_and_colours_by_other_dimensions(tmp_path, 
     _write_run(tmp_path, run)
     client = TestClient(build_app())
 
-    page = client.get('/insights/map-run/tab/map')
+    page = client.get('/insights/map-run/tab/map', headers={'HX-Request': 'true'})
     assert page.status_code == 200
     assert 'data-map-fullscreen' in page.text
     assert 'data-map-projection' in page.text
@@ -219,7 +258,7 @@ def test_insights_map_uses_server_cluster_url_template(tmp_path, monkeypatch):
     _write_run(tmp_path, _map_run())
     client = TestClient(build_app())
 
-    page = client.get('/insights/map-run/tab/map')
+    page = client.get('/insights/map-run/tab/map', headers={'HX-Request': 'true'})
     assert 'data-cluster-detail-url-template="/insights/map-run/cluster/{cluster_id}"' in page.text
 
 
