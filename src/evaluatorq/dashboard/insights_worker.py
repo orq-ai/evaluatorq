@@ -396,6 +396,7 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             coding_labels=spec.coding_labels,
             run_name=payload.run_name,
             runs_dir=payload.runs_dir,
+            **spec.model_overrides(),
             _run_id=payload.run_id,
             llm_client=llm,
             orq_client=orq,

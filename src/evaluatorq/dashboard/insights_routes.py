@@ -24,6 +24,7 @@ from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insi
 from evaluatorq.dashboard.insights_review_data import build_review_payload
 from evaluatorq.dashboard.insights_review_views import review_page
 from evaluatorq.dashboard.insights_run_form import (
+    INSIGHTS_MODEL_FIELDS,
     RunFormValues,
     facet_options,
     render_plan,
@@ -48,8 +49,10 @@ from evaluatorq.dashboard.insights_views import (
     trace_detail_page,
     unreadable_page,
 )
+from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
 from evaluatorq.dashboard.security import csrf_token, request_rejected
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
+from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.models import InsightsRun, label_key
 from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
@@ -121,6 +124,30 @@ def _validation_message(exc: Exception) -> str:
     if isinstance(exc, ValidationError):
         return '; '.join(error['msg'].removeprefix('Value error, ') for error in exc.errors())
     return str(exc)
+
+
+async def _model_rejection(auth: DashboardAuth, spec: InsightsLaunchSpec) -> str | None:
+    """Why the catalogue says a chosen model cannot do its job, or `None` when it can or cannot be checked."""
+    unchecked: list[str] = []
+    for field, wrong_for in (
+        ('classifier_model', lambda info: not info.supports_classify),
+        ('embedding_model', lambda info: info.model_type != 'embedding'),
+    ):
+        model = getattr(spec, field)
+        if not model:
+            continue
+        info = await catalogue_entry(auth, model)
+        if info is None:
+            unchecked.append(field)
+        elif wrong_for(info):
+            what = 'serve /classify' if field == 'classifier_model' else 'produce embeddings'
+            return f'{INSIGHTS_MODEL_FIELDS[field][1]} {model} cannot {what}. Choose another from the list.'
+    if unchecked:
+        logger.warning(
+            'Orq model catalogue has no entry for {}; accepting the typed values unchecked',
+            ' and '.join(f'{field} {getattr(spec, field)!r}' for field in unchecked),
+        )
+    return None
 
 
 def _run_form_response(values: RunFormValues, error: str | None, status_code: int) -> Response:
@@ -404,6 +431,19 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             return _html('<p class="insights-error" role="alert">This trace snapshot contains no traces.</p>', 422)
         return _html(projection_notice(coverage))
 
+    @app.get('/insights/models')
+    async def insights_models(req: Request) -> Response:
+        field = req.query_params.get('field', '')
+        if field not in INSIGHTS_MODEL_FIELDS:
+            return _html('')
+        kind, label = INSIGHTS_MODEL_FIELDS[field]
+        try:
+            groups = await model_groups(selected_dashboard_auth(req.app), kind)
+        except (RuntimeError, ValueError) as exc:
+            logger.warning('No model catalogue for the Insights run form ({}): {}', field, exc)
+            groups = {}
+        return _html(model_control(field, req.query_params.get(field, ''), groups, label=label))
+
     @app.post('/insights/runs')
     async def insights_start(req: Request) -> Response:
         form = await req.form()
@@ -428,6 +468,9 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             identity = await asyncio.to_thread(auth_identity, auth, req.app.state.finder_settings)
         except (RuntimeError, ValueError) as exc:
             return _run_form_response(values, str(exc), 422)
+        model_error = await _model_rejection(auth, spec)
+        if model_error:
+            return _run_form_response(values, model_error, 422)
         run_id = await asyncio.to_thread(
             launch_insights, spec, directory, auth_method=auth.method, auth_identity=identity
         )

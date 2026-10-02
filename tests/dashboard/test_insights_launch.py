@@ -2230,3 +2230,31 @@ def test_running_and_completed_pages_show_manifest_stages(monkeypatch: pytest.Mo
     assert 'Load recent traces' in completed.text
     assert 'Cluster and map intent' in completed.text
     assert 'skipped' in completed.text
+
+
+def test_chosen_models_reach_insights_and_blank_ones_keep_the_pipeline_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    seen: dict[str, object] = {}
+
+    async def fake_insights(population: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return type('Run', (), {'status': 'completed'})()
+
+    settings = DashboardSettings.model_validate({'orq_auth_method': 'environment'})
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: settings)
+    monkeypatch.setattr(insights_worker, 'resolve_dashboard_auth', lambda _settings: DashboardAuth('environment', 'k', 'https://my.orq.ai'))
+    monkeypatch.setattr(insights_worker, 'build_auth_clients', lambda *_a, **_k: (object(), type('C', (), {'close': AsyncMock()})()))
+    monkeypatch.setattr(insights_worker, 'close_orq_client', AsyncMock())
+    monkeypatch.setattr(insights_worker, 'insights', fake_insights)
+    spec = InsightsLaunchSpec(summary_model=' acme/summary ', embedding_model='acme/embed', classifier_model='  ')
+    payload = InsightsLaunchPayload(run_id='r', run_name='n', runs_dir=tmp_path, spec=spec)
+
+    assert asyncio.run(insights_worker._run_with_selected_auth(payload, InsightsPopulation())) is True
+
+    assert seen['summary_model'] == 'acme/summary'
+    assert seen['embedding_model'] == 'acme/embed'
+    assert 'classifier_model' not in seen
+    assert 'compiler_model' not in seen
