@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
-from evaluatorq.common.parallelism import resolve_datapoint_parallelism
+from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM, resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import (
@@ -33,7 +33,7 @@ from evaluatorq.simulation._config import (
     sim_llm_config,
 )
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
@@ -280,7 +280,7 @@ async def simulate(
     report: str | Path | None = None,
     report_path: str | Path | None = None,
     executive_summary: bool = True,
-    recommendations: bool | SimulationRecommendationConfig = False,
+    recommendations: bool | SimulationRecommendationConfig = True,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
@@ -441,12 +441,13 @@ async def simulate(
             penalised) or to reweight the composite. See
             ``SimulationScoringConfig`` for what each field means.
         recommendations: Generate per-result remediation suggestions and store
-            them on the run — and in any saved file. Off by default because the
-            returned ``SimulationResult`` list has nowhere to carry them, so
-            they are only observable via ``save``/``report`` or the dashboard.
-            ``True`` uses ``SimulationRecommendationConfig()`` defaults, a
-            config instance tunes the trigger thresholds and prompt budgets.
-            Best-effort, like the summary: no-op without LLM creds.
+            them on the run — and in any saved file. On by default, matching
+            ``red_team()`` and the CLI. The returned ``SimulationResult`` list has
+            nowhere to carry them, so without ``save``/``report`` they are
+            generated and discarded with a warning; pass ``False`` to skip the
+            extra LLM call. ``True`` uses ``SimulationRecommendationConfig()``
+            defaults, a config instance tunes the trigger thresholds and prompt
+            budgets. Best-effort, like the summary: no-op without LLM creds.
 
     Usage:
 
@@ -518,9 +519,7 @@ async def simulate(
         new_value=report_path,
     )
 
-    datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=10, caller='simulate'
-    )
+    datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='simulate')
     run = await _simulate_run(
         evaluation_name=evaluation_name,
         target=target,
@@ -575,7 +574,7 @@ async def _simulate_run(
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
-    datapoint_parallelism: int = 10,
+    datapoint_parallelism: int = DEFAULT_DATAPOINT_PARALLELISM,
     llm_parallelism: int | None = None,
     target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
@@ -641,7 +640,7 @@ async def _simulate_run(
                     hooks,
                     save=save,
                     run_id=run_id,
-                    run_name=evaluation_name or 'sim',
+                    run_name=evaluation_name or DEFAULT_RUN_NAME,
                     run_output=report,
                 )
                 # Outer manifest guard (FIX 1): _simulate_core owns the terminal
@@ -744,7 +743,7 @@ async def generate_and_simulate(
     report: str | Path | None = None,
     report_path: str | Path | None = None,
     executive_summary: bool = True,
-    recommendations: bool | SimulationRecommendationConfig = False,
+    recommendations: bool | SimulationRecommendationConfig = True,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -839,10 +838,11 @@ async def generate_and_simulate(
     (the default) uses the shipped values. See ``SimulationScoringConfig``.
 
     ``recommendations``: Generate per-result remediation suggestions and store
-    them on the run. Off by default because the returned ``SimulationResult``
-    list has nowhere to carry them — they are observable via ``save``/``report``
-    or the dashboard. ``True`` for defaults, a ``SimulationRecommendationConfig``
-    to tune. Best-effort: no-op without LLM creds.
+    them on the run. On by default, matching ``red_team()`` and the CLI. The
+    returned ``SimulationResult`` list has nowhere to carry them, so without
+    ``save``/``report`` they are generated and discarded with a warning; pass
+    ``False`` to skip the extra LLM call. ``True`` for defaults, a
+    ``SimulationRecommendationConfig`` to tune. Best-effort: no-op without LLM creds.
 
     Usage:
 
@@ -899,7 +899,7 @@ async def generate_and_simulate(
         new_value=report_path,
     )
     datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=10, caller='generate_and_simulate'
+        datapoint_parallelism, parallelism, caller='generate_and_simulate'
     )
     run = await _generate_and_simulate_run(
         evaluation_name=evaluation_name,
@@ -1030,7 +1030,7 @@ async def _generate_and_simulate_run(
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
-    datapoint_parallelism: int = 10,
+    datapoint_parallelism: int = DEFAULT_DATAPOINT_PARALLELISM,
     llm_parallelism: int | None = None,
     target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
@@ -1098,7 +1098,7 @@ async def _generate_and_simulate_run(
                     hooks,
                     save=save,
                     run_id=run_id,
-                    run_name=evaluation_name or 'sim',
+                    run_name=evaluation_name or DEFAULT_RUN_NAME,
                     run_output=report,
                 )
                 # Outer manifest guard (FIX 1): the terminal manifest calls live in
@@ -2066,7 +2066,7 @@ async def _simulate_core(
             if agent_key and agent_key != 'agent':
                 agent_info = await fetch_agent_info(agent_key)
         run = build_simulation_run(
-            run_name=evaluation_name or 'sim',
+            run_name=evaluation_name or DEFAULT_RUN_NAME,
             mode='simulate' if caller == 'simulate' else 'run',
             target_kind=target_kind,
             target=target_name,

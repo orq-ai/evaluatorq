@@ -396,6 +396,11 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
     return sorted(out, key=lambda m: m.started_at, reverse=True)
 
 
+def read_manifest(runs_dir: Path, run_id: str) -> RunManifest | None:
+    """Read the manifest of run *run_id* in *runs_dir*, or ``None`` when absent or unreadable."""
+    return _read_manifest(_manifests_dir(runs_dir) / f'{run_id}.json')
+
+
 def summary_is_current(manifest: RunManifest) -> bool:
     """Whether *manifest* carries a summary of the current shape.
 

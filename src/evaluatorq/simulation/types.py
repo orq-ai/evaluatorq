@@ -28,6 +28,9 @@ DEFAULT_MAX_TURNS = 10
 ``None`` rather than to this value so a replay can tell "unset" from
 "explicitly 10" and restore the replayed run's cap only in the former case."""
 
+DEFAULT_RUN_NAME = 'sim'
+"""Name a run is saved under when the caller names none."""
+
 
 class AgentInfoSnapshot(TypedDict, total=False):
     """Best-effort snapshot of an ORQ agent's configuration, as fetched by
