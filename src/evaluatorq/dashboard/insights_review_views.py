@@ -11,13 +11,11 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import InsightsRun
 
+from evaluatorq.dashboard.insights_run_form import run_form_script_tag
 from evaluatorq.dashboard.shell import page
 
-_REVIEW_HEAD_HTML = (
-    '<link rel="stylesheet" href="/static/insights-review.css">\n'
-    '<script src="/static/insights-run-form.js" defer></script>\n'
-    '<script src="/static/insights-review.js" defer></script>\n'
-)
+_REVIEW_STYLESHEET = '<link rel="stylesheet" href="/static/insights-review.css">\n'
+_REVIEW_SCRIPT = '<script src="/static/insights-review.js" defer></script>\n'
 
 
 def review_page(run: InsightsRun, manifest: RunManifest | None = None) -> str:
@@ -56,5 +54,5 @@ def review_page(run: InsightsRun, manifest: RunManifest | None = None) -> str:
         active_nav='insights',
         body_class='eq-insights-review',
         topbar=False,
-        head_html=_REVIEW_HEAD_HTML,
+        head_html=f'{_REVIEW_STYLESHEET}{run_form_script_tag()}\n{_REVIEW_SCRIPT}',
     )

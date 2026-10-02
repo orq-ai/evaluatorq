@@ -583,7 +583,7 @@ def _step_three(values: RunFormValues) -> str:
     return (
         '<section class="irf-step" data-step="3"><h3>Review and start</h3>'
         '<label class="irf-field"><span class="irf-label">Run name <i>(optional)</i></span>'
-        f'<input name="name" maxlength="80" placeholder="Weekly support review" value="{esc(values.name)}"></label>'
+        f'<input name="name" type="text" maxlength="80" placeholder="Weekly support review" value="{esc(values.name)}"></label>'
         f'<div id="insights-run-models">{_model_pickers(values)}</div>'
         '<label class="irf-field"><span class="irf-label">Parallel requests</span>'
         f'<input name="parallelism" type="number" min="1" max="200" value="{values.parallelism}"></label>'
@@ -624,12 +624,14 @@ def render_run_form(values: RunFormValues, *, csrf: str, error: str | None = Non
     )
 
 
-def _script_version() -> str:
+def run_form_script_tag() -> str:
+    """The deferred `insights-run-form.js` tag, versioned by content so a stale cached copy is never used."""
     script = Path(__file__).parent / 'static' / 'insights-run-form.js'
     try:
-        return hashlib.sha256(script.read_bytes()).hexdigest()[:12]
+        version = hashlib.sha256(script.read_bytes()).hexdigest()[:12]
     except OSError:
-        return 'missing'
+        version = 'missing'
+    return f'<script src="/static/insights-run-form.js?v={version}" defer></script>'
 
 
 def render_run_page(values: RunFormValues, *, csrf: str, error: str | None = None) -> str:
@@ -639,7 +641,7 @@ def render_run_page(values: RunFormValues, *, csrf: str, error: str | None = Non
         '<header class="insights-run-head"><h2>New Insights run</h2>'
         '<p>Choose the traces and what to learn from them.</p></header>'
         f'{render_run_form(values, csrf=csrf, error=error)}</div></div>'
-        f'<script src="/static/insights-run-form.js?v={_script_version()}" defer></script>'
+        f'{run_form_script_tag()}'
     )
     return page('New Insights run', body, active_nav='insights', back_html=_back_to_runs())
 
