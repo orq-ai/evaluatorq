@@ -39,6 +39,7 @@ from evaluatorq.simulation.metrics import TURN_METRICS
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from evaluatorq.common.cli_oauth import OAuthSession
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
@@ -798,6 +799,65 @@ def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]]) ->
     )
 
 
+_OAUTH_BADGES = {
+    'valid': ('passed', 'Valid'),
+    'signed-out': ('failed', 'Signed out'),
+    'unknown': ('cancelled', "Couldn't check"),
+    'unreadable': ('failed', 'Unreadable'),
+}
+
+
+def _oauth_session_row(host: str, account: str, badge_class: str, badge_text: str) -> str:
+    note = f'<span class="config-note">{esc(account)}</span>' if account else ''
+    return (
+        f'<span class="oauth-session-id"><strong>{esc(host)}</strong>{note}</span>'
+        f'<span class="status-badge {badge_class}"><span class="dot"></span>{esc(badge_text)}</span>'
+    )
+
+
+def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
+    """The CLI OAuth server field: a session menu with each login's checked token status.
+
+    Reuses the model picker's markup and script; ``data-rich`` makes the trigger
+    copy the chosen row, so the closed control keeps the status badge. Without
+    any saved login it is a plain server URL box.
+    """
+    if not sessions:
+        return (
+            '<label class="settings-auth-detail-label" for="orq_oauth_server">Orq server</label>'
+            f'<input id="orq_oauth_server" name="orq_oauth_server" type="url" value="{esc(value)}">'
+        )
+    rows: list[tuple[str, str]] = []
+    broken: list[str] = []
+    if all(session.server.rstrip('/') != value.rstrip('/') for session in sessions):
+        rows.append((value, _oauth_session_row(value, 'No saved login on this server', 'failed', 'No login')))
+    for session in sessions:
+        if session.status == 'unreadable':
+            # No server to submit: the CLI could not decode this login's file, so it is listed but not selectable.
+            broken.append(
+                '<div class="oauth-session-broken" aria-disabled="true">'
+                f'{_oauth_session_row(session.host, f"Run orq auth login for {session.host}", *_OAUTH_BADGES["unreadable"])}'
+                '</div>'
+            )
+            continue
+        account = ' · '.join(part for part in (session.user, session.workspace) if part)
+        rows.append((session.server, _oauth_session_row(session.host, account, *_OAUTH_BADGES[session.status])))
+    selected = next((row for server, row in rows if server.rstrip('/') == value.rstrip('/')), rows[0][1])
+    options = ''.join(
+        f'<button type="button" class="model-option{" is-selected" if server.rstrip("/") == value.rstrip("/") else ""}"'
+        f' data-model="{esc(server)}" data-rich aria-pressed="{"true" if server.rstrip("/") == value.rstrip("/") else "false"}">'
+        f'{row}</button>'
+        for server, row in rows
+    )
+    return (
+        '<label class="settings-auth-detail-label" for="orq_oauth_server">CLI session</label>'
+        f'<span class="model-pick oauth-pick"><input type="hidden" name="orq_oauth_server" value="{esc(value)}">'
+        '<button type="button" id="orq_oauth_server" class="model-pick-btn" aria-haspopup="true" aria-expanded="false">'
+        f'{selected}</button>'
+        f'<div class="finder-facets"><div class="facet-list">{options}{"".join(broken)}</div></div></span>'
+    )
+
+
 def settings_body(  # noqa: C901
     config: list[tuple[str, str | list[str]]],
     settings: Any | None = None,
@@ -876,6 +936,16 @@ def settings_body(  # noqa: C901
         if setting_value('orq_api_key_ciphertext')
         else ''
     )
+    oauth_server = setting_value('orq_oauth_server') or 'https://my.orq.ai'
+    # Checking an expired login calls Orq, so the field loads after the page and never delays it.
+    # The hidden input keeps the saved server in the form if Save is pressed before it arrives.
+    oauth_control = (
+        f'<span class="settings-oauth-field" hx-get="/settings/oauth-sessions?{esc(urlencode({"value": oauth_server}))}" '
+        'hx-trigger="load" hx-swap="outerHTML">'
+        '<span class="settings-auth-detail-label">CLI session</span>'
+        f'<input type="hidden" name="orq_oauth_server" value="{esc(oauth_server)}">'
+        '<span class="settings-auth-hint">Checking CLI sessions…</span></span>'
+    )
     cards = (
         ('environment', 'Environment', 'Use ORQ_API_KEY from the dashboard process.', ''),
         (
@@ -893,10 +963,9 @@ def settings_body(  # noqa: C901
             'CLI OAuth',
             'Use the current Orq CLI sign-in and let the CLI refresh its session.',
             (
-                '<label class="settings-auth-detail-label" for="orq_oauth_server">Orq server</label>'
-                f'<input id="orq_oauth_server" name="orq_oauth_server" type="url" '
-                f'value="{esc(setting_value("orq_oauth_server") or "https://my.orq.ai")}">'
-                '<span class="settings-auth-hint">Sign in with <code>orq auth login</code> if needed.</span>'
+                f'{oauth_control}'
+                '<span class="settings-auth-hint">Sign a session back in with '
+                '<code>orq auth login --server &lt;url&gt;</code>.</span>'
             ),
         ),
         (
@@ -991,6 +1060,7 @@ def settings_body(  # noqa: C901
         '}'
         'form.addEventListener("change",function(event){'
         'if(event.target.name==="orq_auth_method")syncAuthFields();});'
+        'form.addEventListener("htmx:load",syncAuthFields);'
         'syncAuthFields();'
         '});</script>'
     )

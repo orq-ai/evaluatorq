@@ -12,6 +12,7 @@ import pytest
 from starlette.requests import Request
 from starlette.testclient import TestClient
 
+from evaluatorq.common.cli_oauth import OAuthSession
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import apply_ui
@@ -46,6 +47,7 @@ def settings_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
         'EVALUATORQ_FINDER_PARALLELISM',
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: ())
     return path
 
 
@@ -556,6 +558,89 @@ def test_authentication_choices_keep_method_fields_in_a_shared_second_step(clien
     assert 'data-auth-method="cli_profile"' in details
     assert 'data-auth-method="cli_oauth"' in details
     assert 'data-auth-method="stored_api_key"' in details
+
+
+def _session_options(html: str) -> dict[str, str]:
+    """Each session option's markup keyed by the server it submits."""
+    picker = html.split('class="model-pick oauth-pick"', 1)[1].split('</span></div></span>', 1)[0]
+    options = picker.split('<button type="button" class="model-option')[1:]
+    return {option.split('data-model="', 1)[1].split('"', 1)[0]: option for option in options}
+
+
+def test_settings_page_defers_the_session_check_and_keeps_the_saved_server_in_the_form(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: pytest.fail('the page waited for the CLI session check'))
+    save_settings(
+        DashboardSettings.model_validate({'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'https://my.staging.orq.ai'}),
+        settings_file,
+    )
+
+    html = client.get('/settings').text
+
+    assert 'hx-get="/settings/oauth-sessions?value=https%3A%2F%2Fmy.staging.orq.ai" hx-trigger="load"' in html
+    assert '<input type="hidden" name="orq_oauth_server" value="https://my.staging.orq.ai">' in html
+
+
+def test_cli_oauth_field_offers_saved_sessions_with_their_checked_token_status(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', 'research', 'valid', True),
+        OAuthSession('https://my.staging.orq.ai', 'my.staging.orq.ai', 'ada@orq.ai', None, 'signed-out', False),
+        OAuthSession('https://aim.orq.ai', 'aim.orq.ai', None, None, 'unknown', False),
+    ))
+
+    html = client.get('/settings/oauth-sessions', params={'value': 'https://my.staging.orq.ai/'}).text
+    options = _session_options(html)
+
+    assert list(options) == ['https://my.orq.ai', 'https://my.staging.orq.ai', 'https://aim.orq.ai']
+    assert 'ada@orq.ai · research' in options['https://my.orq.ai']
+    assert '<span class="status-badge passed"><span class="dot"></span>Valid</span>' in options['https://my.orq.ai']
+    assert '<span class="status-badge failed"><span class="dot"></span>Signed out</span>' in options['https://my.staging.orq.ai']
+    assert '<span class="status-badge cancelled"><span class="dot"></span>Couldn&#x27;t check</span>' in options['https://aim.orq.ai']
+    assert options['https://my.staging.orq.ai'].startswith(' is-selected"')
+    assert '<input type="hidden" name="orq_oauth_server" value="https://my.staging.orq.ai/">' in html
+    trigger = html.split('class="model-pick-btn"', 1)[1].split('</button>', 1)[0]
+    assert 'my.staging.orq.ai' in trigger and 'Signed out' in trigger
+
+
+def test_cli_oauth_field_keeps_a_saved_server_that_has_no_login(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', None, 'valid', True),
+    ))
+
+    options = _session_options(client.get('/settings/oauth-sessions', params={'value': 'https://eu.orq.ai'}).text)
+
+    assert list(options) == ['https://eu.orq.ai', 'https://my.orq.ai']
+    assert options['https://eu.orq.ai'].startswith(' is-selected"')
+    assert 'No login' in options['https://eu.orq.ai']
+
+
+def test_cli_oauth_field_lists_an_unreadable_login_without_making_it_selectable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', None, 'valid', True),
+        OAuthSession('', 'broken.orq.ai', None, None, 'unreadable', False),
+    ))
+
+    html = client.get('/settings/oauth-sessions', params={'value': 'https://my.orq.ai'}).text
+
+    assert list(_session_options(html)) == ['https://my.orq.ai']
+    broken = html.split('<div class="oauth-session-broken" aria-disabled="true">', 1)[1].split('</div>', 1)[0]
+    assert '<strong>broken.orq.ai</strong>' in broken
+    assert 'Run orq auth login for broken.orq.ai' in broken
+    assert '<span class="status-badge failed"><span class="dot"></span>Unreadable</span>' in broken
+
+
+def test_cli_oauth_field_falls_back_to_a_server_box_without_sessions(client: TestClient) -> None:
+    html = client.get('/settings/oauth-sessions', params={'value': 'https://eu.orq.ai'}).text
+
+    assert html == (
+        '<label class="settings-auth-detail-label" for="orq_oauth_server">Orq server</label>'
+        '<input id="orq_oauth_server" name="orq_oauth_server" type="url" value="https://eu.orq.ai">'
+    )
 
 
 def test_entered_api_key_is_encrypted_and_selected_method_survives_reload(

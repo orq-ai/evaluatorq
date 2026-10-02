@@ -13,10 +13,32 @@ import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from datetime import date, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, NamedTuple
+
+from loguru import logger
+
+# Environment credentials and profile selection override the CLI OAuth session.
+# Every OAuth call removes them so the CLI has one unambiguous auth source.
+_OVERRIDE_ENV = (
+    'ORQ_API_KEY',
+    'ORQ_PROFILE',
+    'ORQ_SERVER',
+    'ORQ_WORKSPACE',
+    'ORQ_PROJECT',
+    'ORQ_VERBOSE',
+    'ORQ_JMESPATH',
+)
+
+
+def _oauth_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for name in _OVERRIDE_ENV:
+        env.pop(name, None)
+    return env
 
 
 class OrqCLIError(RuntimeError):
@@ -55,11 +77,7 @@ class _CLI:
         if payload is not None:
             command.append('--stdin')
 
-        # Environment credentials and profile selection override the CLI OAuth
-        # session. Remove them so this adapter has one unambiguous auth source.
-        env = os.environ.copy()
-        for name in ('ORQ_API_KEY', 'ORQ_PROFILE', 'ORQ_SERVER', 'ORQ_WORKSPACE', 'ORQ_PROJECT', 'ORQ_VERBOSE'):
-            env.pop(name, None)
+        env = _oauth_env()
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -288,37 +306,47 @@ def build_cli_oauth_clients(
     return _OrqClient(cli), _LLMClient(cli)
 
 
+_WHOAMI_FIELDS = (
+    '{user_id:user.id,workspace:active_workspace_key,project:active_project_id,'
+    'source:credential.source,authenticated:authenticated}'
+)
+# The CLI exits 1 for both a dead login and a network failure; only its message tells them apart.
+_SIGNED_OUT = re.compile(r"(?i)expired or was revoked|invalid refresh token|run 'orq auth login'")
+
+
+def _whoami(binary: str, server_url: str, timeout: float) -> subprocess.CompletedProcess[str]:
+    """Ask the CLI who is signed in on *server_url*; the CLI refreshes an expired access token first."""
+    return subprocess.run(
+        [
+            binary,
+            '--no-input',
+            '--output-format',
+            'json',
+            '--profile',
+            '',
+            '--server',
+            server_url,
+            '--jmespath',
+            _WHOAMI_FIELDS,
+            'auth',
+            'whoami',
+        ],
+        env=_oauth_env(),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
 def oauth_subject(server_url: str) -> dict[str, str | None]:
     """Read non-secret OAuth account and active scope IDs for a run launch guard."""
 
     binary = shutil.which('orq')
     if binary is None:
         raise OrqCLIError('The orq CLI is not installed. Install it and sign in before using CLI OAuth.')
-    env = os.environ.copy()
-    for name in ('ORQ_API_KEY', 'ORQ_PROFILE', 'ORQ_SERVER', 'ORQ_WORKSPACE', 'ORQ_PROJECT', 'ORQ_VERBOSE'):
-        env.pop(name, None)
     try:
-        result = subprocess.run(
-            [
-                binary,
-                '--no-input',
-                '--output-format',
-                'json',
-                '--profile',
-                '',
-                '--server',
-                server_url,
-                '--jmespath',
-                '{user_id:user.id,workspace:active_workspace_key,project:active_project_id,source:credential.source,authenticated:authenticated}',
-                'auth',
-                'whoami',
-            ],
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
+        result = _whoami(binary, server_url, timeout=10)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise OrqCLIError('Could not check the Orq CLI OAuth sign-in.') from exc
     if result.returncode:
@@ -333,6 +361,103 @@ def oauth_subject(server_url: str) -> dict[str, str | None]:
     if not isinstance(user_id, str) or not user_id:
         raise OrqCLIError('The Orq CLI did not identify the signed-in user. Run orq auth login.')
     return {key: data.get(key) for key in ('user_id', 'workspace', 'project')}
+
+
+SessionStatus = Literal['valid', 'signed-out', 'unknown', 'unreadable']
+# The CLI's statuses for a session file it cannot decode; such a row has a host but no server.
+_UNREADABLE = frozenset({'invalid', 'unreadable'})
+
+
+class OAuthSession(NamedTuple):
+    """One saved Orq CLI OAuth login. The CLI keeps exactly one per server host.
+
+    ``server`` is empty for an ``unreadable`` session: the CLI could not decode
+    its file, so nothing can authenticate with it until it is signed in again.
+    """
+
+    server: str
+    host: str
+    user: str | None
+    workspace: str | None
+    status: SessionStatus
+    active: bool
+
+
+def _session_status(binary: str, server_url: str, timeout: float) -> SessionStatus:
+    """Try the login once: a refresh that works is valid, a rejected one is signed out, anything else unknown."""
+    try:
+        result = _whoami(binary, server_url, timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return 'unknown'
+    if result.returncode == 0:
+        try:
+            data = json.loads(result.stdout)
+        except ValueError:
+            return 'unknown'
+        return 'valid' if isinstance(data, dict) and data.get('authenticated') else 'signed-out'
+    return 'signed-out' if _SIGNED_OUT.search(result.stderr) else 'unknown'
+
+
+def list_oauth_sessions(timeout: float = 5.0) -> tuple[OAuthSession, ...]:
+    """Saved CLI OAuth logins with a checked token status, or none when the CLI is missing or fails.
+
+    The CLI's own listing only says whether the short-lived access token has
+    expired, not whether its refresh token still works. Every login the CLI does
+    not report as ``ok`` is therefore tried once, in parallel, with ``orq auth
+    whoami``; a successful refresh saves new tokens, exactly as the CLI's next
+    real call would. Reads only CLI output, never its session files.
+    """
+    binary = shutil.which('orq')
+    if binary is None:
+        return ()
+    try:
+        result = subprocess.run(
+            [binary, '--no-input', '--output-format', 'json', 'auth', 'sessions'],
+            env=_oauth_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        listing = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        logger.warning('Could not list Orq CLI OAuth sessions: {}', exc)
+        return ()
+    rows = listing.get('sessions') if isinstance(listing, dict) else None
+    if not isinstance(rows, list):
+        logger.warning('Could not list Orq CLI OAuth sessions (exit {})', result.returncode)
+        return ()
+    rows = [
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and isinstance(row.get('host'), str)
+        and row['host']
+        and isinstance(row.get('status'), str)
+        and (row['status'] in _UNREADABLE or (isinstance(row.get('server'), str) and row['server']))
+    ]
+    to_check = [row['server'] for row in rows if row['status'] not in _UNREADABLE and row['status'] != 'ok']
+    checked: dict[str, SessionStatus] = {}
+    if to_check:
+        with ThreadPoolExecutor(max_workers=len(to_check)) as pool:
+            checked = dict(
+                zip(to_check, pool.map(lambda server: _session_status(binary, server, timeout), to_check), strict=True)
+            )
+    sessions: list[OAuthSession] = []
+    for row in rows:
+        user, workspace = row.get('user'), row.get('workspace')
+        unreadable = row['status'] in _UNREADABLE
+        sessions.append(
+            OAuthSession(
+                '' if unreadable else row['server'],
+                row['host'],
+                user if isinstance(user, str) and user else None,
+                workspace if isinstance(workspace, str) and workspace else None,
+                'unreadable' if unreadable else checked.get(row['server'], 'valid'),
+                bool(row.get('active')),
+            )
+        )
+    return tuple(sessions)
 
 
 def _json_value(value: Any) -> Any:
