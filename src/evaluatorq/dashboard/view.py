@@ -798,7 +798,7 @@ def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]]) ->
     )
 
 
-def settings_body(
+def settings_body(  # noqa: C901
     config: list[tuple[str, str | list[str]]],
     settings: Any | None = None,
     *,
@@ -872,10 +872,61 @@ def settings_body(
     key_error = errors.get('orq_api_key_entry')
     key_error_html = f'<span class="settings-error" role="alert">{esc(key_error)}</span>' if key_error else ''
     saved_key_hint = (
-        '<span class="config-note">Leave blank to keep the saved API key.</span>'
+        '<span class="settings-auth-hint">Leave blank to keep the saved API key.</span>'
         if setting_value('orq_api_key_ciphertext')
         else ''
     )
+    cards = (
+        ('environment', 'Environment', 'Use ORQ_API_KEY from the dashboard process.', ''),
+        (
+            'cli_profile',
+            'CLI API-key profile',
+            'Reuse an API-key profile saved by the Orq CLI.',
+            (
+                '<label class="settings-auth-detail-label" for="orq_profile">CLI profile</label>'
+                f'<select id="orq_profile" name="orq_profile"{profile_error_attr}>'
+                f'<option value="">Choose a profile</option>{"".join(options)}</select>{profile_error_html}'
+            ),
+        ),
+        (
+            'cli_oauth',
+            'CLI OAuth',
+            'Use the current Orq CLI sign-in and let the CLI refresh its session.',
+            (
+                '<label class="settings-auth-detail-label" for="orq_oauth_server">Orq server</label>'
+                f'<input id="orq_oauth_server" name="orq_oauth_server" type="url" '
+                f'value="{esc(setting_value("orq_oauth_server") or "https://my.orq.ai")}">'
+                '<span class="settings-auth-hint">Sign in with <code>orq auth login</code> if needed.</span>'
+            ),
+        ),
+        (
+            'stored_api_key',
+            'Enter API key',
+            "Keep an encrypted copy in this dashboard's config file.",
+            (
+                '<label class="settings-auth-detail-label" for="orq_api_key_entry">API key</label>'
+                '<input id="orq_api_key_entry" name="orq_api_key_entry" type="password" autocomplete="new-password" '
+                'placeholder="Paste API key">'
+                f'{saved_key_hint}{key_error_html}'
+                '<label class="settings-auth-detail-label" for="orq_stored_key_host">Orq server</label>'
+                f'<input id="orq_stored_key_host" name="orq_stored_key_host" type="url" '
+                f'value="{esc(setting_value("orq_profile_host") or "https://my.orq.ai")}">'
+            ),
+        ),
+    )
+    auth_rows.extend((
+        '<p class="settings-auth-step">1 · Choose a method</p>',
+        '<div class="settings-auth-choices" role="radiogroup" aria-label="Authentication method">',
+    ))
+    for value, title, description, _detail in cards:
+        checked = ' checked' if method == value else ''
+        auth_rows.append(
+            '<div class="settings-auth-choice">'
+            f'<label class="settings-auth-card"><input type="radio" name="orq_auth_method" value="{value}"{checked}>'
+            f'<span class="settings-auth-card-copy"><strong>{esc(title)}</strong><small>{esc(description)}</small></span>'
+            '<span class="settings-auth-card-check" aria-hidden="true"></span></label></div>'
+        )
+    auth_rows.append('</div>')
     selected_profile = next((profile for profile in profiles if profile.name == chosen), None)
     if chosen and selected_profile is None:
         profile_note = f'The saved Orq CLI profile “{chosen}” is unavailable. Choose another credential source.'
@@ -887,99 +938,17 @@ def settings_body(
         )
     else:
         profile_note = 'Choose a local Orq CLI API-key profile.'
-    # Each method: (value, title, description, [(label, field id or '', control html), ...]).
-    methods = (
-        (
-            'environment',
-            'Environment',
-            'Use ORQ_API_KEY from the dashboard process.',
-            [
-                (
-                    'Source',
-                    '',
-                    '<span class="config-note">Uses ORQ_API_KEY and ORQ_BASE_URL from this dashboard process.</span>',
-                )
-            ],
-        ),
-        (
-            'cli_profile',
-            'CLI API-key profile',
-            'Reuse an API-key profile saved by the Orq CLI.',
-            [
-                (
-                    'CLI profile',
-                    'orq_profile',
-                    (
-                        f'<select id="orq_profile" name="orq_profile"{profile_error_attr}>'
-                        f'<option value="">Choose a profile</option>{"".join(options)}</select>{profile_error_html}'
-                        f'<span class="config-note">{esc(profile_note)}</span>'
-                    ),
-                )
-            ],
-        ),
-        (
-            'cli_oauth',
-            'CLI OAuth',
-            'Use the current Orq CLI sign-in and let the CLI refresh its session.',
-            [
-                (
-                    'Orq server',
-                    'orq_oauth_server',
-                    (
-                        f'<input id="orq_oauth_server" name="orq_oauth_server" type="url" '
-                        f'value="{esc(setting_value("orq_oauth_server") or "https://my.orq.ai")}">'
-                        '<span class="config-note">Sign in with <code>orq auth login</code> if needed.</span>'
-                    ),
-                )
-            ],
-        ),
-        (
-            'stored_api_key',
-            'Enter API key',
-            "Keep an encrypted copy in this dashboard's config file.",
-            [
-                (
-                    'API key',
-                    'orq_api_key_entry',
-                    (
-                        '<input id="orq_api_key_entry" name="orq_api_key_entry" type="password" '
-                        f'autocomplete="new-password" placeholder="Paste API key">{saved_key_hint}{key_error_html}'
-                    ),
-                ),
-                (
-                    'Orq server',
-                    'orq_stored_key_host',
-                    (
-                        f'<input id="orq_stored_key_host" name="orq_stored_key_host" type="url" '
-                        f'value="{esc(setting_value("orq_profile_host") or "https://my.orq.ai")}">'
-                    ),
-                ),
-            ],
-        ),
-    )
-    method_options = ''.join(
-        f'<label class="filter-radio"><input type="radio" name="orq_auth_method" value="{value}"'
-        f'{" checked" if method == value else ""}>'
-        f'<span class="settings-auth-option"><strong>{esc(title)}</strong>'
-        f'<span class="config-note">{esc(description)}</span></span></label>'
-        for value, title, description, _rows in methods
-    )
-    auth_rows.append(
-        '<div class="config-row settings-field"><span class="config-key" id="orq_auth_method_label">Method</span>'
-        '<span class="config-val settings-auth-methods" role="radiogroup" aria-labelledby="orq_auth_method_label">'
-        f'{method_options}</span></div>'
-    )
-    for value, _title, _description, rows in methods:
-        for label, field_id, control in rows:
-            key = (
-                f'<label class="config-key" for="{field_id}">{esc(label)}</label>'
-                if field_id
-                else f'<span class="config-key">{esc(label)}</span>'
-            )
-            auth_rows.append(
-                f'<div class="config-row settings-field settings-auth-detail" data-auth-method="{value}">'
-                f'{key}<span class="config-val">{control}</span></div>'
-            )
+    auth_rows.extend((
+        '<div class="settings-auth-config"><p class="settings-auth-step">2 · Configure the method</p>',
+        '<div class="settings-auth-details">',
+    ))
+    for value, _title, _description, detail in cards:
+        if value == 'environment':
+            detail = '<p class="settings-auth-note">Uses ORQ_API_KEY and ORQ_BASE_URL from this dashboard process.</p>'
+        elif value == 'cli_profile':
+            detail += f'<p class="settings-auth-note">{esc(profile_note)}</p>'
+        auth_rows.append(f'<div class="settings-auth-detail" data-auth-method="{value}">{detail}</div>')
+    auth_rows.extend(('</div>', '</div>'))
     models_panel = _panel(
         'Models',
         'Window, limit and parallelism are set per run on the Trace search page',
