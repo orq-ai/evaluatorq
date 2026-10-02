@@ -12,8 +12,11 @@ from evaluatorq.dashboard import trace_links
 
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard import orq_workspace
+
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
-    for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE'):
+    monkeypatch.setattr(orq_workspace.shutil, 'which', lambda _name: None)
+    for var in ('ORQ_UI_BASE_URL', 'ORQ_BASE_URL', 'ORQ_WORKSPACE_SLUG', 'ORQ_WORKSPACE', 'ORQ_API_KEY'):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -47,6 +50,21 @@ def test_single_trace_url_none_when_empty_or_unconfigured(monkeypatch: pytest.Mo
     monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
     assert trace_links.single_trace_url(None) is None
     assert trace_links.single_trace_url('') is None
+
+
+def test_trace_span_url_uses_inspector_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
+    url = trace_links.trace_span_url('613ec3284c6af91c8e31a59ad530f904', '68f96c9fbffc43ac')
+    assert url == (
+        'https://my.orq.ai/orq-research/traces/'
+        '(trace:613ec3284c6af91c8e31a59ad530f904//span:68f96c9fbffc43ac)'
+    )
+
+
+def test_trace_span_url_uses_experiment_host_and_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'wrong-workspace')
+    url = trace_links.trace_span_url('trace-1', 'span-1', 'https://staging.orq.ai/research/experiments/exp-1')
+    assert url == 'https://staging.orq.ai/research/traces/(trace:trace-1//span:span-1)'
 
 
 def test_ui_base_falls_back_to_orq_base(monkeypatch: pytest.MonkeyPatch) -> None:

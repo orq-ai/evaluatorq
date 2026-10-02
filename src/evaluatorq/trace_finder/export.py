@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime  # noqa: TC003
 from typing import Annotated, Any, Literal
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, Stri
 from .models import (
     FACET_NAMES,
     CompiledQuery,
+    DimensionAnswer,
     FacetSelection,
     NumericFilters,
     RunSnapshot,
@@ -51,6 +53,28 @@ class ExportThresholdSelection(BaseModel):
 
 
 ExportSelection = Annotated[ExportValuesSelection | ExportThresholdSelection, Field(discriminator='kind')]
+
+
+class ExportDimension(BaseModel):
+    """One named classifier dimension: its task and the answers that count as a match."""
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    name: str
+    task: ExportTask
+    selection: ExportSelection
+
+
+class ExportAnswer(BaseModel):
+    """One trace's answer for one dimension, in the run's dimension order."""
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    value: StrictBool | StrictFloat | StrictStr | None = None
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    probabilities: dict[str, float] | None = None
+    matched: bool
+    error: str | None = None
 
 
 class ExportFilters(BaseModel):
@@ -115,9 +139,7 @@ class ExportTrace(BaseModel):
     timestamp: datetime
     agent_name: str | None = None
     tool_names: tuple[str, ...] = ()
-    value: StrictBool | StrictFloat | StrictStr | None = None
-    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    probabilities: dict[str, float] | None = None
+    answers: tuple[ExportAnswer, ...] = ()
     matched: bool
     error: str | None = None
 
@@ -127,10 +149,9 @@ class RunExport(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra='forbid')
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     query: str
-    task: ExportTask
-    selection: ExportSelection
+    dimensions: tuple[ExportDimension, ...]
     generated_filters: ExportFilters
     filters: ExportFilters
     generated_numeric: ExportNumericFilters
@@ -148,8 +169,8 @@ class RunExport(BaseModel):
 def build_export(run: RunSnapshot, *, matched_only: bool = False) -> RunExport:
     """Build a metadata-only export, optionally retaining only matched traces."""
 
-    if run.request is None or run.compiled is None:
-        raise ValueError('run has no request and compiled task to export')
+    if run.request is None or run.dimensions is None:
+        raise ValueError('run has no request and classifier dimensions to export')
 
     source_by_id = {trace.trace_id: trace for trace in run.traces}
     selected: list[TraceRecord] = []
@@ -165,8 +186,10 @@ def build_export(run: RunSnapshot, *, matched_only: bool = False) -> RunExport:
 
     return RunExport(
         query=run.request.query,
-        task=_export_task(run.compiled),
-        selection=_export_selection(run.compiled),
+        dimensions=tuple(
+            ExportDimension(name=dimension.name, task=_export_task(dimension), selection=_export_selection(dimension))
+            for dimension in run.dimensions
+        ),
         generated_filters=_export_filters(run.generated_filters),
         filters=_export_filters(run.request.population.facets),
         generated_numeric=_export_numeric(run.generated_numeric),
@@ -200,6 +223,15 @@ def export_json(run: RunSnapshot, *, matched_only: bool = False) -> str:
     """Return one pretty-printed run, optionally with only matched trace rows."""
 
     return build_export(run, matched_only=matched_only).model_dump_json(indent=2)
+
+
+def export_filename(run: RunSnapshot) -> str:
+    """Give a completed run a stable filename without serializing its export on each page render."""
+    if run.created_at is None or run.finished_at is None:
+        raise ValueError('completed run timestamps are required for an export filename')
+    identity = f'{run.generation}:{run.created_at.isoformat()}:{run.finished_at.isoformat()}'
+    digest = hashlib.sha256(identity.encode('utf-8')).hexdigest()
+    return f'trace-finder-{run.generation}-{digest}.json'
 
 
 def _export_task(compiled: CompiledQuery) -> ExportTask:
@@ -253,9 +285,17 @@ def _export_trace(trace: TraceRecord, classification: TraceClassification | None
         timestamp=trace.timestamp,
         agent_name=trace.agent_name or None,
         tool_names=trace.tool_names,
-        value=classification.value,
-        confidence=classification.confidence,
-        probabilities=dict(classification.probabilities) if classification.probabilities is not None else None,
+        answers=tuple(_export_answer(answer) for answer in classification.answers),
         matched=classification.matched,
         error=classification.error,
+    )
+
+
+def _export_answer(answer: DimensionAnswer) -> ExportAnswer:
+    return ExportAnswer(
+        value=answer.value,
+        confidence=answer.confidence,
+        probabilities=dict(answer.probabilities) if answer.probabilities is not None else None,
+        matched=answer.matched,
+        error=answer.error,
     )

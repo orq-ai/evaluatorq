@@ -11,8 +11,27 @@ import httpx
 import pytest
 
 from evaluatorq import Trace, TraceInput, fetch_traces
-from evaluatorq.common.trace_input import _message_candidates, _parse_messages, _trace_from_spans, partition_traces
+from evaluatorq.common.trace_input import (
+    _message_candidates,
+    _trace_from_spans,
+    detect_message_format,
+    parse_messages,
+    partition_traces,
+)
 from evaluatorq.contracts import Message
+
+
+@pytest.mark.parametrize(
+    ('value', 'expected'),
+    [
+        ([{'role': 'user', 'content': 'hi'}], 'chat_completions'),
+        ([{'role': 'user', 'parts': [{'type': 'text', 'content': 'hi'}]}], 'otel_genai'),
+        ('[{"role": "user", "parts": [{"type": "text", "content": "hi"}]}]', 'otel_genai'),
+        ([{'type': 'function_call', 'call_id': 'c1', 'name': 'f', 'arguments': '{}'}], 'responses'),
+    ],
+)
+def test_detect_message_format(value: object, expected: str) -> None:
+    assert detect_message_format(value) == expected
 
 
 def _span(
@@ -175,7 +194,7 @@ def test_responses_items_preserve_function_call_trajectory() -> None:
 
 
 def test_top_level_responses_input_object_is_detected() -> None:
-    messages, detected = _parse_messages(
+    messages, detected = parse_messages(
         {
             'input': [
                 {
@@ -204,14 +223,14 @@ def test_top_level_responses_input_object_is_detected() -> None:
 def test_responses_envelopes_preserve_scalar_and_untyped_messages(
     payload: object, default_role: Literal['user', 'assistant'], expected_content: str
 ) -> None:
-    messages, detected = _parse_messages(payload, default_role=default_role)
+    messages, detected = parse_messages(payload, default_role=default_role)
 
     assert detected == 'responses'
     assert [message.content for message in messages] == [expected_content]
 
 
 def test_responses_input_is_not_shadowed_by_scalar_output() -> None:
-    messages, detected = _parse_messages(
+    messages, detected = parse_messages(
         {'output': 'answer', 'input': [{'role': 'user', 'content': 'question'}]},
         default_role='user',
     )
@@ -240,7 +259,7 @@ def test_responses_input_is_not_shadowed_by_scalar_output() -> None:
     ],
 )
 def test_message_formats_normalize(payload: object, expected_format: str) -> None:
-    messages, message_format = _parse_messages(payload, default_role='user')
+    messages, message_format = parse_messages(payload, default_role='user')
     assert messages[0].content == 'hi'
     assert message_format == expected_format
 
@@ -317,7 +336,7 @@ def test_nested_responses_full_envelopes_are_normalized() -> None:
     ],
 )
 def test_direct_responses_tool_items_are_preserved(item: dict[str, object], expected_name: str) -> None:
-    messages, detected = _parse_messages(item, default_role='assistant')
+    messages, detected = parse_messages(item, default_role='assistant')
 
     assert detected == 'responses'
     assert messages[0].tool_calls is not None
@@ -327,7 +346,7 @@ def test_direct_responses_tool_items_are_preserved(item: dict[str, object], expe
 
 def test_malformed_chat_identifiers_are_dropped_with_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
-        messages, detected = _parse_messages(
+        messages, detected = parse_messages(
             {'role': 'tool', 'content': 'result', 'tool_call_id': 123, 'name': {'bad': 'shape'}},
             default_role='tool',
         )
@@ -341,7 +360,7 @@ def test_malformed_chat_identifiers_are_dropped_with_warning(caplog: pytest.LogC
 
 
 def test_otel_unknown_and_multimodal_parts_remain_visible() -> None:
-    messages, detected = _parse_messages(
+    messages, detected = parse_messages(
         [
             {
                 'role': 'user',
@@ -361,7 +380,7 @@ def test_otel_unknown_and_multimodal_parts_remain_visible() -> None:
 
 
 def test_flat_otel_prompt_and_untyped_parts_are_supported() -> None:
-    messages, detected = _parse_messages(
+    messages, detected = parse_messages(
         [{'role': 'user', 'parts': [{'content': 'prompt'}]}],
         default_role='user',
     )

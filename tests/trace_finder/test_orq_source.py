@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace, TracebackType
 from typing import Any, cast
@@ -19,6 +20,7 @@ from evaluatorq.trace_finder.orq_source import (
     _conversation_messages,
     build_oql,
 )
+from evaluatorq.trace_finder.rows import TraceRow
 
 UTC = timezone.utc
 START = datetime(2026, 9, 20, tzinfo=UTC)
@@ -32,10 +34,13 @@ class FakeTraces:
         *,
         spans: dict[str, list[Any]] | None = None,
         details: dict[tuple[str, str], Any] | None = None,
+        raw_details: dict[tuple[str, str], dict[str, Any]] | None = None,
     ) -> None:
         self.pages = pages
         self.spans = spans or {}
         self.details = details or {}
+        self.raw_details = raw_details or {}
+        self.capture_hook: Any | None = None
         self.query_calls: list[dict[str, Any]] = []
         self.list_span_calls: list[dict[str, Any]] = []
         self.get_span_calls: list[dict[str, Any]] = []
@@ -51,6 +56,13 @@ class FakeTraces:
 
     async def get_span_async(self, *, trace_id: str, span_id: str, **kwargs: Any) -> Any:
         self.get_span_calls.append({'trace_id': trace_id, 'span_id': span_id, **kwargs})
+        raw = self.raw_details.get((trace_id, span_id))
+        if raw is not None and self.capture_hook is not None:
+            response = namespace(
+                request=namespace(url=namespace(path=f'/v2/traces/{trace_id}/spans/{span_id}')),
+                json=lambda: raw,
+            )
+            self.capture_hook.after_success(namespace(operation_id='TracesGetSpan'), response)
         return namespace(span=self.details[trace_id, span_id])
 
 
@@ -136,8 +148,7 @@ def test_build_oql_includes_categorical_and_numeric_filters() -> None:
     numeric = NumericFilters(tokens_min=500, tokens_max=5000, duration_ms_min=10, duration_ms_max=1000)
 
     assert build_oql(facets, numeric, {'project-123': 'Research'}) == (
-        'fetch traces | filter operation not_in ("generate_content") '
-        '| filter project_id in ("project-123") '
+        'fetch traces | filter project_id in ("project-123") '
         '| filter model in ("gpt-5") '
         '| filter provider in ("openai") '
         '| filter status in ("error") '
@@ -151,6 +162,15 @@ def test_build_oql_includes_categorical_and_numeric_filters() -> None:
         '| filter duration_ms <= 1000 '
         '| sort end_time desc'
     )
+
+
+def test_build_oql_keeps_the_base_filter_unless_a_model_or_provider_is_picked() -> None:
+    base = 'operation not_in ("generate_content")'
+
+    assert base in build_oql(FacetSelection(status=frozenset({'error'})), NumericFilters(), {})
+    # jev and other bare model calls are generate_content traces; the base filter would hide all of them.
+    assert base not in build_oql(FacetSelection(model=frozenset({'jev-latest'})), NumericFilters(), {})
+    assert base not in build_oql(FacetSelection(provider=frozenset({'typesafe'})), NumericFilters(), {})
 
 
 def test_build_oql_rejects_a_project_name_that_cannot_be_resolved() -> None:
@@ -233,6 +253,248 @@ async def test_loads_pages_newest_first_and_uses_bounded_requests() -> None:
 
 
 @pytest.mark.asyncio
+async def test_targeted_load_scans_past_unrelated_summaries_without_hydrating_them() -> None:
+    traces = FakeTraces({
+        None: ([summary('newer-a', messages=[]), summary('newer-b', messages=[])], True, 'page-2'),
+        'page-2': ([summary('pinned', minute=1)], False, None),
+    })
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'pinned'},
+    )
+
+    assert [trace.trace_id for trace in snapshot.traces] == ['pinned']
+    assert [call['page_token'] for call in traces.query_calls] == [None, 'page-2']
+    assert all(call['limit'] == 200 for call in traces.query_calls)
+    assert not traces.list_span_calls
+    assert not traces.get_span_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_load_stops_starting_pages_after_budget_when_id_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    traces = FakeTraces({None: ([summary('unrelated')], True, 'page-2')})
+    ticks = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 31.0))
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'stale'},
+    )
+
+    assert snapshot.traces == ()
+    assert len(traces.query_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_targeted_page_budget_includes_project_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    traces = FakeTraces({})
+    ticks = iter((0.0, 31.0))
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        1,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'stale'},
+    )
+
+    assert snapshot.traces == ()
+    assert not traces.query_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_project_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    traces = FakeTraces({})
+    client = FakeOrq(traces)
+    project_started = asyncio.Event()
+
+    async def slow_projects(**kwargs: Any) -> Any:
+        project_started.set()
+        await asyncio.sleep(60)
+
+    cast('Any', client.projects).list_async = slow_projects
+    snapshot = await make_source(client).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+    )
+
+    assert project_started.is_set()
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert not traces.query_calls
+
+
+@pytest.mark.asyncio
+async def test_targeted_project_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({})
+    client = FakeOrq(traces)
+
+    async def provider_timeout(**_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError('provider project lookup timed out')
+
+    cast('Any', client.projects).list_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider project lookup timed out') as error:
+        await make_source(client).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    traces = FakeTraces({})
+    query_started = asyncio.Event()
+    query_timeouts: list[int] = []
+
+    async def slow_query(**kwargs: Any) -> Any:
+        query_started.set()
+        query_timeouts.append(kwargs['timeout_ms'])
+        await asyncio.sleep(60)
+
+    cast('Any', traces).query_async = slow_query
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+    )
+
+    assert query_started.is_set()
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert len(query_timeouts) == 1
+    assert 1 <= query_timeouts[0] <= 10
+
+
+@pytest.mark.asyncio
+async def test_targeted_query_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({})
+
+    async def provider_timeout(**_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError('provider query timed out')
+
+    cast('Any', traces).query_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider query timed out') as error:
+        await make_source(FakeOrq(traces)).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_targeted_deadline_cancels_slow_span_hydration(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 1.0)
+    ticks = iter((0.0, 0.0, 0.0, 0.0, 0.0, 0.5))
+
+    def monotonic() -> float:
+        return next(ticks, 0.5)
+
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=monotonic))
+    traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
+    hydration_started = asyncio.Event()
+    hydration_timeouts: list[int] = []
+
+    async def slow_span_list(*, trace_id: str, **kwargs: Any) -> Any:
+        hydration_started.set()
+        hydration_timeouts.append(kwargs['timeout_ms'])
+        await asyncio.sleep(60)
+
+    cast('Any', traces).list_spans_async = slow_span_list
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+    )
+
+    assert hydration_started.is_set()
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert len(hydration_timeouts) == 1
+    assert 1 <= hydration_timeouts[0] <= 500
+
+
+@pytest.mark.asyncio
+async def test_targeted_hydration_provider_timeout_is_not_treated_as_deadline() -> None:
+    traces = FakeTraces({None: ([summary('target', messages=[])], False, None)})
+
+    async def provider_timeout(*, trace_id: str, **_kwargs: Any) -> Any:
+        raise asyncio.TimeoutError(f'provider span timed out for {trace_id}')
+
+    cast('Any', traces).list_spans_async = provider_timeout
+
+    with pytest.raises(OrqSourceError, match='provider span timed out') as error:
+        await make_source(FakeOrq(traces)).load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+        )
+    assert isinstance(error.value.__cause__, asyncio.TimeoutError)
+
+
+@pytest.mark.asyncio
+async def test_targeted_hydration_deadline_keeps_completed_traces(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.05)
+    traces = FakeTraces({None: ([summary('fast', messages=[]), summary('slow', messages=[])], False, None)})
+    slow_started = asyncio.Event()
+    slow_cancelled = asyncio.Event()
+    warnings: list[tuple[Any, ...]] = []
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.logger.warning', lambda *args: warnings.append(args))
+
+    async def list_spans(*, trace_id: str, **kwargs: Any) -> Any:
+        traces.list_span_calls.append({'trace_id': trace_id, **kwargs})
+        if trace_id == 'slow':
+            slow_started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                slow_cancelled.set()
+                raise
+        return namespace(data=[span(f'{trace_id}-span', minute=1)], has_more=False, next_page_token=None)
+
+    cast('Any', traces).list_spans_async = list_spans
+    traces.details['fast', 'fast-span'] = detail('fast-span', 'fast conversation', minute=1)
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START,
+        END,
+        2,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        target_trace_ids={'fast', 'slow'},
+    )
+
+    assert slow_started.is_set()
+    assert slow_cancelled.is_set()
+    assert [record.trace_id for record in snapshot.traces] == ['fast']
+    assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
+    assert any('during trace hydration' in str(args[0]) for args in warnings)
+
+
+@pytest.mark.asyncio
+async def test_targeted_scan_limit_marks_snapshot_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.MAX_LIVE_TRACES', 1)
+    traces = FakeTraces({None: ([summary('other', messages=user_messages('other'))], True, 'next')})
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'target'}
+    )
+
+    assert snapshot.traces == ()
+    assert snapshot.capture_metadata['incomplete_reason'] == 'scan_limit'
+    assert len(traces.query_calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_populates_summary_metadata_without_listing_spans() -> None:
     trace = summary('complete', messages=user_messages('from summary'))
     trace.agent_name = 'support-agent'
@@ -257,6 +519,41 @@ async def test_populates_summary_metadata_without_listing_spans() -> None:
     assert record.duration_ms == 42
     assert traces.list_span_calls == []
     assert traces.get_span_calls == []
+
+
+@pytest.mark.asyncio
+async def test_captures_tool_definition_size_from_selected_span() -> None:
+    trace = summary('with-tools', messages=[])
+    hydrated = detail('completion', 'find the order', minute=1)
+    raw = {
+        'span': {
+            'attributes': {
+                'gen_ai': {
+                    'input': {'messages': user_messages('find the order')},
+                    'tool': {'definitions': [
+                        {'type': 'function', 'function': {'name': 'lookup_order', 'parameters': {'type': 'object'}}},
+                        {'type': 'function', 'function': {'name': 'refund_order', 'parameters': {'type': 'object'}}},
+                    ]},
+                },
+            },
+        },
+    }
+    traces = FakeTraces(
+        {None: ([trace], False, None)},
+        spans={'with-tools': [span('completion', minute=1)]},
+        details={('with-tools', 'completion'): hydrated},
+        raw_details={('with-tools', 'completion'): raw},
+    )
+    source = make_source(with_hooks(FakeOrq(traces)))
+    traces.capture_hook = source._capture
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+    record = records['with-tools']
+
+    assert record is not None
+    assert record.tool_definition_count == 2
+    assert record.tool_definition_tokens > 0
 
 
 @pytest.mark.asyncio
@@ -294,6 +591,58 @@ async def test_uses_raw_query_payload_for_fields_dropped_by_sdk_models() -> None
     assert record.tool_names == ('lookup', 'search')
     assert record.total_tokens == 654
     assert record.duration_ms == 77
+
+
+@pytest.mark.asyncio
+async def test_prepends_system_prompt_from_span_detail_when_summary_lacks_it() -> None:
+    # Live Orq shape: the trace summary's gen_ai.input is only the last user turn (a JSON string),
+    # while get_span serves gen_ai.input.messages with the system message first, as role + parts.
+    trace = summary('trace', messages=[])
+    trace.span_id = 'leading'
+    trace.attributes = {'gen_ai': {'input': '"which traces had tool errors?"'}}
+    detail_payload = namespace(
+        attributes={
+            'gen_ai': {
+                'input': {
+                    'messages': [
+                        {'role': 'system', 'parts': [{'type': 'text', 'content': 'You compile queries.'}]},
+                        {'role': 'user', 'parts': [{'type': 'text', 'content': 'which traces had tool errors?'}]},
+                    ]
+                }
+            }
+        }
+    )
+    traces = FakeTraces({None: ([trace], False, None)}, details={('trace', 'leading'): detail_payload})
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    messages = snapshot.traces[0].messages
+    assert [m['role'] for m in messages] == ['system', 'user']
+    assert messages[0]['parts'][0]['content'] == 'You compile queries.'
+    assert messages[1]['role'] == 'user'
+    assert [call['span_id'] for call in traces.get_span_calls] == ['leading']
+
+
+@pytest.mark.asyncio
+async def test_keeps_summary_messages_when_system_prompt_lookup_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    trace = summary('trace', messages=user_messages('hello'))
+    trace.span_id = 'leading'
+    traces = FakeTraces({None: ([trace], False, None)})
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+
+    snapshot = await make_source(FakeOrq(traces)).load_async(
+        START, END, 1, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert snapshot.traces[0].messages == ({'role': 'user', 'content': 'hello'},)
+    lookups = [w for w in warnings if 'system prompt lookup failed for 1 of 1 trace(s); first error:' in w]
+    assert len(lookups) == 1
 
 
 @pytest.mark.asyncio
@@ -512,7 +861,8 @@ async def test_rejects_repeated_page_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hydration_failure_cancels_other_span_requests() -> None:
+@pytest.mark.parametrize('targeted', [False, True])
+async def test_hydration_failure_cancels_other_span_requests(targeted: bool) -> None:
     started = asyncio.Event()
     cancelled = asyncio.Event()
 
@@ -534,7 +884,12 @@ async def test_hydration_failure_cancels_other_span_requests() -> None:
 
     with pytest.raises(OrqSourceError, match='span service unavailable'):
         await make_source(FakeOrq(traces)).load_async(
-            START, END, 2, facets=FacetSelection(), numeric=NumericFilters()
+            START,
+            END,
+            2,
+            facets=FacetSelection(),
+            numeric=NumericFilters(),
+            target_trace_ids={'first', 'second'} if targeted else None,
         )
 
     assert len(traces.list_span_calls) == 2
@@ -627,9 +982,60 @@ async def test_raw_response_capture_correlates_interleaved_requests() -> None:
     assert second == {'search': {'data': [{'trace_id': 'second'}]}}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ('Unset', 'ok'))
+async def test_first_error_message_uses_raw_sdk_status_shape_without_logging_payload(status: str) -> None:
+    raw = {
+        'span': {
+            'span_id': 'failed-span',
+            'attributes': {
+                'otlp': {'status': {'message': '<observed error text>'}},
+                'otel': {'status_description': 'fallback text'},
+            },
+        }
+    }
+    traces = FakeTraces({}, details={('trace', 'failed-span'): {}}, raw_details={('trace', 'failed-span'): raw})
+    client = with_hooks(FakeOrq(traces))
+    source = make_source(client)
+    traces.capture_hook = client.sdk_configuration._hooks.after_success_hooks[0]
+
+    message = await source.first_error_message(
+        'trace', [
+            {'span_id': 'failed-span', 'status': status, 'status_code': 'ERROR'},
+            {'span_id': 'later', 'status': 'error'},
+        ]
+    )
+
+    assert message == '<observed error text>'
+    assert [call['span_id'] for call in traces.get_span_calls] == ['failed-span']
+    assert traces.get_span_calls[0]['timeout_ms'] > 0
+
+
 def test_conversation_messages_accepts_direct_messages() -> None:
     assert _conversation_messages({'messages': [{'role': 'user', 'content': 'direct'}]}) == [
         {'role': 'user', 'content': 'direct'}
+    ]
+
+
+def test_conversation_messages_keeps_output_with_direct_input_messages() -> None:
+    assert _conversation_messages({
+        'messages': [{'role': 'user', 'content': 'question'}],
+        'attributes': {'gen_ai': {'output': {'messages': [{'role': 'assistant', 'content': 'answer'}]}}},
+    }) == [{'role': 'user', 'content': 'question'}, {'role': 'assistant', 'content': 'answer'}]
+
+
+def test_conversation_messages_omits_empty_reasoning_part_before_visible_answer() -> None:
+    assert _conversation_messages({
+        'attributes': {'gen_ai': {
+            'input': {'messages': [{'role': 'system', 'content': 'instructions'}]},
+            'output': {'messages': [
+                {'role': 'assistant', 'parts': [{'type': 'reasoning', 'content': '[encrypted]'}]},
+                {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'answer'}]},
+            ]},
+        }},
+    }) == [
+        {'role': 'system', 'content': 'instructions'},
+        {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'answer'}]},
     ]
 
 
@@ -677,8 +1083,116 @@ def test_conversation_messages_preserves_tool_calls() -> None:
 def test_conversation_messages_preserves_content_parts() -> None:
     parts = [{'type': 'text', 'text': 'part'}]
     assert _conversation_messages({'messages': [{'role': 'user', 'parts': parts}]}) == [
-        {'role': 'user', 'parts': parts}
+        {'role': 'user', 'parts': parts, 'content': 'part'}
     ]
+
+
+LONG = 'Why was my invoice 4411 charged twice? ' * 60
+
+
+def _otel_payload() -> dict[str, Any]:
+    return {
+        'attributes': {
+            'gen_ai': {
+                'input': [{'role': 'user', 'parts': [{'type': 'text', 'content': LONG}]}],
+                'output': [
+                    {
+                        'role': 'assistant',
+                        'parts': [
+                            {
+                                'type': 'tool_call',
+                                'id': 'c1',
+                                'name': 'lookup_invoice',
+                                'arguments': {'id': 4411},
+                            }
+                        ],
+                    },
+                    {
+                        'role': 'tool',
+                        'parts': [
+                            {
+                                'type': 'tool_call_response',
+                                'id': 'c1',
+                                'response': 'Error: invoice service unavailable',
+                            }
+                        ],
+                    },
+                    {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'Your invoice was paid.'}]},
+                ],
+            }
+        }
+    }
+
+
+def test_conversation_messages_normalises_otel_parts() -> None:
+    messages = _conversation_messages(_otel_payload())
+    assert messages[0] == {'role': 'user', 'content': LONG}
+    assert messages[1]['tool_calls'][0]['function']['name'] == 'lookup_invoice'
+    assert messages[2]['role'] == 'tool' and messages[2]['tool_call_id'] == 'c1'
+    assert 'invoice service unavailable' in messages[2]['content']
+    assert messages[3] == {'role': 'assistant', 'content': 'Your invoice was paid.'}
+
+
+def test_conversation_messages_normalises_otel_parts_given_as_json_string() -> None:
+    payload = _otel_payload()
+    payload['attributes']['gen_ai'] = {
+        key: json.dumps(value) for key, value in payload['attributes']['gen_ai'].items()
+    }
+    assert _conversation_messages(payload) == _conversation_messages(_otel_payload())
+
+
+def test_conversation_messages_normalises_responses_items() -> None:
+    payload = {
+        'input': [
+            {'role': 'user', 'content': 'refund order 9'},
+            {'type': 'function_call', 'call_id': 'c9', 'name': 'refund', 'arguments': '{"order": 9}'},
+            {'type': 'function_call_output', 'call_id': 'c9', 'output': 'Error: order not found'},
+        ]
+    }
+    messages = _conversation_messages(payload)
+    assert any(m.get('tool_calls') and m['tool_calls'][0]['function']['name'] == 'refund' for m in messages)
+    assert any(m['role'] == 'tool' and 'order not found' in m['content'] for m in messages)
+
+
+def test_conversation_messages_keeps_responses_calls_beside_chat_parts() -> None:
+    payload = {
+        'input': [
+            {'role': 'user', 'parts': [{'type': 'text', 'text': 'find order 9'}]},
+            {'type': 'function_call', 'call_id': 'c9', 'name': 'lookup_order', 'arguments': '{"id": 9}'},
+            {'type': 'function_call_output', 'call_id': 'c9', 'output': 'order found'},
+        ]
+    }
+
+    messages = _conversation_messages(payload)
+
+    assert messages[0] == {'role': 'user', 'content': 'find order 9'}
+    assert messages[1]['role'] == 'assistant'
+    assert messages[1]['tool_calls'][0]['function']['name'] == 'lookup_order'
+    assert messages[2] == {'role': 'tool', 'tool_call_id': 'c9', 'content': 'order found'}
+
+
+def test_conversation_messages_keeps_mixed_responses_envelope_sides() -> None:
+    payload = {
+        'input': {
+            'input': [
+                {'role': 'user', 'parts': [{'type': 'text', 'text': 'find order 9'}]},
+                {'type': 'function_call_output', 'call_id': 'c9', 'output': 'order found'},
+            ]
+        },
+        'output': {
+            'output': [
+                {'role': 'assistant', 'parts': [{'type': 'text', 'text': 'found it'}]},
+                {'type': 'function_call', 'call_id': 'c10', 'name': 'send_update', 'arguments': '{}'},
+            ]
+        },
+    }
+
+    messages = _conversation_messages(payload)
+
+    assert messages[0] == {'role': 'user', 'content': 'find order 9'}
+    assert messages[1] == {'role': 'tool', 'tool_call_id': 'c9', 'content': 'order found'}
+    assert messages[2] == {'role': 'assistant', 'content': 'found it'}
+    assert messages[3]['tool_calls'][0]['function']['name'] == 'send_update'
 
 
 def namespace(**values: Any) -> SimpleNamespace:
@@ -763,3 +1277,323 @@ def user_messages(content: str) -> list[dict[str, Any]]:
 
 def conversation_attributes(messages: list[dict[str, Any]]) -> dict[str, Any]:
     return {'gen_ai': {'input': {'messages': messages}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('summary_messages', [
+    user_messages('short question'),
+    [
+        {'role': 'user', 'content': 'earlier question'},
+        {'role': 'assistant', 'content': 'earlier answer'},
+        {'role': 'user', 'content': 'short question'},
+    ],
+])
+async def test_hydrate_rows_fetches_full_span_when_summary_omits_reported_reply(
+    summary_messages: list[dict[str, Any]],
+) -> None:
+    trace = summary('partial', messages=summary_messages)
+    trace.usage = namespace(prompt_tokens=1339, completion_tokens=262, prompt_cached_tokens=1336)
+    hydrated = detail('reply', '', minute=1)
+    hydrated.attributes = {
+        'gen_ai': {
+            'input': {'messages': [
+                {'role': 'system', 'parts': [{'type': 'text', 'content': 'full instructions'}]},
+                {'role': 'user', 'parts': [{'type': 'text', 'content': 'short question'}]},
+            ]},
+            'output': {'messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'full answer'}]}]},
+        }
+    }
+    traces = FakeTraces(
+        {None: ([trace], False, None)},
+        spans={'partial': [span('reply', minute=1, span_type='span.responses')]},
+        details={('partial', 'reply'): hydrated},
+    )
+    source = make_source(FakeOrq(traces))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    record = records['partial']
+    assert record is not None
+    assert record.span_id == 'reply'
+    assert [message['role'] for message in record.messages] == ['system', 'user', 'assistant']
+    assert record.messages[-1]['parts'][0]['content'] == 'full answer'
+    assert [call['span_id'] for call in traces.get_span_calls] == ['reply']
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_warns_and_keeps_summary_if_reported_reply_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace = summary('partial', messages=user_messages('short question'))
+    trace.usage = namespace(prompt_tokens=10, completion_tokens=5)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    source = make_source(FakeOrq(FakeTraces({None: ([trace], False, None)})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records['partial'] is not None
+    assert records['partial'].messages == ({'role': 'user', 'content': 'short question'},)
+    assert any('report output tokens but their hydrated spans contain no visible reply' in warning for warning in warnings)
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_uses_typed_output_tokens_when_raw_usage_is_missing() -> None:
+    traces = FakeTraces({})
+    source = make_source(FakeOrq(traces))
+    row = TraceRow(
+        trace_id='typed-fallback',
+        started_at=START,
+        ended_at=START,
+        models=('openai/gpt-5.6-luna',),
+        tokens_out=5,
+        raw={'trace_id': 'typed-fallback', 'messages': user_messages('question'), 'models': ['openai/gpt-5.6-luna']},
+    )
+
+    records = await source.hydrate_rows((row,))
+
+    assert records['typed-fallback'] is not None
+    assert len(traces.list_span_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_pages_without_hydration_and_keeps_server_order() -> None:
+    first = summary('newer', minute=3)
+    first.usage = namespace(prompt_tokens=100, completion_tokens=5, prompt_cached_tokens=50)
+    traces = FakeTraces({
+        None: ([first, summary('older', minute=1)], True, 'page-2'),
+        'page-2': ([summary('oldest', minute=0)], False, None),
+    })
+    pages: list[int] = []
+
+    rows = await make_source(FakeOrq(traces)).search(
+        START,
+        END,
+        3,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+        on_page=lambda so_far: pages.append(len(so_far)),
+    )
+
+    assert [row.trace_id for row in rows] == ['newer', 'older', 'oldest']
+    assert rows[0].tokens_in == 100
+    assert pages == [2, 3]
+    assert traces.list_span_calls == []
+    assert traces.get_span_calls == []
+    assert [call['limit'] for call in traces.query_calls] == [3, 1]
+
+
+@pytest.mark.asyncio
+async def test_search_stops_at_limit() -> None:
+    traces = FakeTraces({None: ([summary('a'), summary('b')], True, 'page-2')})
+
+    rows = await make_source(FakeOrq(traces)).search(
+        START, END, 2, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert len(rows) == 2
+    assert len(traces.query_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_repeated_page_token() -> None:
+    traces = FakeTraces({None: ([summary('a')], True, 'same'), 'same': ([summary('b')], True, 'same')})
+
+    with pytest.raises(OrqSourceError, match='repeated OQL page token'):
+        await make_source(FakeOrq(traces)).search(
+            START, END, 10, facets=FacetSelection(), numeric=NumericFilters()
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_keeps_the_project_guard() -> None:
+    traces = FakeTraces({None: ([summary('wrong', project_id='project-a')], False, None)})
+    projects = FakeProjects([namespace(project_id='project-b', name='Selected')])
+
+    with pytest.raises(OrqSourceError, match='only traces outside the selected project'):
+        await make_source(FakeOrq(traces, projects)).search(
+            START, END, 5, facets=FacetSelection(project_id='project-b'), numeric=NumericFilters()
+        )
+
+
+@pytest.mark.asyncio
+async def test_search_warns_once_for_exclusive_usage(monkeypatch: pytest.MonkeyPatch) -> None:
+    trace = summary('claude-code')
+    trace.usage = namespace(prompt_tokens=1150, completion_tokens=10, prompt_cached_tokens=65_600_000)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda msg, *a: warnings.append(msg.format(*a)),
+    )
+
+    rows = await make_source(FakeOrq(FakeTraces({None: ([trace], False, None)}))).search(
+        START, END, 5, facets=FacetSelection(), numeric=NumericFilters()
+    )
+
+    assert rows[0].tokens_in == 1150 + 65_600_000
+    assert sum('outside prompt_tokens' in warning for warning in warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_warns_when_raw_summary_capture_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    source = make_source(FakeOrq(FakeTraces({None: ([summary('fallback')], False, None)})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+
+    assert rows[0].trace_id == 'fallback'
+    assert any('SDK-model fallback' in warning and 'optional explorer fields' in warning for warning in warnings)
+
+
+class SpanLookupFailingTraces(FakeTraces):
+    def __init__(self, *args: Any, failing: set[str], **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.failing = failing
+
+    async def list_spans_async(self, *, trace_id: str, **kwargs: Any) -> Any:
+        if trace_id in self.failing:
+            raise RuntimeError('span API down')
+        return await super().list_spans_async(trace_id=trace_id, **kwargs)
+
+
+class SpanDetailFailingTraces(FakeTraces):
+    async def get_span_async(self, *, trace_id: str, span_id: str, **kwargs: Any) -> Any:
+        raise RuntimeError('span detail API down')
+
+
+def with_output_tokens(trace: Any) -> Any:
+    trace.usage = namespace(prompt_tokens=10, completion_tokens=5)
+    return trace
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_keeps_summary_messages_when_the_span_lookup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    trace = with_output_tokens(summary('partial', messages=user_messages('short question')))
+    source = make_source(FakeOrq(SpanLookupFailingTraces({None: ([trace], False, None)}, failing={'partial'})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records['partial'] is not None
+    assert records['partial'].messages == ({'role': 'user', 'content': 'short question'},)
+    assert sum('span lookup failed' in warning for warning in warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_keeps_summary_messages_when_span_detail_lookup_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        'evaluatorq.trace_finder.orq_source.logger.warning',
+        lambda message, *args: warnings.append(message.format(*args)),
+    )
+    trace = with_output_tokens(summary('detail-failure', messages=user_messages('short question')))
+    spans = {'detail-failure': [span('reply', minute=0, span_type='span.responses')]}
+    source = make_source(FakeOrq(SpanDetailFailingTraces({None: ([trace], False, None)}, spans=spans)))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    record = records['detail-failure']
+    assert record is not None
+    assert record.messages == ({'role': 'user', 'content': 'short question'},)
+    assert sum('span lookup failed' in warning for warning in warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_omits_failed_trace_when_summary_is_unusable() -> None:
+    trace = with_output_tokens(summary('empty', messages=[]))
+    source = make_source(FakeOrq(SpanLookupFailingTraces({None: ([trace], False, None)}, failing={'empty'})))
+
+    rows = await source.search(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records == {}
+
+
+@pytest.mark.asyncio
+async def test_one_failing_span_lookup_does_not_fail_the_rest_of_the_batch() -> None:
+    bad = with_output_tokens(summary('bad', minute=1, messages=user_messages('bad question')))
+    good = summary('good', minute=0, messages=user_messages('good question'))
+    traces = SpanLookupFailingTraces({None: ([bad, good], False, None)}, failing={'bad'})
+    source = make_source(FakeOrq(traces))
+
+    rows = await source.search(START, END, 5, facets=FacetSelection(), numeric=NumericFilters())
+    records = await source.hydrate_rows(rows)
+
+    assert records['good'] is not None
+    assert records['bad'] is not None
+    assert records['bad'].messages == ({'role': 'user', 'content': 'bad question'},)
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_returns_none_for_a_failed_trace() -> None:
+    ok = summary('ok', messages=user_messages('hello'))
+    traces = FakeTraces({None: ([ok, summary('empty', messages=[])], False, None)})
+    source = make_source(FakeOrq(traces))
+    rows = await source.search(START, END, 5, facets=FacetSelection(), numeric=NumericFilters())
+
+    records = await source.hydrate_rows(rows)
+
+    assert records['ok'] is not None
+    assert records['ok'].messages[0]['content'] == 'hello'
+    assert records['empty'] is None
+
+
+@pytest.mark.asyncio
+async def test_hydrate_rows_reports_progress_to_the_run() -> None:
+    from evaluatorq.trace_finder.progress import set_load_reporter
+
+    traces = FakeTraces({None: ([summary('a'), summary('b')], False, None)})
+    source = make_source(FakeOrq(traces))
+    rows = await source.search(START, END, 5, facets=FacetSelection(), numeric=NumericFilters())
+    seen: list[tuple[int, int]] = []
+
+    async def hydrate() -> None:
+        set_load_reporter(lambda done, total: seen.append((done, total)))
+        await source.hydrate_rows(rows)
+
+    await asyncio.create_task(hydrate())
+
+    assert sorted(seen) == [(1, 2), (2, 2)]
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_limit_below_one() -> None:
+    source = make_source(FakeOrq(FakeTraces({})))
+
+    with pytest.raises(OrqSourceError, match='limit must be at least 1'):
+        await source.search(START, END, 0, facets=FacetSelection(), numeric=NumericFilters())
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_start_after_end() -> None:
+    source = make_source(FakeOrq(FakeTraces({})))
+
+    with pytest.raises(OrqSourceError, match='start must not be after end'):
+        await source.search(END, START, 1, facets=FacetSelection(), numeric=NumericFilters())
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_naive_datetime() -> None:
+    source = make_source(FakeOrq(FakeTraces({})))
+
+    with pytest.raises(OrqSourceError, match='start must include a timezone offset'):
+        await source.search(datetime(2026, 9, 20), END, 1, facets=FacetSelection(), numeric=NumericFilters())

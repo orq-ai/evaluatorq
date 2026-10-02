@@ -3,13 +3,23 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+import threading
+import time
+from typing import TYPE_CHECKING, cast
 
+import pytest
+from pydantic import ValidationError
+
+from evaluatorq.common import run_manifest
 from evaluatorq.common.run_manifest import (
+    ManifestWriter,
+    fail_if_running,
     list_manifests,
     start_manifest,
+    update_manifest,
 )
-from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunSummary
+from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, RunSummary
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -59,6 +69,175 @@ def test_per_stage_status_and_timing(tmp_path: Path) -> None:
     run_duration = m.duration_seconds
     assert run_duration is not None
     assert run_duration >= 0
+
+
+@pytest.mark.parametrize(('completed', 'total'), [(-1, 4), (1, -1), (5, 4)])
+def test_persisted_manifest_rejects_invalid_stage_progress(completed: int, total: int) -> None:
+    persisted = {
+        'run_id': 'r1',
+        'surface': 'sim',
+        'run_name': 'demo',
+        'started_at': '2025-01-01T00:00:00Z',
+        'updated_at': '2025-01-01T00:00:00Z',
+        'stages': [
+            {
+                'name': 'population',
+                'started_at': '2025-01-01T00:00:00Z',
+                'completed': completed,
+                'total': total,
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        RunManifest.model_validate_json(json.dumps(persisted))
+
+
+def test_persisted_manifest_allows_missing_stage_progress() -> None:
+    persisted = {
+        'run_id': 'r1',
+        'surface': 'sim',
+        'run_name': 'demo',
+        'started_at': '2025-01-01T00:00:00Z',
+        'updated_at': '2025-01-01T00:00:00Z',
+        'stages': [{'name': 'population', 'started_at': '2025-01-01T00:00:00Z'}],
+    }
+
+    [stage] = RunManifest.model_validate_json(json.dumps(persisted)).stages
+    assert stage.completed is None
+    assert stage.total is None
+
+
+def test_stage_progress_throttles_and_always_writes_the_last_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='r', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    flushes: list[int] = []
+    original = writer.flush
+    monkeypatch.setattr(writer, 'flush', lambda: (flushes.append(1), original())[1])
+
+    for done in range(1, 101):
+        writer.stage_progress('label', done, 100)
+
+    assert len(flushes) == 2
+    now[0] = 2.0
+    record = writer.manifest.stages[-1]
+    assert (record.completed, record.total) == (100, 100)
+
+
+def test_first_progress_for_each_stage_is_flushed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='r', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    writer.stage_progress('label', 1, 3)
+    writer.end_stage('label')
+
+    flushes: list[int] = []
+    original = writer.flush
+    monkeypatch.setattr(writer, 'flush', lambda: (flushes.append(1), original())[1])
+    writer.start_stage('summary')
+    flushes.clear()  # Ignore the stage transition flush; check its first progress update.
+
+    writer.stage_progress('summary', 1, 3)
+
+    assert len(flushes) == 1
+    [manifest] = list_manifests(tmp_path)
+    record = manifest.stages[-1]
+    assert (record.completed, record.total) == (1, 3)
+
+
+def test_stage_progress_updates_only_matching_target(tmp_path: Path) -> None:
+    writer = start_manifest(run_id='target-progress', surface='sim', run_name='demo', runs_dir=tmp_path)
+    writer.start_stage('prepare', target='agent-a')
+    writer.start_stage('prepare', target='agent-b')
+
+    writer.stage_progress('prepare', 2, 5, target='agent-a')
+
+    by_target = {stage.target: stage for stage in writer.manifest.stages}
+    assert (by_target['agent-a'].completed, by_target['agent-a'].total) == (2, 5)
+    assert (by_target['agent-b'].completed, by_target['agent-b'].total) == (None, None)
+
+
+def test_targetless_stage_progress_does_not_update_targeted_stages(tmp_path: Path) -> None:
+    writer = start_manifest(run_id='targetless-progress', surface='sim', run_name='demo', runs_dir=tmp_path)
+    writer.start_stage('prepare', target='agent-a')
+    writer.start_stage('prepare', target='agent-b')
+
+    writer.stage_progress('prepare', 2, 5)
+
+    assert all((stage.completed, stage.total) == (None, None) for stage in writer.manifest.stages)
+
+
+def test_failed_progress_flush_retries_latest_counts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='failed-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    attempts = [0]
+
+    replace = run_manifest.os.replace
+
+    def fail_once(*args, **kwargs) -> None:
+        attempts[0] += 1
+        if attempts[0] == 1:
+            raise OSError('temporary disk error')
+        replace(*args, **kwargs)
+
+    monkeypatch.setattr(run_manifest.os, 'replace', fail_once)
+    writer.stage_progress('label', 1, 3)
+    assert list_manifests(tmp_path)[0].stages[-1].completed is None
+    now[0] = 0.1
+    writer.stage_progress('label', 2, 3)
+
+    assert attempts[0] == 2
+    record = list_manifests(tmp_path)[0].stages[-1]
+    assert (record.completed, record.total) == (2, 3)
+
+
+def test_failed_progress_flush_after_a_success_retries_inside_the_throttle_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [0.0]
+    started = start_manifest(run_id='failed-after-ok', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
+    writer.start_stage('label')
+    writer.stage_progress('label', 1, 5)  # succeeds, arms the throttle
+
+    replace = run_manifest.os.replace
+    fail = [True]
+
+    def flaky(*args, **kwargs) -> None:
+        if fail[0]:
+            raise OSError('temporary disk error')
+        replace(*args, **kwargs)
+
+    monkeypatch.setattr(run_manifest.os, 'replace', flaky)
+    now[0] = 2.0
+    writer.stage_progress('label', 2, 5)  # past the window, flush fails
+    fail[0] = False
+    now[0] = 2.1
+    writer.stage_progress('label', 3, 5)  # inside the old window, must still retry
+
+    record = list_manifests(tmp_path)[0].stages[-1]
+    assert (record.completed, record.total) == (3, 5)
+
+
+def test_stage_progress_ignores_invalid_counts_without_persisting_them(tmp_path: Path) -> None:
+    started = start_manifest(run_id='invalid-progress', surface='insights', run_name='demo', runs_dir=tmp_path)
+    writer = ManifestWriter(started.manifest, started.path)
+    writer.start_stage('label')
+    writer.stage_progress('label', 1, 3)
+
+    for completed, total in ((-1, 3), (4, 3), (1, -1), (1.5, 3), (True, 3)):
+        writer.stage_progress('label', cast('int', completed), total)
+
+    [manifest] = list_manifests(tmp_path)
+    record = manifest.stages[-1]
+    assert (record.completed, record.total) == (1, 3)
 
 
 def test_stage_is_noop_after_terminal(tmp_path: Path) -> None:
@@ -281,3 +460,89 @@ def test_complete_stamps_the_summary_version(tmp_path: Path) -> None:
 
     m = list_manifests(runs)[0]
     assert m.summary_version == RUN_SUMMARY_VERSION
+
+
+def test_concurrent_updates_to_different_fields_both_persist(tmp_path: Path) -> None:
+    w = start_manifest(run_id='race', surface='sim', run_name='before', runs_dir=tmp_path / 'runs')
+    first_inside = threading.Event()
+
+    def slow_report_path(m: RunManifest) -> None:
+        first_inside.set()
+        time.sleep(0.3)  # hold the read-modify-write open so the other writer overlaps it
+        m.report_path = 'report.json'
+
+    def rename(m: RunManifest) -> None:
+        m.run_name = 'after'
+
+    def second_writer() -> None:
+        first_inside.wait(timeout=5)
+        update_manifest(w.path, rename)
+
+    other = threading.Thread(target=second_writer)
+    other.start()
+    update_manifest(w.path, slow_report_path)
+    other.join(timeout=10)
+
+    [m] = list_manifests(tmp_path / 'runs')
+    assert (m.report_path, m.run_name) == ('report.json', 'after')
+
+
+def test_fail_if_running_does_not_clobber_a_finished_run(tmp_path: Path) -> None:
+    w = start_manifest(run_id='done', surface='sim', run_name='r', runs_dir=tmp_path / 'runs')
+    w.complete(report_path=None, summary=None)
+
+    assert fail_if_running(w.path, 'late failure') is False
+    assert list_manifests(tmp_path / 'runs')[0].status == ManifestStatus.COMPLETED
+
+    running = start_manifest(run_id='live', surface='sim', run_name='r', runs_dir=tmp_path / 'runs')
+    assert fail_if_running(running.path, 'boom', stage='setup') is True
+    stored = next(m for m in list_manifests(tmp_path / 'runs') if m.run_id == 'live')
+    assert (stored.status, stored.error) == (ManifestStatus.ERROR, 'boom')
+
+
+def test_running_writer_flush_does_not_overwrite_a_failure_written_by_another_process(tmp_path: Path) -> None:
+    w = start_manifest(run_id='stale', surface='sim', run_name='r', runs_dir=tmp_path / 'runs')
+    fail_if_running(w.path, 'worker died')
+
+    w.stage_progress('x', 1, 2)  # no open stage: harmless
+    w.flush()
+
+    assert w.manifest.status == ManifestStatus.ERROR
+    assert list_manifests(tmp_path / 'runs')[0].error == 'worker died'
+
+
+def test_terminal_transition_does_not_overwrite_another_writers_terminal_state(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    first = start_manifest(run_id='terminal-race', surface='sim', run_name='r', runs_dir=runs)
+    late = ManifestWriter(first.manifest.model_copy(deep=True), first.path)
+
+    first.complete(report_path='report.json')
+    late.fail('late failure')
+
+    stored = list_manifests(runs)[0]
+    assert stored.status == ManifestStatus.COMPLETED
+    assert stored.report_path == 'report.json'
+    assert late.manifest.status == ManifestStatus.COMPLETED
+
+
+def test_stale_writer_flush_preserves_newer_independent_fields(tmp_path: Path) -> None:
+    runs = tmp_path / 'runs'
+    writer = start_manifest(run_id='stale-fields', surface='sim', run_name='before', runs_dir=runs)
+    writer.start_stage('population')
+    stale = ManifestWriter(writer.manifest.model_copy(deep=True), writer.path)
+
+    def add_progress(manifest: RunManifest) -> None:
+        manifest.summary = {'total_results': 3}
+        manifest.stage_labels['population'] = 'Population'
+        manifest.stages[0].completed = 2
+        manifest.stages[0].total = 3
+
+    update_manifest(writer.path, add_progress)
+    stale.manifest.run_name = 'after'
+    assert stale.flush()
+
+    stored = list_manifests(runs)[0]
+    assert stored.run_name == 'after'
+    assert stored.summary == {'total_results': 3}
+    assert stored.stage_labels == {'population': 'Population'}
+    assert (stored.stages[0].completed, stored.stages[0].total) == (2, 3)

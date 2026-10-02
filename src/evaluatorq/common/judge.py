@@ -42,7 +42,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from openai import AsyncOpenAI
     from pydantic import BaseModel as _BaseModel
@@ -706,23 +706,6 @@ async def run_classify(
             )
             raw_payload = json.dumps(payload, default=str)
             response = ClassifyResponse.model_validate(payload)
-            missing = sorted(set(request.questions) - set(response.answers))
-            if missing:
-                logger.error(
-                    'Judge [{}] classify reply is missing answers for {} (received={})',
-                    model,
-                    missing,
-                    sorted(response.answers),
-                )
-                return ClassifyOutcome(
-                    error_kind=JudgeError.PARSE,
-                    error_message=(
-                        f'classify reply is missing answers for: {", ".join(missing)} '
-                        f'(received: {", ".join(sorted(response.answers))})'
-                    ),
-                    token_usage=usage,
-                    raw_content=response.model_dump_json(),
-                )
             answer = response.answers.get('verdict')
             if answer is not None:
                 set_span_attrs(
@@ -789,6 +772,13 @@ async def _classify_judge(
     error_exc = outcome.error_exc
     if error_exc is not None:
         raise error_exc
+    return _classify_answer_outcome(model=model, question=question, outcome=outcome, key='verdict')
+
+
+def _classify_answer_outcome(
+    *, model: str, question: ClassifyQuestion, outcome: ClassifyOutcome, key: str
+) -> JudgeOutcome:
+    """Translate the ``key`` answer of one ``/classify`` reply into the neutral judge outcome."""
     if outcome.error_kind is not None:
         return JudgeOutcome(
             error_kind=outcome.error_kind,
@@ -807,7 +797,18 @@ async def _classify_judge(
             endpoint='classify',
         )
     raw = response.model_dump_json()
-    answer = response.answers['verdict']
+    answer = response.answers.get(key)
+    if answer is None:
+        logger.error('Judge [{}] classify reply is missing answer key {} (raw={})', model, key, raw[:500])
+        return JudgeOutcome(
+            error_kind=JudgeError.PARSE,
+            error_message=(
+                f'classify reply is missing answer for {key} (received: {", ".join(sorted(response.answers))})'
+            ),
+            token_usage=outcome.token_usage,
+            raw_content=raw,
+            endpoint='classify',
+        )
     verdict = _classify_verdict(question, answer)
     if verdict is None:
         logger.error(
@@ -833,6 +834,87 @@ async def _classify_judge(
         raw_output=answer_output,
         endpoint='classify',
     )
+
+
+async def run_classify_judges(
+    *,
+    client: AsyncOpenAI,
+    model: str,
+    cfg: LLMCallConfig,
+    state: dict[str, Any] | str | list[Any],
+    questions: Mapping[str, ClassifyQuestion],
+    span_attributes: dict[str, str] | None = None,
+) -> dict[str, JudgeOutcome]:
+    """Judge several questions about one ``state``, returning one outcome per question key.
+
+    A classify model (Jev) answers every question in one ``/classify`` round trip, so
+    three questions cost one call, not three. Its token usage rides on each outcome,
+    because the reply is not split per question. Any other model falls back to one
+    `run_judge` call per question, which is what a single-question caller gets.
+
+    **Retry.** The classify call runs under `with_retry` for ``cfg.retry_count + 1``
+    attempts on a client with its SDK retries disabled, the same single layer
+    `run_judge` uses; the fallback inherits `run_judge`'s.
+    """
+    if not questions:
+        return {}
+    client = without_client_retries(client)
+    if not (client_routes_through_orq(client) and await supports_classify(model, client)):
+        outcomes = await asyncio.gather(
+            *(
+                run_judge(
+                    client=client,
+                    model=model,
+                    cfg=cfg,
+                    prompt_template=(
+                        'Judge the supplied state using the full question and rubric below. '
+                        'Return the requested verdict as JSON.\n\n{classify_question}'
+                    ),
+                    replacements={
+                        'classify_question': json.dumps(
+                            question.model_copy(update={'state': state}).model_dump(mode='json'),
+                            ensure_ascii=False,
+                        )
+                    },
+                    span_attributes=span_attributes,
+                    classify=question.model_copy(update={'state': state}),
+                )
+                for question in questions.values()
+            )
+        )
+        return dict(zip(questions, outcomes, strict=True))
+    warn_unread_config_fields(cfg, read=frozenset({'timeout_ms', 'retry_count'}), caller='run_classify_judges')
+    request = ClassifyRequest(state=state, questions=dict(questions))
+
+    async def classify_once() -> ClassifyOutcome:
+        outcome = await run_classify(
+            client=client, model=model, cfg=cfg, request=request, span_attributes=span_attributes
+        )
+        if outcome.error_exc is not None:
+            raise outcome.error_exc
+        return outcome
+
+    try:
+        outcome = await with_retry(classify_once, max_attempts=cfg.retry_count + 1, label=f'judge[{model}]')
+    except (asyncio.TimeoutError, APITimeoutError) as e:
+        logger.error('Judge [{}] classify call timed out after {}ms', model, cfg.timeout_ms)
+        failed = JudgeOutcome(
+            error_kind=JudgeError.TIMEOUT,
+            error_message=f'timed out after {cfg.timeout_ms}ms',
+            error_exc=e,
+            timeout_ms=cfg.timeout_ms,
+            endpoint='classify',
+        )
+        return {key: failed.model_copy() for key in questions}
+    except Exception as e:
+        kind = _classify(e) if isinstance(e, APIConnectionError | APIStatusError) else JudgeError.UNKNOWN
+        logger.error('Judge [{}] classify call failed ({}): {}', model, kind.value, e)
+        failed = JudgeOutcome(error_kind=kind, error_message=str(e), error_exc=e, endpoint='classify')
+        return {key: failed.model_copy() for key in questions}
+    return {
+        key: _classify_answer_outcome(model=model, question=question, outcome=outcome, key=key)
+        for key, question in questions.items()
+    }
 
 
 async def _chat_verdict(

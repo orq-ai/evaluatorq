@@ -27,3 +27,9 @@ def test_drawer_closing_class_has_exit_animation() -> None:
         if declaration.type == 'declaration' and declaration.name == 'animation'
     ]
     assert any('sim-drawer-out' in tinycss2.serialize(declaration.value) for declaration in declarations)
+
+
+def test_insights_review_facet_filters() -> None:
+    script = Path(__file__).with_name('insights_review_filters.cjs')
+    result = subprocess.run(['node', str(script)], capture_output=True, text=True, check=False, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr

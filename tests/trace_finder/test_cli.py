@@ -21,6 +21,7 @@ from evaluatorq.common.judge import ClassifyQuestion
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.trace_finder import (
     CompiledQuery,
+    DimensionAnswer,
     RunSnapshot,
     TraceClassification,
     TraceRecord,
@@ -79,6 +80,7 @@ class FakeStore:
         self.request = request
         trace = _trace()
         compiled = CompiledQuery(
+            name='Refund',
             task=ClassifyQuestion(
                 kind='choice',
                 instructions='Does the trace mention a refund?',
@@ -90,15 +92,14 @@ class FakeStore:
         result = TraceClassification(
             trace_id=trace.trace_id,
             span_id=trace.span_id,
-            value='yes',
-            confidence=0.94,
+            answers=(DimensionAnswer(value='yes', confidence=0.94, matched=True),),
             matched=True,
             raw_result={'value': 'yes'},
         )
         return RunSnapshot(
             state='completed',
             request=request,
-            compiled=compiled,
+            dimensions=(compiled,),
             trace_ids=(trace.trace_id,),
             traces=(trace,),
             results={trace.trace_id: result},
@@ -126,6 +127,46 @@ def test_find_exits_nonzero_when_classifications_failed(monkeypatch: Any, tmp_pa
     assert result.exit_code == 1
     assert '1 failed classifications' in result.output
     assert not output.exists()
+
+
+def test_find_prefers_failed_count_over_plan_warning_on_completed_run(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    class WarnedStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            return replace(snapshot, state='completed', error=None, failed=2, plan_warning='Words not covered: foo')
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: WarnedStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 1
+    assert '2 failed classifications' in result.output
+    assert 'Words not covered' not in result.output
+
+
+def test_find_prints_plan_warning_when_ask_ai_cannot_answer(monkeypatch: Any, tmp_path: Path) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+
+    reason = "Ask AI finds traces; it can't compute totals, averages or rankings. Ranking needs aggregation."
+
+    class CancelledStore(FakeStore):
+        async def compile(self, request: Any, *, wait: bool = True) -> RunSnapshot:
+            snapshot = await super().compile(request, wait=wait)
+            return replace(snapshot, state='cancelled', error=None, plan_warning=reason)
+
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: CancelledStore())
+
+    result = CliRunner().invoke(_app(), ['find', 'which model costs most?'])
+
+    assert result.exit_code == 1
+    assert "can't compute totals" in result.output
+    assert 'ended in cancelled' not in result.output
 
 
 def test_find_missing_orq_key_exits_two(monkeypatch: Any) -> None:
@@ -241,7 +282,7 @@ def test_find_positive_only_filters_json_and_keeps_summary(monkeypatch: Any, tmp
                     negative.trace_id: TraceClassification(
                         trace_id=negative.trace_id,
                         span_id=negative.span_id,
-                        value='no',
+                        answers=(DimensionAnswer(value='no', matched=False),),
                         matched=False,
                         raw_result={'value': 'no'},
                     ),
@@ -358,19 +399,19 @@ def test_find_profile_overrides_environment_for_both_clients_without_mutating_it
     assert os.environ['ORQ_API_KEY'] == 'environment-key'
     assert os.environ['ORQ_BASE_URL'] == 'https://environment.example'
     assert store.request is not None
-    assert store.request.population.facets.project_id == ('project-research' if not use_flag else None)
+    assert store.request.population.facets.project_id is None
 
 
 @pytest.mark.parametrize(
-    ('key', 'host', 'expected_project'),
+    ('key', 'host'),
     [
-        ('saved-key', 'https://saved.example', 'saved-project'),
-        ('different-key', 'https://saved.example', None),
-        ('saved-key', 'https://other.example', None),
+        ('saved-key', 'https://saved.example'),
+        ('different-key', 'https://saved.example'),
+        ('saved-key', 'https://other.example'),
     ],
 )
-def test_find_only_reuses_saved_project_for_matching_environment_credentials(
-    monkeypatch: Any, tmp_path: Path, key: str, host: str, expected_project: str | None
+def test_find_ignores_legacy_saved_project_for_environment_credentials(
+    monkeypatch: Any, tmp_path: Path, key: str, host: str
 ) -> None:
     from evaluatorq.trace_finder import cli as find_cli
     from evaluatorq.trace_finder.settings import DashboardSettings, credential_fingerprint, save_settings
@@ -393,7 +434,7 @@ def test_find_only_reuses_saved_project_for_matching_environment_credentials(
 
     assert result.exit_code == 0, result.output
     assert store.request is not None
-    assert store.request.population.facets.project_id == expected_project
+    assert store.request.population.facets.project_id is None
 
 
 @pytest.mark.parametrize(

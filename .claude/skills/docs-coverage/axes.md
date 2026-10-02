@@ -10,11 +10,12 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 
 | Axis | Where values come from | Notes |
 |---|---|---|
-| **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` + `evaluatorq.formats.__all__` + `evaluatorq.signals.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()`, `eq find`, dashboard Find route (`/find`), format converters (`ChatConversation` / `ResponsesConversation` / `OtelTrace` / `AtifTrajectory` `.to_*()`, Python-only), deterministic trajectory signals (`compute_signals`, `signal_evaluator(s)`, Python-only) |
-| **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard`) · trace finder (`/find`, `eq find`) |
+| **entry point** | `evaluatorq.__all__` + `evaluatorq.simulation.__all__` + `evaluatorq.redteam.__all__` + `evaluatorq.formats.__all__` + `evaluatorq.signals.__all__` + `evaluatorq.insights.__all__` | `evaluatorq()`, `red_team()`, `simulate()`, `generate_and_simulate()`, `wrap_simulation_agent()`, pairwise `build_report()`, `deployment()` / `invoke()`, `eq find`, dashboard Find route (`/find`), format converters (`ChatConversation` / `ResponsesConversation` / `OtelTrace` / `AtifTrajectory` `.to_*()`, Python-only), deterministic trajectory signals (`compute_signals`, `signal_evaluator(s)`, Python-only), `insights()` / `insights_sync()`, `eq insights`, dashboard Insights (`/insights`) |
+| **surface** | fixed | Python API · CLI (`eq`) · dashboard (`eq dashboard`) · trace finder (`/find`, `eq find`) · Insights review (`/insights`) |
 | **target kind** | `_BACKEND_REGISTRY` in `redteam/backends/registry.py` + CLI `--target` prefixes | `agent:<key>`, `deployment:<key>`, direct OpenAI backend, custom `AgentTarget` / `CallableTarget`, `CodingAgentTarget` (claude / codex / opencode × direct / orq launcher × host / container) |
 | **mode** | `--mode` on `eq redteam run` | `dynamic`, `static`, `hybrid` |
-| **data source** | `evaluatorq()` / `red_team()` dataset params, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run |
+| **data source** | `evaluatorq()` / `red_team()` dataset params, `InsightsPopulation`, **plus `replay`** (see below) | inline `DataPoint`s, ORQ dataset id, HuggingFace dataset, generated, replay of a stored run, live trace filters/query, matched traces from a finder export, local trace snapshot |
+| **question selection** | `InsightsLaunchSpec`, `insights()` / `eq insights` label arguments, and the dashboard Insights launch sheet | built-in label presets · coding-agent labels (selected in the dashboard or as a full bundle) gated by `coding_agent` · custom yes/no, choice, or score questions · no fixed questions |
 | **trace replay position** | `redteam.datapoints_from_traces(start_from=...)` | `first_user` · `last_assistant` |
 | **evaluator kind** | `VULNERABILITY_EVALUATOR_REGISTRY`, `SIMULATION_EVALUATORS`, pairwise types, `evaluatorq.signals.__all__` | built-in scorer, LLM jury, pairwise jury, custom `Evaluator` (including deterministic signal scorers from `signal_evaluator(s)`) |
 | **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls · core-evaluation judge |
@@ -69,8 +70,13 @@ Marked `N/A` in the matrix, never reported as a gap.
 | pairwise jury × target kind | operates on collected outputs, not a live target |
 | `deployment()` / `invoke()` × `mode` | deployment invocation has no red-team mode |
 | `deployment()` / `invoke()` × evaluator kind | it fetches a response; scoring is a separate step |
-| dashboard × data source | the dashboard reads run artifacts from disk; it does not select a dataset |
+| dashboard surfaces other than Insights × data source | those pages read run artifacts from disk; Insights can start a run from recent traces, a semantic query, a Finder export, or a local trace snapshot |
 | dashboard × evaluator kind | renders scores, does not choose evaluators |
+| Trace Insights × target kind | it reads trace populations and does not call an agent or target under test |
+| Trace Insights × mode | `--mode` belongs to red teaming; Insights has no pipeline mode |
+| Trace Insights × evaluator kind | fixed classifier labels and discovered dimensions are not evaluator registry entries |
+| question selection × non-Insights entry points | red teaming, simulation, and core evaluation do not classify trace populations with Insights label questions |
+| question selection × target kind / mode / evaluator kind | Insights labels questions about traces; it does not invoke a target or choose evaluation modes or evaluator implementations |
 | `wrap_simulation_agent()` × data source | wraps a target for reuse; does not consume a dataset |
 | `generate_and_simulate()` × data source `ORQ dataset id` | generation *is* the data source |
 | Python-only entry points × surface `CLI` | `build_report()`, `wrap_simulation_agent()`, `deployment()` / `invoke()` have no `eq` command |

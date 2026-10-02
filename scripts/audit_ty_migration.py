@@ -7,10 +7,15 @@ import fnmatch
 import hashlib
 import json
 import re
-import tomllib
+import sys
 from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / 'scripts/data/ty_migration_audit.json'

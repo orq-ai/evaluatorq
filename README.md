@@ -275,9 +275,9 @@ uv sync --all-extras --all-groups   # every extra plus the dev tooling
 uv run pytest                       # quick local profile; excludes integration and slow tests
 uv run pytest -m 'not integration'  # complete non-integration profile; run before pushing
 uv run ruff check src && uv run ruff format src
-uv run ty check                     # the whole repository
+uv run ty check                     # configured source, test, root, and docs files
 ```
 
-CI runs the complete non-integration profile, including the deliberately slow tests skipped by the bare local command, and runs the whole-repository ty check once on Ubuntu with Python 3.10. The package supports Python 3.10 and up, and releases are cut from git tags — commit messages follow [Conventional Commits](https://www.conventionalcommits.org) and decide the next version, so `feat:` and `fix:` ship and `docs:` does not.
+CI runs the complete non-integration profile, including the deliberately slow tests skipped by the bare local command, and runs the configured source, test, root, and docs ty check once on Ubuntu with Python 3.10. The package supports Python 3.10 and up, and releases are cut from git tags — commit messages follow [Conventional Commits](https://www.conventionalcommits.org) and decide the next version, so `feat:` and `fix:` ship and `docs:` does not.
 
 Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). MIT licensed.

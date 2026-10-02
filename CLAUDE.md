@@ -10,6 +10,17 @@ When you flag something that changes what the user should do — a bug you found
 
 This is about the surfacing, not the work. Code, commits, and PR bodies stay normal.
 
+## Working style
+
+- **Explain, then plan, then code.** Before a design choice, or before deleting anything, explain the decision in plain language and get the plan approved. Small calls in the middle of a task do not wait: take the sensible default, say which one you took, and keep going.
+- **Ask questions in one round.** Batch every open question into one numbered list so each can be answered by number.
+- **Scope an instruction to exactly what was named.** Removing a feature does not mean removing the validation next to it. Ask before deleting anything adjacent.
+- **Back claims with something runnable.** Support a claim with a command or snippet the reader can execute, and ground every number in a source. Never invent figures.
+- **Fix review findings in the PR they were found in.** If something is genuinely deferred, give it a ticket id in the same message.
+- **Say "verified" only about the pushed commit**, never the working tree.
+- **End with the link.** The final message names the PR, ticket or page URL.
+- **Review state on GitHub.** Agent reviews post as comments marked as agent output. Set APPROVE or REQUEST_CHANGES only when asked to, and only after reading every review at the current head.
+
 ## Parallel sessions
 
 Parallel agent sessions typically run in their own git worktree, so uncommitted changes you did not make may appear in the working tree from concurrent work. **Never run `git stash` (any subcommand) or `git reset`.** Not `stash` to clean the tree, and not `stash pop`/`apply` either: the stash holds other sessions' autostash entries, and popping one drops a merge into your tree and consumes the entry. `git checkout <path>` and `git checkout -- .` are equally destructive to uncommitted work you did not write. When committing, stage only the exact files your task changed.
@@ -47,7 +58,7 @@ uv run ruff check src
 # Format
 uv run ruff format src
 
-# Type check — the whole repo. Never scope it to a path (see "Before pushing").
+# Type check — the configured source, test, root, and docs files. Never scope it to a path (see "Before pushing").
 uv run ty check
 
 # Build
@@ -95,7 +106,7 @@ Run the same checks CI runs, **verbatim**, before every push:
 ```bash
 uv run ruff check src
 uv run ruff format --check src
-uv run ty check                     # whole repo — NOT a path
+uv run ty check                     # configured repo surface — NOT a path
 uv run pytest -m 'not integration'
 ```
 
@@ -226,7 +237,7 @@ Releases are **tag-driven**. The package version comes from the latest git tag v
   - `feat:` → minor; `fix:`/`perf:` → patch; `feat!:`/`fix!:`/`BREAKING CHANGE:` → major; `docs:`/`chore:`/`ci:`/`test:`/`refactor:`/`style:`/`build:`/`revert:` → no release.
 - The workflow releases the **exact commit CI validated** (`workflow_run.head_sha`), never whatever `main` points at when the job starts. A manual `workflow_dispatch` off any ref other than `main` is refused before checkout — tags are not governed by the branch ruleset, so nothing else would stop a feature branch from being tagged and published.
 - On a release-worthy push the workflow: computes the next version, **pushes the tag `vX.Y.Z`**, builds the wheel/sdist (version derived from the tag), **publishes to PyPI via token auth** (the `PYPI_TOKEN` repo secret, passed to `pypa/gh-action-pypi-publish`), then creates a GitHub Release with PR-based auto-notes (`.github/release.yml` controls the categories — merged PRs + contributor attributions).
-- **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:` and describe the break in the PR body.
+- **Never write a breaking commit without explicit approval.** Do not use `feat!:`/`fix!:` or a `BREAKING CHANGE:` footer unless the user has explicitly approved a major release for that change. A single one halts **all** releases (see next bullet) until a human forces a bump — in July 2026 three `!` commits froze PyPI on `v1.10.1` for 24 days and 317 commits, and the client bug that surfaced it was already fixed in an unreleased commit. If a change is genuinely breaking, ask first; otherwise land it as `feat:`/`fix:`/`refactor:`, describe the break in the PR body and the `CHANGELOG.md`, and add a test for the new behaviour. A break is acceptable without a major release when the affected users are known.
 - **Accidental majors are refused.** A computed `major` bump is skipped unless you re-run via **workflow_dispatch** with `force_level=major`. Use `force_level=minor`/`patch` to override the computed level (e.g. to ship breaking changes as a minor deliberately). The refusal **fails the run** (`::error::` + `exit 1`) so a blocked release is visible; a genuine no-op (a `docs:`-only push, or the tag already pointing at the commit being released) still exits 0 and stays green. A tag that already exists but points at a **different** commit fails the run with both SHAs rather than skipping quietly. The `!` commits stay in range until someone releases, so the block is permanent, not transient — a red Release run means act, not retry.
 - The GitHub Release notes are generated from merged PRs and are created last, non-blocking — a notes failure never blocks the PyPI publish. The committed `CHANGELOG.md` is hand-written and separate from them: a behaviour change to a public default belongs under its `### Notable defaults` section in the same PR, not only in a docstring.
 - PyPI publishing uses the **`PYPI_TOKEN`** repo secret (an API token). To switch to OIDC trusted publishing later, configure a **Trusted Publisher** on PyPI for this repo + `release.yml` (PyPI → project → Publishing) and delete the `with: password:` block in the publish step — `id-token: write` is already granted.

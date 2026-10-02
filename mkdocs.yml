@@ -142,6 +142,8 @@ plugins:
           - framework-integrations.md: Evaluate LangChain and LangGraph agents.
           - guides/targets.md: The system under test — built-in target kinds and how to write your own AgentTarget.
           - coding-agent-targets.md: Run Claude Code, Codex CLI or OpenCode as the system under test, directly or through orq launch.
+          - dashboard.md: Browse red team and simulation reports in a local web dashboard.
+          - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
           - guides/simulation-in-evaluatorq.md: Run a simulation as an evaluatorq job with wrap_simulation_agent(), and score the transcript with your own evaluators.
           - guides/agent-simulation-output.md: The SimulationResult and SimulationRun output models, where they are written, and how to read them.
@@ -155,13 +157,12 @@ plugins:
           - cyclic-judge.md: Round-robin (CyclicJudge) judge assignment at single-judge cost.
           - pairwise-judging.md: Pairwise comparison judging.
           - evaluator-template-variables.md: Reference for pointwise and pairwise jury template variables.
-          - dashboard.md: Browse red team and simulation reports in a local web dashboard.
-          - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
           - formats.md: Convert an agent run between chat messages, OpenResponses items, OTel GenAI traces and ATIF trajectories.
           - signals.md: Deterministic measurements and tags computed from agent trajectories.
+          - insights.md: Label and discover patterns in a population of Orq traces.
         Setup:
           - installation.md: Installing evaluatorq and its extras.
-          - components.md: The four components and which one answers your question.
+          - components.md: The evaluatorq components and which one answers your question.
           - configuration.md: Configuration and environment variables.
           - tuning.md: Timeouts, retries, reasoning effort, and provider options.
           - tracing.md: OpenTelemetry tracing.
@@ -283,14 +284,15 @@ nav:
       - Framework Integrations: framework-integrations.md
       - Targets: guides/targets.md
       - Coding Agents: coding-agent-targets.md
+      - Dashboard: dashboard.md
+      - Trace Finder: trace-finder.md
       - Agent Simulation:
           - Overview: guides/agent-simulation.md
           - In an evaluatorq Run: guides/simulation-in-evaluatorq.md
           - Output Reference: guides/agent-simulation-output.md
-      - Dashboard: dashboard.md
-      - Trace Finder: trace-finder.md
       - Formats: formats.md
       - Signals: signals.md
+      - Trace Insights: insights.md
       - Red Teaming:
           - Overview: guides/red-teaming.md
           - Vulnerabilities & Frameworks: guides/vulnerabilities-and-frameworks.md

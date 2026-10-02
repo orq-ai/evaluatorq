@@ -606,8 +606,21 @@ def test_ci_test_contract_rejects_noncomplementary_matrix_conditions(
 
 
 def test_pytest_default_is_quick_and_explicit_non_integration_is_full(tmp_path: Path) -> None:
-    default_items = _collected_items(tmp_path)
-    full_non_integration_items = _collected_items(tmp_path, '-m', 'not integration')
+    sentinel = tmp_path / 'test_marker_profile.py'
+    sentinel.write_text(
+        "import pytest\n\n"
+        "def test_fast():\n"
+        "    pass\n\n"
+        "@pytest.mark.slow\n"
+        "def test_slow():\n"
+        "    pass\n\n"
+        "@pytest.mark.integration\n"
+        "def test_integration():\n"
+        "    pass\n"
+    )
+    config = str(REPO_ROOT / 'pyproject.toml')
+    default_items = _collected_items(tmp_path, '-c', config, str(sentinel))
+    full_non_integration_items = _collected_items(tmp_path, '-c', config, '-m', 'not integration', str(sentinel))
 
     assert default_items
     assert all('slow' not in item['markers'] and 'integration' not in item['markers'] for item in default_items)
@@ -616,7 +629,7 @@ def test_pytest_default_is_quick_and_explicit_non_integration_is_full(tmp_path: 
     slow_non_integration = {
         item['nodeid'] for item in full_non_integration_items if 'slow' in item['markers']
     }
-    assert slow_non_integration
+    assert len(slow_non_integration) == 1
     default_nodeids = {item['nodeid'] for item in default_items}
     full_nodeids = {item['nodeid'] for item in full_non_integration_items}
     assert default_nodeids == full_nodeids - slow_non_integration
