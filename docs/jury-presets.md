@@ -14,7 +14,7 @@ correctness = llm_jury(
 
 ## The presets
 
-Costs are USD per 1,000 pointwise items at 1,500 input and 1,500 output tokens, uncached, one call per judge per item, with every judge at its default reasoning effort. Output is set equal to input because current judges reason by default and bill that reasoning as output. Every figure is recomputed from the committed model garden snapshot in the test suite, so the table below cannot drift away from what the code seats.
+Costs are USD per 1,000 pointwise items at 1,500 input and 1,500 output tokens, uncached, one call per judge per item. The token counts are a flat assumption, the same for every seat whatever its reasoning effort. Every figure is recomputed from the committed model garden snapshot in the test suite, so the table below cannot drift away from what the code seats.
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
@@ -51,7 +51,7 @@ Presets are pointwise panels, one call per judge per item, so `assignment="cycli
 
 ## What a preset does not carry
 
-A preset sends no reasoning effort, so each seat runs at its provider's default, and that default is what the published cost assumes. `JuryPreset.seated_efforts()` reports it, with `None` for a model whose catalog entry has no effort setting:
+A preset sends no reasoning effort, so each seat runs at its provider's default. `JuryPreset.seated_efforts()` reports it, with `None` for a model whose catalog entry has no effort setting:
 
 ```python
 from evaluatorq import get_preset
@@ -60,7 +60,7 @@ get_preset("Strong Jury").seated_efforts()
 # {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-5.6-sol': 'medium', 'google/gemini-3.6-flash': 'medium'}
 ```
 
-`llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default and moves the panel off the operating point it was costed at. Per-judge call settings are a schema change and a separate ticket.
+`llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default. Per-judge call settings are a schema change and a separate ticket.
 
 Two more limits worth knowing before you quote a number:
 

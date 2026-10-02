@@ -15,9 +15,8 @@ endpoint that publishes both the rates and the reasoning-effort parameter;
 neither.
 
 * `input_rate` / `output_rate`, the per-token billing rates.
-* `seated_effort`, the catalogue's default reasoning effort. Presets call each
-  judge without an effort, so the default is what a seat runs at and what its
-  published cost assumes.
+* `default_reasoning_effort`, the effort each seat runs at, since presets call
+  every judge without one.
 
 Nothing is decided automatically. A repricing invalidates a published
 `estimated_cost_per_1k`, a changed default changes how a seat judges, and a
@@ -70,7 +69,7 @@ def refreshed_row(info: ModelInfo) -> dict[str, Any]:
     return {
         'input_rate': round(info.input_cost_per_1k * 1000, 6),
         'output_rate': round(info.output_cost_per_1k * 1000, 6),
-        'seated_effort': info.default_reasoning_effort,
+        'default_reasoning_effort': info.default_reasoning_effort,
     }
 
 
@@ -91,10 +90,10 @@ def decisions(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
                 f'{after["input_rate"]}/{after["output_rate"]} per 1M. Every panel seating it '
                 'publishes a stale $/1k until the preset figure is recomputed.'
             )
-        if before.get('seated_effort') != after['seated_effort']:
+        if before.get('default_reasoning_effort') != after['default_reasoning_effort']:
             lines.append(
-                f'DEFAULT EFFORT CHANGED: {router_id} {before.get("seated_effort")!r} -> '
-                f'{after["seated_effort"]!r}. Every panel seating it now judges at a different effort.'
+                f'DEFAULT EFFORT CHANGED: {router_id} {before.get("default_reasoning_effort")!r} -> '
+                f'{after["default_reasoning_effort"]!r}. Every panel seating it now judges at a different effort.'
             )
     return lines
 

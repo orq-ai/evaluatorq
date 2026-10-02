@@ -935,10 +935,10 @@ def llm_jury(
     Presets are pointwise panels, so ``assignment="cyclic"`` is rejected: a
     rotation runs one judge per item and there is no panel left to agree.
 
-    What a preset cannot express yet is per-judge call settings. Its seats run,
-    and are costed, at their catalogue default reasoning efforts —
-    ``JuryPreset.seated_efforts()`` reports them — and ``reasoning_effort`` here
-    overrides all of them at once (RES-1347).
+    What a preset cannot express yet is per-judge call settings. Its seats run
+    at their catalogue default reasoning efforts — ``JuryPreset.seated_efforts()``
+    reports them — and ``reasoning_effort`` here overrides all of them at once
+    (RES-1347).
 
     Provider options
     ----------------

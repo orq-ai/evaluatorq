@@ -62,7 +62,7 @@ class JudgeRates(BaseModel):
 
     input_rate: float
     output_rate: float
-    seated_effort: str | None
+    default_reasoning_effort: str | None
 
 
 @lru_cache(maxsize=1)
@@ -175,15 +175,14 @@ class JuryPreset(BaseModel):
     def seated_efforts(self) -> dict[str, str | None]:
         """The reasoning effort each judge runs at: its catalogue default.
 
-        A preset sends no effort, so each seat runs, and is costed, at the
-        provider default. None means the catalogue names no effort parameter for
-        that model.
+        A preset sends no effort, so each seat runs at the provider default. None
+        means the catalogue names no effort parameter for that model.
 
         `llm_jury` takes one `reasoning_effort` for the whole panel, so passing
         one overrides every seat's default; per-judge call settings are a schema
         change and its own ticket (RES-1347).
         """
-        return {judge: (r.seated_effort if (r := judge_rates(judge)) else None) for judge in self.judges}
+        return {judge: (r.default_reasoning_effort if (r := judge_rates(judge)) else None) for judge in self.judges}
 
     def duplicated_lineages(self) -> dict[str, tuple[str, ...]]:
         """Lineages seated more than once, whose errors correlate.
@@ -302,8 +301,8 @@ PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
     )
 })
 
-# Estimate behind every published cost. Output matches input because current
-# judges reason by default and bill their reasoning as output.
+# Flat estimate behind every published cost, the same for every seat whatever
+# its reasoning effort.
 ESTIMATED_PROMPT_TOKENS = 1500
 ESTIMATED_COMPLETION_TOKENS = 1500
 

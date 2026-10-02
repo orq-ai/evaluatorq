@@ -16,7 +16,7 @@ _spec.loader.exec_module(refresh)
 
 
 def _row(input_rate: float = 1.0, output_rate: float = 4.0, effort: str | None = 'high') -> dict[str, Any]:
-    return {'input_rate': input_rate, 'output_rate': output_rate, 'seated_effort': effort}
+    return {'input_rate': input_rate, 'output_rate': output_rate, 'default_reasoning_effort': effort}
 
 
 def _info(input_rate: float = 1.0, output_rate: float = 4.0, default_effort: str | None = None) -> ModelInfo:
@@ -31,7 +31,7 @@ def _info(input_rate: float = 1.0, output_rate: float = 4.0, default_effort: str
 
 def test_rates_and_default_effort_come_from_the_catalogue() -> None:
     row = refresh.refreshed_row(_info(input_rate=2.5, output_rate=10.0, default_effort='medium'))
-    assert row == {'input_rate': 2.5, 'output_rate': 10.0, 'seated_effort': 'medium'}
+    assert row == {'input_rate': 2.5, 'output_rate': 10.0, 'default_reasoning_effort': 'medium'}
 
 
 def test_a_repricing_is_reported() -> None:
