@@ -50,7 +50,7 @@ CASES: list[tuple[Callable[..., Any], type[BaseModel], dict[str, str]]] = [
     (simulate, SimulateRunConfig, _SIMULATION_NOT_JSON),
     (generate_and_simulate, GenerateAndSimulateRunConfig, {**_SIMULATION_NOT_JSON, 'emit_datapoints': 'a callable'}),
 ]
-IDS = [fn.__name__ for fn, _, _ in CASES]
+IDS = [getattr(fn, '__name__', repr(fn)) for fn, _, _ in CASES]
 
 
 @pytest.mark.parametrize(('fn', 'model', 'not_json'), CASES, ids=IDS)

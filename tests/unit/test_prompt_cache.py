@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import typing
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,7 +15,7 @@ from evaluatorq.common.prompt_cache import (
     mark_responses_input,
     responses_volatile_items,
 )
-from evaluatorq.common.tracing import _serialize_messages  # pyright: ignore[reportPrivateUsage]
+from evaluatorq.common.tracing import _serialize_messages
 from evaluatorq.simulation.types import Message
 
 # Every fixture must clear the size guard, or the helpers correctly place nothing
@@ -186,7 +187,7 @@ def test_volatile_tail_has_no_default() -> None:
     """Required keyword on purpose: a caller that rebuilds its last message and
     forgets to say so gets a per-turn write and no read — a bill, not a crash."""
     with pytest.raises(TypeError, match='volatile_tail'):
-        apply_cache_breakpoints([{'role': 'user', 'content': 'hi'}])  # pyright: ignore[reportCallIssue]
+        typing.cast(typing.Any, apply_cache_breakpoints)([{'role': 'user', 'content': 'hi'}])
 
 
 def test_responses_marks_the_end_of_the_prefix() -> None:
@@ -242,7 +243,7 @@ def test_responses_negative_volatile_items_is_rejected() -> None:
 
 def test_responses_volatile_items_has_no_default() -> None:
     with pytest.raises(TypeError, match='volatile_items'):
-        mark_responses_input([{'role': 'user', 'content': 'hi'}])  # pyright: ignore[reportCallIssue]
+        typing.cast(typing.Any, mark_responses_input)([{'role': 'user', 'content': 'hi'}])
 
 
 def test_responses_volatile_items_counts_rendered_items_not_messages() -> None:

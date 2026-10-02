@@ -166,6 +166,7 @@ def serialize_with_fixup(results: list[DataPointResult]) -> dict[str, Any]:
             jr.setdefault("error", "")
             for es in jr.get("evaluatorScores") or []:
                 if "score" in es:
+                    es["score"].setdefault("value", None)
                     es["score"].setdefault("explanation", "")
                     es["score"].pop("token_usage", None)
                     es["score"].pop("raw_output", None)
@@ -200,6 +201,31 @@ class TestSendResultsDefaults:
         jr = payload["results"][0]["jobResults"][0]
         assert "output" in jr
         assert jr["output"] is None
+
+    def test_null_evaluator_score_value_preserved_after_fixup(self):
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output="result",
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="signal",
+                                score=EvaluationResult(value=None, explanation="No basis: no calls"),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+
+        score = extract_score(serialize_with_fixup(results))
+
+        assert "value" in score
+        assert score["value"] is None
+        assert score["explanation"] == "No basis: no calls"
 
     def test_evaluator_token_usage_and_raw_output_stripped_from_upload(self):
         # Evaluator-cost metadata is kept in local result dumps but must NOT be
@@ -459,6 +485,57 @@ class TestSendResultsUploadFailures:
         # Required fields survive the strip.
         assert score["explanation"] == "resistant"
         assert captured["json"]["results"][0]["jobResults"][0]["output"] == "result"
+
+    @pytest.mark.asyncio
+    async def test_null_evaluator_score_value_is_explicit_in_posted_payload(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        captured: dict[str, Any] = {}
+
+        async def fake_post(self: httpx.AsyncClient, url: str, *args: Any, **kwargs: Any) -> httpx.Response:
+            captured["json"] = kwargs["json"]
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                request=request,
+                json={"sheet_id": "s1", "manifest_id": "m1", "experiment_name": "eval", "rows_created": 1},
+            )
+
+        monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+        results = [
+            DataPointResult(
+                data_point=DataPoint(inputs={"text": "hello"}),
+                job_results=[
+                    JobResult(
+                        job_name="job1",
+                        output="result",
+                        evaluator_scores=[
+                            EvaluatorScore(
+                                evaluator_name="signal",
+                                score=EvaluationResult(value=None, explanation="No basis: no calls"),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ]
+
+        await send_results_to_orq(
+            api_key="key",
+            evaluation_name="eval",
+            evaluation_description=None,
+            dataset_id=None,
+            results=results,
+            start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            end_time=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+            raise_on_error=True,
+        )
+
+        score = extract_score(captured["json"])
+        assert "value" in score
+        assert score["value"] is None
+        assert score["explanation"] == "No basis: no calls"
 
     @pytest.mark.asyncio
     async def test_network_error_returns_none_when_raise_on_error_false(

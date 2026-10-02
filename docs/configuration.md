@@ -54,7 +54,7 @@ Four decisions cover almost every real configuration. The rest of this page is r
 | **Which backend runs my LLM calls?** | `ORQ_API_KEY` or `OPENAI_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins when both are set; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route. |
 | **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`) and simulation (`sim-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
 | **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1`, `true`, `yes` or `on` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
-| **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` or dashboard Settings | unset | Your workspace slug. The saved Settings value wins; with neither set, deep-link buttons are hidden. |
+| **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` | unset | Your workspace slug for runs without an experiment URL. Without one, their deep-link buttons are hidden. |
 
 Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI error into a full traceback, and `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` keeps prompts and responses out of your spans.
 
@@ -82,12 +82,12 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 
 | Variable | Required? | Default | What it does |
 |---|---|---|---|
-| `ORQ_WORKSPACE` / `ORQ_WORKSPACE_SLUG` | No | unset | Workspace slug used to build dashboard deep-links into the Orq UI. A workspace saved in dashboard Settings wins; otherwise `ORQ_WORKSPACE` wins over `ORQ_WORKSPACE_SLUG`. When none is set, deep-link buttons are hidden. See [Dashboard](dashboard.md). |
+| `ORQ_WORKSPACE` / `ORQ_WORKSPACE_SLUG` | No | unset | Workspace slug used to build dashboard deep-links into the Orq UI for runs without an experiment URL. `ORQ_WORKSPACE` wins over `ORQ_WORKSPACE_SLUG`. When neither is set, those deep-link buttons are hidden. See [Dashboard](dashboard.md). |
 | `ORQ_UI_BASE_URL` | No | Saved profile host, then `ORQ_BASE_URL`, then `https://my.orq.ai` | Base URL for dashboard deep-links into the Orq UI. Set this when the UI host differs from the selected profile's API host. |
 | `EVALUATORQ_APPLY_MODEL` | No | `openai/gpt-5.6-luna` | Model used by the dashboard's apply-recommendations merge. Shown in the dashboard config panel. See [Dashboard](dashboard.md). |
-| `EVALUATORQ_DASHBOARD_SETTINGS` | No | `.evaluatorq/dashboard-settings.json` | Path to the JSON file used for dashboard and trace-finder settings, including the selected Orq workspace and project. |
+| `EVALUATORQ_DASHBOARD_SETTINGS` | No | `.evaluatorq/dashboard-settings.json` | Path to the JSON file used for dashboard and trace-finder models and the selected authentication method. |
 | `EVALUATORQ_COMPILER_MODEL` | No | `openai/gpt-5.6-luna` | Trace-finder model that compiles a natural-language query into a semantic classifier task. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
-| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Trace-finder classifier model used for facet selection and per-trace classification. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
+| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Classifier model used by the trace finder for facet selection and per-trace classification, and by opt-in signal tool-role classification. Trace-finder CLI or dashboard overrides win for that surface. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
 | `EVALUATORQ_FINDER_WINDOW_DAYS` | No | `7` | Default number of recent days searched by the trace finder. Valid values are `1` through `90`. |
 | `EVALUATORQ_FINDER_LIMIT` | No | `500` | Default maximum number of traces selected for trace-finder classification. Valid values are `1` through `5000`. |
 | `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace classify calls. Valid values are `1` through `200`. |

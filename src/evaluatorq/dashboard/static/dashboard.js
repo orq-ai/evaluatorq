@@ -39,9 +39,20 @@
 
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     var scope = evt.detail.target;
-    if (!scope || !window.vegaEmbed) return;
+    if (scope && scope.id === 'insights-content') syncInsightsTab();
+    if (!scope) return;
+    initInsightsMaps(scope);
+    if (!window.vegaEmbed) return;
 
-    scope.querySelectorAll('[data-vega-for]').forEach(function (tag) {
+    let tags = scope.querySelectorAll('[data-vega-for]');
+    // htmx removes script tags when allowScriptTags is false, including the
+    // application/json islands that hold chart specs. Read those inert tags
+    // from the response so the swapped chart can still be embedded.
+    if (!tags.length && scope.querySelector('.vega-chart') && evt.detail.xhr) {
+      const response = new DOMParser().parseFromString(evt.detail.xhr.responseText, 'text/html');
+      tags = response.querySelectorAll('[data-vega-for]');
+    }
+    tags.forEach(function (tag) {
       var id = tag.getAttribute('data-vega-for');
       if (!id) return;
 
@@ -68,6 +79,251 @@
     });
   });
 
+  function syncInsightsTab() {
+    const nav = document.querySelector('.insights-tabs');
+    if (!nav) return;
+    nav.querySelectorAll('a').forEach(function (link) {
+      const active = new URL(link.href).pathname === window.location.pathname;
+      link.classList.toggle('active', active);
+      if (active) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+  }
+  document.body.addEventListener('htmx:historyRestore', syncInsightsTab);
+  window.addEventListener('popstate', function () {
+    syncInsightsTab();
+  });
+
+  function mapTraces(payload) {
+    if (payload.color_mode === 'continuous') {
+      const traces = [{
+        type: 'scatter3d', mode: 'markers', name: 'traces',
+        x: payload.points.map(function (p) { return p.x; }),
+        y: payload.points.map(function (p) { return p.y; }),
+        z: payload.points.map(function (p) { return p.z; }),
+        text: payload.points.map(function (p) { return p.trace_id + ' · ' + p.cluster_name; }),
+        customdata: payload.points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
+        hovertemplate: '%{text}<extra></extra>',
+        marker: { size: 4, color: payload.points.map(function (p) { return p.color_value; }),
+          colorscale: payload.color_scale, cmin: 0, cmax: 1, showscale: true,
+          colorbar: { title: 'Label value', thickness: 10 }, opacity: .85 }
+      }];
+      if (payload.missing_points && payload.missing_points.length) {
+        traces.push({ type: 'scatter3d', mode: 'markers', name: 'No value',
+          x: payload.missing_points.map(function (p) { return p.x; }),
+          y: payload.missing_points.map(function (p) { return p.y; }),
+          z: payload.missing_points.map(function (p) { return p.z; }),
+          text: payload.missing_points.map(function (p) { return p.trace_id; }),
+          customdata: payload.missing_points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
+          hovertemplate: '%{text}<extra>No value</extra>',
+          marker: { size: 4, color: '#e4e2df', symbol: 'circle', opacity: .85 } });
+      }
+      return traces;
+    }
+    let groups;
+    if (payload.color_mode === 'category') {
+      groups = [];
+      const categorySeen = new Set();
+      const groupsByCategory = new Map();
+      payload.points.forEach(function (point) {
+        const category = String(point.label_value);
+        let symbolGroups = groupsByCategory.get(category);
+        if (!symbolGroups) {
+          symbolGroups = new Map();
+          groupsByCategory.set(category, symbolGroups);
+        }
+        let group = symbolGroups.get(point.symbol);
+        if (!group) {
+          const showLegend = !categorySeen.has(category);
+          categorySeen.add(category);
+          group = { category: category, name: category, color: point.color, symbol: point.symbol,
+            showLegend: showLegend, points: [] };
+          symbolGroups.set(point.symbol, group);
+          groups.push(group);
+        }
+        group.points.push(point);
+      });
+    } else {
+      groups = payload.legend.map(function (item) {
+        return { id: item.cluster_id, name: item.name, color: item.color, symbol: item.symbol, points: [] };
+      });
+      const groupsByCluster = new Map(groups.map(function (group) { return [group.id, group]; }));
+      payload.points.forEach(function (point) {
+        const group = groupsByCluster.get(point.cluster_id);
+        if (group) group.points.push(point);
+      });
+    }
+    return groups.map(function (group) {
+      const points = group.points;
+      return { type: 'scatter3d', mode: 'markers', name: group.name,
+        showlegend: group.showLegend !== false,
+        x: points.map(function (p) { return p.x; }), y: points.map(function (p) { return p.y; }),
+        z: points.map(function (p) { return p.z; }), text: points.map(function (p) { return p.trace_id; }),
+        customdata: points.map(function (p) { return [p.cluster_id, p.trace_id, p.summary, p.agent, p.project, p.span_id]; }),
+        hovertemplate: '%{text}<extra>' + group.name + '</extra>',
+        marker: { size: 4, color: group.color, symbol: group.symbol || 'circle', opacity: .85 } };
+    });
+  }
+
+  function showInsightsMapError(el, error) {
+    const parent = el.parentElement;
+    if (window.Plotly && window.Plotly.purge) window.Plotly.purge(el);
+    el.replaceChildren();
+    el.style.visibility = 'hidden';
+    let empty = parent.querySelector('[data-map-empty]');
+    if (!empty) {
+      empty = document.createElement('div');
+      empty.className = 'insights-map-empty';
+      empty.setAttribute('data-map-empty', '');
+      empty.setAttribute('role', 'status');
+      parent.insertBefore(empty, el.nextSibling);
+    }
+    empty.textContent = 'Map unavailable: could not load map data.';
+    empty.hidden = false;
+    console.error('Insights map failed', error);
+  }
+
+  function drawInsightsMap(el) {
+    if (!el || el.offsetParent === null) return;
+    const requestId = (el.__insightsMapRequestId || 0) + 1;
+    el.__insightsMapRequestId = requestId;
+    if (!window.Plotly) {
+      showInsightsMapError(el, new Error('Plotly is unavailable'));
+      return;
+    }
+    const selector = el.closest('.insights-map-view').querySelector('[data-map-color]');
+    const colorBy = selector ? selector.value : 'cluster';
+    const baseUrl = el.getAttribute('data-map-url').replace(/color_by=[^&]*/, 'color_by=' + encodeURIComponent(colorBy));
+    fetch(baseUrl).then(function (response) {
+      if (!response.ok) throw new Error('Map request failed with status ' + response.status);
+      return response.json();
+    }).then(function (payload) {
+      if (el.__insightsMapRequestId !== requestId || !el.isConnected) return;
+      if (payload.error) throw new Error(payload.error);
+      const parent = el.parentElement;
+      let empty = parent.querySelector('[data-map-empty]');
+      const hasPoints = payload.points.length || (payload.missing_points && payload.missing_points.length);
+      const sand = payload.grid_color;
+      const bg = payload.background_color;
+      const axis = function (title) { return { title: { text: title }, showgrid: true, gridcolor: sand,
+        zeroline: false, showbackground: true, backgroundcolor: bg, showticklabels: true }; };
+      const layout = { margin: { l: 0, r: 0, t: 12, b: 0 }, showlegend: true, uirevision: 'insights-map',
+        legend: { orientation: 'h', x: 0, xanchor: 'left', y: 1, yanchor: 'bottom',
+          bgcolor: 'rgba(255,255,255,.8)', font: { size: 11 } },
+        scene: { xaxis: axis('UMAP 1'), yaxis: axis('UMAP 2'), zaxis: axis('UMAP 3'),
+          bgcolor: '#fff', aspectmode: 'cube', dragmode: 'orbit' }, paper_bgcolor: '#fff' };
+      const priorRender = el.__insightsMapRender || Promise.resolve();
+      const render = priorRender.catch(function () {}).then(function () {
+        if (el.__insightsMapRequestId !== requestId || !el.isConnected) return;
+        if (!hasPoints) {
+          if (!empty) {
+            empty = document.createElement('div');
+            empty.className = 'insights-map-empty';
+            empty.setAttribute('data-map-empty', '');
+            empty.setAttribute('role', 'status');
+            parent.insertBefore(empty, el.nextSibling);
+          }
+          empty.textContent = 'Map unavailable: no traces have coordinates and a readable value for this colour.';
+          empty.hidden = false;
+          if (window.Plotly.purge) window.Plotly.purge(el);
+          el.replaceChildren();
+          el.style.visibility = 'hidden';
+          return;
+        }
+        if (empty) empty.hidden = true;
+        el.style.visibility = '';
+        return Promise.resolve(window.Plotly.react(el, mapTraces(payload), layout, { displaylogo: false, responsive: true })).then(function () {
+          if (el.__insightsMapRequestId !== requestId) return;
+          el.removeAllListeners && el.removeAllListeners('plotly_click');
+          el.on('plotly_click', function (event) {
+            const point = event.points && event.points[0];
+            const cluster = point && point.customdata && point.customdata[0];
+            const mapLayout = el.closest('.insights-map-layout');
+            const panel = mapLayout ? mapLayout.querySelector('[data-map-detail]') : document.getElementById('insights-cluster-detail');
+            if (!panel || !point || !point.customdata) return;
+            const data = point.customdata;
+            panel.replaceChildren();
+            const heading = document.createElement('h3');
+            heading.textContent = data[1];
+            panel.appendChild(heading);
+            if (data[3] || data[4]) {
+              const meta = document.createElement('p');
+              meta.className = 'insights-muted';
+              meta.textContent = [data[3], data[4]].filter(Boolean).join(' · ');
+              panel.appendChild(meta);
+            }
+            if (data[2]) {
+              const summary = document.createElement('p');
+              summary.textContent = data[2];
+              panel.appendChild(summary);
+            }
+            if (!cluster || cluster === 'noise' || cluster === 'Unclassified') return;
+            const clusterPanel = document.createElement('div');
+            panel.appendChild(clusterPanel);
+            const detailUrl = el.getAttribute('data-cluster-detail-url-template');
+            if (window.htmx && detailUrl) window.htmx.ajax('GET', detailUrl.replace('{cluster_id}', encodeURIComponent(cluster)), { target: clusterPanel, swap: 'innerHTML' });
+            else clusterPanel.textContent = cluster;
+          });
+        });
+      });
+      el.__insightsMapRender = render;
+      return render;
+    }).catch(function (error) {
+      if (el.__insightsMapRequestId === requestId && el.isConnected) showInsightsMapError(el, error);
+    });
+  }
+
+  function initInsightsMaps(scope) {
+    if (!scope || !scope.querySelectorAll) return;
+    scope.querySelectorAll('.insights-map-chart').forEach(drawInsightsMap);
+  }
+
+  document.addEventListener('DOMContentLoaded', function () { initInsightsMaps(document); });
+  document.body.addEventListener('change', function (evt) {
+    if (evt.target.matches('[data-map-color]')) drawInsightsMap(evt.target.closest('.insights-map-view').querySelector('.insights-map-chart'));
+    if (evt.target.matches('[data-map-projection]')) {
+      const viewer = evt.target.closest('.insights-map-fullscreen-viewer');
+      const name = evt.target.value;
+      viewer.querySelectorAll('[data-map-projection-panel]').forEach(function (panel) {
+        panel.hidden = panel.getAttribute('data-map-projection-panel') !== name;
+      });
+      const panel = Array.from(viewer.querySelectorAll('[data-map-projection-panel]')).find(function (item) { return !item.hidden; });
+      if (panel) drawInsightsMap(panel.querySelector('.insights-map-chart'));
+    }
+  });
+  document.body.addEventListener('click', function (evt) {
+    const fullscreenButton = evt.target.closest('[data-map-fullscreen]');
+    if (fullscreenButton) {
+      const viewer = fullscreenButton.closest('.insights-map-fullscreen-viewer');
+      if (document.fullscreenElement === viewer) document.exitFullscreen();
+      else if (viewer.classList.contains('is-expanded')) viewer.classList.remove('is-expanded');
+      else if (viewer.requestFullscreen) viewer.requestFullscreen().catch(function () {
+        viewer.classList.add('is-expanded');
+        fullscreenButton.textContent = 'Exit full screen';
+      });
+      else viewer.classList.add('is-expanded');
+      fullscreenButton.textContent = document.fullscreenElement === viewer || viewer.classList.contains('is-expanded') ? 'Exit full screen' : 'Full screen';
+      setTimeout(function () {
+        const visible = viewer.querySelector('[data-map-projection-panel]:not([hidden]) .insights-map-chart');
+        if (visible && window.Plotly && window.Plotly.Plots) window.Plotly.Plots.resize(visible);
+      }, 100);
+      return;
+    }
+  });
+  document.addEventListener('fullscreenchange', function () {
+    const viewer = document.querySelector('.insights-map-fullscreen-viewer');
+    if (!viewer) return;
+    viewer.querySelector('[data-map-fullscreen]').textContent = document.fullscreenElement === viewer ? 'Exit full screen' : 'Full screen';
+    const visible = viewer.querySelector('[data-map-projection-panel]:not([hidden]) .insights-map-chart');
+    if (visible && window.Plotly && window.Plotly.Plots) window.Plotly.Plots.resize(visible);
+  });
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Escape') document.querySelectorAll('.insights-map-fullscreen-viewer.is-expanded').forEach(function (viewer) {
+      viewer.classList.remove('is-expanded');
+      viewer.querySelector('[data-map-fullscreen]').textContent = 'Full screen';
+    });
+  });
+
   // ⌘K / Ctrl+K focuses the global report search; Escape clears + blurs it.
   document.addEventListener('keydown', function (evt) {
     if ((evt.metaKey || evt.ctrlKey) && (evt.key === 'k' || evt.key === 'K')) {
@@ -86,6 +342,27 @@
   });
 
   // Delegated so the finder handlers survive HTMX fragment swaps.
+  document.body.addEventListener('focusin', function (evt) {
+    const query = evt.target.closest('.finder-command-textarea[data-finder-placeholders]');
+    if (!query) return;
+    query.dataset.finderPlaceholderDismissed = 'true';
+    query.placeholder = '';
+  });
+  window.setInterval(function () {
+    document.querySelectorAll('.finder-command-textarea[data-finder-placeholders]').forEach(function (query) {
+      if (query.dataset.finderPlaceholderDismissed === 'true' || query.value || document.activeElement === query) return;
+      try {
+        const placeholders = JSON.parse(query.dataset.finderPlaceholders || '[]');
+        if (!Array.isArray(placeholders) || placeholders.length < 2) return;
+        const index = (Number(query.dataset.finderPlaceholderIndex || 0) + 1) % placeholders.length;
+        query.dataset.finderPlaceholderIndex = String(index);
+        query.placeholder = placeholders[index];
+      } catch (_error) {
+        query.dataset.finderPlaceholderDismissed = 'true';
+      }
+    });
+  }, 4000);
+
   document.body.addEventListener('click', function (evt) {
     const example = evt.target.closest('[data-finder-example]');
     if (example) {
@@ -99,11 +376,35 @@
     }
 
     const item = evt.target.closest('.facet-item');
-    if (item) { showFacet(item); return; }
-    const addFilter = evt.target.closest('.finder-controls .add');
+    if (item) {
+      showFacet(item);
+      // Clicking (or Enter on) a category moves focus into its values, so a keyboard user is not left in the list.
+      const sub = item.closest('.finder-facets').querySelector('.facet-sub[data-facet-sub="' + item.getAttribute('data-facet') + '"]');
+      const first = sub && sub.querySelector('input, button');
+      if (first) first.focus();
+      return;
+    }
+    const option = evt.target.closest('.model-pick .model-option');
+    if (option) { pickModel(option, option.getAttribute('data-model')); return; }
+    const addFilter = evt.target.closest('.finder-controls .add, .model-pick-btn');
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
+      closeMenus(ownMenu);
       if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
+      addFilter.setAttribute('aria-expanded', ownMenu && ownMenu.classList.contains('open') ? 'true' : 'false');
+      return;
+    }
+    const filtersButton = evt.target.closest('[data-explorer-filters]');
+    if (filtersButton) {
+      const menu = document.querySelector('.finder-controls .finder-facets');
+      if (menu && menu.classList.contains('open')) closeFacetMenus();
+      else if (menu) {
+        openFacetMenu(menu, filtersButton);
+        if (menu.hasAttribute('data-refresh-on-open') && window.htmx) {
+          menu.setAttribute('hx-vals', '{"open":"1"}');
+          window.htmx.trigger(menu, 'refreshFacets');
+        }
+      }
       return;
     }
     const chipOpen = evt.target.closest('[data-chip-open]');
@@ -112,18 +413,12 @@
       const target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
       if (target) {
         // Anchor the menu under the clicked chip instead of under + Filter.
-        const chip = chipOpen.closest('.chip').getBoundingClientRect();
-        const wrap = menu.parentElement.getBoundingClientRect();
-        menu.style.left = (chip.left - wrap.left) + 'px';
-        menu.style.top = (chip.bottom - wrap.top + 6) + 'px';
-        menu.classList.add('open');
+        openFacetMenu(menu, chipOpen.closest('.chip'));
         showFacet(target);
       }
       return;
     }
-    if (!evt.target.closest('.finder-controls .addwrap') && !evt.target.closest('.chip-open')) {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (!evt.target.closest('.finder-controls .addwrap, .model-pick') && !evt.target.closest('.chip-open')) closeFacetMenus();
 
     const remove = evt.target.closest('[data-finder-remove]');
     if (!remove) return;
@@ -137,8 +432,139 @@
         else input.value = '';
       }
     });
+    const fromToolbar = remove.closest('.xr-chips');
     remove.closest('.chip').remove();
+    if (fromToolbar) loadExplorer();
   });
+
+  // On /traces the Filters button opens the facet menu itself; picks apply with one reload when it closes.
+  let filtersDirty = false;
+  let pendingExplorerControl = null;
+  let explorerControlRequest = null;
+  function loadExplorer() {
+    const form = document.getElementById('explorer-load-form');
+    if (form && form.requestSubmit) form.requestSubmit();
+  }
+  function openFacetMenu(menu, anchor) {
+    const box = anchor.getBoundingClientRect();
+    const wrap = menu.parentElement.getBoundingClientRect();
+    menu.style.left = (box.left - wrap.left) + 'px';
+    menu.style.top = (box.bottom - wrap.top + 6) + 'px';
+    menu.classList.add('open');
+    document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'true'); });
+  }
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    const target = evt.detail && evt.detail.target;
+    if (!target || !target.matches || !target.matches('.finder-facets')) return;
+    const menu = document.querySelector('.finder-controls .finder-facets.open');
+    const anchor = document.querySelector('[data-explorer-filters]');
+    if (menu && anchor) openFacetMenu(menu, anchor);
+  });
+  function closeFacetMenus() {
+    closeMenus();
+    document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
+    if (filtersDirty) { filtersDirty = false; loadExplorer(); }
+  }
+  document.body.addEventListener('change', function (evt) {
+    if (evt.target.closest('.finder-facets') && !evt.target.matches('.facet-search') && document.querySelector('[data-explorer-filters]')) filtersDirty = true;
+  });
+  // A control click applies the pending facet edits first, then repeats the
+  // selected rows request so its choice is applied to the newly loaded rows.
+  document.addEventListener('click', function (evt) {
+    const control = evt.target.closest('[hx-get][hx-target="#explorer-results"]');
+    if (!control) return;
+    const url = control.getAttribute('hx-get');
+    if (!url) return;
+    if (pendingExplorerControl) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      pendingExplorerControl = url;
+      return;
+    }
+    if (!filtersDirty) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    pendingExplorerControl = url;
+    filtersDirty = false;
+    document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
+    document.querySelectorAll('[data-explorer-filters]').forEach(function (button) { button.setAttribute('aria-expanded', 'false'); });
+    loadExplorer();
+  }, true);
+  function runPendingExplorerControl() {
+    if (!pendingExplorerControl || !window.htmx) return;
+    const url = pendingExplorerControl;
+    pendingExplorerControl = null;
+    window.htmx.ajax('GET', url, { target: '#explorer-results', swap: 'outerHTML' });
+  }
+  document.body.addEventListener('htmx:afterSettle', function (evt) {
+    const target = evt.detail?.target;
+    if (!pendingExplorerControl || target?.id !== 'explorer-results' ||
+        evt.detail?.elt?.id !== 'explorer-results' ||
+        evt.detail?.requestConfig !== explorerControlRequest) return;
+    const loadFailed = !!document.querySelector('#explorer-results .finder-form-error');
+    explorerControlRequest = null;
+    if (loadFailed) {
+      pendingExplorerControl = null;
+      return;
+    }
+    runPendingExplorerControl();
+  });
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    if (pendingExplorerControl && evt.detail?.elt === document.getElementById('explorer-load-form')) {
+      explorerControlRequest = evt.detail.requestConfig;
+    }
+  });
+  ['htmx:sendError', 'htmx:responseError', 'htmx:timeout'].forEach(function (name) {
+    document.body.addEventListener(name, function (evt) {
+      if (evt.detail?.elt?.id === 'explorer-load-form') {
+        pendingExplorerControl = null;
+        explorerControlRequest = null;
+      }
+    });
+  });
+  // A swap of the whole filter row (Load, Clear, a new run) replaces the menu and its unsaved ticks with it.
+  function filterRowReplaced(evt) {
+    const id = evt.detail && evt.detail.target && evt.detail.target.id;
+    if (id !== 'finder-body' && id !== 'finder-controls') return;
+    filtersDirty = false;
+    if (!document.querySelector('.finder-facets.open')) {
+      document.querySelectorAll('[data-explorer-filters]').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
+    }
+  }
+  document.body.addEventListener('htmx:afterSwap', filterRowReplaced);
+  document.body.addEventListener('htmx:oobAfterSwap', filterRowReplaced);
+  function closeMenus(except) {
+    document.querySelectorAll('.finder-facets.open').forEach(function (menu) {
+      if (menu === except) return;
+      menu.classList.remove('open');
+      const trigger = menu.parentElement.querySelector('[data-explorer-filters], .add, .model-pick-btn');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function pickModel(from, model) {
+    const pick = from.closest('.model-pick');
+    pick.querySelector('input[type="hidden"]').value = model;
+    pick.querySelector('.model-pick-btn').textContent = model || 'Choose a model';
+    pick.querySelectorAll('.model-option').forEach(function (other) {
+      other.classList.toggle('is-selected', other === from);
+      other.setAttribute('aria-pressed', other === from ? 'true' : 'false');
+    });
+    pick.querySelectorAll('.facet-item .count').forEach(function (tick) { tick.remove(); });
+    const owner = pick.querySelector('.facet-item[data-facet="' + from.closest('.facet-sub').getAttribute('data-facet-sub') + '"]');
+    if (owner && model) owner.querySelector('.chev').insertAdjacentHTML('beforebegin', '<span class="count">✓</span>');
+    if (from.classList.contains('model-option')) closeModelMenu(pick);
+  }
+
+  document.body.addEventListener('input', function (evt) {
+    const custom = evt.target.closest('.model-pick .model-custom');
+    if (custom) pickModel(custom, custom.value.trim());
+  });
+
+  function closeModelMenu(pick) {
+    closeMenus();
+    pick.querySelector('.model-pick-btn').focus();
+  }
 
   function showFacet(item) {
     const menu = item.closest('.finder-facets');
@@ -167,8 +593,9 @@
     const sub = search.closest('.facet-sub');
     const query = search.value.trim().toLocaleLowerCase();
     let visible = 0;
-    sub.querySelectorAll('.facet-values label').forEach(function (option) {
-      const matches = option.textContent.toLocaleLowerCase().includes(query);
+    sub.querySelectorAll('.facet-values label, .facet-values .model-option').forEach(function (option) {
+      const label = option.querySelector('input + span');
+      const matches = (label ? label.textContent : option.textContent).toLocaleLowerCase().includes(query);
       option.hidden = !matches;
       if (matches) visible += 1;
     });
@@ -188,9 +615,7 @@
   });
 
   document.addEventListener('keydown', function (evt) {
-    if (evt.key === 'Escape') {
-      document.querySelectorAll('.finder-facets.open').forEach(function (menu) { menu.classList.remove('open'); });
-    }
+    if (evt.key === 'Escape') closeFacetMenus();
     if (!(evt.metaKey || evt.ctrlKey) || evt.key !== 'Enter') return;
     const query = evt.target.closest('#finder-query-form textarea[name="query"]');
     if (!query) return;
@@ -678,5 +1103,706 @@
     if (!evt.target || !evt.target.classList || !evt.target.classList.contains('rt-drawer-overlay')) return;
     var mount = document.getElementById(DRAWER);
     if (mount && mount.querySelector('.rt-drawer-body--loading')) mount.innerHTML = '';
+  });
+  // Explorer: browser timezone, local From/To, presets.
+  function explorerEndpointOffset(name) {
+    const dateInput = document.getElementById('explorer-' + name);
+    const timeInput = document.getElementById('explorer-' + name + '-time');
+    if (!dateInput || !timeInput || !dateInput.value || !timeInput.value) return null;
+    const local = new Date(dateInput.value + 'T' + timeInput.value);
+    if (Number.isNaN(local.getTime())) return null;
+    const pad = (value) => String(value).padStart(2, '0');
+    const roundTrip = local.getFullYear() + '-' + pad(local.getMonth() + 1) + '-' + pad(local.getDate()) +
+      'T' + pad(local.getHours()) + ':' + pad(local.getMinutes());
+    if (roundTrip !== dateInput.value + 'T' + timeInput.value.slice(0, 5)) return null;
+    return String(local.getTimezoneOffset());
+  }
+  function explorerValidateLocalRange() {
+    const dateTime = (name) => {
+      const date = document.getElementById('explorer-' + name)?.value;
+      const time = document.getElementById('explorer-' + name + '-time')?.value;
+      return date && time ? date + 'T' + time : '';
+    };
+    const start = dateTime('from'), end = dateTime('to');
+    const fromTime = document.getElementById('explorer-from-time');
+    const toTime = document.getElementById('explorer-to-time');
+    if (fromTime) fromTime.setCustomValidity('');
+    if (toTime) toTime.setCustomValidity('');
+    const startDate = start ? new Date(start) : null;
+    const endDate = end ? new Date(end) : null;
+    const localPartsMatch = (value, date) => {
+      if (!date || Number.isNaN(date.getTime())) return false;
+      const pad = (part) => String(part).padStart(2, '0');
+      return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) +
+        'T' + pad(date.getHours()) + ':' + pad(date.getMinutes()) === value.slice(0, 16);
+    };
+    let invalidField = null, message = '';
+    if (!start || !end) {
+      invalidField = !start ? fromTime : toTime;
+      message = 'Enter both ends of the time range';
+    } else if (!localPartsMatch(start, startDate)) {
+      invalidField = fromTime;
+      message = 'Enter a valid local time';
+    } else if (!localPartsMatch(end, endDate)) {
+      invalidField = toTime;
+      message = 'Enter a valid local time';
+    } else if (startDate >= endDate) {
+      invalidField = toTime;
+      message = 'End must be after start';
+    }
+    if (invalidField) {
+      invalidField.setCustomValidity(message);
+      invalidField.reportValidity();
+      return null;
+    }
+    return { start, end, startDate, endDate };
+  }
+  function explorerUpdateOffsets() {
+    ['from', 'to'].forEach((name) => {
+      const dateInput = document.getElementById('explorer-' + name);
+      const timeInput = document.getElementById('explorer-' + name + '-time');
+      if (!dateInput || !timeInput) return;
+      const fieldName = name + '_tz_offset';
+      let field = document.querySelector('[name="' + fieldName + '"][form="explorer-load-form"]');
+      if (!field) {
+        field = document.createElement('input');
+        field.type = 'hidden';
+        field.name = fieldName;
+        field.setAttribute('form', 'explorer-load-form');
+        dateInput.parentNode.appendChild(field);
+      }
+      const offset = explorerEndpointOffset(name);
+      field.value = offset === null ? '' : offset;
+    });
+  }
+  function explorerLocal(dateInput) {
+    const utc = dateInput.getAttribute('data-utc');
+    const prefix = dateInput.id === 'explorer-from' ? 'explorer-from' : 'explorer-to';
+    const timeInput = document.getElementById(prefix + '-time');
+    if (!utc || dateInput.dataset.localised || !timeInput || timeInput.dataset.localised) return;
+    const d = new Date(utc + 'Z');
+    const pad = (n) => String(n).padStart(2, '0');
+    dateInput.value = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    timeInput.value = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    dateInput.dataset.localised = '1';
+    timeInput.dataset.localised = '1';
+  }
+  function explorerInit() {
+    document.querySelectorAll('[data-explorer-tz]').forEach((el) => { el.value = String(new Date().getTimezoneOffset()); });
+    document.querySelectorAll('#explorer-from, #explorer-to').forEach(explorerLocal);
+    const exact = document.querySelector('[data-explorer-range-mode]')?.value === 'exact';
+    const seconds = document.querySelector('[data-explorer-range-seconds]')?.value;
+    document.querySelectorAll('[data-explorer-preset]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(!exact && b.getAttribute('data-explorer-preset') === seconds));
+    });
+    const custom = document.querySelector('.xr-exact');
+    if (custom) {
+      // Runs after every swap, polls included: open the exact-range panel, never close one the user opened.
+      if (exact) custom.open = true;
+      custom.querySelector('summary')?.toggleAttribute('data-active', exact);
+    }
+    const tz = document.querySelector('[data-explorer-tz-label]');
+    if (tz) {
+      const off = -new Date().getTimezoneOffset();
+      const pad = (n) => String(Math.floor(Math.abs(n))).padStart(2, '0');
+      tz.textContent = 'Local time (UTC' + (off >= 0 ? '+' : '−') + pad(off / 60) + ':' + pad(off % 60) + ')';
+    }
+    explorerUpdateRangeLabel();
+    document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = exact; });
+    explorerUpdateOffsets();
+  }
+  let customRangeWasOpen = false;
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail?.target?.id !== 'explorer-results') return;
+    customRangeWasOpen = !!document.querySelector('.xr-exact')?.open;
+  });
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail?.target?.id !== 'explorer-results' || !customRangeWasOpen) return;
+    const custom = document.querySelector('.xr-exact');
+    if (custom) custom.open = true;
+    customRangeWasOpen = false;
+  });
+  function explorerUpdateRangeLabel(presetLabel) {
+    const label = document.querySelector('[data-explorer-range-label]');
+    if (!label) return;
+    const mode = document.querySelector('[data-explorer-range-mode]');
+    if (mode?.value === 'exact') {
+      const read = (id) => new Date((document.getElementById(id)?.value || '') + 'T' + (document.getElementById(id + '-time')?.value || '00:00:00'));
+      const from = read('explorer-from'), to = read('explorer-to');
+      if (isNaN(from) || isNaN(to)) { label.textContent = 'Custom range'; return; }
+      const year = new Date().getFullYear();
+      const showYear = from.getFullYear() !== year || to.getFullYear() !== year;
+      const day = (d) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: showYear ? 'numeric' : undefined });
+      const time = (d) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+      const sameDay = day(from) === day(to);
+      // ponytail: ranges of a day or more show dates only; the exact seconds live in the tooltip and the inputs.
+      label.textContent = to - from >= 86400000 ? day(from) + ' – ' + day(to)
+        : sameDay ? day(from) + ' ' + time(from) + '–' + time(to)
+        : day(from) + ' ' + time(from) + ' – ' + day(to) + ' ' + time(to);
+      label.title = from.toLocaleString() + ' – ' + to.toLocaleString();
+      return;
+    }
+    if (presetLabel) {
+      const labels = { '15m': '15 minutes', '1h': '1 hour', '24h': '24 hours', '7d': '7 days', '30d': '30 days' };
+      label.textContent = 'Last ' + (labels[presetLabel] || presetLabel);
+      return;
+    }
+    const seconds = document.querySelector('[data-explorer-range-seconds]')?.value || '604800';
+    const match = document.querySelector('[data-explorer-preset="' + seconds + '"]');
+    if (match) { explorerUpdateRangeLabel(match.textContent.trim()); return; }
+    const days = Number(seconds) / 86400;
+    label.textContent = 'Last ' + (Number.isInteger(days) ? days : days.toFixed(1)) + ' days';
+  }
+  function explorerRefreshRelativeRange() {
+    const mode = document.querySelector('[data-explorer-range-mode]');
+    if (!mode || mode.value !== 'relative') return;
+    const seconds = Number(document.querySelector('[data-explorer-range-seconds]')?.value || 0);
+    if (!seconds) return;
+    const to = new Date();
+    const from = new Date(to.getTime() - seconds * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
+    [['from', from], ['to', to]].forEach(([name, date]) => {
+      const dateInput = document.getElementById('explorer-' + name);
+      const timeInput = document.getElementById('explorer-' + name + '-time');
+      if (!dateInput || !timeInput) return;
+      dateInput.value = date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+      timeInput.value = pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+    });
+    explorerUpdateOffsets();
+  }
+  document.addEventListener('submit', function (evt) {
+    const form = evt.target;
+    if (!form || form.id !== 'explorer-load-form') return;
+    explorerRefreshRelativeRange();
+    if (!explorerValidateLocalRange()) {
+      pendingExplorerControl = null;
+      explorerControlRequest = null;
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+    }
+  }, true);
+  // Apply filters only sends its own hx-post, bypassing the form submit event.
+  // Refresh relative dates before htmx gathers the request parameters.
+  document.addEventListener('click', function (evt) {
+    if (!evt.target.closest('[hx-post="/find/load"]')) return;
+    explorerRefreshRelativeRange();
+    if (!explorerValidateLocalRange()) {
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+    }
+  }, true);
+  document.addEventListener('submit', function (evt) {
+    const form = evt.target;
+    if (!form || form.id !== 'finder-query-form') return;
+    if (!document.getElementById('explorer-load-form')) return;
+    explorerRefreshRelativeRange();
+    const rows = document.getElementById('explorer-rows');
+    const limit = document.getElementById('finder-limit-query');
+    if (rows && limit) limit.value = rows.value;
+    const range = explorerValidateLocalRange();
+    if (!range) {
+      evt.preventDefault();
+      evt.stopImmediatePropagation();
+      return;
+    }
+    const { start, end, startDate, endDate } = range;
+    document.querySelectorAll('#finder-controls [data-new-range]').forEach((field) => {
+      if (field.name === 'new_from') field.value = start;
+      else if (field.name === 'new_to') field.value = end;
+      else if (field.name === 'new_from_tz_offset') field.value = String(startDate.getTimezoneOffset());
+      else if (field.name === 'new_to_tz_offset') field.value = String(endDate.getTimezoneOffset());
+    });
+  }, true);
+  document.addEventListener('DOMContentLoaded', explorerInit);
+  document.body.addEventListener('htmx:afterSettle', explorerInit);
+  document.body.addEventListener('change', function (evt) {
+    if (evt.target && (evt.target.id === 'explorer-from' || evt.target.id === 'explorer-to' || evt.target.id === 'explorer-from-time' || evt.target.id === 'explorer-to-time')) explorerUpdateOffsets();
+  });
+  document.addEventListener('click', function (evt) {
+    if (evt.target.closest('[data-explorer-apply]')) {
+      const val = (id) => (document.getElementById(id)?.value || '') + 'T' + (document.getElementById(id + '-time')?.value || '');
+      const toInput = document.getElementById('explorer-to-time');
+      if (toInput) {
+        toInput.setCustomValidity(val('explorer-from') >= val('explorer-to') ? 'End must be after start' : '');
+        if (!toInput.reportValidity()) return;
+      }
+      const mode = document.querySelector('[data-explorer-range-mode]');
+      if (mode) mode.value = 'exact';
+      document.querySelectorAll('[data-explorer-preset]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+      document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = true; });
+      explorerUpdateRangeLabel();
+      const menu = evt.target.closest('.xr-time-menu');
+      if (menu) menu.open = false;
+      document.getElementById('explorer-load-form')?.requestSubmit();
+      return;
+    }
+    const preset = evt.target.closest('[data-explorer-preset]');
+    if (!preset) return;
+    const mode = document.querySelector('[data-explorer-range-mode]');
+    const seconds = document.querySelector('[data-explorer-range-seconds]');
+    if (mode) mode.value = 'relative';
+    if (seconds) seconds.value = preset.getAttribute('data-explorer-preset');
+    document.querySelectorAll('[data-explorer-preset]').forEach((b) => b.setAttribute('aria-pressed', String(b === preset)));
+    explorerUpdateRangeLabel(preset.textContent.trim());
+    document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = false; });
+    const to = new Date();
+    const from = new Date(to.getTime() - Number(preset.getAttribute('data-explorer-preset')) * 1000);
+    [['#explorer-from', from], ['#explorer-to', to]].forEach(([sel, d]) => {
+      const input = document.querySelector(sel);
+      const prefix = sel === '#explorer-from' ? 'explorer-from' : 'explorer-to';
+      const timeInput = document.getElementById(prefix + '-time');
+      if (!input || !timeInput) return;
+      const utc = d.toISOString().slice(0, 19);
+      input.setAttribute('data-utc', utc);
+      timeInput.setAttribute('data-utc', utc);
+      delete input.dataset.localised;
+      delete timeInput.dataset.localised;
+      explorerLocal(input);
+    });
+    explorerUpdateOffsets();
+    const exact = preset.closest('.xr-time-options')?.querySelector('.xr-exact');
+    if (exact) exact.open = false;
+    const menu = preset.closest('.xr-time-menu');
+    if (menu) menu.open = false;
+    document.getElementById('explorer-load-form')?.requestSubmit();
+  });
+
+  document.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Enter' && evt.target.matches?.('.xr-exact input')) {
+      evt.preventDefault();
+      document.querySelector('[data-explorer-apply]')?.click();
+      return;
+    }
+    if (evt.key !== 'Escape') return;
+    const menu = evt.target.closest?.('.xr-time-menu[open], .xr-cols[open], .xr-sort[open], .xr-top-menu[open]');
+    if (!menu) return;
+    menu.open = false;
+    menu.querySelector('summary')?.focus();
+  });
+
+  // The Columns menu lives inside #explorer-results, which every tick swaps.
+  // Remember whether it was open (and which box had focus) and restore both.
+  let colsWasOpen = false;
+  let colsFocus = null;
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id !== 'explorer-results') return;
+    const menu = document.getElementById('explorer-cols');
+    colsWasOpen = !!menu?.open;
+    const active = document.activeElement;
+    colsFocus = colsWasOpen && active && menu.contains(active) ? (active.value || null) : null;
+  });
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail.target?.id !== 'explorer-results' && !document.getElementById('explorer-results')) return;
+    if (!colsWasOpen) return;
+    colsWasOpen = false;
+    const menu = document.getElementById('explorer-cols');
+    if (!menu) return;
+    menu.open = true;
+    if (colsFocus !== null) {
+      const box = Array.from(menu.querySelectorAll('input')).find((i) => i.value === colsFocus);
+      box?.focus({ preventScroll: true });
+    }
+    colsFocus = null;
+  });
+  document.addEventListener('click', function (evt) {
+    const menu = document.getElementById('explorer-cols');
+    if (menu?.open && !menu.contains(evt.target)) menu.open = false;
+  });
+
+  // Poll renders (data-poll) of #explorer-results and #explorer-toolbar: drop one older than the
+  // table on screen or identical to it; otherwise keep what the user had open, scrolled, selected
+  // and focused. The server half is described above find_poll in dashboard/trace_finder/routes.py.
+  const pollKept = {};
+  function pollState(root) {
+    const details = {};
+    root.querySelectorAll('details').forEach(function (d) {
+      const key = d.className;
+      details[key] = details[key] || [];
+      details[key].push(d.open);
+    });
+    const scroll = {};
+    root.querySelectorAll('.xr-table-wrap, .tv-rows').forEach(function (el) {
+      scroll[el.className] = [el.scrollLeft, el.scrollTop];
+    });
+    const active = document.activeElement;
+    let focus = null;
+    if (active && root.contains(active)) {
+      if (active.id) focus = '#' + CSS.escape(active.id);
+      else if (active.hasAttribute('data-tv-row')) focus = '[data-tv-row="' + CSS.escape(active.getAttribute('data-tv-row')) + '"]';
+      else if (active.hasAttribute('data-xr-sort')) focus = '[data-xr-sort="' + CSS.escape(active.getAttribute('data-xr-sort')) + '"]';
+      else if (active.name) focus = '[name="' + CSS.escape(active.name) + '"][value="' + CSS.escape(active.value) + '"]';
+    }
+    const sel = root.querySelector('[data-tv-row].sel');
+    // OOB toolbar swaps bypass hx-preserve for controls inside the toolbar. Keep values the user
+    // may still be editing (custom range and requested row count) until they choose Load/Apply.
+    const controls = Array.from(root.querySelectorAll('input[id], select[id], textarea[id]')).map(function (el) {
+      return {
+        id: el.id,
+        value: el.value,
+        checked: 'checked' in el ? el.checked : null,
+        utc: el.getAttribute('data-utc'),
+        localised: el.getAttribute('data-localised'),
+        required: el.required
+      };
+    });
+    return {
+      details: details,
+      scroll: scroll,
+      focus: focus,
+      sel: sel ? sel.getAttribute('data-tv-row') : null,
+      controls: controls
+    };
+  }
+  function pollRestore(root, state) {
+    const seen = {};
+    root.querySelectorAll('details').forEach(function (d) {
+      const key = d.className;
+      const index = seen[key] = (seen[key] || 0) + 1;
+      const was = state.details[key];
+      if (was && index <= was.length) d.open = was[index - 1];
+    });
+    root.querySelectorAll('.xr-table-wrap, .tv-rows').forEach(function (el) {
+      const at = state.scroll[el.className];
+      if (at) { el.scrollLeft = at[0]; el.scrollTop = at[1]; }
+    });
+    if (state.sel) root.querySelector('[data-tv-row="' + CSS.escape(state.sel) + '"]')?.classList.add('sel');
+    (state.controls || []).forEach(function (saved) {
+      const el = root.querySelector('#' + CSS.escape(saved.id));
+      if (!el) return;
+      el.value = saved.value;
+      if (saved.checked !== null) el.checked = saved.checked;
+      if (saved.utc === null) el.removeAttribute('data-utc');
+      else el.setAttribute('data-utc', saved.utc);
+      if (saved.localised === null) el.removeAttribute('data-localised');
+      else el.setAttribute('data-localised', saved.localised);
+      el.required = saved.required;
+    });
+    if (state.focus) root.querySelector(state.focus)?.focus({ preventScroll: true });
+  }
+  document.body.addEventListener('htmx:oobBeforeSwap', function (evt) {
+    const target = evt.detail.target;
+    const incoming = evt.detail.fragment && evt.detail.fragment.firstElementChild;
+    if (!target || !incoming || !incoming.hasAttribute('data-poll')) return;
+    const shown = Number(document.getElementById('explorer-results')?.getAttribute('data-view-version') || 0);
+    const version = Number(incoming.getAttribute('data-view-version') || 0);
+    const shownSequence = Number(target.getAttribute('data-poll-sequence') || 0);
+    const sequence = Number(incoming.getAttribute('data-poll-sequence') || 0);
+    if (version < shown) { evt.detail.shouldSwap = false; return; }
+    if (sequence < shownSequence) { evt.detail.shouldSwap = false; return; }
+    if (incoming.getAttribute('data-render-key') === target.getAttribute('data-render-key')) {
+      target.setAttribute('data-view-version', String(version));
+      target.setAttribute('data-poll-sequence', String(sequence));
+      evt.detail.shouldSwap = false;
+      return;
+    }
+    pollKept[target.id] = pollKept[target.id] || [];
+    pollKept[target.id].push(pollState(target));
+  });
+  function pollAfterSwap(id) {
+    const states = pollKept[id];
+    const state = states && states.shift();
+    if (states && !states.length) delete pollKept[id];
+    const root = document.getElementById(id);
+    if (state && root) pollRestore(root, state);
+  }
+  document.body.addEventListener('htmx:oobAfterSwap', function (evt) {
+    const id = evt.detail.target && evt.detail.target.id;
+    if (id && pollKept[id]?.length) pollAfterSwap(id);
+    const results = id === 'explorer-results' ? document.getElementById('explorer-results') : null;
+    if (results?.hasAttribute('data-initial-load')) {
+      const scope = document.getElementById('finder-scope');
+      const within = scope?.querySelector('input[name="scope"][value="within"]');
+      const fresh = scope?.querySelector('input[name="scope"][value="new"]');
+      if (scope?.getAttribute('data-auto-scope') === 'pending' && within && fresh) {
+        within.disabled = false;
+        within.checked = true;
+        fresh.checked = false;
+        scope.removeAttribute('data-auto-scope');
+      }
+    }
+  });
+  document.body.addEventListener('click', function (evt) {
+    if (evt.target.closest('#finder-scope')) {
+      document.getElementById('finder-scope')?.removeAttribute('data-auto-scope');
+    }
+  });
+  // The run-status slot is the Ask AI poll's main target; keep its open criteria cards across ticks.
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id === 'finder-run-status') {
+      pollKept['finder-run-status'] = pollKept['finder-run-status'] || [];
+      pollKept['finder-run-status'].push(pollState(evt.detail.target));
+    }
+  });
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail.target?.id === 'finder-run-status') pollAfterSwap('finder-run-status');
+  });
+
+  // Trajectories: one tooltip, positioned from the hovered segment's data-* attributes.
+  document.addEventListener('mouseover', function (evt) {
+    const seg = evt.target.closest('.tv-segs i[data-tv-msg], .tv-segs i[data-tv-tools]');
+    const tv = evt.target.closest('.tv');
+    const tip = tv && tv.querySelector('.tv-tip');
+    if (!tip) return;
+    if (!seg) { tip.hidden = true; return; }
+    const d = seg.dataset;
+    tip.replaceChildren();
+    const h = document.createElement('div'); h.className = 'h';
+    const sw = document.createElement('i'); sw.className = seg.className;
+    const k = document.createElement('b'); k.textContent = d.tvKind;
+    const n = document.createElement('span'); n.className = 'n'; n.textContent = d.tvN;
+    h.append(sw, k, n);
+    const sub = document.createElement('div'); sub.className = 'sub';
+    if (d.tvTool) { const t = document.createElement('span'); t.className = 'tool'; t.textContent = d.tvTool; sub.append(t); }
+    const tk = document.createElement('span'); tk.className = 'tk'; tk.textContent = d.tvTok; sub.append(tk);
+    const pre = document.createElement('pre'); pre.textContent = d.tvP;
+    const foot = document.createElement('div'); foot.className = 'c'; foot.textContent = d.tvTools ? 'Captured tool schemas are shown as one block.' : 'Click to open this message ↗';
+    tip.append(h, sub, pre, foot);
+    tip.hidden = false;
+    const box = tv.getBoundingClientRect(); const r = seg.getBoundingClientRect();
+    const padding = 8;
+    tip.style.maxWidth = Math.max(0, box.width - padding * 2) + 'px';
+    const width = tip.offsetWidth || Math.min(320, box.width - padding * 2);
+    const maxLeft = Math.max(padding, box.width - width - padding);
+    const left = Math.min(Math.max(padding, r.left - box.left + r.width / 2 - width / 2), maxLeft);
+    tip.style.left = left + 'px';
+    tip.style.top = (r.bottom - box.top + 10) + 'px';
+  });
+
+  // Segment click opens the drawer at that message; the row's own hx-get handles every other click.
+  document.addEventListener('click', function (evt) {
+    const seg = evt.target.closest('.tv-segs i[data-tv-msg]');
+    const row = evt.target.closest('[data-tv-row]');
+    if (row) {
+      document.querySelectorAll('[data-tv-row].sel').forEach((el) => el.classList.remove('sel'));
+      row.classList.add('sel');
+    }
+    if (!seg || !row) return;
+    const tip = seg.closest('.tv').querySelector('.tv-tip');
+    if (tip) tip.hidden = true;
+    evt.stopPropagation();
+    htmx.ajax('GET', '/find/trace/' + encodeURIComponent(row.getAttribute('data-tv-row')) + '?msg=' + seg.getAttribute('data-tv-msg'), { target: '#finder-drawer', swap: 'innerHTML' });
+  }, true);
+
+  // Drawer: scroll the thread (not the page) to the selected message, and move the selection locally.
+  let latestFinderDrawerXhr = null;
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    if (evt.detail.target?.id === 'finder-drawer') latestFinderDrawerXhr = evt.detail.xhr;
+  });
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id === 'finder-drawer' && evt.detail.xhr !== latestFinderDrawerXhr) {
+      evt.preventDefault();
+    }
+  });
+  function drawerMarkSelected(root, index) {
+    root.querySelectorAll('.fd-msg').forEach((el) => {
+      const on = el.getAttribute('data-msg') === String(index);
+      el.classList.toggle('on', on);
+    });
+    root.querySelectorAll('.fd-mini i').forEach((el) => el.classList.toggle('on', el.getAttribute('data-mini-msg') === String(index)));
+  }
+  function drawerScrollTo(root, index) {
+    const list = root.querySelector('#fd-thread');
+    const target = root.querySelector('#msg-' + index);
+    if (list && target) list.scrollTop = target.offsetTop - list.offsetTop - list.clientHeight / 2 + target.clientHeight / 2;
+  }
+  function drawerSelect(root, index) {
+    drawerMarkSelected(root, index);
+    root.querySelectorAll('.fd-msg').forEach((el) => { el.open = el.getAttribute('data-msg') === String(index); });
+    drawerScrollTo(root, index);
+  }
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.detail.target && evt.detail.target.id === 'finder-drawer') {
+      const on = evt.detail.target.querySelector('.fd-msg.on');
+      if (on) drawerScrollTo(evt.detail.target, on.getAttribute('data-msg'));
+    }
+  });
+  document.addEventListener('click', function (evt) {
+    const mini = evt.target.closest('.fd-mini i[data-mini-msg]');
+    const summary = evt.target.closest('.fd-msg > summary');
+    const root = document.getElementById('finder-drawer');
+    if (!root || (!mini && !summary)) return;
+    if (mini) {
+      drawerSelect(root, mini.getAttribute('data-mini-msg'));
+      return;
+    }
+    const details = summary.parentElement;
+    const index = details.getAttribute('data-msg');
+    drawerMarkSelected(root, index);
+    if (!details.open) drawerScrollTo(root, index);
+  });
+
+  // Finder rows open the trace drawer from the keyboard; the drawer behaves as a modal dialog:
+  // focus moves in on open, Tab stays inside, Escape closes, focus returns to the opening row,
+  // and j/k (or ArrowDown/ArrowUp) step to the next/previous trace like the simulation drawer.
+  let finderOpenId = null;
+  const finderDialog = () => document.querySelector('#finder-drawer [role="dialog"]');
+  const shortcutGuide = () => document.querySelector('#finder-shortcut-guide');
+  const finderRows = () => Array.from(document.querySelectorAll('#explorer-results [data-tv-row]'));
+  const finderRow = (id) => finderRows().find((row) => row.getAttribute('data-tv-row') === id) || null;
+  function finderEditable(el) {
+    return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  }
+  function traceShortcutBlocked(evt) {
+    const target = evt.target;
+    const active = document.activeElement;
+    const details = target.closest?.('details, summary') || active?.closest?.('details, summary');
+    const otherModal = Array.from(document.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]'))
+      .some((modal) => modal !== finderDialog() && modal !== shortcutGuide());
+    const shiftedShortcut = ['?', 'J', 'K'].includes(evt.key) && evt.shiftKey && !evt.ctrlKey && !evt.altKey && !evt.metaKey;
+    return evt.ctrlKey || evt.altKey || evt.metaKey || (evt.shiftKey && !shiftedShortcut) ||
+      finderEditable(target) || finderEditable(active) || details || otherModal;
+  }
+  function ensureShortcutGuide() {
+    let guide = shortcutGuide();
+    if (guide) return guide;
+    guide = document.createElement('dialog');
+    guide.id = 'finder-shortcut-guide';
+    guide.setAttribute('aria-labelledby', 'finder-shortcut-title');
+    guide.style.cssText = 'border:1px solid var(--line,#d7dce2);border-radius:14px;padding:22px;max-width:440px;width:calc(100% - 40px);color:var(--ink,#18202a);background:var(--surface,#fff);box-shadow:0 24px 80px #0004';
+    guide.innerHTML = '<h2 id="finder-shortcut-title">Keyboard shortcuts</h2>' +
+      '<dl style="display:grid;grid-template-columns:140px 1fr;gap:8px 12px;margin:18px 0">' +
+      '<dt><kbd>/</kbd></dt><dd style="margin:0">Ask AI about traces</dd>' +
+      '<dt><kbd>?</kbd></dt><dd style="margin:0">Show this guide</dd>' +
+      '<dt><kbd>j</kbd> / <kbd>k</kbd> or arrows</dt><dd style="margin:0">Next or previous trace</dd>' +
+      '<dt><kbd>o</kbd></dt><dd style="margin:0">Open this trace in Orq</dd>' +
+      '<dt><kbd>c</kbd></dt><dd style="margin:0">Copy this trace ID</dd>' +
+      '<dt><kbd>Esc</kbd></dt><dd style="margin:0">Close the guide or trace</dd></dl>' +
+      '<button type="button" class="btn-secondary" data-shortcut-guide-close>Close</button>';
+    guide.addEventListener('click', function (evt) {
+      if (evt.target === guide) guide.close();
+    });
+    guide.querySelector('[data-shortcut-guide-close]').addEventListener('click', () => guide.close());
+    document.body.appendChild(guide);
+    return guide;
+  }
+  function handleTraceShortcut(evt) {
+    if (window.location.pathname !== '/traces') return false;
+    if (traceShortcutBlocked(evt)) return false;
+    if (evt.key === '/') {
+      const input = document.querySelector('.finder-command-textarea, .finder-command textarea[name="query"], #finder-query-form textarea[name="query"]');
+      if (!input || input.disabled) return false;
+      evt.preventDefault();
+      input.focus();
+      input.select();
+      return true;
+    }
+    if (evt.key === '?') {
+      evt.preventDefault();
+      const guide = ensureShortcutGuide();
+      if (!guide.open) guide.showModal();
+      guide.querySelector('[data-shortcut-guide-close]').focus();
+      return true;
+    }
+    if (evt.key === 'o' && finderDialog() && finderOpenId) {
+      const link = Array.from(finderDialog().querySelectorAll('a[href]'))
+        .find((anchor) => anchor.textContent.includes('Open in Orq'));
+      if (!link) return false;
+      evt.preventDefault();
+      link.click();
+      return true;
+    }
+    if (evt.key === 'c' && finderDialog() && finderOpenId) {
+      const button = Array.from(finderDialog().querySelectorAll('.rt-drawer-footer button[data-trace-id]'))
+        .find((candidate) => candidate.getAttribute('data-trace-id') === finderOpenId);
+      if (!button) return false;
+      evt.preventDefault();
+      button.click();
+      return true;
+    }
+    return false;
+  }
+  function finderStep(delta) {
+    const rows = finderRows();
+    const current = rows.findIndex((row) => row.getAttribute('data-tv-row') === finderOpenId);
+    if (current < 0 || !rows.length) return;
+    const next = rows[(current + delta + rows.length) % rows.length];
+    next.scrollIntoView({ block: 'nearest' });
+    next.click();
+  }
+  document.addEventListener('click', function (evt) {
+    const row = evt.target.closest('#explorer-results [data-tv-row]');
+    if (row) finderOpenId = row.getAttribute('data-tv-row');
+  }, true);
+  document.addEventListener('keydown', function (evt) {
+    const guide = shortcutGuide();
+    if (evt.key === 'Escape' && guide?.open) {
+      evt.preventDefault();
+      guide.close();
+      return;
+    }
+    if (guide?.open) return;
+    if (handleTraceShortcut(evt)) return;
+    const dialog = finderDialog();
+    if (!dialog) {
+      const row = evt.target.closest?.('#explorer-results [data-tv-row]');
+      if (row && evt.target === row && (evt.key === 'Enter' || evt.key === ' ')) {
+        evt.preventDefault();
+        row.click();
+      }
+      return;
+    }
+    if (evt.key === 'Escape') {
+      evt.preventDefault();
+      dialog.querySelector('.rt-drawer-close')?.click();
+      return;
+    }
+    if (evt.key === 'Tab') {
+      const items = Array.from(dialog.querySelectorAll('a[href], button:not([disabled]), input, select, textarea, summary, [tabindex]:not([tabindex="-1"])'))
+        .filter((el) => el.offsetParent !== null);
+      if (!items.length) { evt.preventDefault(); dialog.focus(); return; }
+      const first = items[0];
+      const last = items[items.length - 1];
+      const active = document.activeElement;
+      if (!dialog.contains(active) || (evt.shiftKey && (active === first || active === dialog))) {
+        evt.preventDefault();
+        (evt.shiftKey ? last : first).focus();
+      } else if (!evt.shiftKey && active === last) {
+        evt.preventDefault();
+        first.focus();
+      }
+      return;
+    }
+    if (evt.metaKey || evt.ctrlKey || evt.altKey || finderEditable(document.activeElement)) return;
+    if (window.location.pathname === '/traces' && traceShortcutBlocked(evt)) return;
+    if (evt.key === 'j' || evt.key === 'J' || evt.key === 'ArrowDown') {
+      evt.preventDefault();
+      finderStep(1);
+    } else if (evt.key === 'k' || evt.key === 'K' || evt.key === 'ArrowUp') {
+      evt.preventDefault();
+      finderStep(-1);
+    }
+  });
+  document.body.addEventListener('htmx:afterSettle', function (evt) {
+    if (evt.detail.target?.id !== 'finder-drawer') return;
+    const dialog = finderDialog();
+    if (dialog) {
+      if (!dialog.contains(document.activeElement)) dialog.focus({ preventScroll: true });
+      return;
+    }
+    const row = finderOpenId && finderRow(finderOpenId);
+    if (row) row.focus({ preventScroll: true });
+  });
+
+  // Explorer swaps replace the rows and headers; put focus back on the row or sort button that had it.
+  let explorerFocus = null;
+  document.body.addEventListener('htmx:beforeRequest', function (evt) {
+    const sortButton = evt.detail.elt?.closest?.('[data-xr-sort]');
+    if (sortButton) explorerFocus = ['data-xr-sort', sortButton.getAttribute('data-xr-sort')];
+  });
+  document.body.addEventListener('htmx:beforeSwap', function (evt) {
+    if (evt.detail.target?.id !== 'explorer-results' || explorerFocus) return;
+    // Polls re-render the results while a load finishes; they must not drop focus either.
+    const active = document.activeElement;
+    const row = active?.closest?.('#explorer-results [data-tv-row]');
+    if (row === active) explorerFocus = ['data-tv-row', row.getAttribute('data-tv-row')];
+    const sortButton = active?.closest?.('#explorer-results [data-xr-sort]');
+    if (sortButton) explorerFocus = ['data-xr-sort', sortButton.getAttribute('data-xr-sort')];
+  });
+  document.body.addEventListener('htmx:afterSettle', function () {
+    if (!explorerFocus) return;
+    const [attr, value] = explorerFocus;
+    explorerFocus = null;
+    const target = Array.from(document.querySelectorAll('#explorer-results [' + attr + ']')).find((el) => el.getAttribute(attr) === value);
+    if (target && !finderDialog()) target.focus({ preventScroll: true });
   });
 })();

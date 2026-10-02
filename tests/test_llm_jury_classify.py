@@ -24,8 +24,10 @@ from evaluatorq.contracts import AgentResponse, ToolCallOutputItem
 from evaluatorq.llm_jury import (
     DEFAULT_TEMPLATE,
     PairwiseComparator,
-    _build_verdict_model,  # pyright: ignore[reportPrivateUsage]
-    _default_system_prompt,  # pyright: ignore[reportPrivateUsage]
+
+    _build_verdict_model,
+
+    _default_system_prompt,
     llm_jury,
     llm_jury_pairwise,
 )
@@ -623,7 +625,8 @@ async def test_a_vanilla_classify_panel_warns_about_no_unread_config_field(
         return {JEV: jev, 'jev-latest': jev}
 
     monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
-    structured_output._WARNED_UNREAD.clear()  # pyright: ignore[reportPrivateUsage]
+
+    structured_output._WARNED_UNREAD.clear()
     client = MagicMock()
     client.base_url = 'https://my.orq.ai/v3/router'
     client.post = AsyncMock(

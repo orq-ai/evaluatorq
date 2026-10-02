@@ -6,6 +6,7 @@ import asyncio
 import os
 import subprocess
 import time
+import typing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -286,6 +287,7 @@ async def test_exec_process_creation_error_removes_container(docker, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_idle_timeout_removes_container(docker, monkeypatch) -> None:
     binary, _, calls = docker
     monkeypatch.setenv('FAKE_EXEC_SLEEP', '30')
@@ -301,6 +303,7 @@ async def test_idle_timeout_removes_container(docker, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_cancellation_removes_container_before_propagating(docker, monkeypatch) -> None:
     binary, log, calls = docker
     monkeypatch.setenv('FAKE_EXEC_SLEEP', '30')
@@ -321,6 +324,7 @@ async def test_cancellation_removes_container_before_propagating(docker, monkeyp
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_cancel_during_run_still_cleans_up(docker, monkeypatch) -> None:
     binary, log, calls = docker
     target = _target(binary)
@@ -342,6 +346,7 @@ async def test_cancel_during_run_still_cleans_up(docker, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_cancel_during_restart_removal_waits_until_old_container_is_removed(docker, monkeypatch, tmp_path) -> None:
     binary, log, calls = docker
     target = _target(binary)
@@ -504,7 +509,7 @@ async def test_kill_group_uses_taskkill_without_killpg(monkeypatch: pytest.Monke
 
     monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
     monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
-    await coding_agent_module.kill_group(SimpleNamespace(returncode=None, pid=4242))  # pyright: ignore[reportArgumentType]
+    await coding_agent_module.kill_group(typing.cast(typing.Any, SimpleNamespace(returncode=None, pid=4242)))
     assert calls == [['taskkill', '/T', '/F', '/PID', '4242']]
 
 
@@ -518,7 +523,7 @@ async def test_kill_group_kills_agent_process_when_taskkill_fails(monkeypatch: p
     monkeypatch.delattr(coding_agent_module.os, 'killpg', raising=False)
     monkeypatch.setattr(coding_agent_module.subprocess, 'run', fake_run)
     proc = SimpleNamespace(returncode=None, pid=4242, kill=lambda: killed.append(4242))
-    await coding_agent_module.kill_group(proc)  # pyright: ignore[reportArgumentType]
+    await coding_agent_module.kill_group(typing.cast(typing.Any, proc))
     assert killed == [4242]
 
 

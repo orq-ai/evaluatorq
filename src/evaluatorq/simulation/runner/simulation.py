@@ -726,8 +726,8 @@ class SimulationRunner:
         self._shared_client: AsyncOpenAI | None = llm_client
         self._client_owned: bool = False
         # Injected agents (may be None; resolved lazily in run() when None)
-        self._injected_user_simulator: BaseAgent | None = user_simulator
-        self._injected_judge: BaseAgent | None = judge
+        self._injected_user_simulator = cast('UserSimulatorAgent | None', user_simulator)
+        self._injected_judge = cast('JudgeAgent | None', judge)
         # Warned once here, not per datapoint: an injected agent arrives built and llm_config cannot reach it.
         injected = [name for name, agent in (('user_simulator', user_simulator), ('judge', judge)) if agent is not None]
         # From the caller's own arguments, not the resolved config: `resolve_sim_llm_config`
@@ -809,7 +809,6 @@ class SimulationRunner:
                 persona,
                 scenario,
             )
-
         datapoint_id = datapoint.id if datapoint else ''
 
         effective_max_turns = max_turns or self._max_turns
@@ -883,8 +882,8 @@ class SimulationRunner:
     def _resolve_simulator_and_judge(
         self,
         *,
-        persona: Persona | None,
-        scenario: Scenario | None,
+        persona: Persona,
+        scenario: Scenario,
         system_prompt: str,
     ) -> tuple[UserSimulatorAgent, JudgeAgent]:
         """Return this run's user simulator and judge.
@@ -901,17 +900,13 @@ class SimulationRunner:
             # Shallow-copy isolates _custom_system_prompt mutations from concurrent
             # run_batch tasks. Reset _usage to a fresh TokenUsage — shallow copy
             # keeps the same reference, which would cross-contaminate per-sim counts.
-            user_simulator: UserSimulatorAgent = copy.copy(self._injected_user_simulator)  # pyright: ignore[reportAssignmentType]
+            user_simulator = copy.copy(self._injected_user_simulator)
             user_simulator.reset_usage()
             if _implements(user_simulator, _USER_SIMULATOR_METHODS):
                 try:
                     user_simulator.update_context(
-                        persona_context=build_persona_system_prompt(persona)  # type: ignore[arg-type]
-                        if persona
-                        else None,
-                        scenario_context=build_scenario_user_context(scenario)  # type: ignore[arg-type]
-                        if scenario
-                        else None,
+                        persona_context=build_persona_system_prompt(persona) if persona else None,
+                        scenario_context=build_scenario_user_context(scenario) if scenario else None,
                     )
                 except Exception as ctx_err:
                     raise RuntimeError(
@@ -930,7 +925,7 @@ class SimulationRunner:
             import copy
 
             # Isolate per-sim state — see user_simulator comment above.
-            judge: JudgeAgent = copy.copy(self._injected_judge)  # pyright: ignore[reportAssignmentType]
+            judge = copy.copy(self._injected_judge)
             judge.reset_usage()
             # Without this the judge sees "No specific criteria defined" and scores 0.0.
             if _implements(judge, _CONTEXTUAL_JUDGE_METHODS):
@@ -965,8 +960,8 @@ class SimulationRunner:
         judge: JudgeAgent,
         sinks: RunSinks,
         conversation_target: AgentTarget | None,
-        persona: Persona | None,
-        scenario: Scenario | None,
+        persona: Persona,
+        scenario: Scenario,
         run_span: Span | None,
         criteria_tracker: _CriteriaTracker,
         usage_before: TokenUsage,
@@ -1124,16 +1119,16 @@ class SimulationRunner:
             turn_metrics=sinks.turn_metrics,
             token_usage=sinks.token_usage,
             token_usage_known=sinks.token_usage_known,
-            criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,  # type: ignore[arg-type]
+            criteria_results=self._build_criteria_results(scenario, resolved) if scenario else None,
             criteria_verified=criteria_tracker.verified,
-            metadata=judge_metadata,  # type: ignore[union-attr]
+            metadata=judge_metadata,
         )
 
     async def _run_inner(
         self,
         *,
-        persona: Persona | None,
-        scenario: Scenario | None,
+        persona: Persona,
+        scenario: Scenario,
         datapoint_id: str,
         first_message: str | None,
         effective_max_turns: int,
@@ -1142,7 +1137,7 @@ class SimulationRunner:
         conversation_target: AgentTarget | None = None,
     ) -> SimulationResult:
         """Inner simulation body (runs inside the orq.simulation.run span)."""
-        system_prompt = build_datapoint_system_prompt(persona, scenario)  # pyright: ignore[reportArgumentType]
+        system_prompt = build_datapoint_system_prompt(persona, scenario)
         user_simulator, judge = self._resolve_simulator_and_judge(
             persona=persona,
             scenario=scenario,

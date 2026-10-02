@@ -506,7 +506,7 @@ class TestLangGraphTargetAgentContext:
         # NOTE: langgraph < 2.0 path. create_react_agent moved to
         # `langchain.agents.create_agent` in langgraph V1.0 and is removed in V2.0 —
         # update this import when bumping to langgraph 2.x.
-        from langgraph.prebuilt import create_react_agent
+        from langgraph.prebuilt import create_react_agent  # ty: ignore[deprecated]
 
         monkeypatch.setenv('OPENAI_API_KEY', 'sk-test-stub')
 
@@ -515,7 +515,7 @@ class TestLangGraphTargetAgentContext:
             """Add two integers."""
             return a + b
 
-        graph = create_react_agent(ChatOpenAI(model='gpt-4o-mini'), tools=[add])
+        graph = create_react_agent(ChatOpenAI(model='gpt-4o-mini'), tools=[add])  # ty: ignore[deprecated]
         target = LangGraphTarget(graph)
 
         ctx = await target.get_agent_context()

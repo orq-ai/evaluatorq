@@ -11,7 +11,7 @@ def test_project_key_discovers_only_its_project_and_matching_workspace(monkeypat
     monkeypatch.setenv('ORQ_API_KEY', 'project-key')
     calls: list[list[str]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         calls.append(args)
         assert profile is None
         if args[:2] == ['projects', 'list']:
@@ -34,7 +34,7 @@ def test_project_key_discovers_only_its_project_and_matching_workspace(monkeypat
 def test_profile_project_list_is_paged_and_workspace_comes_from_profile(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         assert profile == 'research-management'
         calls.append(args)
         if args[:2] == ['workspaces', 'list']:
@@ -51,19 +51,48 @@ def test_profile_project_list_is_paged_and_workspace_comes_from_profile(monkeypa
     assert any('--starting-after' in args for args in calls)
 
 
-def test_scope_rejects_session_workspace_mismatch(monkeypatch) -> None:
+def test_scope_does_not_use_a_different_active_workspace(monkeypatch) -> None:
     monkeypatch.setenv('ORQ_API_KEY', 'project-key')
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
-        return {'credential': {'workspace_id': 'workspace-b'}, 'workspaces': []}
+        return {'active_workspace_key': 'other', 'workspaces': [{'id': 'workspace-b', 'key': 'other'}]}
 
     monkeypatch.setattr(orq_scope, '_cli_json', cli)
     scope = orq_scope.discover_orq_scope()
 
-    assert scope.error is not None
-    assert scope.projects == ()
+    assert scope.workspace_key is None
+    assert scope.workspace_id == 'workspace-a'
+    assert len(scope.projects) == 1
+
+
+def test_scope_finds_project_workspace_even_when_another_is_active(monkeypatch) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'project-key')
+
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
+        if args[:2] == ['projects', 'list']:
+            return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
+        return {
+            'active_workspace_key': 'other',
+            'workspaces': [{'id': 'workspace-b', 'key': 'other'}, {'id': 'workspace-a', 'key': 'orq-research'}],
+        }
+
+    monkeypatch.setattr(orq_scope, '_cli_json', cli)
+    scope = orq_scope.discover_orq_scope()
+    assert scope.workspace_key == 'orq-research'
+
+
+def test_scope_uses_authenticated_cli_session_without_api_key(monkeypatch) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
+        if args[:2] == ['projects', 'list']:
+            return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
+        return {'active_workspace_key': 'orq-research', 'workspaces': [{'id': 'workspace-a', 'key': 'orq-research'}]}
+
+    monkeypatch.setattr(orq_scope, '_cli_json', cli)
+    assert orq_scope.discover_orq_scope().workspace_key == 'orq-research'
 
 
 def test_profile_cli_call_drops_unrelated_environment_credential(monkeypatch) -> None:
@@ -94,6 +123,7 @@ def test_direct_key_uses_evaluatorq_host_and_clears_scope_overrides(monkeypatch)
 
     def run(command, **kwargs):
         environment = kwargs['env']
+        assert command[:3] == ['/usr/bin/orq', '--profile', '']
         assert environment['ORQ_SERVER'] == 'https://my.orq.ai'
         assert all(name not in environment for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'))
         return subprocess.CompletedProcess(command, 0, '{"data": []}', '')
@@ -103,10 +133,29 @@ def test_direct_key_uses_evaluatorq_host_and_clears_scope_overrides(monkeypatch)
     assert orq_scope._cli_json(['projects', 'list'], profile=None, timeout=5) == {'data': []}
 
 
+def test_cli_session_uses_selected_profile_without_empty_profile_flag(monkeypatch) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setenv('ORQ_WORKSPACE', 'stale-workspace')
+    monkeypatch.setenv('ORQ_PROJECT', 'stale-project')
+    monkeypatch.setattr(orq_scope.shutil, 'which', lambda _: '/usr/bin/orq')
+
+    def run(command, **kwargs):
+        assert command == ['/usr/bin/orq', 'projects', 'list', '-o', 'json', '--no-input']
+        environment = kwargs['env']
+        assert all(name not in environment for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'))
+        return subprocess.CompletedProcess(command, 0, '{"data": []}', '')
+
+    monkeypatch.setattr(orq_scope.subprocess, 'run', run)
+
+    assert orq_scope._cli_json(
+        ['projects', 'list'], profile=None, timeout=5, use_cli_session=True
+    ) == {'data': []}
+
+
 def test_profile_workspace_lookup_reads_later_pages(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         calls.append(args)
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-b'}]}
@@ -122,12 +171,31 @@ def test_profile_workspace_lookup_reads_later_pages(monkeypatch) -> None:
     assert any('--starting-after' in args for args in calls)
 
 
+def test_profile_workspace_lookup_falls_back_when_workspace_list_is_empty(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
+        calls.append(args)
+        if args[:2] == ['projects', 'list']:
+            return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-a'}]}
+        if args == ['workspace', 'list']:
+            return {'workspaces': []}
+        return {'data': [{'id': 'workspace-a', 'key': 'target'}], 'has_more': False}
+
+    monkeypatch.setattr(orq_scope, '_cli_json', cli)
+
+    scope = orq_scope.discover_orq_scope('research')
+
+    assert scope.workspace_key == 'target'
+    assert ['workspaces', 'list', '--limit', '200'] in calls
+
+
 def test_scope_discovery_has_one_deadline_across_project_and_workspace_pages(monkeypatch) -> None:
     times = iter((0.0, 0.0, 5.0, 11.0, 16.0))
     monkeypatch.setattr(orq_scope, 'monotonic', lambda: next(times))
     calls: list[tuple[list[str], float]] = []
 
-    def cli(args: list[str], *, profile: str | None, timeout: float) -> dict:
+    def cli(args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False) -> dict:
         calls.append((args, timeout))
         if args[:2] == ['projects', 'list']:
             return {'data': [{'project_id': 'project-a', 'name': 'A', 'workspace_id': 'workspace-target'}]}

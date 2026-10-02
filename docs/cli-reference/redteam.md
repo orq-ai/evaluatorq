@@ -58,7 +58,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 
 **Delivery methods** (`--delivery-method`): `DAN`, `role-play`, `skeleton-key`, `base64`, `leetspeak`, `multilingual`, `character-spacing`, `crescendo`, `many-shot`, `authority-impersonation`, `refusal-suppression`, `direct-request`, `code-elicitation`, `code-assistance`, `tool-response`, `word-substitution`.
 
-**Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--artifacts-dir DIR` sets where JSON is written and is **required** when `--save detail` (`--output-dir` was removed; use `--artifacts-dir`).
+**Saving results.** Persistence is controlled by two flags. `--save` accepts `none` (no files), `final` (summary JSON only), or `detail` (all per-stage artifacts). `--artifacts-dir DIR` sets where JSON is written and is **required** when `--save detail` (`--output-dir` was removed; use `--artifacts-dir`). What each file contains, and the fields of the report `--report` writes, are in the [output reference](../guides/red-teaming-output.md).
 
 **Exit codes.** `eq redteam run` exits `1` — after writing any requested report artifacts — in two cases, both read off `report.summary`:
 

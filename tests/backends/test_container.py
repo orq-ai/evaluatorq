@@ -59,7 +59,7 @@ def test_options_frozen_and_workdir_absolute() -> None:
         assert DockerOptions(workdir=workdir).workdir == workdir
     opts = DockerOptions()
     with pytest.raises(pydantic.ValidationError):
-        opts.image = 'x'  # pyright: ignore[reportAttributeAccessIssue]
+        opts.image = 'x'  # ty: ignore[invalid-assignment]
 
 
 @pytest.mark.parametrize('name_prefix', ['', '.', '..', '../evq-leak', '../../evq-leak', 'a/b', 'a\\b', '-task', '_task'])
@@ -347,6 +347,7 @@ def test_heartbeat_warns_again_after_recovery(fake_docker, tmp_path) -> None:
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='the watchdog runs inside a Linux container, never on a Windows host')
 @pytest.mark.parametrize('shell', ['sh', 'busybox'])
+@pytest.mark.slow
 def test_watchdog_script_lifecycle(tmp_path: Path, shell: str) -> None:
     if shutil.which(shell) is None:
         pytest.skip(f'{shell} not installed')

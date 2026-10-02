@@ -326,7 +326,7 @@ A persona requires its core traits — `name`, `patience`, `assertiveness`, `pol
         asyncio.run(main())
     ```
 
-One persona × one scenario yields one `SimulationResult` with `goal_achieved`, `goal_completion_score`, `turn_count`, `rules_broken`, and the full message transcript.
+One persona × one scenario yields one `SimulationResult` with `goal_achieved`, `goal_completion_score`, `turn_count`, `rules_broken`, and the full message transcript. Every field, and the saved `SimulationRun` file, is in the [output reference](agent-simulation-output.md).
 
 ### How criteria are scored
 

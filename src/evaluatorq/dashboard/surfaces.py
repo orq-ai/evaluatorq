@@ -89,7 +89,7 @@ def _redteam_adapter() -> SurfaceAdapter:
     def _rt_load(p: _Path) -> RedTeamReport:
         from evaluatorq.dashboard.library import load_model_cached
 
-        return load_model_cached(p, RedTeamReport.model_validate)  # type: ignore[return-value]
+        return load_model_cached(p, RedTeamReport.model_validate)
 
     return SurfaceAdapter(
         load=_rt_load,
@@ -124,7 +124,7 @@ def _sim_adapter() -> SurfaceAdapter:
     def _sim_load(p: _Path) -> SimulationRun:
         from evaluatorq.dashboard.library import load_model_cached
 
-        return load_model_cached(p, SimulationRun.model_validate)  # type: ignore[return-value]
+        return load_model_cached(p, SimulationRun.model_validate)
 
     return SurfaceAdapter(
         load=_sim_load,
@@ -201,7 +201,7 @@ def _pairwise_adapter() -> SurfaceAdapter:
     def _pw_load(p: _Path) -> PairwiseRun:
         from evaluatorq.dashboard.library import load_model_cached
 
-        return load_model_cached(p, PairwiseRun.model_validate)  # type: ignore[return-value]
+        return load_model_cached(p, PairwiseRun.model_validate)
 
     def _with_entries(run: PairwiseRun, filtered: list[PairwiseEntry]) -> PairwiseRun:
         """A copy carrying only *filtered* entries, with the rollup recomputed.

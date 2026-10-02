@@ -311,18 +311,20 @@ def _looks_like_responses(value: Any) -> bool:
     return isinstance(decoded, list) and any(isinstance(item, dict) and is_responses_item(item) for item in decoded)
 
 
-def _parse_messages(
+def detect_message_format(value: Any) -> _MESSAGE_FORMAT:
+    """Detect which supported transcript format `value` uses."""
+    if _looks_like_otel(value):
+        return 'otel_genai'
+    if _looks_like_responses(value):
+        return 'responses'
+    return 'chat_completions'
+
+
+def parse_messages(
     value: Any, *, hinted: _MESSAGE_FORMAT | None = None, default_role: _ROLE
 ) -> tuple[list[Message], _MESSAGE_FORMAT]:
-    detected: _MESSAGE_FORMAT
-    if hinted is not None:
-        detected = hinted
-    elif _looks_like_otel(value):
-        detected = 'otel_genai'
-    elif _looks_like_responses(value):
-        detected = 'responses'
-    else:
-        detected = 'chat_completions'
+    """Parse a supported transcript format into messages and return its format."""
+    detected = hinted if hinted is not None else detect_message_format(value)
     if detected == 'otel_genai':
         return _otel_messages(value, default_role=default_role), detected
     if detected == 'responses':
@@ -400,7 +402,7 @@ def _parse_exchange(
     for side, default_role in side_roles:
         parsed: tuple[list[Message], _MESSAGE_FORMAT] | None = None
         for hinted, value in _message_candidates(span, side):
-            messages, detected = _parse_messages(value, hinted=hinted, default_role=default_role)
+            messages, detected = parse_messages(value, hinted=hinted, default_role=default_role)
             # Content-less messages would stop the search at a shape that merely looked like a conversation.
             if any(message.content or message.tool_calls or message.tool_call_id for message in messages):
                 parsed = messages, detected
@@ -411,19 +413,24 @@ def _parse_exchange(
             sides.append(([], 'chat_completions'))
     input_messages, _input_format = sides[0]
     output_messages, _output_format = sides[1]
-    formats = {fmt for found, fmt in sides if found}
-    message_format = cast(
-        '_TRACE_MESSAGE_FORMAT | None', next(iter(formats)) if len(formats) == 1 else ('mixed' if formats else None)
-    )
+    formats: set[_MESSAGE_FORMAT] = {fmt for found, fmt in sides if found}
+    if len(formats) == 1:
+        message_format: _TRACE_MESSAGE_FORMAT | None = next(iter(formats))
+    elif formats:
+        message_format = 'mixed'
+    else:
+        message_format = None
     return input_messages, output_messages, message_format
 
 
-def _span_id(span: dict[str, Any], index: int) -> str:
+def span_id_of(span: dict[str, Any], index: int) -> str:
+    """Return a raw span dict's id, or a synthetic `__span_<index>` when it has none."""
     value = span.get('span_id') or span.get('_id') or span.get('id')
     return str(value) if value else f'__span_{index}'
 
 
-def _parent_id(span: dict[str, Any]) -> str | None:
+def parent_span_id_of(span: dict[str, Any]) -> str | None:
+    """Return a raw span dict's parent id, or None for a root (missing or empty parent)."""
     value = span.get('parent_span_id') or span.get('parent_id')
     return str(value) if value else None
 
@@ -528,7 +535,7 @@ def _evaluator_subtree_ids(indexed: list[tuple[str, dict[str, Any], int]]) -> se
     """Return evaluator span IDs together with every descendant span ID."""
     children: dict[str | None, list[str]] = defaultdict(list)
     for span_id, span, _ in indexed:
-        children[_parent_id(span)].append(span_id)
+        children[parent_span_id_of(span)].append(span_id)
     evaluator_ids = {span_id for span_id, span, _ in indexed if _is_evaluator(span)}
     queue = deque(evaluator_ids)
     while queue:
@@ -554,7 +561,7 @@ def _trace_from_spans(
     """
     if not spans:
         return _failed_trace(trace_id, 'the trace has no spans.', requested_span_id=requested_span_id)
-    indexed = [(_span_id(span, index), span, index) for index, span in enumerate(spans)]
+    indexed = [(span_id_of(span, index), span, index) for index, span in enumerate(spans)]
     by_id = {span_id: span for span_id, span, _ in indexed}
     evaluator_ids = _evaluator_subtree_ids(indexed)
     if requested_span_id is not None:
@@ -597,7 +604,7 @@ def _trace_from_spans(
             if candidate_input or candidate_output:
                 selected = current_id, span, candidate_input, candidate_output, candidate_format
                 break
-            current_id = _parent_id(span)
+            current_id = parent_span_id_of(span)
         if selected is not None:
             selected_id, selected_span, input_messages, output_messages, message_format = selected
         else:

@@ -7,6 +7,7 @@ mocked at the ``generate_structured`` layer so no network/key is needed.
 
 from __future__ import annotations
 
+import typing
 from typing import Any, cast
 
 import pytest
@@ -111,7 +112,7 @@ async def test_generate_personas_scenarios_seeds_override_num(captured):
         num_personas=99,  # ignored — seeds win
         num_scenarios=3,
         llm_config=LLMCallConfig(model="m"),
-        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        generation_client=typing.cast(typing.Any, object()),
         persona_seeds=["angry retiree", "fraud dispute"],
     )
     # One persona per seed, each seed threaded into its prompt.
@@ -136,7 +137,7 @@ async def test_generate_personas_scenarios_threads_edge_case_percentage(captured
         num_personas=5,
         num_scenarios=5,
         llm_config=LLMCallConfig(model="m"),
-        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        generation_client=typing.cast(typing.Any, object()),
         edge_case_percentage=0.6,
     )
     joined = " ".join(captured["prompts"])
@@ -155,7 +156,7 @@ async def test_generate_personas_scenarios_default_edge_case_percentage_unchange
         num_personas=5,
         num_scenarios=5,
         llm_config=LLMCallConfig(model="m"),
-        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        generation_client=typing.cast(typing.Any, object()),
     )
     joined = " ".join(captured["prompts"])
     assert "1 edge case" in joined
@@ -175,7 +176,7 @@ async def test_generation_instructions_reach_both_prompts(captured):
         num_personas=3,
         num_scenarios=3,
         llm_config=LLMCallConfig(model="m"),
-        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        generation_client=typing.cast(typing.Any, object()),
         generation_instructions="all replying in German",
     )
     # Two prompts (one persona, one scenario); the steer must be in each.
@@ -217,7 +218,7 @@ async def test_generation_instructions_reach_the_seeded_fanout(captured):
         num_personas=99,  # ignored — one persona per seed
         num_scenarios=2,
         llm_config=LLMCallConfig(model="m"),
-        generation_client=object(),  # pyright: ignore[reportArgumentType]
+        generation_client=typing.cast(typing.Any, object()),
         persona_seeds=["angry retiree", "fraud dispute"],
         generation_instructions="reply only in German",
     )

@@ -180,7 +180,7 @@ async def test_wrap_simulation_agent_rejects_removed_evaluators_kwarg():
     with pytest.raises(TypeError, match="evaluators"):
         wrap_simulation_agent(
             target=lambda _msgs: "ok",
-            evaluators=["goal_achieved"],  # type: ignore[call-arg]
+            evaluators=["goal_achieved"],
         )
 
 

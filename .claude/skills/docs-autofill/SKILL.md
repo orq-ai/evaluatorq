@@ -121,11 +121,11 @@ If anything under `src/` changed, **the run is already broken** — step 3 forbi
 ```bash
 uv run ruff check src
 uv run ruff format --check src
-uv run basedpyright
+uv run ty check
 uv run pytest -m 'not integration'
 ```
 
-`basedpyright` is never scoped to a path. Everything green before review.
+`ty check` is never scoped to a path. Everything green before review.
 
 ## Step 6 — review, in parallel
 

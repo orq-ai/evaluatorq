@@ -130,10 +130,10 @@ def test_an_unset_flag_and_unset_field_keep_the_flag_default(tmp_path: Path) -> 
 
     assert result.exit_code == 0, result.output
     assert fake.call_args.kwargs['datapoint_parallelism'] == 10
-    assert fake.call_args.kwargs['llm_config'] == LLMConfig(
-        attacker={'model': LLMConfig().attacker.model},  # pyright: ignore[reportArgumentType]
-        evaluator={'model': LLMConfig().evaluator.model},  # pyright: ignore[reportArgumentType]
-    )
+    assert fake.call_args.kwargs['llm_config'] == LLMConfig.model_validate({
+        'attacker': {'model': LLMConfig().attacker.model},
+        'evaluator': {'model': LLMConfig().evaluator.model},
+    })
 
 
 @pytest.mark.parametrize(

@@ -45,8 +45,8 @@ Targets — provide **exactly one**:
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
 | `--datapoints` / `-d` | `Path \| None` / `None` | Write generated datapoints to JSONL for reproducible re-runs. |
-| `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL (results + scorer averages + metadata). |
-| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
+| `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL, one `SimulationResult` per line. |
+| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. The [output reference](../guides/agent-simulation-output.md) describes this file and the `--results` rows. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--executive-summary` / `--no-executive-summary` | `bool` / `True` | Generate an LLM narrative executive summary in the report. |
@@ -88,7 +88,7 @@ There is no `--target-reasoning-effort` flag here — it is a `eq sim run` flag 
 | `--no-save` | `bool` / `False` | Skip writing to `.evaluatorq/sim-runs/`. |
 | `--recommendations` / `--no-recommendations` | `bool` / `True` | Generate LLM remediation suggestions for failures, tied to their concrete cause. On by default; `--no-recommendations` skips the extra LLM call. Uses `--sim-model`. |
 | `--results` / `-r` | `Path \| None` / `None` | Path to write results JSONL. |
-| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. |
+| `--report` | `Path \| None` / `None` | Path to write full SimulationRun report JSON. The [output reference](../guides/agent-simulation-output.md) describes this file and the `--results` rows. |
 | `--report-md` | `Path \| None` / `None` | Directory for an auto-named Markdown report. |
 | `--report-html` | `Path \| None` / `None` | Directory for an auto-named HTML report. |
 | `--executive-summary` / `--no-executive-summary` | `bool` / `True` | Generate an LLM narrative executive summary in the report. |

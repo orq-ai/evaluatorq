@@ -11,6 +11,7 @@ reaching the network.
 from __future__ import annotations
 
 import importlib
+import typing
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -133,7 +134,7 @@ class _RecordingTarget(AgentTarget):
 def test_agent_target_passed_as_target_routes_to_target_agent() -> None:
     """Passing an AgentTarget as target= must not wrap it in CallableTarget."""
     agent = _RecordingTarget()
-    runner = SimulationRunner(target=agent)  # pyright: ignore[reportArgumentType]
+    runner = SimulationRunner(target=typing.cast(typing.Any, agent))
 
     assert runner._effective_target is agent  # noqa: SLF001
     assert runner._target is None  # noqa: SLF001

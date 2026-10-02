@@ -439,7 +439,7 @@ def _resolve_run_options(
             )
         resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
 
-    targets: list[str] | str = target if len(target) > 1 else target[0]
+    targets: list[str] | str = list(target) if len(target) > 1 else target[0]
 
     return RunOptions(
         strategies=strategies,

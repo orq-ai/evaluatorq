@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,11 +36,11 @@ SCENARIO = {'name': 'Refund', 'goal': 'Get a refund'}
 QUIET = ['--no-save', '--no-executive-summary', '--yes']
 
 
-def _run(mode: str) -> SimulationRun:
+def _run(mode: Literal['run', 'simulate', 'generate']) -> SimulationRun:
     return SimulationRun(
         run_name='cfg',
         created_at=datetime.now(tz=timezone.utc),
-        mode=mode,  # pyright: ignore[reportArgumentType]
+        mode=mode,
         target_kind='orq_agent',
         evaluator_names=[],
         total_results=0,
@@ -330,7 +330,7 @@ def _invoke_real_target(command: str, args: list[str], *, stdin: str) -> tuple[A
 
     internal = '_simulate_run' if command == 'simulate' else '_generate_and_simulate_run'
     fake = AsyncMock(return_value=_run('simulate' if command == 'simulate' else 'run'))
-    resolver = MagicMock(wraps=cli._resolve_target)  # pyright: ignore[reportPrivateUsage]
+    resolver = MagicMock(wraps=cli._resolve_target)
     with (
         patch(f'evaluatorq.simulation.api.{internal}', new=fake),
         patch('evaluatorq.simulation.cli._resolve_target', new=resolver),

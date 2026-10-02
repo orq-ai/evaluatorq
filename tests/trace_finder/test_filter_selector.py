@@ -12,7 +12,7 @@ from evaluatorq.trace_finder import filter_selector as filter_selector_module
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyOutcome, ClassifyResponse, JudgeError
 from evaluatorq.trace_finder.filter_selector import FilterSelectionError, select_filters, select_filters_with_response
 from evaluatorq.trace_finder.debug import cli_debug
-from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.models import FACET_NAMES, FILTER_OR_JUDGMENT_RULE, FacetCatalogue, FacetSelection
 
 
 def catalogue() -> FacetCatalogue:
@@ -51,7 +51,7 @@ async def test_filter_request_and_response_are_debug_only(monkeypatch: pytest.Mo
 
     request_line = next(message for message in messages if 'Trace finder filter classify request' in message)
     request_body = json.loads(request_line.split(' input=', 1)[1])
-    assert request_body['state'] == {'query': 'Demos'}
+    assert request_body['state'] == {'query': 'Demos', 'rule': FILTER_OR_JUDGMENT_RULE}
     assert request_body['questions']['project']['type'] == 'choice'
     assert any('Trace finder filter classify response' in message and 'project_0' in message for message in messages)
 
@@ -86,7 +86,9 @@ async def test_select_filters_uses_one_classify_request_for_non_empty_facets(mon
     assert selected.agent_name == frozenset()
     assert len(captured) == 1
     request = captured[0]['request']
-    assert request.state == {'query': 'OpenAI errors in Demos'}
+    assert request.state == {'query': 'OpenAI errors in Demos', 'rule': FILTER_OR_JUDGMENT_RULE}
+    assert 'not an error inside the conversation' in request.questions['status'].instructions
+    assert 'not an error inside the conversation' not in request.questions['project'].instructions
     assert set(request.questions) == {str(name) for name in FACET_NAMES} - {'agent_name', 'tool_name'}
     assert all(question.kind == 'choice' for question in request.questions.values())
     assert 'span.responses' in str(request.questions['trace_type'].criteria)

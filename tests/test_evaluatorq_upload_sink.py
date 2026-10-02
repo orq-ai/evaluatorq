@@ -38,7 +38,7 @@ async def _run_with_upload_response(response: OrqResponse | None) -> list[str]:
         patch.dict(os.environ, {"ORQ_API_KEY": "test"}),
         patch.object(_EQ_MOD, "send_results_to_orq", AsyncMock(return_value=response)),
     ):
-        await evaluatorq(
+        await evaluatorq(  # ty: ignore[call-non-callable]
             "run",
             data=[DataPoint(inputs={"x": 1})],
             jobs=[_job],

@@ -33,21 +33,43 @@ _SIDEBAR_TOGGLE_SCRIPT = (
     "(function(){try{if(localStorage.getItem('eq-sidebar-collapsed')==='1')"
     "document.documentElement.classList.add('sidebar-collapsed');}catch(e){}})();"
     'function eqToggleSidebar(){'
-    "var c=document.documentElement.classList.toggle('sidebar-collapsed');"
+    "const c=document.documentElement.classList.toggle('sidebar-collapsed');"
     "try{localStorage.setItem('eq-sidebar-collapsed',c?'1':'0');}catch(e){}}"
     "document.addEventListener('keydown',function(e){"
     "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&e.key.toLowerCase()==='b')"
     '{e.preventDefault();eqToggleSidebar();}});'
     'function eqFinderTab(el,id){'
-    "var root=el.closest('.rt-drawer');if(!root)return;"
+    "const root=el.closest('.rt-drawer');if(!root)return;"
     "root.querySelectorAll('.fd-tabs [data-panel]').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
-    "root.querySelectorAll('.fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
+    "let panels=root.querySelectorAll('.fd-technical .fd-panel');if(!panels.length)panels=root.querySelectorAll('.fd-panel');"
+    'panels.forEach(function(panel){panel.hidden=panel.id!==id;});}'
+    'function eqFinderTraceTab(el,id){'
+    "const root=el.closest('.fd-traces');if(!root)return;"
+    "root.querySelectorAll('.fd-tabs button').forEach(function(tab){tab.classList.toggle('on',tab===el);});"
+    "root.querySelectorAll(':scope > .fd-panel').forEach(function(panel){panel.hidden=panel.id!==id;});}"
     # Non-Mac shows "Ctrl B" instead of the ⌘B glyph on the hotkey hint.
     'if(!/Mac|iPhone|iPad/.test(navigator.platform)){'
     "document.addEventListener('DOMContentLoaded',function(){"
     "document.querySelectorAll('.sidebar-toggle-kbd').forEach("
     "function(k){k.textContent='Ctrl B';});});}"
     '</script>\n'
+)
+
+_AUTH_TOAST_SCRIPT = (
+    '<script>'
+    "document.addEventListener('DOMContentLoaded',function(){"
+    "fetch('/auth/status',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(s){"
+    "if(s.status==='valid')return;"
+    "const id='eq-auth-toast:'+s.method+':'+s.status+':'+s.message;"
+    "try{if(sessionStorage.getItem(id))return;sessionStorage.setItem(id,'1');}catch(e){}"
+    "const toast=document.getElementById('eq-auth-toast');if(!toast)return;"
+    "toast.querySelector('.eq-auth-toast-message').textContent=s.message;"
+    "toast.hidden=false;toast.classList.toggle('is-warning',s.status==='unavailable');"
+    'const close=function(){toast.hidden=true};'
+    "toast.querySelector('button').addEventListener('click',close,{once:true});"
+    'setTimeout(close,12000);'
+    '}).catch(function(){});});'
+    '</script>'
 )
 
 # The v1 brand mark (orq ink-nodes logomark), vendored from the design system.
@@ -71,6 +93,7 @@ def _load_mark() -> str:
 _FAVICON_PATH = Path(__file__).parent / 'static' / 'orq-favicon.svg'
 _favicon_cache: str | None = None
 FIND_ICON = '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/><circle cx="11" cy="11" r="2"/>'
+TRACE_ICON = '<path d="M3 12h3l3-8 6 16 3-8h3"/>'
 
 
 def _favicon_link() -> str:
@@ -122,6 +145,13 @@ _NAV: list[tuple[str, str, str, str]] = [
         '/find',
         FIND_ICON,
     ),
+    (
+        'traces',
+        'Traces',
+        '/traces',
+        TRACE_ICON,
+    ),
+    ('insights', 'Insights', '/insights', '<path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-7"/>'),
     (
         'settings',
         'Settings',
@@ -180,6 +210,7 @@ def page(
     active_nav: str | None = None,
     actions_html: str = '',
     back_html: str = '',
+    shell_variant: str | None = None,
 ) -> str:
     """Render a complete HTML page in the dashboard sidebar shell.
 
@@ -198,6 +229,24 @@ def page(
         A complete HTML document string starting with ``<!DOCTYPE html>``.
     """
     css = load_css()
+    if shell_variant == 'insights-review':
+        nav_key = _resolve_nav(active_surface, active_nav)
+        sidebar = _sidebar_html(nav_key)
+        scripts = ''.join(str(a) for a in head_assets())
+        return (
+            '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+            '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+            f'{_favicon_link()}<title>{esc(title)} | evaluatorq</title>\n'
+            f'<style>\n{css}\n</style>\n<style>\n{EDITORIAL_CSS}\n</style>\n'
+            f'<style>\n{DASHBOARD_CSS}\n</style>\n{scripts}'
+            '<link rel="stylesheet" href="/static/insights-review.css">\n'
+            '<script src="/static/insights-run-common.js" defer></script>\n'
+            '<script src="/static/insights-review.js" defer></script>\n</head>\n'
+            '<body class="eq-dashboard eq-insights-review">\n'
+            f'{_SIDEBAR_TOGGLE_SCRIPT}<div class="app-shell">{sidebar}'
+            f'<div class="app-main"><main class="app-content insights-review-content">{body_html}</main></div>'
+            '</div></body></html>\n'
+        )
     nav_key = _resolve_nav(active_surface, active_nav)
     sidebar = _sidebar_html(nav_key)
     scripts = ''.join(str(a) for a in head_assets())
@@ -220,6 +269,7 @@ def page(
         '</head>\n'
         '<body class="eq-dashboard">\n'
         f'{_SIDEBAR_TOGGLE_SCRIPT}'
+        f'{_AUTH_TOAST_SCRIPT}'
         '<div class="app-shell">\n'
         f'{sidebar}\n'
         '<div class="app-main">\n'
@@ -231,6 +281,11 @@ def page(
         f'{body_html}\n'
         '</main>\n'
         '</div>\n'
+        '</div>\n'
+        '<div id="eq-auth-toast" class="eq-auth-toast" role="status" hidden>'
+        '<span class="eq-auth-toast-message"></span>'
+        '<a href="/settings">Settings</a>'
+        '<button type="button" aria-label="Dismiss authentication notice">&times;</button>'
         '</div>\n'
         '</body>\n'
         '</html>\n'

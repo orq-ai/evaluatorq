@@ -49,7 +49,7 @@ def read_json(path_str: str, mtime_ns: int) -> dict[str, object]:
         json.JSONDecodeError: When the file content is not valid JSON.
         OSError: When the file cannot be read.
     """
-    return json.loads(Path(path_str).read_text(encoding='utf-8'))  # type: ignore[return-value]
+    return json.loads(Path(path_str).read_text(encoding='utf-8'))
 
 
 def read_json_cached(path: Path) -> dict[str, object]:
@@ -315,11 +315,13 @@ def _backfill_manifest(path: Path, card: ReportCard) -> None:
         ended_at=card.created_at,
         report_path=str(path),
     )
-    # complete() is a no-op on an already-terminal manifest, so stamp directly —
-    # ManifestWriter.flush() is still the single writer of a sidecar.
-    manifest.summary = summary
-    manifest.summary_version = RUN_SUMMARY_VERSION
-    ManifestWriter(manifest, mpath).flush()
+    # Seed the writer before changing the summary: flush merges fields changed
+    # since construction onto the latest disk view, so the existing thin summary
+    # must remain the writer's baseline for this backfill to count as an update.
+    writer = ManifestWriter(manifest, mpath)
+    writer.manifest.summary = summary
+    writer.manifest.summary_version = RUN_SUMMARY_VERSION
+    writer.flush()
 
 
 def _report_summary(path: Path, surface: str) -> RunSummary | None:
