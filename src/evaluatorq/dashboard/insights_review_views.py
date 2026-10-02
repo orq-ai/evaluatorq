@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 
 from evaluatorq.dashboard.shell import page
 
+_REVIEW_HEAD_HTML = (
+    '<link rel="stylesheet" href="/static/insights-review.css">\n'
+    '<script src="/static/insights-run-common.js" defer></script>\n'
+    '<script src="/static/insights-review.js" defer></script>\n'
+)
+
 
 def review_page(run: InsightsRun, manifest: RunManifest | None = None, *, rerun: bool = False) -> str:
     """Render the review shell; trace content is fetched from the JSON endpoint."""
@@ -48,4 +54,11 @@ def review_page(run: InsightsRun, manifest: RunManifest | None = None, *, rerun:
         }
     body = body.replace('REVIEW_PROGRESS', escape(json.dumps(progress, separators=(',', ':')), quote=True))
     body = body.replace('<header class="top">', '<header class="top" id="header">', 1)
-    return page(run.run_name, body, active_nav='insights', shell_variant='insights-review')
+    return page(
+        run.run_name,
+        body,
+        active_nav='insights',
+        body_class='eq-insights-review',
+        topbar=False,
+        head_html=_REVIEW_HEAD_HTML,
+    )
