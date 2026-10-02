@@ -139,7 +139,11 @@ class FacetSelection(BaseModel):
 
 
 class FacetCatalogue(BaseModel):
-    """Available trace facet values and fields whose returned values were truncated."""
+    """Available trace facet values, fields whose returned values were truncated, and per-value trace counts.
+
+    ``value_counts`` holds Orq's trace count per value for each facet that reported one for every value it
+    returned; a facet without counts is absent rather than zero.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -152,6 +156,7 @@ class FacetCatalogue(BaseModel):
     agent_name: tuple[str, ...] = ()
     tool_name: tuple[str, ...] = ()
     truncated_facets: frozenset[FacetName] = frozenset()
+    value_counts: dict[str, dict[str, int]] = {}
 
 
 class NumericFilters(BaseModel):

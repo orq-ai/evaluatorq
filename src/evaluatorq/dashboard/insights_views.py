@@ -13,9 +13,9 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
 from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
+from evaluatorq.dashboard.facet_picker import render_facet_chips, render_facet_menu, window_count_note
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
-from evaluatorq.dashboard.trace_finder.views import facet_menu
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.insights.models import label_key, label_order
 from evaluatorq.insights.population import describe_projection_coverage
@@ -1266,8 +1266,9 @@ def facet_options(
     *,
     profile_name: str | None = None,
     credential_rejected: bool = False,
+    window_days: int | None = None,
 ) -> str:
-    """Render the Finder facet choices for an Insights window, retaining selected values."""
+    """Render the filter picker for an Insights window, with Orq's per-value counts and the selected values as chips."""
     if catalogue is None and credential_rejected:
         if profile_name == 'CLI OAuth':
             credential = 'Orq rejected the CLI OAuth sign-in. Run <code>orq auth login</code> and try again.'
@@ -1301,12 +1302,20 @@ def facet_options(
         unavailable = ''
     if catalogue is None and not any(getattr(selection, name) for name in FACET_NAMES):
         return unavailable
-    menu = facet_menu(catalogue, form_id='insights-new-form', selection=selection, include_numeric=False)
+    menu = render_facet_menu(
+        catalogue,
+        form_id='insights-new-form',
+        selection=selection,
+        include_numeric=False,
+        counts=catalogue.value_counts if catalogue is not None else None,
+        count_note=window_count_note(window_days),
+    )
     return (
         f'{unavailable}<div class="finder-controls insights-filter-picker">'
         '<span class="addwrap"><button class="add" type="button" aria-haspopup="true" '
         'aria-label="Add a trace filter">+ Filter</button>'
-        f'{menu}</span><div class="insights-selected-facets" aria-live="polite"></div></div>'
+        f'{menu}</span><div class="insights-selected-facets" aria-live="polite">'
+        f'{render_facet_chips(selection, removable=True)}</div></div>'
     )
 
 
