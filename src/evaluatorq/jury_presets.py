@@ -1,4 +1,4 @@
-"""LLM-as-a-jury preset definitions (RES-1171, derived in RES-996/RES-1346).
+"""LLM-as-a-jury preset definitions (RES-1171).
 
 The single source for what a named jury preset means: which judges, which
 aggregation mode, and which reserve judges replace them when one is retired,
@@ -6,22 +6,17 @@ deprecated or repriced. `llm_jury(preset=...)` builds a panel from here, and a
 test recomputes every published figure from `common/data/jury_judge_rates.json`,
 so the table in the docs cannot drift away from what the code seats.
 
-Seats are derived rather than hand-listed. The derivation itself is not here:
-it reads a capture of the whole model garden, ranks each lineage on an
-intelligence index and a blended price, and is rerun and reviewed in the
-research repo that owns the capture. What ships to callers is its output, the
-panels and the rates they were costed at. Seats are compared in-family, because
-the lineage diversity is the point: judged against the whole garden most seats
-look dominated, and acting on that would collapse every panel onto whichever
-vendor is cheapest this month and recreate the correlated errors a panel exists
-to cancel.
+Seats are chosen here. Each one is the best buy within its own lineage, ranked
+on its intelligence index at the catalogue default reasoning effort against its
+price, because that default is the operating point a preset call runs at.
+Seats are compared in-family, because the lineage diversity is the point:
+judged against the whole catalogue most seats look dominated, and acting on that
+would collapse every panel onto whichever vendor is cheapest this month and
+recreate the correlated errors a panel exists to cancel.
 
 A preset that is not in `PRESETS` still owes an explanation, so `WITHHELD_PRESETS`
 and `DROPPED_PRESETS` carry one and `get_preset` hands it back by name instead of
-a bare "unknown preset". The registers behind the seating itself, which record a
-successor deliberately passed over or a seat knowingly held past its age limit,
-live with the derivation in the research repo where they can be checked against
-the garden.
+a bare "unknown preset".
 
 Reserves are a reviewed change to this file, not a grade-time substitution. A
 panel that contains the generator warns and proceeds (`_panel_composition_messages`
