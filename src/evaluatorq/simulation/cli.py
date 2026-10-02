@@ -533,8 +533,8 @@ def _run_default(field: str) -> Any:
 
 
 _NAME_HELP = (
-    'Run name. Unset unless passed: the SDK names the run when omitted '
-    '(the saved run-store entry, or an uploaded experiment, gets its generated name).'
+    'Run name. Unset unless passed: the SDK then saves the run as "sim" and names an uploaded experiment '
+    'simulation-<timestamp>-<id>.'
 )
 _DATAPOINT_PARALLELISM_HELP = f'Concurrent simulations. Defaults to {DEFAULT_DATAPOINT_PARALLELISM}.'
 _LLM_PARALLELISM_HELP = (
