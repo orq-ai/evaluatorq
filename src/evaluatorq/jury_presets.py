@@ -56,14 +56,13 @@ _RATES_PATH = Path(__file__).parent / 'common' / 'data' / 'jury_judge_rates.json
 
 
 class JudgeRates(BaseModel):
-    """What a seated judge bills and the rung it was ranked at, per 1M tokens."""
+    """What a seated judge bills per 1M tokens and the effort it runs at."""
 
     model_config = {'frozen': True}
 
     input_rate: float
     output_rate: float
     seated_effort: str | None
-    priced_at_ceiling: bool
 
 
 @lru_cache(maxsize=1)
@@ -157,7 +156,7 @@ class JuryPreset(BaseModel):
     numeric_aggregation: AggregatorName = 'mean_std'
     use_when: str
     estimated_cost_per_1k: float = Field(
-        description='USD per 1,000 pointwise items at 1,500 input / 150 output tokens, uncached.'
+        description='USD per 1,000 pointwise items at 1,500 input / 1,500 output tokens, uncached.'
     )
 
     @model_validator(mode='after')
@@ -174,34 +173,17 @@ class JuryPreset(BaseModel):
         return self
 
     def seated_efforts(self) -> dict[str, str | None]:
-        """The reasoning effort each judge is ranked at, and so must be called at.
+        """The reasoning effort each judge runs at: its catalogue default.
 
-        A preset names judges and a caller sends the call, so until the seated
-        effort is stated the two can disagree silently: the panel is costed and
-        ranked at one operating point and run at another. None means the card
-        publishes no ladder and the provider default stands.
+        A preset sends no effort, so each seat runs, and is costed, at the
+        provider default. None means the catalogue names no effort parameter for
+        that model.
 
-        `llm_jury` takes one `reasoning_effort` for the whole panel, so a preset
-        whose seats disagree cannot express itself through it yet; per-judge call
-        settings are a schema change and its own ticket (RES-1347).
-
-        These are the rungs the cards were scored at, not values to send: a card
-        that only distinguishes thinking from not thinking is scored at
-        `reasoning` or `none`, which the EU Region haiku seat reads back as
-        `reasoning` and no provider accepts as a `reasoning_effort`. Sending one
-        is a 400 on the value, which the retry path used to read as the model
-        refusing the parameter.
+        `llm_jury` takes one `reasoning_effort` for the whole panel, so passing
+        one overrides every seat's default; per-judge call settings are a schema
+        change and its own ticket (RES-1347).
         """
         return {judge: (r.seated_effort if (r := judge_rates(judge)) else None) for judge in self.judges}
-
-    def priced_below_seated_effort(self) -> tuple[str, ...]:
-        """Judges whose captured price is the blend at a cheaper rung than the seated one.
-
-        The published $/1k understates these until a probe measures them at the
-        effort they are seated at. Disclosed rather than corrected: correcting it
-        is a re-probe of every panel, not an arithmetic fix.
-        """
-        return tuple(j for j in self.judges if (r := judge_rates(j)) and not r.priced_at_ceiling)
 
     def duplicated_lineages(self) -> dict[str, tuple[str, ...]]:
         """Lineages seated more than once, whose errors correlate.
@@ -230,10 +212,10 @@ class JuryPreset(BaseModel):
                 raise KeyError(f'{self.name}: no captured pricing for {judge!r}; re-run the rate capture')
             total += Decimal(str(rates.input_rate)) * Decimal(ESTIMATED_PROMPT_TOKENS)
             total += Decimal(str(rates.output_rate)) * Decimal(ESTIMATED_COMPLETION_TOKENS)
-        # Decimal, and one rounding at the end. Two published figures land exactly
-        # on a half-cent (Strong Jury 23.625, EU Region 6.555), so binary floats
-        # and banker's rounding would decide them by representation rather than by
-        # a price, and a recapture that moved nothing could flip the table.
+        # Decimal, and one rounding at the end. A figure that lands exactly on a
+        # half-cent would otherwise be decided by binary-float representation and
+        # banker's rounding rather than by a price, and a recapture that moved
+        # nothing could flip the table.
         return float((total / Decimal(1_000)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
 
@@ -268,7 +250,7 @@ BALANCED_TRIO = JuryPreset(
     # fourth-vendor reserve would quietly reshape it.
     reserve_judges=('deepseek/deepseek-flash',),
     use_when='Default subjective eval. Three families, three error surfaces.',
-    estimated_cost_per_1k=4.64,
+    estimated_cost_per_1k=17.56,
 )
 
 STRONG_JURY = JuryPreset(
@@ -293,7 +275,7 @@ STRONG_JURY = JuryPreset(
     ),
     reserve_judges=('deepseek/deepseek-v4-pro',),
     use_when='Customer-facing benchmarks, preference data, anything that compounds.',
-    estimated_cost_per_1k=21.38,
+    estimated_cost_per_1k=85.5,
 )
 
 OPEN_WEIGHT_PORTABLE = JuryPreset(
@@ -317,7 +299,7 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
     ),
     reserve_judges=('minimax/MiniMax-M2.7',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
-    estimated_cost_per_1k=10.29,
+    estimated_cost_per_1k=37.66,
 )
 
 EU_REGION = JuryPreset(
@@ -333,7 +315,7 @@ EU_REGION = JuryPreset(
     use_when=(
         'Data residency: every judge serves from an EU region. Anthropic, Google and OpenAI, which is what the EU catalog can field at the current generation: the DeepSeek seat carrying Balanced Trio has no EU endpoint newer than v3.1, so this is not that panel relocated.'
     ),
-    estimated_cost_per_1k=6.56,
+    estimated_cost_per_1k=27.75,
 )
 
 SINGLE_PROVIDER_TRIO = JuryPreset(
@@ -361,7 +343,7 @@ SINGLE_PROVIDER_TRIO = JuryPreset(
         'family diversity: errors correlate and OpenAI-generated outputs face a '
         'self-preference risk the panel cannot vote away.'
     ),
-    estimated_cost_per_1k=14.28,
+    estimated_cost_per_1k=59.1,
 )
 
 PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
@@ -375,10 +357,10 @@ PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
     )
 })
 
-# Estimate behind every published cost. Measured usage runs above this when a
-# judge reasons without being asked (RES-996), so treat it as a floor.
+# Estimate behind every published cost. Output matches input because current
+# judges reason by default and bill their reasoning as output.
 ESTIMATED_PROMPT_TOKENS = 1500
-ESTIMATED_COMPLETION_TOKENS = 150
+ESTIMATED_COMPLETION_TOKENS = 1500
 
 
 # Presets derived and costed, but not seated in PRESETS because a seat cannot

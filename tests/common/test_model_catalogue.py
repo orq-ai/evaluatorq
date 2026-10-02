@@ -180,6 +180,7 @@ def test_parse_catalogue_reads_reasoning_effort_options():
 
     prices = pricing._parse_catalogue([_entry_with_efforts('low', 'medium', 'high', 'xhigh')])
     assert prices['thinky'].reasoning_efforts == frozenset({'low', 'medium', 'high', 'xhigh'})
+    assert prices['thinky'].default_reasoning_effort == 'medium'
 
 
 def test_parse_catalogue_reasoning_efforts_is_none_without_the_parameter():
@@ -188,6 +189,7 @@ def test_parse_catalogue_reasoning_efforts_is_none_without_the_parameter():
         [{'model_id': 'plain', 'provider': 'openai', 'input_cost': 0.1, 'output_cost': 0.2}]
     )
     assert prices['plain'].reasoning_efforts is None
+    assert prices['plain'].default_reasoning_effort is None
 
 
 def test_parse_catalogue_ignores_the_supports_reasoning_effort_flags():
