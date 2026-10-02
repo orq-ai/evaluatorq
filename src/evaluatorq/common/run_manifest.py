@@ -362,6 +362,7 @@ def start_manifest(
     runs_dir: Path,
     planned_stages: list[str] | None = None,
     stage_labels: dict[str, str] | None = None,
+    parallelism: int | None = None,
 ) -> ManifestWriter:
     """Create + persist a ``running`` manifest, returning its writer."""
     now = datetime.now(tz=timezone.utc)
@@ -372,6 +373,7 @@ def start_manifest(
         status=ManifestStatus.RUNNING,
         planned_stages=planned_stages or [],
         stage_labels=stage_labels or {},
+        parallelism=parallelism,
         started_at=now,
         updated_at=now,
     )

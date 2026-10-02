@@ -52,7 +52,7 @@ TOKENS_PER_TRACE: Mapping[str, tuple[int, int]] = {
 
 EXCLUDED = ('trace selection (question compiling and filter choice)', 'cluster naming and merging')
 FIRST_RUN_NOTE = 'estimated after your first run'
-PARALLELISM_NOTE = "earlier runs' parallelism is not recorded, so time is not scaled to the chosen parallelism"
+PARALLELISM_NOTE = 'an earlier run did not record its parallelism, so its time is not scaled to the chosen parallelism'
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,19 @@ class TraceBound:
 
 
 @dataclass(frozen=True)
+class StageTiming:
+    """Median seconds per trace of one stage, and the parallelism that figure is for.
+
+    ``parallelism`` is ``1`` when the figure was normalised from runs that recorded theirs (the
+    time then scales as one over the chosen parallelism) and ``None`` when no earlier run did.
+    """
+
+    seconds: float
+    parallelism: int | None
+    runs: int
+
+
+@dataclass(frozen=True)
 class StageEstimate:
     name: str
     traces_low: int
@@ -80,6 +93,7 @@ class StageEstimate:
     cost_high: float | None
     seconds_low: float | None
     seconds_high: float | None
+    basis: str
 
 
 @dataclass(frozen=True)
@@ -93,6 +107,7 @@ class RunEstimate:
     seconds_high: float | None
     time_partial: bool
     time_note: str | None
+    time_basis: str
     unknowns: tuple[str, ...]
     excluded: tuple[str, ...]
 
@@ -145,14 +160,16 @@ def _exact(count: int | None, what: str) -> TraceBound:
     return TraceBound(count, exact=True, basis=what)
 
 
-def stage_seconds(directory: Path) -> Mapping[str, float]:
+def stage_seconds(directory: Path) -> Mapping[str, StageTiming]:
     """Median seconds per trace for each stage, from earlier Insights manifests.
 
     A stage counts only when it completed and recorded a positive progress ``total``; the manifest
     stores no per-trace count otherwise. Stage names are the manifest's (``label``, ``summary``,
-    ``dimension:<name>``).
+    ``dimension:<name>``). Runs that recorded their parallelism are normalised to one request at a
+    time, assuming time falls in proportion to parallelism; when a stage has no such run, its
+    median is returned unscaled with ``parallelism=None``.
     """
-    per_trace: dict[str, list[float]] = {}
+    samples: dict[str, list[tuple[float, int | None]]] = {}
     for manifest in list_manifests(directory):
         if manifest.surface != 'insights':
             continue
@@ -163,8 +180,15 @@ def stage_seconds(directory: Path) -> Mapping[str, float]:
             if seconds < 0:
                 logger.debug('Ignoring stage {} with negative duration in run {}', stage.name, manifest.run_id)
                 continue
-            per_trace.setdefault(stage.name, []).append(seconds / stage.total)
-    return {name: statistics.median(values) for name, values in per_trace.items()}
+            samples.setdefault(stage.name, []).append((seconds / stage.total, manifest.parallelism))
+    timings: dict[str, StageTiming] = {}
+    for name, values in samples.items():
+        recorded = [seconds * parallelism for seconds, parallelism in values if parallelism]
+        if recorded:
+            timings[name] = StageTiming(statistics.median(recorded), 1, len(recorded))
+        else:
+            timings[name] = StageTiming(statistics.median(seconds for seconds, _ in values), None, len(values))
+    return timings
 
 
 def _price(info: ModelInfo | None, tokens_in: int, tokens_out: int) -> float | None:
@@ -182,12 +206,16 @@ def estimate_run(
     coding: bool,
     models: StageModels,
     prices: Mapping[str, ModelInfo | None],
-    seconds: Mapping[str, float],
+    seconds: Mapping[str, StageTiming],
     parallelism: int,
     query: bool,
-    seconds_parallelism: int | None = None,
+    sentiment_selected: bool = False,
 ) -> RunEstimate:
     """Cost and time ceilings per stage.
+
+    ``question_count`` counts the chosen general and custom questions. The label call also answers
+    the sentiment label the pipeline adds for the sentiment dimension (unless ``sentiment_selected``
+    already has it) and, for a Question source, the population-match question.
 
     A Question source labels every trace in range but only matches reach later stages, so those
     stages run from zero (label only) to every trace (every trace matches).
@@ -202,28 +230,47 @@ def estimate_run(
     label_in, label_answer = TOKENS_PER_TRACE['label']
     summary_in, summary_out = TOKENS_PER_TRACE['summary']
     embed_in, embed_out = TOKENS_PER_TRACE['embedding']
-    # (name, model, tokens in, tokens out, traces low)
-    plan: list[tuple[str, str, int, int, int]] = []
-    if question_count or 'sentiment' in dimensions:
-        plan.append(('label', models.classifier, label_in, label_answer * max(question_count, 1), high))
+    answers = question_count + (1 if 'sentiment' in dimensions and not sentiment_selected else 0) + (1 if query else 0)
+    label_basis = (
+        f'one classify call per trace: {label_in:,} input tokens (conversation view cap) and '
+        f'{answers} answer{"" if answers == 1 else "s"} of {label_answer} output tokens'
+        + (', including the population-match answer' if query else '')
+    )
+    coding_basis = (
+        f'upper bound: one more classify call per trace ({label_in:,} input tokens, {label_answer} output tokens), '
+        'timed at the whole label stage'
+    )
+    summary_basis = (
+        f'{summary_in:,} input tokens (conversation view cap), up to {summary_out:,} output tokens (max_tokens)'
+    )
+    embed_basis = f'one embedding per trace, up to {embed_in:,} tokens (summary length cap)'
+    # (name, model, tokens in, tokens out, traces low, basis)
+    plan: list[tuple[str, str, int, int, int, str]] = []
+    if answers:
+        plan.append(('label', models.classifier, label_in, label_answer * answers, high, label_basis))
     if coding:
-        plan.append(('label_coding', models.classifier, label_in, label_answer, high))
-    plan.append(('summary', models.summary, summary_in, summary_out, later_low))
-    plan.extend((f'dimension:{name}', models.embedding, embed_in, embed_out, later_low) for name in dimensions)
-
-    scale = 1.0
-    scale_known = seconds_parallelism is not None
-    if seconds_parallelism is not None:
-        scale = seconds_parallelism / max(parallelism, 1)
+        plan.append(('label_coding', models.classifier, label_in, label_answer, high, coding_basis))
+    plan.append(('summary', models.summary, summary_in, summary_out, later_low, summary_basis))
+    plan.extend(
+        (f'dimension:{name}', models.embedding, embed_in, embed_out, later_low, embed_basis) for name in dimensions
+    )
 
     rows: list[StageEstimate] = []
-    for name, model, tokens_in, tokens_out, low in plan:
+    unscaled = False
+    for name, model, tokens_in, tokens_out, low, basis in plan:
         unit = _price(prices.get(model), tokens_in, tokens_out) if n is not None else None
         if n is not None and unit is None:
             unknowns.append(f'cost: {name} has no price for {model}')
-        per_trace = seconds.get(name if name != 'label_coding' else 'label')
-        if n is not None and per_trace is None and seconds:
+        timing = seconds.get('label' if name == 'label_coding' else name)
+        if n is not None and timing is None and seconds:
             unknowns.append(f'time: {name} has no earlier timing')
+        scale = 1.0
+        if timing is not None:
+            if timing.parallelism is None:
+                unscaled = True
+            else:
+                scale = timing.parallelism / max(parallelism, 1)
+        unknown_time = timing is None or n is None
         rows.append(
             StageEstimate(
                 name=name,
@@ -233,8 +280,9 @@ def estimate_run(
                 tokens_out=tokens_out,
                 cost_low=None if unit is None else unit * low,
                 cost_high=None if unit is None else unit * high,
-                seconds_low=None if per_trace is None or n is None else per_trace * low * scale,
-                seconds_high=None if per_trace is None or n is None else per_trace * high * scale,
+                seconds_low=None if timing is None or unknown_time else timing.seconds * low * scale,
+                seconds_high=None if timing is None or unknown_time else timing.seconds * high * scale,
+                basis=basis,
             )
         )
 
@@ -243,8 +291,16 @@ def estimate_run(
     time_note = None
     if not seconds:
         time_note = FIRST_RUN_NOTE
-    elif not scale_known:
+    elif unscaled:
         time_note = PARALLELISM_NOTE
+    earlier = max((timing.runs for timing in seconds.values()), default=0)
+    runs = f'median per-trace time of up to {earlier} earlier run{"" if earlier == 1 else "s"}'
+    if not seconds:
+        time_basis = FIRST_RUN_NOTE
+    elif unscaled:
+        time_basis = f'{runs}, at the parallelism they used; rough'
+    else:
+        time_basis = f'{runs}, assuming time falls in proportion to the {parallelism} parallel requests; rough'
     return RunEstimate(
         bound=bound,
         rows=tuple(rows),
@@ -255,6 +311,7 @@ def estimate_run(
         seconds_high=sum(row.seconds_high or 0.0 for row in timed) if timed else None,
         time_partial=bool(timed) and len(timed) != len(rows),
         time_note=time_note,
+        time_basis=time_basis,
         unknowns=tuple(unknowns),
         excluded=EXCLUDED,
     )

@@ -1808,6 +1808,10 @@ class RunManifest(BaseModel):
     ended_at: datetime | None = None  # set when the run reaches a terminal status
     error: str | None = None
     report_path: str | None = None
+    parallelism: int | None = Field(
+        default=None,
+        description='Concurrent requests the run was started with, so a later estimate can scale stage timings. None when not recorded.',
+    )
     summary: RunSummary | None = Field(
         default=None,
         description=(

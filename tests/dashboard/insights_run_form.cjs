@@ -31,7 +31,7 @@ function boot(handlers) {
     return handler(String(url), options);
   };
   const context = vm.createContext({
-    window, document, fetch, DOMParser, URLSearchParams, FormData, AbortController, File, console, setTimeout, Promise,
+    window, document, fetch, DOMParser, URLSearchParams, FormData, AbortController, File, console, setTimeout, clearTimeout, Promise,
   });
   vm.runInContext(source, context);
   const form = document.getElementById('insights-new-form');
@@ -215,6 +215,55 @@ async function main() {
     app.form.querySelector('[data-irf-start]').click();
     await tick();
     assert.equal(app.location.assigned, '/insights/run-1', 'a started run opens its page');
+  }
+
+  {
+    const FULL = '<div data-part="estimate"><section>FULL ESTIMATE</section></div>'
+      + '<div data-part="compact">full says 100 traces</div><div data-part="plan"><ol class="irf-stages"><li>Stage</li></ol></div>';
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/new/plan': url => response(url.includes('compact=1') ? 'compact says 100 traces' : FULL),
+    });
+    await tick();
+    const compact = app.form.querySelector('#insights-run-compact');
+    const planCalls = () => app.calls.filter(call => call.url.startsWith('/insights/new/plan'));
+    assert.equal(planCalls().length, 1, 'the step bar line loads on mount');
+    assert.ok(planCalls()[0].url.includes('compact=1'));
+    await tick();
+    assert.equal(compact.textContent, 'compact says 100 traces');
+
+    app.calls.length = 0;
+    const limit = app.form.querySelector('input[name="limit"]');
+    limit.value = '50';
+    limit.dispatchEvent({type: 'change', bubbles: true, target: limit});
+    limit.value = '60';
+    limit.dispatchEvent({type: 'change', bubbles: true, target: limit});
+    await tick();
+    assert.equal(planCalls().length, 0, 'nothing is requested before the debounce');
+    await new Promise(resolve => setTimeout(resolve, 600));
+    assert.equal(planCalls().length, 1, 'two quick changes make one compact request');
+    assert.ok(planCalls()[0].url.includes('compact=1'));
+    assert.equal(new URLSearchParams(planCalls()[0].url.split('?')[1]).get('limit'), '60');
+
+    app.calls.length = 0;
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    await tick();
+    assert.deepEqual(visibleStep(app.form), ['3']);
+    const full = planCalls().filter(call => !call.url.includes('compact=1'));
+    assert.equal(full.length, 1, 'opening the review step loads the full estimate once');
+    assert.match(app.form.querySelector('#insights-run-estimate').innerHTML, /FULL ESTIMATE/);
+    assert.match(app.form.querySelector('#insights-run-plan').innerHTML, /Stage/);
+    assert.equal(compact.textContent, 'full says 100 traces', 'the full response also refreshes the step bar line');
+
+    app.calls.length = 0;
+    const model = app.form.querySelector('#insights-run-models input');
+    model.dispatchEvent({type: 'change', bubbles: true, target: model});
+    await tick();
+    await tick();
+    assert.equal(planCalls().filter(call => !call.url.includes('compact=1')).length, 1, 'a model change reloads the full estimate');
   }
 }
 

@@ -3414,6 +3414,15 @@ _INSIGHTS_CSS = """
 .insights-run-form .irf-plan { margin-top:14px; padding:12px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-sunken); }
 .insights-run-form .irf-plan p { margin:0 0 8px; }
 .insights-run-form .irf-plan h4 { margin:0 0 6px; color:var(--text-strong); font-size:12.5px; letter-spacing:0; text-transform:none; }
+.insights-run-form .irf-compact { margin:0 0 14px; padding:8px 12px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-sunken); color:var(--text-body); font-size:12px; }
+.insights-run-form .irf-estimate { margin-top:14px; padding:12px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-sunken); }
+.insights-run-form .irf-estimate h4 { margin:0 0 6px; color:var(--text-strong); font-size:12.5px; letter-spacing:0; text-transform:none; }
+.insights-run-form .irf-estimate h5 { margin:10px 0 4px; color:var(--text-strong); font-size:12px; }
+.insights-run-form .irf-estimate-totals, .insights-run-form .irf-estimate-unknowns { margin:0 0 8px; padding-left:18px; }
+.insights-run-form .irf-estimate small, .insights-run-form .irf-estimate-basis { display:block; color:var(--text-muted); font-size:11px; }
+.insights-run-form .irf-estimate-table { width:100%; margin:8px 0; border-collapse:collapse; font-size:11.5px; }
+.insights-run-form .irf-estimate-table th, .insights-run-form .irf-estimate-table td { padding:5px 8px; border-bottom:1px solid var(--border-subtle); text-align:left; vertical-align:top; }
+.insights-run-form .irf-estimate .irf-hint { margin:6px 0 0; }
 .insights-run-form .irf-stages { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:4px 12px; margin:0; padding-left:20px; font-size:11.5px; }
 .insights-run-form .irf-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
 .insights-run-form .irf-btn { padding:8px 15px; border:1px solid var(--border-default); border-radius:7px; background:var(--surface-card); color:var(--text-strong); font:inherit; font-size:12.5px; cursor:pointer; }

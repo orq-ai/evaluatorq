@@ -3,6 +3,7 @@
   'use strict';
 
   const POPULATION_SOURCES = ['recent', 'query'];
+  const REFRESH_DELAY_MS = 400;
   const NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
   const contexts = new WeakMap();
 
@@ -182,21 +183,66 @@
     }
   }
 
-  async function loadPlan(ctx) {
-    const form = ctx.form;
-    const host = form.querySelector('#insights-run-plan');
-    const sequence = ++ctx.planSequence;
+  function planParams(form, compact) {
     const params = new URLSearchParams();
     formPairs(form).forEach(function (pair) {
       if (pair[0] !== 'csrf' && pair[0] !== 'mount') params.append(pair[0], pair[1]);
     });
-    host.textContent = 'Working out the stages…';
+    if (compact) params.set('compact', '1');
+    return params;
+  }
+
+  async function loadCompact(ctx) {
+    const host = ctx.form.querySelector('#insights-run-compact');
+    const sequence = ++ctx.compactSequence;
     try {
-      const response = await fetch('/insights/new/plan?' + params.toString());
+      const response = await fetch('/insights/new/plan?' + planParams(ctx.form, true).toString());
       const markup = await response.text();
-      if (sequence === ctx.planSequence) host.innerHTML = markup;
+      if (sequence === ctx.compactSequence) host.innerHTML = markup;
     } catch (failure) {
-      if (sequence === ctx.planSequence) host.textContent = 'The expected stages could not be loaded.';
+      if (sequence === ctx.compactSequence) host.textContent = 'The estimate could not be loaded.';
+    }
+  }
+
+  function scheduleRefresh(ctx) {
+    clearTimeout(ctx.refreshTimer);
+    ctx.refreshTimer = setTimeout(function () {
+      ctx.refreshTimer = null;
+      if (ctx.step === 3) loadPlan(ctx);
+      else loadCompact(ctx);
+    }, REFRESH_DELAY_MS);
+  }
+
+  async function loadPlan(ctx) {
+    const form = ctx.form;
+    clearTimeout(ctx.refreshTimer);
+    ctx.refreshTimer = null;
+    const host = form.querySelector('#insights-run-plan');
+    const estimate = form.querySelector('#insights-run-estimate');
+    const compact = form.querySelector('#insights-run-compact');
+    const sequence = ++ctx.planSequence;
+    ctx.compactSequence += 1;
+    host.textContent = 'Working out the stages…';
+    estimate.textContent = 'Working out the estimate…';
+    try {
+      const response = await fetch('/insights/new/plan?' + planParams(form, false).toString());
+      const markup = await response.text();
+      if (sequence !== ctx.planSequence) return;
+      if (!response.ok) {
+        host.innerHTML = markup;
+        estimate.textContent = '';
+        return;
+      }
+      const parts = new DOMParser().parseFromString(markup, 'text/html');
+      const part = function (name) { return parts.querySelector('[data-part="' + name + '"]'); };
+      host.innerHTML = part('plan') ? part('plan').innerHTML : '';
+      estimate.innerHTML = part('estimate') ? part('estimate').innerHTML : '';
+      if (part('compact')) compact.innerHTML = part('compact').innerHTML;
+    } catch (failure) {
+      if (sequence === ctx.planSequence) {
+        host.textContent = 'The expected stages could not be loaded.';
+        estimate.textContent = 'The estimate could not be loaded.';
+      }
     }
   }
 
@@ -308,6 +354,7 @@
       form.querySelector('[data-file-name="' + kind + '"]').value = file.name;
       status.textContent = kind === 'finder' ? 'Finder export is ready.' : 'Trace snapshot is ready.';
       showError(ctx, '');
+      scheduleRefresh(ctx);
       if (kind === 'snapshot') {
         ctx.measuredPath = null;
         await measureSnapshot(ctx);
@@ -389,8 +436,17 @@
     } else if (hit('[data-retry-facets]')) refreshFacets(ctx, true);
   }
 
+  function affectsEstimate(target) {
+    return !target.matches('[data-cq], input[data-file], input[type="search"]');
+  }
+
   function onChange(ctx, event) {
     const target = event.target;
+    if (target.closest('#insights-run-models')) {
+      loadPlan(ctx);
+      return;
+    }
+    if (affectsEstimate(target)) scheduleRefresh(ctx);
     if (target.name === 'source') {
       showError(ctx, '');
       updateSource(ctx);
@@ -423,10 +479,14 @@
   function mountAt(form, step, keepError) {
     if (!form) return null;
     if (contexts.has(form)) return contexts.get(form);
-    const ctx = {form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null, planSequence: 0};
+    const ctx = {
+      form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null,
+      planSequence: 0, compactSequence: 0, refreshTimer: null,
+    };
     contexts.set(form, ctx);
     form.addEventListener('click', function (event) { onClick(ctx, event); });
     form.addEventListener('change', function (event) { onChange(ctx, event); });
+    form.addEventListener('input', function (event) { if (affectsEstimate(event.target)) scheduleRefresh(ctx); });
     form.addEventListener('keydown', function (event) { onKeydown(ctx, event); });
     form.addEventListener('facets:closed', function () { refreshFacets(ctx); });
     form.addEventListener('submit', function (event) {
@@ -437,6 +497,7 @@
     form.classList.add('irf-ready');
     showStep(ctx, step || 1, keepError);
     refreshFacets(ctx);
+    if (ctx.step !== 3) loadCompact(ctx);
     return ctx;
   }
 

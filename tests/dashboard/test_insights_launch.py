@@ -110,6 +110,7 @@ def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
     assert manifest.status == 'running'
     assert manifest.planned_stages == ['population', 'label', 'summary', 'dimension:intent', 'dimension:failure', 'priority', 'write']
     assert manifest.stage_labels['label'] == 'Match and classify traces'
+    assert manifest.parallelism == spec.parallelism
     command = spawn.call_args.args[0]
     assert command[1] == '-c'
     assert 'runpy.run_module' in command[2]

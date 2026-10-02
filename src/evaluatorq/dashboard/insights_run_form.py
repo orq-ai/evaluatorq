@@ -614,6 +614,7 @@ def render_run_form(values: RunFormValues, *, csrf: str, error: str | None = Non
         f'<input type="hidden" name="finder_export" value="{esc(values.finder_export)}">'
         f'<input type="hidden" name="snapshot_path" value="{esc(values.snapshot_path)}">'
         f'<ol class="irf-steps" aria-label="Steps">{steps}</ol>'
+        '<p id="insights-run-compact" class="irf-compact" role="status" aria-live="polite">Estimating traces, cost and time…</p>'
         f'<p id="insights-run-error" class="insights-error" role="alert"{"" if message else " hidden"}>{esc(message or "")}</p>'
         f'{_step_one(values)}{_step_two(values)}{_step_three(values)}'
         '<div class="irf-actions"><button type="button" class="irf-btn" data-irf-back>Back</button>'

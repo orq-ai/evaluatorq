@@ -503,6 +503,7 @@ async def insights(  # noqa: C901
         runs_dir=directory,
         planned_stages=[stage for stage, _ in plan],
         stage_labels=dict(plan),
+        parallelism=parallelism,
     )
     resolved_llm: AsyncOpenAI | None = None
     llm_owned = False

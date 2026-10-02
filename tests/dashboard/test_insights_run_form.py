@@ -10,6 +10,7 @@ import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from dataclasses import replace
+from datetime import timedelta
 from unittest.mock import patch
 
 import pytest
@@ -18,7 +19,7 @@ from starlette.testclient import TestClient
 from evaluatorq.common.model_catalogue import ModelInfo
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.auth import DashboardAuth
-from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec
+from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, get_finder_exports_dir
 from evaluatorq.dashboard.insights_run_form import (
     INSIGHTS_MODEL_FIELDS,
     OFFERED_DIMENSIONS,
@@ -27,9 +28,22 @@ from evaluatorq.dashboard.insights_run_form import (
     RunFormValues,
     render_run_form,
 )
+from evaluatorq.common.run_manifest import start_manifest
+from evaluatorq.contracts import ManifestStatus, StageRecord
 from evaluatorq.insights.models import InsightsConfig, InsightsRun, LabelSpec
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS, TASK_TYPE
-from evaluatorq.trace_finder.models import FacetSelection
+from evaluatorq.insights.store import get_insights_runs_dir
+from evaluatorq.trace_finder.export import (
+    ExportCounts,
+    ExportDimension,
+    ExportFilters,
+    ExportNumericFilters,
+    ExportTask,
+    ExportTimes,
+    ExportValuesSelection,
+    RunExport,
+)
+from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -256,6 +270,170 @@ def test_plan_route_reports_the_validation_message(monkeypatch: pytest.MonkeyPat
     assert response.status_code == 422
     assert 'role="alert"' in response.text
     assert 'Enter a question' in response.text
+
+@pytest.fixture(autouse=True)
+def _no_orq_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def nothing(*args: object, **kwargs: object) -> tuple[None, None, bool]:
+        return None, None, False
+
+    async def unpriced(auth: object, model: str) -> None:
+        return None
+
+    monkeypatch.setattr('evaluatorq.dashboard.insights_routes._catalogue', nothing)
+    monkeypatch.setattr('evaluatorq.dashboard.insights_routes.catalogue_entry', unpriced)
+
+
+_COUNTS = FacetCatalogue(value_counts={'status': {'completed': 90, 'error': 30}})
+_PLAN_QUERY = {'source': 'recent', 'limit': '100', 'labels': 'made_errors', 'dimensions': 'intent'}
+
+
+def _patch_estimate_inputs(monkeypatch: pytest.MonkeyPatch, *, price: ModelInfo | None) -> list[str]:
+    priced: list[str] = []
+
+    async def catalogue(*args: object, **kwargs: object) -> tuple[FacetCatalogue, str, bool]:
+        return _COUNTS, 'research', False
+
+    async def entry(auth: object, model: str) -> ModelInfo | None:
+        priced.append(model)
+        return price
+
+    monkeypatch.setattr('evaluatorq.dashboard.insights_routes._catalogue', catalogue)
+    monkeypatch.setattr('evaluatorq.dashboard.insights_routes.catalogue_entry', entry)
+    monkeypatch.setattr('evaluatorq.dashboard.insights_routes.selected_dashboard_auth', lambda app: _AUTH)
+    return priced
+
+
+def test_plan_route_shows_up_to_traces_cost_and_a_first_run_time(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    priced = _patch_estimate_inputs(monkeypatch, price=ModelInfo(0.01, 0.03, 'acme', False))
+    client = TestClient(build_app())
+
+    response = client.get('/insights/new/plan', params=_PLAN_QUERY)
+
+    assert response.status_code == 200
+    assert 'up to 100 traces' in response.text
+    assert re.search(r'up to \$\d', response.text)
+    assert 'estimated after your first run' in response.text
+    assert 'Expected stages' in response.text
+    spec = RunFormValues.from_form(_PLAN_QUERY)
+    assert set(priced) == {spec.summary_model, spec.classifier_model, spec.embedding_model}
+
+
+def test_plan_route_names_the_stage_without_a_price(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _patch_estimate_inputs(monkeypatch, price=None)
+    client = TestClient(build_app())
+
+    response = client.get('/insights/new/plan', params=_PLAN_QUERY)
+
+    assert 'cost unknown' in response.text
+    assert 'summary has no price' in response.text
+
+
+def test_plan_route_without_facet_counts_bounds_traces_by_the_limit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+
+    response = client.get('/insights/new/plan', params=_PLAN_QUERY)
+
+    assert 'up to 100 traces' in response.text
+    assert 'the trace limit of 100' in response.text
+
+
+def test_plan_route_time_comes_from_earlier_runs_and_scales_with_parallelism(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _patch_estimate_inputs(monkeypatch, price=ModelInfo(0.01, 0.03, 'acme', False))
+    runs = get_insights_runs_dir()
+    writer = start_manifest(run_id='earlier', surface='insights', run_name='earlier', runs_dir=runs, parallelism=10)
+    start = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    for name in ('label', 'summary'):
+        writer.manifest.stages.append(
+            StageRecord(
+                name=name,
+                status=ManifestStatus.COMPLETED,
+                started_at=start,
+                ended_at=start + timedelta(seconds=100),
+                completed=100,
+                total=100,
+            )
+        )
+    writer.flush()
+    client = TestClient(build_app())
+
+    slow = client.get('/insights/new/plan', params={**_PLAN_QUERY, 'dimensions': 'intent', 'parallelism': '10'})
+    fast = client.get('/insights/new/plan', params={**_PLAN_QUERY, 'dimensions': 'intent', 'parallelism': '100'})
+
+    assert 'estimated after your first run' not in slow.text
+    assert 'about 3 min' in slow.text
+    assert 'about 20 s' in fast.text
+
+
+def test_compact_plan_is_one_line_without_the_stage_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _patch_estimate_inputs(monkeypatch, price=ModelInfo(0.01, 0.03, 'acme', False))
+    client = TestClient(build_app())
+
+    response = client.get('/insights/new/plan', params={**_PLAN_QUERY, 'compact': '1'})
+
+    assert response.status_code == 200
+    assert 'up to 100 traces' in response.text
+    assert 'Expected stages' not in response.text
+    assert '<table' not in response.text
+
+
+def test_compact_plan_reports_an_incomplete_form_without_an_error_status(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+
+    response = client.get('/insights/new/plan', params={'source': 'query', 'query': '', 'dimensions': 'intent', 'compact': '1'})
+
+    assert response.status_code == 200
+    assert 'Enter a question' in response.text
+
+
+def test_a_finder_export_gives_an_exact_trace_count(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _patch_estimate_inputs(monkeypatch, price=ModelInfo(0.01, 0.03, 'acme', False))
+    exports = get_finder_exports_dir()
+    exports.mkdir(parents=True, exist_ok=True)
+    export = exports / 'export.json'
+    export.write_text(_finder_export(['t1', 't2', 't3']).model_dump_json(), encoding='utf-8')
+    client = TestClient(build_app())
+
+    response = client.get(
+        '/insights/new/plan', params={**_PLAN_QUERY, 'source': 'finder', 'finder_export': str(export), 'compact': '1'}
+    )
+
+    assert response.status_code == 200
+    assert '3 traces' in response.text
+    assert 'up to 3' not in response.text
+
+
+def _finder_export(matched: list[str]) -> RunExport:
+    return RunExport(
+        query='refund requests',
+        dimensions=(
+            ExportDimension(
+                name='intent',
+                task=ExportTask(kind='choice', instructions='classify', state={}, noul_threshold=0.5),
+                selection=ExportValuesSelection(kind='values', values=('refunds',)),
+            ),
+        ),
+        generated_filters=ExportFilters(),
+        filters=ExportFilters(),
+        generated_numeric=ExportNumericFilters(),
+        numeric=ExportNumericFilters(),
+        limit=500,
+        parallelism=100,
+        times=ExportTimes(elapsed=0, rate=0),
+        counts=ExportCounts(total=0, completed=0, failed=0, matched=0, active=0, queued=0, percent=0),
+        traces=(),
+        matched_trace_ids=matched,
+    )
 
 
 def test_start_launches_the_spec_built_from_the_submitted_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
