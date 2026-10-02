@@ -185,6 +185,7 @@ plugins:
           - examples/**/*.md
         About:
           - contributing.md: How to contribute.
+          - ty-migration-receipt.md: Pinned coverage audit for the ty migration.
           - changelog.md: Release notes.
           - roadmap.md: Planned work.
   - redirects:
@@ -315,5 +316,6 @@ nav:
   - FAQ: faq.md
   - About:
       - Contributing: contributing.md
+      - ty Migration Receipt: ty-migration-receipt.md
       - Changelog: changelog.md
       - Roadmap: roadmap.md

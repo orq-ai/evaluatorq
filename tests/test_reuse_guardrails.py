@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import io
 import re
+import sys
 import tokenize
 from functools import cache
 from pathlib import Path
@@ -98,6 +99,7 @@ def _ty_checked_python_files() -> list[Path]:
         candidate = REPO_ROOT / pattern
         if candidate.is_dir():
             files.update(candidate.rglob('*.py'))
+            files.update(candidate.rglob('*.pyi'))
         else:
             files.update(REPO_ROOT.glob(pattern))
     return sorted(path for path in files if not _is_excluded(path.relative_to(REPO_ROOT), excludes))
@@ -149,6 +151,20 @@ def test_ty_suppression_detector_actually_fires() -> None:
 def test_ty_checked_files_honor_configured_excludes() -> None:
     relative = {path.relative_to(REPO_ROOT).as_posix() for path in _ty_checked_python_files()}
     assert not any(path.startswith(('examples/', 'scripts/', '.venv/')) for path in relative)
+
+
+def test_ty_checked_files_include_python_source_and_stub_files(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    (tmp_path / 'package').mkdir()
+    (tmp_path / 'package' / 'runtime.py').write_text('value = 1\n')
+    (tmp_path / 'package' / 'surface.pyi').write_text('value: int\n')
+    (tmp_path / 'pyproject.toml').write_text(
+        '[tool.ty.src]\ninclude = ["package"]\nexclude = []\n'
+    )
+    monkeypatch.setattr(sys.modules[__name__], 'REPO_ROOT', tmp_path)
+
+    assert {path.name for path in _ty_checked_python_files()} == {'runtime.py', 'surface.pyi'}
 
 
 def test_guardrail_is_python_310_compatible() -> None:

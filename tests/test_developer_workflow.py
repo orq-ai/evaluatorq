@@ -75,24 +75,84 @@ def _yaml_list_blocks(text: str, indent: int) -> list[str]:
     return blocks
 
 
+def _run_scripts(yaml_text: str) -> list[str]:
+    """Extract every inline or block-scalar ``run`` script from workflow YAML."""
+    lines = yaml_text.splitlines()
+    scripts: list[str] = []
+    index = 0
+    while index < len(lines):
+        match = re.match(r'^(?P<indent>\s*)(?:-\s+)?run:\s*(?P<value>.*)$', lines[index])
+        if match is None or lines[index].lstrip().startswith('#'):
+            index += 1
+            continue
+        value = match.group('value').strip()
+        if not re.fullmatch(r'[|>][+-]?(?:\d+)?', value):
+            if len(value) >= 2 and value[0] == value[-1] == '"':
+                value = json.loads(value)
+            elif len(value) >= 2 and value[0] == value[-1] == "'":
+                value = value[1:-1].replace("''", "'")
+            scripts.append(value)
+            index += 1
+            continue
+
+        header_indent = len(match.group('indent'))
+        body: list[str] = []
+        index += 1
+        while index < len(lines):
+            line = lines[index]
+            indentation = len(line) - len(line.lstrip())
+            if line.strip() and indentation <= header_indent:
+                break
+            body.append(line)
+            index += 1
+        nonblank_indents = [len(line) - len(line.lstrip()) for line in body if line.strip()]
+        body_indent = min(nonblank_indents, default=header_indent + 1)
+        scripts.append('\n'.join(line[body_indent:] if line.strip() else '' for line in body))
+    return scripts
+
+
+def _shell_commands(script: str) -> list[list[str]]:
+    """Split a shell script into executable commands without matching quoted text."""
+    lexer = shlex.shlex(script, posix=True, punctuation_chars=';&|()')
+    lexer.whitespace_split = True
+    lexer.commenters = '#'
+    commands: list[list[str]] = []
+    command: list[str] = []
+    for token in lexer:
+        if token and all(character in ';&|()' for character in token):
+            if command:
+                commands.append(command)
+                command = []
+        else:
+            command.append(token)
+    if command:
+        commands.append(command)
+    return commands
+
+
 def _run_command(step: str) -> list[str] | None:
-    run_lines = [
-        match.group(1)
-        for line in step.splitlines()
-        if (match := re.match(r'^\s*(?:-\s+)?run:\s*(\S.*)$', line)) is not None
-    ]
-    assert len(run_lines) <= 1, 'expected at most one run command per step'
-    if not run_lines:
+    scripts = _run_scripts(step)
+    assert len(scripts) <= 1, 'expected at most one run script per step'
+    if not scripts:
         return None
-    return shlex.split(run_lines[0])
+    commands = _shell_commands(scripts[0])
+    return commands[0] if len(commands) == 1 else None
 
 
 def _run_invocations(workflow: str, prefix: list[str]) -> list[list[str]]:
-    commands = [
-        shlex.split(match.group(1))
-        for match in re.finditer(r'(?m)^\s+(?:-\s+)?run:\s*(\S.*)$', workflow)
+    return [
+        command
+        for script in _run_scripts(workflow)
+        for command in _shell_commands(script)
+        if command[: len(prefix)] == prefix
     ]
-    return [command for command in commands if command[: len(prefix)] == prefix]
+
+
+def _assert_failure_enforcing(block: str, *, indent: int) -> None:
+    assert not re.search(
+        rf'(?m)^{{indent}}continue-on-error:'.format(indent=' ' * indent),
+        block,
+    )
 
 
 def _assert_ci_typecheck_contract(workflow: str) -> None:
@@ -100,6 +160,9 @@ def _assert_ci_typecheck_contract(workflow: str) -> None:
     check_job = _yaml_block(jobs, 'check:', indent=2)
     expected_name = "    name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})"
     assert expected_name in check_job.splitlines()
+    assert '        python-version: ["3.10", "3.11", "3.12", "3.13"]' in check_job.splitlines()
+    assert not any(re.match(r'^    if:', line) for line in check_job.splitlines())
+    _assert_failure_enforcing(check_job, indent=4)
 
     steps = _yaml_block(check_job, 'steps:', indent=4)
     assert len(_run_invocations(workflow, ['uv', 'run', 'ty', 'check'])) == 1
@@ -110,11 +173,16 @@ def _assert_ci_typecheck_contract(workflow: str) -> None:
     ]
     assert len(ty_steps) == 1
     assert "        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'" in ty_steps[0].splitlines()
+    assert _run_scripts(ty_steps[0]) == ['uv run ty check']
+    assert not any(re.match(r'^        shell:', line) for line in ty_steps[0].splitlines())
+    _assert_failure_enforcing(ty_steps[0], indent=8)
 
 
 def _assert_ci_test_contract(workflow: str) -> None:
     jobs = _yaml_block(workflow, 'jobs:', indent=0)
     check_job = _yaml_block(jobs, 'check:', indent=2)
+    assert not any(re.match(r'^    if:', line) for line in check_job.splitlines())
+    _assert_failure_enforcing(check_job, indent=4)
     steps = _yaml_block(check_job, 'steps:', indent=4)
     matching_steps = [
         (tuple(command), step)
@@ -129,6 +197,8 @@ def _assert_ci_test_contract(workflow: str) -> None:
     assert set(test_steps) == {bare, coverage}
     assert "        if: matrix.python-version != '3.13' || matrix.os != 'ubuntu-latest'" in test_steps[bare].splitlines()
     assert "        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'" in test_steps[coverage].splitlines()
+    for step in test_steps.values():
+        _assert_failure_enforcing(step, indent=8)
 
 
 def _subprocess_output(value: str | bytes | None) -> str:
@@ -242,6 +312,81 @@ def test_ci_typecheck_contract_counts_ty_commands_with_options() -> None:
         _assert_ci_typecheck_contract(mutated)
 
 
+def test_run_script_extractor_covers_inline_and_block_scalars() -> None:
+    workflow = '''
+steps:
+  - run: uv run python -V
+  - run: "uv run ty check"
+  - run: |
+      uv run pytest
+  - run: >-
+      uv run ruff check
+      src
+'''
+
+    assert _run_scripts(workflow) == [
+        'uv run python -V',
+        'uv run ty check',
+        'uv run pytest',
+        'uv run ruff check\nsrc',
+    ]
+
+
+@pytest.mark.parametrize(
+    'duplicate_step',
+    [
+        "      - run: |\n          uv run ty check --output-format concise",
+        "      - run: >\n          uv run python -V && uv run ty check --output-format concise",
+        "      - run: uv run python -V; uv run ty check --output-format concise",
+        '      - run: "uv run ty check --output-format concise"',
+    ],
+)
+def test_ci_typecheck_contract_counts_every_executable_ty_invocation(duplicate_step: str) -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow + f'\n  duplicate-typecheck:\n    steps:\n{duplicate_step}\n'
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+
+
+@pytest.mark.parametrize(
+    ('old', 'new'),
+    [
+        ('        run: uv run ty check', '        run: uv run ty check || true'),
+        ('        run: uv run ty check', '        run: |\n          uv run ty check\n          exit 0'),
+        (
+            '        run: uv run ty check',
+            '        continue-on-error: true\n        run: uv run ty check',
+        ),
+        (
+            '        run: uv run ty check',
+            '        continue-on-error: false\n        run: uv run ty check',
+        ),
+    ],
+)
+def test_ci_typecheck_contract_rejects_failure_suppression(old: str, new: str) -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(workflow.replace(old, new, 1))
+
+
+def test_ci_typecheck_contract_requires_python_310_matrix_leg() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow.replace('python-version: ["3.10", "3.11", "3.12", "3.13"]', 'python-version: ["3.11", "3.12", "3.13"]', 1)
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+
+
+def test_ci_typecheck_contract_rejects_disabled_check_job() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow.replace('  check:\n', '  check:\n    if: false\n', 1)
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+
+
 def test_ci_typecheck_contract_rejects_the_expected_name_outside_check_job() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
     expected = "    name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})"
@@ -259,6 +404,27 @@ def test_ci_keeps_full_non_integration_test_commands() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
 
     _assert_ci_test_contract(workflow)
+
+
+@pytest.mark.parametrize(
+    ('old', 'new'),
+    [
+        ("  check:\n", "  check:\n    continue-on-error: true\n"),
+        (
+            "      - name: Test (unit only)\n",
+            "      - name: Test (unit only)\n        continue-on-error: true\n",
+        ),
+        (
+            "      - name: Test (unit only, with coverage)\n",
+            "      - name: Test (unit only, with coverage)\n        continue-on-error: true\n",
+        ),
+    ],
+)
+def test_ci_test_contract_rejects_failure_suppression(old: str, new: str) -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+
+    with pytest.raises(AssertionError):
+        _assert_ci_test_contract(workflow.replace(old, new, 1))
 
 
 def test_ci_test_contract_rejects_commands_outside_check_job() -> None:

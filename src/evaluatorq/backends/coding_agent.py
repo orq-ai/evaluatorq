@@ -31,7 +31,7 @@ import types
 import uuid
 import weakref
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field
@@ -102,7 +102,7 @@ class CodingAgentError(Exception):
         self.kill_reason = kill_reason
 
 
-class CodingAgentUnavailableError(CodingAgentError, cast('Any', NonRetryableTargetError)):
+class CodingAgentUnavailableError(CodingAgentError, NonRetryableTargetError):
     """Non-retryable codes: ``cli.not_found``, ``cli.timeout``, ``cli.prompt_too_long``,
     ``cli.agent_not_found``, ``cli.image_missing``, ``cli.container_start``, and ``cli.unsafe_shim``. Retrying these
     outcomes repeats the same failure, so the retry loop stops.

@@ -38,100 +38,93 @@ uv run pytest \
   tests/test_reuse_guardrails.py::test_ty_checked_files_honor_configured_excludes -q
 ```
 
-Retrieve the exact official mapping used for the coverage review and print its missing or partial rows:
+Run the executable audit to fetch both pinned primary sources, reconstruct the active BasedPyright rules from the exact historical repository configuration, classify all 65 diagnostics, intersect Ruff mappings with the repository's selected rules and `src`-only lint surface, and validate the table below:
 
 ```bash
-set -o pipefail
-curl -L --fail --silent https://raw.githubusercontent.com/astral-sh/ty/8dd9a7f7fa35a18275d82117e6593ba45507065f/docs/coming-from-mypy-or-pyright.md \
-  | rg '^\| .*?(None yet|partial coverage)'
+uv run python scripts/audit_ty_migration.py
 ```
 
-Retrieve the replaced repository configuration and the replaced checker's effective default rule set with:
+The audit asserts the exact membership of all four classes, not only their counts. It also asserts that the classes partition the active diagnostics, every required Ruff rule is selected, Ruff's configured source root is exactly `src`, preview rules are enabled, and every table row has the expected classification and effective surface.
 
-```bash
-set -o pipefail
-git show c12bdc240^:pyproject.toml | sed -n '/^\[tool.basedpyright\]/,/^\[tool.ty.src\]/p'
-curl -L --fail --silent \
-  https://raw.githubusercontent.com/DetachHead/basedpyright/ecea0a681818fc8b90a1314b7d2f844fef8f53c0/packages/pyright-internal/src/common/configOptions.ts \
-  | sed -n '947,1061p'
-```
-
-Derive the retained diagnostics without a hand-maintained rule list:
-
-```bash
-uv run python - <<'PY'
-import re
-import subprocess
-from urllib.request import urlopen
-
-mapping_url = 'https://raw.githubusercontent.com/astral-sh/ty/8dd9a7f7fa35a18275d82117e6593ba45507065f/docs/coming-from-mypy-or-pyright.md'
-defaults_url = 'https://raw.githubusercontent.com/DetachHead/basedpyright/ecea0a681818fc8b90a1314b7d2f844fef8f53c0/packages/pyright-internal/src/common/configOptions.ts'
-mapping = urlopen(mapping_url).read().decode()
-defaults = urlopen(defaults_url).read().decode()
-old_config = subprocess.check_output(['git', 'show', 'c12bdc240^:pyproject.toml'], text=True)
-recommended = defaults.split('getRecommendedDiagnosticRuleSet =', 1)[1].split('});', 1)[0]
-levels = dict(re.findall(r"(report\w+): '(none|hint|warning|error)'", recommended))
-global_overrides = old_config.split('[tool.basedpyright]', 1)[1].split('[[tool.basedpyright.executionEnvironments]]', 1)[0]
-levels.update(dict(re.findall(r'(report\w+) = "(none|hint|warning|error)"', global_overrides)))
-rows = [
-    row
-    for row in mapping.splitlines()
-    if row.startswith('| ') and re.search(r'\[`report\w+`\]', row)
-]
-active = {diagnostic for diagnostic, level in levels.items() if level != 'none'}
-mapped = {
-    diagnostic
-    for row in rows
-    for diagnostic in re.findall(r'\[`(report\w+)`\]', row)
-}
-missing_or_partial = {
-    diagnostic
-    for row in rows
-    if 'None yet' in row or 'partial coverage' in row
-    for diagnostic in re.findall(r'\[`(report\w+)`\]', row)
-    if diagnostic in active
-}
-unmapped = active - mapped
-print('[mapped missing or partial]')
-print('\n'.join(sorted(missing_or_partial)))
-print('[absent from mapping]')
-print('\n'.join(sorted(unmapped)))
-PY
-```
-
-The named failure mode is an unpinned mapping: the same command against `main` can produce a different answer after a ty release, even though this repository still runs `0.0.84`. Changing the exact ty pin requires rerunning this mapping and gap audit and updating this receipt.
+The named failure mode is an unpinned mapping: running an equivalent comparison against either upstream `main` branch can change the answer while this repository still runs ty `0.0.84`. Changing the exact ty pin requires rerunning the audit and updating its expected sets and this table together.
 
 ## Accepted coverage differences
 
-BasedPyright `1.37.4` uses its `recommended` rules when `typeCheckingMode` is absent, as it was in the replaced configuration. The filtering rule is deterministic: apply the repository's explicit global overrides to the recommended rule set, retain every diagnostic whose resulting severity is not `none`, and compare that active set with every Pyright or BasedPyright diagnostic named in Astral's pinned mapping table. The accepted gaps are the active mapped rows marked `None yet` or `partial coverage` plus the active diagnostics absent from the table. The dashboard execution environments only loosened additional diagnostics, so they add no global gap.
+BasedPyright `1.37.4` uses its `recommended` rules when `typeCheckingMode` is absent, as it was in the replaced configuration. The audit applies the repository's explicit global overrides, retains every diagnostic whose effective severity is not `none`, and classifies it against every matching row in Astral's pinned table. “Partial” includes semantic qualifiers such as Ruff covering duplicate exception handlers only; it does not depend on the literal phrase “partial coverage.” The dashboard execution environments only loosened diagnostics, so they add no global rule.
 
-| Replaced diagnostic | ty `0.0.84` mapping | Decision |
+Ruff-only is not whole-repository coverage. CI runs Ruff over `src`, while BasedPyright and ty cover `src`, `tests`, root Python files, and documentation Python hooks. Every Ruff-only row therefore records the other three surfaces as uncovered.
+
+<!-- diagnostic-classification:start -->
+| Diagnostic | Classification | Effective surface |
 |---|---|---|
-| `reportAbstractUsage` | No equivalent yet for abstract-class instantiation or abstract `super()` calls | Accepted with no automated replacement |
-| `reportCallInDefaultInitializer` | Ruff `B006` and `B008` provide partial coverage; immutable annotations and calls are excluded | Accepted; Ruff covers only the mapped cases under `src`, while tests, root files, and documentation hooks have no automated replacement |
-| `reportConstantRedefinition` | No equivalent yet | Accepted with no automated replacement |
-| `reportDuplicateImport` | Ruff `F811` and `I001` provide partial coverage; separate import blocks may be missed | Accepted; Ruff covers only `src`, and separate import blocks may still be missed there |
-| `reportIncompleteStub` | No equivalent yet | Accepted with no automated replacement |
-| `reportImplicitAbstractClass` | Absent from the pinned mapping table | Accepted with no mapping-backed automated replacement |
-| `reportImplicitRelativeImport` | Absent from the pinned mapping table | Accepted with no mapping-backed automated replacement |
-| `reportInconsistentConstructor` | No equivalent yet | Accepted with no automated replacement |
-| `reportInvalidAbstractMethod` | Absent from the pinned mapping table | Accepted with no mapping-backed automated replacement |
-| `reportInvalidTypeVarUse` | No equivalent yet for the mapped cases | Accepted with no automated replacement |
-| `reportMatchNotExhaustive` | No equivalent yet | Accepted with no automated replacement |
-| `reportMissingModuleSource` | No equivalent yet | Accepted with no automated replacement |
-| `reportMissingSuperCall` | No equivalent yet | Accepted with no automated replacement |
-| `reportOverlappingOverload` | No equivalent yet | Accepted with no automated replacement |
-| `reportPrivateImportUsage` | No equivalent yet | Accepted with no automated replacement |
-| `reportPropertyTypeMismatch` | No equivalent yet | Accepted with no automated replacement |
-| `reportSelfClsDefault` | Absent from the pinned mapping table | Accepted with no mapping-backed automated replacement |
-| `reportTypedDictNotRequiredAccess` | No equivalent yet for reading non-required keys | Accepted with no automated replacement for reads; ty maps read-only mutations separately to `invalid-assignment` |
-| `reportUnhashable` | No equivalent yet | Accepted with no automated replacement |
-| `reportUninitializedInstanceVariable` | No equivalent yet | Accepted with no automated replacement |
-| `reportUnsafeMultipleInheritance` | Absent from the pinned mapping table | Accepted with no mapping-backed automated replacement |
-| `reportUntypedBaseClass`, `reportUntypedClassDecorator` | No equivalent yet | Accepted with no automated replacement |
-| `reportUnusedClass` | No equivalent yet | Accepted with no automated replacement |
+| `reportArgumentType` | ty-backed | all ty roots |
+| `reportAssertTypeFailure` | ty-backed | all ty roots |
+| `reportAssignmentType` | ty-backed | all ty roots |
+| `reportAttributeAccessIssue` | ty-backed | all ty roots |
+| `reportCallIssue` | ty-backed | all ty roots |
+| `reportFunctionMemberAccess` | ty-backed | all ty roots |
+| `reportGeneralTypeIssues` | ty-backed | all ty roots |
+| `reportIgnoreCommentWithoutRule` | ty-backed | all ty roots |
+| `reportIncompatibleMethodOverride` | ty-backed | all ty roots |
+| `reportInconsistentOverload` | ty-backed | all ty roots |
+| `reportIndexIssue` | ty-backed | all ty roots |
+| `reportInvalidCast` | ty-backed | all ty roots |
+| `reportInvalidTypeArguments` | ty-backed | all ty roots |
+| `reportInvalidTypeForm` | ty-backed | all ty roots |
+| `reportMissingTypeArgument` | ty-backed | all ty roots |
+| `reportNoOverloadImplementation` | ty-backed | all ty roots |
+| `reportOperatorIssue` | ty-backed | all ty roots |
+| `reportOptionalCall` | ty-backed | all ty roots |
+| `reportOptionalContextManager` | ty-backed | all ty roots |
+| `reportOptionalIterable` | ty-backed | all ty roots |
+| `reportOptionalMemberAccess` | ty-backed | all ty roots |
+| `reportOptionalOperand` | ty-backed | all ty roots |
+| `reportOptionalSubscript` | ty-backed | all ty roots |
+| `reportPossiblyUnboundVariable` | ty-backed | all ty roots |
+| `reportRedeclaration` | ty-backed | all ty roots |
+| `reportReturnType` | ty-backed | all ty roots |
+| `reportUnboundVariable` | ty-backed | all ty roots |
+| `reportUndefinedVariable` | ty-backed | all ty roots |
+| `reportUnnecessaryCast` | ty-backed | all ty roots |
+| `reportUnnecessaryComparison` | ty-backed | all ty roots |
+| `reportUnnecessaryContains` | ty-backed | all ty roots |
+| `reportUnusedCoroutine` | ty-backed | all ty roots |
+| `reportAssertAlwaysTrue` | ruff-only | src only; tests/root/docs uncovered |
+| `reportInvalidStringEscapeSequence` | ruff-only | src only; tests/root/docs uncovered |
+| `reportInvalidStubStatement` | ruff-only | src only; tests/root/docs uncovered |
+| `reportSelfClsParameterName` | ruff-only | src only; tests/root/docs uncovered |
+| `reportTypeCommentUsage` | ruff-only | src only; tests/root/docs uncovered |
+| `reportUntypedNamedTuple` | ruff-only | src only; tests/root/docs uncovered |
+| `reportUnusedExpression` | ruff-only | src only; tests/root/docs uncovered |
+| `reportWildcardImportFromLibrary` | ruff-only | src only; tests/root/docs uncovered |
+| `reportAbstractUsage` | partial | all ty roots; partial semantics |
+| `reportCallInDefaultInitializer` | partial | src partial; tests/root/docs uncovered |
+| `reportDuplicateImport` | partial | src partial; tests/root/docs uncovered |
+| `reportTypedDictNotRequiredAccess` | partial | all ty roots; partial semantics |
+| `reportUnusedExcept` | partial | src partial; tests/root/docs uncovered |
+| `reportConstantRedefinition` | absent | all ty roots uncovered |
+| `reportImplicitAbstractClass` | absent | all ty roots uncovered |
+| `reportImplicitRelativeImport` | absent | all ty roots uncovered |
+| `reportIncompleteStub` | absent | all ty roots uncovered |
+| `reportInconsistentConstructor` | absent | all ty roots uncovered |
+| `reportInvalidAbstractMethod` | absent | all ty roots uncovered |
+| `reportInvalidTypeVarUse` | absent | all ty roots uncovered |
+| `reportMatchNotExhaustive` | absent | all ty roots uncovered |
+| `reportMissingModuleSource` | absent | all ty roots uncovered |
+| `reportMissingSuperCall` | absent | all ty roots uncovered |
+| `reportOverlappingOverload` | absent | all ty roots uncovered |
+| `reportPrivateImportUsage` | absent | all ty roots uncovered |
+| `reportPropertyTypeMismatch` | absent | all ty roots uncovered |
+| `reportSelfClsDefault` | absent | all ty roots uncovered |
+| `reportUnhashable` | absent | all ty roots uncovered |
+| `reportUninitializedInstanceVariable` | absent | all ty roots uncovered |
+| `reportUnsafeMultipleInheritance` | absent | all ty roots uncovered |
+| `reportUntypedBaseClass` | absent | all ty roots uncovered |
+| `reportUntypedClassDecorator` | absent | all ty roots uncovered |
+| `reportUnusedClass` | absent | all ty roots uncovered |
+<!-- diagnostic-classification:end -->
 
-The old configuration already disabled its unknown-type, missing-stub, general private-use, most unused-code, import-cycle, and incompatible-variable-override diagnostics. It did not disable `reportPrivateImportUsage` or `reportUnusedClass`, so those remain explicit accepted gaps above. Ruff continues to own the lint families selected in `pyproject.toml`; the migration does not add a second home-grown diagnostic registry.
+The 20 absent rows are accepted migration gaps. The partial rows retain only the stated subset, and the eight Ruff-only rows remain uncovered outside `src`. This receipt does not imply that tests or review replace those diagnostics.
 
 ## Test-profile benchmark evidence
 
