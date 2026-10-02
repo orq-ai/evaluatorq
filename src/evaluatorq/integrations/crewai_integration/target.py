@@ -40,8 +40,15 @@ from evaluatorq.contracts import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import Protocol
 
-    from crewai import Crew
+    class Crew(Protocol):
+        """Structural subset of CrewAI used by this optional integration."""
+
+        agents: Any
+
+        def kickoff(self, *, inputs: dict[str, Any]) -> Any: ...
+
 
 logger = logging.getLogger(__name__)
 
