@@ -16,7 +16,11 @@ SRC = REPO / "src" / "evaluatorq"
 EXAMPLES = REPO / "examples"
 BLOB = "https://github.com/orq-ai/evaluatorq/blob/main"
 TY_MIGRATION_RECEIPT = REPO / "docs" / "superpowers" / "specs" / "2026-10-01-ty-migration-receipt.md"
-VIRTUAL_LINKS = {TY_MIGRATION_RECEIPT: "ty-migration-receipt.md"}
+LOCAL_TEST_PROFILE_BENCHMARK = REPO / "docs" / "superpowers" / "specs" / "2026-10-01-local-test-profile-benchmark.md"
+VIRTUAL_LINKS = {
+    TY_MIGRATION_RECEIPT: "ty-migration-receipt.md",
+    LOCAL_TEST_PROFILE_BENCHMARK: "local-test-profile-benchmark.md",
+}
 
 # --- Public API packages driven by each package's __all__ ----------------
 # Public surface is each package's __init__.py __all__ re-exports; griffe /
@@ -91,6 +95,7 @@ def _rewrite_relative_links(text: str, source_dir: Path) -> str:
 INGEST = [
     (REPO / "CONTRIBUTING.md", "contributing.md"),
     (TY_MIGRATION_RECEIPT, "ty-migration-receipt.md"),
+    (LOCAL_TEST_PROFILE_BENCHMARK, "local-test-profile-benchmark.md"),
     (REPO / "CHANGELOG.md", "changelog.md"),
     (REPO / "ROADMAP.md", "roadmap.md"),
 ]

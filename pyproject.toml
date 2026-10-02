@@ -200,7 +200,10 @@ python-version = "3.10"
 python-platform = "all"
 
 [tool.ty.rules]
+blanket-ignore-comment = "error"
 ignore-comment-unknown-rule = "error"
+missing-type-argument = "error"
+possibly-unresolved-reference = "error"
 unused-ignore-comment = "error"
 unused-type-ignore-comment = "error"
 unused-awaitable = "error"
@@ -212,6 +215,7 @@ include = [ "src/evaluatorq/dashboard" ]
   invalid-argument-type = "ignore"
   invalid-return-type = "ignore"
   invalid-type-form = "ignore"
+  missing-type-argument = "ignore"
   unresolved-attribute = "ignore"
 
 [[tool.ty.overrides]]
@@ -220,6 +224,7 @@ include = [ "tests/dashboard" ]
   [tool.ty.overrides.rules]
   invalid-argument-type = "ignore"
   invalid-return-type = "ignore"
+  missing-type-argument = "ignore"
   not-iterable = "ignore"
   unresolved-attribute = "ignore"
 

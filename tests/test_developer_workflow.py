@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import json
 import os
 import re
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 import pytest
+
+from scripts import audit_ty_migration
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,7 +89,7 @@ def _run_scripts(yaml_text: str) -> list[str]:
             index += 1
             continue
         value = match.group('value').strip()
-        if not re.fullmatch(r'[|>][+-]?(?:\d+)?', value):
+        if not re.fullmatch(r'[|>](?:[+-][1-9]?|[1-9][+-]?)?', value):
             if len(value) >= 2 and value[0] == value[-1] == '"':
                 value = json.loads(value)
             elif len(value) >= 2 and value[0] == value[-1] == "'":
@@ -130,6 +133,25 @@ def _shell_commands(script: str) -> list[list[str]]:
     return commands
 
 
+def _unwrap_command(command: list[str]) -> list[list[str]]:
+    """Return executable commands hidden behind common shell wrappers."""
+    if not command:
+        return []
+    if command[0] == 'env':
+        index = 1
+        while index < len(command) and (command[index].startswith('-') or '=' in command[index]):
+            index += 1
+        return _unwrap_command(command[index:])
+    if command[0] == 'command':
+        index = 1
+        while index < len(command) and command[index].startswith('-'):
+            index += 1
+        return _unwrap_command(command[index:])
+    if command[0] in {'bash', 'sh'} and len(command) >= 3 and command[1] in {'-c', '-ec', '-ce'}:
+        return [nested for nested_command in _shell_commands(command[2]) for nested in _unwrap_command(nested_command)]
+    return [command]
+
+
 def _run_command(step: str) -> list[str] | None:
     scripts = _run_scripts(step)
     assert len(scripts) <= 1, 'expected at most one run script per step'
@@ -141,18 +163,26 @@ def _run_command(step: str) -> list[str] | None:
 
 def _run_invocations(workflow: str, prefix: list[str]) -> list[list[str]]:
     return [
-        command
+        executable
         for script in _run_scripts(workflow)
         for command in _shell_commands(script)
-        if command[: len(prefix)] == prefix
+        for executable in _unwrap_command(command)
+        if executable[: len(prefix)] == prefix
     ]
 
 
 def _assert_failure_enforcing(block: str, *, indent: int) -> None:
     assert not re.search(
-        rf'(?m)^{{indent}}continue-on-error:'.format(indent=' ' * indent),
+        rf'(?m)^{{indent}}continue-on-error\s*:'.format(indent=' ' * indent),
         block,
     )
+
+
+def _assert_canonical_matrix(check_job: str) -> None:
+    matrix = _yaml_block(check_job, 'matrix:', indent=6)
+    assert '        python-version: ["3.10", "3.11", "3.12", "3.13"]' in matrix.splitlines()
+    assert '        os: [ubuntu-latest, macos-latest, windows-latest]' in matrix.splitlines()
+    assert not any(re.match(r'^        (?:include|exclude)\s*:', line) for line in matrix.splitlines())
 
 
 def _assert_ci_typecheck_contract(workflow: str) -> None:
@@ -160,8 +190,8 @@ def _assert_ci_typecheck_contract(workflow: str) -> None:
     check_job = _yaml_block(jobs, 'check:', indent=2)
     expected_name = "    name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})"
     assert expected_name in check_job.splitlines()
-    assert '        python-version: ["3.10", "3.11", "3.12", "3.13"]' in check_job.splitlines()
-    assert not any(re.match(r'^    if:', line) for line in check_job.splitlines())
+    _assert_canonical_matrix(check_job)
+    assert not any(re.match(r'^    if\s*:', line) for line in check_job.splitlines())
     _assert_failure_enforcing(check_job, indent=4)
 
     steps = _yaml_block(check_job, 'steps:', indent=4)
@@ -181,7 +211,8 @@ def _assert_ci_typecheck_contract(workflow: str) -> None:
 def _assert_ci_test_contract(workflow: str) -> None:
     jobs = _yaml_block(workflow, 'jobs:', indent=0)
     check_job = _yaml_block(jobs, 'check:', indent=2)
-    assert not any(re.match(r'^    if:', line) for line in check_job.splitlines())
+    assert not any(re.match(r'^    if\s*:', line) for line in check_job.splitlines())
+    _assert_canonical_matrix(check_job)
     _assert_failure_enforcing(check_job, indent=4)
     steps = _yaml_block(check_job, 'steps:', indent=4)
     matching_steps = [
@@ -272,6 +303,52 @@ def test_ty_is_the_only_locked_typechecker() -> None:
     assert not re.search(r'(?m)^name = "(?:basedpyright|pytest-xdist)"$', lockfile)
 
 
+def test_ty_migration_receipt_matches_effective_offline_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    def network_forbidden(url: str) -> str:
+        raise AssertionError(f'offline audit attempted network access: {url}')
+
+    monkeypatch.setattr(audit_ty_migration, '_download', network_forbidden)
+
+    classified = audit_ty_migration.audit()
+
+    assert {name: len(diagnostics) for name, diagnostics in classified.items()} == {
+        'ty-backed': 22,
+        'ruff-only': 8,
+        'partial': 14,
+        'absent': 21,
+    }
+
+
+@pytest.mark.parametrize(
+    ('diagnostic', 'mutation'),
+    [
+        ('reportAssertAlwaysTrue', 'global-ignore'),
+        ('reportAssertAlwaysTrue', 'per-file-ignore'),
+        ('reportTypeCommentUsage', 'preview-off'),
+    ],
+)
+def test_ty_migration_audit_applies_effective_ruff_configuration(diagnostic: str, mutation: str) -> None:
+    baseline = audit_ty_migration._load(audit_ty_migration.BASELINE)
+    config = audit_ty_migration._project_config()
+    config = copy.deepcopy(config)
+    if mutation == 'global-ignore':
+        config['tool']['ruff']['lint']['ignore'].append('F631')
+    elif mutation == 'per-file-ignore':
+        config['tool']['ruff']['lint']['per-file-ignores']['src/**/*.py'] = ['F631']
+    else:
+        config['tool']['ruff']['preview'] = False
+
+    classification, surface = audit_ty_migration._classification_and_surface(
+        diagnostic,
+        baseline['mapping_cells'][diagnostic],
+        baseline,
+        config,
+    )
+
+    assert classification == 'absent'
+    assert surface.startswith('uncovered:')
+
+
 def test_ci_runs_ty_once_on_the_python_310_ubuntu_leg() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
 
@@ -322,6 +399,10 @@ steps:
   - run: >-
       uv run ruff check
       src
+  - run: |2-
+      uv run ty check
+  - run: >+2
+      uv run pytest -m 'not integration'
 '''
 
     assert _run_scripts(workflow) == [
@@ -329,6 +410,8 @@ steps:
         'uv run ty check',
         'uv run pytest',
         'uv run ruff check\nsrc',
+        'uv run ty check',
+        "uv run pytest -m 'not integration'",
     ]
 
 
@@ -339,6 +422,9 @@ steps:
         "      - run: >\n          uv run python -V && uv run ty check --output-format concise",
         "      - run: uv run python -V; uv run ty check --output-format concise",
         '      - run: "uv run ty check --output-format concise"',
+        '      - run: env CI=1 uv run ty check --output-format concise',
+        '      - run: command uv run ty check --output-format concise',
+        "      - run: bash -c 'uv run ty check --output-format concise'",
     ],
 )
 def test_ci_typecheck_contract_counts_every_executable_ty_invocation(duplicate_step: str) -> None:
@@ -371,6 +457,18 @@ def test_ci_typecheck_contract_rejects_failure_suppression(old: str, new: str) -
         _assert_ci_typecheck_contract(workflow.replace(old, new, 1))
 
 
+def test_ci_typecheck_contract_rejects_flexible_failure_control_spacing() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow.replace(
+        '        run: uv run ty check',
+        '        continue-on-error : true\n        run: uv run ty check',
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+
+
 def test_ci_typecheck_contract_requires_python_310_matrix_leg() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
     mutated = workflow.replace('python-version: ["3.10", "3.11", "3.12", "3.13"]', 'python-version: ["3.11", "3.12", "3.13"]', 1)
@@ -379,9 +477,38 @@ def test_ci_typecheck_contract_requires_python_310_matrix_leg() -> None:
         _assert_ci_typecheck_contract(mutated)
 
 
+@pytest.mark.parametrize(
+    'exclusion',
+    [
+        '          - os: ubuntu-latest\n            python-version: "3.10"',
+        '          - os: ubuntu-latest\n            python-version: "3.13"',
+    ],
+)
+def test_ci_contract_rejects_exclusion_of_required_ubuntu_legs(exclusion: str) -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow.replace(
+        '        os: [ubuntu-latest, macos-latest, windows-latest]',
+        f'        os: [ubuntu-latest, macos-latest, windows-latest]\n        exclude:\n{exclusion}',
+        1,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+    with pytest.raises(AssertionError):
+        _assert_ci_test_contract(mutated)
+
+
 def test_ci_typecheck_contract_rejects_disabled_check_job() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
     mutated = workflow.replace('  check:\n', '  check:\n    if: false\n', 1)
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+
+
+def test_ci_typecheck_contract_rejects_disabled_check_job_with_spaced_key() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow.replace('  check:\n', '  check:\n    if : false\n', 1)
 
     with pytest.raises(AssertionError):
         _assert_ci_typecheck_contract(mutated)
@@ -472,7 +599,9 @@ def test_pytest_default_is_quick_and_explicit_non_integration_is_full(tmp_path: 
         item['nodeid'] for item in full_non_integration_items if 'slow' in item['markers']
     }
     assert slow_non_integration
-    assert slow_non_integration.isdisjoint(item['nodeid'] for item in default_items)
+    default_nodeids = {item['nodeid'] for item in default_items}
+    full_nodeids = {item['nodeid'] for item in full_non_integration_items}
+    assert default_nodeids == full_nodeids - slow_non_integration
 
 
 def test_collection_subprocess_is_bounded_and_surfaces_stderr(
@@ -526,6 +655,9 @@ def test_ty_promotes_contract_diagnostics_to_errors() -> None:
     assert _string(rules, 'unused-ignore-comment') == 'error'
     assert _string(rules, 'unused-type-ignore-comment') == 'error'
     assert _string(rules, 'unused-awaitable') == 'error'
+    assert _string(rules, 'blanket-ignore-comment') == 'error'
+    assert _string(rules, 'missing-type-argument') == 'error'
+    assert _string(rules, 'possibly-unresolved-reference') == 'error'
 
 
 def test_ty_dashboard_overrides_match_the_diagnostic_baseline() -> None:
@@ -537,6 +669,7 @@ include = [ "src/evaluatorq/dashboard" ]
   invalid-argument-type = "ignore"
   invalid-return-type = "ignore"
   invalid-type-form = "ignore"
+  missing-type-argument = "ignore"
   unresolved-attribute = "ignore"
 
 [[tool.ty.overrides]]
@@ -545,6 +678,7 @@ include = [ "tests/dashboard" ]
   [tool.ty.overrides.rules]
   invalid-argument-type = "ignore"
   invalid-return-type = "ignore"
+  missing-type-argument = "ignore"
   not-iterable = "ignore"
   unresolved-attribute = "ignore"'''
 

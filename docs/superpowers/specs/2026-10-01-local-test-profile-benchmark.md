@@ -13,7 +13,7 @@ Under the disclosed fixed-order protocol, the quick profile passed both gates on
 | Quick | 6,818 passed, 6 skipped, 39 deselected | 88.85 s | 552,828,928 bytes (527.22 MiB) |
 | Full non-integration | 6,834 passed, 7 skipped, 22 deselected | 127.37 s | 566,525,952 bytes (540.28 MiB) |
 
-The wall-time reduction is `(127.37 - 88.85) / 127.37 = 30.24%`, above the required 20%. This is faster feedback from omitting tests that deliberately wait on real time, not a material compute-load reduction: median user CPU time is effectively unchanged at 55.97 seconds for quick and 56.14 seconds for full. The quick median peak resident memory is only `(566,525,952 - 552,828,928) / 566,525,952 = 2.42%` below the full median. Both acceptance gates pass, but the resource case for the wider migration rests on the checker improvement and removal of unnecessary fixture setup rather than this pytest profile's CPU or memory difference.
+The wall-time reduction is `(127.37 - 88.85) / 127.37 = 30.24%`, above the required 20%. This is faster feedback from omitting tests that deliberately wait on real time, not a material compute-load reduction: median user CPU time is effectively unchanged at 55.97 seconds for quick and 56.14 seconds for full. The quick median peak resident memory is only `(566,525,952 - 552,828,928) / 566,525,952 = 2.42%` below the full median. Both profile gates pass; these samples do not measure the checker replacement or fixture changes.
 
 ## Method
 
@@ -38,7 +38,7 @@ The `slow` marker is reserved for tests that deliberately spend real elapsed tim
 uv run pytest --collect-only -q -m 'slow and not integration'
 ```
 
-```text
+```console
 tests/backends/test_coding_agent_container.py::test_idle_timeout_removes_container
 tests/backends/test_coding_agent_container.py::test_cancellation_removes_container_before_propagating
 tests/backends/test_coding_agent_container.py::test_cancel_during_run_still_cleans_up
@@ -66,7 +66,7 @@ Each block preserves the pytest terminal summary and the complete `/usr/bin/time
 
 ### Quick sample 1
 
-```text
+```console
 ======================== 6818 passed, 6 skipped, 39 deselected, 41 warnings in 86.42s (0:01:26) ========================
 real 88.85
 user 56.46
@@ -92,7 +92,7 @@ sys 9.73
 
 ### Quick sample 2
 
-```text
+```console
 ======================== 6818 passed, 6 skipped, 39 deselected, 41 warnings in 84.56s (0:01:24) ========================
 real 86.92
 user 55.97
@@ -118,7 +118,7 @@ sys 9.92
 
 ### Quick sample 3
 
-```text
+```console
 ======================== 6818 passed, 6 skipped, 39 deselected, 41 warnings in 87.87s (0:01:27) ========================
 real 90.20
 user 55.89
@@ -144,7 +144,7 @@ sys 11.51
 
 ### Full non-integration sample 1
 
-```text
+```console
 ======================= 6834 passed, 7 skipped, 22 deselected, 41 warnings in 124.08s (0:02:04) ========================
 real 126.23
 user 55.98
@@ -170,7 +170,7 @@ sys 10.34
 
 ### Full non-integration sample 2
 
-```text
+```console
 ======================= 6834 passed, 7 skipped, 22 deselected, 41 warnings in 125.68s (0:02:05) ========================
 real 128.02
 user 56.14
@@ -196,7 +196,7 @@ sys 10.51
 
 ### Full non-integration sample 3
 
-```text
+```console
 ======================= 6834 passed, 7 skipped, 22 deselected, 41 warnings in 124.96s (0:02:04) ========================
 real 127.37
 user 56.24
