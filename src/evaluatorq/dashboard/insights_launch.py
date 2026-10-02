@@ -20,7 +20,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
@@ -877,6 +877,10 @@ class InsightsLaunchSpec(BaseModel):
     custom_labels: list[LabelSpec] = Field(default_factory=list, max_length=10)
     coding_labels: list[str] = Field(default_factory=list, max_length=len(_CODING_PRESETS))
     dimensions: list[DimensionName] = Field(default_factory=lambda: ['intent'])
+    summary_model: str = Field(default='', max_length=200)
+    classifier_model: str = Field(default='', max_length=200)
+    embedding_model: str = Field(default='', max_length=200)
+    compiler_model: str = Field(default='', max_length=200)
     _finder_export_snapshot: str | None = PrivateAttr(default=None)
 
     def validated_finder_export_snapshot(self) -> str | None:
@@ -970,6 +974,21 @@ class InsightsLaunchSpec(BaseModel):
             window_days=self.window_days,
             limit=self.limit,
         )
+
+    @field_validator('summary_model', 'classifier_model', 'embedding_model', 'compiler_model')
+    @classmethod
+    def _strip_model(cls, value: str) -> str:
+        return value.strip()
+
+    def model_overrides(self) -> dict[str, str]:
+        """The chosen models as `insights()` keywords; a blank field keeps that function's own default."""
+        chosen = {
+            'summary_model': self.summary_model,
+            'classifier_model': self.classifier_model,
+            'embedding_model': self.embedding_model,
+            'compiler_model': self.compiler_model,
+        }
+        return {name: model for name, model in chosen.items() if model}
 
     def label_specs(self) -> list[LabelSpec]:
         return [*(LABEL_PRESETS[name] for name in self.labels), *self.custom_labels]

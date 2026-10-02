@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, get_args
+from urllib.parse import urlencode
 
 from pydantic import ValidationError
 
@@ -17,13 +18,16 @@ from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, Source, get
 from evaluatorq.dashboard.insights_uploads import is_uploaded_source
 from evaluatorq.dashboard.insights_views import _back_to_runs
 from evaluatorq.dashboard.shell import page
-from evaluatorq.insights.models import DimensionName, LabelSpec
+from evaluatorq.dashboard.view import model_control
+from evaluatorq.insights.models import DimensionName, InsightsConfig, LabelSpec
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from evaluatorq.common.model_catalogue import ModelKind
     from evaluatorq.insights.models import InsightsRun
 
 Mount = Literal['page', 'dialog']
@@ -190,6 +194,25 @@ def _saved_file_usable(source: Source, path: Path, runs_dir: Path) -> bool:
     return is_uploaded_source(runs_dir, path) or path.resolve().parent == get_finder_exports_dir().resolve()
 
 
+INSIGHTS_MODEL_FIELDS: MappingProxyType[str, tuple[ModelKind, str]] = MappingProxyType({
+    'summary_model': ('chat', 'Summary model'),
+    'classifier_model': ('classify', 'Classifier model'),
+    'embedding_model': ('embedding', 'Embedding model'),
+    'compiler_model': ('chat', 'Question compiler'),
+})
+
+
+def _model_defaults() -> dict[str, str]:
+    """What a run uses when the form does not choose: the pipeline's own defaults and the Settings models."""
+    settings = effective_settings()
+    return {
+        'summary_model': str(InsightsConfig.model_fields['summary_model'].default),
+        'classifier_model': settings.classifier_model,
+        'embedding_model': str(InsightsConfig.model_fields['embedding_model'].default),
+        'compiler_model': settings.compiler_model,
+    }
+
+
 @dataclass(frozen=True)
 class RunFormValues:
     """Everything the run form shows, so a rejected submission re-renders exactly what the user entered."""
@@ -211,6 +234,10 @@ class RunFormValues:
     preset: str | None = None
     mount: Mount = 'page'
     error: str | None = None
+    summary_model: str = ''
+    classifier_model: str = ''
+    embedding_model: str = ''
+    compiler_model: str = ''
 
     @classmethod
     def defaults(cls) -> RunFormValues:
@@ -223,6 +250,7 @@ class RunFormValues:
             labels=preset.labels,
             coding_labels=preset.coding_labels,
             preset=preset.id,
+            **_model_defaults(),
         )
 
     @classmethod
@@ -253,6 +281,10 @@ class RunFormValues:
             coding_labels=tuple(coding),
             custom_labels=custom,
             name=run.run_name,
+            summary_model=run.config.summary_model,
+            classifier_model=run.config.classifier_model,
+            embedding_model=run.config.embedding_model,
+            compiler_model=run.config.compiler_model or _model_defaults()['compiler_model'],
             finder_export=kept_path if source == 'finder' else '',
             snapshot_path=kept_path if source == 'snapshot' else '',
             source_name=str(population.get('source_name') or '') if kept_path else '',
@@ -284,6 +316,7 @@ class RunFormValues:
             source_name=str(form.get('source_name') or ''),
             preset=str(form.get('preset') or '') or None,
             mount=mount,
+            **{name: str(form.get(name) or '').strip() or default for name, default in _model_defaults().items()},
         )
 
     def launch_fields(self) -> dict[str, object]:
@@ -303,6 +336,7 @@ class RunFormValues:
             'coding_labels': list(self.coding_labels),
             'custom_labels': [spec.model_dump(mode='json') for spec in self.custom_labels],
             'dimensions': list(self.dimensions),
+            **{name: getattr(self, name) for name in INSIGHTS_MODEL_FIELDS},
         }
 
 
@@ -530,12 +564,27 @@ def _step_two(values: RunFormValues) -> str:
     )
 
 
+def _model_pickers(values: RunFormValues) -> str:
+    rows = []
+    for name, (_, label) in INSIGHTS_MODEL_FIELDS.items():
+        value = getattr(values, name)
+        fallback = model_control(name, value, {}, label=label)
+        scope = ' data-source="query"' if name == 'compiler_model' else ''
+        hidden = ' hidden' if name == 'compiler_model' and values.source != 'query' else ''
+        rows.append(
+            f'<div class="irf-field"{scope}{hidden}><label class="irf-label" for="{name}">{esc(label)}</label>'
+            f'<span hx-get="/insights/models?{esc(urlencode({"field": name, name: value}))}" hx-trigger="load" '
+            f'hx-include="find input" hx-swap="outerHTML">{fallback}</span></div>'
+        )
+    return ''.join(rows)
+
+
 def _step_three(values: RunFormValues) -> str:
     return (
         '<section class="irf-step" data-step="3"><h3>Review and start</h3>'
         '<label class="irf-field"><span class="irf-label">Run name <i>(optional)</i></span>'
         f'<input name="name" maxlength="80" placeholder="Weekly support review" value="{esc(values.name)}"></label>'
-        '<div id="insights-run-models"></div>'
+        f'<div id="insights-run-models">{_model_pickers(values)}</div>'
         '<label class="irf-field"><span class="irf-label">Parallel requests</span>'
         f'<input name="parallelism" type="number" min="1" max="200" value="{values.parallelism}"></label>'
         '<div id="insights-run-estimate"></div>'

@@ -1269,3 +1269,24 @@ def test_label_results_count_score_levels_by_their_own_number_and_not_asked() ->
     assert results['user_frustration'].counts == {'1': 1, '5': 1}
     assert results['scope_creep'].counts == {'yes': 1}
     assert results['scope_creep'].n_not_asked == 1
+
+
+@pytest.mark.asyncio
+async def test_compiler_model_is_saved_in_the_config_for_rerun(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_clients(monkeypatch)
+    traces = [_trace(0)]
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
+
+    async def label(*args, **kwargs):
+        return _labels(traces)
+
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize(traces))
+
+    async def dimension(*args, **kwargs):
+        return _dimension_result()
+
+    monkeypatch.setattr(pipeline, '_build_dimension', dimension)
+    run = await pipeline.insights(_population(), runs_dir=tmp_path, compiler_model='acme/compiler-2')
+
+    assert run.config.compiler_model == 'acme/compiler-2'

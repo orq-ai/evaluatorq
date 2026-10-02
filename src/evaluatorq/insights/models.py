@@ -262,6 +262,7 @@ class InsightsConfig(BaseModel):
     dimensions: list[DimensionName]
     summary_model: str = 'openai/gpt-6-luna'
     classifier_model: str = 'typesafe/jev-latest'
+    compiler_model: str | None = None
     embedding_model: str = 'openai/text-embedding-3-small'
     max_clusters: int = Field(default=15, ge=1)
     max_subclusters: int = Field(default=15, ge=1)

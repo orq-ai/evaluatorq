@@ -9,14 +9,18 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+from dataclasses import replace
 from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
 
+from evaluatorq.common.model_catalogue import ModelInfo
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.auth import DashboardAuth
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec
 from evaluatorq.dashboard.insights_run_form import (
+    INSIGHTS_MODEL_FIELDS,
     OFFERED_DIMENSIONS,
     OFFERED_LABELS,
     RUN_PRESETS,
@@ -29,6 +33,8 @@ from evaluatorq.trace_finder.models import FacetSelection
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+_AUTH = DashboardAuth('environment', 'key', 'https://my.orq.ai')
 
 
 def _token(client: TestClient) -> str:
@@ -284,3 +290,169 @@ def test_start_launches_the_spec_built_from_the_submitted_values(monkeypatch: py
     assert (spec.window_days, spec.limit, spec.labels, spec.coding_labels) == (5, 30, ['made_errors'], ['outcome'])
     assert spec.dimensions == ['intent', 'failure']
     assert spec.facets.status == frozenset({'error'})
+
+
+def test_review_step_loads_a_picker_per_model_and_the_compiler_only_for_question() -> None:
+    recent = render_run_form(RunFormValues.defaults(), csrf='t')
+    question = render_run_form(replace(RunFormValues.defaults(), source='query'), csrf='t')
+
+    for field in ('summary_model', 'classifier_model', 'embedding_model'):
+        assert f'hx-get="/insights/models?field={field}&amp;{field}=' in recent
+        assert 'hx-trigger="load"' in recent
+    assert re.search(r'<div class="irf-field" data-source="query" hidden><label[^>]*>Question compiler', recent)
+    assert re.search(r'<div class="irf-field" data-source="query"><label[^>]*>Question compiler', question)
+    assert 'hx-get="/insights/models?field=compiler_model&amp;compiler_model=' in question
+    assert set(INSIGHTS_MODEL_FIELDS) == {'summary_model', 'classifier_model', 'embedding_model', 'compiler_model'}
+
+
+def test_model_defaults_come_from_the_config_and_the_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'none.json'))
+    monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'acme/classifier-9')
+    monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'acme/compiler-9')
+
+    values = RunFormValues.defaults()
+
+    assert values.summary_model == InsightsConfig.model_fields['summary_model'].default
+    assert values.embedding_model == InsightsConfig.model_fields['embedding_model'].default
+    assert (values.classifier_model, values.compiler_model) == ('acme/classifier-9', 'acme/compiler-9')
+    assert values.launch_fields()['classifier_model'] == 'acme/classifier-9'
+
+
+def test_from_run_prefills_all_four_models(tmp_path: Path) -> None:
+    run = _saved_run(
+        {'mode': 'query', 'query': 'refunds'},
+        summary_model='acme/summary',
+        classifier_model='acme/classify',
+        embedding_model='acme/embed',
+        compiler_model='acme/compile',
+    )
+
+    values = RunFormValues.from_run(run, tmp_path)
+
+    assert (values.summary_model, values.classifier_model, values.embedding_model, values.compiler_model) == (
+        'acme/summary',
+        'acme/classify',
+        'acme/embed',
+        'acme/compile',
+    )
+
+
+def test_from_run_without_a_saved_compiler_uses_the_settings_default(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'none.json'))
+    monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'acme/compiler-9')
+
+    assert RunFormValues.from_run(_saved_run({'mode': 'query'}), tmp_path).compiler_model == 'acme/compiler-9'
+
+
+def test_models_route_loads_the_catalogue_kind_for_the_field(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    seen: list[str] = []
+
+    async def groups(auth: object, kind: str) -> dict[str, list[str]]:
+        seen.append(kind)
+        return {'openai': ['openai/text-embedding-3-small', 'openai/text-embedding-3-large']}
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.selected_dashboard_auth', return_value=_AUTH),
+        patch('evaluatorq.dashboard.insights_routes.model_groups', groups),
+    ):
+        embedding = client.get('/insights/models?field=embedding_model&embedding_model=openai/text-embedding-3-large')
+        summary = client.get('/insights/models?field=summary_model&summary_model=x/y')
+        compiler = client.get('/insights/models?field=compiler_model')
+        unknown = client.get('/insights/models?field=apply_model')
+
+    assert seen == ['embedding', 'chat', 'chat']
+    assert 'class="model-pick"' in embedding.text
+    assert 'name="embedding_model" value="openai/text-embedding-3-large"' in embedding.text
+    assert 'aria-label="Summary model (custom)"' in summary.text
+    assert 'aria-label="Question compiler (custom)"' in compiler.text
+    assert unknown.text == ''
+
+
+def test_models_route_falls_back_to_a_text_input_without_a_catalogue(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+
+    async def none(auth: object, kind: str) -> dict[str, list[str]]:
+        return {}
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.selected_dashboard_auth', return_value=_AUTH),
+        patch('evaluatorq.dashboard.insights_routes.model_groups', none),
+    ):
+        response = client.get('/insights/models?field=classifier_model&classifier_model=acme/c')
+
+    assert 'model-pick' not in response.text
+    assert '<input id="classifier_model" name="classifier_model" type="text" value="acme/c"' in response.text
+
+
+def _post_models(client: TestClient, **models: str) -> object:
+    return client.post(
+        '/insights/runs',
+        data={'csrf': _token(client), 'source': 'recent', 'labels': 'made_errors', 'dimensions': 'intent', **models},
+        follow_redirects=False,
+    )
+
+
+def _info(model_type: str) -> ModelInfo:
+    return ModelInfo(None, None, 'acme', False, None, False, model_type)
+
+
+def test_start_rejects_models_the_catalogue_says_cannot_do_the_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    catalogue = {
+        'acme/chat-only': _info('chat'),
+        'acme/embedder': _info('embedding'),
+        'acme/chat-2': _info('chat'),
+    }
+
+    async def entry(auth: object, model: str) -> ModelInfo | None:
+        return catalogue.get(model)
+
+    with (
+        patch('evaluatorq.dashboard.insights_routes.selected_dashboard_auth', return_value=_AUTH),
+        patch('evaluatorq.dashboard.insights_routes.catalogue_entry', entry),
+        patch('evaluatorq.dashboard.insights_routes.launch_insights', return_value='run-9') as launch,
+    ):
+        classifier = _post_models(client, classifier_model='acme/chat-only', summary_model='acme/chat-2')
+        embedding = _post_models(client, embedding_model='acme/chat-2')
+        accepted = _post_models(client, embedding_model='acme/embedder', summary_model='acme/chat-2')
+
+    assert classifier.status_code == 422
+    assert 'acme/chat-only' in classifier.text
+    assert 'value="acme/chat-2"' in classifier.text
+    assert 'classify' in classifier.text
+    assert embedding.status_code == 422
+    assert 'embedding' in embedding.text
+    assert accepted.status_code == 303
+    assert launch.call_count == 1
+
+
+def test_start_accepts_unchecked_models_and_warns_when_the_catalogue_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from loguru import logger
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    messages: list[str] = []
+    sink = logger.add(messages.append, level='WARNING')
+
+    async def unavailable(auth: object, model: str) -> None:
+        return None
+
+    try:
+        with (
+            patch('evaluatorq.dashboard.insights_routes.selected_dashboard_auth', return_value=_AUTH),
+            patch('evaluatorq.dashboard.insights_routes.catalogue_entry', unavailable),
+            patch('evaluatorq.dashboard.insights_routes.launch_insights', return_value='run-9') as launch,
+        ):
+            response = _post_models(client, classifier_model='acme/typed', embedding_model='acme/typed-embed')
+    finally:
+        logger.remove(sink)
+
+    assert response.status_code == 303
+    assert launch.call_args.args[0].classifier_model == 'acme/typed'
+    assert any('classifier_model' in m and 'embedding_model' in m for m in messages)
