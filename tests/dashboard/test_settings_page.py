@@ -545,12 +545,12 @@ def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient,
     assert 'key-staging' not in html
 
 
-def test_authentication_choices_keep_method_fields_in_a_shared_second_step(client: TestClient) -> None:
+def test_authentication_method_fields_sit_outside_the_method_choice(client: TestClient) -> None:
     html = client.get('/settings').text
-    choices = html.split('<div class="settings-auth-choices"', 1)[1].split('<div class="settings-auth-config">', 1)[0]
-    details = html.split('<div class="settings-auth-config">', 1)[1].split('</form>', 1)[0]
+    after_group = html.split('role="radiogroup" aria-labelledby="orq_auth_method_label">', 1)[1]
+    choices, details = after_group.split('</span></div>', 1)[0], after_group.split('</form>', 1)[0]
 
-    assert choices.count('class="settings-auth-choice"') == 4
+    assert choices.count('name="orq_auth_method"') == 4
     assert 'name="orq_profile"' not in choices
     assert 'name="orq_api_key_entry"' not in choices
     assert 'data-auth-method="cli_profile"' in details
