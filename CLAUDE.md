@@ -146,6 +146,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
+| A dropdown in the dashboard | `dashboard.view._rich_pick` (rows from `_pick_row`; `compact=True` for long lists of short values) | a native `<select>` or a new menu component: the browser draws its own option list, which cannot hold a note or status badge and does not match the rest of the dashboard |
 
 
 ## House rules
