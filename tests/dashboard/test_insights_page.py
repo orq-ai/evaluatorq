@@ -900,3 +900,14 @@ def test_completed_run_shows_escaped_run_warnings(tmp_path, minimal_run, monkeyp
     assert response.status_code == 200
     assert 'insights-review-root' in response.text
     assert TestClient(build_app()).get('/insights/run-1/review-data.json').json()['run']['warnings'] == [warning]
+
+
+def test_review_page_shows_auth_warning_host(minimal_run: InsightsRun) -> None:
+    from evaluatorq.dashboard.insights_review_views import review_page
+
+    html = review_page(minimal_run, None)
+
+    assert 'id="eq-auth-toast"' in html
+    assert "fetch('/auth/status'" in html
+    assert '<header class="app-topbar">' not in html
+    assert 'class="eq-dashboard eq-insights-review"' in html
