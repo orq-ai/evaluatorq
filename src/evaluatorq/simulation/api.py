@@ -519,9 +519,7 @@ async def simulate(
         new_value=report_path,
     )
 
-    datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, caller='simulate'
-    )
+    datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='simulate')
     run = await _simulate_run(
         evaluation_name=evaluation_name,
         target=target,
