@@ -770,6 +770,7 @@ async def test_hybrid_agent_target_static_leg_traces_attack_and_target_call(
     assert report.run_id == 'hybrid-static-run'
     assert report.results[0].thread_id == 'hybrid-static-run:Target:0'
 
+    monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
     monkeypatch.setenv('ORQ_WORKSPACE_SLUG', 'orq-research')
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     # Pin the host rather than asserting the built-in default: a developer with
