@@ -60,12 +60,14 @@ if TYPE_CHECKING:
 RATES_PATH = Path(__file__).resolve().parent.parent / 'src/evaluatorq/common/data/jury_judge_rates.json'
 
 
-def refreshed_row(info: ModelInfo) -> dict[str, Any]:
-    """One judge's row: live rates and default effort.
+def refreshed_row(info: ModelInfo) -> dict[str, Any] | None:
+    """One judge's row: live rates and default effort, or None when the catalogue lists no price.
 
     `/v2/models` quotes per 1000 tokens and the table is per 1M, which is the
     unit the published $/1k arithmetic and every seat comment are written in.
     """
+    if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
+        return None
     return {
         'input_rate': round(info.input_cost_per_1k * 1000, 6),
         'output_rate': round(info.output_cost_per_1k * 1000, 6),
@@ -80,8 +82,9 @@ def decisions(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
         after = current.get(router_id)
         if after is None:
             lines.append(
-                f'NOT SERVED: {router_id} is named by a preset but absent from /v2/models. '
-                'Retired, or not enabled for this key - check before promoting a reserve.'
+                f'NOT SERVED: {router_id} is named by a preset but absent from /v2/models or listed '
+                'without a price. Retired, repriced to nothing, or not enabled for this key - check '
+                'before promoting a reserve.'
             )
             continue
         if (before['input_rate'], before['output_rate']) != (after['input_rate'], after['output_rate']):
@@ -107,9 +110,9 @@ async def capture(previous: dict[str, Any]) -> dict[str, Any]:
     try:
         for router_id in previous:
             info = await get_model_info(router_id, resolved.client)
-            if info is None:
-                continue
-            current[router_id] = refreshed_row(info)
+            row = refreshed_row(info) if info is not None else None
+            if row is not None:
+                current[router_id] = row
     finally:
         if resolved.owned:
             await resolved.client.close()

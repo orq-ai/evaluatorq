@@ -46,11 +46,12 @@ async def test_captured_judge_rates_still_match_the_live_catalogue() -> None:
     for router_id in sorted(all_router_ids()):
         assert router_id in committed, f'{router_id} is seated but carries no captured rates'
         live = await get_model_info(router_id)
-        if live is None or live.input_cost_per_1k is None or live.output_cost_per_1k is None:
+        row = refresh.refreshed_row(live) if live is not None else None
+        if row is None:
             unlisted.append(router_id)
             continue
         previous[router_id] = committed[router_id]
-        current[router_id] = refresh.refreshed_row(live)
+        current[router_id] = row
 
     drifted = refresh.decisions(previous, current)
     assert not drifted, f'the committed table no longer matches the live catalogue: {drifted}'

@@ -34,6 +34,12 @@ def test_rates_and_default_effort_come_from_the_catalogue() -> None:
     assert row == {'input_rate': 2.5, 'output_rate': 10.0, 'default_reasoning_effort': 'medium'}
 
 
+def test_a_judge_listed_without_a_price_yields_no_row() -> None:
+    """The catalogue keeps unpriced models; the table must not gain a null rate or crash on one."""
+    unpriced = ModelInfo(input_cost_per_1k=None, output_cost_per_1k=None, provider='openai', supports_responses=True)
+    assert refresh.refreshed_row(unpriced) is None
+
+
 def test_a_repricing_is_reported() -> None:
     previous = {'openai/gpt-5.6-luna': _row()}
     current = {'openai/gpt-5.6-luna': _row(input_rate=2.0)}
