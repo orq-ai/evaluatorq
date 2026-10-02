@@ -535,15 +535,29 @@ def test_a_missing_datapoints_file_is_a_bad_parameter() -> None:
     fake.assert_not_called()
 
 
-def test_an_empty_datapoints_file_is_a_bad_parameter(tmp_path: Path) -> None:
-    empty = tmp_path / 'empty.jsonl'
-    empty.write_text('', encoding='utf-8')
+@pytest.mark.parametrize(
+    'content',
+    ['', 'not json\n', '{"persona": {}, "scenario": {}}\n'],
+    ids=['empty', 'unparseable', 'invalid datapoint'],
+)
+def test_an_empty_or_invalid_datapoints_file_is_a_one_line_error_with_exit_1(tmp_path: Path, content: str) -> None:
+    bad = tmp_path / 'bad.jsonl'
+    bad.write_text(content, encoding='utf-8')
 
-    result, fake = _invoke('simulate', ['--input', str(empty), '--target', 'agent:x'])
+    result, fake = _invoke('simulate', ['--input', str(bad), '--target', 'agent:x'])
 
-    assert result.exit_code == 2
-    assert 'No datapoints loaded from' in _flat(result.output)
+    assert result.exit_code == 1
+    assert 'Traceback' not in result.output
     fake.assert_not_called()
+
+
+def test_an_empty_evaluator_list_in_the_config_is_forwarded_as_unset() -> None:
+    payload = {'target': 'agent:x', 'previous_run': 'latest', 'evaluator_names': []}
+
+    result, fake = _invoke('simulate', ['--config', '-'], stdin=json.dumps(payload))
+
+    assert result.exit_code == 0, result.output
+    assert 'evaluator_names' not in fake.call_args.kwargs
 
 
 CLI_OWNED = {'target', 'memory_entity_id', 'report_path'}

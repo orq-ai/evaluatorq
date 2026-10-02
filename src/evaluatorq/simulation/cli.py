@@ -75,6 +75,7 @@ if TYPE_CHECKING:
 
     from pydantic import BaseModel
 
+    from evaluatorq.common.cli_config import ModelT
     from evaluatorq.simulation.types import SimulationDatapoint, SimulationRun
 
 app = typer.Typer(
@@ -554,18 +555,33 @@ _EXECUTIVE_SUMMARY_HELP = (
 
 
 def _load_datapoints(path: Path) -> list[SimulationDatapoint]:
-    """Read the ``--input`` JSONL into the config's ``datapoints`` field."""
+    """Read the ``--input`` JSONL into the config's ``datapoints`` field.
+
+    A missing file is a bad parameter (exit 2); an empty or unparseable one raises ``ValueError``, which the
+    command reports as a one-line error with exit 1.
+    """
     from evaluatorq.simulation.utils.dataset_export import load_datapoints_from_jsonl
 
     if not path.exists():
         raise typer.BadParameter(f'Datapoints file not found: {path}')
-    try:
-        loaded = load_datapoints_from_jsonl(str(path))
-    except ValueError as exc:
-        raise typer.BadParameter(f'Cannot read datapoints from {path}: {exc}') from exc
+    loaded = load_datapoints_from_jsonl(str(path))
     if not loaded:
-        raise typer.BadParameter(f'No datapoints loaded from {path}')
+        raise ValueError(f'No datapoints loaded from {path}')
     return loaded
+
+
+def _resolve_cli_config(
+    ctx: typer.Context,
+    model: type[ModelT],
+    flags: tuple[Flag, ...],
+    cli_args: dict[str, Any],
+    config_source: str | None,
+) -> ModelT:
+    """`resolve_config`, with the errors a flag's value converter raises (``ValueError``) reported as exit 1."""
+    try:
+        return resolve_config(ctx, model, flags, cli_args, config_source=config_source)
+    except _clean_cli_error_types() as exc:
+        _handle_cli_error(exc)
 
 
 # Order matters: later rows win for a shared field, so ``--sim-model`` beats ``--llm-config``. Each row names the
@@ -999,7 +1015,7 @@ def simulate(
     # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
-    cfg = resolve_config(ctx, SimulateCliConfig, _SIMULATE_FLAGS, cli_args, config_source=config_source)
+    cfg = _resolve_cli_config(ctx, SimulateCliConfig, _SIMULATE_FLAGS, cli_args, config_source)
     hooks = _setup_run_output(
         verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
     )
@@ -1012,7 +1028,7 @@ def simulate(
             openai_model=openai_model,
             memory_entity_id=cfg.memory_entity_id,
         )
-        _resolve_evaluators(cfg.evaluator_names)
+        cfg = cfg.model_copy(update={'evaluator_names': _resolve_evaluators(cfg.evaluator_names)})
         run = asyncio.run(_simulate_impl(cfg, target=resolved_target, hooks=hooks))
     except KeyboardInterrupt:
         typer.echo('^C aborted.', err=True)
@@ -1300,7 +1316,7 @@ def run(
     # ctx.params still holds click's raw strings; the arguments themselves are the converted values.
     cli_args = dict(locals())
     emit_json = reserve_stdout_for_json(ctx) if json_output else None
-    cfg = resolve_config(ctx, GenerateAndSimulateCliConfig, _RUN_FLAGS, cli_args, config_source=config_source)
+    cfg = _resolve_cli_config(ctx, GenerateAndSimulateCliConfig, _RUN_FLAGS, cli_args, config_source)
     hooks = _setup_run_output(
         verbose=verbose, quiet=quiet, yes=yes, executive_summary=cfg.executive_summary, sim_model=_sim_model(cfg)
     )
@@ -1315,7 +1331,7 @@ def run(
             openai_model=openai_model,
             memory_entity_id=cfg.memory_entity_id,
         )
-        _resolve_evaluators(cfg.evaluator_names)
+        cfg = cfg.model_copy(update={'evaluator_names': _resolve_evaluators(cfg.evaluator_names)})
         run = asyncio.run(
             _run_impl(
                 cfg,
