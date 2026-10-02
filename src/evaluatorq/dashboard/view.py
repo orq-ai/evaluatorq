@@ -824,13 +824,15 @@ def _rich_pick(
     disabled: Sequence[str] = (),
     current: str = '',
     describedby: str = '',
+    compact: bool = False,
 ) -> str:
     """A menu of rich rows that submits *value* through a hidden input.
 
     Reuses the model picker's markup and script; ``data-rich`` makes the trigger
     copy the chosen row, so the closed control keeps its note and badge.
     *disabled* rows are listed but cannot be chosen. The trigger shows the row
-    matching *value*, else *current*.
+    matching *value*, else *current*. *compact* puts each row's note on the
+    title's line, for long lists.
     """
     selected = next((row for option, row in options if value and option.rstrip('/') == value.rstrip('/')), current)
     buttons = ''.join(
@@ -841,7 +843,8 @@ def _rich_pick(
     rows_off = ''.join(f'<div class="rich-pick-disabled" aria-disabled="true">{row}</div>' for row in disabled)
     described = f' aria-describedby="{esc(describedby)}"' if describedby else ''
     return (
-        f'<span class="model-pick rich-pick"><input type="hidden" name="{esc(name)}" value="{esc(value)}">'
+        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}">'
+        f'<input type="hidden" name="{esc(name)}" value="{esc(value)}">'
         f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false"{described}>'
         f'{selected}</button>'
         f'<div class="finder-facets"><div class="facet-list">{buttons}{rows_off}</div></div></span>'
@@ -898,7 +901,9 @@ def profile_field(chosen: str, profiles: Sequence[Any], *, describedby: str = ''
                 current = row
         else:
             options.append((profile.name, _pick_row(profile.name, server)))
-    return _rich_pick('orq_profile', chosen, options, disabled=disabled, current=current, describedby=describedby)
+    return _rich_pick(
+        'orq_profile', chosen, options, disabled=disabled, current=current, describedby=describedby, compact=True
+    )
 
 
 def settings_body(

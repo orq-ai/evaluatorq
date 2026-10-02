@@ -785,12 +785,16 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .rich-pick .model-pick-btn::after { float: none; order: 3; margin-left: auto; }
 .rich-pick .finder-facets { left: 0; right: 0; }
 .rich-pick .finder-facets .facet-list { width: auto; }
-.rich-pick .model-option { padding: 5px 10px; }
-.rich-pick-disabled { display: flex; align-items: center; gap: 12px; padding: 5px 10px; cursor: not-allowed; opacity: .7; }
+.rich-pick .model-option, .rich-pick-disabled { padding: 8px 10px; }
+.rich-pick-disabled { display: flex; align-items: center; gap: 12px; cursor: not-allowed; opacity: .7; }
 .rich-pick-placeholder { flex: 1; color: var(--text-muted); font-size: 13px; }
-.rich-pick-id { display: flex; flex: 1; align-items: baseline; gap: 8px; min-width: 0; }
-.rich-pick-id strong { flex: none; color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.rich-pick-id { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.rich-pick-id strong { color: var(--text-strong); font-size: 13px; font-weight: 600; }
 .rich-pick-id .config-note { min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Compact: one line per row, the note right after the title. */
+.rich-pick--compact .model-option, .rich-pick--compact .rich-pick-disabled { padding: 5px 10px; }
+.rich-pick--compact .rich-pick-id { display: flex; align-items: baseline; gap: 8px; }
+.rich-pick--compact .rich-pick-id strong { flex: none; }
 .settings-field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }
 .settings-auth-step { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .settings-auth-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; padding: 12px 0 2px; }
