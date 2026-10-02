@@ -28,7 +28,8 @@ class TestModelCatalogueLive:
 
         pricing.reset_catalogue_cache()
         try:
-            catalogue = await pricing._load_catalogue()  # pyright: ignore[reportPrivateUsage]
+
+            catalogue = await pricing._load_catalogue()
 
             assert catalogue, 'live /v2/models returned no usable entries'
 

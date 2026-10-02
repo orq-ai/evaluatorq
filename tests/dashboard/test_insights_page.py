@@ -417,6 +417,7 @@ def test_review_page_has_mock_shell_and_no_trace_data(minimal_run: InsightsRun) 
 
 def test_review_data_route_returns_complete_uncached_payload(tmp_path, monkeypatch, minimal_run: InsightsRun) -> None:
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.setenv('ORQ_WORKSPACE', 'test-workspace')
     many = minimal_run.model_copy(update={
         'traces': [
             minimal_run.traces[index % len(minimal_run.traces)].model_copy(

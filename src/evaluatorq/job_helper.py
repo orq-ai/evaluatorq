@@ -79,7 +79,7 @@ def job(
                 if isawaitable(result):
                     output: Output = await result
                 else:
-                    output = result  # type: ignore
+                    output = result
 
                 job_return: dict[str, Any] = {
                     'name': name,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, cast
 
 import pytest
 
@@ -17,7 +18,7 @@ def test_defaults_are_the_agreed_set() -> None:
 
 def test_registry_is_frozen() -> None:
     with pytest.raises(TypeError):
-        COLUMNS['x'] = COLUMNS['status']  # pyright: ignore[reportIndexIssue]
+        cast('Any', COLUMNS)['x'] = COLUMNS['status']
 
 
 def test_trace_column_combines_name_and_agent_and_escapes_text() -> None:

@@ -62,7 +62,7 @@ def _fake_umap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         def fit_transform(self, values: np.ndarray) -> np.ndarray:
             return np.asarray([[row[0], row[1]] for row in values])
 
-    module.UMAP = Reducer  # type: ignore[attr-defined]
+    module.UMAP = Reducer
     monkeypatch.setitem(sys.modules, 'umap', module)
     return calls
 
@@ -101,7 +101,7 @@ def test_review_xy_skips_invalid_coordinates_with_warning(
     _fake_umap(monkeypatch)
     run = _run(count=7)
     run.traces[0].coords['intent'] = (float('nan'), 1.0, 2.0)
-    run.traces[1].coords['intent'] = (1.0, 2.0)
+    run.traces[1].coords['intent'] = cast('tuple[float, float, float]', (1.0, 2.0))
 
     points = projection.review_xy(run, 'intent')
 
@@ -149,7 +149,7 @@ def test_review_xy_serializes_concurrent_umap_fits(monkeypatch: pytest.MonkeyPat
                 with state_lock:
                     active -= 1
 
-    module.UMAP = ConcurrentProbeReducer  # type: ignore[attr-defined]
+    module.UMAP = ConcurrentProbeReducer
     monkeypatch.setitem(sys.modules, 'umap', module)
     runs = [_run().model_copy(update={'run_id': f'projection-test-{index}'}) for index in range(4)]
 

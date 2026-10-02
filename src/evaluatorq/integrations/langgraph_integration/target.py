@@ -362,7 +362,7 @@ class LangGraphTarget(AgentTarget):
                 self._warned_unknown_callbacks = True
             new_callbacks = [existing, collector]
 
-        new_config: RunnableConfig = {**base_config, 'callbacks': new_callbacks}
+        new_config: RunnableConfig = {**base_config, 'callbacks': new_callbacks}  # ty: ignore[invalid-argument-type]
 
         prev_count = self._prev_msg_count
         usage: TokenUsage | None = None
@@ -494,10 +494,12 @@ def _introspect_tools(graph: CompiledStateGraph[Any, Any, Any, Any]) -> list[Too
     return tools
 
 
-def _introspect_memory_stores(graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str) -> list[MemoryStoreInfo]:
+def _introspect_memory_stores(
+    graph: CompiledStateGraph[Any, Any, Any, Any], thread_id: str | None
+) -> list[MemoryStoreInfo]:
     """Return a single synthetic memory store entry when a checkpointer is attached."""
     checkpointer = getattr(graph, 'checkpointer', None)
-    if checkpointer is None:
+    if checkpointer is None or thread_id is None:
         return []
     return [
         MemoryStoreInfo(

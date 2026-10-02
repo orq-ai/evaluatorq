@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 
 import pytest
 
@@ -25,8 +25,8 @@ def test_running_stage_gets_flag_with_elapsed_time_and_count(monkeypatch: pytest
 
     class FrozenDateTime(datetime):
         @classmethod
-        def now(cls, tz: object = None) -> datetime:
-            return fixed_now
+        def now(cls, tz: tzinfo | None = None) -> FrozenDateTime:
+            return cls.fromtimestamp(fixed_now.timestamp(), tz=tz)
 
     monkeypatch.setattr('evaluatorq.dashboard.insights_views.datetime', FrozenDateTime)
     manifest = _manifest(ManifestStatus.RUNNING, ManifestStatus.RUNNING)

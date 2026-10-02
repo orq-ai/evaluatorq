@@ -512,7 +512,7 @@ def explorer_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         store.reset_calls += 1
         return store.snapshot_value
 
-    store.reset = reset
+    monkeypatch.setattr(store, 'reset', reset)
 
     async def build_store(_app: Any) -> FakeStore:
         return store
@@ -667,7 +667,7 @@ async def test_initial_trace_warmups_fetch_concurrently_across_sessions(
 
         store = FakeStore()
         store.explorer = ExplorerStore(search=search, hydrate=lambda _rows: empty_hydration())
-        store.snapshot = lambda: empty_snapshot()
+        monkeypatch.setattr(store, 'snapshot', lambda: empty_snapshot())
         stores[session_id] = store
 
     async def get_store(_app: Any, *, session_id: str, **_kwargs: Any) -> Any:
@@ -1082,7 +1082,7 @@ def test_reset_preserves_errors_quick_view(explorer_client) -> None:
 def test_trace_table_wrapper_has_no_perimeter_border() -> None:
     from evaluatorq.dashboard import styles
 
-    css = styles._TRACES_DENSITY_CSS  # pyright: ignore[reportPrivateUsage]
+    css = styles._TRACES_DENSITY_CSS
     wrapper_rule = re.search(r'\.xr-table-wrap \{[^}]+\}', css)
     assert wrapper_rule is not None
     wrapper_rule = wrapper_rule.group(0)
@@ -1472,7 +1472,7 @@ def test_message_counting_hydrates_in_bounded_batches_and_keeps_drawer_cache() -
         batches.append(len(batch))
         return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'hello'}) for row in batch}
 
-    store = ExplorerStore(search=lambda *_args, **_kwargs: None, hydrate=hydrate)  # type: ignore[arg-type]
+    store = ExplorerStore(search=lambda *_args, **_kwargs: None, hydrate=hydrate)
     store._view = ExplorerView(state='loaded', generation=123, rows=rows)
 
     async def run() -> ExplorerView:
@@ -1488,7 +1488,7 @@ def test_message_counting_hydrates_in_bounded_batches_and_keeps_drawer_cache() -
 
 
 def test_show_tool_definitions_advances_display_version() -> None:
-    store = ExplorerStore(search=lambda *_args, **_kwargs: None, hydrate=lambda _rows: None)  # type: ignore[arg-type]
+    store = ExplorerStore(search=lambda *_args, **_kwargs: None, hydrate=lambda _rows: None)
     before = asyncio.run(store.view())
 
     updated = asyncio.run(store.set_view(show_tool_definitions=True))
@@ -1581,13 +1581,13 @@ def test_match_column_choice_survives_a_columns_edit_made_before_any_ai_run(expl
 def test_trajectories_view_hydrates_only_the_visible_page(explorer_client) -> None:
     store, _, client = explorer_client
     calls: list[int] = []
-    original = store.explorer._hydrate  # pyright: ignore[reportPrivateUsage]
+    original = store.explorer._hydrate
 
     async def counting(rows: Any) -> Any:
         calls.append(len(rows))
         return await original(rows)
 
-    store.explorer._hydrate = counting  # pyright: ignore[reportPrivateUsage]
+    store.explorer._hydrate = counting
     # The load warms the first page's trajectories, so opening Trajectories hydrates nothing more.
     _load(client)
     html = client.get('/find/rows?view=trajectories').text
@@ -1623,7 +1623,7 @@ def test_summary_status_and_trajectory_polling_are_independent_during_prewarm(
         await asyncio.to_thread(release.wait)
         return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'hello'}) for row in rows}
 
-    store.explorer._hydrate = gated_hydrate  # pyright: ignore[reportPrivateUsage]
+    store.explorer._hydrate = gated_hydrate
     monkeypatch.setattr(store, 'close', store.explorer.close, raising=False)
 
     async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
@@ -1678,7 +1678,7 @@ def test_failed_prewarm_logs_and_trajectories_request_retries(explorer_client, m
             raise RuntimeError('trajectory store unavailable')
         return {row.trace_id: _trajectory_record(row.trace_id, {'role': 'user', 'content': 'retried'}) for row in rows}
 
-    store.explorer._hydrate = flaky_hydrate  # pyright: ignore[reportPrivateUsage]
+    store.explorer._hydrate = flaky_hydrate
     monkeypatch.setattr(store, 'close', store.explorer.close, raising=False)
 
     async def load_catalogue(_app: Any, _window_days: int | None = None) -> FacetCatalogue:
@@ -1722,13 +1722,13 @@ def test_new_search_results_do_not_change_trajectory_hydration_page(explorer_cli
 
     store, _, client = explorer_client
     calls: list[tuple[str, ...]] = []
-    original = store.explorer._hydrate  # pyright: ignore[reportPrivateUsage]
+    original = store.explorer._hydrate
 
     async def counting(rows: Any) -> Any:
         calls.append(tuple(row.trace_id for row in rows))
         return await original(rows)
 
-    store.explorer._hydrate = counting  # pyright: ignore[reportPrivateUsage]
+    store.explorer._hydrate = counting
     _load(client)
     store.snapshot_value = replace(
         store.snapshot_value,
@@ -1764,7 +1764,7 @@ def test_traces_filters_button_opens_the_facet_menu_directly(explorer_client) ->
 
     _, _, client = explorer_client
     html = client.get('/traces').text
-    css = styles._FINDER_CSS  # pyright: ignore[reportPrivateUsage]
+    css = styles._FINDER_CSS
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     assert html.count('id="finder-controls"') == 1
     assert 'data-explorer-filters aria-haspopup="true" aria-expanded="false">Filters</button>' in html
@@ -2749,7 +2749,7 @@ def test_model_summary_groups_trace_counts_and_only_sums_known_same_currency_cos
         TraceRow(trace_id='f', models=('gpt-5.6-luna',), cost_total=None, currency=None),
     )
 
-    html = explorer_views._model_totals(rows)  # pyright: ignore[reportPrivateUsage]
+    html = explorer_views._model_totals(rows)
 
     assert '<span class="xr-model-name">gpt-5.6-luna</span> <span>3 traces</span> <span>—</span>' in html
     assert '<span class="xr-model-name">claude-x</span> <span>2 traces</span> <span>—</span>' in html
@@ -3139,7 +3139,7 @@ def test_header_widths_measure_unescaped_text() -> None:
     columns = resolve_columns(['name'])
     amps = (TraceRow(trace_id='a', name='&' * 20),)
     letters = (TraceRow(trace_id='b', name='a' * 20),)
-    widths = explorer_views._header_widths  # pyright: ignore[reportPrivateUsage]
+    widths = explorer_views._header_widths
     assert widths(columns, amps, None) == widths(columns, letters, None)
 
 
@@ -3153,7 +3153,7 @@ def test_header_widths_measure_each_row_once_per_load_and_only_grow() -> None:
         return row.name or ''
 
     columns = (Column('name', 'Name', lambda row: row.name, render),)
-    widths = explorer_views._header_widths  # pyright: ignore[reportPrivateUsage]
+    widths = explorer_views._header_widths
     generation = 10**9
     long_rows = tuple(TraceRow(trace_id=f'long-{i}', name='x' * 30) for i in range(3))
     first = widths(columns, long_rows, None, generation=generation)

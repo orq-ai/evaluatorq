@@ -280,7 +280,7 @@ class TestTokenUsage:
         usage = TokenUsage(total_cost=0.42)
         assert usage.cost_usd == pytest.approx(0.42)
         with pytest.raises(ValidationError):
-            usage.cost_usd = 1.0  # pyright: ignore[reportAttributeAccessIssue]
+            setattr(usage, 'cost_usd', 1.0)
 
 
 class TestAgentContext:

@@ -12,6 +12,7 @@ fallback paths.
 
 from __future__ import annotations
 
+import typing
 from types import SimpleNamespace
 from typing import Any
 
@@ -107,7 +108,7 @@ def _chat_reply() -> Any:
 def _rate_limit_error() -> RateLimitError:
     return RateLimitError(
         'rate limited',
-        response=SimpleNamespace(status_code=429, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=429, headers={}, request=None)),
         body={'error': {'message': 'rate limited'}},
     )
 
@@ -115,7 +116,7 @@ def _rate_limit_error() -> RateLimitError:
 def _server_error(status: int = 503) -> APIStatusError:
     return APIStatusError(
         'server error',
-        response=SimpleNamespace(status_code=status, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=status, headers={}, request=None)),
         body={'error': {'message': 'server error'}},
     )
 
@@ -123,7 +124,7 @@ def _server_error(status: int = 503) -> APIStatusError:
 def _bad_request(message: str) -> BadRequestError:
     return BadRequestError(
         message,
-        response=SimpleNamespace(status_code=400, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=400, headers={}, request=None)),
         body={'error': {'message': message}},
     )
 
@@ -164,7 +165,7 @@ async def _judge(
 ) -> Any:
     cfg = LLMCallConfig(
         model='gpt-5-mini',
-        api=api,  # pyright: ignore[reportArgumentType]
+        api=typing.cast(typing.Any, api),
         max_tokens=256,
         retry_count=retry_count,
     )
@@ -249,7 +250,7 @@ async def test_default_retry_count_issues_exactly_two_requests():
     cfg = LLMCallConfig(model='gpt-5-mini', api='responses', max_tokens=256)
     assert cfg.retry_count == 1
     outcome = await run_judge(
-        client=client,  # pyright: ignore[reportArgumentType]
+        client=typing.cast(typing.Any, client),
         model='gpt-5-mini',
         cfg=cfg,
         prompt_template='judge this',

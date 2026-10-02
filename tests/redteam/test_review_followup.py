@@ -61,7 +61,8 @@ class TestTokenUsageArithmeticEdges:
         # NotImplemented so Python can fall back to the left operand's
         # __add__ (and ultimately TypeError) instead of silently producing
         # a misleading result.
-        assert usage.__radd__('not a number') is NotImplemented  # pyright: ignore[reportArgumentType]
+
+        assert usage.__radd__('not a number') is NotImplemented
 
     def test_radd_returns_notimplemented_for_nonzero_int(self) -> None:
         usage = TokenUsage(prompt_tokens=1)

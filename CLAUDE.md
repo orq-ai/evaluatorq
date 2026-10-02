@@ -37,11 +37,17 @@ Processes are shared too. **Never `pkill -f` a command name** (`mkdocs serve`, `
 # Install dependencies (dev group + all optional extras)
 uv sync --all-extras --all-groups
 
-# Run unit tests (excludes integration tests)
+# Run the quick local profile (excludes integration and deliberately slow tests)
+uv run pytest
+
+# Run the complete non-integration profile before pushing (matches CI selection)
 uv run pytest -m 'not integration'
 
 # Run a specific test file
 uv run pytest tests/redteam/test_vulnerability_first.py -v
+
+# The default marker still applies; opt a targeted slow test back in explicitly
+uv run pytest -m 'not integration' path/to/test.py::test_name
 
 # Run integration tests (requires ORQ_API_KEY in .env)
 uv run pytest -m integration
@@ -52,8 +58,8 @@ uv run ruff check src
 # Format
 uv run ruff format src
 
-# Type check — the whole repo. Never scope it to a path (see "Before pushing").
-uv run basedpyright
+# Type check — the configured source, test, root, and docs files. Never scope it to a path (see "Before pushing").
+uv run ty check
 
 # Build
 uv build
@@ -100,13 +106,13 @@ Run the same checks CI runs, **verbatim**, before every push:
 ```bash
 uv run ruff check src
 uv run ruff format --check src
-uv run basedpyright                 # whole repo — NOT a path
+uv run ty check                     # configured repo surface — NOT a path
 uv run pytest -m 'not integration'
 ```
 
-**Do not scope `basedpyright` to a path.** CI runs it bare, which covers `tests/` as well as `src/`. Running `uv run basedpyright src/` passes clean while CI fails on type errors in test files — parametrized args annotated `str` where the signature wants a `Literal`, raw dicts passed where a pydantic model is expected. That exact mistake left PR #119 red across all four Python versions for three commits without any local signal.
+**Do not scope `ty` to a path.** The configured bare check covers `tests/`, `src/`, root Python files, and docs Python files. A scoped run can pass while CI fails on a type error elsewhere. CI runs the bare check once, on Ubuntu with Python 3.10.
 
-Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **basedpyright** is not scoped. Match CI, not intuition.
+Note the asymmetry: **ruff** is scoped to `src` (tests are deliberately not ruff-formatted, so `ruff format --check tests/` reports the whole tree as unformatted — don't "fix" that). **ty** is not scoped. Match CI, not intuition.
 
 CI does not run integration tests. Real-API coverage runs weekly via `.github/workflows/examples-weekly.yml`, which opens an issue on failure rather than blocking a PR.
 
@@ -220,7 +226,7 @@ These tests use fakes and do not require API credentials. The repository does no
 - Python 3.10+ compatible (use `from __future__ import annotations` for newer typing syntax)
 - `StrEnum` polyfill for Python 3.10 (native in 3.11+)
 - Linting: ruff
-- Type checking: basedpyright (lenient config — many rules disabled)
+- Type checking: ty
 - Logging: `loguru` everywhere (core runtime dependency since 1.3)
 
 ### Releases

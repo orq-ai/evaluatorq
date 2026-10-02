@@ -165,7 +165,7 @@ async def test_summary_load_finishes_before_first_page_trajectory_warmup() -> No
     assert store.cached_records(['t0']) == {}
 
     release.set()
-    prewarm_task = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    prewarm_task = store._prewarm_task
     assert prewarm_task is not None
     await prewarm_task
 
@@ -190,7 +190,7 @@ async def test_failed_trajectory_warmup_clears_flag_and_can_retry() -> None:
 
     store = ExplorerStore(search=FakeSource(rows).search, hydrate=flaky_hydrate)
     view = await store.load(START, END, 100, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
-    prewarm_task = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    prewarm_task = store._prewarm_task
     assert prewarm_task is not None
     await prewarm_task
 
@@ -302,7 +302,7 @@ async def test_drawer_hydration_is_not_blocked_by_first_page_prewarm() -> None:
     await asyncio.wait_for(drawer_entered.wait(), timeout=1)
     release.set()
     assert await drawer == {'t0': record('t0')}
-    prewarm = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    prewarm = store._prewarm_task
     assert prewarm is not None
     await prewarm
 
@@ -326,7 +326,7 @@ async def test_successful_drawer_hydration_wins_over_late_missing_prewarm_result
 
     assert await store.records(['t0']) == {'t0': record('t0')}
     release_prewarm.set()
-    prewarm = store._prewarm_task  # pyright: ignore[reportPrivateUsage]
+    prewarm = store._prewarm_task
     assert prewarm is not None
     await prewarm
 
@@ -430,8 +430,8 @@ async def test_stale_hydration_does_not_fill_the_next_load_cache() -> None:
     stale_request = asyncio.create_task(store.records(['same']))
     await entered.wait()
 
-    store._search = new_source.search  # pyright: ignore[reportPrivateUsage]
-    store._hydrate = new_source.hydrate_rows  # pyright: ignore[reportPrivateUsage]
+    store._search = new_source.search
+    store._hydrate = new_source.hydrate_rows
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     release.set()
     await stale_request
@@ -455,7 +455,7 @@ async def test_message_counts_ignores_stale_generation() -> None:
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     counts = asyncio.create_task(store.message_counts())
     await entered.wait()
-    store._search = FakeSource((TraceRow(trace_id='new'),)).search  # pyright: ignore[reportPrivateUsage]
+    store._search = FakeSource((TraceRow(trace_id='new'),)).search
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     release.set()
     await counts
@@ -501,8 +501,8 @@ async def test_background_message_counting_returns_pending_then_completes() -> N
     await entered.wait()
     await store.set_view(quick_view='all', sort='started', descending=False)
     release.set()
-    assert store._message_count_task is not None  # pyright: ignore[reportPrivateUsage]
-    await store._message_count_task  # pyright: ignore[reportPrivateUsage]
+    assert store._message_count_task is not None
+    await store._message_count_task
 
     completed = await store.view()
     assert not completed.message_counting
@@ -529,7 +529,7 @@ async def test_background_message_counting_is_cancelled_by_new_load() -> None:
     await entered.wait()
 
     new = FakeSource((TraceRow(trace_id='new'),))
-    store._search = new.search  # pyright: ignore[reportPrivateUsage]
+    store._search = new.search
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True, warm_trajectories=False)
     release.set()
 
@@ -554,8 +554,8 @@ async def test_background_message_counting_reports_hydration_error() -> None:
     await store.start_message_counting()
     await entered.wait()
     release.set()
-    assert store._message_count_task is not None  # pyright: ignore[reportPrivateUsage]
-    await store._message_count_task  # pyright: ignore[reportPrivateUsage]
+    assert store._message_count_task is not None
+    await store._message_count_task
 
     failed = await store.view()
     assert not failed.message_counting
@@ -599,7 +599,7 @@ async def test_new_load_supersedes_the_old_one() -> None:
 
     store = ExplorerStore(search=Slow((TraceRow(trace_id='old'),)).search, hydrate=FakeSource(()).hydrate_rows)
     await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
-    store._search = FakeSource((TraceRow(trace_id='new'),)).search  # pyright: ignore[reportPrivateUsage]
+    store._search = FakeSource((TraceRow(trace_id='new'),)).search
     view = await store.load(START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), wait=True)
     gate.set()
     await asyncio.sleep(0)

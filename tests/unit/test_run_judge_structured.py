@@ -23,11 +23,11 @@ def _verdict_model() -> type[BaseModel]:
 
 def _parsed_completion(value, explanation, refusal=None):
     msg = MagicMock()
-    msg.parsed = None if refusal else _verdict_model()(value=value, explanation=explanation)
+    msg.parsed = None if refusal else _verdict_model()(value=value, explanation=explanation)  # ty: ignore[pydantic-discarded-extra-argument]
     msg.refusal = refusal
     # The SDK sets `content` to the verbatim wire body alongside `parsed`; a bare
     # MagicMock would hand `run_judge` a mock where it expects that string.
-    msg.content = None if refusal else msg.parsed.model_dump_json()
+    msg.content = None if refusal else msg.parsed.model_dump_json()  # ty: ignore[unresolved-attribute]
     choice = MagicMock(); choice.message = msg
     comp = MagicMock(); comp.choices = [choice]; comp.usage = None
     return comp
@@ -36,7 +36,7 @@ def _parsed_completion(value, explanation, refusal=None):
 def _abstaining_completion():
     verdict_model = create_model('AbstainingVerdict', value=(bool, ...), explanation=(str, ...), abstain=(bool, ...))
     msg = MagicMock()
-    msg.parsed = verdict_model(value=False, explanation='uncertain', abstain=True)
+    msg.parsed = verdict_model(value=False, explanation='uncertain', abstain=True)  # ty: ignore[pydantic-discarded-extra-argument]
     msg.refusal = None
     msg.content = msg.parsed.model_dump_json()
     choice = MagicMock(); choice.message = msg

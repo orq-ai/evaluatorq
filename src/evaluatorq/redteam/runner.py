@@ -846,11 +846,11 @@ def _resolve_vulns_and_categories(
         for c in categories:
             v = resolve_category_safe(c)
             primary = get_primary_category(v) if v is not None else None
-            if primary is not None and primary != c:
+            if v is not None and primary is not None and primary != c:
                 logger.info(
                     'Category %s is scored by the %s evaluator and reported under %s.',
                     c,
-                    v.value,  # pyright: ignore[reportOptionalMemberAccess] - v is not None here
+                    v.value,
                     primary,
                 )
     else:
@@ -1585,7 +1585,7 @@ async def red_team(
     resolved_agent_targets = agent_targets or []
     all_target_labels, _ = _deduplicate_target_labels(targets, resolved_agent_targets)
     backend_label = _resolve_backend_label(targets=targets, resolved_agent_targets=resolved_agent_targets)
-    pipeline_attributes = {
+    pipeline_attributes: AttrMap = {
         'orq.trace_type': 'redteam',
         'orq.redteam.targets': ', '.join(all_target_labels),
         'orq.redteam.mode': resolved_mode,
@@ -2539,25 +2539,18 @@ async def _retrieve_agent_contexts(
     # Pre-fetch contexts for AgentTarget objects (they may provide their own context)
     at_contexts: dict[int, AgentContext] = {}
     for at in resolved_agent_targets:
-        get_ctx = getattr(at, 'get_agent_context', None)
         at_deduped_label = agent_target_labels[id(at)]
-        if callable(get_ctx):
-            try:
-                at_ctx = await cast('Any', get_ctx())
-            except Exception as exc:
-                raise RuntimeError(
-                    f'Failed to retrieve agent context from {type(at).__name__}.get_agent_context(): {exc}. '
-                    f'Ensure the target implements get_agent_context() correctly.'
-                ) from exc
-            if not isinstance(at_ctx, AgentContext):
-                raise TypeError(
-                    f'{type(at).__name__}.get_agent_context() returned {type(at_ctx).__name__}, expected AgentContext.'
-                )
-        else:
-            logger.warning(
-                f'AgentTarget {at_deduped_label!r} does not implement get_agent_context(); using minimal context.'
+        try:
+            at_ctx = await at.get_agent_context()
+        except Exception as exc:
+            raise RuntimeError(
+                f'Failed to retrieve agent context from {type(at).__name__}.get_agent_context(): {exc}. '
+                f'Ensure the target implements get_agent_context() correctly.'
+            ) from exc
+        if not isinstance(at_ctx, AgentContext):
+            raise TypeError(
+                f'{type(at).__name__}.get_agent_context() returned {type(at_ctx).__name__}, expected AgentContext.'
             )
-            at_ctx = AgentContext(key=at_deduped_label)
         at_contexts[id(at)] = at_ctx
 
     return all_agent_contexts, at_contexts
@@ -4660,7 +4653,7 @@ async def _run_static(
         resolved_hooks.on_stage_start(
             PipelineStage.ATTACK_EXECUTION,
             {
-                'num_datapoints': len(data) if isinstance(data, list) else 0,  # type: ignore[arg-type]
+                'num_datapoints': len(data) if isinstance(data, list) else 0,
                 'targets': all_target_labels,
             },
         )

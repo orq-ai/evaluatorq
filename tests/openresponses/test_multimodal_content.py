@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import typing
+
 import pytest
 from pydantic import ValidationError
 
@@ -42,7 +44,7 @@ def test_input_image_content_file_id_only() -> None:
 def test_input_image_content_detail_choices() -> None:
     assert InputImageContent(type="input_image", image_url="https://x", detail="low").detail == "low"
     with pytest.raises(ValidationError):
-        InputImageContent(type="input_image", image_url="https://x", detail="ultra")  # pyright: ignore[reportArgumentType]
+        InputImageContent(type="input_image", image_url="https://x", detail=typing.cast(typing.Any, "ultra"))
 
 
 def test_input_file_content_all_optional() -> None:

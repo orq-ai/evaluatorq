@@ -7,6 +7,7 @@ LLM/target timeouts (F4). per_simulation_timeout_s closes that gap.
 from __future__ import annotations
 
 import asyncio
+import typing
 from typing import Any
 
 # ruff: noqa: S101
@@ -20,6 +21,8 @@ from evaluatorq.simulation.types import (
     Scenario,
     SimulationDatapoint,
     TerminatedBy,
+)
+from evaluatorq.simulation.types import (
     TokenUsage as _TU,
 )
 
@@ -93,8 +96,8 @@ async def test_per_simulation_timeout_s_unset_leaves_simulate_unaffected(monkeyp
         datapoints=[_datapoint()],
         target=_fast_target,
         max_turns=1,
-        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-        judge=_StubJudge(),  # pyright: ignore[reportArgumentType]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge()),
         upload_results=False,
         executive_summary=False,
     )
@@ -116,8 +119,8 @@ async def test_per_simulation_timeout_s_terminates_a_stalled_conversation(monkey
         target_agent_timeout_ms=60_000,
         max_target_retries=0,
         per_simulation_timeout_s=0.2,
-        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-        judge=_StubJudge(),  # pyright: ignore[reportArgumentType]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _StubJudge()),
         upload_results=False,
         executive_summary=False,
         # The subject here is the wall clock, not the exit gate: a timed-out row

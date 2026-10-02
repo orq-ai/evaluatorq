@@ -121,7 +121,8 @@ def _make_backend(target: MagicMock | None = None) -> MagicMock:
         target = _make_target()
     backend = MagicMock()
     backend.create_target = MagicMock(return_value=target)
-    backend.map_error = MagicMock(side_effect=lambda exc: ("target_error", f"{type(exc).__name__}: {exc}"))  # pyright: ignore[reportUnknownLambdaType]
+
+    backend.map_error = MagicMock(side_effect=lambda exc: ("target_error", f"{type(exc).__name__}: {exc}"))
     return backend
 
 

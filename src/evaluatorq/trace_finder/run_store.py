@@ -8,6 +8,7 @@ import re
 import time
 from dataclasses import replace
 from datetime import datetime, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from loguru import logger
@@ -353,11 +354,14 @@ class RunStore:
                         and generated_filters == FacetSelection()
                         and generated_numeric == NumericFilters()
                     )
-                    loader = (
-                        (lambda: traces_limited(population.limit))
-                        if use_limited_loader and traces_limited is not None
-                        else traces or (lambda: table(population))  # pyright: ignore[reportOptionalCall]
-                    )
+                    if use_limited_loader and traces_limited is not None:
+                        loader = partial(traces_limited, population.limit)
+                    elif traces is not None:
+                        loader = traces
+                    elif table is not None:
+                        loader = partial(table, population)
+                    else:  # pragma: no cover - guarded by the enclosing condition
+                        raise RuntimeError('a trace or table loader is required')
                     loaded_traces = await self._load_owned(generation, loader)
                     exact_source_generation = explorer_generation
                     # A fresh table load records its exact ExplorerView generation in

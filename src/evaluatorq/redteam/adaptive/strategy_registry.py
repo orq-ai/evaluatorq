@@ -29,14 +29,9 @@ from evaluatorq.redteam.frameworks.owasp_llm import LLM_STRATEGIES
 from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY, VULNERABILITY_DEFS
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
 
 # Combined registry of all strategies
-STRATEGY_REGISTRY: Mapping[str, list[AttackStrategy]]
-VULNERABILITY_STRATEGY_REGISTRY: Mapping[Vulnerability, list[AttackStrategy]]
-
 _strategy_registry: dict[str, list[AttackStrategy]] = {
     **ASI_STRATEGIES,
     **LLM_STRATEGIES,
@@ -54,8 +49,10 @@ for _cat, _strategies in _strategy_registry.items():
     if _vuln is not None:
         _vulnerability_strategy_registry[_vuln] = _strategies
 
-STRATEGY_REGISTRY = types.MappingProxyType(_strategy_registry)  # pyright: ignore[reportConstantRedefinition]
-VULNERABILITY_STRATEGY_REGISTRY = types.MappingProxyType(_vulnerability_strategy_registry)  # pyright: ignore[reportConstantRedefinition]
+
+STRATEGY_REGISTRY = types.MappingProxyType(_strategy_registry)
+
+VULNERABILITY_STRATEGY_REGISTRY = types.MappingProxyType(_vulnerability_strategy_registry)
 
 
 def get_strategies_for_vulnerability(vuln: Vulnerability) -> list[AttackStrategy]:

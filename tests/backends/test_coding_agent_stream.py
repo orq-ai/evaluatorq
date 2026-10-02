@@ -50,6 +50,7 @@ def _warnings() -> tuple[list[str], int]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_steady_output_outlives_idle_limit(tmp_path: Path) -> None:
     body = f'for _ in range(6):\n    out({SYSTEM!r})\n    time.sleep(0.5)\nout({RESULT!r})\n'
     target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=3000)
@@ -59,6 +60,7 @@ async def test_steady_output_outlives_idle_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_silence_past_idle_limit_is_idle_timeout(tmp_path: Path) -> None:
     tool_use = '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","id":"t"}]}}'
     body = f'out({tool_use!r})\ntime.sleep(30)\n'
@@ -77,6 +79,7 @@ async def test_silence_past_idle_limit_is_idle_timeout(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_open_child_after_stdout_eof_still_hits_idle_limit(tmp_path: Path) -> None:
     body = 'os.close(1)\ntime.sleep(30)\n'
     target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=2000)
@@ -93,6 +96,7 @@ async def test_open_child_after_stdout_eof_still_hits_idle_limit(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_descendant_holding_stderr_open_still_hits_idle_limit(tmp_path: Path) -> None:
     sleeper = "[sys.executable, '-c', 'import time; time.sleep(30)']"
     body = f'out({RESULT!r})\nsubprocess.Popen({sleeper}, stdout=subprocess.DEVNULL)\n'
@@ -110,6 +114,7 @@ async def test_descendant_holding_stderr_open_still_hits_idle_limit(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_hard_cap_fires_on_steady_output(tmp_path: Path) -> None:
     body = f'while True:\n    out({SYSTEM!r})\n    time.sleep(0.1)\n'
     target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=10_000, max_turn_ms=3000)
@@ -121,6 +126,7 @@ async def test_hard_cap_fires_on_steady_output(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_sustained_stderr_resets_idle_limit(tmp_path: Path) -> None:
     body = f"for _ in range(5):\n    err('progress')\n    time.sleep(1)\nout({RESULT!r})\n"
     target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=3000)
@@ -130,6 +136,7 @@ async def test_sustained_stderr_resets_idle_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_idle_timeout_after_stderr_stops(tmp_path: Path) -> None:
     body = "err('progress')\ntime.sleep(30)\n"
     target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, body), timeout_ms=2000)
@@ -181,6 +188,7 @@ async def test_one_megabyte_line_parses_without_copying_for_each_deadline_check(
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_partial_line_counts_as_output(tmp_path: Path) -> None:
     half = RESULT[: len(RESULT) // 2]
     rest = RESULT[len(RESULT) // 2 :]
@@ -192,6 +200,7 @@ async def test_partial_line_counts_as_output(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_cancellation_logs_cancelled(tmp_path: Path) -> None:
     target = CodingAgentTarget(agent='claude', env=_agent(tmp_path, 'time.sleep(30)\n'))
     seen, sink = _warnings()

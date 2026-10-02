@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, cast
 
 from orq_ai_sdk.models import TraceUsage
 
@@ -133,7 +134,7 @@ def test_row_without_trace_id_is_dropped() -> None:
 def test_trace_row_is_frozen() -> None:
     row = TraceRow(trace_id='t')
     try:
-        row.trace_id = 'x'  # pyright: ignore[reportAttributeAccessIssue]
+        cast('Any', row).trace_id = 'x'
     except Exception:  # noqa: BLE001
         return
     raise AssertionError('TraceRow must be frozen')

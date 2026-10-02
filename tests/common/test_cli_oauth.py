@@ -192,7 +192,7 @@ async def test_cli_adapters_route_facets_projects_chat_and_embeddings(monkeypatc
             calls.append((args, body))
             return await old_communicate(body)
 
-        process.communicate = capture
+        monkeypatch.setattr(process, 'communicate', capture)
         return process
 
     monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')

@@ -15,6 +15,7 @@ applied" and "the field was dropped on the floor" are indistinguishable otherwis
 
 from __future__ import annotations
 
+import typing
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -31,6 +32,8 @@ from evaluatorq.simulation.types import (
     SimulationDatapoint,
     SimulationResult,
     TerminatedBy,
+)
+from evaluatorq.simulation.types import (
     TokenUsage as _TU,
 )
 
@@ -148,8 +151,8 @@ async def _run_simulate(scoring: SimulationScoringConfig | None) -> SimulationRe
         max_turns=10,  # well above TURNS_UNTIL_GOAL: the judge ends the run, not the cap
         evaluator_names=["turn_efficiency", "conversation_quality", "goal_achieved"],
         scoring=scoring,
-        user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-        judge=_GoalReachedAfterNTurns(),  # pyright: ignore[reportArgumentType]
+        user_simulator=typing.cast(typing.Any, _StubUserSim()),
+        judge=typing.cast(typing.Any, _GoalReachedAfterNTurns()),
         upload_results=False,
         executive_summary=False,
     )
@@ -242,8 +245,8 @@ async def test_generate_and_simulate_threads_scoring_to_the_scorer(monkeypatch):
             max_turns=10,
             evaluator_names=["turn_efficiency"],
             scoring=STEEP_SCORING,
-            user_simulator=_StubUserSim(),  # pyright: ignore[reportArgumentType]
-            judge=_GoalReachedAfterNTurns(),  # pyright: ignore[reportArgumentType]
+            user_simulator=typing.cast(typing.Any, _StubUserSim()),
+            judge=typing.cast(typing.Any, _GoalReachedAfterNTurns()),
             upload_results=False,
             executive_summary=False,
         )

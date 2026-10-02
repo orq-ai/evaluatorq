@@ -322,6 +322,7 @@ def test_find_debug_flag_shows_progress(monkeypatch: Any) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_find_debug_progress_skips_unchanged_polls() -> None:
     from evaluatorq.trace_finder import cli as find_cli
     from evaluatorq.trace_finder.debug import cli_debug

@@ -53,8 +53,10 @@ def test_arithmetic_carries_cost_breakdown():
     a = Usage.extract(V3_USAGE)
     assert a is not None
     total = a + a
-    assert total.input_cost == a.input_cost * 2  # pyright: ignore[reportOptionalOperand]
-    assert total.total_cost == a.total_cost * 2  # pyright: ignore[reportOptionalOperand]
+    assert a.input_cost is not None
+    assert a.total_cost is not None
+    assert total.input_cost == a.input_cost * 2
+    assert total.total_cost == a.total_cost * 2
     assert total.cache_creation_tokens == 1024
     delta = total - a
     assert delta.total_cost == a.total_cost

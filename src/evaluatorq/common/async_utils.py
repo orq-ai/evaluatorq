@@ -39,7 +39,7 @@ async def await_maybe(value: MaybeAsync[_T]) -> _T:
         return await value
     # isawaitable is False here, so value is the bare _T; the checker cannot
     # narrow the union via isawaitable, hence the cast-free ignore.
-    return value  # type: ignore[return-value]
+    return value
 
 
 async def fan_out(children: Iterable[Any], method_name: str, *args: Any, **kwargs: Any) -> None:

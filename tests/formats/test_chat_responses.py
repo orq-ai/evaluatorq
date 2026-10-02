@@ -5,11 +5,19 @@
 from __future__ import annotations
 
 import json
+import typing
 from typing import Any
 
 import pytest
 
-from evaluatorq.contracts import FunctionCall, InputFileContent, InputImageContent, InputTextContent, Message, StrategyToolCall
+from evaluatorq.contracts import (
+    FunctionCall,
+    InputFileContent,
+    InputImageContent,
+    InputTextContent,
+    Message,
+    StrategyToolCall,
+)
 from evaluatorq.formats.chat import ChatConversation
 from evaluatorq.formats.responses import ResponsesConversation
 
@@ -98,7 +106,7 @@ def test_function_call_keeps_nested_raw_key_json_arguments_verbatim() -> None:
     items: list[dict[str, Any]] = [
         {'type': 'function_call', 'call_id': 'c', 'name': 'f', 'arguments': raw_arguments},
     ]
-    call = ResponsesConversation(items=items).to_chat().messages[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    call = typing.cast(typing.Any, ResponsesConversation(items=items).to_chat().messages)[0].tool_calls[0]
     assert call.function.arguments == raw_arguments
 
 

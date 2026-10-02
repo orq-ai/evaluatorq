@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import typing
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -16,9 +17,7 @@ from pydantic import ValidationError
 
 import evaluatorq
 from evaluatorq.common import judge as judge_mod
-from evaluatorq.common import llm_call
-from evaluatorq.common import model_catalogue
-from evaluatorq.common import tracing
+from evaluatorq.common import llm_call, model_catalogue, tracing
 from evaluatorq.common.judge import (
     ClassifyOutcome,
     ClassifyQuestion,
@@ -89,7 +88,7 @@ def _client(*post_results: Any) -> Any:
 def _rate_limit() -> RateLimitError:
     return RateLimitError(
         'slow down',
-        response=SimpleNamespace(status_code=429, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=429, headers={}, request=None)),
         body={'error': {'message': 'slow down'}},
     )
 
@@ -102,7 +101,7 @@ async def _judge(
     retry_count: int = 0,
     api: str = 'responses',
 ) -> Any:
-    cfg = LLMCallConfig(model=model, api=api, retry_count=retry_count)  # pyright: ignore[reportArgumentType]
+    cfg = LLMCallConfig(model=model, api=typing.cast(typing.Any, api), retry_count=retry_count)
     return await run_judge(
         client=client,
         model=model,
@@ -800,7 +799,7 @@ async def test_a_readable_usage_block_still_lands_on_the_span():
 def test_a_criteria_shape_the_endpoint_would_reject_is_refused_locally(kwargs: dict[str, Any]):
     """Rejected before the call is paid for, not after a 400."""
     with pytest.raises(ValidationError):
-        ClassifyQuestion(instructions='q', state='s', **kwargs)  # pyright: ignore[reportArgumentType]
+        ClassifyQuestion(instructions='q', state='s', **kwargs)
 
 
 @pytest.mark.asyncio

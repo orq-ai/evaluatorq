@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -82,7 +83,7 @@ def test_orphan_function_call_output_warns_and_attaches(caplog: pytest.LogCaptur
     items = [*_ITEMS[:1], {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'a'}]},
              {'type': 'function_call_output', 'call_id': 'ghost', 'output': 'r'}]
     traj = ResponsesConversation(items=items).to_atif()
-    result = traj.steps[1].observation.results[0]  # pyright: ignore[reportOptionalMemberAccess]
+    result = typing.cast(typing.Any, traj.steps[1].observation).results[0]
     assert result.source_call_id is None and result.extra == {'orphan_call_id': 'ghost'}
     assert 'ghost' in caplog.text
 
@@ -230,9 +231,9 @@ def test_json_raw_key_arguments_and_typed_tool_output_survive() -> None:
         ]},
     ]
     trajectory = ResponsesConversation(items=items).to_atif()
-    call = trajectory.steps[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    call = typing.cast(typing.Any, trajectory.steps)[0].tool_calls[0]
     assert call.arguments == {'_raw': 'literal'}
-    result = trajectory.steps[0].observation.results[0]  # pyright: ignore[reportOptionalMemberAccess]
+    result = typing.cast(typing.Any, trajectory.steps[0].observation).results[0]
     assert isinstance(result.content, list)
     assert [part.type for part in result.content] == ['text', 'image', 'text']
     back = trajectory.to_responses()
@@ -247,7 +248,7 @@ def test_nested_raw_sentinel_shaped_json_arguments_do_not_collide() -> None:
         {'type': 'function_call_output', 'call_id': 'c', 'output': 'done'},
     ]
     trajectory = ResponsesConversation(items=items).to_atif()
-    call = trajectory.steps[0].tool_calls[0]  # pyright: ignore[reportOptionalSubscript]
+    call = typing.cast(typing.Any, trajectory.steps)[0].tool_calls[0]
     assert call.arguments == {'_raw': {'evaluatorq_raw_value': 'literal'}}
     assert call.extra is None
     back = trajectory.to_responses()

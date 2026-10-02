@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sys
+import typing
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -592,7 +593,7 @@ async def test_static_deployment_job_traces_attack_and_target_call(
     deployments = MagicMock()
     deployments.invoke_async = AsyncMock(return_value=completion)
     module = ModuleType('orq_ai_sdk')
-    module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
+    typing.cast(typing.Any, module).Orq = MagicMock(return_value=MagicMock(deployments=deployments))
     monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
@@ -611,13 +612,13 @@ async def test_static_deployment_job_traces_attack_and_target_call(
 
     _assert_static_target_spans(span_collector)
     _assert_target_child_span(span_collector, child_name='invoke deployment:test-deployment')
-    assert deployments.invoke_async.await_args.kwargs['metadata'] == {
+    assert deployments.invoke_async.await_args.kwargs['metadata'] == {  # ty: ignore[unresolved-attribute]
         'evaluatorq_pipeline': 'red_teaming',
         'evaluatorq_run_id': 'static-run',
     }
-    assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}
+    assert deployments.invoke_async.await_args.kwargs['thread'] == {'id': 'static-run:test-deployment:0'}  # ty: ignore[unresolved-attribute]
     # Without this the deployment's server-side execution starts its own root trace.
-    assert 'traceparent' in deployments.invoke_async.await_args.kwargs['http_headers']
+    assert 'traceparent' in deployments.invoke_async.await_args.kwargs['http_headers']  # ty: ignore[unresolved-attribute]
 
 
 @pytest.mark.asyncio
@@ -635,7 +636,7 @@ async def test_static_deployment_job_omits_trace_headers_when_propagation_disabl
     deployments = MagicMock()
     deployments.invoke_async = AsyncMock(return_value=completion)
     module = ModuleType('orq_ai_sdk')
-    module.Orq = MagicMock(return_value=MagicMock(deployments=deployments))  # pyright: ignore[reportAttributeAccessIssue]
+    typing.cast(typing.Any, module).Orq = MagicMock(return_value=MagicMock(deployments=deployments))
     monkeypatch.setitem(sys.modules, 'orq_ai_sdk', module)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
     monkeypatch.setenv('EVALUATORQ_PROPAGATE_TRACE_CONTEXT', 'false')
@@ -652,7 +653,7 @@ async def test_static_deployment_job_omits_trace_headers_when_propagation_disabl
         0,
     )
 
-    assert 'http_headers' not in deployments.invoke_async.await_args.kwargs
+    assert 'http_headers' not in deployments.invoke_async.await_args.kwargs  # ty: ignore[unresolved-attribute]
 
 
 @pytest.mark.asyncio
@@ -984,10 +985,9 @@ async def test_orq_agent_target_emits_one_llm_span_per_create(span_collector: _C
     several priced calls. Usage belongs on those per-call spans only — a total
     on the parent would double-count when the sink aggregates.
     """
-    from tests.redteam.test_backend_send_prompt_with_usage import _make_orq_response
-
     from evaluatorq.redteam.backends.orq import ORQAgentTarget
     from evaluatorq.redteam.contracts import Message
+    from tests.redteam.test_backend_send_prompt_with_usage import _make_orq_response
 
     pending = MagicMock()
     pending.id = 'tool-call-001'

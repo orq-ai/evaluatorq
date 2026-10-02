@@ -1646,7 +1646,7 @@ def test_yes_no_cell_shows_only_classifier_score_when_prose_exists() -> None:
     from evaluatorq.dashboard.trace_finder.explorer_views import _match_cells
 
     _, _, snapshot = _yes_no_snapshot('The user asks how to filter traces.')
-    html = _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
+    html = _match_cells(SimpleNamespace(trace_id='t'), snapshot)
 
     assert 'xr-yn yes' in html
     assert 'Classifier score 93%' in html
@@ -1660,7 +1660,7 @@ def test_prose_reason_is_not_rendered_in_table_or_drawer() -> None:
     from evaluatorq.dashboard.trace_finder.views import _drawer_reason
 
     _, result, snapshot = _yes_no_snapshot('Asked <script>alert("x")</script> & explained.')
-    html = _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
+    html = _match_cells(SimpleNamespace(trace_id='t'), snapshot)
     drawer = _drawer_reason(result.answers[0])
 
     assert 'Classifier score 93%' in html
@@ -1682,7 +1682,7 @@ def test_score_only_summary_renders_neutral_classifier_score() -> None:
 
     assert 'Classifier score 93%' in _match_cells(
         SimpleNamespace(trace_id='t'), snapshot
-    )  # type: ignore[arg-type]
+    )
     assert 'Classifier score 93%' in _answer_cells(result, (dimension,))
     drawer = _drawer_reason(result.answers[0])
     assert score_text not in drawer
@@ -1697,7 +1697,7 @@ def test_matched_answer_without_confidence_shows_no_reason_or_score() -> None:
     from evaluatorq.dashboard.trace_finder.views import _answer_cells, _drawer_reason
 
     dimension, result, snapshot = _yes_no_snapshot('noul=0.93 (threshold 0.5)', confidence=None)
-    table = _match_cells(SimpleNamespace(trace_id='t'), snapshot)  # type: ignore[arg-type]
+    table = _match_cells(SimpleNamespace(trace_id='t'), snapshot)
     cells = _answer_cells(result, (dimension,))
     drawer = _drawer_reason(result.answers[0])
 
@@ -1725,10 +1725,10 @@ def test_unmatched_or_failed_score_answer_has_no_score_callout() -> None:
     assert 'Classifier score' not in _drawer_reason(failed)
     assert 'Classifier score' not in _match_cells(
         SimpleNamespace(trace_id='t'), replace(snapshot, results={'t': unmatched_result})
-    )  # type: ignore[arg-type]
+    )
     assert 'Classifier score' not in _match_cells(
         SimpleNamespace(trace_id='t'), replace(snapshot, results={'t': failed_result})
-    )  # type: ignore[arg-type]
+    )
 
 
 def test_drawer_uses_score_only_when_classifier_returns_prose() -> None:

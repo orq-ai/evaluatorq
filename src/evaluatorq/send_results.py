@@ -14,7 +14,7 @@ from .types import DataPointResult, EvaluatorqResult
 class SendResultsPayload(BaseModel):
     """The payload format expected by the Orq API."""
 
-    model_config: dict[str, bool] = {'populate_by_name': True}
+    model_config: dict[str, bool] = {'populate_by_name': True}  # ty: ignore[invalid-attribute-override]
 
     name: str = Field(serialization_alias='_name')
     description: str | None = Field(default=None, serialization_alias='_description')

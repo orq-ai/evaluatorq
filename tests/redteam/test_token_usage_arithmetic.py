@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -45,7 +45,7 @@ class TestTokenUsageSum:
         a = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
         b = TokenUsage(prompt_tokens=20, completion_tokens=8, total_tokens=28, calls=2)
         # sum() starts with int(0); __radd__ must handle it
-        result: TokenUsage = sum([a, b])  # pyright: ignore[reportAssignmentType]
+        result = cast(TokenUsage, sum([a, b]))
         assert result.prompt_tokens == 30
         assert result.completion_tokens == 13
         assert result.calls == 3
@@ -54,7 +54,7 @@ class TestTokenUsageSum:
         a = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, calls=1)
         b = TokenUsage(prompt_tokens=20, completion_tokens=8, total_tokens=28, calls=2)
         c = TokenUsage(prompt_tokens=5, completion_tokens=2, total_tokens=7, calls=1)
-        result: TokenUsage = sum([a, b, c])  # pyright: ignore[reportAssignmentType]
+        result = cast(TokenUsage, sum([a, b, c]))
         assert result.prompt_tokens == 35
         assert result.completion_tokens == 15
         assert result.calls == 4

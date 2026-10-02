@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from typing import cast
 
 import pytest
 
@@ -26,12 +27,16 @@ def test_concerning_preset_uses_classifier_level_indices() -> None:
 
 def test_registry_is_frozen() -> None:
     with pytest.raises(TypeError):
-        presets.LABEL_PRESETS['x'] = presets.SENTIMENT  # type: ignore[index]  # pyright: ignore[reportIndexIssue]
+        cast('dict[str, LabelSpec]', presets.LABEL_PRESETS)['x'] = presets.SENTIMENT
 
 
 def test_taxonomies_have_expected_sizes() -> None:
-    assert len(presets.INTENT_TAXONOMY.criteria) == 10  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-    assert len(presets.FAILURE_TAXONOMY.criteria) == 14  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    intent_criteria = presets.INTENT_TAXONOMY.criteria
+    failure_criteria = presets.FAILURE_TAXONOMY.criteria
+    assert intent_criteria is not None
+    assert failure_criteria is not None
+    assert len(intent_criteria) == 10
+    assert len(failure_criteria) == 14
 
 
 def test_label_name_rejects_reserved_match_key() -> None:

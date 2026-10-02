@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -189,6 +189,11 @@ def _match_value(result: TraceClassification | None) -> object:
     return (result.matched, tuple(str(answer.value) for answer in result.answers))
 
 
+def _sort_value(value: Callable[[TraceRow], object], row: TraceRow) -> Any:
+    """Adapt a registry value to the dynamically comparable sort-key boundary."""
+    return value(row)
+
+
 def sort_rows(
     rows: Sequence[TraceRow],
     key: str,
@@ -207,5 +212,5 @@ def sort_rows(
     value = (lambda row: _match_value(results.get(row.trace_id))) if key == MATCH and results else column.value
     present = [row for row in rows if value(row) is not None]
     missing = [row for row in rows if value(row) is None]
-    present.sort(key=value, reverse=descending)  # pyright: ignore[reportArgumentType, reportCallIssue]
+    present.sort(key=lambda row: _sort_value(value, row), reverse=descending)
     return (*present, *missing)

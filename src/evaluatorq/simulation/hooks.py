@@ -63,7 +63,7 @@ _STAGE_LABELS: dict[str, str] = {
 
 def _stage_label(stage: SimStage | str) -> str:
     """Return a human-readable label for *stage*, falling back to the raw value."""
-    return _STAGE_LABELS.get(stage, str(stage))  # type: ignore[arg-type]
+    return _STAGE_LABELS.get(stage, str(stage))
 
 
 class SimulationRunMeta(TypedDict):

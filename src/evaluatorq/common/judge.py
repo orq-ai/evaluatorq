@@ -384,7 +384,7 @@ def _build_namespace(
     return nested, flat
 
 
-# Use an EXPLICIT signature (not **kwargs) so basedpyright checks call sites and
+# Use an EXPLICIT signature (not **kwargs) so the type checker checks call sites and
 # the `error` kwarg actually reaches _build_namespace.
 def build_eval_replacements(
     *,
@@ -562,7 +562,7 @@ async def _responses_judge(
             value=parsed.value,
             explanation=parsed.explanation,
             abstain=bool(getattr(parsed, 'abstain', False)),
-        )  # pyright: ignore[reportAttributeAccessIssue]
+        )
     return JudgeOutcome(payload=payload, token_usage=usage, raw_content=raw)
 
 

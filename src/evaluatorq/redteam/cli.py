@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import typer
 
@@ -34,6 +34,7 @@ from evaluatorq.redteam.contracts import (
 )
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import AgentTarget
     from evaluatorq.redteam.contracts import RedTeamReport
 
 app = typer.Typer(
@@ -338,7 +339,7 @@ def _resolve_run_options(
         resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
 
     target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
-    targets: list[str] | str = target if len(target) > 1 else target[0]
+    targets: list[str] | str = list(target) if len(target) > 1 else target[0]
 
     # Build LLMConfig from CLI flags
     config = LLMConfig(
@@ -664,7 +665,7 @@ def run(
     try:
         report = asyncio.run(
             red_team(
-                target=targets,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+                target=cast('list[str | AgentTarget] | str', targets),
                 llm_config=config,
                 name=name,
                 mode=mode,

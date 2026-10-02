@@ -155,7 +155,7 @@ def _cached_stats(path: Path, distil: Callable[[str, int], _Stats | None]) -> _S
 
 def _as_float(v: object, default: float = 0.0) -> float:
     try:
-        return float(v)  # type: ignore[arg-type]
+        return float(v)
     except (TypeError, ValueError):
         return default
 
@@ -168,14 +168,14 @@ def _as_float_or_none(v: object) -> float | None:
     if v is None:
         return None
     try:
-        return float(v)  # type: ignore[arg-type]
+        return float(v)
     except (TypeError, ValueError):
         return None
 
 
 def _as_int(v: object, default: int = 0) -> int:
     try:
-        return int(v)  # type: ignore[arg-type]
+        return int(v)
     except (TypeError, ValueError):
         return default
 

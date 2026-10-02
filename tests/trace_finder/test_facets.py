@@ -102,8 +102,8 @@ async def test_duplicate_project_names_keep_distinct_id_labels() -> None:
             has_more=False,
         )
 
-    client.traces.list_facet_values_async = facets
-    client.projects.list_async = projects
+    client.traces.list_facet_values_async = facets  # ty: ignore[invalid-assignment]
+    client.projects.list_async = projects  # ty: ignore[invalid-assignment]
     now = datetime(2026, 9, 22, tzinfo=timezone.utc)
 
     catalogue = await load_facet_catalogue(cast(Any, client), start=now, end=now)
@@ -136,7 +136,7 @@ async def test_load_facet_catalogue_keeps_ranked_values_when_one_facet_overflows
             )
         return await original_facets(**kwargs)
 
-    client.traces.list_facet_values_async = facets
+    client.traces.list_facet_values_async = facets  # ty: ignore[invalid-assignment]
     start = datetime(2026, 9, 1, tzinfo=timezone.utc)
 
     catalogue = await load_facet_catalogue(cast(Any, client), start=start, end=start)

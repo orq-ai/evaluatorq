@@ -603,7 +603,7 @@ async def execute_classify(
         ],
     )
     payload = await _bounded_call(
-        client.post('/classify', cast_to=object, body=body, options=options),  # pyright: ignore[reportArgumentType]
+        client.post('/classify', cast_to=object, body=body, options=cast('Any', options)),
         timeout_s,
     )
     # `record_llm_response` is duck-typed (its `_field` helper reads dicts as well as

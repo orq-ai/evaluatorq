@@ -822,12 +822,12 @@ def _build_token_usage_section(report: RedTeamReport) -> ReportSection | None:
             'total_cost': overall.total_cost,
         }
 
-    agent_usage: dict[str, TokenUsage] = defaultdict(TokenUsage)
+    agent_usage: dict[str, TokenUsage] = {}
     for result in report.results:
         if result.execution is None or result.execution.token_usage is None:
             continue
         agent_key = result.agent.key or result.agent.display_name or 'unknown'
-        agent_usage[agent_key] = agent_usage[agent_key] + result.execution.token_usage
+        agent_usage[agent_key] = agent_usage.get(agent_key, TokenUsage()) + result.execution.token_usage
 
     per_agent = [
         {

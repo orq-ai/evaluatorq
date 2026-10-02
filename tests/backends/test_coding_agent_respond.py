@@ -149,6 +149,7 @@ async def test_missing_binary_is_not_found_and_non_retryable(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_timeout_kills_and_is_non_retryable(tmp_path: Path) -> None:
     pidfile = tmp_path / 'pid'
     path = _install(tmp_path, 'claude', SLEEPER)

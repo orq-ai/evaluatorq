@@ -1,5 +1,7 @@
 """Tests for SimulationRunner."""
 
+import typing
+
 import pytest
 
 from evaluatorq.simulation.runner.simulation import (
@@ -34,7 +36,7 @@ def _make_scenario():
 class TestSimulationRunnerValidation:
     def test_target_callback_is_rejected(self):
         with pytest.raises(TypeError, match="target_callback"):
-            SimulationRunner(target_callback=lambda msgs: "ok")  # pyright: ignore[reportCallIssue]
+            typing.cast(typing.Any, SimulationRunner)(target_callback=lambda msgs: "ok")
 
     def test_requires_target(self):
         with pytest.raises(ValueError, match="Must provide either"):

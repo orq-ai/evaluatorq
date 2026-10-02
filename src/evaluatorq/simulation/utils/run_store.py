@@ -18,7 +18,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
 from evaluatorq.common.replay import REPLAY_VERSION
@@ -174,8 +174,8 @@ def get_sim_runs_dir() -> Path:
 def build_simulation_run(
     *,
     run_name: str,
-    mode: str,
-    target_kind: str,
+    mode: Literal['run', 'simulate', 'generate'],
+    target_kind: Literal['orq_agent', 'orq_deployment', 'vercel', 'openai_model', 'callback'],
     evaluator_names: list[str],
     results: list[Any],
     target: str | None = None,
@@ -211,8 +211,8 @@ def build_simulation_run(
     return SimulationRun(
         run_name=run_name,
         created_at=datetime.now(tz=timezone.utc),
-        mode=mode,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
-        target_kind=target_kind,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+        mode=mode,
+        target_kind=target_kind,
         target=target,
         target_model=target_model,
         max_turns=max_turns,

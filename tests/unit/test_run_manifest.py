@@ -108,14 +108,16 @@ def test_persisted_manifest_allows_missing_stage_progress() -> None:
     assert stage.total is None
 
 
-def test_stage_progress_throttles_and_always_writes_the_last_count(tmp_path: Path) -> None:
+def test_stage_progress_throttles_and_always_writes_the_last_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     now = [0.0]
     started = start_manifest(run_id='r', surface='insights', run_name='demo', runs_dir=tmp_path)
     writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
     writer.start_stage('label')
     flushes: list[int] = []
     original = writer.flush
-    writer.flush = lambda: (flushes.append(1), original())[1]  # type: ignore[method-assign]
+    monkeypatch.setattr(writer, 'flush', lambda: (flushes.append(1), original())[1])
 
     for done in range(1, 101):
         writer.stage_progress('label', done, 100)
@@ -126,7 +128,7 @@ def test_stage_progress_throttles_and_always_writes_the_last_count(tmp_path: Pat
     assert (record.completed, record.total) == (100, 100)
 
 
-def test_first_progress_for_each_stage_is_flushed(tmp_path: Path) -> None:
+def test_first_progress_for_each_stage_is_flushed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = [0.0]
     started = start_manifest(run_id='r', surface='insights', run_name='demo', runs_dir=tmp_path)
     writer = ManifestWriter(started.manifest, started.path, clock=lambda: now[0])
@@ -136,7 +138,7 @@ def test_first_progress_for_each_stage_is_flushed(tmp_path: Path) -> None:
 
     flushes: list[int] = []
     original = writer.flush
-    writer.flush = lambda: (flushes.append(1), original())[1]  # type: ignore[method-assign]
+    monkeypatch.setattr(writer, 'flush', lambda: (flushes.append(1), original())[1])
     writer.start_stage('summary')
     flushes.clear()  # Ignore the stage transition flush; check its first progress update.
 

@@ -689,7 +689,7 @@ def _toolbar(
     )
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary xr-load" type="submit" form="explorer-load-form">Load</button>'
-    from evaluatorq.dashboard.trace_finder.views import _facet_chips  # pyright: ignore[reportPrivateUsage]
+    from evaluatorq.dashboard.trace_finder.views import _facet_chips
 
     chips = _facet_chips(view.facets, view.numeric, removable=True)
     active = chips.count('class="chip ')

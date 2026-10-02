@@ -68,10 +68,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --all-extras --all-groups
 
-      # Type results do not depend on the host OS, so only Linux pays for it.
-      - name: Typecheck (basedpyright)
-        if: matrix.os == 'ubuntu-latest'
-        run: uv run basedpyright
+      # Type results do not depend on the host OS or runtime version, so only
+      # the minimum-version Linux leg pays for it.
+      - name: Typecheck (ty)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+        run: uv run ty check
 
       - name: Test (unit only)
         if: matrix.python-version != '3.13' || matrix.os != 'ubuntu-latest'

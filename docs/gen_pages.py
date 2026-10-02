@@ -151,7 +151,7 @@ def _safe_getattr(mod: object, name: str, parent_dotted: str) -> object | None:
     """
     import sys
 
-    obj = vars(mod).get(name)  # type: ignore[arg-type]
+    obj = vars(mod).get(name)
     if obj is not None:
         return obj
     full = f"{parent_dotted}.{name}"
@@ -203,7 +203,7 @@ def _submodule_shadowed(mod: object, dotted: str, name: str) -> str | None:
     Only griffe is confused: at runtime the function wins permanently (the import
     machinery binds the sub-module on the package first, then the ``from`` import
     rebinds the name over it, and a later ``import_module`` hits ``sys.modules``
-    without re-binding), and basedpyright resolves all three to functions too. So
+    without re-binding), and static type analysis resolves all three to functions too. So
     the fix belongs here rather than in a rename of the three modules.
 
     Detect it by asking where the runtime object is actually defined: a hit means

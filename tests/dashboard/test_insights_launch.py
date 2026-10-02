@@ -237,6 +237,7 @@ def test_dashboard_reconciles_worker_killed_before_start_and_releases_finder_fil
     snapshot.chmod(0o600)
     state_path = worker_state_path(runs_dir, 'worker-killed')
     _write_worker_state(state_path, {'pid': 12345, 'heartbeat_at': time.time() - 120, 'snapshot_path': str(snapshot)})
+    monkeypatch.setattr('evaluatorq.dashboard.insights_launch._worker_process_is_alive', lambda *_: False)
 
     entries, _, manifests = insights_routes._entries(runs_dir)
 

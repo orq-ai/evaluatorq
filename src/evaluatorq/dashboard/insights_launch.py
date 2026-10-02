@@ -47,6 +47,10 @@ INSIGHTS_WORKER_STALE_SECONDS = 90
 INSIGHTS_WORKER_HEARTBEAT_SECONDS = 10
 
 
+def _default_dimensions() -> list[DimensionName]:
+    return ['intent']
+
+
 def _set_private_file_mode(descriptor: int, mode: int) -> None:
     """Apply POSIX file permissions; Windows uses the containing directory ACL.
 
@@ -876,7 +880,7 @@ class InsightsLaunchSpec(BaseModel):
     labels: list[Preset] = Field(default_factory=list, max_length=len(LABEL_PRESETS))
     custom_labels: list[LabelSpec] = Field(default_factory=list, max_length=10)
     coding_labels: list[str] = Field(default_factory=list, max_length=len(_CODING_PRESETS))
-    dimensions: list[DimensionName] = Field(default_factory=lambda: ['intent'])
+    dimensions: list[DimensionName] = Field(default_factory=_default_dimensions)
     _finder_export_snapshot: str | None = PrivateAttr(default=None)
 
     def validated_finder_export_snapshot(self) -> str | None:

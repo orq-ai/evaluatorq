@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import typing
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from unittest.mock import MagicMock, patch
@@ -94,7 +95,7 @@ def _datapoint() -> DataPoint:
 
 def test_unknown_assignment_raises():
     with pytest.raises(ValueError, match="unknown assignment"):
-        llm_jury(name="x", criteria="c", judges=["a", "b"], assignment="random")  # pyright: ignore[reportArgumentType]
+        llm_jury(name="x", criteria="c", judges=["a", "b"], assignment=typing.cast(typing.Any, "random"))
 
 
 def test_cyclic_requires_min_successful_judges_1():

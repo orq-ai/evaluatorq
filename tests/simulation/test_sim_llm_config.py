@@ -8,17 +8,18 @@ surface: one config in at the entry point, honoured at each call site.
 
 from __future__ import annotations
 
+import typing
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.common.structured_output import UNSET
+from evaluatorq.contracts import LLMCallConfig
+from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.agents.base import AgentConfig, _config_from_agent_config
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
-from evaluatorq.simulation._config import resolve_sim_llm_config
 from evaluatorq.simulation.generators import (
     FirstMessageGenerator,
     PersonaGenerator,
@@ -690,7 +691,7 @@ def test_the_simulation_config_refuses_the_removed_model_keyword() -> None:
     from evaluatorq.simulation._config import SimulationConfig
 
     with pytest.raises(ValidationError):
-        SimulationConfig(model='chosen/model')  # pyright: ignore[reportCallIssue]
+        typing.cast(typing.Any, SimulationConfig)(model='chosen/model')
 
 
 def test_no_public_entry_point_still_takes_sim_model() -> None:

@@ -17,7 +17,7 @@ def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'empty-settings.json'))
     monkeypatch.setattr(ow.shutil, 'which', lambda _name: None)
-    ow._cli_slug_cache.clear()  # pyright: ignore[reportPrivateUsage]
+    ow._cli_slug_cache.clear()
 
 
 # --- workspace slug ---------------------------------------------------------

@@ -182,10 +182,7 @@ Keep it natural - this is how they would actually open a conversation."""
         ) as span:
             record_llm_input(
                 span,
-                [
-                    {'role': str(m['role']), 'content': str(m.get('content', ''))}  # pyright: ignore[reportAttributeAccessIssue]
-                    for m in messages
-                ],
+                [{'role': str(m['role']), 'content': str(m.get('content', ''))} for m in messages],
             )
             # RES-1295: `generate()` returns a bare `str`, so the usage
             # execute_response now prices has nowhere to go — carrying it

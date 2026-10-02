@@ -1,7 +1,10 @@
+import hashlib
 import logging
 import socket
 import threading
 import traceback
+import typing
+from pathlib import Path
 
 import pytest
 
@@ -102,7 +105,8 @@ def _reset_reasoning_rejectors():
     reset_responses_rejectors()
 
 
-class _OfflineCatalogues(dict):  # pyright: ignore[reportMissingTypeArgument]
+
+class _OfflineCatalogues(dict[typing.Any, typing.Any]):
     """A catalogue cache that reports every host as already-fetched-and-empty."""
 
     def get(self, key, default=None):
@@ -136,12 +140,17 @@ def _offline_model_catalogue(request, monkeypatch):
     clear_model_overrides()
 
 
+def _run_store_path(base: Path, nodeid: str) -> Path:
+    """Return a lazy, filesystem-safe run-store path unique to one test node."""
+    node_digest = hashlib.sha256(nodeid.encode()).hexdigest()
+    return base / "evaluatorq-run-stores" / node_digest
+
+
 @pytest.fixture(autouse=True)
-def _isolate_run_stores(tmp_path, monkeypatch):
-    """Point the redteam/sim run stores at a tmp dir so tests never write
-    runs into the repo's real ``.evaluatorq/`` store."""
-    monkeypatch.setenv("EVALUATORQ_DIR", str(tmp_path / ".evaluatorq"))
-    yield
+def _isolate_run_stores(tmp_path_factory, request, monkeypatch):
+    """Point each test at a lazy run store below pytest's session temp root."""
+    path = _run_store_path(tmp_path_factory.getbasetemp(), request.node.nodeid)
+    monkeypatch.setenv("EVALUATORQ_DIR", str(path))
 
 
 @pytest.fixture(autouse=True)
@@ -177,8 +186,12 @@ class _LoguruPropagateHandler(logging.Handler):
 
 
 @pytest.fixture(autouse=True)
-def _propagate_loguru_to_stdlib():
-    """Bridge loguru records into stdlib logging so pytest's caplog can capture them."""
+def _propagate_loguru_to_stdlib(request):
+    """Bridge Loguru only when caplog is in the test's fixture dependency closure."""
+    if "caplog" not in request.fixturenames:
+        yield
+        return
+
     from loguru import logger
 
     handler_id = logger.add(_LoguruPropagateHandler(), format="{message}", level="DEBUG")

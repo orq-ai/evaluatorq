@@ -123,7 +123,7 @@ def priority_points(
             answer = member.labels.get(satisfaction_label)
             if answer is None or answer.error is not None or answer.value is None:
                 continue
-            satisfaction_values.append(float(answer.value))  # pyright: ignore[reportArgumentType]
+            satisfaction_values.append(float(answer.value))
 
         if not satisfaction_values:
             logger.warning(
