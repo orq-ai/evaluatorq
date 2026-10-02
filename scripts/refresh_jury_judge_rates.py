@@ -8,21 +8,20 @@ because our gateway is down. Committed is not the same as frozen: a provider
 reprices and the published figure silently becomes wrong, which is the failure
 mode this script exists to catch.
 
-What it refreshes, and what it deliberately does not:
+What it refreshes, all from `GET /v2/models` via `common.model_catalogue`, so
+there is one parser for that payload rather than two. This is the only
+endpoint that publishes both the rates and the reasoning-effort parameter;
+`/v2/model-catalog` is unauthenticated and lists more models but carries
+neither.
 
-* `input_rate` / `output_rate` are read from `GET /v2/models` via
-  `common.model_catalogue`, so there is one parser for that payload rather than
-  two. This is the only endpoint that publishes both the rates and the accepted
-  reasoning-effort values; `/v2/model-catalog` is unauthenticated and lists more
-  models but carries neither.
-* `seated_effort` and `priced_at_ceiling` are **carried over untouched**. Both
-  come from the intelligence/price frontier derivation, which lives in the
-  research repo and is rerun and argued there. Guessing them here would put a
-  number in front of customers that nothing derived.
+* `input_rate` / `output_rate`, the per-token billing rates.
+* `default_reasoning_effort`, the effort each seat runs at, since presets call
+  every judge without one.
 
 Nothing is decided automatically. A repricing invalidates a published
-`estimated_cost_per_1k` and a retirement means promoting a reserve; both are
-printed as decisions for a human to act on.
+`estimated_cost_per_1k`, a changed default changes how a seat judges, and a
+retirement means promoting a reserve; all three are printed as decisions for a
+human to act on.
 
 RES-1528 will replace this with `orq/auto` / `orq/frontier`, which compute the
 same selection server-side and update on every catalog sync. Until those
@@ -60,36 +59,32 @@ if TYPE_CHECKING:
 
 RATES_PATH = Path(__file__).resolve().parent.parent / 'src/evaluatorq/common/data/jury_judge_rates.json'
 
-# Fields the frontier derivation owns. Carried over from the previous capture
-# rather than recomputed, because the derivation is not in this repository.
-DERIVED_FIELDS = ('seated_effort', 'priced_at_ceiling')
 
-
-def refreshed_row(previous: dict[str, Any], info: ModelInfo) -> dict[str, Any]:
-    """One judge's row: live rates, carried-over derivation, original key order.
+def refreshed_row(info: ModelInfo) -> dict[str, Any] | None:
+    """One judge's row: live rates and default effort, or None when the catalogue lists no price.
 
     `/v2/models` quotes per 1000 tokens and the table is per 1M, which is the
     unit the published $/1k arithmetic and every seat comment are written in.
     """
-    row = {
+    if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
+        return None
+    return {
         'input_rate': round(info.input_cost_per_1k * 1000, 6),
         'output_rate': round(info.output_cost_per_1k * 1000, 6),
+        'default_reasoning_effort': info.default_reasoning_effort,
     }
-    row.update({field: previous[field] for field in DERIVED_FIELDS if field in previous})
-    return row
 
 
-def decisions(
-    previous: dict[str, Any], current: dict[str, Any], efforts: dict[str, frozenset[str] | None]
-) -> list[str]:
+def decisions(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
     """What a human has to act on before this capture can be committed."""
     lines: list[str] = []
     for router_id, before in previous.items():
         after = current.get(router_id)
         if after is None:
             lines.append(
-                f'NOT SERVED: {router_id} is named by a preset but absent from /v2/models. '
-                'Retired, or not enabled for this key - check before promoting a reserve.'
+                f'NOT SERVED: {router_id} is named by a preset but absent from /v2/models or listed '
+                'without a price. Retired, repriced to nothing, or not enabled for this key - check '
+                'before promoting a reserve.'
             )
             continue
         if (before['input_rate'], before['output_rate']) != (after['input_rate'], after['output_rate']):
@@ -98,36 +93,26 @@ def decisions(
                 f'{after["input_rate"]}/{after["output_rate"]} per 1M. Every panel seating it '
                 'publishes a stale $/1k until the preset figure is recomputed.'
             )
-
-    # The check that would have caught `reasoning` being sent as an effort: the
-    # catalogue publishes the values a model accepts, and a seat ranked at a rung
-    # outside that set cannot be called where it was costed.
-    for router_id, row in current.items():
-        seated, accepted = row.get('seated_effort'), efforts.get(router_id)
-        if seated is None or accepted is None or seated in accepted:
-            continue
-        lines.append(
-            f'EFFORT NOT ACCEPTED: {router_id} is seated at {seated!r}, which is not among the '
-            f'values /v2/models says it takes ({sorted(accepted)}). Either the seat is priced at a '
-            'rung it cannot be called at, or the rung is a card dialect rather than a sendable value.'
-        )
+        if before.get('default_reasoning_effort') != after['default_reasoning_effort']:
+            lines.append(
+                f'DEFAULT EFFORT CHANGED: {router_id} {before.get("default_reasoning_effort")!r} -> '
+                f'{after["default_reasoning_effort"]!r}. Every panel seating it now judges at a different effort.'
+            )
     return lines
 
 
-async def capture(previous: dict[str, Any]) -> tuple[dict[str, Any], dict[str, frozenset[str] | None]]:
-    """Live rates for every judge in the table, plus the efforts each one accepts."""
+async def capture(previous: dict[str, Any]) -> dict[str, Any]:
+    """Live rates and default effort for every judge in the table."""
     if not os.environ.get('ORQ_API_KEY'):
         raise SystemExit('ORQ_API_KEY is required: /v2/models is authenticated and project-scoped.')
     resolved = resolve_llm_client(require_orq=True)
     current: dict[str, Any] = {}
-    efforts: dict[str, frozenset[str] | None] = {}
     try:
-        for router_id, row in previous.items():
+        for router_id in previous:
             info = await get_model_info(router_id, resolved.client)
-            if info is None:
-                continue
-            current[router_id] = refreshed_row(row, info)
-            efforts[router_id] = info.reasoning_efforts
+            row = refreshed_row(info) if info is not None else None
+            if row is not None:
+                current[router_id] = row
     finally:
         if resolved.owned:
             await resolved.client.close()
@@ -142,7 +127,7 @@ async def capture(previous: dict[str, Any]) -> tuple[dict[str, Any], dict[str, f
             'failure, not a catalogue of retirements - check the key and the project scope. '
             'Run with EVALUATORQ_LOG_LEVEL=DEBUG to see the underlying response.'
         )
-    return current, efforts
+    return current
 
 
 def main() -> int:
@@ -153,9 +138,9 @@ def main() -> int:
 
     table = json.loads(args.out.read_text())
     previous = table['judges']
-    current, efforts = asyncio.run(capture(previous))
+    current = asyncio.run(capture(previous))
 
-    pending = decisions(previous, current, efforts)
+    pending = decisions(previous, current)
     for line in pending:
         print(line)
 

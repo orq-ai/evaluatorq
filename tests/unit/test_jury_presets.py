@@ -28,7 +28,7 @@ def _rate_table() -> dict[str, JudgeRates]:
 def _preset(**overrides: Any) -> dict[str, Any]:
     base = {
         'name': 'Test Panel',
-        'judges': ('openai/gpt-5.6-luna', 'anthropic/claude-opus-5', 'google/gemini-3.6-flash'),
+        'judges': ('openai/gpt-5.6-luna', 'anthropic/claude-opus-5-5', 'google/gemini-3.6-flash'),
         'reserve_judges': ('deepseek/deepseek-v4-pro',),
         'use_when': 'testing',
         'estimated_cost_per_1k': 1.0,
@@ -196,20 +196,6 @@ class TestFamilyExclusion:
             'EU Region',
         ):
             assert PRESETS[name].duplicated_lineages() == {}
-
-
-class TestPricingRungDisclosure:
-    @pytest.mark.parametrize('preset', PRESETS.values(), ids=lambda p: p.name)
-    def test_understated_seats_are_named_and_are_seats(self, preset):
-        understated = preset.priced_below_seated_effort()
-
-        assert len(set(understated)) == len(understated)
-        assert set(understated) <= set(preset.judges)
-
-    def test_open_weight_is_the_one_panel_priced_at_the_effort_it_sits_at(self):
-        """A published figure is a floor everywhere else, so the exception is worth pinning."""
-        assert PRESETS['Open-Weight / Portable'].priced_below_seated_effort() == ()
-        assert any(p.priced_below_seated_effort() for p in PRESETS.values())
 
 
 class TestDroppedRegister:
