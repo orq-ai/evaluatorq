@@ -1,12 +1,14 @@
 """Structured input and output for the run commands: ``--config``, JSON-valued flags, ``--json`` and ``schema``.
 
 ``eq redteam run``, ``eq sim simulate`` and ``eq sim run`` accept their SDK keyword arguments as one JSON
-document (``--config``), and print their result model as JSON (``--json``). This module holds the parts the
-two surfaces share; each surface owns the pydantic model that names its own keyword arguments.
+document (``--config``), and print their result model as JSON (``--json``). Each surface owns the pydantic
+model naming its keyword arguments and a table of `Flag` rows saying which field each flag sets; this module
+turns the two into one validated model with `resolve_config`.
 
 Precedence is the same everywhere: a flag passed on the command line beats the config file, which beats the
-flag's default. "Passed on the command line" is read from click's parameter source, never by comparing the
-value with the default, so ``--max-turns 5`` beats a config's ``"max_turns": 8`` even when 5 is the default.
+model's default. "Passed on the command line" is read from click's parameter source, never by comparing the
+value with a default, so ``--max-turns 5`` beats a config's ``"max_turns": 8`` even when 5 is the default.
+Config-backed flags therefore declare no default of their own: the model's default is the only one.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import json
 import sys
 import types
 import typing
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
@@ -29,7 +32,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
 ModelT = TypeVar('ModelT', bound=BaseModel)
-ValueT = TypeVar('ValueT')
 
 STDIN_SOURCE = '-'
 
@@ -40,7 +42,7 @@ def config_option_help(function: str, schema_command: str) -> str:
     """Help text for a ``--config`` option that carries ``function``'s keyword arguments."""
     return (
         f'JSON file of {function} keyword arguments, or "-" to read it from stdin. '
-        f'Flags passed on the command line override it. Unknown keys are rejected; '
+        f'Flags passed on the command line override it, field by field. Unknown keys are rejected; '
         f'print the accepted shape with `{schema_command}`.'
     )
 
@@ -56,27 +58,69 @@ def explicitly_set(ctx: click.Context, param: str) -> bool:
     return source is not None and source not in _IMPLICIT_SOURCES
 
 
-def pick(
-    ctx: click.Context, config: BaseModel | None, *, param: str, value: ValueT, field: str | None = None
-) -> ValueT:
-    """Resolve one CLI parameter against a config file: explicit flag, then config, then the flag default.
+@dataclass(frozen=True)
+class Flag:
+    """A command-line flag that sets one field of a run config.
 
-    ``field`` names the config field when it differs from the parameter name. A config value of ``null``
-    reads as "not set" and falls back to the flag default, which is what ``None`` means to the SDK too.
+    ``path`` is the dotted field path, e.g. ``'llm_config.attacker.model'``. ``None`` marks a flag with no
+    config field of its own, such as ``--vercel-url``, which builds a target object outside the config.
+    ``to_value`` turns the parsed flag value into the field value. ``replaces`` names top-level fields the
+    flag's choice supersedes: passing the flag drops them from the config file, so ``--dataset-id`` replaces a
+    file's ``"datapoints"`` instead of colliding with it in the "exactly one source" check.
     """
-    field = field or param
-    if config is None or explicitly_set(ctx, param) or field not in config.model_fields_set:
-        return value
-    configured = getattr(config, field)
-    return value if configured is None else cast('ValueT', configured)
+
+    param: str
+    path: str | None
+    to_value: Callable[[Any], Any] | None = None
+    replaces: tuple[str, ...] = ()
 
 
-def unmapped_fields(config: BaseModel | None, *, mapped: Iterable[str]) -> dict[str, Any]:
-    """The fields ``config`` set that no CLI flag owns, as typed values ready to forward to the SDK."""
-    if config is None:
-        return {}
-    skip = set(mapped)
-    return {name: getattr(config, name) for name in config.model_fields_set if name not in skip}
+def json_flag(param: str, path: str, model: type[BaseModel], *, flag: str) -> Flag:
+    """A flag whose value is a JSON object validated against ``model``, merged into the field at ``path``."""
+
+    def to_value(raw: str) -> dict[str, Any]:
+        return parse_json_model(raw, model, flag=flag).model_dump(by_alias=True, exclude_unset=True)
+
+    return Flag(param, path, to_value=to_value)
+
+
+def resolve_config(
+    ctx: click.Context,
+    model: type[ModelT],
+    flags: Iterable[Flag],
+    cli_args: dict[str, Any],
+    *,
+    config_source: str | None,
+) -> ModelT:
+    """Build ``model`` from the ``--config`` file with every flag passed on the command line merged on top.
+
+    Flags apply in ``flags`` order and deep-merge into their own path, so ``--attack-model`` keeps the rest of
+    a configured ``llm_config``, and a narrow flag listed after ``--llm-config`` wins over it for its field.
+    ``cli_args`` holds the command's converted arguments: click's ``ctx.params`` still has raw strings. A
+    field nothing sets takes ``model``'s default, and ``null`` anywhere means unset.
+    """
+    data: dict[str, Any] = {}
+    if config_source is not None:
+        data = load_config(config_source, model).model_dump(by_alias=True, exclude_unset=True)
+    overrides: dict[str, Any] = {}
+    for flag in flags:
+        if not explicitly_set(ctx, flag.param):
+            continue
+        for field in flag.replaces:
+            data.pop(field, None)
+        if flag.path is None:
+            continue
+        value = cli_args[flag.param]
+        _set_path(overrides, flag.path, value if flag.to_value is None else flag.to_value(value))
+    try:
+        return model.model_validate(_deep_merge(data, overrides))
+    except ValidationError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def model_kwargs(config: BaseModel) -> dict[str, Any]:
+    """Every field of ``config`` as a keyword argument, nested models kept as model instances."""
+    return {name: getattr(config, name) for name in type(config).model_fields}
 
 
 def _read_source(source: str, *, flag: str) -> tuple[str, str]:
@@ -111,14 +155,11 @@ def load_config(source: str, model: type[ModelT], *, flag: str = '--config') -> 
     return parse_json_model(raw, model, flag=flag, origin=origin)
 
 
-def overlay_model(model: type[ModelT], base: BaseModel | None, updates: dict[str, Any]) -> ModelT:
-    """Build ``model`` from ``base``'s explicitly set fields with ``updates`` deep-merged on top; updates win.
-
-    Only fields the caller set survive the round trip, so a field ``base`` left unset stays unset, which
-    matters for models such as ``LLMCallConfig`` that omit an unset parameter from the request.
-    """
-    data = base.model_dump(exclude_unset=True) if base is not None else {}
-    return model.model_validate(_deep_merge(data, updates))
+def _set_path(target: dict[str, Any], path: str, value: Any) -> None:
+    *parents, leaf = path.split('.')
+    for key in parents:
+        target = target.setdefault(key, {})
+    target[leaf] = value
 
 
 def reserve_stdout_for_json(ctx: click.Context) -> Callable[[BaseModel], None]:

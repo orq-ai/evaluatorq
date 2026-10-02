@@ -27,9 +27,10 @@ from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # 
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
 from evaluatorq.simulation.types import Persona, Scenario, SimulationDatapoint  # noqa: TC001
 
-# Public keyword -> the name the internal run functions take it under, for the fields the CLI forwards
-# untouched. ``run_name`` and ``report_path`` are absent because the CLI owns them (``--name``, ``--report``).
+# Public keyword -> the name the internal run functions take it under. ``report_path`` is absent because the
+# CLI owns it: ``--report`` also accepts a directory, which the SDK's ``report`` does not.
 _INTERNAL_NAMES = {
+    'run_name': 'evaluation_name',
     'experiment_description': 'evaluation_description',
     'orq_folder_path': 'orq_results_path',
     'raise_on_execution_failure': 'exit_on_failure',
@@ -62,7 +63,7 @@ class _SharedRunConfig(BaseModel):
     save: bool = False
     report_path: Path | None = None
     executive_summary: bool = True
-    recommendations: bool | SimulationRecommendationConfig = False
+    recommendations: bool | SimulationRecommendationConfig = True
 
 
 class SimulateRunConfig(_SharedRunConfig):
@@ -89,13 +90,22 @@ class GenerateAndSimulateRunConfig(_SharedRunConfig):
     generation_instructions: str = ''
 
 
-def to_internal_kwargs(public: dict[str, Any]) -> dict[str, Any]:
-    """Rename public keyword names to the internal run functions' names.
+class SimulateCliConfig(SimulateRunConfig):
+    """What ``eq sim simulate --config`` accepts, with the CLI's defaults: it saves the run unless told not to."""
 
-    ``raise_on_execution_failure=None`` is dropped: the public functions read it as "default", the internal
-    ones take a plain ``bool`` and default it themselves.
+    save: bool = True
+
+
+class GenerateAndSimulateCliConfig(GenerateAndSimulateRunConfig):
+    """What ``eq sim run --config`` accepts, with the CLI's defaults: it saves the run unless told not to."""
+
+    save: bool = True
+
+
+def to_internal_kwargs(public: dict[str, Any]) -> dict[str, Any]:
+    """Rename public keyword names to the internal run functions' names, dropping ``None`` values.
+
+    ``None`` means "unset" in a config, and the internal functions default an unset keyword themselves:
+    ``datapoint_parallelism`` and ``exit_on_failure`` take a plain value there, not ``None``.
     """
-    renamed = {_INTERNAL_NAMES.get(name, name): value for name, value in public.items()}
-    if renamed.get('exit_on_failure', False) is None:
-        del renamed['exit_on_failure']
-    return renamed
+    return {_INTERNAL_NAMES.get(name, name): value for name, value in public.items() if value is not None}

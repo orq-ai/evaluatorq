@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # static typing) — pydantic resolves annotations at class-creation time even
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
+from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.contracts import DEFAULT_TARGET_TIMEOUT_MS, AgentTarget, LLMCallConfig, TokenUsage
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
@@ -43,7 +44,7 @@ from evaluatorq.simulation.reports.recommendations import SimulationRecommendati
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
 
 # Named because every `simulate` overload repeats them; as literals they drifted one
-# signature at a time.
+# signature at a time. DEFAULT_DATAPOINT_PARALLELISM is shared with red team, so it lives in common.
 DEFAULT_TARGET_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS
 DEFAULT_MAX_TARGET_RETRIES = 2
 DEFAULT_MAX_TOOL_RESULT_CHARS = 500
@@ -103,7 +104,7 @@ class SimulationConfig(BaseModel):
         """Resolved simulation model, derived from ``llm_config`` — no second field to keep in step."""
         return self.llm_config.model
 
-    datapoint_parallelism: int = 10
+    datapoint_parallelism: int = DEFAULT_DATAPOINT_PARALLELISM
     target_agent_timeout_ms: int = Field(default=DEFAULT_TARGET_AGENT_TIMEOUT_MS, gt=0)
     """Per-call timeout for the target under test, threaded into
     ``SimulationRunner``. Mirrors red team's equivalent knob — a slow

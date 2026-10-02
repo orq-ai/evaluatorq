@@ -842,7 +842,7 @@ async def evaluatorq(
         ```
     """
     datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=10, caller='evaluatorq'
+        datapoint_parallelism, parallelism, caller='evaluatorq'
     )
     resolved = _normalise_params(
         _EvaluationInputs(

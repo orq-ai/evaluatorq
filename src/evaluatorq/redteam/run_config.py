@@ -61,3 +61,13 @@ class RedTeamRunConfig(BaseModel):
     attacker_instructions: str | None = None
     verbosity: int = 0
     save: SaveMode = SaveMode.FINAL
+
+
+class RedTeamCliConfig(RedTeamRunConfig):
+    """What ``eq redteam run --config`` accepts, with the CLI's defaults.
+
+    One differs from `red_team`: ``verbosity`` is 1, a summary progress bar, because a terminal user is
+    watching. ``-v`` raises it, ``-q`` sets it to 0.
+    """
+
+    verbosity: int = 1
