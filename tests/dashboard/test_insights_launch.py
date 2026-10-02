@@ -1526,7 +1526,6 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
         labels=[],
         coding_labels=['task_type', 'verified'],
         dimensions=['intent'],
-        coding_analysis=True,
     )
 
     export_path.unlink()
@@ -1564,7 +1563,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     async def fake_insights(*_args, **kwargs):
         from types import SimpleNamespace
 
-        assert kwargs['coding_analysis'] is True
+        assert kwargs['coding_labels'] == ['task_type', 'verified']
         return SimpleNamespace(status='completed')
 
     monkeypatch.setattr(insights_worker, 'effective_settings', lambda: DashboardSettings.model_validate({}))
@@ -1600,10 +1599,8 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert consumed == ['approved-trace']
     assert snapshot_replacement == [replacement_export]
     assert consumed_source == [export_path]
-    assert forwarded_specs[0].coding_analysis is True
     assert forwarded[0]['_source_name'] == 'my-export.json'
     assert forwarded_specs[0].coding_labels == ['task_type', 'verified']
-    assert 'coding_analysis' not in forwarded[0]
     assert not payload.finder_export_snapshot.exists()
     assert not reference.exists()
     assert not worker_state_path(tmp_path / 'runs', payload.run_id).exists()
@@ -1974,7 +1971,7 @@ def test_reloaded_selected_profile_is_used_and_named_when_orq_rejects_it(
 
 
 def test_facet_auth_error_names_oauth_credential() -> None:
-    from evaluatorq.dashboard.insights_views import facet_options
+    from evaluatorq.dashboard.insights_run_form import facet_options
 
     html = facet_options(None, FacetSelection(), profile_name='CLI OAuth', credential_rejected=True)
 
@@ -1984,7 +1981,7 @@ def test_facet_auth_error_names_oauth_credential() -> None:
 
 
 def test_facet_options_renders_removable_chips_for_selected_values() -> None:
-    from evaluatorq.dashboard.insights_views import facet_options
+    from evaluatorq.dashboard.insights_run_form import facet_options
 
     html = facet_options(
         FacetCatalogue(agent_name=('a', 'b'), value_counts={'agent_name': {'a': 7, 'b': 2}}),

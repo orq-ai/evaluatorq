@@ -1,0 +1,286 @@
+"""The one Insights run form, shown as a page and as the run-page dialog."""
+
+# Assertions are the test framework's reporting contract.
+# ruff: noqa: S101
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING
+from unittest.mock import patch
+
+import pytest
+from starlette.testclient import TestClient
+
+from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec
+from evaluatorq.dashboard.insights_run_form import (
+    OFFERED_DIMENSIONS,
+    OFFERED_LABELS,
+    RUN_PRESETS,
+    RunFormValues,
+    render_run_form,
+)
+from evaluatorq.insights.models import InsightsConfig, InsightsRun, LabelSpec
+from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS, TASK_TYPE
+from evaluatorq.trace_finder.models import FacetSelection
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _token(client: TestClient) -> str:
+    match = re.search(r'name="csrf" value="([^"]+)"', client.get('/insights/new').text)
+    assert match is not None
+    return match.group(1)
+
+
+def _saved_run(population: dict[str, object], **config: object) -> InsightsRun:
+    custom = LabelSpec(name='needs_follow_up', kind='noul', instructions='Should a human follow up?')
+    return InsightsRun(
+        run_id='saved-run',
+        run_name='Saved run',
+        created_at=datetime(2026, 9, 1, 12, tzinfo=timezone.utc),
+        status='completed',
+        stage_failures=[],
+        population=population,
+        config=InsightsConfig(
+            labels=[LABEL_PRESETS['user_frustration'], custom],
+            dimensions=['intent', 'failure'],
+            coding_labels=[CODING_LABELS[1]],
+            **config,
+        ),
+        traces=[],
+        dimensions={},
+        labels={},
+        priority=None,
+        priority_reason=None,
+        counts={'n_traces': 0},
+        warnings=[],
+    )
+
+
+def test_defaults_render_three_steps_with_every_offered_choice() -> None:
+    html = render_run_form(RunFormValues.defaults(), csrf='t')
+
+    assert html.count('data-step="') == 3
+    for source in ('recent', 'query', 'finder', 'snapshot'):
+        assert f'name="source" value="{source}"' in html
+    assert 'Presets' in html
+    for preset in RUN_PRESETS:
+        assert f'data-preset="{preset.id}"' in html
+    for name in (*OFFERED_LABELS, *OFFERED_DIMENSIONS, *(spec.name for spec in CODING_LABELS[1:])):
+        assert f'value="{name}"' in html
+    task_type = html[html.index('value="task_type"') :]
+    task_type = task_type[: task_type.index('</label>')]
+    assert all(key in task_type for key in TASK_TYPE.criteria or {})
+    assert 'implementation' not in html
+    assert 'id="insights-run-models"' in html
+    assert 'id="insights-run-estimate"' in html
+    assert 'name="csrf" value="t"' in html
+    assert 'data-mount="page"' in html
+    assert 'name="finder_export" value=""' in html and 'name="snapshot_path" value=""' in html
+    assert 'Choose a Finder export JSON file.' in html and 'Choose a trace snapshot JSON file.' in html
+
+
+def test_customer_satisfaction_says_the_priority_matrix_needs_it() -> None:
+    html = render_run_form(RunFormValues.defaults(), csrf='t')
+
+    toggle = html[html.index('value="customer_satisfaction"') :]
+    assert 'the priority matrix needs this' in toggle[: toggle.index('</label>')]
+    assert 'value="customer_satisfaction" checked' not in html
+
+
+def test_defaults_are_the_find_failures_preset_on_recent_traces() -> None:
+    values = RunFormValues.defaults()
+
+    assert (values.source, values.window_days, values.limit) == ('recent', 7, 200)
+    assert values.preset == RUN_PRESETS[0].id
+    assert values.dimensions == RUN_PRESETS[0].dimensions
+    assert values.labels == RUN_PRESETS[0].labels
+
+
+def test_from_run_round_trips_a_saved_run(tmp_path: Path) -> None:
+    run = _saved_run({'mode': 'query', 'query': 'refunds', 'window_days': 14, 'limit': 50, 'facets': {'agent_name': ['a']}})
+
+    values = RunFormValues.from_run(run, tmp_path)
+
+    assert values.source == 'query'
+    assert (values.query, values.window_days, values.limit) == ('refunds', 14, 50)
+    assert values.facets == FacetSelection(agent_name=frozenset({'a'}))
+    assert values.dimensions == ('intent', 'failure')
+    assert values.labels == ('user_frustration',)
+    assert values.coding_labels == (CODING_LABELS[1].name,)
+    assert [spec.name for spec in values.custom_labels] == ['needs_follow_up']
+    assert values.name == 'Saved run'
+    assert values.error is None
+
+
+def test_from_run_clears_a_missing_uploaded_file_and_asks_for_a_fresh_one(tmp_path: Path) -> None:
+    missing = RunFormValues.from_run(_saved_run({'mode': 'snapshot', 'snapshot_path': str(tmp_path / 'gone.json')}), tmp_path)
+    assert missing.source == 'snapshot'
+    assert missing.snapshot_path == ''
+    assert missing.error is not None and 'fresh file' in missing.error
+
+    present = tmp_path / 'traces.json'
+    present.write_text('{}', encoding='utf-8')
+    kept = RunFormValues.from_run(_saved_run({'mode': 'snapshot', 'snapshot_path': str(present)}), tmp_path)
+    assert kept.snapshot_path == str(present)
+    assert kept.error is None
+
+
+def test_from_form_reads_query_parameters_and_form_data_the_same_way() -> None:
+    from starlette.datastructures import FormData, QueryParams
+
+    pairs = [
+        ('source', 'query'),
+        ('query', 'refunds'),
+        ('window_days', '3'),
+        ('limit', '40'),
+        ('facet_status', 'error'),
+        ('facet_status', 'ok'),
+        ('dimensions', 'failure'),
+        ('labels', 'made_errors'),
+        ('coding_labels', 'outcome'),
+        ('custom_labels_json', json.dumps([{'name': 'q_one', 'kind': 'noul', 'instructions': 'Is it?'}])),
+        ('mount', 'dialog'),
+    ]
+    from_query = RunFormValues.from_form(QueryParams(pairs))
+    from_post = RunFormValues.from_form(FormData(pairs))
+
+    assert from_query == from_post
+    assert from_query.facets.status == frozenset({'error', 'ok'})
+    assert from_query.mount == 'dialog'
+    assert from_query.launch_fields()['labels'] == ['made_errors']
+
+
+def test_stages_wrap_the_stage_plan_the_launch_uses() -> None:
+    spec = InsightsLaunchSpec(source='query', query='refunds', labels=['made_errors'], dimensions=['intent'])
+
+    titles = [title for _, title in spec.stages()]
+
+    assert titles[0] == 'Find matching traces'
+    assert 'Match and classify traces' in titles
+
+
+def test_rejected_start_rerenders_what_the_user_entered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    data = {
+        'csrf': _token(client),
+        'source': 'query',
+        'query': '',
+        'window_days': '21',
+        'facet_agent_name': 'support-bot',
+        'dimensions': 'intent',
+        'custom_labels_json': json.dumps([{'name': 'needs_follow_up', 'kind': 'noul', 'instructions': 'Follow up?'}]),
+    }
+
+    page = client.post('/insights/runs', data=data)
+    fragment = client.post('/insights/runs', data={**data, 'mount': 'dialog'})
+
+    assert page.status_code == fragment.status_code == 422
+    for response in (page, fragment):
+        assert 'Enter a question' in response.text
+        assert 'name="window_days" type="number" min="1" max="90" value="21"' in response.text
+        assert 'data-chip-name="facet_agent_name" data-finder-value="support-bot"' in response.text
+        assert 'needs_follow_up' in response.text
+    assert '<html' in page.text
+    assert '<html' not in fragment.text
+    assert 'data-mount="dialog"' in fragment.text
+    assert client.post('/insights/runs', data={'source': 'recent', 'mount': 'dialog'}).status_code == 403
+
+
+def test_new_run_dialog_is_a_fragment_with_its_own_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+
+    fragment = client.get('/insights/new?mount=dialog')
+
+    assert fragment.status_code == 200
+    assert '<html' not in fragment.text
+    assert 'id="insights-new-form"' in fragment.text
+    assert re.search(r'name="csrf" value="[^"]+"', fragment.text)
+    assert 'data-mount="dialog"' in fragment.text
+
+
+def test_new_run_with_rerun_prefills_from_the_saved_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    directory = tmp_path / 'insights-runs'
+    directory.mkdir()
+    (directory / 'insights_saved.json').write_text(
+        _saved_run({'mode': 'snapshot', 'snapshot_path': str(tmp_path / 'gone.json')}).model_dump_json(), encoding='utf-8'
+    )
+    client = TestClient(build_app())
+
+    fragment = client.get('/insights/new?rerun=saved-run&mount=dialog')
+
+    assert fragment.status_code == 200
+    assert 'value="Saved run"' in fragment.text
+    assert 'needs_follow_up' in fragment.text
+    assert 'Browse for a fresh file' in fragment.text
+    assert client.get('/insights/new?rerun=unknown&mount=dialog').status_code == 404
+
+
+def test_plan_route_returns_the_stage_titles_the_launch_uses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    query = {'source': 'query', 'query': 'refunds', 'labels': 'made_errors', 'dimensions': 'intent'}
+
+    response = client.get('/insights/new/plan', params=query)
+    expected = InsightsLaunchSpec(source='query', query='refunds', labels=['made_errors'], dimensions=['intent']).stages()
+
+    assert response.status_code == 200
+    for _, title in expected:
+        assert title in response.text
+    filtered = client.get(
+        '/insights/new/plan', params={'source': 'recent', 'facet_agent_name': 'support-bot', 'dimensions': 'intent'}
+    )
+    assert 'Filter recent traces' in filtered.text
+
+
+def test_plan_route_reports_the_validation_message(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+
+    response = client.get('/insights/new/plan', params={'source': 'query', 'query': '', 'dimensions': 'intent'})
+
+    assert response.status_code == 422
+    assert 'role="alert"' in response.text
+    assert 'Enter a question' in response.text
+
+
+def test_start_launches_the_spec_built_from_the_submitted_values(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    from evaluatorq.dashboard.auth import DashboardAuth
+
+    with (
+        patch(
+            'evaluatorq.dashboard.insights_routes.selected_dashboard_auth',
+            return_value=DashboardAuth('environment', 'key', 'https://my.orq.ai'),
+        ),
+        patch('evaluatorq.dashboard.insights_routes.launch_insights', return_value='run-9') as launch,
+    ):
+        response = client.post(
+            '/insights/runs',
+            data={
+                'csrf': _token(client),
+                'source': 'recent',
+                'window_days': '5',
+                'limit': '30',
+                'facet_status': 'error',
+                'labels': 'made_errors',
+                'coding_labels': 'outcome',
+                'dimensions': ['intent', 'failure'],
+            },
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    spec = launch.call_args.args[0]
+    assert (spec.window_days, spec.limit, spec.labels, spec.coding_labels) == (5, 30, ['made_errors'], ['outcome'])
+    assert spec.dimensions == ['intent', 'failure']
+    assert spec.facets.status == frozenset({'error'})

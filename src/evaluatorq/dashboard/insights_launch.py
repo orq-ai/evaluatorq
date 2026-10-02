@@ -887,8 +887,6 @@ class InsightsLaunchSpec(BaseModel):
         """Return the bounded Finder JSON captured during source validation."""
         return self._finder_export_snapshot
 
-    coding_analysis: bool = False
-
     def _validate_snapshot_source(self) -> None:
         if self.source != 'snapshot':
             return
@@ -961,13 +959,7 @@ class InsightsLaunchSpec(BaseModel):
         reserved = {spec.name for spec in CODING_LABELS}
         if reserved.intersection(all_names):
             raise ValueError('Custom labels cannot use names reserved for coding analysis.')
-        if (
-            not self.labels
-            and not self.custom_labels
-            and not self.dimensions
-            and not self.coding_analysis
-            and not self.coding_labels
-        ):
+        if not self.labels and not self.custom_labels and not self.dimensions and not self.coding_labels:
             raise ValueError('Select at least one label or dimension.')
         return self
 
@@ -988,15 +980,23 @@ class InsightsLaunchSpec(BaseModel):
 
     @property
     def coding_enabled(self) -> bool:
-        return self.coding_analysis or bool(self.coding_labels)
+        return bool(self.coding_labels)
 
     def coding_label_specs(self) -> list[LabelSpec]:
-        if self.coding_analysis:
-            return list(CODING_LABELS[1:])
         return [_CODING_PRESETS[name] for name in self.coding_labels]
 
     def dimension_names(self) -> list[DimensionName]:
         return list(self.dimensions)
+
+    def stages(self, population: InsightsPopulation | None = None) -> list[tuple[str, str]]:
+        """The `(stage name, title)` plan a run with this spec reports, as `launch_insights` records it."""
+        if population is None:
+            population, _ = _population_for_launch_plan(self)
+        return stage_plan(
+            population,
+            [*self.label_specs(), *(CODING_LABELS[:1] if self.coding_enabled else ()), *self.coding_label_specs()],
+            self.dimension_names(),
+        )
 
 
 class InsightsLaunchPayload(BaseModel):
@@ -1033,11 +1033,7 @@ def launch_insights(
     run_id = str(uuid.uuid4())
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
     population, finder_snapshot = _population_for_launch_plan(spec)
-    plan = stage_plan(
-        population,
-        [*spec.label_specs(), *(CODING_LABELS[:1] if spec.coding_enabled else ()), *spec.coding_label_specs()],
-        spec.dimension_names(),
-    )
+    plan = spec.stages(population)
     writer = start_manifest(
         run_id=run_id,
         surface='insights',

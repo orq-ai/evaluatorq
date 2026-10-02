@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlencode
 
 from loguru import logger
@@ -15,12 +16,20 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import RedirectResponse, Response
 
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
+from evaluatorq.common.reports import esc
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.auth import auth_identity
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
 from evaluatorq.dashboard.insights_review_data import build_review_payload
 from evaluatorq.dashboard.insights_review_views import review_page
+from evaluatorq.dashboard.insights_run_form import (
+    RunFormValues,
+    facet_options,
+    render_plan,
+    render_run_form,
+    render_run_page,
+)
 from evaluatorq.dashboard.insights_uploads import (
     UploadRequestTooLargeError,
     cleanup_expired_uploads,
@@ -30,9 +39,7 @@ from evaluatorq.dashboard.insights_uploads import (
 )
 from evaluatorq.dashboard.insights_views import (
     TABS,
-    facet_options,
     map_payload,
-    new_run_page,
     overview_page,
     projection_notice,
     running_page,
@@ -41,7 +48,7 @@ from evaluatorq.dashboard.insights_views import (
     trace_detail_page,
     unreadable_page,
 )
-from evaluatorq.dashboard.security import request_rejected
+from evaluatorq.dashboard.security import csrf_token, request_rejected
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 from evaluatorq.insights.models import InsightsRun, label_key
 from evaluatorq.insights.population import PopulationError, preview_snapshot
@@ -108,6 +115,20 @@ def _entries(
 
 def _html(content: str, status_code: int = 200, media_type: str = 'text/html') -> Response:
     return Response(content, status_code=status_code, media_type=media_type)
+
+
+def _validation_message(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        return '; '.join(error['msg'].removeprefix('Value error, ') for error in exc.errors())
+    return str(exc)
+
+
+def _run_form_response(values: RunFormValues, error: str | None, status_code: int) -> Response:
+    """The run form as a page or a dialog fragment to match `values.mount`."""
+    token = csrf_token()
+    if values.mount == 'dialog':
+        return _html(render_run_form(values, csrf=token, error=error), status_code)
+    return _html(render_run_page(values, csrf=token, error=error), status_code)
 
 
 def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> tuple[Path, InsightsRun | str] | None:
@@ -271,8 +292,30 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         return _html(overview_page(entries, runs, manifests))
 
     @app.get('/insights/new')
-    def insights_new() -> Response:
-        return _html(new_run_page())
+    def insights_new(req: Request) -> Response:
+        directory = get_insights_runs_dir()
+        rerun_id = req.query_params.get('rerun')
+        if rerun_id:
+            _, loaded, _ = _entries(directory)
+            resolved = _resolve(rerun_id, loaded)
+            if resolved is None or not isinstance(resolved[1], InsightsRun):
+                return _html('<p class="insights-empty">Insights run not found.</p>', 404)
+            values = RunFormValues.from_run(resolved[1], directory)
+        else:
+            values = RunFormValues.defaults()
+        mount: Literal['page', 'dialog'] = 'dialog' if req.query_params.get('mount') == 'dialog' else 'page'
+        return _run_form_response(replace(values, mount=mount), None, 200)
+
+    @app.get('/insights/new/plan')
+    async def insights_new_plan(req: Request) -> Response:
+        def plan() -> str:
+            spec = InsightsLaunchSpec.model_validate(RunFormValues.from_form(req.query_params).launch_fields())
+            return render_plan(spec, spec.stages())
+
+        try:
+            return _html(await asyncio.to_thread(plan))
+        except (ValidationError, ValueError, TypeError) as exc:
+            return _html(f'<p class="insights-error" role="alert">{esc(_validation_message(exc))}</p>', 422)
 
     @app.get('/insights/facets')
     async def insights_facets(req: Request) -> Response:
@@ -366,43 +409,25 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         form = await req.form()
         rejected = request_rejected(req, form)
         directory = get_insights_runs_dir()
-        if rejected:
-            return _html(new_run_page(error=rejected), 403)
-        custom_labels_raw = str(form.get('custom_labels_json', '[]'))
         try:
-            custom_labels = json.loads(custom_labels_raw)
-            if not isinstance(custom_labels, list):
-                raise TypeError('Custom questions must be a JSON list.')
-            spec = await asyncio.to_thread(
-                InsightsLaunchSpec.model_validate,
-                {
-                    'name': form.get('name', ''),
-                    'source': form.get('source', 'recent'),
-                    'query': form.get('query', ''),
-                    'finder_export': form.get('finder_export', ''),
-                    'snapshot_path': form.get('snapshot_path', ''),
-                    'source_name': form.get('source_name', ''),
-                    'window_days': form.get('window_days', 7),
-                    'limit': form.get('limit', 100),
-                    'facets': {name: form.getlist(f'facet_{name}') for name in FACET_NAMES},
-                    'parallelism': form.get('parallelism', 20),
-                    'labels': form.getlist('labels'),
-                    'coding_labels': form.getlist('coding_labels'),
-                    'custom_labels': custom_labels,
-                    'dimensions': form.getlist('dimensions'),
-                    'coding_analysis': form.get('coding_analysis') == 'on',
-                },
-            )
+            values = RunFormValues.from_form(form)
+            unreadable = None
+        except ValueError as exc:
+            values = replace(RunFormValues.defaults(), mount='dialog' if form.get('mount') == 'dialog' else 'page')
+            unreadable = _validation_message(exc)
+        if rejected:
+            return _run_form_response(values, rejected, 403)
+        if unreadable:
+            return _run_form_response(values, unreadable, 422)
+        try:
+            spec = await asyncio.to_thread(InsightsLaunchSpec.model_validate, values.launch_fields())
         except (ValidationError, ValueError, TypeError) as exc:
-            message = (
-                '; '.join(error['msg'] for error in exc.errors()) if isinstance(exc, ValidationError) else str(exc)
-            )
-            return _html(new_run_page(error=message), 422)
+            return _run_form_response(values, _validation_message(exc), 422)
         try:
             auth = selected_dashboard_auth(req.app)
             identity = await asyncio.to_thread(auth_identity, auth, req.app.state.finder_settings)
         except (RuntimeError, ValueError) as exc:
-            return _html(new_run_page(error=str(exc)), 422)
+            return _run_form_response(values, str(exc), 422)
         run_id = await asyncio.to_thread(
             launch_insights, spec, directory, auth_method=auth.method, auth_identity=identity
         )
@@ -417,9 +442,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             return _html('<h1>Insights run not found</h1>', 404)
         _, run = resolved
         if isinstance(run, InsightsRun):
-            return _html(
-                review_page(run, manifest=manifests.get(run.run_id), rerun=req.query_params.get('rerun') == '1')
-            )
+            return _html(review_page(run, manifest=manifests.get(run.run_id)))
         if run in ('running', 'error', 'cancelled', 'completed') and run_id in manifests:
             return _html(running_page(run_id, manifests[run_id].run_name, manifests[run_id]))
         return _html(unreadable_page(str(run)))
