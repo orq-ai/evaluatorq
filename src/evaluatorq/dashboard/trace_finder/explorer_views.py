@@ -14,6 +14,7 @@ from urllib.parse import quote
 from loguru import logger
 
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.facet_picker import render_facet_chips
 from evaluatorq.trace_finder.columns import COLUMNS, MATCH, Column, fmt_cost, fmt_duration, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.explorer import (
     CONVERSATION_METRICS,
@@ -689,9 +690,7 @@ def _toolbar(
     )
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary xr-load" type="submit" form="explorer-load-form">Load</button>'
-    from evaluatorq.dashboard.trace_finder.views import _facet_chips  # pyright: ignore[reportPrivateUsage]
-
-    chips = _facet_chips(view.facets, view.numeric, removable=True)
+    chips = render_facet_chips(view.facets, view.numeric, removable=True)
     active = chips.count('class="chip ')
     label = f'Filters · {active}' if active else 'Filters'
     return (

@@ -1982,6 +1982,21 @@ def test_facet_auth_error_names_oauth_credential() -> None:
     assert 'key for profile' not in html
 
 
+def test_facet_options_renders_removable_chips_for_selected_values() -> None:
+    from evaluatorq.dashboard.insights_views import facet_options
+
+    html = facet_options(
+        FacetCatalogue(agent_name=('a', 'b'), value_counts={'agent_name': {'a': 7, 'b': 2}}),
+        FacetSelection(agent_name=frozenset({'a'})),
+    )
+
+    selected = html[html.index('class="insights-selected-facets"') :]
+    assert 'data-chip-name="facet_agent_name" data-finder-value="a"' in selected
+    assert 'value="a" checked><span>a</span><span class="facet-n"' in html
+    assert '>7</span>' in html
+    assert 'hx-get="/find/facets' not in html
+
+
 def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     client = TestClient(build_app())

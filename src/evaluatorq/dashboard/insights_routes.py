@@ -294,6 +294,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 selection,
                 profile_name=profile_name,
                 credential_rejected=credential_rejected,
+                window_days=window_days,
             )
         )
 

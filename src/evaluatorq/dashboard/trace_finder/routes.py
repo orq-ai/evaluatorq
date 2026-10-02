@@ -1544,6 +1544,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 form_id=form_id,
                 selection=selection,
                 loaded_rows=loaded_rows,
+                row_scoped=params.get('counts') == 'loaded',
+                window_days=parsed.window_days,
             )
         )
 
