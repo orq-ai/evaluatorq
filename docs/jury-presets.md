@@ -18,8 +18,8 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 150 output tokens, un
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
-| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-5.6-luna`<br>`google/gemini-3.6-flash` | majority | 4.64 | `deepseek/deepseek-v4.1-flash` |
-| **Strong Jury** | `anthropic/claude-opus-5.5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 21.38 | `deepseek/deepseek-v4-pro` |
+| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-5.6-luna`<br>`google/gemini-3.6-flash` | majority | 4.64 | `deepseek/deepseek-flash` |
+| **Strong Jury** | `anthropic/claude-opus-5-5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 21.38 | `deepseek/deepseek-v4-pro` |
 | **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`baseten/kimi-k3`<br>`zai/glm-5.2` | majority | 10.29 | `minimax/MiniMax-M2.7` |
 | **EU Region** | `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0`<br>`google/eu.gemini-3.5-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 6.56 | `google/eu.claude-sonnet-5` |
 | **Single-Provider Trio** | `openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-5.6-luna` | majority | 14.28 | `openai/gpt-5.4-nano` |
@@ -57,7 +57,7 @@ Each seat is ranked and costed at a particular reasoning effort, which `JuryPres
 from evaluatorq import get_preset
 
 get_preset("Strong Jury").seated_efforts()
-# {'anthropic/claude-opus-5.5': 'high', 'openai/gpt-5.6-sol': 'max', 'google/gemini-3.6-flash': 'high'}
+# {'anthropic/claude-opus-5-5': 'high', 'openai/gpt-5.6-sol': 'max', 'google/gemini-3.6-flash': 'high'}
 ```
 
 Those are the rungs the cards were scored at rather than values to send. A card that only distinguishes thinking from not thinking is scored at `reasoning` or `none`, and no provider accepts either as a `reasoning_effort`, so read the mapping as a report of where a panel was ranked and priced. `llm_jury()` takes one `reasoning_effort` for the whole panel, so a preset whose seats disagree cannot express itself through it. Per-judge call settings are a schema change and a separate ticket. Until then a panel run at the provider defaults is being run at an operating point it was not costed at, which is why the published figures are a floor rather than an estimate.

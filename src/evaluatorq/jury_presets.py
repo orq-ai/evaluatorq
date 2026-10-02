@@ -266,17 +266,7 @@ BALANCED_TRIO = JuryPreset(
     # Same lineage as the seat it backs, on purpose: a retirement is usually a
     # version bump, and flash keeps the panel at three families where a
     # fourth-vendor reserve would quietly reshape it.
-    #
-    # UNVERIFIED (RES-1683, filed 2026-10-01): DeepSeek's own API docs now say
-    # the `deepseek-v4-flash` name is retired — still accepted, but silently
-    # served as DeepSeek-V4.1-Flash at V4.1-Flash pricing, which is also why
-    # ENG-2830 shows this exact name 400ing when invoked as a judge. The id
-    # below is guessed from DeepSeek's own model name and has NOT been checked
-    # against orq's `GET /v2/models`; its rate row is a vendor list price, not
-    # a captured registry rate. This reserve isn't a live panel seat, so it
-    # doesn't move Balanced Trio's published $/1k, but the maintenance record
-    # should name what actually gets called if this reserve is ever promoted.
-    reserve_judges=('deepseek/deepseek-v4.1-flash',),
+    reserve_judges=('deepseek/deepseek-flash',),
     use_when='Default subjective eval. Three families, three error surfaces.',
     estimated_cost_per_1k=4.64,
 )
@@ -284,18 +274,9 @@ BALANCED_TRIO = JuryPreset(
 STRONG_JURY = JuryPreset(
     name='Strong Jury',
     judges=(
-        # UNVERIFIED (RES-1683, filed 2026-10-01): Anthropic shipped Opus 5.5 on
-        # 2026-09-22, same lineage, $4/$20 per 1M against this seat's $5/$25 (a
-        # vendor-published 20% cut), and pitched by Anthropic as matching their
-        # next tier up with their best behavioral-audit score yet. That is the
-        # in-family, cheaper-or-equal successor the reseating rule exists to
-        # catch, but the router id below is guessed from the repo's own
-        # dot-versioned naming convention and has NOT been checked against
-        # orq's `GET /v2/models`, and its rate row in
-        # `common/data/jury_judge_rates.json` is a vendor list price, not a
-        # captured orq registry rate. Confirm both, and re-probe this preset,
-        # before trusting the recomputed $/1k below.
-        'anthropic/claude-opus-5.5',
+        # Held by claude-opus-5 until Opus 5.5 (2026-09-22): same lineage, $4/$20
+        # against $5/$25.
+        'anthropic/claude-opus-5-5',
         # Held by gpt-5.4 on a number that turned out to be measured at the
         # wrong operating point: the 51.4 this seat was defended with is
         # gpt-5.4's xhigh score, while its default effort is `none`, where it

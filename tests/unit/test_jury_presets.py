@@ -28,7 +28,7 @@ def _rate_table() -> dict[str, JudgeRates]:
 def _preset(**overrides: Any) -> dict[str, Any]:
     base = {
         'name': 'Test Panel',
-        'judges': ('openai/gpt-5.6-luna', 'anthropic/claude-opus-5', 'google/gemini-3.6-flash'),
+        'judges': ('openai/gpt-5.6-luna', 'anthropic/claude-opus-5-5', 'google/gemini-3.6-flash'),
         'reserve_judges': ('deepseek/deepseek-v4-pro',),
         'use_when': 'testing',
         'estimated_cost_per_1k': 1.0,
