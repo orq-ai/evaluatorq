@@ -125,15 +125,20 @@ def test_an_explicit_flag_beats_the_config_even_at_its_default_value(tmp_path: P
     assert kwargs['name'] == 'from-config'
 
 
-def test_an_unset_flag_and_unset_field_keep_the_flag_default(tmp_path: Path) -> None:
-    result, fake = _invoke(['--config', _write(tmp_path, {'target': 'agent:x'})])
+def test_without_config_red_team_gets_the_cli_defaults() -> None:
+    result, fake = _invoke(['-t', 'agent:x'])
 
     assert result.exit_code == 0, result.output
-    assert fake.call_args.kwargs['datapoint_parallelism'] == 10
-    assert fake.call_args.kwargs['llm_config'] == LLMConfig.model_validate({
-        'attacker': {'model': LLMConfig().attacker.model},
-        'evaluator': {'model': LLMConfig().evaluator.model},
-    })
+    kwargs = fake.call_args.kwargs
+    # Unset values are left to red_team's own defaults.
+    assert kwargs['datapoint_parallelism'] is None
+    assert kwargs['max_turns'] is None
+    assert kwargs['name'] is None
+    assert kwargs['llm_config'] == LLMConfig()
+    assert kwargs['verbosity'] == 1
+    assert kwargs['generate_strategies'] is True
+    assert kwargs['cleanup_memory'] is True
+    assert kwargs['save'] is SaveMode.FINAL
 
 
 @pytest.mark.parametrize(
@@ -183,15 +188,64 @@ def test_llm_config_blob_with_a_narrow_flag_winning_its_own_field() -> None:
     assert 'max_target_retries' not in llm_config.model_fields_set
 
 
-def test_llm_config_flag_replaces_the_config_files_llm_config(tmp_path: Path) -> None:
+def test_llm_config_flag_merges_into_the_config_files_llm_config(tmp_path: Path) -> None:
     config = _write(tmp_path, {'target': 'agent:x', 'llm_config': {'retry_count': 7, 'max_probe_turns': 3}})
 
-    result, fake = _invoke(['--config', config, '--llm-config', '{"retry_count": 1}'])
+    result, fake = _invoke(['--config', config, '--llm-config', '{"retry_count": 1}', '--max-target-retries', '4'])
 
     assert result.exit_code == 0, result.output
     llm_config: LLMConfig = fake.call_args.kwargs['llm_config']
     assert llm_config.retry_count == 1
-    assert llm_config.max_probe_turns == LLMConfig().max_probe_turns
+    assert llm_config.max_probe_turns == 3
+    assert llm_config.max_target_retries == 4
+
+
+def test_system_prompt_flag_overrides_the_config_files_target_config(tmp_path: Path) -> None:
+    config = _write(tmp_path, {'target': 'agent:x', 'target_config': {'system_prompt': 'from file'}})
+
+    result, fake = _invoke(['--config', config, '--system-prompt', 'from flag'])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['target_config'] == TargetConfig(system_prompt='from flag')
+
+
+def test_a_negative_bool_flag_beats_the_config(tmp_path: Path) -> None:
+    config = _write(tmp_path, {'target': 'agent:x', 'generate_strategies': True, 'cleanup_memory': False})
+
+    result, fake = _invoke(['--config', config, '--no-generate-strategies', '--cleanup-memory'])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['generate_strategies'] is False
+    assert fake.call_args.kwargs['cleanup_memory'] is True
+
+
+def test_the_positive_bool_flag_beats_a_false_config_value(tmp_path: Path) -> None:
+    config = _write(tmp_path, {'target': 'agent:x', 'generate_strategies': False})
+
+    result, fake = _invoke(['--config', config, '--generate-strategies'])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['generate_strategies'] is True
+
+
+def test_a_null_config_value_means_unset(tmp_path: Path) -> None:
+    config = _write(tmp_path, {'target': 'agent:x', 'max_turns': None, 'datapoint_parallelism': None})
+
+    result, fake = _invoke(['--config', config])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['max_turns'] is None
+    assert fake.call_args.kwargs['datapoint_parallelism'] is None
+
+
+@pytest.mark.parametrize(('flags', 'verbosity'), [([], 3), (['-v'], 2), (['-q'], 0), (['-v', '-q'], 0)])
+def test_verbosity_flags_beat_the_config(tmp_path: Path, flags: list[str], verbosity: int) -> None:
+    config = _write(tmp_path, {'target': 'agent:x', 'verbosity': 3})
+
+    result, fake = _invoke(['--config', config, *flags])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['verbosity'] == verbosity
 
 
 def test_json_prints_only_the_report_on_stdout(tmp_path: Path) -> None:
@@ -264,7 +318,7 @@ def test_schema_defaults_to_the_config_input_shape() -> None:
 
     assert result.exit_code == 0, result.output
     schema = json.loads(result.stdout)
-    assert schema['title'] == 'RedTeamRunConfig'
+    assert schema['title'] == 'RedTeamCliConfig'
     assert schema['additionalProperties'] is False
     assert {'target', 'llm_config', 'datapoints'} <= set(schema['properties'])
 
