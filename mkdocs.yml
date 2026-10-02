@@ -185,8 +185,6 @@ plugins:
           - examples/**/*.md
         About:
           - contributing.md: How to contribute.
-          - ty-migration-receipt.md: Pinned coverage audit for the ty migration.
-          - local-test-profile-benchmark.md: Measured quick and full local pytest profiles.
           - changelog.md: Release notes.
           - roadmap.md: Planned work.
   - redirects:
@@ -317,7 +315,5 @@ nav:
   - FAQ: faq.md
   - About:
       - Contributing: contributing.md
-      - ty Migration Receipt: ty-migration-receipt.md
-      - Local pytest Profile Benchmark: local-test-profile-benchmark.md
       - Changelog: changelog.md
       - Roadmap: roadmap.md

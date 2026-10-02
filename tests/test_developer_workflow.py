@@ -311,7 +311,7 @@ def test_ty_is_the_only_locked_typechecker() -> None:
     assert not re.search(r'(?m)^name = "(?:basedpyright|pytest-xdist)"$', lockfile)
 
 
-def test_ty_migration_receipt_matches_effective_offline_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ty_migration_audit_matches_effective_offline_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
     def network_forbidden(url: str) -> str:
         raise AssertionError(f'offline audit attempted network access: {url}')
 

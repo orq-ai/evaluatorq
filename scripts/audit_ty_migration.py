@@ -14,7 +14,6 @@ from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / 'scripts/data/ty_migration_audit.json'
-RECEIPT = ROOT / 'docs/superpowers/specs/2026-10-01-ty-migration-receipt.md'
 
 SURFACES = {
     'src': 'src/evaluatorq/contracts.py',
@@ -286,18 +285,7 @@ def _classification_and_surface(
     return classification, surface_text
 
 
-def _receipt_rows(receipt: Path) -> dict[str, tuple[str, str]]:
-    text = receipt.read_text()
-    table = text.split('<!-- diagnostic-classification:start -->', 1)[1].split(
-        '<!-- diagnostic-classification:end -->', 1
-    )[0]
-    rows = re.findall(
-        r'^\| `(?P<diagnostic>report\w+)` \| (?P<classification>[a-z-]+) \| (?P<surface>[^|]+?) \|', table, re.M
-    )
-    return {diagnostic: (classification, surface) for diagnostic, classification, surface in rows}
-
-
-def audit(*, baseline_path: Path = BASELINE, receipt: Path = RECEIPT) -> dict[str, set[str]]:
+def audit(*, baseline_path: Path = BASELINE) -> dict[str, set[str]]:
     baseline = _load(baseline_path)
     config = _project_config()
     workflow = (ROOT / '.github/workflows/ci.yml').read_text()
@@ -317,7 +305,6 @@ def audit(*, baseline_path: Path = BASELINE, receipt: Path = RECEIPT) -> dict[st
     assert classified == EXPECTED, 'effective diagnostic classification changed'
     assert set().union(*classified.values()) == set(baseline['basedpyright']['active_diagnostics'])
     assert sum(len(diagnostics) for diagnostics in classified.values()) == len(actual)
-    assert _receipt_rows(receipt) == actual, 'receipt decision table does not match effective coverage'
     return classified
 
 
@@ -332,7 +319,6 @@ def _print_table(baseline_path: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--baseline', type=Path, default=BASELINE)
-    parser.add_argument('--receipt', type=Path, default=RECEIPT)
     parser.add_argument('--refresh', action='store_true', help='verify the snapshot against pinned upstream sources')
     parser.add_argument('--print-table', action='store_true')
     args = parser.parse_args()
@@ -342,7 +328,7 @@ def main() -> None:
     if args.print_table:
         _print_table(args.baseline)
         return
-    classified = audit(baseline_path=args.baseline, receipt=args.receipt)
+    classified = audit(baseline_path=args.baseline)
     for classification in ('ty-backed', 'ruff-only', 'partial', 'absent'):
         print(f'{classification}: {len(classified[classification])}')
 
