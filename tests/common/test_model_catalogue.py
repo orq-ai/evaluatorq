@@ -938,3 +938,23 @@ def test_parse_catalogue_lists_non_finite_cost_unpriced(cost: float):
 def test_model_info_with_one_rate_is_unpriced():
     info = ModelInfo(0.1, None, 'self', supports_responses=False)
     assert (info.input_cost_per_1k, info.output_cost_per_1k) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_models_by_provider_embedding_kind_lists_only_embedding_models(monkeypatch: pytest.MonkeyPatch):
+    entries = [
+        {'model_id': 'text-embedding-4', 'provider': 'openai', 'model_type': 'embedding', 'input_cost': 1, 'output_cost': 0},
+        {'model_id': 'embed-v4', 'provider': 'cohere', 'model_type': 'embedding', 'input_cost': 1, 'output_cost': 0},
+        {'model_id': 'gpt-5.6-luna', 'provider': 'openai', 'model_type': 'chat', 'input_cost': 1, 'output_cost': 1},
+    ]
+    catalogue = pricing._parse_catalogue(entries)  # pyright: ignore[reportPrivateUsage]
+
+    async def load(client: object = None) -> dict[str, ModelInfo]:
+        return catalogue
+
+    monkeypatch.setattr(pricing, '_load_catalogue', load)
+
+    assert await pricing.models_by_provider(kind='embedding') == {
+        'cohere': ['cohere/embed-v4'],
+        'openai': ['openai/text-embedding-4'],
+    }
