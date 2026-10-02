@@ -79,7 +79,8 @@ def json_flag(param: str, path: str, model: type[BaseModel], *, flag: str) -> Fl
     """A flag whose value is a JSON object validated against ``model``, merged into the field at ``path``."""
 
     def to_value(raw: str) -> dict[str, Any]:
-        return parse_json_model(raw, model, flag=flag).model_dump(by_alias=True, exclude_unset=True)
+        parse_json_model(raw, model, flag=flag)
+        return cast('dict[str, Any]', json.loads(raw))
 
     return Flag(param, path, to_value=to_value)
 
@@ -102,7 +103,7 @@ def resolve_config(
     """
     data: dict[str, Any] = {}
     if config_source is not None:
-        data = load_config(config_source, model).model_dump(by_alias=True, exclude_unset=True)
+        data = load_config(config_source, model)
     overrides: dict[str, Any] = {}
     for flag in flags:
         if not explicitly_set(ctx, flag.param):
@@ -150,10 +151,15 @@ def parse_json_model(raw: str, model: type[ModelT], *, flag: str, origin: str | 
     return parsed
 
 
-def load_config(source: str, model: type[ModelT], *, flag: str = '--config') -> ModelT:
-    """Read ``source`` (a path, or ``-`` for stdin) and validate it against ``model``."""
+def load_config(source: str, model: type[ModelT], *, flag: str = '--config') -> dict[str, Any]:
+    """Read ``source`` (a path, or ``-`` for stdin), validate it against ``model`` and return its parsed JSON.
+
+    The document's own JSON is returned, not the validated model re-dumped: a field whose serialization alias
+    differs from its validation name would otherwise be silently dropped by the final validation.
+    """
     raw, origin = _read_source(source, flag=flag)
-    return parse_json_model(raw, model, flag=flag, origin=origin)
+    parse_json_model(raw, model, flag=flag, origin=origin)
+    return cast('dict[str, Any]', json.loads(raw))
 
 
 def _set_path(target: dict[str, Any], path: str, value: Any) -> None:

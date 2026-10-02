@@ -532,7 +532,10 @@ def _run_default(field: str) -> Any:
     return GenerateAndSimulateCliConfig.model_fields[field].default
 
 
-_NAME_HELP = "Run name for the run-store entry. Defaults to 'sim'."
+_NAME_HELP = (
+    'Run name. Unset unless passed: the SDK names the run when omitted '
+    '(the saved run-store entry, or an uploaded experiment, gets its generated name).'
+)
 _DATAPOINT_PARALLELISM_HELP = f'Concurrent simulations. Defaults to {DEFAULT_DATAPOINT_PARALLELISM}.'
 _LLM_PARALLELISM_HELP = (
     f'Ceiling on in-flight LLM requests for the whole run. Defaults to {DEFAULT_LLM_PARALLELISM}, -1 for no limit; '

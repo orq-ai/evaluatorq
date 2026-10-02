@@ -536,18 +536,23 @@ def test_a_missing_datapoints_file_is_a_bad_parameter() -> None:
 
 
 @pytest.mark.parametrize(
-    'content',
-    ['', 'not json\n', '{"persona": {}, "scenario": {}}\n'],
+    ('content', 'names_file'),
+    [('', True), ('not json\n', True), ('{"persona": {}, "scenario": {}}\n', False)],
     ids=['empty', 'unparseable', 'invalid datapoint'],
 )
-def test_an_empty_or_invalid_datapoints_file_is_a_one_line_error_with_exit_1(tmp_path: Path, content: str) -> None:
+def test_an_empty_or_invalid_datapoints_file_is_a_one_line_error_with_exit_1(
+    tmp_path: Path, content: str, names_file: bool
+) -> None:
     bad = tmp_path / 'bad.jsonl'
     bad.write_text(content, encoding='utf-8')
 
     result, fake = _invoke('simulate', ['--input', str(bad), '--target', 'agent:x'])
 
     assert result.exit_code == 1
-    assert 'Traceback' not in result.output
+    assert isinstance(result.exception, SystemExit)
+    assert 'Error:' in result.output
+    if names_file:
+        assert 'bad.jsonl' in result.output
     fake.assert_not_called()
 
 

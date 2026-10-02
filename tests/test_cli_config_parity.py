@@ -142,3 +142,8 @@ def test_config_backed_flags_declare_no_default(app: typer.Typer, command: str, 
         if flag.path is not None and flag.param not in _FLAG_DEFAULT_EXEMPT and params[flag.param].default is not None
     }
     assert with_defaults == {}, 'a config-backed flag must default to None; the model owns the default'
+
+
+def test_every_default_exemption_names_a_flag_that_exists() -> None:
+    params = {flag.param for _, _, flags in _FLAG_TABLES for flag in flags}
+    assert set(_FLAG_DEFAULT_EXEMPT) <= params, 'a renamed flag leaves a stale exemption'

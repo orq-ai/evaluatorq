@@ -103,6 +103,16 @@ def test_config_file_supplies_the_red_team_keywords(tmp_path: Path) -> None:
     assert kwargs['save'] is SaveMode.NONE
 
 
+def test_a_datapoints_expected_output_survives_the_config_file(tmp_path: Path) -> None:
+    payload = {'target': 'agent:a', 'datapoints': [{'inputs': {'q': 'hi'}, 'expected_output': 'refuse'}]}
+
+    result, fake = _invoke(['--config', _write(tmp_path, payload)])
+
+    assert result.exit_code == 0, result.output
+    (datapoint,) = fake.call_args.kwargs['datapoints']
+    assert datapoint.expected_output == 'refuse'
+
+
 def test_config_is_read_from_stdin() -> None:
     result, fake = _invoke(['--config', '-'], stdin=json.dumps({'target': ['agent:a', 'agent:b'], 'max_turns': 2}))
 
