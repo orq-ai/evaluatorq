@@ -10,12 +10,22 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any
 
+import click
 import pytest
+import typer.main
 
-from evaluatorq.redteam.run_config import RedTeamRunConfig
+from evaluatorq.common.cli_config import Flag
+from evaluatorq.redteam import cli as redteam_cli
+from evaluatorq.redteam.run_config import RedTeamCliConfig, RedTeamRunConfig
 from evaluatorq.redteam.runner import red_team
+from evaluatorq.simulation import cli as sim_cli
 from evaluatorq.simulation.api import generate_and_simulate, simulate
-from evaluatorq.simulation.run_config import GenerateAndSimulateRunConfig, SimulateRunConfig
+from evaluatorq.simulation.run_config import (
+    GenerateAndSimulateCliConfig,
+    GenerateAndSimulateRunConfig,
+    SimulateCliConfig,
+    SimulateRunConfig,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -75,3 +85,60 @@ def test_config_defaults_are_the_sdk_defaults(
         if name not in model.model_fields or param.default is inspect.Parameter.empty:
             continue
         assert model.model_fields[name].get_default(call_default_factory=True) == param.default, name
+
+
+_CLI_DIFFERS_FROM_SDK_ONLY_IN: list[tuple[type[BaseModel], type[BaseModel], set[str]]] = [
+    (RedTeamCliConfig, RedTeamRunConfig, {'verbosity'}),
+    (SimulateCliConfig, SimulateRunConfig, {'save'}),
+    (GenerateAndSimulateCliConfig, GenerateAndSimulateRunConfig, {'save'}),
+]
+
+
+@pytest.mark.parametrize(
+    ('cli_model', 'sdk_model', 'overridden'),
+    _CLI_DIFFERS_FROM_SDK_ONLY_IN,
+    ids=[cli.__name__ for cli, _, _ in _CLI_DIFFERS_FROM_SDK_ONLY_IN],
+)
+def test_cli_model_differs_from_sdk_model_only_where_named(
+    cli_model: type[BaseModel], sdk_model: type[BaseModel], overridden: set[str]
+) -> None:
+    assert set(cli_model.model_fields) == set(sdk_model.model_fields)
+
+    differing = {
+        name
+        for name, field in cli_model.model_fields.items()
+        if field.get_default(call_default_factory=True)
+        != sdk_model.model_fields[name].get_default(call_default_factory=True)
+    }
+    assert differing == overridden
+
+
+# Config-backed flags that must keep their own default: presentation counters, not SDK values.
+_FLAG_DEFAULT_EXEMPT: dict[str, str] = {
+    'verbose': 'a -v counter; its default 0 means "not passed" and the CLI default verbosity lives on the model',
+    'quiet': 'a -q switch; its default False means "not passed"',
+}
+
+_FLAG_TABLES: list[tuple[typer.Typer, str, tuple[Flag, ...]]] = [
+    (redteam_cli.app, 'run', redteam_cli._RUN_FLAGS),
+    (sim_cli.app, 'simulate', sim_cli._SIMULATE_FLAGS),
+    (sim_cli.app, 'run', sim_cli._RUN_FLAGS),
+]
+
+
+@pytest.mark.parametrize(
+    ('app', 'command', 'flags'),
+    _FLAG_TABLES,
+    ids=['redteam run', 'sim simulate', 'sim run'],
+)
+def test_config_backed_flags_declare_no_default(app: typer.Typer, command: str, flags: tuple[Flag, ...]) -> None:
+    group = typer.main.get_command(app)
+    assert isinstance(group, click.Group)
+    params = {param.name: param for param in group.commands[command].params}
+
+    with_defaults = {
+        flag.param: params[flag.param].default
+        for flag in flags
+        if flag.path is not None and flag.param not in _FLAG_DEFAULT_EXEMPT and params[flag.param].default is not None
+    }
+    assert with_defaults == {}, 'a config-backed flag must default to None; the model owns the default'
