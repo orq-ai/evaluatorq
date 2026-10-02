@@ -781,6 +781,15 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .model-pick .model-option[hidden] { display: none; }
 .model-pick .model-option.is-selected { background: var(--surface-sunken); color: var(--text-strong); font-weight: 600; }
 .model-pick .model-custom { box-sizing: border-box; width: calc(100% - 12px); margin: 4px 6px 8px; }
+.oauth-pick .model-pick-btn, .oauth-pick .model-option { display: flex; align-items: center; gap: 12px; font-family: var(--font-sans); word-break: normal; }
+.oauth-pick .model-pick-btn::after { float: none; order: 3; }
+.oauth-pick .finder-facets { left: 0; right: 0; }
+.oauth-pick .finder-facets .facet-list { width: auto; }
+.oauth-pick .model-option { padding: 8px 10px; }
+.oauth-session-broken { display: flex; align-items: center; gap: 12px; padding: 8px 10px; cursor: not-allowed; opacity: .7; }
+.oauth-session-id { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.oauth-session-id strong { color: var(--text-strong); font-size: 13px; font-weight: 600; }
+.oauth-session-id .config-note { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }
 .settings-auth-step { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .settings-auth-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; padding: 12px 0 2px; }
@@ -796,6 +805,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-auth-panel:has(input[name="orq_auth_method"][value="environment"]:checked) .settings-auth-config { display: none; }
 .settings-auth-config > .settings-auth-step { margin: 0 0 14px; }
 .settings-auth-detail { display: none; max-width: 640px; gap: 7px; }
+.settings-oauth-field { display: grid; gap: 7px; }
 .settings-auth-panel:has(input[value="environment"]:checked) .settings-auth-detail[data-auth-method="environment"],
 .settings-auth-panel:has(input[value="cli_profile"]:checked) .settings-auth-detail[data-auth-method="cli_profile"],
 .settings-auth-panel:has(input[value="cli_oauth"]:checked) .settings-auth-detail[data-auth-method="cli_oauth"],
