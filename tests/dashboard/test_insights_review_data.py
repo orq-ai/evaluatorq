@@ -105,7 +105,7 @@ def test_review_payload_provides_safe_server_built_trace_links(monkeypatch):
     safe_run = _run([safe_trace]).model_copy(update={'population': {'mode': 'query'}})
     safe_row = _trace_rows(build_review_payload(safe_run))[0]
     assert safe_row['orq_url'] == (
-        'https://orq.example/workspace/traces?query=%28trace%3Atrace.a-~%2F%2Fspan%3Aspan_a-~%29'
+        'https://orq.example/workspace/traces/(trace:trace.a-~//span:span_a-~)'
     )
     snapshot_row = _trace_rows(build_review_payload(_run([trace])))[0]
     assert snapshot_row['orq_url'] is None

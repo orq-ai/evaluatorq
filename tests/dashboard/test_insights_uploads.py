@@ -39,7 +39,7 @@ def test_upload_validates_and_stores_finder_export_under_runs_dir(tmp_path: Path
     assert stored.exists()
     if os.name == 'posix':
         assert stored.stat().st_mode & 0o777 == 0o600
-    assert json.loads(stored.read_text())['schema_version'] == 1
+    assert json.loads(stored.read_text())['schema_version'] == 2
 
 
 def test_upload_rejects_bad_csrf_type_and_invalid_content(tmp_path: Path, monkeypatch) -> None:
