@@ -33,6 +33,9 @@ uv run pytest -m 'not integration'
 # Specific test file
 uv run pytest tests/redteam/test_vulnerability_first.py -v
 
+# The default marker still applies; opt a targeted slow test back in explicitly
+uv run pytest -m 'not integration' path/to/test.py::test_name
+
 # With coverage
 uv run pytest -m 'not integration' --cov=src/evaluatorq
 
@@ -113,5 +116,6 @@ Add integration modules under `src/evaluatorq/integrations/`. Add the dependency
 
 - Branch from `main`
 - Run the complete `uv run pytest -m 'not integration'` profile and `uv run ty check` before pushing; the bare local pytest command also excludes deliberately slow tests, while CI runs the complete non-integration profile and runs the whole-repository ty check once on Ubuntu with Python 3.10
+- Read [the ty migration receipt](docs/superpowers/specs/2026-10-01-ty-migration-receipt.md) for accepted checker gaps; changing the exact ty pin requires rerunning its pinned mapping and gap audit
 - Use conventional commit format for commit messages (e.g., `feat(redteam): ...`, `fix(evaluatorq): ...`)
 - Keep PRs focused — one feature or fix per PR when possible

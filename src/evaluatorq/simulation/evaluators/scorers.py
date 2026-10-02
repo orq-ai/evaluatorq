@@ -6,7 +6,6 @@ compatible with evaluatorq integration.
 
 from __future__ import annotations
 
-import typing
 from collections.abc import Callable
 from functools import partial
 
@@ -328,7 +327,7 @@ class ConversationQualityScore(float):
         super().__init__()
         self.breakdown: dict[str, dict[str, float]] = breakdown
 
-    def __getnewargs__(self) -> typing.Any:
+    def __getnewargs__(self) -> tuple[float, dict[str, dict[str, float]]]:  # ty: ignore[invalid-method-override]
         return (float(self), self.breakdown)
 
 

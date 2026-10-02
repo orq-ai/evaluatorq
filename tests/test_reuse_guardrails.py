@@ -59,6 +59,7 @@ def _calls(source: str) -> list[tuple[int, str]]:
 
 
 _PYRIGHT_DIRECTIVE = re.compile(r'#\s*pyright\s*:')
+_TYPE_IGNORE = re.compile(r'#\s*type\s*:\s*ignore(?:\b|\[)')
 _TY_IGNORE = re.compile(r'#\s*ty:\s*ignore(?:\[([^]]*)\])?')
 _PROTECTED_TY_RULES = frozenset({'unused-ignore-comment', 'ignore-comment-unknown-rule'})
 
@@ -116,6 +117,7 @@ def _forbidden_type_suppressions(source: str) -> list[int]:
         )
         if (
             _PYRIGHT_DIRECTIVE.search(token.string)
+            or _TYPE_IGNORE.search(token.string)
             or (ty_match is not None and ty_match.group(1) is None)
             or bool(selectors & _PROTECTED_TY_RULES)
         ):
@@ -129,6 +131,9 @@ def test_ty_suppression_detector_actually_fires() -> None:
     assert _forbidden_type_suppressions(f'value = bad  {pyright}') == [1]
     assert _forbidden_type_suppressions('# pyright: reportArgumentType=false') == [1]
     assert _forbidden_type_suppressions('# pyright: strict') == [1]
+    assert _forbidden_type_suppressions('value = bad  # type: ignore') == [1]
+    assert _forbidden_type_suppressions('value = bad  # type: ignore[arg-type]') == [1]
+    assert _forbidden_type_suppressions('value = bad  # type: ignore[foreign-selector]') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty:' + ' ignore') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty: ignore[unused-ignore-comment]') == [1]
     assert _forbidden_type_suppressions('value = bad  # ty: ignore[ignore-comment-unknown-rule]') == [1]
@@ -137,6 +142,7 @@ def test_ty_suppression_detector_actually_fires() -> None:
     assert _forbidden_type_suppressions('value = "# pyright: ignore"') == []
     assert _forbidden_type_suppressions('value = "# pyright: reportArgumentType=false"') == []
     assert _forbidden_type_suppressions('value = "# ty: ignore"') == []
+    assert _forbidden_type_suppressions('value = "# type: ignore[arg-type]"') == []
     assert _forbidden_type_suppressions('# prose mentions ty without an ignore directive') == []
 
 

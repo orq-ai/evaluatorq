@@ -13,7 +13,7 @@ Under the disclosed fixed-order protocol, the quick profile passed both gates on
 | Quick | 6,818 passed, 6 skipped, 39 deselected | 88.85 s | 552,828,928 bytes (527.22 MiB) |
 | Full non-integration | 6,834 passed, 7 skipped, 22 deselected | 127.37 s | 566,525,952 bytes (540.28 MiB) |
 
-The wall-time reduction is `(127.37 - 88.85) / 127.37 = 30.24%`, above the required 20%. The quick median peak resident memory is `(566,525,952 - 552,828,928) / 566,525,952 = 2.42%` below the full median, so it does not exceed the full profile. Both acceptance gates pass.
+The wall-time reduction is `(127.37 - 88.85) / 127.37 = 30.24%`, above the required 20%. This is faster feedback from omitting tests that deliberately wait on real time, not a material compute-load reduction: median user CPU time is effectively unchanged at 55.97 seconds for quick and 56.14 seconds for full. The quick median peak resident memory is only `(566,525,952 - 552,828,928) / 566,525,952 = 2.42%` below the full median. Both acceptance gates pass, but the resource case for the wider migration rests on the checker improvement and removal of unnecessary fixture setup rather than this pytest profile's CPU or memory difference.
 
 ## Method
 

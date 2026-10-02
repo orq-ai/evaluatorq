@@ -35,6 +35,9 @@ uv run pytest -m 'not integration'
 # Run a specific test file
 uv run pytest tests/redteam/test_vulnerability_first.py -v
 
+# The default marker still applies; opt a targeted slow test back in explicitly
+uv run pytest -m 'not integration' path/to/test.py::test_name
+
 # Run integration tests (requires ORQ_API_KEY in .env)
 uv run pytest -m integration
 

@@ -4,6 +4,7 @@ import ast
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -74,18 +75,60 @@ def _yaml_list_blocks(text: str, indent: int) -> list[str]:
     return blocks
 
 
+def _run_command(step: str) -> list[str] | None:
+    run_lines = [
+        match.group(1)
+        for line in step.splitlines()
+        if (match := re.match(r'^\s*(?:-\s+)?run:\s*(\S.*)$', line)) is not None
+    ]
+    assert len(run_lines) <= 1, 'expected at most one run command per step'
+    if not run_lines:
+        return None
+    return shlex.split(run_lines[0])
+
+
+def _run_invocations(workflow: str, prefix: list[str]) -> list[list[str]]:
+    commands = [
+        shlex.split(match.group(1))
+        for match in re.finditer(r'(?m)^\s+(?:-\s+)?run:\s*(\S.*)$', workflow)
+    ]
+    return [command for command in commands if command[: len(prefix)] == prefix]
+
+
 def _assert_ci_typecheck_contract(workflow: str) -> None:
     jobs = _yaml_block(workflow, 'jobs:', indent=0)
     check_job = _yaml_block(jobs, 'check:', indent=2)
     expected_name = "    name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})"
     assert expected_name in check_job.splitlines()
 
-    expected_run = '        run: uv run ty check'
-    assert sum(line == expected_run for line in workflow.splitlines()) == 1
     steps = _yaml_block(check_job, 'steps:', indent=4)
-    ty_steps = [step for step in _yaml_list_blocks(steps, indent=6) if expected_run in step.splitlines()]
+    assert len(_run_invocations(workflow, ['uv', 'run', 'ty', 'check'])) == 1
+    ty_steps = [
+        step
+        for step in _yaml_list_blocks(steps, indent=6)
+        if (_run_command(step) or [])[:4] == ['uv', 'run', 'ty', 'check']
+    ]
     assert len(ty_steps) == 1
     assert "        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'" in ty_steps[0].splitlines()
+
+
+def _assert_ci_test_contract(workflow: str) -> None:
+    jobs = _yaml_block(workflow, 'jobs:', indent=0)
+    check_job = _yaml_block(jobs, 'check:', indent=2)
+    steps = _yaml_block(check_job, 'steps:', indent=4)
+    matching_steps = [
+        (tuple(command), step)
+        for step in _yaml_list_blocks(steps, indent=6)
+        if (command := _run_command(step)) is not None
+        and command[:5] == ['uv', 'run', 'pytest', '-m', 'not integration']
+    ]
+    bare = ('uv', 'run', 'pytest', '-m', 'not integration')
+    coverage = (*bare, '--cov', '--cov-report=term')
+    assert len(matching_steps) == 2
+    test_steps = dict(matching_steps)
+    assert set(test_steps) == {bare, coverage}
+    assert "        if: matrix.python-version != '3.13' || matrix.os != 'ubuntu-latest'" in test_steps[bare].splitlines()
+    assert "        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'" in test_steps[coverage].splitlines()
 
 
 def _subprocess_output(value: str | bytes | None) -> str:
@@ -191,6 +234,14 @@ def test_ci_typecheck_contract_rejects_a_ty_command_only_in_a_comment() -> None:
         raise AssertionError('typecheck contract accepted a ty command that appeared only in a comment')
 
 
+def test_ci_typecheck_contract_counts_ty_commands_with_options() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow + '\n  duplicate-typecheck:\n    steps:\n      - run: uv run ty check --output-format concise\n'
+
+    with pytest.raises(AssertionError):
+        _assert_ci_typecheck_contract(mutated)
+
+
 def test_ci_typecheck_contract_rejects_the_expected_name_outside_check_job() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
     expected = "    name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})"
@@ -207,9 +258,40 @@ def test_ci_typecheck_contract_rejects_the_expected_name_outside_check_job() -> 
 def test_ci_keeps_full_non_integration_test_commands() -> None:
     workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
 
-    assert workflow.count("run: uv run pytest -m 'not integration'") == 2
-    assert "run: uv run pytest -m 'not integration'\n" in workflow
-    assert "run: uv run pytest -m 'not integration' --cov --cov-report=term\n" in workflow
+    _assert_ci_test_contract(workflow)
+
+
+def test_ci_test_contract_rejects_commands_outside_check_job() -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    command = "        run: uv run pytest -m 'not integration'"
+    mutated = workflow.replace(command, '        run: uv run python -V', 1)
+    mutated += "\n  decoy:\n    steps:\n      - run: uv run pytest -m 'not integration'\n"
+
+    with pytest.raises(AssertionError):
+        _assert_ci_test_contract(mutated)
+
+
+@pytest.mark.parametrize(
+    ('old_condition', 'new_condition'),
+    [
+        (
+            "        if: matrix.python-version != '3.13' || matrix.os != 'ubuntu-latest'",
+            "        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'",
+        ),
+        (
+            "        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'",
+            "        if: matrix.python-version != '3.13' || matrix.os != 'ubuntu-latest'",
+        ),
+    ],
+)
+def test_ci_test_contract_rejects_noncomplementary_matrix_conditions(
+    old_condition: str, new_condition: str
+) -> None:
+    workflow = (REPO_ROOT / '.github/workflows/ci.yml').read_text()
+    mutated = workflow.replace(old_condition, new_condition, 1)
+
+    with pytest.raises(AssertionError):
+        _assert_ci_test_contract(mutated)
 
 
 def test_pytest_default_is_quick_and_explicit_non_integration_is_full(tmp_path: Path) -> None:
