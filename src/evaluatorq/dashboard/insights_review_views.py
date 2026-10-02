@@ -20,7 +20,7 @@ _REVIEW_HEAD_HTML = (
 )
 
 
-def review_page(run: InsightsRun, manifest: RunManifest | None = None, *, rerun: bool = False) -> str:
+def review_page(run: InsightsRun, manifest: RunManifest | None = None) -> str:
     """Render the review shell; trace content is fetched from the JSON endpoint."""
     from pathlib import Path
 
@@ -36,11 +36,7 @@ def review_page(run: InsightsRun, manifest: RunManifest | None = None, *, rerun:
     )
     body = body.replace(
         '<button class="btn" data-act="mock">Re-run</button>',
-        f'<a class="btn" href="/insights/{run_url}?rerun=1">Re-run</a>',
-    )
-    body = body.replace(
-        ' data-run-progress="REVIEW_PROGRESS"',
-        f' data-run-progress="REVIEW_PROGRESS" data-rerun="{str(rerun).lower()}"',
+        f'<a class="btn" id="rerun" href="/insights/{run_url}?rerun=1">Re-run</a>',
     )
     progress = None
     if manifest is not None:

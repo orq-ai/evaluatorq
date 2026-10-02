@@ -19,7 +19,7 @@ from starlette.testclient import TestClient
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.contracts import ManifestStatus, ManifestSurface, RunManifest, StageRecord, Usage
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.insights_views import TABS, cluster_detail, failures, header, labels, new_run_page, progress, trace_detail_page, traces
+from evaluatorq.dashboard.insights_views import TABS, cluster_detail, failures, header, labels, progress, trace_detail_page, traces
 from evaluatorq.insights.models import (
     Cluster,
     ClusterAssignment,
@@ -64,21 +64,6 @@ def test_insights_review_dimensionless_run_and_safe_tooltips() -> None:
     subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
 
 
-def test_insights_run_common_contract() -> None:
-    if shutil.which('node') is None:
-        pytest.skip('Node.js is unavailable')
-    script = Path(__file__).with_name('insights_run_common.cjs')
-    subprocess.run(['node', str(script)], check=True, cwd=Path(__file__).parents[2])
-
-
-def test_new_run_page_loads_shared_logic_before_wizard() -> None:
-    html = new_run_page()
-
-    common_script = html.index('/static/insights-run-common.js')
-    wizard_script = html.index('/static/insights-wizard.js')
-    assert common_script < wizard_script
-
-
 def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_run) -> None:
     ledger = UsageLedger()
     ledger.add('label', Usage(input_tokens=10, output_tokens=2, total_tokens=12, total_cost=0.01, calls=1, priced_calls=1))
@@ -86,15 +71,6 @@ def test_insights_header_marks_priced_and_missing_usage_calls_partial(minimal_ru
     run = minimal_run.model_copy(update={'cost_by_stage': ledger.totals()})
 
     assert 'priced for 1 of 2 calls' in header(run)
-
-
-def test_wizard_says_priority_matrix_needs_customer_satisfaction() -> None:
-    from evaluatorq.dashboard.insights_views import new_run_page
-
-    markup = new_run_page()
-
-    assert 'value="customer_satisfaction"> Customer satisfaction<small>The priority matrix needs this label.</small>' in markup
-    assert 'value="customer_satisfaction" checked' not in markup
 
 
 def test_insights_header_hides_untracked_cost(minimal_run) -> None:
@@ -146,8 +122,8 @@ def test_saved_run_uses_redesign_and_python_owned_actions(tmp_path, minimal_run,
     assert 'href="/insights">Insights</a>' in response.text
     assert 'href="/insights/run-1/export.json">Export</a>' in response.text
     assert 'href="/insights/run-1?rerun=1">Re-run</a>' in response.text
-    rerun_page = client.get('/insights/run-1?rerun=1')
-    assert 'data-rerun="true"' in rerun_page.text
+    assert 'id="rerun"' in response.text
+    assert 'data-rerun' not in client.get('/insights/run-1?rerun=1').text
     rerun = client.get('/insights/run-1/rerun', follow_redirects=False)
     assert rerun.status_code == 302
     assert rerun.headers['location'] == '/insights/run-1?rerun=1'
@@ -412,7 +388,7 @@ def test_review_page_has_mock_shell_and_no_trace_data(minimal_run: InsightsRun) 
     assert 'Loading run insights' in html
     assert 'Could not load this run' in html
     assert 'What is the refund policy?' not in html
-    assert 'insights-review.css' in html and 'insights-run-common.js' in html and 'insights-review.js' in html
+    assert 'insights-review.css' in html and 'insights-run-form.js' in html and 'insights-review.js' in html
 
 
 def test_review_data_route_returns_complete_uncached_payload(tmp_path, monkeypatch, minimal_run: InsightsRun) -> None:
@@ -538,20 +514,6 @@ def test_review_trace_links_reject_unsafe_url_schemes() -> None:
 
     script = Path(__file__).with_name('insights_review_url.cjs')
     subprocess.run(['node', str(script)], check=True)
-
-
-def test_new_run_sheet_starts_with_empty_source_selection() -> None:
-    from pathlib import Path
-
-    script = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/insights-review.js').read_text(encoding='utf-8')
-
-    assert 'Choose a Finder export JSON file.' in script
-    assert 'Choose a trace snapshot JSON file.' in script
-    assert 'trace-finder-42.json' not in script
-    assert 'sample100-trace-snapshot.json' not in script
-    assert '42 matched traces' not in script
-    assert 'Agent: Claude Code' not in script
-    assert "NR.src === 'finder' ? 42" not in script
 
 
 def test_review_fallback_payloads_keep_the_same_page_structure(minimal_run: InsightsRun) -> None:
