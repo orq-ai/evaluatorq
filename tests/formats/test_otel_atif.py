@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import json
-import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -180,6 +179,31 @@ def test_router_responses_root_mirrors_child_only_once() -> None:
     assert trace.spans[0].output_messages == trace.spans[1].output_messages
     traj = trace.to_atif()
     assert [(step.source, step.message) for step in traj.steps] == [('user', 'write hello.py'), ('agent', 'hello.py')]
+
+
+def test_router_mirror_full_history_is_only_the_matching_child(caplog: pytest.LogCaptureFixture) -> None:
+    inputs = [_text('user', 'write hello.py')]
+    outputs = [_text('agent', 'hello.py')]
+    raw = [
+        {
+            'span_id': 'root',
+            'type': 'trace',
+            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input': inputs, 'gen_ai.output': outputs},
+        },
+        {
+            **_chat('distinct', [_text('user', 'a'), _text('assistant', 'b'), _text('user', 'c')],
+                    [_text('assistant', 'd')]),
+            'parent_span_id': 'root',
+            'started_at': 1,
+        },
+        {**_chat('mirror', inputs, outputs), 'parent_span_id': 'root', 'type': 'span.responses', 'started_at': 2},
+    ]
+
+    traj = OtelTrace.from_orq(raw).to_atif()
+
+    assert ('agent', 'b') not in [(step.source, step.message) for step in traj.steps]
+    assert 'history of 1 messages before the first chat span is not converted' in caplog.text
+
 
 
 def test_router_responses_mirror_keeps_prior_agent_tool_turns(caplog: pytest.LogCaptureFixture) -> None:
@@ -523,7 +547,7 @@ def test_history_before_first_chat_span_is_warned_and_dropped(caplog: pytest.Log
     assert 'history of 1 messages before the first chat span is not converted' in caplog.text
 
 
-def test_call_without_id_gets_stable_id_and_no_result_entry(caplog: pytest.LogCaptureFixture) -> None:
+def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:
     call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'name': 'f', 'arguments': 'not json'}]}
     raw = [_chat('c', [_text('user', 'a')], [call])]
     first = OtelTrace.from_orq(raw).to_atif()
@@ -533,43 +557,19 @@ def test_call_without_id_gets_stable_id_and_no_result_entry(caplog: pytest.LogCa
     assert step.tool_calls[0].arguments == {}
     assert step.tool_calls[0].extra == {RAW_ARGUMENTS_EXTRA_KEY: 'not json'}
     assert step.observation is None
+    assert OtelTrace.from_orq(raw).to_atif() == first
+
+
+def test_unparsed_tool_arguments_round_trip_through_otel(caplog: pytest.LogCaptureFixture) -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'f', 'arguments': 'not json'}]}
+    first = OtelTrace.from_orq([_chat('c', [_text('user', 'a')], [call])]).to_atif()
+
     assert "Tool call 'f' arguments are not a JSON object" in caplog.text
     tool_span = next(span for span in first.to_otel().spans if span.operation == 'execute_tool')
     assert tool_span.attributes['gen_ai.tool.call.arguments'] == 'not json'
     round_trip = first.to_otel().to_atif()
     assert round_trip.steps[1].tool_calls is not None
     assert round_trip.steps[1].tool_calls[0].extra == {RAW_ARGUMENTS_EXTRA_KEY: 'not json'}
-    assert OtelTrace.from_orq(raw).to_atif() == first
-
-
-@pytest.mark.skipif(not hasattr(time, 'tzset'), reason='Changing the process timezone requires time.tzset()')
-def test_tool_span_order_treats_naive_times_as_utc(monkeypatch: pytest.MonkeyPatch) -> None:
-    import os
-    from datetime import datetime, timezone
-
-    from evaluatorq.formats.convert_otel_atif import _by_tool_time
-    from evaluatorq.formats.otel import OtelSpan
-
-    old_tz = os.environ.get('TZ')
-    monkeypatch.setenv('TZ', 'Etc/GMT-12')
-    time.tzset()
-    try:
-        naive_later = OtelSpan(
-            trace_id='t', span_id='naive-later', start_time=datetime.fromisoformat('2026-01-01T01:00:00')
-        )
-        aware_earlier = OtelSpan(
-            trace_id='t', span_id='aware-earlier', start_time=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
-        )
-        assert [span.span_id for span in _by_tool_time([naive_later, aware_earlier])] == [
-            'aware-earlier',
-            'naive-later',
-        ]
-    finally:
-        if old_tz is None:
-            monkeypatch.delenv('TZ', raising=False)
-        else:
-            monkeypatch.setenv('TZ', old_tz)
-        time.tzset()
 
 
 def test_raw_arguments_are_written_back_as_the_string() -> None:

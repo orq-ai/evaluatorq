@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 import json
-import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -123,6 +121,11 @@ def test_flatten_attributes() -> None:
     assert flatten_attributes({'gen_ai': {'a': {'b': 1}}, 'x.y': 2}) == {'gen_ai.a.b': 1, 'x.y': 2}
 
 
+def test_output_dict_with_a_plain_message_key_is_still_flattened() -> None:
+    error = {'gen_ai': {'output': {'message': 'boom', 'code': 1}}}
+    assert flatten_attributes(error) == {'gen_ai.output.message': 'boom', 'gen_ai.output.code': 1}
+
+
 def test_bad_message_attribute_keeps_raw_attribute(caplog: pytest.LogCaptureFixture) -> None:
     span = {'span_id': 's', 'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input.messages': '{not json'}}
     trace = OtelTrace.from_orq([span])
@@ -221,26 +224,15 @@ def test_orphan_parent_is_treated_as_root() -> None:
     assert [s.span_id for s in trace.roots()] == ['s']
 
 
-@pytest.mark.skipif(not hasattr(time, 'tzset'), reason='Changing the process timezone requires time.tzset()')
-def test_ordered_treats_naive_span_times_as_utc(monkeypatch: pytest.MonkeyPatch) -> None:
-    old_tz = os.environ.get('TZ')
-    monkeypatch.setenv('TZ', 'Etc/GMT-12')
-    time.tzset()
-    try:
-        naive_later = OtelSpan(
-            trace_id='t', span_id='naive-later', start_time=datetime.fromisoformat('2026-01-01T01:00:00')
-        )
-        aware_earlier = OtelSpan(
-            trace_id='t', span_id='aware-earlier', start_time=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
-        )
-        trace = OtelTrace(spans=[naive_later, aware_earlier])
-        assert [span.span_id for span in trace.roots()] == ['aware-earlier', 'naive-later']
-    finally:
-        if old_tz is None:
-            monkeypatch.delenv('TZ', raising=False)
-        else:
-            monkeypatch.setenv('TZ', old_tz)
-        time.tzset()
+def test_naive_span_times_are_read_as_utc() -> None:
+    naive = datetime(2026, 1, 1, 1, 0)
+    span = OtelSpan(trace_id='t', span_id='s', start_time=naive, end_time=naive)
+    assert span.start_time == span.end_time == naive.replace(tzinfo=timezone.utc)
+
+    aware_earlier = OtelSpan(
+        trace_id='t', span_id='aware-earlier', start_time=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+    )
+    assert [s.span_id for s in OtelTrace(spans=[span, aware_earlier]).roots()] == ['aware-earlier', 's']
 
 
 def _real() -> list[dict[str, Any]]:

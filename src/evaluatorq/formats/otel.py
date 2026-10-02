@@ -198,7 +198,10 @@ class OtelUsage(BaseModel):
 
 
 class OtelSpan(BaseModel):
-    """One span. `span_type` keeps Orq's raw wrapper type; parsed message attributes leave `attributes`."""
+    """One span. `span_type` keeps Orq's raw wrapper type; parsed message attributes leave `attributes`.
+
+    A naive `start_time` or `end_time` is read as UTC.
+    """
 
     model_config = ConfigDict(frozen=True)
     trace_id: str
@@ -215,6 +218,11 @@ class OtelSpan(BaseModel):
     output_messages: list[OtelMessage] | None = None
     system_instructions: list[OtelPart] | None = None
     attributes: dict[str, Any] = {}
+
+    @field_validator('start_time', 'end_time')
+    @classmethod
+    def _aware(cls, value: datetime | None) -> datetime | None:
+        return parse_time(value)
 
 
 class OtelTrace(BaseModel):
@@ -245,24 +253,11 @@ class OtelTrace(BaseModel):
     def roots(self) -> list[OtelSpan]:
         """Spans with no parent, or whose parent is not in this trace, in start-time order."""
         ids = {span.span_id for span in self.spans}
-        return self._ordered([s for s in self.spans if s.parent_span_id is None or s.parent_span_id not in ids])
+        return order_spans([s for s in self.spans if s.parent_span_id is None or s.parent_span_id not in ids])
 
     def children(self, span_id: str) -> list[OtelSpan]:
         """Direct children of `span_id` in start-time order (no time last, ties by list order)."""
-        return self._ordered([s for s in self.spans if s.parent_span_id == span_id])
-
-    @staticmethod
-    def _ordered(spans: list[OtelSpan]) -> list[OtelSpan]:
-        def key(span: OtelSpan) -> tuple[bool, float]:
-            if span.start_time is None:
-                return True, 0.0
-            start_time = span.start_time
-            if start_time.tzinfo is None:
-                start_time = start_time.replace(tzinfo=timezone.utc)
-            return False, start_time.timestamp()
-
-        # sorted() is stable, so ties keep list order
-        return sorted(spans, key=key)
+        return order_spans([s for s in self.spans if s.parent_span_id == span_id])
 
     def to_atif(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> AtifTrajectory:
         """Convert to an ATIF trajectory (subagent `invoke_agent` subtrees become subagent trajectories).
@@ -290,6 +285,19 @@ class OtelTrace(BaseModel):
         ancestry, per-call metrics, subagent trees, media).
         """
         return self.to_atif(agent_name=agent_name, agent_version=agent_version).to_responses().to_chat()
+
+
+def order_spans(spans: list[OtelSpan], *, fallback_end: bool = False) -> list[OtelSpan]:
+    """Spans in start-time order; with `fallback_end`, a span with no start sorts by its end.
+
+    A span with no usable time goes last, and ties keep list order.
+    """
+
+    def key(span: OtelSpan) -> tuple[bool, float]:
+        at = span.start_time or (span.end_time if fallback_end else None)
+        return (True, 0.0) if at is None else (False, at.timestamp())
+
+    return sorted(spans, key=key)
 
 
 # --- raw Orq span parsing ---------------------------------------------------------------------------
@@ -360,8 +368,8 @@ def flatten_attributes(attrs: dict[str, Any]) -> dict[str, Any]:
             return True
         return key in ('gen_ai.input', 'gen_ai.output') and (
             'role' in value
-            or 'message' in value
-            or 'messages' in value
+            or isinstance(value.get('message'), dict)
+            or isinstance(value.get('messages'), list)
             or (bool(value) and all(index.isdigit() for index in value))
         )
 

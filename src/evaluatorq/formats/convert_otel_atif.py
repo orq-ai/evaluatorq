@@ -62,6 +62,7 @@ from evaluatorq.formats.otel import (
     OtelToolCallResponsePart,
     OtelTrace,
     OtelUriPart,
+    order_spans,
     parse_time,
     span_usage,
 )
@@ -173,22 +174,8 @@ def _collect(trace: OtelTrace, tops: list[OtelSpan]) -> _Scope:
                 scope.subagents.append(child)
             else:
                 stack.append((child, in_agent or child.operation == 'invoke_agent'))
-    scope.subagents = OtelTrace._ordered(scope.subagents)  # noqa: SLF001
+    scope.subagents = order_spans(scope.subagents)
     return scope
-
-
-def _by_tool_time(spans: list[OtelSpan]) -> list[OtelSpan]:
-    """Order tool spans by start time, using the end time when the start is missing."""
-
-    def key(span: OtelSpan) -> tuple[bool, float]:
-        at = span.start_time or span.end_time
-        if at is None:
-            return True, 0.0
-        if at.tzinfo is None:
-            at = at.replace(tzinfo=timezone.utc)
-        return False, at.timestamp()
-
-    return sorted(spans, key=key)
 
 
 def _session_id(trace: OtelTrace, tops: list[OtelSpan]) -> str:
@@ -237,21 +224,20 @@ def _build(
     scope = _collect(trace, tops)
     by_id = {span.span_id: span for span in trace.spans}
     chats: list[OtelSpan] = []
-    mirrored_children: set[str] = set()
+    mirror_children: set[str] = set()
     for span in scope.members:
         if span.operation != 'chat':
             continue
-        if _mirrored_router_root(trace, span):
-            mirrored_children.update(
-                child.span_id for child in trace.children(span.span_id) if child.operation == 'chat'
-            )
+        mirror = _router_mirror_child(trace, span)
+        if mirror is not None:
+            mirror_children.add(mirror.span_id)
             continue
         chats.append(span)
-    chats = OtelTrace._ordered(chats)  # noqa: SLF001
+    chats = order_spans(chats)
     drafts, new_inputs = _chat_steps(
         chats,
         by_id,
-        first_has_full_history=bool(chats and chats[0].span_id in mirrored_children),
+        first_has_full_history=bool(chats and chats[0].span_id in mirror_children),
     )
     _attach_results(drafts, scope.members, chats, new_inputs)
     subagents = _subagents(trace, scope, drafts, session_id, trajectory_id, by_id)
@@ -278,20 +264,26 @@ def _build(
     )
 
 
-def _mirrored_router_root(trace: OtelTrace, span: OtelSpan) -> bool:
-    """Skip an Orq trace wrapper when its direct child holds the same router chat call."""
+def _router_mirror_child(trace: OtelTrace, span: OtelSpan) -> OtelSpan | None:
+    """The child chat span an Orq trace wrapper mirrors (read the child once, skip the wrapper), else None."""
     if span.span_type != 'trace' or span.output_messages is None:
-        return False
-    mirrored = any(
-        child.operation == 'chat'
-        and _same_transcript(child.input_messages, span.input_messages)
-        and _same_transcript(child.output_messages, span.output_messages)
-        and _same_parts(child.system_instructions, span.system_instructions)
-        for child in trace.children(span.span_id)
+        return None
+    mirror = next(
+        (
+            child
+            for child in trace.children(span.span_id)
+            if child.operation == 'chat'
+            and _same_transcript(child.input_messages, span.input_messages)
+            and _same_transcript(child.output_messages, span.output_messages)
+            and _same_parts(child.system_instructions, span.system_instructions)
+        ),
+        None,
     )
-    if mirrored:
-        logger.info('Router trace span {} mirrors a child chat span; reading the child once', span.span_id)
-    return mirrored
+    if mirror is not None:
+        logger.info(
+            'Router trace span {} mirrors child chat span {}; reading the child once', span.span_id, mirror.span_id
+        )
+    return mirror
 
 
 def _same_transcript(left: list[OtelMessage] | None, right: list[OtelMessage] | None) -> bool:
@@ -376,57 +368,17 @@ def _chat_steps(
             drafts.extend(_system_instruction_steps(chat))
             last_system = chat.system_instructions
         if index == 0:
-            if first_has_full_history:
-                drafts.extend(_router_mirrored_history(chat.input_messages or []))
-            else:
-                drafts.extend(_history(chat.input_messages or [], first=True))
+            turns: _PriorTurns = 'pair' if first_has_full_history else 'drop'
+            drafts.extend(_history(chat.input_messages or [], turns=turns))
             new_inputs.append([])
         else:
             new = _new_input(chats[index - 1], chat)
-            drafts.extend(_history(new, first=False))
+            drafts.extend(_history(new, turns='keep'))
             new_inputs.append(new)
         agent = _agent_step(chat, by_id)
         if agent is not None:
             drafts.append(agent)
     return drafts, new_inputs
-
-
-def _router_mirrored_history(messages: list[OtelMessage]) -> list[_Draft]:
-    """Keep the agent/tool turns carried in the full input of a mirrored router Responses call."""
-    drafts: list[_Draft] = []
-    pending_calls: dict[str, list[_Draft]] = {}
-    for message in messages:
-        if _is_compaction(message):
-            pending_calls.clear()
-            drafts.append(_compaction_step(message))
-        elif message.role in ('system', 'developer', 'user'):
-            pending_calls.clear()
-            drafts.append(_message_step(message))
-        elif message.role in ('assistant', 'agent'):
-            draft = _input_agent_step(message)
-            drafts.append(draft)
-            for call in draft.fields['tool_calls'] or []:
-                pending_calls.setdefault(call.tool_call_id, []).append(draft)
-        elif message.role == 'tool':
-            for part in message.parts:
-                if not isinstance(part, OtelToolCallResponsePart):
-                    continue
-                matches = pending_calls.get(part.id or '', [])
-                result = _result(call_id=part.id, span=None, part=part, orphan=not matches)
-                if result is None:
-                    continue
-                if matches:
-                    matches.pop(0).results.append(result)
-                else:
-                    logger.warning(
-                        'Router mirrored Responses history has tool result {} without a still-valid call; '
-                        'preserving it as a chronological orphan step',
-                        part.id,
-                    )
-                    drafts.append(_Draft(fields={'source': 'agent', 'message': ''}, results=[result]))
-        else:
-            logger.warning('Skipping chat input message with role {!r}: ATIF has no such step source', message.role)
-    return drafts
 
 
 def _new_input(prev: OtelSpan, chat: OtelSpan) -> list[OtelMessage]:
@@ -527,24 +479,64 @@ def _system_instruction_steps(chat: OtelSpan) -> list[_Draft]:
     return [_Draft(fields={'source': 'system', 'message': join_text(texts), 'extra': rest})]
 
 
-def _history(messages: list[OtelMessage], *, first: bool) -> list[_Draft]:
-    """Turn new input messages into steps. Tool messages are read as results elsewhere."""
+_PriorTurns = Literal['drop', 'keep', 'pair']
+
+
+def _history(messages: list[OtelMessage], *, turns: _PriorTurns) -> list[_Draft]:
+    """Turn input messages into steps.
+
+    `turns` decides what happens to assistant and tool messages: `drop` counts and warns (a first chat span's
+    history), `keep` keeps assistant turns and leaves tool results to `_attach_results` (a later span's new
+    input), `pair` keeps assistant turns and attaches each tool result to its call here (a mirrored router call,
+    whose input is the whole conversation and has no later span to read results from).
+    """
     drafts: list[_Draft] = []
-    history = 0
+    dropped = 0
+    pending_calls: dict[str, list[_Draft]] = {}
     for message in messages:
         if _is_compaction(message):
+            pending_calls.clear()
             drafts.append(_compaction_step(message))
         elif message.role in ('system', 'developer', 'user'):
+            pending_calls.clear()
             drafts.append(_message_step(message))
-        elif first and message.role in ('assistant', 'agent', 'tool'):
-            history += 1
+        elif message.role in ('assistant', 'agent', 'tool') and turns == 'drop':
+            dropped += 1
         elif message.role in ('assistant', 'agent'):
-            drafts.append(_input_agent_step(message))
-        elif message.role != 'tool':
+            draft = _input_agent_step(message)
+            drafts.append(draft)
+            for call in draft.fields['tool_calls'] or []:
+                pending_calls.setdefault(call.tool_call_id, []).append(draft)
+        elif message.role == 'tool':
+            if turns == 'pair':
+                drafts.extend(_pair_results(message, pending_calls))
+        else:
             logger.warning('Skipping chat input message with role {!r}: ATIF has no such step source', message.role)
-    if history:
-        logger.warning('history of {} messages before the first chat span is not converted', history)
+    if dropped:
+        logger.warning('history of {} messages before the first chat span is not converted', dropped)
     return drafts
+
+
+def _pair_results(message: OtelMessage, pending_calls: dict[str, list[_Draft]]) -> list[_Draft]:
+    """Attach a tool message's results to their pending calls; return an orphan step per unmatched result."""
+    orphans: list[_Draft] = []
+    for part in message.parts:
+        if not isinstance(part, OtelToolCallResponsePart):
+            continue
+        matches = pending_calls.get(part.id or '', [])
+        result = _result(call_id=part.id, span=None, part=part, orphan=not matches)
+        if result is None:
+            continue
+        if matches:
+            matches.pop(0).results.append(result)
+        else:
+            logger.warning(
+                'Router mirrored Responses history has tool result {} without a still-valid call; '
+                'preserving it as a chronological orphan step',
+                part.id,
+            )
+            orphans.append(_Draft(fields={'source': 'agent', 'message': ''}, results=[result]))
+    return orphans
 
 
 def _input_agent_step(message: OtelMessage) -> _Draft:
@@ -764,7 +756,7 @@ def _attach_results(
     Results that match no call (an id-less or unknown-id `execute_tool` span, or a `tool_call_response` part
     whose id no call has) are warned and kept as `source_call_id=None` results on the nearest earlier agent step.
     """
-    tool_spans = _by_tool_time([span for span in members if span.operation == 'execute_tool'])
+    tool_spans = order_spans([span for span in members if span.operation == 'execute_tool'], fallback_end=True)
     by_call: dict[str, list[OtelSpan]] = {}
     for span in tool_spans:
         call_id = span.attributes.get('gen_ai.tool.call.id')
@@ -1182,13 +1174,8 @@ def _emit_step(
     tool_definitions: list[dict[str, Any]] | None,
 ) -> list[OtelSpan]:
     """Emit one agent step's chat span and tool spans, then extend `history` with its turn and results."""
-    finish_reasons = (step.extra or {}).get('finish_reasons')
-    finish_reason = (
-        finish_reasons[0]
-        if isinstance(finish_reasons, list) and finish_reasons and isinstance(finish_reasons[0], str)
-        else None
-    )
-    output = OtelMessage(role='assistant', parts=_assistant_parts(step), finish_reason=finish_reason)
+    reasons = _finish_reasons(step)
+    output = OtelMessage(role='assistant', parts=_assistant_parts(step), finish_reason=reasons[0] if reasons else None)
     start, end, status = _times(step)
     error_type = _extra_str(step, 'error_type')
     chat = OtelSpan(
@@ -1314,14 +1301,20 @@ def _chat_attributes(
             'gen_ai.usage.total_cost': metrics.cost_usd,
         }
         attributes.update({key: value for key, value in usage.items() if value is not None})
-    finish_reasons = (step.extra or {}).get('finish_reasons')
-    if isinstance(finish_reasons, list):
-        attributes['gen_ai.response.finish_reasons'] = finish_reasons
+    reasons = _finish_reasons(step)
+    if reasons is not None:
+        attributes['gen_ai.response.finish_reasons'] = reasons
     if error_type is not None:
         attributes['error.type'] = error_type
     unmapped = {key: value for key, value in (step.extra or {}).items() if key not in _MAPPED_STEP_EXTRA}
     _put_json(attributes, _STEP_EXTRA, unmapped)
     return attributes
+
+
+def _finish_reasons(step: AtifStep) -> list[str] | None:
+    """The step's `extra.finish_reasons` strings, or None when it holds no list."""
+    value = (step.extra or {}).get('finish_reasons')
+    return [reason for reason in value if isinstance(reason, str)] if isinstance(value, list) else None
 
 
 def _put_json(attributes: dict[str, Any], key: str, value: dict[str, Any] | None) -> None:
