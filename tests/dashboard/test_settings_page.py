@@ -542,9 +542,28 @@ def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient,
     assert '<summary>Advanced</summary>' not in html
     assert 'name="orq_auth_method" value="environment" checked' in html
     assert 'name="orq_auth_method" value="cli_profile"' in html
-    assert '<option value="staging">staging (https://staging.orq.ai)</option>' in html
-    assert '<option value="prod">prod</option>' in html
+    options = _pick_options(html, 'orq_profile')
+    assert list(options) == ['staging', 'prod']
+    assert '<strong>staging</strong><span class="config-note">https://staging.orq.ai</span>' in options['staging']
+    assert '<strong>prod</strong><span class="config-note">Default Orq server</span>' in options['prod']
+    assert 'Choose a profile' in html.split('id="orq_profile"', 1)[1].split('</button>', 1)[0]
     assert 'key-staging' not in html
+
+
+def test_a_profile_with_a_hidden_cli_key_is_listed_but_not_selectable(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: (
+        OrqProfile('staging', 'key-staging', 'https://staging.orq.ai', False),
+        OrqProfile('locked', 'sk-****', None, False),
+    ))
+
+    html = client.get('/settings').text
+
+    assert list(_pick_options(html, 'orq_profile')) == ['staging']
+    hidden = _disabled_rows(html)[0]
+    assert '<strong>locked</strong>' in hidden
+    assert '<span class="status-badge failed"><span class="dot"></span>Key hidden</span>' in hidden
 
 
 def test_authentication_choices_keep_method_fields_in_a_shared_second_step(client: TestClient) -> None:
@@ -560,11 +579,15 @@ def test_authentication_choices_keep_method_fields_in_a_shared_second_step(clien
     assert 'data-auth-method="stored_api_key"' in details
 
 
-def _session_options(html: str) -> dict[str, str]:
-    """Each session option's markup keyed by the server it submits."""
-    picker = html.split('class="model-pick oauth-pick"', 1)[1].split('</span></div></span>', 1)[0]
+def _pick_options(html: str, name: str = 'orq_oauth_server') -> dict[str, str]:
+    """Each selectable option's markup in the *name* picker, keyed by the value it submits."""
+    picker = html.split(f'<input type="hidden" name="{name}"', 1)[1].split('</div></div></span>', 1)[0]
     options = picker.split('<button type="button" class="model-option')[1:]
     return {option.split('data-model="', 1)[1].split('"', 1)[0]: option for option in options}
+
+
+def _disabled_rows(html: str) -> list[str]:
+    return [row.split('</div>', 1)[0] for row in html.split('<div class="rich-pick-disabled" aria-disabled="true">')[1:]]
 
 
 def test_settings_page_defers_the_session_check_and_keeps_the_saved_server_in_the_form(
@@ -592,7 +615,7 @@ def test_cli_oauth_field_offers_saved_sessions_with_their_checked_token_status(
     ))
 
     html = client.get('/settings/oauth-sessions', params={'value': 'https://my.staging.orq.ai/'}).text
-    options = _session_options(html)
+    options = _pick_options(html)
 
     assert list(options) == ['https://my.orq.ai', 'https://my.staging.orq.ai', 'https://aim.orq.ai']
     assert 'ada@orq.ai · research' in options['https://my.orq.ai']
@@ -610,7 +633,7 @@ def test_cli_oauth_field_keeps_a_saved_server_that_has_no_login(client: TestClie
         OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', None, 'valid', True),
     ))
 
-    options = _session_options(client.get('/settings/oauth-sessions', params={'value': 'https://eu.orq.ai'}).text)
+    options = _pick_options(client.get('/settings/oauth-sessions', params={'value': 'https://eu.orq.ai'}).text)
 
     assert list(options) == ['https://eu.orq.ai', 'https://my.orq.ai']
     assert options['https://eu.orq.ai'].startswith(' is-selected"')
@@ -627,8 +650,8 @@ def test_cli_oauth_field_lists_an_unreadable_login_without_making_it_selectable(
 
     html = client.get('/settings/oauth-sessions', params={'value': 'https://my.orq.ai'}).text
 
-    assert list(_session_options(html)) == ['https://my.orq.ai']
-    broken = html.split('<div class="oauth-session-broken" aria-disabled="true">', 1)[1].split('</div>', 1)[0]
+    assert list(_pick_options(html)) == ['https://my.orq.ai']
+    broken = _disabled_rows(html)[0]
     assert '<strong>broken.orq.ai</strong>' in broken
     assert 'Run orq auth login for broken.orq.ai' in broken
     assert '<span class="status-badge failed"><span class="dot"></span>Unreadable</span>' in broken
@@ -771,7 +794,7 @@ def test_selecting_another_profile_does_not_show_its_scope_before_save(
     html = client.get('/settings?profile=staging').text
 
     assert 'Profile preview. Save settings to use it.' in html
-    assert '<option value="staging" selected>staging' in html
+    assert _pick_options(html, 'orq_profile')['staging'].startswith(' is-selected"')
     assert 'https://staging.orq.ai' in html
     assert 'Selected profile API key' in html
     assert 'onchange="location.assign' not in html
@@ -836,7 +859,7 @@ def test_saving_a_profile_persists_it_without_changing_environment(
     assert os.environ['ORQ_API_KEY'] == 'from-env'
     assert os.environ['ORQ_BASE_URL'] == 'https://env.orq.ai'
     html = client.get('/settings').text
-    assert '<option value="prod" selected>prod</option>' in html
+    assert _pick_options(html, 'orq_profile')['prod'].startswith(' is-selected"')
     assert '<div class="panel-title">Authentication</div>' in html
     assert 'Selected profile API key' in html
     assert 'key-prod' not in html
@@ -908,7 +931,10 @@ def test_missing_profile_selector_preserves_saved_choice(
     assert asyncio.run(finder_routes._build_store(app)) is None
     assert 'Orq profile prod is unavailable' in client.get('/find').text
     html = client.get('/settings').text
-    assert '<option value="prod" selected disabled>prod (unavailable)</option>' in html
+    assert '<input type="hidden" name="orq_profile" value="prod">' in html
+    assert 'prod' not in _pick_options(html, 'orq_profile')
+    unavailable = _disabled_rows(html)[0]
+    assert '<strong>prod</strong>' in unavailable and 'Unavailable' in unavailable
     assert 'name="orq_auth_method" value="environment"' in html
     assert 'The saved Orq CLI profile “prod” is unavailable.' in html
 

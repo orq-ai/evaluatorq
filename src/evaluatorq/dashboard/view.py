@@ -807,58 +807,101 @@ _OAUTH_BADGES = {
 }
 
 
-def _oauth_session_row(host: str, account: str, badge_class: str, badge_text: str) -> str:
-    note = f'<span class="config-note">{esc(account)}</span>' if account else ''
+def _pick_row(title: str, note: str = '', badge: tuple[str, str] | None = None) -> str:
+    """One rich picker row: a bold title, a muted note, and an optional ``status-badge`` (class, text)."""
+    note_html = f'<span class="config-note">{esc(note)}</span>' if note else ''
+    badge_html = (
+        f'<span class="status-badge {badge[0]}"><span class="dot"></span>{esc(badge[1])}</span>' if badge else ''
+    )
+    return f'<span class="rich-pick-id"><strong>{esc(title)}</strong>{note_html}</span>{badge_html}'
+
+
+def _rich_pick(
+    name: str,
+    value: str,
+    options: Sequence[tuple[str, str]],
+    *,
+    disabled: Sequence[str] = (),
+    current: str = '',
+    describedby: str = '',
+) -> str:
+    """A menu of rich rows that submits *value* through a hidden input.
+
+    Reuses the model picker's markup and script; ``data-rich`` makes the trigger
+    copy the chosen row, so the closed control keeps its note and badge.
+    *disabled* rows are listed but cannot be chosen. The trigger shows the row
+    matching *value*, else *current*.
+    """
+    selected = next((row for option, row in options if value and option.rstrip('/') == value.rstrip('/')), current)
+    buttons = ''.join(
+        f'<button type="button" class="model-option{" is-selected" if row == selected else ""}" data-model="{esc(option)}"'
+        f' data-rich aria-pressed="{"true" if row == selected else "false"}">{row}</button>'
+        for option, row in options
+    )
+    rows_off = ''.join(f'<div class="rich-pick-disabled" aria-disabled="true">{row}</div>' for row in disabled)
+    described = f' aria-describedby="{esc(describedby)}"' if describedby else ''
     return (
-        f'<span class="oauth-session-id"><strong>{esc(host)}</strong>{note}</span>'
-        f'<span class="status-badge {badge_class}"><span class="dot"></span>{esc(badge_text)}</span>'
+        f'<span class="model-pick rich-pick"><input type="hidden" name="{esc(name)}" value="{esc(value)}">'
+        f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false"{described}>'
+        f'{selected}</button>'
+        f'<div class="finder-facets"><div class="facet-list">{buttons}{rows_off}</div></div></span>'
     )
 
 
 def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
-    """The CLI OAuth server field: a session menu with each login's checked token status.
+    """The CLI OAuth server field: each saved CLI login with its checked token status.
 
-    Reuses the model picker's markup and script; ``data-rich`` makes the trigger
-    copy the chosen row, so the closed control keeps the status badge. Without
-    any saved login it is a plain server URL box.
+    Without any saved login it is a plain server URL box.
     """
     if not sessions:
         return (
             '<label class="settings-auth-detail-label" for="orq_oauth_server">Orq server</label>'
             f'<input id="orq_oauth_server" name="orq_oauth_server" type="url" value="{esc(value)}">'
         )
-    rows: list[tuple[str, str]] = []
-    broken: list[str] = []
+    options: list[tuple[str, str]] = []
     if all(session.server.rstrip('/') != value.rstrip('/') for session in sessions):
-        rows.append((value, _oauth_session_row(value, 'No saved login on this server', 'failed', 'No login')))
+        options.append((value, _pick_row(value, 'No saved login on this server', ('failed', 'No login'))))
+    # An unreadable login has no server to submit, so it is listed but not selectable.
+    disabled = [
+        _pick_row(session.host, f'Run orq auth login for {session.host}', _OAUTH_BADGES['unreadable'])
+        for session in sessions
+        if session.status == 'unreadable'
+    ]
     for session in sessions:
-        if session.status == 'unreadable':
-            # No server to submit: the CLI could not decode this login's file, so it is listed but not selectable.
-            broken.append(
-                '<div class="oauth-session-broken" aria-disabled="true">'
-                f'{_oauth_session_row(session.host, f"Run orq auth login for {session.host}", *_OAUTH_BADGES["unreadable"])}'
-                '</div>'
-            )
-            continue
-        account = ' · '.join(part for part in (session.user, session.workspace) if part)
-        rows.append((session.server, _oauth_session_row(session.host, account, *_OAUTH_BADGES[session.status])))
-    selected = next((row for server, row in rows if server.rstrip('/') == value.rstrip('/')), rows[0][1])
-    options = ''.join(
-        f'<button type="button" class="model-option{" is-selected" if server.rstrip("/") == value.rstrip("/") else ""}"'
-        f' data-model="{esc(server)}" data-rich aria-pressed="{"true" if server.rstrip("/") == value.rstrip("/") else "false"}">'
-        f'{row}</button>'
-        for server, row in rows
-    )
-    return (
-        '<label class="settings-auth-detail-label" for="orq_oauth_server">CLI session</label>'
-        f'<span class="model-pick oauth-pick"><input type="hidden" name="orq_oauth_server" value="{esc(value)}">'
-        '<button type="button" id="orq_oauth_server" class="model-pick-btn" aria-haspopup="true" aria-expanded="false">'
-        f'{selected}</button>'
-        f'<div class="finder-facets"><div class="facet-list">{options}{"".join(broken)}</div></div></span>'
+        if session.status != 'unreadable':
+            account = ' · '.join(part for part in (session.user, session.workspace) if part)
+            options.append((session.server, _pick_row(session.host, account, _OAUTH_BADGES[session.status])))
+    return '<label class="settings-auth-detail-label" for="orq_oauth_server">CLI session</label>' + _rich_pick(
+        'orq_oauth_server', value, options, disabled=disabled
     )
 
 
-def settings_body(  # noqa: C901
+def profile_field(chosen: str, profiles: Sequence[Any], *, describedby: str = '') -> str:
+    """The CLI API-key profile field: each local CLI profile with its server.
+
+    Profiles whose key the CLI masks, and a saved profile the CLI no longer
+    has, are listed but cannot be chosen. The hidden input keeps the saved name,
+    so saving without choosing again reports it as unavailable.
+    """
+    options: list[tuple[str, str]] = []
+    disabled: list[str] = []
+    current = '<span class="rich-pick-placeholder">Choose a profile</span>'
+    if chosen and all(profile.name != chosen for profile in profiles):
+        current = _pick_row(chosen, 'Not in the Orq CLI any more', ('failed', 'Unavailable'))
+        disabled.append(current)
+    for profile in profiles:
+        server = profile.server or 'Default Orq server'
+        if '*' in profile.api_key:
+            row = _pick_row(profile.name, server, ('failed', 'Key hidden'))
+            disabled.append(row)
+            if profile.name == chosen:
+                current = row
+        else:
+            options.append((profile.name, _pick_row(profile.name, server)))
+    return _rich_pick('orq_profile', chosen, options, disabled=disabled, current=current, describedby=describedby)
+
+
+def settings_body(
     config: list[tuple[str, str | list[str]]],
     settings: Any | None = None,
     *,
@@ -911,24 +954,10 @@ def settings_body(  # noqa: C901
     auth_rows: list[str] = []
     chosen = setting_value('orq_profile')
     method = setting_value('orq_auth_method') or ('cli_profile' if chosen else 'environment')
-    options = []
-    if chosen and all(profile.name != chosen for profile in profiles):
-        options.append(f'<option value="{esc(chosen)}" selected disabled>{esc(chosen)} (unavailable)</option>')
-    profile_options: list[str] = []
-    for profile in profiles:
-        label = profile.name + (f' ({profile.server})' if profile.server else '')
-        selected = ' selected' if profile.name == chosen else ''
-        if '*' in profile.api_key:
-            label += ' (CLI key masked)'
-            profile_options.append(f'<option value="{esc(profile.name)}"{selected} disabled>{esc(label)}</option>')
-        else:
-            profile_options.append(f'<option value="{esc(profile.name)}"{selected}>{esc(label)}</option>')
-    options.extend(profile_options)
     profile_error = errors.get('orq_profile')
     profile_error_html = (
         f'<span id="orq_profile_error" class="settings-error">{esc(profile_error)}</span>' if profile_error else ''
     )
-    profile_error_attr = ' aria-describedby="orq_profile_error"' if profile_error else ''
     key_error = errors.get('orq_api_key_entry')
     key_error_html = f'<span class="settings-error" role="alert">{esc(key_error)}</span>' if key_error else ''
     saved_key_hint = (
@@ -954,8 +983,8 @@ def settings_body(  # noqa: C901
             'Reuse an API-key profile saved by the Orq CLI.',
             (
                 '<label class="settings-auth-detail-label" for="orq_profile">CLI profile</label>'
-                f'<select id="orq_profile" name="orq_profile"{profile_error_attr}>'
-                f'<option value="">Choose a profile</option>{"".join(options)}</select>{profile_error_html}'
+                f'{profile_field(chosen, profiles, describedby="orq_profile_error" if profile_error else "")}'
+                f'{profile_error_html}'
             ),
         ),
         (
