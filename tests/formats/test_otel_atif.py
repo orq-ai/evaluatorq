@@ -181,31 +181,6 @@ def test_router_responses_root_mirrors_child_only_once() -> None:
     assert [(step.source, step.message) for step in traj.steps] == [('user', 'write hello.py'), ('agent', 'hello.py')]
 
 
-def test_router_mirror_full_history_is_only_the_matching_child(caplog: pytest.LogCaptureFixture) -> None:
-    inputs = [_text('user', 'write hello.py')]
-    outputs = [_text('agent', 'hello.py')]
-    raw = [
-        {
-            'span_id': 'root',
-            'type': 'trace',
-            'attributes': {'gen_ai.operation.name': 'chat', 'gen_ai.input': inputs, 'gen_ai.output': outputs},
-        },
-        {
-            **_chat('distinct', [_text('user', 'a'), _text('assistant', 'b'), _text('user', 'c')],
-                    [_text('assistant', 'd')]),
-            'parent_span_id': 'root',
-            'started_at': 1,
-        },
-        {**_chat('mirror', inputs, outputs), 'parent_span_id': 'root', 'type': 'span.responses', 'started_at': 2},
-    ]
-
-    traj = OtelTrace.from_orq(raw).to_atif()
-
-    assert ('agent', 'b') not in [(step.source, step.message) for step in traj.steps]
-    assert 'history of 1 messages before the first chat span is not converted' in caplog.text
-
-
-
 def test_router_responses_mirror_keeps_prior_agent_tool_turns(caplog: pytest.LogCaptureFixture) -> None:
     inputs = [
         _text('user', 'Create and run a file.'),
@@ -266,70 +241,74 @@ def test_router_responses_mirror_keeps_prior_agent_tool_turns(caplog: pytest.Log
     assert not [record for record in caplog.records if record.levelno >= 30]
 
 
+def _call(call_id: str, name: str = 'lookup') -> dict[str, Any]:
+    return {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': call_id, 'name': name, 'arguments': {}}]}
+
+
+def _response(call_id: str | None, response: str) -> dict[str, Any]:
+    part = {'type': 'tool_call_response', 'response': response, **({'id': call_id} if call_id else {})}
+    return {'role': 'tool', 'parts': [part]}
+
+
+def _linked_results(traj: AtifTrajectory) -> list[tuple[int, str | None, object]]:
+    return [
+        (step.step_id, result.source_call_id, result.content)
+        for step in traj.steps
+        for result in (step.observation.results if step.observation else [])
+    ]
+
+
 @pytest.mark.parametrize('boundary_role', ['user', 'system'])
-def test_router_mirrored_result_after_boundary_is_an_orphan_step(
+def test_history_result_after_a_boundary_still_matches_its_call_by_id(
     boundary_role: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    call = {'role': 'assistant', 'parts': [
-        {'type': 'tool_call', 'id': 'call-old', 'name': 'lookup', 'arguments': {'q': 'old'}}]}
-    inputs = [
-        _text('user', 'First request'),
-        call,
-        _text(boundary_role, 'New context'),
-        {'role': 'tool', 'parts': [
-            {'type': 'tool_call_response', 'id': 'call-old', 'response': 'late result'}]},
-    ]
-    output = [_text('assistant', 'Done')]
-    root_input = {'_value': 'New context', 'messages': inputs}
-    root_output = {'_value': [{'type': 'message', 'role': 'assistant', 'content': 'Done'}], 'messages': output}
-    child_output = {'type': 'text', 'messages': output}
-    raw = [
-        {'span_id': 'root', 'type': 'trace', 'attributes': {
-            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input, 'output': root_output}}},
-        {'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses', 'attributes': {
-            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input, 'output': child_output}}},
-    ]
+    inputs = [_text('user', 'First'), _call('call-old'), _text(boundary_role, 'New context'),
+              _response('call-old', 'late result')]
+    traj = OtelTrace.from_orq([_chat('c', inputs, [_text('assistant', 'Done')])]).to_atif()
 
-    trajectory = OtelTrace.from_orq(raw).to_atif()
-
-    assert [step.source for step in trajectory.steps] == [
-        'user', 'agent', boundary_role if boundary_role == 'user' else 'system', 'agent', 'agent'
-    ]
-    assert trajectory.steps[1].observation is None
-    orphan = trajectory.steps[3].observation
-    assert orphan is not None
-    assert [(result.source_call_id, result.content, result.extra) for result in orphan.results] == [
-        (None, 'late result', {'orphan_call_id': 'call-old'})
-    ]
-    assert 'without a still-valid call' in caplog.text
+    assert [step.source for step in traj.steps] == ['user', 'agent', boundary_role, 'agent']
+    assert _linked_results(traj) == [(2, 'call-old', 'late result')]
+    assert 'match no earlier call' not in caplog.text
 
 
-def test_router_mirrored_orphan_before_first_agent_keeps_its_position(caplog: pytest.LogCaptureFixture) -> None:
-    inputs = [
-        {'role': 'tool', 'parts': [
-            {'type': 'tool_call_response', 'id': 'unknown', 'response': 'early result'}]},
-        _text('user', 'Request'),
-    ]
-    output = [_text('assistant', 'Done')]
-    root_input = {'_value': 'Request', 'messages': inputs}
-    root_output = {'_value': [{'type': 'message', 'role': 'assistant', 'content': 'Done'}], 'messages': output}
-    raw = [
-        {'span_id': 'root', 'type': 'trace', 'attributes': {
-            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input, 'output': root_output}}},
-        {'span_id': 'child', 'parent_span_id': 'root', 'type': 'span.responses', 'attributes': {
-            'gen_ai.operation.name': 'chat', 'gen_ai': {'input': root_input,
-                                                        'output': {'type': 'text', 'messages': output}}}},
-    ]
+def test_history_results_follow_call_ids_not_order() -> None:
+    inputs = [_text('user', 'Go'), _call('call-a'), _call('call-b'),
+              _response('call-b', 'b result'), _response('call-a', 'a result')]
+    traj = OtelTrace.from_orq([_chat('c', inputs, [_text('assistant', 'Done')])]).to_atif()
 
-    trajectory = OtelTrace.from_orq(raw).to_atif()
+    assert sorted(_linked_results(traj)) == [(2, 'call-a', 'a result'), (3, 'call-b', 'b result')]
 
-    assert [step.source for step in trajectory.steps] == ['agent', 'user', 'agent']
-    orphan = trajectory.steps[0].observation
-    assert orphan is not None
-    assert [(result.source_call_id, result.content, result.extra) for result in orphan.results] == [
-        (None, 'early result', {'orphan_call_id': 'unknown'})
+
+def test_later_span_input_result_links_to_the_call_in_that_input() -> None:
+    first = {**_chat('a', [_text('user', 'q')], [_text('assistant', 'a1')]), 'started_at': 1}
+    later_input = [_text('user', 'q'), _text('assistant', 'a1'), _text('user', 'q2'), _call('x'), _response('x', 'R')]
+    later = {**_chat('b', later_input, [_text('assistant', 'a2')]), 'started_at': 2}
+
+    traj = OtelTrace.from_orq([first, later]).to_atif()
+
+    assert [(s.source, s.message) for s in traj.steps] == [
+        ('user', 'q'), ('agent', 'a1'), ('user', 'q2'), ('agent', ''), ('agent', 'a2')
     ]
-    assert 'without a still-valid call' in caplog.text
+    assert _linked_results(traj) == [(4, 'x', 'R')]
+
+
+def test_history_result_with_no_matching_call_is_unlinked_on_the_nearest_agent_step(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    inputs = [_response('early', 'before any agent'), _text('user', 'Go'), _call('call-a'),
+              _response('unknown', 'stray'), _response(None, 'no id')]
+    traj = OtelTrace.from_orq([_chat('c', inputs, [_text('assistant', 'Done')])]).to_atif()
+
+    assert [step.source for step in traj.steps] == ['user', 'agent', 'agent']
+    orphans = traj.steps[1].observation
+    assert orphans is not None
+    assert [(r.source_call_id, r.content, r.extra) for r in orphans.results] == [
+        (None, 'before any agent', {'orphan_call_id': 'early'}),
+        (None, 'stray', {'orphan_call_id': 'unknown'}),
+        (None, 'no id', None),
+    ]
+    assert traj.steps[2].observation is None
+    assert '3 tool results in chat input match no earlier call' in caplog.text
 
 
 def test_router_mirror_ignores_non_transcript_message_metadata() -> None:
@@ -540,11 +519,10 @@ def _text(role: str, text: str) -> dict[str, Any]:
     return {'role': role, 'parts': [{'type': 'text', 'content': text}]}
 
 
-def test_history_before_first_chat_span_is_warned_and_dropped(caplog: pytest.LogCaptureFixture) -> None:
+def test_first_chat_span_keeps_its_earlier_assistant_turns() -> None:
     span = _chat('c', [_text('user', 'a'), _text('assistant', 'b'), _text('user', 'c')], [_text('assistant', 'd')])
     traj = OtelTrace.from_orq([span]).to_atif()
-    assert [(s.source, s.message) for s in traj.steps] == [('user', 'a'), ('user', 'c'), ('agent', 'd')]
-    assert 'history of 1 messages before the first chat span is not converted' in caplog.text
+    assert [(s.source, s.message) for s in traj.steps] == [('user', 'a'), ('agent', 'b'), ('user', 'c'), ('agent', 'd')]
 
 
 def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:

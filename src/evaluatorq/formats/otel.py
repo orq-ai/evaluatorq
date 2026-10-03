@@ -171,13 +171,21 @@ def _as_list(value: Any) -> Any:
 
 
 class OtelMessage(BaseModel):
-    """One GenAI message. `finish_reason` is read when present; converters write it as a span attribute."""
+    """One GenAI message. `finish_reason` is read when present; converters write it as a span attribute.
+
+    Orq's `agent` role (A2A naming) is read as `assistant`.
+    """
 
     model_config = _OPEN
     role: str
     parts: list[OtelPart]
     name: str | None = None
     finish_reason: str | None = None
+
+    @field_validator('role')
+    @classmethod
+    def _assistant_role(cls, value: str) -> str:
+        return 'assistant' if value == 'agent' else value
 
     @field_validator('parts', mode='before')
     @classmethod
@@ -262,9 +270,9 @@ class OtelTrace(BaseModel):
     def to_atif(self, *, agent_name: str = 'unknown', agent_version: str = 'unknown') -> AtifTrajectory:
         """Convert to an ATIF trajectory (subagent `invoke_agent` subtrees become subagent trajectories).
 
-        Lost: see `convert_otel_atif.otel_to_atif` for the mapping. Chat input before the first chat span
-        (prior history, warned), extra output choices (warned), span attributes other than model, usage,
-        finish reasons and error type, and spans that are not `chat`, `execute_tool` or `invoke_agent`.
+        Lost: see `convert_otel_atif.otel_to_atif` for the mapping. Extra output choices (warned), span attributes
+        other than model, usage, finish reasons and error type, and spans that are not `chat`, `execute_tool` or
+        `invoke_agent`.
         """
         from evaluatorq.formats import convert_otel_atif
 

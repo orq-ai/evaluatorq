@@ -299,7 +299,7 @@ def test_router_root_direct_messages_parse_a2a_parts(container: str, caplog: pyt
     [span] = OtelTrace.from_orq([{'span_id': 'root', 'type': 'trace', 'attributes': {
         'gen_ai.operation.name': 'chat', 'gen_ai.output': value}}]).spans
     assert span.output_messages is not None
-    assert [parsed.role for parsed in span.output_messages] == ['agent']
+    assert [parsed.role for parsed in span.output_messages] == ['assistant']
     assert span.output_messages[0].parts == [OtelTextPart(type='text', content='Hello.')]
     assert 'Unknown OTel message part type' not in caplog.text
 
