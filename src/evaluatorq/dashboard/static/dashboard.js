@@ -549,7 +549,7 @@
     hidden.value = model;
     const button = pick.querySelector('.model-pick-btn');
     if (from.hasAttribute('data-rich')) button.innerHTML = from.innerHTML;
-    else button.textContent = model || 'Choose a model';
+    else button.textContent = model || button.getAttribute('data-default') || 'Choose a model';
     pick.querySelectorAll('.model-option').forEach(function (other) {
       other.classList.toggle('is-selected', other === from);
       other.setAttribute('aria-pressed', other === from ? 'true' : 'false');

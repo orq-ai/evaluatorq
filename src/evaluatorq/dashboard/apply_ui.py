@@ -95,9 +95,6 @@ def _credential_identity(auth: Any, settings: Any) -> str:
     return auth_identity(auth, settings)
 
 
-# Model for the instruction-merge call: the smart role, since rewriting production
-# agent instructions warrants a stronger model than bulk generation does.
-APPLY_MODEL_ENV = 'EVALUATORQ_APPLY_MODEL'
 DEFAULT_APPLY_MODEL = DEFAULT_SMART_MODEL
 
 

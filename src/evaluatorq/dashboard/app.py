@@ -35,7 +35,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fasthtml.core import FastHTML, NotStr
@@ -78,6 +78,7 @@ from evaluatorq.dashboard.view import (
     filter_fragment,
     landing_body,
     model_control,
+    model_field_env,
     oauth_session_field,
     redteam_overview_body,
     render_filter_form,
@@ -168,31 +169,18 @@ def _settings_config(
     settings: DashboardSettings | None = None,
 ) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
-    stores being scanned, the default sim model, and API-key presence with a
+    stores being scanned and API-key presence with a
     masked suffix (never the full value)."""
     from evaluatorq.dashboard.library import default_roots
     from evaluatorq.dashboard.orq_workspace import classify_host, resolve_base_url, resolve_slug
-    from evaluatorq.simulation.types import DEFAULT_MODEL
 
     scan_roots = roots if roots is not None else default_roots()
     store_paths = [str(p) for p in scan_roots] or ['—']
-    from evaluatorq.dashboard.apply_ui import APPLY_MODEL_ENV, DEFAULT_APPLY_MODEL, apply_model
-
     settings = settings or effective_settings()
-    config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
-    config.append(('Default sim model', DEFAULT_MODEL))
-    model = apply_model()
-    source = (
-        APPLY_MODEL_ENV
-        if os.environ.get(APPLY_MODEL_ENV, '').strip()
-        else 'saved'
-        if model != DEFAULT_APPLY_MODEL
-        else 'default'
-    )
-    config.extend((
-        ('Apply-recommendations model', f'{model} ({source})'),
+    config: list[tuple[str, str | list[str]]] = [
+        ('Run stores', store_paths),
         ('Authentication method', settings.orq_auth_method.replace('_', ' ')),
-    ))
+    ]
     if settings.orq_auth_method == 'cli_profile' and settings.orq_profile is not None and profile is None:
         config.append(('Orq profile status', 'unavailable — choose Environment or another profile'))
     if profile is not None:
@@ -374,6 +362,18 @@ async def _settings_oauth_sessions(req: Request) -> NotStr:
     return NotStr(oauth_session_field(value, sessions))
 
 
+_MODEL_FIELD_KINDS: dict[str, Literal['chat', 'classify', 'embedding']] = {
+    'fast_model': 'chat',
+    'smart_model': 'chat',
+    'classifier_model': 'classify',
+    'embedding_model': 'embedding',
+}
+
+
+def _join_notes(*notes: str) -> str:
+    return ' '.join(note for note in notes if note)
+
+
 async def _settings_models(req: Request) -> NotStr:
     """One settings model field as its workspace menu, or as the text box when there is no catalogue."""
     field = req.query_params.get('field', '')
@@ -383,6 +383,9 @@ async def _settings_models(req: Request) -> NotStr:
     params = req.query_params
     name = params.get('orq_profile') or params.get('profile') or ''
     settings = effective_settings()
+    env_name, env_value = model_field_env(field)
+    env_note = f'Set by {env_name}' if env_value and value == env_value else ''
+    kind = _MODEL_FIELD_KINDS[field]
     requested_method = params.get('orq_auth_method') or params.get('auth_method')
     update: dict[str, Any] = {}
     if requested_method in ('environment', 'cli_profile', 'stored_api_key', 'cli_oauth'):
@@ -393,7 +396,9 @@ async def _settings_models(req: Request) -> NotStr:
         update['orq_oauth_server'] = params['orq_oauth_server']
     settings = settings.model_copy(update=update)
     if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
-        return NotStr(model_control(field, value, {}, note='Choose a CLI profile to load its models.'))
+        return NotStr(
+            model_control(field, value, {}, note=_join_notes(env_note, 'Choose a CLI profile to load its models.'))
+        )
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
     groups: dict[str, list[str]] = {}
     try:
@@ -401,7 +406,7 @@ async def _settings_models(req: Request) -> NotStr:
         if auth.method == 'cli_oauth':
             orq, llm = build_auth_clients(auth)
             try:
-                groups = await models_by_provider(llm, classify=field == 'classifier_model')
+                groups = await models_by_provider(llm, kind=kind)
             finally:
                 await close_orq_client(orq)
                 await llm.close()
@@ -413,7 +418,7 @@ async def _settings_models(req: Request) -> NotStr:
                 max_retries=0,
             )
             try:
-                groups = await models_by_provider(resolved.client, classify=field == 'classifier_model')
+                groups = await models_by_provider(resolved.client, kind=kind)
             finally:
                 if resolved.owned:
                     await resolved.client.close()
@@ -428,7 +433,7 @@ async def _settings_models(req: Request) -> NotStr:
             note = "Couldn't load the model list from Orq. Type a model id."
     else:
         note = '' if groups else 'Orq returned no models for this field. Type a model id.'
-    return NotStr(model_control(field, value, groups, note=note))
+    return NotStr(model_control(field, value, groups, note=_join_notes(env_note, note)))
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
@@ -577,17 +582,15 @@ def _log_finder_store_close_failures(stores: list[Any], results: list[Any]) -> N
 
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
     """Keep unchanged environment overrides out of the saved file."""
-    values: dict[str, object] = {
-        name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
-    }
-    for name, env_name in (
-        ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
-        ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),
-        ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
-    ):
-        override = os.environ.get(env_name, '').strip()
-        if override and values[name] == override:
-            values[name] = getattr(current, name, '')
+    values: dict[str, object] = {'model_overrides': current.model_overrides}
+    for name in MODEL_FIELDS:
+        saved = getattr(current, name)
+        if name not in form_data:
+            values[name] = saved
+            continue
+        submitted = str(form_data[name]).strip() or None
+        # A value that only came from the environment is not the user's choice, so the saved one stays.
+        values[name] = saved if submitted and submitted == model_field_env(name)[1] else submitted
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
     method = form_data.get('orq_auth_method')
     if method is None and 'orq_profile' in form_data:

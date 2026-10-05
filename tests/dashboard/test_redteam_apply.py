@@ -16,7 +16,7 @@ import pytest
 
 import evaluatorq.dashboard.apply_ui as apply_mod
 from evaluatorq.common.orq_client import OrqProfile
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, DEFAULT_SMART_MODEL
+from evaluatorq.contracts import DEFAULT_SMART_MODEL
 from evaluatorq.dashboard.apply_ui import record_applied_on_report, render_preview_drawer
 from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
 
@@ -524,25 +524,19 @@ class TestApplyModelSetting:
 
     def test_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv('EVALUATORQ_SMART_MODEL', raising=False)
-        monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
+        monkeypatch.delenv('EVALUATORQ_APPLY_MODEL', raising=False)
         assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_SMART_MODEL
 
     def test_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, 'openai/gpt-6')
+        monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'openai/gpt-6')
         assert apply_mod.apply_model() == 'openai/gpt-6'
-        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, '   ')
+        monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', '   ')
         monkeypatch.delenv('EVALUATORQ_SMART_MODEL', raising=False)
         assert apply_mod.apply_model() == apply_mod.DEFAULT_APPLY_MODEL == DEFAULT_SMART_MODEL
 
-    def test_settings_page_shows_the_model(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_settings_page_has_no_apply_model_row(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
         client, _rid, _path = apply_client
-        monkeypatch.delenv(apply_mod.APPLY_MODEL_ENV, raising=False)
+        monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'openai/gpt-6')
         html = client.get('/settings').text
-        assert 'Apply-recommendations model' in html
-        assert f'{DEFAULT_PIPELINE_MODEL} (default)' in html
-
-    def test_settings_page_shows_the_override_source(self, apply_client, monkeypatch: pytest.MonkeyPatch) -> None:
-        client, _rid, _path = apply_client
-        monkeypatch.setenv(apply_mod.APPLY_MODEL_ENV, 'openai/gpt-6')
-        html = client.get('/settings').text
-        assert 'openai/gpt-6 (EVALUATORQ_APPLY_MODEL)' in html
+        assert 'Apply-recommendations model' not in html
+        assert 'EVALUATORQ_APPLY_MODEL' not in html
