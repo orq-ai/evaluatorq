@@ -156,9 +156,14 @@ def test_without_config_red_team_gets_the_cli_defaults() -> None:
     [
         ({'target': 'agent:x', 'max_turn': 3}, 'Extra inputs are not permitted'),
         ({'target': 'agent:x', 'llm_config': {'attacker': {'temprature': 0.2}}}, 'llm_config.attacker.temprature'),
+        ({'target': 'agent:x', 'recommendations': {'modl': 'x'}}, 'unknown key(s): recommendations.modl.'),
+        (
+            {'target': 'agent:x', 'datapoints': [{'inputs': {}, 'inptus': {}}]},
+            'unknown key(s): datapoints[0].inptus.',
+        ),
         ({'target': 'agent:x', 'max_turns': 'many'}, 'max_turns'),
     ],
-    ids=['top-level typo', 'nested typo', 'wrong type'],
+    ids=['top-level typo', 'nested typo', 'typo in bool-or-model field', 'typo in list item', 'wrong type'],
 )
 def test_a_bad_config_is_rejected_before_anything_runs(tmp_path: Path, payload: dict[str, Any], message: str) -> None:
     result, fake = _invoke(['--config', _write(tmp_path, payload)])

@@ -120,10 +120,11 @@ def resolve_config(
             continue
         value = cli_args[flag.param]
         _set_path(overrides, flag.path, value if flag.to_value is None else flag.to_value(value))
+    merged = _deep_merge(data, overrides)
     try:
-        return model.model_validate(_deep_merge(data, overrides), extra='forbid')
+        return model.model_validate(merged, extra='forbid')
     except ValidationError as exc:
-        raise typer.BadParameter(_validation_message(exc)) from exc
+        raise typer.BadParameter(_validation_message(exc, merged)) from exc
 
 
 def model_kwargs(config: BaseModel) -> dict[str, Any]:
@@ -158,7 +159,7 @@ def parse_json_config(raw: str, model: type[BaseModel], *, flag: str, origin: st
     try:
         model.model_validate(data, extra='forbid')
     except ValidationError as exc:
-        raise typer.BadParameter(_validation_message(exc, where), param_hint=flag) from exc
+        raise typer.BadParameter(_validation_message(exc, data, where), param_hint=flag) from exc
     return cast('dict[str, Any]', data)
 
 
@@ -211,21 +212,31 @@ def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def _dotted(loc: tuple[int | str, ...]) -> str:
-    """``('a', 'b', 0, 'c')`` as ``a.b[0].c``."""
+def _real_path(loc: tuple[int | str, ...], data: Any) -> str:
+    """``loc`` as ``a.b[0].c``, keeping only the steps that exist in ``data``.
+
+    Pydantic adds a union branch's name to ``loc`` (``recommendations.RedTeamRecommendationConfig.modl``); such a
+    segment is neither a key of the dict nor an index of the list being walked, so it is skipped.
+    """
     path = ''
+    current = data
     for part in loc:
-        if isinstance(part, int):
+        if isinstance(part, int) and isinstance(current, list) and 0 <= part < len(cast('list[Any]', current)):
+            current = cast('list[Any]', current)[part]
             path += f'[{part}]'
-        else:
+        elif isinstance(part, str) and isinstance(current, dict) and part in current:
+            current = cast('dict[str, Any]', current)[part]
             path += f'.{part}' if path else part
     return path
 
 
-def _validation_message(exc: ValidationError, where: str = '') -> str:
-    """``exc`` as text: a pure unknown-key failure names each key's full path, anything else is pydantic's own."""
-    errors = exc.errors()
-    if errors and all(error['type'] == 'extra_forbidden' for error in errors):
-        paths = ', '.join(_dotted(error['loc']) for error in errors)
-        return f'{where}unknown key(s): {paths}. Extra inputs are not permitted.'
+def _validation_message(exc: ValidationError, data: Any, where: str = '') -> str:
+    """``exc`` as text: unknown keys, when there are any, named by their path in ``data``; else pydantic's own.
+
+    A misspelt key inside a union field also fails the union's other branches with type errors; those are
+    artefacts of the typo, so they are left out.
+    """
+    unknown = [_real_path(error['loc'], data) for error in exc.errors() if error['type'] == 'extra_forbidden']
+    if unknown:
+        return f'{where}unknown key(s): {", ".join(dict.fromkeys(unknown))}. Extra inputs are not permitted.'
     return f'{where}{exc}'
