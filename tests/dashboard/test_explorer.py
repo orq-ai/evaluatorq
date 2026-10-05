@@ -598,6 +598,7 @@ def test_initial_auto_scope_js_respects_a_user_scope_click() -> None:
     assert "scope?.getAttribute('data-auto-scope') === 'pending'" in js
     assert "scope.removeAttribute('data-auto-scope');" in js
     assert "evt.target.closest('#finder-scope')" in js
+    assert 'if (within) within.disabled = false;' in js
 
 
 def test_initial_traces_respect_saved_project(explorer_client) -> None:
