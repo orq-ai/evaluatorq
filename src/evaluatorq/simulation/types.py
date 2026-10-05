@@ -21,7 +21,8 @@ from evaluatorq.contracts import (
 )
 
 DEFAULT_MODEL = DEFAULT_PIPELINE_MODEL
-"""Model for the user-simulator, judge and generators when ``sim_model`` is unset."""
+"""The built-in fast model, kept for imports. Simulation call sites resolve their model
+role through ``evaluatorq.common.model_roles`` instead of reading this."""
 
 DEFAULT_MAX_TURNS = 10
 """Turn cap when the caller names none. The public ``max_turns`` defaults to

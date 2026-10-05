@@ -26,7 +26,7 @@ from evaluatorq.simulation.generators import (
     ScenarioGenerator,
 )
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import DEFAULT_MODEL, CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
 
 
 def _persona() -> Persona:
@@ -58,7 +58,7 @@ def test_llm_config_wins_over_the_model_argument(caplog: pytest.LogCaptureFixtur
 def test_no_warning_when_the_model_argument_is_untouched(caplog: pytest.LogCaptureFixture) -> None:
     cfg = LLMCallConfig(model='openai/gpt-4o')
     with caplog.at_level('WARNING'):
-        assert resolve_sim_llm_config(model=DEFAULT_MODEL, llm_config=cfg, caller='SimulationRunner') is cfg
+        assert resolve_sim_llm_config(model=None, llm_config=cfg, caller='SimulationRunner') is cfg
     assert caplog.text == ''
 
 

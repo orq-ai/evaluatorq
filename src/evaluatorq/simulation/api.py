@@ -31,6 +31,7 @@ from evaluatorq.simulation._config import (
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     SimulationConfig,
     sim_llm_config,
+    sim_role_config,
 )
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
 from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS
@@ -317,7 +318,9 @@ async def simulate(
             (``model``, ``temperature``, ``reasoning_effort``, ``timeout_ms``,
             ``extra_body``). Only the fields you set take effect, so an unset
             ``temperature`` still means the parameter is omitted from the request.
-            Three fields are narrower. ``max_tokens``: the two agents and the
+            With no ``model`` set, the judge runs on the smart model role and
+            every other role on the fast one; a ``model`` set here applies to
+            all five. Three fields are narrower. ``max_tokens``: the two agents and the
             executive summary read it, while the generators and the
             recommendations pass size their own budget from the item count.
             ``api`` and ``retry_count``: the two agents read them, every other
@@ -1888,7 +1891,7 @@ async def _publish_run(*, run: SimulationRun, config: SimulationConfig) -> None:
         await _attach_recommendations(
             run,
             config.recommendations,
-            config.model,
+            sim_role_config(config.llm_config, 'sim.generator').model,
             persisted=config.save or config.run_output is not None,
             llm_config=config.llm_config,
         )
@@ -1900,7 +1903,12 @@ async def _publish_run(*, run: SimulationRun, config: SimulationConfig) -> None:
         from evaluatorq.simulation.reports.executive_summary import populate_run_executive_summary
 
         try:
-            await populate_run_executive_summary(run, enabled=True, model=config.model, llm_config=config.llm_config)
+            await populate_run_executive_summary(
+                run,
+                enabled=True,
+                model=sim_role_config(config.llm_config, 'sim.generator').model,
+                llm_config=config.llm_config,
+            )
         except Exception:
             logger.warning('Failed to generate executive summary (results still returned)', exc_info=True)
 
@@ -2331,7 +2339,7 @@ async def _resolve_or_generate_datapoints(
         async with with_simulation_span(
             'orq.simulation.first_message_generation',
             {
-                'orq.simulation.model': resolved.model,
+                'orq.simulation.model': sim_role_config(resolved, 'sim.generator').model,
                 'orq.simulation.pair_count': len(pairs),
                 'orq.simulation.persona_count': len(personas),
                 'orq.simulation.scenario_count': len(scenarios),
@@ -2445,7 +2453,7 @@ def _build_simulation_job_and_cache(
     sim_dp_by_id: dict[int, SimulationDatapoint],
     target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None,
     target_agent: AgentTarget | None,
-    model: str,
+    model: str | None = None,
     llm_config: LLMCallConfig | None = None,
     max_turns: int,
     user_simulator: BaseAgent | None,
@@ -2545,7 +2553,7 @@ def _build_simulation_job_and_cache(
             await await_maybe(resolved_hooks.on_datapoint_error(sim_dp, RuntimeError(reason)))
         await await_maybe(resolved_hooks.on_datapoint_complete(result))
         # Emitted unconditionally: an omitted key is indistinguishable from a clean run.
-        return {'name': job_name, 'output': to_open_responses(result, model), 'error': reason}
+        return {'name': job_name, 'output': to_open_responses(result, runner.model), 'error': reason}
 
     return job_fn, result_cache, runner
 
@@ -2783,7 +2791,6 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.types import DataPoint
 
     evaluation_name = config.evaluation_name
-    model = config.model
     # _simulate_core resolves max_turns before calling here; the fallback only
     # covers a direct call that skipped it.
     max_turns = config.max_turns if config.max_turns is not None else DEFAULT_MAX_TURNS
@@ -2810,7 +2817,6 @@ async def _simulate_via_evaluatorq(
         sim_dp_by_id=sim_dp_by_id,
         target=target,
         target_agent=target_agent,
-        model=model,
         llm_config=config.llm_config,
         max_turns=max_turns,
         user_simulator=user_simulator,

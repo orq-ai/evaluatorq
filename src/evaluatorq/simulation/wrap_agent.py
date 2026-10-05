@@ -12,16 +12,13 @@ from evaluatorq.simulation._datapoint_io import _extract_single_datapoint
 from evaluatorq.simulation.adapters import from_orq_deployment
 from evaluatorq.simulation.convert import to_open_responses
 from evaluatorq.simulation.evaluators.scorers import failure_reason
-from evaluatorq.simulation.types import (
-    DEFAULT_MODEL,
-    Message,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from evaluatorq.contracts import AgentResponse, LLMCallConfig
     from evaluatorq.simulation.agents.base import BaseAgent
+    from evaluatorq.simulation.types import Message
     from evaluatorq.types import DataPoint
 
 logger = logging.getLogger(__name__)
@@ -87,7 +84,7 @@ def wrap_simulation_agent(
 
     runner = SimulationRunner(
         target=resolved_target,
-        model=model or DEFAULT_MODEL,
+        model=model or None,
         llm_config=llm_config,
         max_turns=max_turns,
         user_simulator=user_simulator,
