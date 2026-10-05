@@ -200,10 +200,11 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
 
 
 def tool_activity_chunks(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUDGET) -> list[str]:
-    """Render every tool call with its input, status and output excerpt, with user turns for context.
+    """Render every tool call with its input and status, with user turns for context.
 
     Used for the questions that need to see what a command did: whether an error
-    stayed unfixed, and whether an action was risky. Assistant prose is left out.
+    stayed unfixed, and whether an action was risky. Assistant prose is left out,
+    and each tool result body is replaced by its diagnostic category.
     A view that fits after cutting at most `MAX_CUT_SHARE` of it from the middle is
     one chunk; a longer one is split into consecutive chunks of at most `budget`
     characters, each starting with the opening user turns, for the caller to ask
