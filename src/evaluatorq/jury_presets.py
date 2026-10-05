@@ -6,9 +6,10 @@ deprecated or repriced. `llm_jury(preset=...)` builds a panel from here, and a
 test recomputes every published figure from `common/data/jury_judge_rates.json`,
 so the table in the docs cannot drift away from what the code seats.
 
-Seats are chosen here. Each one is the best buy within its own lineage, ranked
-on its intelligence index at the catalogue default reasoning effort against its
-price, because that default is the operating point a preset call runs at.
+Seats are chosen here. Compare intelligence at the catalogue default reasoning
+effort against price within each lineage. Explicitly reviewed host-and-effort
+trades may retain a seat without a benchmark at its new default; the Wafer Kimi
+seat is such a trade, not a measured dominance claim.
 Seats are compared in-family, because the lineage diversity is the point:
 judged against the whole catalogue most seats look dominated, and acting on that
 would collapse every panel onto whichever vendor is cheapest this month and
@@ -243,13 +244,13 @@ OPEN_WEIGHT_PORTABLE = JuryPreset(
     name='Open-Weight / Portable',
     judges=(
         'deepseek/deepseek-v4-pro',
-        # Served from baseten because the Moonshot account 429s.
-        'baseten/kimi-k3',
+        # Accepted host trade: Wafer defaults to none, not Baseten's max.
+        'wafer/Kimi-K3',
         'zai/glm-5.2',
     ),
     reserve_judges=('minimax/MiniMax-M2.7',),
     use_when='No dependence on a closed frontier vendor; migration path to self-hosting.',
-    estimated_cost_per_1k=37.66,
+    estimated_cost_per_1k=34.28,
 )
 
 EU_REGION = JuryPreset(

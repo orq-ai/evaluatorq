@@ -20,7 +20,7 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 1,500 output tokens, 
 | --- | --- | --- | --- | --- |
 | **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-5.6-luna`<br>`google/gemini-3.6-flash` | majority | 17.56 | `deepseek/deepseek-flash` |
 | **Strong Jury** | `anthropic/claude-opus-5-5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 85.50 | `deepseek/deepseek-v4-pro` |
-| **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`baseten/kimi-k3`<br>`zai/glm-5.2` | majority | 37.66 | `minimax/MiniMax-M2.7` |
+| **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`wafer/Kimi-K3`<br>`zai/glm-5.2` | majority | 34.28 | `minimax/MiniMax-M2.7` |
 | **EU Region** | `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0`<br>`google/eu.gemini-3.5-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 27.75 | `google/eu.claude-sonnet-5` |
 | **Single-Provider Trio** | `openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-5.6-luna` | majority | 59.10 | `openai/gpt-5.4-nano` |
 
@@ -60,6 +60,8 @@ get_preset("Strong Jury").seated_efforts()
 # {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-5.6-sol': 'medium', 'google/gemini-3.6-flash': 'medium'}
 ```
 
+Open-Weight / Portable uses `wafer/Kimi-K3` at Wafer's default effort, `none`, instead of `baseten/kimi-k3` at `max`. Wafer bills $3.00 input and $12.75 output per million tokens, versus Baseten's $3.00/$15.00. This is an accepted host-and-effort trade, not a claim that non-reasoning and maximum-reasoning benchmark scores are equal. Both hosts passed a two-answer factual-judging smoke check; that check does not establish equal accuracy on your dataset.
+
 `llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default. Per-judge call settings are a schema change and a separate ticket.
 
 Two more limits worth knowing before you quote a number:
@@ -69,7 +71,7 @@ Two more limits worth knowing before you quote a number:
 
 ## How a preset stays current
 
-Seats are chosen in this package. Each one is the best buy within its own lineage, ranked on its Artificial Analysis intelligence index at the model's default reasoning effort against its price, because the default is the effort a preset call runs at. Lineage diversity is the point of a panel, so seats are compared in-family: judged against the whole catalog, most seats look dominated, and acting on that would collapse every panel onto whichever vendor is cheapest this month and recreate exactly the correlated errors a panel exists to cancel.
+Seats are chosen in this package. Compare Artificial Analysis intelligence at the model's default reasoning effort against its price within each lineage, because the default is the effort a preset call runs at. Explicitly reviewed host-and-effort trades can retain a seat without a benchmark at its new default; the Wafer Kimi seat is such a trade, not a measured dominance claim. Lineage diversity is the point of a panel: comparing seats against the whole catalog and choosing only the cheapest vendor would recreate the correlated errors the panel exists to cancel.
 
 `common/data/jury_judge_rates.json` records what each seated judge bills, the default reasoning effort it runs at, and when both were captured. Every published figure is recomputed from those rates on every test run, so a repricing fails CI instead of quietly making the docs wrong. An opt-in integration test (`ORQ_API_KEY` plus `RUN_PRICING_DRIFT=1`) compares the table against the live catalog, which is how a repricing or a changed default gets noticed in the first place.
 
