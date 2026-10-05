@@ -235,7 +235,7 @@ def insights_cmd(
         str | None,
         typer.Option(
             '--classifier-model',
-            help='Model used to answer label questions. Defaults to EVALUATORQ_CLASSIFIER_MODEL or the dashboard setting.',
+            help='Model used to answer label questions. Defaults to the classifier model role.',
         ),
     ] = None,
     embedding_model: Annotated[

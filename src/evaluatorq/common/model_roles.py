@@ -8,6 +8,7 @@ sit above all of these because they are passed explicitly as ``model=``.
 
 from __future__ import annotations
 
+import json
 import os
 from typing import TYPE_CHECKING, Literal
 
@@ -56,6 +57,10 @@ LEGACY_TASK_ENV: dict[str, str] = {
     'apply': 'EVALUATORQ_APPLY_MODEL',
 }
 
+# Internal: carries --model-override pairs (JSON) to subprocesses such as the
+# dashboard's Insights worker, which inherit os.environ but not process state.
+OVERRIDES_ENV = 'EVALUATORQ_MODEL_OVERRIDES'
+
 _cli_roles: dict[Role, str] = {}
 _cli_overrides: dict[str, str] = {}
 _warned_legacy: set[str] = set()
@@ -64,8 +69,13 @@ _warned_legacy: set[str] = set()
 def set_cli_models(roles: Mapping[Role, str | None] | None = None, overrides: Mapping[str, str] | None = None) -> None:
     """Record the global CLI flags for this process, replacing any earlier call."""
     _cli_roles.clear()
-    _cli_roles.update({role: model.strip() for role, model in (roles or {}).items() if model and model.strip()})
     _cli_overrides.clear()
+    add_cli_models(roles, overrides)
+
+
+def add_cli_models(roles: Mapping[Role, str | None] | None = None, overrides: Mapping[str, str] | None = None) -> None:
+    """Add CLI flags on top of those already recorded, e.g. a subcommand's own model flags."""
+    _cli_roles.update({role: model.strip() for role, model in (roles or {}).items() if model and model.strip()})
     _cli_overrides.update(overrides or {})
 
 
@@ -87,6 +97,20 @@ def _env(name: str) -> str | None:
     return os.environ.get(name, '').strip() or None
 
 
+def _inherited_overrides() -> dict[str, str]:
+    raw = _env(OVERRIDES_ENV)
+    if not raw:
+        return {}
+    try:
+        loaded = json.loads(raw)
+    except ValueError:
+        logger.warning('Ignoring malformed {}', OVERRIDES_ENV)
+        return {}
+    return (
+        {k: v for k, v in loaded.items() if k in TASKS and isinstance(v, str) and v} if isinstance(loaded, dict) else {}
+    )
+
+
 def _legacy_env(task: str) -> str | None:
     name = LEGACY_TASK_ENV.get(task)
     if name is None:
@@ -103,8 +127,9 @@ def _resolve(role: Role, task: str | None) -> tuple[str, str]:
         raise ValueError(f'task {task!r} belongs to role {TASKS[task]!r}, not {role!r}')
     from evaluatorq.trace_finder.settings import load_settings
 
-    if task and task in _cli_overrides:
-        return _cli_overrides[task], 'flag'
+    overrides = _cli_overrides or _inherited_overrides()
+    if task and task in overrides:
+        return overrides[task], 'flag'
     if role in _cli_roles:
         return _cli_roles[role], 'flag'
     legacy = _legacy_env(task) if task else None

@@ -24,7 +24,6 @@ from evaluatorq.common.llm_limit import check_llm_parallelism_option
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     DeliveryMethod,
     EvaluatorConfig,
     LLMConfig,
@@ -263,8 +262,8 @@ def _resolve_run_options(
     strategies: list[str] | None,
     delivery_methods: list[str] | None,
     system_prompt: str | None,
-    attack_model: str,
-    evaluator_model: str,
+    attack_model: str | None,
+    evaluator_model: str | None,
     min_evaluation_coverage: float,
     target_timeout_ms: int,
     max_target_retries: int,
@@ -342,9 +341,13 @@ def _resolve_run_options(
     targets: list[str] | str = list(target) if len(target) > 1 else target[0]
 
     # Build LLMConfig from CLI flags
+    # An omitted model stays unset so the smart role resolves it.
     config = LLMConfig(
-        attacker=LLMCallConfig(model=attack_model),
-        evaluator=EvaluatorConfig(model=evaluator_model, min_evaluation_coverage=min_evaluation_coverage),
+        attacker=LLMCallConfig(**({'model': attack_model} if attack_model else {})),
+        evaluator=EvaluatorConfig(
+            **({'model': evaluator_model} if evaluator_model else {}),
+            min_evaluation_coverage=min_evaluation_coverage,
+        ),
         target_agent_timeout_ms=target_timeout_ms,
         max_target_retries=max_target_retries,
         retry_count=retry_count,
@@ -442,9 +445,12 @@ def run(
         typer.Option(help='Cap strategies per category.'),
     ] = None,
     attack_model: Annotated[
-        str,
-        typer.Option(help=f'Model for adversarial prompt generation. {MODEL_OPTION_NOTE}'),
-    ] = DEFAULT_PIPELINE_MODEL,
+        str | None,
+        typer.Option(
+            help=f'Model for adversarial prompt generation. Default: the smart model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
+        ),
+    ] = None,
     attacker_instructions: Annotated[
         str | None,
         typer.Option(
@@ -456,9 +462,12 @@ def run(
         ),
     ] = None,
     evaluator_model: Annotated[
-        str,
-        typer.Option(help=f'Model for OWASP evaluation scoring. {MODEL_OPTION_NOTE}'),
-    ] = DEFAULT_PIPELINE_MODEL,
+        str | None,
+        typer.Option(
+            help=f'Model for OWASP evaluation scoring. Default: the smart model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
+        ),
+    ] = None,
     min_evaluation_coverage: Annotated[
         float,
         typer.Option(

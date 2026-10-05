@@ -667,14 +667,13 @@ class TestLLMConfigFlagForwarding:
         assert config.attacker.model == "openai/attacker-model"
         assert config.evaluator.judges == ["openai/judge-model"]
 
-    def test_model_flags_default_to_the_shared_pipeline_model(self):
-        from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL
-
+    def test_model_flags_default_to_the_smart_role(self):
         result, mock_rt = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"])
         assert result.exit_code == 0, result.output
         config = self._config(mock_rt)
-        assert config.attacker.model == DEFAULT_PIPELINE_MODEL
-        assert config.evaluator.judges == [DEFAULT_PIPELINE_MODEL]
+        # Left unset by the CLI, so the library resolves the smart role (tests/redteam/test_model_roles*).
+        assert "model" not in config.attacker.model_fields_set
+        assert "model" not in config.evaluator.model_fields_set
 
     def test_min_evaluation_coverage_reaches_the_evaluator_config(self):
         result, mock_rt = _run_with_mocked_red_team(

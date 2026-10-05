@@ -46,9 +46,9 @@ from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.llm_limit import check_llm_parallelism_option, llm_concurrency_limit
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
-from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
@@ -309,6 +309,16 @@ def _provider_label() -> str:
     return 'unresolved provider'
 
 
+def _sim_llm_config(sim_model: str | None) -> LLMCallConfig:
+    """An unset ``--sim-model`` leaves the model unset so each role resolves its own."""
+    return LLMCallConfig(model=sim_model) if sim_model else LLMCallConfig()
+
+
+def _generation_model(sim_model: str | None) -> str:
+    """The model for generation, recommendations and summaries: the flag, else the fast role."""
+    return sim_model or role_model('fast', task='sim.generator')
+
+
 def _echo_using(model: str) -> None:
     """Show the provider branch selected by the environment for generations."""
     typer.echo(f'Using for generations: {_provider_label()} · {model}', err=True)
@@ -504,7 +514,7 @@ def _resolve_simulate_options(
     experiment_id: str | None,
     experiment_run_id: str | None,
     from_run: str | None,
-    sim_model: str,
+    sim_model: str | None,
     verbose: int,
     quiet: bool,
     yes: bool,
@@ -541,7 +551,7 @@ def _resolve_simulate_options(
             verbose=verbose,
         )
     _configure_logging(verbose, console=log_console)
-    _echo_using(sim_model)
+    _echo_using(_generation_model(sim_model))
 
     sources = [
         name
@@ -668,12 +678,17 @@ def simulate(
         typer.Option('--name', '-n', help='Run name for the run-store entry.'),
     ] = 'sim',
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for the user-simulator, the judge, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}',
+            help=(
+                'Model for every simulation-side call: the user-simulator, the judge, the recommendations pass '
+                'and the executive summary. Default: the fast model role for the simulated user, recommendations '
+                f'and summary, and the smart model role for the judge. {MODEL_OPTION_NOTE}'
+            ),
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     max_turns: Annotated[
         int | None,
         typer.Option(
@@ -839,7 +854,7 @@ def simulate(
     if results_path:
         _write_results(results, results_path)
 
-    _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
+    _maybe_generate_executive_summary(run, enabled=executive_summary, model=_generation_model(sim_model))
     if hooks is not None and executive_summary:
         hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
 
@@ -869,7 +884,7 @@ async def _simulate_impl(
     experiment_run_id: str | None = None,
     previous_run: str | None = None,
     target: Any,
-    sim_model: str,
+    sim_model: str | None,
     max_turns: int | None,
     datapoint_parallelism: int,
     llm_parallelism: int | None,
@@ -896,7 +911,7 @@ async def _simulate_impl(
         experiment_run_id=experiment_run_id,
         previous_run=previous_run,
         target=target,
-        llm_config=LLMCallConfig(model=sim_model),
+        llm_config=_sim_llm_config(sim_model),
         max_turns=max_turns,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
@@ -976,15 +991,17 @@ def run(
         typer.Option('--name', '-n', help='Run name for the run-store entry.'),
     ] = 'sim',
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
             help=(
-                'Model for the user-simulator, the judge, persona/scenario/first-message '
-                f'generation, the recommendations pass and the executive summary. {MODEL_OPTION_NOTE}'
+                'Model for every simulation-side call: the user-simulator, the judge, persona/scenario/first-message '
+                'generation, the recommendations pass and the executive summary. Default: the fast model role, '
+                f'except the judge, which uses the smart model role. {MODEL_OPTION_NOTE}'
             ),
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     max_turns: Annotated[
         int,
         typer.Option('--max-turns', min=1, help='Maximum conversation turns.'),
@@ -1157,7 +1174,7 @@ def run(
             verbose=verbose,
         )
     _configure_logging(verbose, console=log_console)
-    _echo_using(sim_model)
+    _echo_using(_generation_model(sim_model))
 
     try:
         resolved_agent_description = asyncio.run(
@@ -1210,7 +1227,7 @@ def run(
     if results_path:
         _write_results(results, results_path)
 
-    _maybe_generate_executive_summary(run, enabled=executive_summary, model=sim_model)
+    _maybe_generate_executive_summary(run, enabled=executive_summary, model=_generation_model(sim_model))
     if hooks is not None and executive_summary:
         hooks.print_summary(results, executive_summary=run.executive_summary, experiment_url=run.experiment_url)
 
@@ -1236,7 +1253,7 @@ async def _run_impl(
     *,
     agent_description: str,
     target: Any,
-    sim_model: str,
+    sim_model: str | None,
     max_turns: int,
     datapoint_parallelism: int,
     llm_parallelism: int | None,
@@ -1270,7 +1287,7 @@ async def _run_impl(
     return await _generate_and_simulate_run(
         agent_description=agent_description,
         target=target,
-        llm_config=LLMCallConfig(model=sim_model),
+        llm_config=_sim_llm_config(sim_model),
         max_turns=max_turns,
         datapoint_parallelism=datapoint_parallelism,
         llm_parallelism=llm_parallelism,
@@ -1314,12 +1331,13 @@ def generate(
         ),
     ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for persona/scenario/first-message generation. {MODEL_OPTION_NOTE}',
+            help=f'Model for persona/scenario/first-message generation. Default: the fast model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     num_personas: Annotated[
         int,
         typer.Option('--num-personas', min=1, help='Number of personas to generate.'),
@@ -1416,7 +1434,7 @@ def generate(
         _echo_generate_plan(
             console=log_console,
             source=source,
-            model=sim_model,
+            model=_generation_model(sim_model),
             num_personas=num_personas,
             num_scenarios=num_scenarios,
             output=datapoints_path,
@@ -1523,12 +1541,16 @@ def from_traces(
         ),
     ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for persona/scenario inference and extension generation. {MODEL_OPTION_NOTE}',
+            help=(
+                'Model for persona/scenario inference and extension generation. '
+                f'Default: the fast model role. {MODEL_OPTION_NOTE}'
+            ),
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     replay_first_message: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
@@ -1686,7 +1708,7 @@ def from_traces(
 async def _generate_impl(
     *,
     agent_description: str,
-    sim_model: str,
+    sim_model: str | None,
     num_personas: int,
     num_scenarios: int,
     hooks: Any = None,
@@ -1700,7 +1722,7 @@ async def _generate_impl(
         agent_description=agent_description,
         num_personas=num_personas,
         num_scenarios=num_scenarios,
-        llm_config=LLMCallConfig(model=sim_model),
+        llm_config=_sim_llm_config(sim_model),
         hooks=hooks,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
@@ -1764,9 +1786,13 @@ def export(
         ),
     ] = False,
     sim_model: Annotated[
-        str,
-        typer.Option('--sim-model', help=f'Model for --recommendations generation. {MODEL_OPTION_NOTE}'),
-    ] = DEFAULT_MODEL,
+        str | None,
+        typer.Option(
+            '--sim-model',
+            help=f'Model for --recommendations generation. Default: the fast model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
+        ),
+    ] = None,
     target: Annotated[
         str,
         typer.Option('--target-label', help='Target name shown in md/html report headers.'),
@@ -1802,7 +1828,7 @@ def export(
 
     recs = stored_recs or None
     if recommendations and not recs:
-        recs = _maybe_generate_recommendations(results, sim_model)
+        recs = _maybe_generate_recommendations(results, _generation_model(sim_model))
     elif recs:
         typer.echo(f'Using {len(recs)} stored remediation suggestion(s) from the input run.', err=True)
 
