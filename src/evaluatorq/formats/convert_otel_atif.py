@@ -1164,6 +1164,10 @@ def _emit_step(
     output = OtelMessage(role='assistant', parts=_assistant_parts(step), finish_reason=reasons[0] if reasons else None)
     start, end, status = _times(step)
     error_type = _extra_str(step, 'error_type')
+    if error_type is None and _extra_str(step, 'status') == 'failed':
+        error_type = _OTHER_ERROR
+    if error_type is not None and status == 'unset':
+        status = 'error'
     chat = OtelSpan(
         trace_id=trace_id,
         span_id=stable_hex(seed, 'chat', str(step.step_id), length=16),

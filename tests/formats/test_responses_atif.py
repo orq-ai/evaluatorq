@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from openai.types.responses import Response
+from openai.types.responses import Response, ResponseError
 
 from evaluatorq.formats.atif import AtifTrajectory
 from evaluatorq.formats.responses import ResponsesConversation
@@ -411,6 +411,52 @@ def test_valid_status_error_and_incomplete_details_pass_through() -> None:
     assert response.status == 'failed'
     assert response.error is not None and response.error.model_dump() == error
     assert response.incomplete_details is not None and response.incomplete_details.model_dump() == incomplete
+
+
+@pytest.mark.parametrize(
+    ('extra', 'status', 'error', 'incomplete', 'metadata'),
+    [
+        ({'error_type': 'timeout'}, 'failed', {'code': 'server_error', 'message': 'timeout'}, None,
+         {'atif_error_type': 'timeout'}),
+        ({'error_type': 'rate_limit_exceeded'}, 'failed',
+         {'code': 'rate_limit_exceeded', 'message': 'rate_limit_exceeded'}, None, None),
+        ({'invocation': {'status': 'error'}}, 'failed', {'code': 'server_error', 'message': 'error'}, None,
+         {'atif_error_type': ''}),
+        ({'finish_reasons': ['length']}, 'incomplete', None, {'reason': 'max_output_tokens'}, None),
+        ({'finish_reasons': ['stop']}, 'completed', None, None, {'atif_finish_reasons': '["stop"]'}),
+    ],
+    ids=['error-type', 'responses-error-code', 'failed-span', 'length', 'stop'],
+)
+def test_step_outcome_becomes_response_status_and_reads_back(
+    extra: dict[str, Any], status: str, error: dict[str, str] | None, incomplete: dict[str, str] | None,
+    metadata: dict[str, str] | None,
+) -> None:
+    conversation = _agent_step_with_extra(extra).to_responses()
+    assert conversation.responses is not None
+    response = conversation.responses[0]
+    assert response.status == status
+    assert (response.error.model_dump() if response.error else None) == error
+    assert (response.incomplete_details.model_dump() if response.incomplete_details else None) == incomplete
+    assert response.metadata == metadata
+    back = conversation.to_atif().steps[0].extra or {}
+    for key in ('error_type', 'finish_reasons'):
+        assert back.get(key) == extra.get(key)
+
+
+def test_failed_response_round_trips_without_duplicating_its_outcome() -> None:
+    usage = {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2,
+             'input_tokens_details': {'cached_tokens': 0}, 'output_tokens_details': {'reasoning_tokens': 0}}
+    failed = _response('gpt-x', usage).model_copy(update={
+        'id': 'resp_2', 'status': 'failed', 'error': ResponseError(code='rate_limit_exceeded', message='slow down')})
+    traj = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', usage), failed]).to_atif()
+
+    assert traj.steps[2].extra == {
+        'response_id': 'resp_2', 'error_type': 'rate_limit_exceeded',
+        'error': {'code': 'rate_limit_exceeded', 'message': 'slow down'},
+    }
+    back = traj.to_responses().responses
+    assert back is not None
+    assert (back[1].status, back[1].error, back[1].metadata) == ('failed', failed.error, None)
 
 
 # --- ATIF -> Responses -> ATIF does not invent data ---

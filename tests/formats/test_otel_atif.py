@@ -1067,6 +1067,20 @@ def _sig(traj: AtifTrajectory) -> list[tuple[str, Any]]:
     return [(s.source, s.message) for s in traj.steps]
 
 
+@pytest.mark.parametrize(
+    ('extra', 'error_type'),
+    [({'error_type': 'timeout'}, 'timeout'), ({'status': 'failed'}, '_OTHER')],
+    ids=['error-type', 'failed-response'],
+)
+def test_failed_agent_step_becomes_an_error_chat_span(extra: dict[str, Any], error_type: str) -> None:
+    traj = AtifTrajectory(session_id='s', agent=AtifAgent(name='a', version='1'), steps=[
+        AtifStep(step_id=1, source='user', message='q'),
+        AtifStep(step_id=2, source='agent', message='a', extra=extra),
+    ])
+    chat = next(span for span in traj.to_otel().spans if span.operation == 'chat')
+    assert (chat.status, chat.attributes['error.type']) == ('error', error_type)
+
+
 def test_steps_after_the_last_agent_step_round_trip() -> None:
     traj = _steps(('user', 'q'), ('agent', 'a'), ('user', 'thanks'), ('system', 'wrap up'))
     trace = traj.to_otel()
