@@ -138,7 +138,8 @@ def _legacy_env(task: str) -> str | None:
     return value
 
 
-def _resolve(role: Role, task: str | None) -> tuple[str, str]:
+def _resolve(role: Role, task: str | None) -> tuple[str, str, bool]:
+    """The model, its source, and whether a task-level source (not a role-level one) supplied it."""
     if task is not None and TASKS[task] != role:
         raise ValueError(f'task {task!r} belongs to role {TASKS[task]!r}, not {role!r}')
     from evaluatorq.trace_finder.settings import load_settings
@@ -148,24 +149,24 @@ def _resolve(role: Role, task: str | None) -> tuple[str, str]:
     else:
         cli_roles, cli_overrides = _inherited_cli_models()
     if task and task in cli_overrides:
-        return cli_overrides[task], 'flag'
+        return cli_overrides[task], 'flag', True
     if role in cli_roles:
-        return cli_roles[role], 'flag'
+        return cli_roles[role], 'flag', False
     legacy = _legacy_env(task) if task else None
     if legacy:
-        return legacy, 'env'
+        return legacy, 'env', True
     # ponytail: reads the settings file per call; cache by mtime if a hot path shows up.
     settings = load_settings()
     if task and task in settings.model_overrides:
-        return settings.model_overrides[task], 'settings'
+        return settings.model_overrides[task], 'settings', True
     env_name = ROLE_ENV.get(role)
     env_value = _env(env_name) if env_name else None
     if env_value:
-        return env_value, 'env'
+        return env_value, 'env', False
     saved = getattr(settings, f'{role}_model')
     if saved:
-        return saved, 'settings'
-    return BUILTIN[role], 'default'
+        return saved, 'settings', False
+    return BUILTIN[role], 'default', False
 
 
 def role_model(role: Role, *, task: str | None = None) -> str:
@@ -179,3 +180,12 @@ def role_model(role: Role, *, task: str | None = None) -> str:
 def role_source(role: Role, task: str | None = None) -> str:
     """Where `role_model` found its answer: ``flag``, ``env``, ``settings`` or ``default``."""
     return _resolve(role, task)[1]
+
+
+def task_override(task: str) -> tuple[str, str] | None:
+    """The model and a human label of the task-level source that pins *task*, or ``None``."""
+    model, source, task_level = _resolve(TASKS[task], task)
+    if not task_level:
+        return None
+    label = {'flag': '--model-override', 'env': LEGACY_TASK_ENV.get(task, 'environment'), 'settings': 'settings file'}
+    return model, label[source]

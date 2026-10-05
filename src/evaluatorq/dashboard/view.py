@@ -30,7 +30,7 @@ from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
-from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, role_model, role_source
+from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, TASKS, role_model, role_source, task_override
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
@@ -985,12 +985,13 @@ def settings_body(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
             f'<span class="config-val">{control}{error_html}<span class="settings-auth-hint">{esc(hint)}</span></span></div>'
         )
-    overrides = (
-        settings.get('model_overrides') if isinstance(settings, Mapping) else getattr(settings, 'model_overrides', {})
-    )
-    if overrides:
+    # The effective per-task pins (flag, legacy env, settings file), not just the file's, so a shadowed
+    # file value never shows and an active flag or env var does.
+    pinned_tasks = [(task, found) for task in TASKS if (found := task_override(task))]
+    if pinned_tasks:
         lines = ''.join(
-            f'<span class="config-val-item">{esc(task)} → {esc(model)}</span>' for task, model in overrides.items()
+            f'<span class="config-val-item">{esc(task)} → {esc(model)} ({esc(label)})</span>'
+            for task, (model, label) in pinned_tasks
         )
         field_rows.append(
             '<div class="config-row"><span class="config-key">Task overrides</span>'

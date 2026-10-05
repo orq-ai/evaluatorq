@@ -275,7 +275,51 @@ def test_page_lists_the_task_overrides_read_only(client: TestClient, settings_fi
     html = client.get('/settings').text
 
     assert 'apply → anthropic/claude-opus-5-5' in html
+    assert 'settings file' in html
     assert 'name="model_overrides"' not in html
+
+
+def test_page_lists_cli_and_legacy_env_task_overrides(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    set_cli_models(overrides={'sim.user': 'cli/user'})
+    monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'env/apply')
+
+    html = client.get('/settings').text
+
+    assert 'sim.user → cli/user' in html
+    assert '--model-override' in html
+    assert 'apply → env/apply' in html
+    assert 'EVALUATORQ_APPLY_MODEL' in html
+
+
+def test_page_hides_a_file_override_that_a_higher_source_shadows(
+    client: TestClient, settings_file: Path
+) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    save_settings(DashboardSettings.model_validate({'model_overrides': {'apply': 'file/apply'}}), settings_file)
+    set_cli_models(overrides={'apply': 'cli/apply'})
+
+    html = client.get('/settings').text
+
+    assert 'apply → cli/apply' in html
+    assert 'file/apply' not in html
+
+
+def test_saving_keeps_file_overrides_and_never_persists_cli_ones(
+    client: TestClient, settings_file: Path
+) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    save_settings(DashboardSettings.model_validate({'model_overrides': {'apply': 'file/apply'}}), settings_file)
+    set_cli_models(overrides={'apply': 'cli/apply', 'sim.user': 'cli/user'})
+
+    client.post('/settings', data=csrf_data(_MODELS))
+
+    assert json.loads(settings_file.read_text())['model_overrides'] == {'apply': 'file/apply'}
 
 
 def test_page_without_task_overrides_has_no_overrides_row(client: TestClient) -> None:

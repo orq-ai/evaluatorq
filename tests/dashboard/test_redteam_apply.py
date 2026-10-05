@@ -539,4 +539,5 @@ class TestApplyModelSetting:
         monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'openai/gpt-6')
         html = client.get('/settings').text
         assert 'Apply-recommendations model' not in html
-        assert 'EVALUATORQ_APPLY_MODEL' not in html
+        # No dedicated row, but the legacy variable is listed as an active task override.
+        assert 'apply → openai/gpt-6 (EVALUATORQ_APPLY_MODEL)' in html
