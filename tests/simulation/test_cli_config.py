@@ -116,11 +116,10 @@ def test_simulate_takes_inline_personas_and_scenarios_as_its_input_source(tmp_pa
     kwargs = fake.call_args.kwargs
     assert kwargs['personas'][0].name == 'Impatient'
     assert kwargs['scenarios'][0].goal == 'Get a refund'
-    assert 'datapoints' not in kwargs
+    assert kwargs['datapoints'] is None
     assert kwargs['max_turns'] == 4
-    # Public keyword names in the file, internal names at the run function.
-    assert kwargs['evaluation_description'] == 'nightly'
-    assert kwargs['exit_on_failure'] is False
+    assert kwargs['experiment_description'] == 'nightly'
+    assert kwargs['raise_on_execution_failure'] is False
     assert kwargs['per_simulation_timeout_s'] == 30
 
 
@@ -145,7 +144,7 @@ def test_simulate_reads_its_config_from_stdin_and_a_flag_wins() -> None:
     kwargs = fake.call_args.kwargs
     assert kwargs['previous_run'] == 'latest'
     assert kwargs['max_turns'] == 3
-    assert kwargs['evaluation_name'] == 'from-config'
+    assert kwargs['run_name'] == 'from-config'
 
 
 def test_llm_config_blob_with_sim_model_winning_the_model() -> None:
@@ -268,10 +267,9 @@ def test_config_only_fields_reach_the_run_function_under_the_sdk_names(tmp_path:
     assert result.exit_code == 0, result.output
     kwargs = fake.call_args.kwargs
     assert kwargs['upload_results'] is False
-    assert kwargs['evaluation_description'] == 'd'
-    assert kwargs['orq_results_path'] == 'A/B'
-    assert 'exit_on_failure' not in kwargs
-    assert 'report' not in kwargs
+    assert kwargs['experiment_description'] == 'd'
+    assert kwargs['orq_folder_path'] == 'A/B'
+    assert kwargs['raise_on_execution_failure'] is None
     assert 'report_path' not in kwargs
     assert (tmp_path / 'report.json').exists()
 
@@ -290,8 +288,8 @@ def test_a_null_config_value_is_unset_so_the_sdk_default_applies() -> None:
     result, fake = _invoke('simulate', ['--config', '-'], stdin=json.dumps(payload))
 
     assert result.exit_code == 0, result.output
-    assert 'evaluation_name' not in fake.call_args.kwargs
-    assert 'datapoint_parallelism' not in fake.call_args.kwargs
+    assert fake.call_args.kwargs['run_name'] is None
+    assert fake.call_args.kwargs['datapoint_parallelism'] is None
 
 
 def test_a_null_inline_source_is_not_an_input_source() -> None:
@@ -342,8 +340,8 @@ def test_without_a_config_the_sdk_receives_the_cli_defaults_and_nothing_else(com
     assert kwargs['save'] is True
     assert kwargs['recommendations'] is True
     assert kwargs['executive_summary'] is True
-    for unset in ('datapoint_parallelism', 'max_turns', 'evaluation_name', 'llm_config', 'llm_parallelism'):
-        assert unset not in kwargs
+    for unset in ('datapoint_parallelism', 'max_turns', 'run_name', 'llm_config', 'llm_parallelism'):
+        assert kwargs[unset] is None
 
 
 @pytest.mark.parametrize('command', ['simulate', 'run'])
@@ -448,7 +446,7 @@ def test_each_input_flag_replaces_every_config_input_source(tmp_path: Path, flag
 
     assert result.exit_code == 0, result.output
     kwargs = fake.call_args.kwargs
-    assert set(kwargs) & set(_EVERY_INPUT) == {field}
+    assert {name: kwargs[name] is not None for name in _EVERY_INPUT} == {name: name == field for name in _EVERY_INPUT}
 
 
 def test_the_input_flag_loads_the_jsonl_into_datapoints(tmp_path: Path) -> None:
@@ -588,7 +586,7 @@ def test_an_empty_evaluator_list_in_the_config_is_forwarded_as_unset() -> None:
     result, fake = _invoke('simulate', ['--config', '-'], stdin=json.dumps(payload))
 
     assert result.exit_code == 0, result.output
-    assert 'evaluator_names' not in fake.call_args.kwargs
+    assert fake.call_args.kwargs['evaluator_names'] is None
 
 
 CLI_OWNED = {'target', 'memory_entity_id', 'report_path'}
@@ -606,7 +604,6 @@ def test_every_config_field_reaches_the_run_function_or_is_cli_owned(
 ) -> None:
     """A field added to the config model cannot be dropped silently: it is forwarded or declared CLI-owned."""
     from evaluatorq.simulation import cli
-    from evaluatorq.simulation.run_config import to_internal_kwargs
 
     sentinel = object()
     resolved_target = object()
@@ -617,12 +614,11 @@ def test_every_config_field_reaches_the_run_function_or_is_cli_owned(
 
     received = fake.call_args.kwargs
     for field in cfg_model.model_fields:
-        (internal,) = to_internal_kwargs({field: sentinel})
         if field == 'target':
-            assert received[internal] is resolved_target
+            assert received[field] is resolved_target
         elif field in CLI_OWNED:
-            assert internal not in received, field
+            assert field not in received, field
         elif field == 'agent_description':
-            assert received[internal] == impl_kwargs['agent_description']  # the CLI's resolved value wins
+            assert received[field] == impl_kwargs['agent_description']  # the CLI's resolved value wins
         else:
-            assert received[internal] is sentinel, field
+            assert received[field] is sentinel, field

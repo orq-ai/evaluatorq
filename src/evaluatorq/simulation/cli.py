@@ -63,7 +63,6 @@ from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.simulation.run_config import (
     GenerateAndSimulateCliConfig,
     SimulateCliConfig,
-    to_internal_kwargs,
 )
 from evaluatorq.simulation.types import DEFAULT_MAX_TURNS, DEFAULT_MODEL, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
@@ -647,9 +646,7 @@ _CLI_OWNED_FIELDS = frozenset({'target', 'memory_entity_id', 'report_path'})
 
 def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:
     """The keyword arguments of the internal run function that ``cfg`` supplies: every field the CLI does not own."""
-    return to_internal_kwargs({
-        name: value for name, value in model_kwargs(cfg).items() if name not in _CLI_OWNED_FIELDS
-    })
+    return {name: value for name, value in model_kwargs(cfg).items() if name not in _CLI_OWNED_FIELDS}
 
 
 def _sim_model(cfg: BaseModel) -> str:
