@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from click.testing import Result as CliResult
 from typer.testing import CliRunner
 
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.redteam.cli import app
 from evaluatorq.redteam.contracts import (
     AgentInfo,
@@ -672,7 +673,7 @@ class TestLLMConfigFlagForwarding:
         assert result.exit_code == 0, result.output
         config = self._config(mock_rt)
         # Left unset by the CLI, so the library resolves the smart role (tests/redteam/test_model_roles*).
-        assert "model" not in config.attacker.model_fields_set
+        assert config.attacker.model == role_model("smart", task="redteam.attacker")
         assert "model" not in config.evaluator.model_fields_set
 
     def test_min_evaluation_coverage_reaches_the_evaluator_config(self):
@@ -707,3 +708,40 @@ class TestLLMConfigFlagForwarding:
         )
         assert result.exit_code == 2, result.output
         mock_rt.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Model roles reach the attacker when --attack-model is omitted
+# ---------------------------------------------------------------------------
+
+
+class TestAttackerModelRole:
+    """The attacker follows the smart role (and its task override) unless --attack-model is set."""
+
+    @staticmethod
+    def _attacker_model(args: list[str], extra: list[str] | None = None) -> str:
+        from evaluatorq.cli import _register_subapps
+        from evaluatorq.cli import app as root_app
+
+        if not root_app.registered_groups:
+            _register_subapps(root_app)
+        with patch("evaluatorq.redteam.red_team", new=AsyncMock(return_value=_make_mock_report())) as mock_rt:
+            result = runner.invoke(
+                root_app,
+                [*args, "redteam", "run", "--target", "agent:test-agent", "--yes", *(extra or [])],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        return mock_rt.call_args.kwargs["llm_config"].attacker.model
+
+    def test_smart_model_flag_reaches_the_attacker(self):
+        assert self._attacker_model(["--smart-model", "flag/smart"]) == "flag/smart"
+
+    def test_model_override_reaches_the_attacker(self):
+        assert self._attacker_model(["--model-override", "redteam.attacker=flag/task"]) == "flag/task"
+
+    def test_attack_model_flag_still_wins(self):
+        model = self._attacker_model(
+            ["--model-override", "redteam.attacker=flag/task"], extra=["--attack-model", "explicit/model"]
+        )
+        assert model == "explicit/model"

@@ -936,6 +936,13 @@ class LLMConfig(BaseModel):
     )
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
+    @model_validator(mode='after')
+    def _attacker_follows_smart_role(self) -> 'LLMConfig':
+        """An attacker config that never named a model gets the smart role's, not the class default."""
+        if 'model' not in self.attacker.model_fields_set:
+            self.attacker = self.attacker.model_copy(update={'model': role_model('smart', task='redteam.attacker')})
+        return self
+
     # --- Retry configuration --------------------------------------------------
     # Retries after the initial call (0 disables) for pipeline-owned LLM calls and
     # ORQ context/enrichment/cleanup. Target calls are owned by call_target_with_retry.

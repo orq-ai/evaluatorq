@@ -341,7 +341,7 @@ def _resolve_run_options(
     targets: list[str] | str = list(target) if len(target) > 1 else target[0]
 
     # Build LLMConfig from CLI flags
-    # An omitted model stays unset so the smart role resolves it.
+    # An omitted model stays unset; LLMConfig then resolves it from the smart role.
     config = LLMConfig(
         attacker=LLMCallConfig(**({'model': attack_model} if attack_model else {})),
         evaluator=EvaluatorConfig(
