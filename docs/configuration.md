@@ -135,7 +135,7 @@ These options go before the subcommand, for example `eq --smart-model gpt-6-luna
 | `--embedding-model MODEL` | The `embedding` role. |
 | `--model-override TASK=MODEL` | One task from the table above. Repeatable. |
 
-An unknown task, or a pair without `=`, exits with an error that lists the valid tasks. Subcommands keep their own model flags (`--attack-model`, `--sim-model`, `--summary-model` and the others), which rank above everything here. `eq dashboard` and `eq find` also take `--compiler-model`, a `finder.compiler` override, and `--classifier-model`.
+An unknown task exits with an error that lists the valid tasks, and a pair without `=` exits with an `expected task=model` error. Subcommands keep their own model flags (`--attack-model`, `--sim-model`, `--summary-model` and the others), which rank above everything here. `eq dashboard` and `eq find` also take `--compiler-model`, a `finder.compiler` override, and `--classifier-model`.
 
 ### Go OpenAI-direct
 
