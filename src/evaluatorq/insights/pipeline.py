@@ -453,7 +453,10 @@ async def insights(  # noqa: C901
             raise ValueError(f'{limit_name} must be positive')
     settings = effective_settings()
     compiler_model = compiler_model or role_model('fast', task='finder.compiler')
-    classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
+    # An explicit classifier_model covers both stages; otherwise population search
+    # follows finder.classifier and labelling follows insights.labels.
+    finder_classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
+    classifier_model = classifier_model or role_model('classifier', task='insights.labels')
     summary_model = summary_model or role_model('smart', task='insights.summary')
     embedding_model = embedding_model or role_model('embedding', task='insights.embedding')
     run_id = _run_id or str(uuid.uuid4())
@@ -546,7 +549,7 @@ async def insights(  # noqa: C901
                 orq=resolved_orq,
                 client=resolved_llm,
                 compiler_model=compiler_model,
-                classifier_model=classifier_model,
+                classifier_model=finder_classifier_model,
             )
             run.population = {
                 **resolved.echo,

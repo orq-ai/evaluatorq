@@ -40,3 +40,38 @@ def test_apply_model_is_the_smart_role(monkeypatch: pytest.MonkeyPatch) -> None:
     assert apply_model() == role_model('smart', task='apply')
     monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
     assert apply_model() == 'env/smart'
+
+
+@pytest.mark.asyncio
+async def test_insights_run_labels_on_insights_labels_and_searches_on_finder_classifier(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+    from evaluatorq.insights import pipeline
+    from evaluatorq.insights.models import InsightsPopulation
+    from tests.insights.test_pipeline import _labels, _patch_clients, _resolved, _trace
+
+    traces = [_trace(1)]
+    seen: dict[str, str] = {}
+
+    async def resolve(*args, classifier_model: str, **kwargs):
+        seen['population'] = classifier_model
+        return _resolved(traces)
+
+    async def label(*args, model: str, **kwargs):
+        seen['labels'] = model
+        return _labels(traces)
+
+    _patch_clients(monkeypatch)
+    monkeypatch.setattr(pipeline, 'resolve_population', resolve)
+    monkeypatch.setattr(pipeline, 'label_traces', label)
+    set_cli_models(overrides={'insights.labels': 'override/labels', 'finder.classifier': 'override/finder'})
+    try:
+        run = await pipeline.insights(
+            InsightsPopulation(), dimensions=(), labels=('user_frustration',), runs_dir=tmp_path / 'runs'
+        )
+    finally:
+        set_cli_models()
+
+    assert seen == {'population': 'override/finder', 'labels': 'override/labels'}
+    assert run.config.classifier_model == 'override/labels'
