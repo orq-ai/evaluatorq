@@ -15,7 +15,7 @@ Section kinds:
     - ``token_usage``           prompt/completion/total + per-conversation summary
     - ``individual_results``    one entry per ``SimulationResult`` (transcript)
     - ``errors``                count by error type for error-terminated runs
-    - ``recommendations``       LLM remediation suggestions (opt-in, when provided)
+    - ``recommendations``       LLM remediation suggestions (when provided)
 """
 
 from __future__ import annotations

@@ -24,7 +24,7 @@ from evaluatorq.common.llm_client import orq_base_url as _orq_base_url
 from evaluatorq.common.replay import REPLAY_VERSION
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import _coerce_text
-from evaluatorq.simulation.types import AgentInfoSnapshot, SimulationRun
+from evaluatorq.simulation.types import DEFAULT_RUN_NAME, AgentInfoSnapshot, SimulationRun
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ def sanitise_run_name(name: str) -> str:
     sanitised = re.sub(r'[^a-z0-9_-]', '_', sanitised)
     sanitised = re.sub(r'_+', '_', sanitised)
     sanitised = sanitised.strip('_')
-    return sanitised[:64] or 'sim'
+    return sanitised[:64] or DEFAULT_RUN_NAME
 
 
 def get_sim_runs_dir() -> Path:

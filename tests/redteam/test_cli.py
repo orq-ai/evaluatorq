@@ -629,24 +629,11 @@ class TestLLMConfigFlagForwarding:
         assert config.max_tool_continuations == 4
         assert config.target_reasoning_effort == "high"
 
-    def test_defaults_reach_the_config_when_flags_are_omitted(self):
-        """Omitted flags fall back to the LLMConfig field defaults, not to zero/None.
-
-        The CLI declares each default as ``LLMConfig.model_fields[...].default``;
-        this pins that the declared default is what actually lands on the config,
-        so a mis-wired default (or a flag dropped from the constructor) fails here
-        even though every explicit-value test above would still pass.
-        """
-        from evaluatorq.redteam.contracts import LLMConfig
-
+    def test_no_llm_flags_forward_no_llm_config(self):
+        """With no LLM flag, the CLI forwards ``None`` so red_team applies the LLMConfig defaults itself."""
         result, mock_rt = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"])
         assert result.exit_code == 0, result.output
-        config = self._config(mock_rt)
-        assert config.target_agent_timeout_ms == LLMConfig.model_fields["target_agent_timeout_ms"].default
-        assert config.max_target_retries == LLMConfig.model_fields["max_target_retries"].default
-        assert config.retry_count == LLMConfig.model_fields["retry_count"].default
-        assert config.max_tool_continuations == LLMConfig.model_fields["max_tool_continuations"].default
-        assert config.target_reasoning_effort is None
+        assert mock_rt.call_args.kwargs["llm_config"] is None
 
     def test_attack_and_evaluator_model_flags_reach_the_config(self):
         """--attack-model / --evaluator-model land on the attacker and evaluator roles.
@@ -667,31 +654,12 @@ class TestLLMConfigFlagForwarding:
         assert config.attacker.model == "openai/attacker-model"
         assert config.evaluator.judges == ["openai/judge-model"]
 
-    def test_model_flags_default_to_the_shared_pipeline_model(self):
-        from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL
-
-        result, mock_rt = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"])
-        assert result.exit_code == 0, result.output
-        config = self._config(mock_rt)
-        assert config.attacker.model == DEFAULT_PIPELINE_MODEL
-        assert config.evaluator.judges == [DEFAULT_PIPELINE_MODEL]
-
     def test_min_evaluation_coverage_reaches_the_evaluator_config(self):
         result, mock_rt = _run_with_mocked_red_team(
             ["run", "--target", "agent:test-agent", "--min-evaluation-coverage", "0.25", "--yes"]
         )
         assert result.exit_code == 0, result.output
         assert self._config(mock_rt).evaluator.min_evaluation_coverage == 0.25
-
-    def test_min_evaluation_coverage_defaults_to_the_evaluator_field_default(self):
-        from evaluatorq.redteam.contracts import EvaluatorConfig
-
-        result, mock_rt = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"])
-        assert result.exit_code == 0, result.output
-        assert (
-            self._config(mock_rt).evaluator.min_evaluation_coverage
-            == EvaluatorConfig.model_fields["min_evaluation_coverage"].default
-        )
 
     def test_min_evaluation_coverage_rejects_out_of_range(self):
         """typer's min/max bounds reject a fraction above 1 before red_team runs."""
