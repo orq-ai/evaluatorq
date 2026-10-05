@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import functools
 import hashlib
-import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import starmap
@@ -31,7 +30,7 @@ from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
-from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV
+from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, role_model, role_source
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
@@ -763,10 +762,15 @@ def model_field_role(name: str) -> Role:
     return cast('Role', name.removesuffix('_model'))
 
 
-def model_field_env(name: str) -> tuple[str, str]:
-    """The environment variable behind a settings field and its value, or ``('', '')`` when unset."""
-    env_name = ROLE_ENV.get(model_field_role(name), '')
-    return (env_name, os.environ.get(env_name, '').strip()) if env_name else ('', '')
+def model_field_source(name: str) -> tuple[str, str]:
+    """The model and note for a field whose value a flag or env var sets, else ``('', '')``."""
+    role = model_field_role(name)
+    source = role_source(role)
+    if source == 'flag':
+        return role_model(role), f'Set by --{role}-model'
+    if source == 'env':
+        return role_model(role), f'Set by {ROLE_ENV[role]}'
+    return '', ''
 
 
 def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, note: str = '') -> str:
@@ -971,12 +975,11 @@ def settings_body(
     for name, (label, hint) in MODEL_FIELDS.items():
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
-        env_name, env_value = model_field_env(name)
-        note = f'Set by {env_name}' if env_value else ''
+        pinned, note = model_field_source(name)
         control = (
             f'<span class="settings-model-field" id="{esc(name)}-field" hx-get="/settings/models?field={esc(name)}" '
             f'hx-trigger="{esc(MODEL_FIELD_TRIGGER)}" hx-include="{esc(_model_field_include(name))}" '
-            f'hx-swap="innerHTML">{model_control(name, env_value or setting_value(name), {}, note=note)}</span>'
+            f'hx-swap="innerHTML">{model_control(name, pinned or setting_value(name), {}, note=note)}</span>'
         )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'

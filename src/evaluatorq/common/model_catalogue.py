@@ -440,8 +440,8 @@ async def models_by_provider(
     """Catalogue ids as ``provider/model``, grouped by provider, both levels sorted.
 
     ``kind='classify'`` lists the models that serve ``/classify``, ``'embedding'`` the
-    embedding models, and ``'chat'`` (the default) the chat models. Empty when the catalogue is unavailable, so a caller can fall back to
-    free text.
+    embedding models, and ``'chat'`` (the default) the chat models. Empty when the
+    catalogue is unavailable, so a caller can fall back to free text.
     """
     # `_parse_catalogue` files each entry under its bare and its qualified key with
     # the same ModelInfo object; the qualified key is the longer of the two.

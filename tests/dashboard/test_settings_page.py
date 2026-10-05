@@ -1554,3 +1554,42 @@ def test_model_field_offers_use_default_and_labels_an_empty_value(
 
     chosen = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': 'openai/gpt-5.6-luna'}).text
     assert 'data-model="" aria-pressed="false">Use default</button>' in chosen
+
+
+def test_page_shows_a_command_line_model_and_says_which_flag_set_it(client: TestClient) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    set_cli_models(roles={'smart': 'openai/gpt-6'})
+
+    html = client.get('/settings').text
+
+    assert '<input id="smart_model" name="smart_model" type="text" value="openai/gpt-6"' in html
+    assert 'Set by --smart-model' in html
+    assert 'Set by --fast-model' not in html
+
+
+def test_model_field_notes_a_command_line_model(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    set_cli_models(roles={'smart': 'openai/gpt-6'})
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    html = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': 'openai/gpt-6'}).text
+
+    assert 'Set by --smart-model' in html
+    assert 'EVALUATORQ_SMART_MODEL' not in html
+
+
+def test_saving_does_not_persist_a_command_line_model(client: TestClient, settings_file: Path) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    save_settings(DashboardSettings.model_validate({'smart_model': 'saved/smart'}), settings_file)
+    set_cli_models(roles={'smart': 'openai/gpt-6', 'embedding': 'cli/embed'})
+
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'smart_model': 'openai/gpt-6', 'embedding_model': 'cli/embed'}))
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['smart_model'] == 'saved/smart'
+    assert saved['embedding_model'] is None

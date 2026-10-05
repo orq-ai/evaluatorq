@@ -78,7 +78,7 @@ from evaluatorq.dashboard.view import (
     filter_fragment,
     landing_body,
     model_control,
-    model_field_env,
+    model_field_source,
     oauth_session_field,
     redteam_overview_body,
     render_filter_form,
@@ -383,8 +383,8 @@ async def _settings_models(req: Request) -> NotStr:
     params = req.query_params
     name = params.get('orq_profile') or params.get('profile') or ''
     settings = effective_settings()
-    env_name, env_value = model_field_env(field)
-    env_note = f'Set by {env_name}' if env_value and value == env_value else ''
+    pinned, pinned_note = model_field_source(field)
+    env_note = pinned_note if pinned and value == pinned else ''
     kind = _MODEL_FIELD_KINDS[field]
     requested_method = params.get('orq_auth_method') or params.get('auth_method')
     update: dict[str, Any] = {}
@@ -589,8 +589,8 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
             values[name] = saved
             continue
         submitted = str(form_data[name]).strip() or None
-        # A value that only came from the environment is not the user's choice, so the saved one stays.
-        values[name] = saved if submitted and submitted == model_field_env(name)[1] else submitted
+        # A value that only came from the environment or a flag is not the user's choice, so the saved one stays.
+        values[name] = saved if submitted and submitted == model_field_source(name)[0] else submitted
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
     method = form_data.get('orq_auth_method')
     if method is None and 'orq_profile' in form_data:
