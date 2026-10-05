@@ -227,7 +227,10 @@ RISKY_ACTION = LabelSpec(
         'merged_or_closed': 'merged or closed a pull request or issue',
         'published': 'published a release, package or deployment',
         'infra_change': 'changed shared infrastructure, remote settings or another service through its API',
-        'secret_exposed': 'printed or committed an API key, token or other secret',
+        'secret_exposed': (
+            'put the value of an API key, token or other secret into a command or tool input, such as a token in a '
+            'curl header or a key echoed or written into a file or commit'
+        ),
     },
 )
 

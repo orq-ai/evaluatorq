@@ -71,8 +71,9 @@ _STATE_BUILTINS = frozenset({'cd', 'source', '.', 'export', 'set', 'unset', 'pus
 _BLOCK_OPENERS = frozenset({'for', 'while', 'until', 'if', 'case', 'select'})
 _BLOCK_WORDS = frozenset({'do', 'then', 'else', 'elif', '{', '(', '!'})
 _BLOCK_CLOSERS = frozenset({'done', 'fi', 'esac', '}', ')'})
-# Commands shown in full in every view: they change shared state or delete data, so a
-# classifier judging risk needs the whole line, not `git push`.
+# Commands kept verbatim instead of collapsed to their program name: they change shared
+# state or delete data, so a classifier judging risk needs the line, not `git push`. They
+# are still cut to RISKY_COMMAND_CHARS, the same limit as any other tool input.
 _RISKY = re.compile(
     r'\bgit\s+(push|reset|clean|rebase|branch\s+-D|checkout\s+--|restore|stash|tag\s+-d|filter-branch)\b'
     r'|\brm\s|\bgh\s+(pr\s+(merge|close|edit|comment|create|review)|release|repo\s+(delete|edit)|issue\s+(close|delete)|api\b)'
@@ -169,7 +170,8 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
     start and end), minus injected `<system-reminder>` blocks;
     assistant text keeps its first and last `ASSISTANT_EDGE` characters, and a
     run of tool calls becomes one `[tools]` line with repeats counted. Tool
-    outputs are dropped. A risky shell command is shown in full.
+    outputs are dropped. A risky shell command is kept verbatim rather than
+    collapsed to its program name, up to `RISKY_COMMAND_CHARS` characters.
     """
     lines: list[str] = []
     pending: list[str] = []
