@@ -1,9 +1,9 @@
 """Named model roles and the one place their configured model is resolved.
 
-Precedence, highest first: a CLI task override, a CLI role flag, the role's
-environment variable, the settings file's task override, the settings file's
-role field, the built-in default. Per-command flags such as ``--attack-model``
-sit above all of these because they are passed explicitly as ``model=``.
+Precedence, highest first: a per-command flag such as ``--attack-model`` (passed explicitly as
+``model=``), a CLI task override (``--model-override``), a CLI role flag, a legacy task environment
+variable (``EVALUATORQ_COMPILER_MODEL``, ``EVALUATORQ_APPLY_MODEL``), the settings file's task
+override, the role's environment variable, the settings file's role field, the built-in default.
 """
 
 from __future__ import annotations
