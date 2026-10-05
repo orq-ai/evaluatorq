@@ -71,7 +71,7 @@ def _tool_call_part(item: dict[str, Any], *, name_key: str = 'name', args_key: s
     return {
         'type': 'tool_call',
         'id': item.get('call_id') or item.get('id') or '',
-        'name': item.get(name_key) or '',
+        'name': item.get(name_key) or item.get('tool_name') or '',
         'arguments': _parse_json_or_value(item.get(args_key)),
     }
 
@@ -146,7 +146,7 @@ def items_to_input_messages(items: Any) -> list[dict[str, Any]]:
         elif item_type == 'custom_tool_call':
             messages.append({'role': 'assistant', 'parts': [_tool_call_part(raw, args_key='input')]})
         elif item_type == 'mcp_call':
-            messages.append({'role': 'assistant', 'parts': [_tool_call_part(raw, name_key='tool_name')]})
+            messages.append({'role': 'assistant', 'parts': [_tool_call_part(raw)]})
             error = raw.get('error')
             if error:
                 messages.append(_tool_response_message(raw.get('call_id'), {'error': error}))
@@ -190,7 +190,7 @@ def items_to_output_messages(items: Any, finish_reason: str = '') -> list[dict[s
             parts = [_tool_call_part(raw, args_key='input')]
             role = 'assistant'
         elif item_type == 'mcp_call':
-            parts = [_tool_call_part(raw, name_key='tool_name')]
+            parts = [_tool_call_part(raw)]
             role = 'assistant'
         elif item_type == 'reasoning':
             parts = _reasoning_parts(raw)

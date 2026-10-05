@@ -411,6 +411,7 @@ def test_reload_worker_reads_local_env(monkeypatch: pytest.MonkeyPatch, tmp_path
     """An already running reloader picks up the workspace slug in a new worker."""
     from evaluatorq.dashboard.launch import build_app_from_env
 
+    monkeypatch.setattr('evaluatorq.dashboard.insights_review_projection.warm_review_projection', lambda: None)
     (tmp_path / '.env').write_text('ORQ_WORKSPACE=orq-research\n')
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv('ORQ_WORKSPACE', raising=False)
@@ -423,6 +424,22 @@ def test_reload_worker_reads_local_env(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     assert os.environ['ORQ_WORKSPACE'] == 'orq-research'
     build.assert_called_once_with(None)
+
+
+def test_reload_worker_registers_browser_readiness_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The browser readiness route registers when the reload worker starts."""
+    from starlette.testclient import TestClient
+
+    from evaluatorq.dashboard.launch import build_app_from_env
+
+    monkeypatch.setattr('evaluatorq.dashboard.insights_review_projection.warm_review_projection', lambda: None)
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_LAUNCH_NONCE', 'test-nonce')
+    with patch('evaluatorq.dashboard.launch._install_log_bridge'):
+        app = build_app_from_env()
+
+    response = TestClient(app).get('/_dashboard-ready')
+    assert response.status_code == 200
+    assert response.text == 'test-nonce'
 
 
 def test_browser_opens_after_dashboard_listener_is_ready() -> None:

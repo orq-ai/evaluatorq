@@ -221,7 +221,7 @@ def _as_client(obj: object) -> "AsyncOpenAI":
 
     retry_extra_body only reads ``base_url`` via client_routes_through_orq, so the
     fake is sufficient at runtime; this routes the cast through ``object`` to satisfy
-    basedpyright (a direct _FakeClient→AsyncOpenAI cast is rejected as non-overlapping).
+    static analysis (a direct _FakeClient→AsyncOpenAI cast is rejected as non-overlapping).
     """
     return cast("AsyncOpenAI", obj)
 
@@ -316,25 +316,51 @@ def test_request_params_site_params_override_field_defaults():
     assert params['max_completion_tokens'] == 1500
 
 
+def _sampling_splat_lines(source: str) -> list[int]:
+    """Find completion calls with explicit sampling keys and an extra_kwargs splat."""
+    import ast
+
+    offenders = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in {'create', 'parse'}:
+            continue
+        explicit = {kw.arg for kw in node.keywords if kw.arg is not None}
+        if not explicit.intersection({'temperature', 'max_completion_tokens'}):
+            continue
+        for kw in node.keywords:
+            if kw.arg is not None:
+                continue
+            splat = kw.value
+            name = splat.id if isinstance(splat, ast.Name) else splat.attr if isinstance(splat, ast.Attribute) else ''
+            if name.endswith('extra_kwargs'):
+                offenders.append(node.lineno)
+    return offenders
+
+
+def test_sampling_splat_guard_detects_one_line_and_multiline_calls():
+    assert _sampling_splat_lines('client.create(temperature=0, **extra_kwargs)') == [1]
+    assert _sampling_splat_lines('client.parse(\n    max_completion_tokens=10,\n    **config.extra_kwargs,\n)') == [1]
+    assert _sampling_splat_lines('client.create(**extra_kwargs)') == []
+    assert _sampling_splat_lines('# client.create(temperature=0, **extra_kwargs)') == []
+
+
 def test_no_call_site_splats_extra_kwargs_next_to_explicit_sampling_kwargs():
-    """Grep-level guard: the collision pattern must not come back.
+    """A duplicate sampling keyword can make a completion fail with TypeError.
 
     A call carrying explicit temperature=/max_completion_tokens= keywords AND a
     **...extra_kwargs splat raises TypeError on a duplicate key. All call sites
     must go through LLMCallConfig.request_params (or an equivalent dict
     merge) instead.
     """
-    import re
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[2] / 'src' / 'evaluatorq'
     offenders = []
     for path in src.rglob('*.py'):
-        text = path.read_text()
-        for m in re.finditer(r'\.(?:create|parse)\(\n(?:[^()]*?\n)*?[^()]*?\*\*[\w.]*extra_kwargs', text):
-            window = m.group(0)
-            if 'temperature=' in window or 'max_completion_tokens=' in window:
-                offenders.append(str(path.relative_to(src)))
+        for line in _sampling_splat_lines(path.read_text(encoding='utf-8')):
+            offenders.append(f'{path.relative_to(src)}:{line}')
     assert offenders == [], f'explicit sampling kwargs next to **extra_kwargs in: {offenders}'
 
 

@@ -33,6 +33,8 @@ is skipped rather than silently mixed into a USD total.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import math
 import os
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -51,16 +53,22 @@ if TYPE_CHECKING:
 class _ModelInfoFields(NamedTuple):
     """Field layout for `ModelInfo`; see that class for the contract."""
 
-    input_cost_per_1k: float
-    output_cost_per_1k: float
+    # ``None`` when the catalogue lists the model without a usable USD price.
+    input_cost_per_1k: float | None
+    output_cost_per_1k: float | None
     provider: str
     supports_responses: bool
     # Accepted ``reasoning.effort`` values. ``None`` means the catalogue does not say
     # — absence is "unknown", never "empty".
     reasoning_efforts: frozenset[str] | None = None
     # Whether the model serves the router's ``/classify`` endpoint rather than a
-    # chat/responses one. Last and defaulted so the positional call sites keep working.
+    # chat/responses one. Defaulted so the positional call sites keep working.
     supports_classify: bool = False
+    # The catalogue's ``model_type`` (``chat``, ``embedding``, ``tts``, …); ``''`` when unstated.
+    model_type: str = ''
+    # The effort the provider applies when none is sent. ``None`` when the
+    # catalogue names no default.
+    default_reasoning_effort: str | None = None
 
 
 class ModelInfo(_ModelInfoFields):
@@ -79,12 +87,14 @@ class ModelInfo(_ModelInfoFields):
 
     def __new__(  # noqa: PYI034 — a NamedTuple subclass really does construct the subclass
         cls,
-        input_cost_per_1k: float,
-        output_cost_per_1k: float,
+        input_cost_per_1k: float | None,
+        output_cost_per_1k: float | None,
         provider: str,
         supports_responses: bool,  # noqa: FBT001 — positional to match the tuple field order
         reasoning_efforts: frozenset[str] | None = None,
         supports_classify: bool = False,  # noqa: FBT001, FBT002 — positional to match the tuple field order
+        model_type: str = '',
+        default_reasoning_effort: str | None = None,
     ) -> ModelInfo:
         """Normalize an empty ``reasoning_efforts`` to ``None``.
 
@@ -97,6 +107,9 @@ class ModelInfo(_ModelInfoFields):
         collapses the two; doing it in the type closes the same hole for
         `register_model`, which takes whatever a caller hands it.
         """
+        # One rate without the other cannot price a call; keep "unpriced" a single state.
+        if input_cost_per_1k is None or output_cost_per_1k is None:
+            input_cost_per_1k = output_cost_per_1k = None
         return super().__new__(
             cls,
             input_cost_per_1k,
@@ -105,15 +118,16 @@ class ModelInfo(_ModelInfoFields):
             supports_responses,
             reasoning_efforts or None,
             supports_classify,
+            model_type,
+            default_reasoning_effort,
         )
 
 
-# host -> (model_id -> ModelInfo). A host is absent until its first fetch, and
-# maps to {} when the fetch failed or the account has no models. Keyed on host
-# because a long-lived process (jobs runner, dashboard) can serve runs against
-# prod and staging in turn, and prices attributed to the wrong deployment are
-# worse than no prices.
-_catalogues: dict[str, dict[str, ModelInfo]] = {}
+# (host, credential) -> (model_id -> ModelInfo). Absent until its first fetch, and
+# {} when the fetch failed or the account has no models. A long-lived process
+# (jobs runner, dashboard) can serve prod and staging in turn, and switch between
+# workspaces on one host; each workspace enables its own models.
+_catalogues: dict[tuple[str, str], dict[str, ModelInfo]] = {}
 # Built lazily: a module-level asyncio.Lock() binds to the loop running at import
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
@@ -124,7 +138,7 @@ _lock: asyncio.Lock | None = None
 _overrides: dict[str, ModelInfo] = {}
 # Consecutive failed fetches per host: retry a few times, then give up for the
 # process rather than hammering a host that is genuinely down.
-_fetch_failures: dict[str, int] = {}
+_fetch_failures: dict[tuple[str, str], int] = {}
 _MAX_FETCH_FAILURES = 3
 # Env var rather than a parameter: `_load_catalogue` is called from pricing paths
 # with no config object to thread.
@@ -219,6 +233,25 @@ async def get_model_info(model: str, client: AsyncOpenAI | None = None) -> Model
     return await _lookup(model, client)
 
 
+def _usd_price(entry: dict[str, object], side: str) -> float | None:
+    """The entry's ``<side>_cost`` per 1k tokens in USD, or ``None`` when it has no usable one."""
+    cost = entry.get(f'{side}_cost')
+    # bool is an int subclass: `input_cost: true` would otherwise price at $1.00/1k.
+    if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+        return None
+    try:
+        price = float(cost)
+    except OverflowError:  # a JSON integer too large for a float
+        return None
+    if not math.isfinite(price) or price < 0:
+        return None
+    # Currency is '' on most entries and 'usd' on the rest; only a stated non-USD
+    # price is refused, so the common empty case still prices.
+    if str(entry.get(f'{side}_currency') or '') not in {'', 'usd'}:
+        return None
+    return price
+
+
 def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:
     """One entry's ``metadata`` mapping, or ``{}`` when it is any other shape.
 
@@ -228,6 +261,18 @@ def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:
     """
     metadata = entry.get('metadata')
     return metadata if isinstance(metadata, dict) else {}
+
+
+def _reasoning_effort_config(entry: dict[str, object]) -> dict[str, object] | None:
+    """The ``reasoningEffort`` parameter's ``config`` for one catalogue entry, or ``None``."""
+    parameters = entry.get('parameters')
+    if not isinstance(parameters, list):
+        return None
+    for parameter in parameters:
+        if isinstance(parameter, dict) and parameter.get('parameter') == 'reasoningEffort':
+            config = parameter.get('config')
+            return config if isinstance(config, dict) else None
+    return None
 
 
 def _parse_reasoning_efforts(entry: dict[str, object]) -> frozenset[str] | None:
@@ -240,19 +285,19 @@ def _parse_reasoning_efforts(entry: dict[str, object]) -> frozenset[str] | None:
     level without a schema change. ``None`` when the entry has no such parameter,
     which the caller must treat as "cannot validate", not "nothing allowed".
     """
-    parameters = entry.get('parameters')
-    if not isinstance(parameters, list):
+    config = _reasoning_effort_config(entry)
+    options = config.get('options') if config else None
+    if not isinstance(options, list):
         return None
-    for parameter in parameters:
-        if not isinstance(parameter, dict) or parameter.get('parameter') != 'reasoningEffort':
-            continue
-        config = parameter.get('config')
-        options = config.get('options') if isinstance(config, dict) else None
-        if not isinstance(options, list):
-            return None
-        values = {o['value'] for o in options if isinstance(o, dict) and isinstance(o.get('value'), str)}
-        return frozenset(values) or None
-    return None
+    values = {o['value'] for o in options if isinstance(o, dict) and isinstance(o.get('value'), str)}
+    return frozenset(values) or None
+
+
+def _parse_default_reasoning_effort(entry: dict[str, object]) -> str | None:
+    """The effort the provider applies when none is sent, from the same parameter's ``config.default``."""
+    config = _reasoning_effort_config(entry)
+    default = config.get('default') if config else None
+    return default if isinstance(default, str) and default else None
 
 
 def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
@@ -280,21 +325,9 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
         if not isinstance(entry, dict):
             continue
         model_id, provider = entry.get('model_id'), entry.get('provider')
-        inp, out = entry.get('input_cost'), entry.get('output_cost')
         if not isinstance(model_id, str) or not isinstance(provider, str):
             continue
-        # bool is an int subclass: `input_cost: true` would otherwise price at $1.00/1k.
-        if isinstance(inp, bool) or isinstance(out, bool):
-            continue
-        if not isinstance(inp, (int, float)) or not isinstance(out, (int, float)):
-            continue
-        if inp < 0 or out < 0:
-            continue
-        # Currency is '' on most entries and 'usd' on the rest; only a stated
-        # non-USD price is skipped, so the common empty case still prices.
-        currencies = {str(entry.get('input_currency') or ''), str(entry.get('output_currency') or '')}
-        if currencies - {'', 'usd'}:
-            continue
+        inp, out = _usd_price(entry, 'input'), _usd_price(entry, 'output')
         metadata = _entry_metadata(entry)
         classify_flag = metadata.get('supports_classify')
         if classify_flag is not None and not isinstance(classify_flag, bool):
@@ -305,14 +338,16 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
                 classify_flag,
             )
         info = ModelInfo(
-            input_cost_per_1k=float(inp),
-            output_cost_per_1k=float(out),
+            input_cost_per_1k=inp,
+            output_cost_per_1k=out,
             provider=provider,
             # `metadata` is provider-shaped and has arrived as a list; `.get` on a
             # non-mapping took the whole catalogue down rather than one model.
             supports_responses=bool(metadata.get('supports_responses_api')),
             reasoning_efforts=_parse_reasoning_efforts(entry),
             supports_classify=classify_flag is True,
+            model_type=str(entry.get('model_type') or ''),
+            default_reasoning_effort=_parse_default_reasoning_effort(entry),
         )
         models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)
@@ -330,7 +365,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
 
 
 async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelInfo]:
-    """Fetch the Orq model catalogue once per process, per host.
+    """Fetch the Orq model catalogue once per process, per host and credential.
 
     The host is taken from ``client`` when it routes through the Orq router, so an
     injected staging/on-prem client is not priced against prod; otherwise
@@ -343,24 +378,25 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
     consequence spelled out.
     """
     host = resolve_results_base_url(client) if client is not None else orq_base_url()
-    cached = _catalogues.get(host)
+    # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
+    # different workspace would 401 (caching {}) or price against the wrong one.
+    api_key = (
+        (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
+        if client is not None
+        else os.environ.get('ORQ_API_KEY')
+    )
+    cache_key = (host, hashlib.sha256(api_key.encode()).hexdigest()[:16] if isinstance(api_key, str) else '')
+    cached = _catalogues.get(cache_key)
     if cached is not None:
         return cached
     async with _catalogue_lock():
-        cached = _catalogues.get(host)
+        cached = _catalogues.get(cache_key)
         if cached is not None:
             return cached
-        # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
-        # different workspace would 401 (caching {}) or price against the wrong one.
-        api_key = (
-            (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
-            if client is not None
-            else os.environ.get('ORQ_API_KEY')
-        )
         if not api_key:
             logger.debug('No ORQ_API_KEY and no client credential; model catalogue unavailable')
-            _catalogues[host] = {}
-            return _catalogues[host]
+            _catalogues[cache_key] = {}
+            return _catalogues[cache_key]
         payload: object = None
         try:
             async with httpx.AsyncClient(timeout=_CATALOGUE_TIMEOUT_S) as http_client:
@@ -373,7 +409,7 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         except (httpx.HTTPError, ValueError) as exc:
             # Narrow on purpose: a bug inside _parse_catalogue must not be cached
             # away as "the network was down", so parsing happens outside the try.
-            failures = _fetch_failures[host] = _fetch_failures.get(host, 0) + 1
+            failures = _fetch_failures[cache_key] = _fetch_failures.get(cache_key, 0) + 1
             give_up = failures >= _MAX_FETCH_FAILURES
             logger.warning(
                 'Orq model catalogue unavailable ({}: {}) at {}/v2/models (attempt {} of {}) — '
@@ -387,14 +423,34 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
                 'for the rest of this process' if give_up else 'until a later call succeeds',
             )
             if give_up:
-                _catalogues[host] = {}
-                return _catalogues[host]
+                _catalogues[cache_key] = {}
+                return _catalogues[cache_key]
             # Not cached: a transient hiccup must not degrade the whole run.
             return {}
-        _fetch_failures.pop(host, None)
-        _catalogues[host] = _parse_catalogue(payload)
-        logger.debug('Loaded catalogue for {} models from {}', len(_catalogues[host]), host)
-        return _catalogues[host]
+        _fetch_failures.pop(cache_key, None)
+        _catalogues[cache_key] = _parse_catalogue(payload)
+        logger.debug('Loaded catalogue for {} models from {}', len(_catalogues[cache_key]), host)
+        return _catalogues[cache_key]
+
+
+async def models_by_provider(client: AsyncOpenAI | None = None, *, classify: bool = False) -> dict[str, list[str]]:
+    """Catalogue ids as ``provider/model``, grouped by provider, both levels sorted.
+
+    ``classify=True`` lists the models that serve ``/classify``; otherwise the chat
+    models. Empty when the catalogue is unavailable, so a caller can fall back to
+    free text.
+    """
+    # `_parse_catalogue` files each entry under its bare and its qualified key with
+    # the same ModelInfo object; the qualified key is the longer of the two.
+    qualified: dict[int, tuple[ModelInfo, str]] = {}
+    for key, info in (await _load_catalogue(client)).items():
+        if key.startswith(f'{info.provider}/') and len(key) > len(qualified.get(id(info), (info, ''))[1]):
+            qualified[id(info)] = (info, key)
+    grouped: dict[str, list[str]] = {}
+    for info, key in qualified.values():
+        if info.supports_classify if classify else info.model_type == 'chat':
+            grouped.setdefault(info.provider, []).append(key)
+    return {provider: sorted(ids) for provider, ids in sorted(grouped.items())}
 
 
 def _names_router(model_id: str, info: ModelInfo | None) -> bool:
@@ -539,7 +595,7 @@ async def price_usage(
     served = served_model if served_model and served_model.split('/', 1)[-1] != model.split('/', 1)[-1] else None
     served_info = await _lookup(served, client) if served is not None else None
     served_is_router = served is not None and _names_router(served, served_info)
-    if served_info is not None and not served_is_router:
+    if served_info is not None and not served_is_router and served_info.input_cost_per_1k is not None:
         logger.debug('Pricing the call at {}, which served the request for {}', served, model)
         info = served_info
     else:
@@ -567,6 +623,9 @@ async def price_usage(
     # ponytail: flat input rate — cached-read and cache-write tokens are billed at a
     # discount/premium the catalogue does not expose, so a cache-heavy call reads
     # slightly high. Split the rate here if /v2/models ever publishes the tiers.
+    if info.input_cost_per_1k is None or info.output_cost_per_1k is None:
+        logger.debug('Model {} is listed without a USD price; call stays unpriced', model)
+        return usage
     input_cost = usage.input_tokens / 1000 * info.input_cost_per_1k
     output_cost = usage.output_tokens / 1000 * info.output_cost_per_1k
     return usage.model_copy(

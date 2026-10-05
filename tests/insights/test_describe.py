@@ -1,0 +1,280 @@
+"""Unit tests for `evaluatorq.insights.describe` — LLM cluster naming."""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, cast
+
+import pytest
+
+from evaluatorq.common.structured_output import StructuredResult
+from evaluatorq.insights import describe as describe_module
+from evaluatorq.insights.describe import ClusterName, describe_clusters, describe_top_level
+
+if TYPE_CHECKING:
+    from openai import AsyncOpenAI
+
+
+class _FakeClient:
+    """Placeholder object — `generate_structured` is monkeypatched, so this is never called."""
+
+
+def fake_client() -> AsyncOpenAI:
+    return cast('AsyncOpenAI', cast(object, _FakeClient()))
+
+
+def test_describe_prompt_bounds_excerpts_and_preserves_their_ends() -> None:
+    long_member = 'M' * 2000 + ' member-tail'
+    long_contrastive = 'C' * 2000 + ' contrastive-tail'
+
+    prompt = describe_module._build_describe_prompt('intent', [long_member], [long_contrastive])
+
+    assert len(describe_module._bound_excerpts([long_member])[0]) == describe_module._MAX_EXCERPT_CHARS
+    assert 'M' * 100 in prompt
+    assert 'member-tail' in prompt
+    assert 'excerpt truncated' in prompt
+    assert 'C' * 100 in prompt
+    assert 'contrastive-tail' in prompt
+
+
+def test_describe_prompt_context_budget_is_shared_by_both_example_groups() -> None:
+    members = [f'member-{index}-' + ('x' * 2000) for index in range(10)]
+    contrastive = [f'contrastive-{index}-' + ('y' * 2000) for index in range(9)]
+
+    prompt = describe_module._build_describe_prompt('intent', members, contrastive)
+    bounded = describe_module._bound_excerpts(members + contrastive)
+
+    assert len(bounded) == len(members) + len(contrastive)
+    assert len('\n'.join(bounded[: len(members)])) + len('\n'.join(bounded[len(members) :])) <= describe_module._MAX_CONTEXT_CHARS
+    assert all(len(text) <= describe_module._MAX_EXCERPT_CHARS for text in bounded)
+    assert all(f'member-{index}-' in text for index, text in enumerate(bounded[: len(members)]))
+    assert all(f'contrastive-{index}-' in text for index, text in enumerate(bounded[len(members) :]))
+    assert 'member-0-' in prompt and 'contrastive-0-' in prompt
+
+
+def test_describe_prompt_logs_when_shared_budget_truncates_examples(monkeypatch: pytest.MonkeyPatch) -> None:
+    warnings: list[tuple[str, tuple[Any, ...]]] = []
+    monkeypatch.setattr(describe_module, '_MAX_CONTEXT_CHARS', 160)
+    monkeypatch.setattr(describe_module.logger, 'warning', lambda message, *args: warnings.append((message, args)))
+
+    prompt = describe_module._build_describe_prompt(
+        'intent', ['member-' + ('m' * 100)], ['contrastive-' + ('c' * 100)]
+    )
+
+    assert 'member-' in prompt and 'excerpt truncated' in prompt
+    assert 'contrastive-' in prompt
+    assert warnings == [
+        ('Insights description examples were truncated to the shared {}-character context budget', (160,))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_describe_clusters_calls_generate_structured_per_cluster(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        calls.append(kwargs)
+        return StructuredResult(parsed=ClusterName(name='Refund requests', description='Users asked about refunds.'), raw='')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    members = {
+        0: ['refund my order', 'i want my money back'],
+        1: ['reset my password', 'cannot log in'],
+    }
+    neighbours = {0: [1], 1: [0]}
+
+    result = await describe_clusters(members, neighbours=neighbours, dimension='intent', client=fake_client(), model='m')
+
+    assert len(calls) == 2
+    assert result[0] == ClusterName(name='Refund requests', description='Users asked about refunds.')
+    assert result[1] == ClusterName(name='Refund requests', description='Users asked about refunds.')
+    for kwargs in calls:
+        assert kwargs['response_format'] is ClusterName
+        assert kwargs['max_tokens'] == 4096
+        assert kwargs['label'] == 'insights.describe'
+
+
+@pytest.mark.asyncio
+async def test_describe_clusters_includes_member_and_contrastive_texts(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[int, str] = {}
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        content = kwargs['messages'][0]['content']
+        captured[len(captured)] = content
+        return StructuredResult(parsed=ClusterName(name='n', description='d'), raw='')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    members = {0: ['refund my order'], 1: ['reset my password'], 2: ['cancel my subscription']}
+    neighbours = {0: [1, 2]}
+
+    await describe_clusters({0: members[0]}, neighbours=neighbours, dimension='intent', client=fake_client(), model='m')
+
+    # Only cluster 0 was described (members only has key 0), so its neighbours
+    # 1 and 2 are absent from `members` and contribute no contrastive text —
+    # this test only checks that the member text made it into the prompt.
+    content = next(iter(captured.values()))
+    assert 'refund my order' in content
+    assert '<examples>' in content
+    assert '<contrastive>' in content
+
+
+@pytest.mark.asyncio
+async def test_describe_clusters_uses_up_to_3_neighbours_and_3_examples_each(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[str] = []
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        captured.append(kwargs['messages'][0]['content'])
+        return StructuredResult(parsed=ClusterName(name='n', description='d'), raw='')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    members = {
+        0: ['target text'],
+        1: ['n1-a', 'n1-b', 'n1-c', 'n1-d'],
+        2: ['n2-a', 'n2-b'],
+        3: ['n3-a'],
+        4: ['n4-a'],  # a 4th neighbour must be dropped (cap is 3 neighbour clusters)
+    }
+    neighbours = {0: [1, 2, 3, 4]}
+
+    await describe_clusters(members, neighbours=neighbours, dimension='intent', client=fake_client(), model='m')
+
+    content = captured[0]
+    assert 'n1-a' in content
+    assert 'n1-b' in content
+    assert 'n1-c' in content
+    assert 'n1-d' not in content  # 4th example of neighbour 1 dropped (cap is 3 per neighbour)
+    assert 'n2-a' in content
+    assert 'n3-a' in content
+    assert 'n4-a' not in content  # 4th neighbour cluster dropped (cap is 3 neighbour clusters)
+
+
+@pytest.mark.asyncio
+async def test_describe_clusters_exception_yields_error_string_and_logs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loguru import logger
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        raise RuntimeError('provider down')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        result = await describe_clusters(
+            {0: ['hello']}, neighbours={0: []}, dimension='intent', client=fake_client(), model='m'
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert isinstance(result[0], str)
+    assert 'provider down' in result[0]
+    assert any('0' in message and 'provider down' in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_describe_clusters_unparseable_output_yields_error_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        return StructuredResult(parsed=None, raw='not json')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    result = await describe_clusters({0: ['hello']}, neighbours={0: []}, dimension='intent', client=fake_client(), model='m')
+
+    assert isinstance(result[0], str)
+    assert 'unparseable' in result[0]
+
+
+@pytest.mark.asyncio
+async def test_describe_clusters_dimension_selects_the_right_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[str] = []
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        captured.append(kwargs['messages'][0]['content'])
+        return StructuredResult(parsed=ClusterName(name='n', description='d'), raw='')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    await describe_clusters({0: ['x']}, neighbours={0: []}, dimension='failure', client=fake_client(), model='m')
+    await describe_clusters({0: ['x']}, neighbours={0: []}, dimension='sentiment', client=fake_client(), model='m')
+
+    assert 'failure mechanism' in captured[0]
+    assert 'sentiment pattern' in captured[1]
+
+
+@pytest.mark.asyncio
+async def test_describe_top_level_names_group_from_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[str] = []
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        captured.append(kwargs['messages'][0]['content'])
+        assert kwargs['response_format'] is ClusterName
+        assert kwargs['max_tokens'] == 4096
+        return StructuredResult(parsed=ClusterName(name='Billing support', description='Covers refunds and billing questions.'), raw='')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    children = {
+        0: [
+            ClusterName(name='Refund requests', description='Users asked about refunds.'),
+            ClusterName(name='Invoice questions', description='Users asked about invoices.'),
+        ]
+    }
+
+    result = await describe_top_level(children, client=fake_client(), model='m')
+
+    assert result[0] == ClusterName(name='Billing support', description='Covers refunds and billing questions.')
+    assert 'Refund requests' in captured[0]
+    assert 'Invoice questions' in captured[0]
+
+
+def test_top_level_child_context_has_per_child_and_shared_bounds() -> None:
+    children = [
+        ClusterName(name=f'child-{index}', description=f'description-{index}-' + ('x' * 2000) + f'-tail-{index}')
+        for index in range(51)
+    ]
+
+    bounded = describe_module._children_text(children)
+
+    assert len(bounded) <= describe_module._MAX_CONTEXT_CHARS
+    assert 'child-0' in bounded and 'description-0-' in bounded and '-tail-0' in bounded
+    assert 'child-49' in bounded
+    assert 'child-50' not in bounded
+    assert 'excerpt truncated' in bounded
+
+
+def test_excerpt_shorter_than_truncation_marker_stays_within_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(describe_module, '_MAX_CONTEXT_CHARS', 8)
+
+    bounded = describe_module._bound_excerpts(['a' * 100])
+
+    assert bounded == ['a' * 8]
+
+
+@pytest.mark.asyncio
+async def test_describe_top_level_failure_yields_error_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[ClusterName]:
+        raise RuntimeError('boom')
+
+    monkeypatch.setattr(describe_module, 'generate_structured', fake_generate_structured)
+
+    children = {0: [ClusterName(name='a', description='b')]}
+    result = await describe_top_level(children, client=fake_client(), model='m')
+
+    assert isinstance(result[0], str)
+    assert 'boom' in result[0]
+
+
+@pytest.mark.parametrize('function, args', [
+    (describe_clusters, ({0: ['member']},)),
+    (describe_top_level, ({0: [ClusterName(name='child', description='details')]},)),
+])
+@pytest.mark.asyncio
+async def test_describe_apis_reject_non_positive_parallelism(function: Any, args: Any) -> None:
+    kwargs: dict[str, Any] = {'client': fake_client(), 'model': 'm', 'parallelism': 0}
+    if function is describe_clusters:
+        kwargs.update(neighbours={0: []}, dimension='intent')
+
+    with pytest.raises(ValueError, match='parallelism must be positive'):
+        await function(*args, **kwargs)

@@ -133,7 +133,7 @@ if sys.version_info >= (3, 11):
 else:
     from enum import Enum
 
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
+    class StrEnum(str, Enum):
         """String enum compatible with Python 3.10."""
 
 
@@ -683,28 +683,30 @@ class Usage(BaseModel):
         # runtime via the validation aliases above, but a static type checker only
         # sees the declared field names. Declare the constructor explicitly so call
         # sites passing either spelling type-check cleanly.
-        def __init__(  # pyright: ignore[reportMissingSuperCall]
+
+        def __init__(
             self,
             *,
-            input_tokens: int = ...,
-            output_tokens: int = ...,
-            prompt_tokens: int = ...,
-            completion_tokens: int = ...,
-            total_tokens: int = ...,
-            cached_tokens: int = ...,
-            cache_creation_tokens: int = ...,
-            cache_creation_1h_tokens: int = ...,
-            cache_creation_5m_tokens: int = ...,
-            reasoning_tokens: int = ...,
-            input_cost: float | None = ...,
-            prompt_cost: float | None = ...,
-            output_cost: float | None = ...,
-            completion_cost: float | None = ...,
-            total_cost: float | None = ...,
-            cost_usd: float | None = ...,
-            calls: int = ...,
-            priced_calls: int = ...,
-        ) -> None: ...
+            input_tokens: int = 0,
+            output_tokens: int = 0,
+            prompt_tokens: int = 0,
+            completion_tokens: int = 0,
+            total_tokens: int = 0,
+            cached_tokens: int = 0,
+            cache_creation_tokens: int = 0,
+            cache_creation_1h_tokens: int = 0,
+            cache_creation_5m_tokens: int = 0,
+            reasoning_tokens: int = 0,
+            input_cost: float | None = None,
+            prompt_cost: float | None = None,
+            output_cost: float | None = None,
+            completion_cost: float | None = None,
+            total_cost: float | None = None,
+            cost_usd: float | None = None,
+            calls: int = 0,
+            priced_calls: int = 0,
+        ) -> None:
+            super().__init__()
 
     @property
     def prompt_tokens(self) -> int:
@@ -1193,7 +1195,7 @@ class AgentResponse(BaseModel):
 
     if TYPE_CHECKING:
 
-        def __init__(  # pyright: ignore[reportMissingSuperCall]
+        def __init__(
             self,
             *,
             output: list[OutputMessage] | None = None,
@@ -1206,7 +1208,8 @@ class AgentResponse(BaseModel):
             finish_reason: str | None = None,
             refusal: str | None = None,
             error: AgentResponseError | None = None,
-        ) -> None: ...
+        ) -> None:
+            super().__init__()
 
     @model_validator(mode='before')
     @classmethod
@@ -1708,6 +1711,7 @@ class ManifestSurface(StrEnum):
 
     SIM = 'sim'
     REDTEAM = 'redteam'
+    INSIGHTS = 'insights'
 
 
 class ManifestStatus(StrEnum):
@@ -1770,6 +1774,19 @@ class StageRecord(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     started_at: datetime
     ended_at: datetime | None = None
+    completed: int | None = Field(default=None, strict=True)
+    total: int | None = Field(default=None, strict=True)
+
+    @model_validator(mode='after')
+    def validate_progress(self) -> StageRecord:
+        """Keep persisted stage progress within its meaningful range."""
+        if self.completed is not None and self.completed < 0:
+            raise ValueError('completed must be non-negative')
+        if self.total is not None and self.total < 0:
+            raise ValueError('total must be non-negative')
+        if self.completed is not None and self.total is not None and self.completed > self.total:
+            raise ValueError('completed must not exceed total')
+        return self
 
     @property
     def duration_seconds(self) -> float | None:
@@ -1787,6 +1804,8 @@ class RunManifest(BaseModel):
     status: ManifestStatus = ManifestStatus.RUNNING
     stage: str | None = None  # name of the current / most-recent stage
     stages: list[StageRecord] = Field(default_factory=list)
+    planned_stages: list[str] = Field(default_factory=list)
+    stage_labels: dict[str, str] = Field(default_factory=dict)
     started_at: datetime
     updated_at: datetime
     ended_at: datetime | None = None  # set when the run reaches a terminal status

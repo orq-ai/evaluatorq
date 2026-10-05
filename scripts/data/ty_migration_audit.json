@@ -1,0 +1,448 @@
+{
+  "basedpyright": {
+    "active_diagnostics": [
+      "reportAbstractUsage",
+      "reportArgumentType",
+      "reportAssertAlwaysTrue",
+      "reportAssertTypeFailure",
+      "reportAssignmentType",
+      "reportAttributeAccessIssue",
+      "reportCallInDefaultInitializer",
+      "reportCallIssue",
+      "reportConstantRedefinition",
+      "reportDuplicateImport",
+      "reportFunctionMemberAccess",
+      "reportGeneralTypeIssues",
+      "reportIgnoreCommentWithoutRule",
+      "reportImplicitAbstractClass",
+      "reportImplicitRelativeImport",
+      "reportIncompatibleMethodOverride",
+      "reportIncompleteStub",
+      "reportInconsistentConstructor",
+      "reportInconsistentOverload",
+      "reportIndexIssue",
+      "reportInvalidAbstractMethod",
+      "reportInvalidCast",
+      "reportInvalidStringEscapeSequence",
+      "reportInvalidStubStatement",
+      "reportInvalidTypeArguments",
+      "reportInvalidTypeForm",
+      "reportInvalidTypeVarUse",
+      "reportMatchNotExhaustive",
+      "reportMissingModuleSource",
+      "reportMissingSuperCall",
+      "reportMissingTypeArgument",
+      "reportNoOverloadImplementation",
+      "reportOperatorIssue",
+      "reportOptionalCall",
+      "reportOptionalContextManager",
+      "reportOptionalIterable",
+      "reportOptionalMemberAccess",
+      "reportOptionalOperand",
+      "reportOptionalSubscript",
+      "reportOverlappingOverload",
+      "reportPossiblyUnboundVariable",
+      "reportPrivateImportUsage",
+      "reportPropertyTypeMismatch",
+      "reportRedeclaration",
+      "reportReturnType",
+      "reportSelfClsDefault",
+      "reportSelfClsParameterName",
+      "reportTypeCommentUsage",
+      "reportTypedDictNotRequiredAccess",
+      "reportUnboundVariable",
+      "reportUndefinedVariable",
+      "reportUnhashable",
+      "reportUninitializedInstanceVariable",
+      "reportUnnecessaryCast",
+      "reportUnnecessaryComparison",
+      "reportUnnecessaryContains",
+      "reportUnsafeMultipleInheritance",
+      "reportUntypedBaseClass",
+      "reportUntypedClassDecorator",
+      "reportUntypedNamedTuple",
+      "reportUnusedClass",
+      "reportUnusedCoroutine",
+      "reportUnusedExcept",
+      "reportUnusedExpression",
+      "reportWildcardImportFromLibrary"
+    ],
+    "commit": "ecea0a681818fc8b90a1314b7d2f844fef8f53c0",
+    "defaults_sha256": "7441133e0d6b4c71b16e926121a9326f993630f7e48f52991700ee0d1cc10312",
+    "defaults_url": "https://raw.githubusercontent.com/DetachHead/basedpyright/ecea0a681818fc8b90a1314b7d2f844fef8f53c0/packages/pyright-internal/src/common/configOptions.ts",
+    "global_rules": {
+      "reportAny": "none",
+      "reportDeprecated": "none",
+      "reportExplicitAny": "none",
+      "reportImplicitOverride": "none",
+      "reportImplicitStringConcatenation": "none",
+      "reportImportCycles": "none",
+      "reportIncompatibleVariableOverride": "none",
+      "reportMissingImports": "none",
+      "reportMissingParameterType": "none",
+      "reportMissingTypeStubs": "none",
+      "reportPrivateLocalImportUsage": "none",
+      "reportPrivateUsage": "none",
+      "reportUnannotatedClassAttribute": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownLambdaType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none",
+      "reportUnnecessaryIsInstance": "none",
+      "reportUnnecessaryTypeIgnoreComment": "none",
+      "reportUnreachable": "none",
+      "reportUnsupportedDunderAll": "none",
+      "reportUntypedFunctionDecorator": "none",
+      "reportUnusedCallResult": "none",
+      "reportUnusedFunction": "none",
+      "reportUnusedImport": "none",
+      "reportUnusedParameter": "none",
+      "reportUnusedVariable": "none"
+    },
+    "old_config_commit": "c830b931c574fdab9483049e0c57e36b903ee802",
+    "overrides": [
+      {
+        "include": "src/evaluatorq/dashboard",
+        "rules": {
+          "reportArgumentType": "none",
+          "reportAttributeAccessIssue": "none",
+          "reportGeneralTypeIssues": "none",
+          "reportMissingTypeArgument": "none",
+          "reportReturnType": "none"
+        }
+      },
+      {
+        "include": "tests/dashboard",
+        "rules": {
+          "reportArgumentType": "none",
+          "reportAttributeAccessIssue": "none",
+          "reportGeneralTypeIssues": "none",
+          "reportMissingTypeArgument": "none",
+          "reportReturnType": "none"
+        }
+      }
+    ],
+    "version": "1.37.4"
+  },
+  "mapping_cells": {
+    "reportAbstractUsage": [
+      " [`call-abstract-method`][ty-call-abstract-method]                                                                            ",
+      " None yet for instantiating abstract classes                                                                                  ",
+      " None yet for calling abstract methods through `super()`                                                                      "
+    ],
+    "reportArgumentType": [
+      " [`invalid-argument-type`][ty-invalid-argument-type]                                                                          ",
+      " [`invalid-newtype`][ty-invalid-newtype]                                                                                      ",
+      " [`invalid-parameter-default`][ty-invalid-parameter-default]                                                                  ",
+      " [`isinstance-against-protocol`][ty-isinstance-against-protocol]                                                              ",
+      " [`isinstance-against-typed-dict`][ty-isinstance-against-typed-dict]                                                          "
+    ],
+    "reportAssertAlwaysTrue": [
+      " [Ruff `F631`][ruff-f631]                                                                                                     "
+    ],
+    "reportAssertTypeFailure": [
+      " [`type-assertion-failure`][ty-type-assertion-failure]                                                                        "
+    ],
+    "reportAssignmentType": [
+      " [`invalid-argument-type`][ty-invalid-argument-type]                                                                          ",
+      " [`invalid-assignment`][ty-invalid-assignment]                                                                                ",
+      " [`invalid-key`][ty-invalid-key]                                                                                              ",
+      " [`missing-typed-dict-key`][ty-missing-typed-dict-key]                                                                        "
+    ],
+    "reportAttributeAccessIssue": [
+      " [`invalid-assignment`][ty-invalid-assignment] (incompatible method replacements only)                                        ",
+      " [`invalid-attribute-access`][ty-invalid-attribute-access]                                                                    ",
+      " [`unresolved-attribute`][ty-unresolved-attribute]                                                                            "
+    ],
+    "reportCallInDefaultInitializer": [
+      " [Ruff `B006`][ruff-b006]<br>[Ruff `B008`][ruff-b008] (partial coverage; immutable annotations and calls are excluded)        "
+    ],
+    "reportCallIssue": [
+      " [`call-non-callable`][ty-call-non-callable]                                                                                  ",
+      " [`invalid-key`][ty-invalid-key]                                                                                              ",
+      " [`missing-argument`][ty-missing-argument]                                                                                    ",
+      " [`no-matching-overload`][ty-no-matching-overload]                                                                            ",
+      " [`parameter-already-assigned`][ty-parameter-already-assigned]                                                                ",
+      " [`positional-only-parameter-as-kwarg`][ty-positional-only-parameter-as-kwarg]                                                ",
+      " [`too-many-positional-arguments`][ty-too-many-positional-arguments]                                                          ",
+      " [`unknown-argument`][ty-unknown-argument]                                                                                    "
+    ],
+    "reportConstantRedefinition": [
+      " None yet (tracked in [Ruff #10137][ruff-10137])                                                                              "
+    ],
+    "reportDuplicateImport": [
+      " [Ruff `F811`][ruff-f811]<br>[Ruff `I001`][ruff-i001] (partial coverage; separate import blocks may be missed)                "
+    ],
+    "reportFunctionMemberAccess": [
+      " [`unresolved-attribute`][ty-unresolved-attribute]                                                                            "
+    ],
+    "reportGeneralTypeIssues": [
+      " [`abstract-method-in-final-class`][ty-abstract-method-in-final-class]                                                        ",
+      " [`conflicting-metaclass`][ty-conflicting-metaclass]                                                                          ",
+      " [`cyclic-class-definition`][ty-cyclic-class-definition]                                                                      ",
+      " [`dataclass-field-order`][ty-dataclass-field-order]                                                                          ",
+      " [`duplicate-base`][ty-duplicate-base]                                                                                        ",
+      " [`final-on-non-method`][ty-final-on-non-method]                                                                              ",
+      " [`final-without-value`][ty-final-without-value]                                                                              ",
+      " [`inconsistent-mro`][ty-inconsistent-mro]                                                                                    ",
+      " [`index-out-of-bounds`][ty-index-out-of-bounds]                                                                              ",
+      " [`invalid-assignment`][ty-invalid-assignment] (TypedDict item values)                                                        ",
+      " [`invalid-await`][ty-invalid-await]                                                                                          ",
+      " [`invalid-base`][ty-invalid-base]                                                                                            ",
+      " [`invalid-context-manager`][ty-invalid-context-manager]                                                                      ",
+      " [`invalid-exception-caught`][ty-invalid-exception-caught]                                                                    ",
+      " [`invalid-explicit-override`][ty-invalid-explicit-override]                                                                  ",
+      " [`invalid-frozen-dataclass-subclass`][ty-invalid-frozen-dataclass-subclass]                                                  ",
+      " [`invalid-key`][ty-invalid-key]                                                                                              ",
+      " [`invalid-legacy-type-variable`][ty-invalid-legacy-type-variable]                                                            ",
+      " [`invalid-newtype`][ty-invalid-newtype]                                                                                      ",
+      " [`invalid-protocol`][ty-invalid-protocol]                                                                                    ",
+      " [`invalid-raise`][ty-invalid-raise]                                                                                          ",
+      " [`invalid-type-form`][ty-invalid-type-form]                                                                                  ",
+      " [`invalid-type-guard-definition`][ty-invalid-type-guard-definition]                                                          ",
+      " [`invalid-type-variable-bound`][ty-invalid-type-variable-bound]                                                              ",
+      " [`invalid-type-variable-constraints`][ty-invalid-type-variable-constraints]                                                  ",
+      " [`invalid-type-variable-default`][ty-invalid-type-variable-default]                                                          ",
+      " [`isinstance-against-protocol`][ty-isinstance-against-protocol]                                                              ",
+      " [`isinstance-against-typed-dict`][ty-isinstance-against-typed-dict]                                                          ",
+      " [`mismatched-type-name`][ty-mismatched-type-name]                                                                            ",
+      " [`not-iterable`][ty-not-iterable]                                                                                            ",
+      " [`override-of-final-variable`][ty-override-of-final-variable]                                                                ",
+      " [`subclass-of-final-class`][ty-subclass-of-final-class]                                                                      ",
+      " [`unbound-type-variable`][ty-unbound-type-variable]                                                                          "
+    ],
+    "reportIgnoreCommentWithoutRule": [
+      " [`blanket-ignore-comment`][ty-blanket-ignore-comment], [Ruff `PGH003`][ruff-pgh003]                                          "
+    ],
+    "reportImplicitAbstractClass": [],
+    "reportImplicitRelativeImport": [],
+    "reportIncompatibleMethodOverride": [
+      " [`invalid-method-override`][ty-invalid-method-override]                                                                      ",
+      " [`override-of-final-method`][ty-override-of-final-method]                                                                    "
+    ],
+    "reportIncompleteStub": [
+      " None yet                                                                                                                     "
+    ],
+    "reportInconsistentConstructor": [
+      " None yet (tracked in [#3651][ty-3651])                                                                                       "
+    ],
+    "reportInconsistentOverload": [
+      " [`invalid-overload`][ty-invalid-overload]                                                                                    "
+    ],
+    "reportIndexIssue": [
+      " [`not-subscriptable`][ty-not-subscriptable]                                                                                  "
+    ],
+    "reportInvalidAbstractMethod": [],
+    "reportInvalidCast": [
+      " [`disjoint-cast`][ty-disjoint-cast]                                                                                          "
+    ],
+    "reportInvalidStringEscapeSequence": [
+      " [Ruff `W605`][ruff-w605]                                                                                                     "
+    ],
+    "reportInvalidStubStatement": [
+      " [Ruff `PYI010`][ruff-pyi010]<br>[Ruff `PYI017`][ruff-pyi017]<br>[Ruff `PYI048`][ruff-pyi048]<br>[Ruff `PYI052`][ruff-pyi052] "
+    ],
+    "reportInvalidTypeArguments": [
+      " [`invalid-type-arguments`][ty-invalid-type-arguments]                                                                        "
+    ],
+    "reportInvalidTypeForm": [
+      " [`invalid-legacy-type-variable`][ty-invalid-legacy-type-variable]                                                            ",
+      " [`invalid-type-form`][ty-invalid-type-form]                                                                                  "
+    ],
+    "reportInvalidTypeVarUse": [
+      " None yet (tracked in [#1017][ty-1017], [#3636][ty-3636], [#3637][ty-3637])                                                   "
+    ],
+    "reportMatchNotExhaustive": [
+      " None yet (tracked in [#1060][ty-1060])                                                                                       "
+    ],
+    "reportMissingModuleSource": [
+      " None yet (tracked in [#1577][ty-1577])                                                                                       "
+    ],
+    "reportMissingSuperCall": [
+      " None yet (tracked in [#3652][ty-3652])                                                                                       "
+    ],
+    "reportMissingTypeArgument": [
+      " [`missing-type-argument`][ty-missing-type-argument]                                                                          "
+    ],
+    "reportNoOverloadImplementation": [
+      " [`invalid-overload`][ty-invalid-overload]                                                                                    "
+    ],
+    "reportOperatorIssue": [
+      " [`unsupported-operator`][ty-unsupported-operator]                                                                            "
+    ],
+    "reportOptionalCall": [
+      " [`call-non-callable`][ty-call-non-callable]                                                                                  "
+    ],
+    "reportOptionalContextManager": [
+      " [`invalid-context-manager`][ty-invalid-context-manager]                                                                      "
+    ],
+    "reportOptionalIterable": [
+      " [`not-iterable`][ty-not-iterable]                                                                                            "
+    ],
+    "reportOptionalMemberAccess": [
+      " [`unresolved-attribute`][ty-unresolved-attribute]                                                                            "
+    ],
+    "reportOptionalOperand": [
+      " [`unsupported-operator`][ty-unsupported-operator]                                                                            "
+    ],
+    "reportOptionalSubscript": [
+      " [`not-subscriptable`][ty-not-subscriptable]                                                                                  "
+    ],
+    "reportOverlappingOverload": [
+      " None yet (tracked in [#103][ty-103])                                                                                         "
+    ],
+    "reportPossiblyUnboundVariable": [
+      " [`possibly-unresolved-reference`][ty-possibly-unresolved-reference]                                                          "
+    ],
+    "reportPrivateImportUsage": [
+      " None yet (tracked in [#200][ty-200])                                                                                         "
+    ],
+    "reportPropertyTypeMismatch": [
+      " None yet (tracked in [#3633][ty-3633])                                                                                       "
+    ],
+    "reportRedeclaration": [
+      " [`conflicting-declarations`][ty-conflicting-declarations]                                                                    "
+    ],
+    "reportReturnType": [
+      " [`empty-body`][ty-empty-body]                                                                                                ",
+      " [`invalid-return-type`][ty-invalid-return-type]                                                                              ",
+      " [`invalid-yield`][ty-invalid-yield]                                                                                          "
+    ],
+    "reportSelfClsDefault": [],
+    "reportSelfClsParameterName": [
+      " [Ruff `N804`][ruff-n804]<br>[Ruff `N805`][ruff-n805]                                                                         "
+    ],
+    "reportTypeCommentUsage": [
+      " [Ruff `PYI033`][ruff-pyi033] (`.py` files require preview)                                                                   "
+    ],
+    "reportTypedDictNotRequiredAccess": [
+      " [`invalid-assignment`][ty-invalid-assignment] (read-only TypedDict keys)                                                     ",
+      " None yet for accessing non-required keys (tracked in [#2810][ty-2810])                                                       "
+    ],
+    "reportUnboundVariable": [
+      " [`unresolved-reference`][ty-unresolved-reference], [Ruff `F823`][ruff-f823]                                                  "
+    ],
+    "reportUndefinedVariable": [
+      " [`unresolved-reference`][ty-unresolved-reference], [Ruff `F823`][ruff-f823]                                                  "
+    ],
+    "reportUnhashable": [
+      " None yet (tracked in [#3781][ty-3781])                                                                                       "
+    ],
+    "reportUninitializedInstanceVariable": [
+      " None yet (tracked in [#2954][ty-2954])                                                                                       "
+    ],
+    "reportUnnecessaryCast": [
+      " [`redundant-cast`][ty-redundant-cast]                                                                                        "
+    ],
+    "reportUnnecessaryComparison": [
+      " [`redundant-condition`][ty-redundant-condition] (function objects only)                                                      ",
+      " [`redundant-condition`][ty-redundant-condition], [`redundant-condition-strict`][ty-redundant-condition-strict]               "
+    ],
+    "reportUnnecessaryContains": [
+      " [`redundant-condition`][ty-redundant-condition], [`redundant-condition-strict`][ty-redundant-condition-strict]               "
+    ],
+    "reportUnsafeMultipleInheritance": [],
+    "reportUntypedBaseClass": [
+      " None yet                                                                                                                     "
+    ],
+    "reportUntypedClassDecorator": [
+      " None yet                                                                                                                     "
+    ],
+    "reportUntypedNamedTuple": [
+      " [Ruff `PYI024`][ruff-pyi024]                                                                                                 "
+    ],
+    "reportUnusedClass": [
+      " None yet                                                                                                                     "
+    ],
+    "reportUnusedCoroutine": [
+      " [`unused-awaitable`][ty-unused-awaitable] (native coroutines only)                                                           "
+    ],
+    "reportUnusedExcept": [
+      " [Ruff `B025`][ruff-b025] (duplicate exception handlers only; other cases tracked in [#3701][ty-3701])                        "
+    ],
+    "reportUnusedExpression": [
+      " [Ruff `B015`][ruff-b015]<br>[Ruff `B018`][ruff-b018]                                                                         "
+    ],
+    "reportWildcardImportFromLibrary": [
+      " [Ruff `F403`][ruff-f403]                                                                                                     "
+    ]
+  },
+  "schema": 1,
+  "ty": {
+    "mapping_commit": "8dd9a7f7fa35a18275d82117e6593ba45507065f",
+    "mapping_sha256": "2052f813e0a6013e47d50ccdabc3dca1b9be0433bccd293faf4cc09187a177bd",
+    "mapping_url": "https://raw.githubusercontent.com/astral-sh/ty/8dd9a7f7fa35a18275d82117e6593ba45507065f/docs/coming-from-mypy-or-pyright.md",
+    "rule_defaults": {
+      "abstract-method-in-final-class": "error",
+      "blanket-ignore-comment": "ignore",
+      "call-abstract-method": "error",
+      "call-non-callable": "error",
+      "conflicting-declarations": "error",
+      "conflicting-metaclass": "error",
+      "cyclic-class-definition": "error",
+      "dataclass-field-order": "error",
+      "disjoint-cast": "ignore",
+      "duplicate-base": "error",
+      "empty-body": "error",
+      "final-on-non-method": "error",
+      "final-without-value": "error",
+      "inconsistent-mro": "error",
+      "index-out-of-bounds": "error",
+      "invalid-argument-type": "error",
+      "invalid-assignment": "error",
+      "invalid-attribute-access": "error",
+      "invalid-await": "error",
+      "invalid-base": "error",
+      "invalid-context-manager": "error",
+      "invalid-exception-caught": "error",
+      "invalid-explicit-override": "error",
+      "invalid-frozen-dataclass-subclass": "error",
+      "invalid-key": "error",
+      "invalid-legacy-type-variable": "error",
+      "invalid-method-override": "error",
+      "invalid-newtype": "error",
+      "invalid-overload": "error",
+      "invalid-parameter-default": "error",
+      "invalid-protocol": "error",
+      "invalid-raise": "error",
+      "invalid-return-type": "error",
+      "invalid-type-arguments": "error",
+      "invalid-type-form": "error",
+      "invalid-type-guard-definition": "error",
+      "invalid-type-variable-bound": "error",
+      "invalid-type-variable-constraints": "error",
+      "invalid-type-variable-default": "error",
+      "invalid-yield": "error",
+      "isinstance-against-protocol": "error",
+      "isinstance-against-typed-dict": "error",
+      "mismatched-type-name": "warn",
+      "missing-argument": "error",
+      "missing-type-argument": "ignore",
+      "missing-typed-dict-key": "error",
+      "no-matching-overload": "error",
+      "not-iterable": "error",
+      "not-subscriptable": "error",
+      "override-of-final-method": "error",
+      "override-of-final-variable": "error",
+      "parameter-already-assigned": "error",
+      "positional-only-parameter-as-kwarg": "error",
+      "possibly-unresolved-reference": "ignore",
+      "redundant-cast": "warn",
+      "redundant-condition": "warn",
+      "redundant-condition-strict": "ignore",
+      "subclass-of-final-class": "error",
+      "too-many-positional-arguments": "error",
+      "type-assertion-failure": "error",
+      "unbound-type-variable": "error",
+      "unknown-argument": "error",
+      "unresolved-attribute": "error",
+      "unresolved-reference": "error",
+      "unsupported-operator": "error",
+      "unused-awaitable": "warn"
+    },
+    "rules_sha256": "0fdc0b6923ae6bae2b073d70460026740d5c4775789b9938b6d997519af7b543",
+    "rules_url": "https://raw.githubusercontent.com/astral-sh/ty/8dd9a7f7fa35a18275d82117e6593ba45507065f/docs/reference/rules.md",
+    "version": "0.0.84"
+  }
+}

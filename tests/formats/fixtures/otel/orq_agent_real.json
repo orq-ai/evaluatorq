@@ -1,0 +1,1024 @@
+{
+ "source": "orq traces list-spans + get-span, agent trace-probe-parent, 2026-09-30",
+ "trace_id": "01M3RHSVX9X29KGKFVQREXFF74",
+ "spans": [
+  {
+   "cost": {
+    "accepted_prediction": 0,
+    "audio_input": 0,
+    "audio_output": 0,
+    "billable": false,
+    "cache_read": 0,
+    "cache_write": 0,
+    "cached": 0,
+    "currency": "USD",
+    "input": 0.0001165,
+    "integration_id": "",
+    "output": 3.9e-05,
+    "pricing_tier": "",
+    "reasoning": 0,
+    "rejected_prediction": 0,
+    "threshold_exceeded": false,
+    "total": 0.0001555,
+    "web_search": 0
+   },
+   "duration_ms": 5138,
+   "ended_at": "2026-09-30T07:00:05.704Z",
+   "guardrail_enabled": false,
+   "has_children": true,
+   "has_detail": true,
+   "leading_span_type": "span.agent",
+   "level": 0,
+   "model": "",
+   "name": "AgentInvoke",
+   "object": "span",
+   "operation": "AgentInvoke",
+   "parent_span_id": "",
+   "provider": "",
+   "span_id": "01M3RHSVX9XCM5V5YMXQBE4G5D",
+   "started_at": "2026-09-30T07:00:00.566Z",
+   "status": "ok",
+   "trace_framework": "orq",
+   "trace_id": "01M3RHSVX9X29KGKFVQREXFF74",
+   "type": "trace",
+   "usage": {
+    "completion_accepted_prediction_tokens": 0,
+    "completion_audio_tokens": 0,
+    "completion_reasoning_tokens": 0,
+    "completion_rejected_prediction_tokens": 0,
+    "completion_tokens": 78,
+    "prompt_audio_tokens": 0,
+    "prompt_cache_creation_tokens": 0,
+    "prompt_cached_tokens": 0,
+    "prompt_tokens": 1165,
+    "total_tokens": 1243
+   },
+   "attributes": {
+    "gen_ai": {
+     "input": {
+      "message": {
+       "parts": {
+        "0": {
+         "kind": "text",
+         "text": "What is the date today, and what day of the week is it?"
+        }
+       },
+       "role": "user"
+      }
+     },
+     "operation": {
+      "name": "AgentInvoke"
+     },
+     "usage": {
+      "completion_tokens": 78,
+      "completion_tokens_details": {
+       "accepted_prediction_tokens": 0,
+       "audio_tokens": 0,
+       "reasoning_tokens": 0,
+       "rejected_prediction_tokens": 0
+      },
+      "prompt_tokens": 1165,
+      "prompt_tokens_details": {
+       "audio_tokens": 0,
+       "cache_creation_tokens": 0,
+       "cached_tokens": 0
+      },
+      "total_tokens": 1243
+     }
+    },
+    "leading_span": {
+     "span_id": "01M3RHSVX9J9Z0EV6ZJ0YRD61B",
+     "span_type": "span.agent"
+    },
+    "metadata": {
+     "source": "res-1668-probe"
+    },
+    "orq": {
+     "billing": {
+      "accepted_prediction_tokens_cost": 0,
+      "billable": false,
+      "cache_read_cost": 0,
+      "cache_write_cost": 0,
+      "cached_tokens_cost": 0,
+      "completion_audio_tokens_cost": 0,
+      "input_cost": 0.0001165,
+      "output_cost": 3.9e-05,
+      "prompt_audio_tokens_cost": 0,
+      "reasoning_tokens_cost": 0,
+      "rejected_prediction_tokens_cost": 0,
+      "threshold_exceeded": false,
+      "total_cost": 0.0001555,
+      "web_search_cost": 0
+     },
+     "contact_id": null,
+     "context": null,
+     "duration": 5138,
+     "leading_span": {
+      "span_type": "span.agent"
+     },
+     "product": "agents",
+     "related_entities": {
+      "agent": {
+       "01M36SN9GDJNPCS0SWWDMBP95M": true
+      },
+      "workflow_run": {
+       "01M3RHSVX9XCM5V5YMXQBE4G5D": true
+      }
+     },
+     "span_type": "trace",
+     "trace": {
+      "framework": {
+       "name": "orq",
+       "version": "v4.15.13"
+      }
+     },
+     "trace_framework": "orq"
+    },
+    "otel": {
+     "status_code": "OK"
+    },
+    "type": "workflow_run"
+   }
+  },
+  {
+   "cost": {
+    "accepted_prediction": 0,
+    "audio_input": 0,
+    "audio_output": 0,
+    "billable": true,
+    "cache_read": 0,
+    "cache_write": 0,
+    "cached": 0,
+    "currency": "USD",
+    "input": 0.0001621,
+    "integration_id": "",
+    "output": 5.65e-05,
+    "pricing_tier": "",
+    "reasoning": 0,
+    "rejected_prediction": 0,
+    "threshold_exceeded": false,
+    "total": 0.0002186,
+    "web_search": 0
+   },
+   "duration_ms": 5097,
+   "ended_at": "2026-09-30T07:00:05.686Z",
+   "guardrail_enabled": false,
+   "has_children": true,
+   "has_detail": true,
+   "leading_span_type": "",
+   "level": 1,
+   "model": "",
+   "name": "trace-probe-parent",
+   "object": "span",
+   "operation": "invoke_agent",
+   "parent_span_id": "01M3RHSVX9XCM5V5YMXQBE4G5D",
+   "provider": "",
+   "span_id": "01M3RHSVXK6YG3SJAVTGYEC3RX",
+   "started_at": "2026-09-30T07:00:00.589Z",
+   "status": "unset",
+   "trace_framework": "orq",
+   "trace_id": "01M3RHSVX9X29KGKFVQREXFF74",
+   "type": "span.agent_execution",
+   "usage": {
+    "completion_accepted_prediction_tokens": 0,
+    "completion_audio_tokens": 0,
+    "completion_reasoning_tokens": 0,
+    "completion_rejected_prediction_tokens": 0,
+    "completion_tokens": 113,
+    "prompt_audio_tokens": 0,
+    "prompt_cache_creation_tokens": 0,
+    "prompt_cached_tokens": 0,
+    "prompt_tokens": 1621,
+    "total_tokens": 1734
+   },
+   "attributes": {
+    "gen_ai": {
+     "agent": {
+      "description": "Throwaway probe parent: delegates to trace-probe-child",
+      "id": "01M36SN9GDJNPCS0SWWDMBP95M",
+      "name": "trace-probe-parent",
+      "source": "internal"
+     },
+     "operation": {
+      "name": "invoke_agent"
+     },
+     "response": {
+      "finish_reasons": [
+       "stop"
+      ]
+     },
+     "usage": {
+      "completion_tokens": 113,
+      "completion_tokens_details": {
+       "accepted_prediction_tokens": 0,
+       "audio_tokens": 0,
+       "reasoning_tokens": 0,
+       "rejected_prediction_tokens": 0
+      },
+      "input_tokens": 1621,
+      "output_tokens": 113,
+      "prompt_tokens": 1621,
+      "prompt_tokens_details": {
+       "audio_tokens": 0,
+       "cache_creation_tokens": 0,
+       "cached_tokens": 0
+      },
+      "total_tokens": 1734
+     }
+    },
+    "metadata": {
+     "source": "res-1668-probe"
+    },
+    "orq": {
+     "agent_id": "01M36SN9GDJNPCS0SWWDMBP95M",
+     "agent_name": "trace-probe-parent",
+     "billing": {
+      "accepted_prediction_tokens_cost": 0,
+      "billable": true,
+      "cache_read_cost": 0,
+      "cache_write_cost": 0,
+      "cached_tokens_cost": 0,
+      "completion_audio_tokens_cost": 0,
+      "input_cost": 0.0001621,
+      "integration_id": null,
+      "output_cost": 5.65e-05,
+      "prompt_audio_tokens_cost": 0,
+      "reasoning_tokens_cost": 0,
+      "rejected_prediction_tokens_cost": 0,
+      "threshold_exceeded": false,
+      "total_cost": 0.0002186,
+      "web_search_cost": 0
+     },
+     "product": "agents",
+     "related_entities": {
+      "agent_execution": {
+       "01M3RHSVXK6YG3SJAVTGYEC3RX": true
+      }
+     },
+     "span_type": "span.agent_execution",
+     "trace": {
+      "framework": {
+       "name": "orq",
+       "version": "v4.15.13"
+      }
+     },
+     "trace_framework": "orq"
+    },
+    "otel": {
+     "status_code": "UNSET"
+    },
+    "type": "agent_execution"
+   }
+  },
+  {
+   "cost": {
+    "accepted_prediction": 0,
+    "audio_input": 0,
+    "audio_output": 0,
+    "billable": true,
+    "cache_read": 0,
+    "cache_write": 0,
+    "cached": 0,
+    "currency": "USD",
+    "input": 3.05e-05,
+    "integration_id": "",
+    "output": 9.5e-06,
+    "pricing_tier": "standard",
+    "reasoning": 0,
+    "rejected_prediction": 0,
+    "threshold_exceeded": false,
+    "total": 4e-05,
+    "web_search": 0
+   },
+   "duration_ms": 834,
+   "ended_at": "2026-09-30T07:00:01.428Z",
+   "guardrail_enabled": false,
+   "has_children": false,
+   "has_detail": true,
+   "leading_span_type": "",
+   "level": 2,
+   "model": "gpt-6-luna",
+   "name": "",
+   "object": "span",
+   "operation": "chat-completion",
+   "parent_span_id": "01M3RHSVXK6YG3SJAVTGYEC3RX",
+   "provider": "openai",
+   "span_id": "01M3RHSVYD91V10H3EYA5E6ACW",
+   "started_at": "2026-09-30T07:00:00.594Z",
+   "status": "ok",
+   "trace_framework": "orq",
+   "trace_id": "01M3RHSVX9X29KGKFVQREXFF74",
+   "type": "span.chat_completion",
+   "usage": {
+    "completion_accepted_prediction_tokens": 0,
+    "completion_audio_tokens": 0,
+    "completion_reasoning_tokens": 0,
+    "completion_rejected_prediction_tokens": 0,
+    "completion_tokens": 19,
+    "prompt_audio_tokens": 0,
+    "prompt_cache_creation_tokens": 0,
+    "prompt_cached_tokens": 0,
+    "prompt_tokens": 305,
+    "total_tokens": 324
+   },
+   "attributes": {
+    "gen_ai": {
+     "input": {
+      "messages": {
+       "0": {
+        "content": "\nYou never know the date yourself. For any question about dates, you MUST delegate to the sub-agent trace-probe-child using the call_sub_agent tool, then relay its answer prefixed with 'Child says:'.",
+        "role": "system"
+       },
+       "1": {
+        "content": "What is the date today, and what day of the week is it?",
+        "role": "user"
+       }
+      }
+     },
+     "operation": {
+      "name": "chat-completion"
+     },
+     "output": {
+      "messages": {
+       "0": {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": {
+         "0": {
+          "function": {
+           "arguments": {
+            "include_descriptions": true
+           },
+           "name": "retrieve_agents"
+          },
+          "id": "call_crLWE5z0fN1dtFraANqA3UY0",
+          "type": "function"
+         }
+        }
+       }
+      }
+     },
+     "provider": {
+      "name": "openai"
+     },
+     "request": {
+      "model": "gpt-6-luna",
+      "stream": false
+     },
+     "response": {
+      "finish_reasons": [
+       "tool_calls"
+      ],
+      "id": "01M3RHSVX9XCM5V5YMXQBE4G5D",
+      "model": "gpt-6-luna"
+     },
+     "system": "openai",
+     "tool": {
+      "definitions": {
+       "0": {
+        "function": {
+         "description": "A tool that retrieves a list of available agents for the agent",
+         "name": "retrieve_agents",
+         "parameters": {
+          "additionalProperties": false,
+          "properties": {
+           "include_descriptions": {
+            "description": "Indicates whether to include descriptions of the agent keys",
+            "type": "boolean"
+           }
+          },
+          "required": "include_descriptions",
+          "type": "object"
+         },
+         "strict": true
+        },
+        "type": "function"
+       },
+       "1": {
+        "function": {
+         "description": "A tool that calls a sub-agent with provided input and returns its output. The agent_key is unique and so this tool must only be called after retrieve_agents has been previously called.",
+         "name": "call_sub_agent",
+         "parameters": {
+          "additionalProperties": false,
+          "properties": {
+           "agent_key": {
+            "description": "The unique key of the sub-agent to invoke (unique within the workspace). This can only be an agent_key that has been retrieved by retrieve_agents or previously described",
+            "type": "string"
+           },
+           "input": {
+            "description": "The input payload to send to the sub-agent",
+            "type": "string"
+           }
+          },
+          "required": [
+           "agent_key",
+           "input"
+          ],
+          "type": "object"
+         },
+         "strict": true
+        },
+        "type": "function"
+       }
+      }
+     },
+     "usage": {
+      "completion_tokens": 19,
+      "completion_tokens_details": {
+       "accepted_prediction_tokens": 0,
+       "audio_tokens": 0,
+       "reasoning_tokens": 0,
+       "rejected_prediction_tokens": 0
+      },
+      "input_tokens": 305,
+      "output_tokens": 19,
+      "prompt_tokens": 305,
+      "prompt_tokens_details": {
+       "audio_tokens": 0,
+       "cache_creation_tokens": 0,
+       "cached_tokens": 0
+      },
+      "total_tokens": 324
+     }
+    },
+    "metadata": {
+     "source": "res-1668-probe"
+    },
+    "orq": {
+     "billing": {
+      "accepted_prediction_tokens_cost": 0,
+      "audio_input_cost": 0,
+      "audio_output_cost": 0,
+      "billable": true,
+      "cache_read_cost": 0,
+      "cache_write_cost": 0,
+      "cached_tokens_cost": 0,
+      "completion_audio_tokens_cost": 0,
+      "input_cost": 3.05e-05,
+      "integration_id": null,
+      "output_cost": 9.5e-06,
+      "pricing_tier": "standard",
+      "prompt_audio_tokens_cost": 0,
+      "reasoning_cost": 0,
+      "reasoning_tokens_cost": 0,
+      "rejected_prediction_tokens_cost": 0,
+      "threshold_exceeded": false,
+      "total_cost": 4e-05,
+      "web_search_cost": 0
+     },
+     "contact_id": null,
+     "product": "agents",
+     "related_entities": {
+      "model": {
+       "f8014ede-44e1-548b-bc59-f2a050a77bf4": true
+      },
+      "provider": {
+       "openai": true
+      },
+      "workflow_run": {
+       "01M3RHSVX9XCM5V5YMXQBE4G5D": true
+      }
+     },
+     "span_type": "span.chat_completion",
+     "trace": {
+      "framework": {
+       "name": "orq",
+       "version": "v4.15.13"
+      }
+     },
+     "trace_framework": "orq"
+    },
+    "otel": {
+     "status_code": "OK"
+    },
+    "type": "chat_completion"
+   }
+  },
+  {
+   "cost": {
+    "accepted_prediction": 0,
+    "audio_input": 0,
+    "audio_output": 0,
+    "billable": true,
+    "cache_read": 0,
+    "cache_write": 0,
+    "cached": 0,
+    "currency": "USD",
+    "input": 3.63e-05,
+    "integration_id": "",
+    "output": 1.9e-05,
+    "pricing_tier": "standard",
+    "reasoning": 0,
+    "rejected_prediction": 0,
+    "threshold_exceeded": false,
+    "total": 5.53e-05,
+    "web_search": 0
+   },
+   "duration_ms": 966,
+   "ended_at": "2026-09-30T07:00:02.423Z",
+   "guardrail_enabled": false,
+   "has_children": false,
+   "has_detail": true,
+   "leading_span_type": "",
+   "level": 2,
+   "model": "gpt-6-luna",
+   "name": "",
+   "object": "span",
+   "operation": "chat-completion",
+   "parent_span_id": "01M3RHSVXK6YG3SJAVTGYEC3RX",
+   "provider": "openai",
+   "span_id": "01M3RHSWSFFD6A529H3DA4VB3E",
+   "started_at": "2026-09-30T07:00:01.457Z",
+   "status": "ok",
+   "trace_framework": "orq",
+   "trace_id": "01M3RHSVX9X29KGKFVQREXFF74",
+   "type": "span.chat_completion",
+   "usage": {
+    "completion_accepted_prediction_tokens": 0,
+    "completion_audio_tokens": 0,
+    "completion_reasoning_tokens": 0,
+    "completion_rejected_prediction_tokens": 0,
+    "completion_tokens": 38,
+    "prompt_audio_tokens": 0,
+    "prompt_cache_creation_tokens": 0,
+    "prompt_cached_tokens": 0,
+    "prompt_tokens": 363,
+    "total_tokens": 401
+   },
+   "attributes": {
+    "gen_ai": {
+     "input": {
+      "messages": {
+       "0": {
+        "content": "\nYou never know the date yourself. For any question about dates, you MUST delegate to the sub-agent trace-probe-child using the call_sub_agent tool, then relay its answer prefixed with 'Child says:'.",
+        "role": "system"
+       },
+       "1": {
+        "content": "What is the date today, and what day of the week is it?",
+        "role": "user"
+       },
+       "2": {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": {
+         "0": {
+          "function": {
+           "arguments": {
+            "include_descriptions": true
+           },
+           "name": "retrieve_agents"
+          },
+          "id": "call_crLWE5z0fN1dtFraANqA3UY0",
+          "type": "function"
+         }
+        }
+       },
+       "3": {
+        "content": [
+         {
+          "description": "Throwaway probe child: returns today's date via tool",
+          "key": "trace-probe-child",
+          "role": "Date helper"
+         }
+        ],
+        "role": "tool",
+        "tool_call_id": "call_crLWE5z0fN1dtFraANqA3UY0"
+       }
+      }
+     },
+     "operation": {
+      "name": "chat-completion"
+     },
+     "output": {
+      "messages": {
+       "0": {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": {
+         "0": {
+          "function": {
+           "arguments": {
+            "agent_key": "trace-probe-child",
+            "input": "What is today's date and what day of the week is it?"
+           },
+           "name": "call_sub_agent"
+          },
+          "id": "call_6fsEpQmsOaIzv6IH7NBI5K9G",
+          "type": "function"
+         }
+        }
+       }
+      }
+     },
+     "provider": {
+      "name": "openai"
+     },
+     "request": {
+      "model": "gpt-6-luna",
+      "stream": false
+     },
+     "response": {
+      "finish_reasons": [
+       "tool_calls"
+      ],
+      "id": "01M3RHSVX9XCM5V5YMXQBE4G5D",
+      "model": "gpt-6-luna"
+     },
+     "system": "openai",
+     "tool": {
+      "definitions": {
+       "0": {
+        "function": {
+         "description": "A tool that retrieves a list of available agents for the agent",
+         "name": "retrieve_agents",
+         "parameters": {
+          "additionalProperties": false,
+          "properties": {
+           "include_descriptions": {
+            "description": "Indicates whether to include descriptions of the agent keys",
+            "type": "boolean"
+           }
+          },
+          "required": "include_descriptions",
+          "type": "object"
+         },
+         "strict": true
+        },
+        "type": "function"
+       },
+       "1": {
+        "function": {
+         "description": "A tool that calls a sub-agent with provided input and returns its output. The agent_key is unique and so this tool must only be called after retrieve_agents has been previously called.",
+         "name": "call_sub_agent",
+         "parameters": {
+          "additionalProperties": false,
+          "properties": {
+           "agent_key": {
+            "description": "The unique key of the sub-agent to invoke (unique within the workspace). This can only be an agent_key that has been retrieved by retrieve_agents or previously described",
+            "type": "string"
+           },
+           "input": {
+            "description": "The input payload to send to the sub-agent",
+            "type": "string"
+           }
+          },
+          "required": [
+           "agent_key",
+           "input"
+          ],
+          "type": "object"
+         },
+         "strict": true
+        },
+        "type": "function"
+       }
+      }
+     },
+     "usage": {
+      "completion_tokens": 38,
+      "completion_tokens_details": {
+       "accepted_prediction_tokens": 0,
+       "audio_tokens": 0,
+       "reasoning_tokens": 0,
+       "rejected_prediction_tokens": 0
+      },
+      "input_tokens": 363,
+      "output_tokens": 38,
+      "prompt_tokens": 363,
+      "prompt_tokens_details": {
+       "audio_tokens": 0,
+       "cache_creation_tokens": 0,
+       "cached_tokens": 0
+      },
+      "total_tokens": 401
+     }
+    },
+    "orq": {
+     "billing": {
+      "accepted_prediction_tokens_cost": 0,
+      "audio_input_cost": 0,
+      "audio_output_cost": 0,
+      "billable": true,
+      "cache_read_cost": 0,
+      "cache_write_cost": 0,
+      "cached_tokens_cost": 0,
+      "completion_audio_tokens_cost": 0,
+      "input_cost": 3.63e-05,
+      "integration_id": null,
+      "output_cost": 1.9e-05,
+      "pricing_tier": "standard",
+      "prompt_audio_tokens_cost": 0,
+      "reasoning_cost": 0,
+      "reasoning_tokens_cost": 0,
+      "rejected_prediction_tokens_cost": 0,
+      "threshold_exceeded": false,
+      "total_cost": 5.53e-05,
+      "web_search_cost": 0
+     },
+     "contact_id": null,
+     "product": "agents",
+     "related_entities": {
+      "model": {
+       "f8014ede-44e1-548b-bc59-f2a050a77bf4": true
+      },
+      "provider": {
+       "openai": true
+      },
+      "workflow_run": {
+       "01M3RHSVX9XCM5V5YMXQBE4G5D": true
+      }
+     },
+     "span_type": "span.chat_completion",
+     "trace": {
+      "framework": {
+       "name": "orq",
+       "version": "v4.15.13"
+      }
+     },
+     "trace_framework": "orq"
+    },
+    "otel": {
+     "status_code": "OK"
+    },
+    "type": "chat_completion"
+   }
+  },
+  {
+   "cost": {
+    "accepted_prediction": 0,
+    "audio_input": 0,
+    "audio_output": 0,
+    "billable": true,
+    "cache_read": 0,
+    "cache_write": 0,
+    "cached": 0,
+    "currency": "USD",
+    "input": 4.97e-05,
+    "integration_id": "",
+    "output": 1.05e-05,
+    "pricing_tier": "standard",
+    "reasoning": 0,
+    "rejected_prediction": 0,
+    "threshold_exceeded": false,
+    "total": 6.02e-05,
+    "web_search": 0
+   },
+   "duration_ms": 1468,
+   "ended_at": "2026-09-30T07:00:05.684Z",
+   "guardrail_enabled": false,
+   "has_children": false,
+   "has_detail": true,
+   "leading_span_type": "",
+   "level": 2,
+   "model": "gpt-6-luna",
+   "name": "",
+   "object": "span",
+   "operation": "chat-completion",
+   "parent_span_id": "01M3RHSVXK6YG3SJAVTGYEC3RX",
+   "provider": "openai",
+   "span_id": "01M3RHSZFEGD8W9TGQNS7TGA81",
+   "started_at": "2026-09-30T07:00:04.216Z",
+   "status": "ok",
+   "trace_framework": "orq",
+   "trace_id": "01M3RHSVX9X29KGKFVQREXFF74",
+   "type": "span.chat_completion",
+   "usage": {
+    "completion_accepted_prediction_tokens": 0,
+    "completion_audio_tokens": 0,
+    "completion_reasoning_tokens": 0,
+    "completion_rejected_prediction_tokens": 0,
+    "completion_tokens": 21,
+    "prompt_audio_tokens": 0,
+    "prompt_cache_creation_tokens": 0,
+    "prompt_cached_tokens": 0,
+    "prompt_tokens": 497,
+    "total_tokens": 518
+   },
+   "attributes": {
+    "gen_ai": {
+     "input": {
+      "messages": {
+       "0": {
+        "content": "\nYou never know the date yourself. For any question about dates, you MUST delegate to the sub-agent trace-probe-child using the call_sub_agent tool, then relay its answer prefixed with 'Child says:'.",
+        "role": "system"
+       },
+       "1": {
+        "content": "What is the date today, and what day of the week is it?",
+        "role": "user"
+       },
+       "2": {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": {
+         "0": {
+          "function": {
+           "arguments": {
+            "include_descriptions": true
+           },
+           "name": "retrieve_agents"
+          },
+          "id": "call_crLWE5z0fN1dtFraANqA3UY0",
+          "type": "function"
+         }
+        }
+       },
+       "3": {
+        "content": [
+         {
+          "description": "Throwaway probe child: returns today's date via tool",
+          "key": "trace-probe-child",
+          "role": "Date helper"
+         }
+        ],
+        "role": "tool",
+        "tool_call_id": "call_crLWE5z0fN1dtFraANqA3UY0"
+       },
+       "4": {
+        "content": null,
+        "refusal": null,
+        "role": "assistant",
+        "tool_calls": {
+         "0": {
+          "function": {
+           "arguments": {
+            "agent_key": "trace-probe-child",
+            "input": "What is today's date and what day of the week is it?"
+           },
+           "name": "call_sub_agent"
+          },
+          "id": "call_6fsEpQmsOaIzv6IH7NBI5K9G",
+          "type": "function"
+         }
+        }
+       },
+       "5": {
+        "content": {
+         "result": "Today is September 30, 2026, and it\u2019s Wednesday.",
+         "usage": {
+          "completion_tokens": 35,
+          "completion_tokens_details": {
+           "accepted_prediction_tokens": 0,
+           "audio_tokens": 0,
+           "reasoning_tokens": 0,
+           "rejected_prediction_tokens": 0
+          },
+          "prompt_tokens": 456,
+          "prompt_tokens_details": {
+           "audio_tokens": 0,
+           "cached_tokens": 0
+          },
+          "time_to_first_token": 0,
+          "total_tokens": 491
+         }
+        },
+        "role": "tool",
+        "tool_call_id": "call_6fsEpQmsOaIzv6IH7NBI5K9G"
+       }
+      }
+     },
+     "operation": {
+      "name": "chat-completion"
+     },
+     "output": {
+      "messages": {
+       "0": {
+        "content": "Child says: Today is September 30, 2026, and it\u2019s Wednesday.",
+        "role": "assistant"
+       }
+      }
+     },
+     "provider": {
+      "name": "openai"
+     },
+     "request": {
+      "model": "gpt-6-luna",
+      "stream": false
+     },
+     "response": {
+      "finish_reasons": [
+       "stop"
+      ],
+      "id": "01M3RHSVX9XCM5V5YMXQBE4G5D",
+      "model": "gpt-6-luna"
+     },
+     "system": "openai",
+     "tool": {
+      "definitions": {
+       "0": {
+        "function": {
+         "description": "A tool that retrieves a list of available agents for the agent",
+         "name": "retrieve_agents",
+         "parameters": {
+          "additionalProperties": false,
+          "properties": {
+           "include_descriptions": {
+            "description": "Indicates whether to include descriptions of the agent keys",
+            "type": "boolean"
+           }
+          },
+          "required": "include_descriptions",
+          "type": "object"
+         },
+         "strict": true
+        },
+        "type": "function"
+       },
+       "1": {
+        "function": {
+         "description": "A tool that calls a sub-agent with provided input and returns its output. The agent_key is unique and so this tool must only be called after retrieve_agents has been previously called.",
+         "name": "call_sub_agent",
+         "parameters": {
+          "additionalProperties": false,
+          "properties": {
+           "agent_key": {
+            "description": "The unique key of the sub-agent to invoke (unique within the workspace). This can only be an agent_key that has been retrieved by retrieve_agents or previously described",
+            "type": "string"
+           },
+           "input": {
+            "description": "The input payload to send to the sub-agent",
+            "type": "string"
+           }
+          },
+          "required": [
+           "agent_key",
+           "input"
+          ],
+          "type": "object"
+         },
+         "strict": true
+        },
+        "type": "function"
+       }
+      }
+     },
+     "usage": {
+      "completion_tokens": 21,
+      "completion_tokens_details": {
+       "accepted_prediction_tokens": 0,
+       "audio_tokens": 0,
+       "reasoning_tokens": 0,
+       "rejected_prediction_tokens": 0
+      },
+      "input_tokens": 497,
+      "output_tokens": 21,
+      "prompt_tokens": 497,
+      "prompt_tokens_details": {
+       "audio_tokens": 0,
+       "cache_creation_tokens": 0,
+       "cached_tokens": 0
+      },
+      "total_tokens": 518
+     }
+    },
+    "orq": {
+     "billing": {
+      "accepted_prediction_tokens_cost": 0,
+      "audio_input_cost": 0,
+      "audio_output_cost": 0,
+      "billable": true,
+      "cache_read_cost": 0,
+      "cache_write_cost": 0,
+      "cached_tokens_cost": 0,
+      "completion_audio_tokens_cost": 0,
+      "input_cost": 4.97e-05,
+      "integration_id": null,
+      "output_cost": 1.05e-05,
+      "pricing_tier": "standard",
+      "prompt_audio_tokens_cost": 0,
+      "reasoning_cost": 0,
+      "reasoning_tokens_cost": 0,
+      "rejected_prediction_tokens_cost": 0,
+      "threshold_exceeded": false,
+      "total_cost": 6.02e-05,
+      "web_search_cost": 0
+     },
+     "contact_id": null,
+     "product": "agents",
+     "related_entities": {
+      "model": {
+       "f8014ede-44e1-548b-bc59-f2a050a77bf4": true
+      },
+      "provider": {
+       "openai": true
+      },
+      "workflow_run": {
+       "01M3RHSVX9XCM5V5YMXQBE4G5D": true
+      }
+     },
+     "span_type": "span.chat_completion",
+     "trace": {
+      "framework": {
+       "name": "orq",
+       "version": "v4.15.13"
+      }
+     },
+     "trace_framework": "orq"
+    },
+    "otel": {
+     "status_code": "OK"
+    },
+    "type": "chat_completion"
+   }
+  }
+ ]
+}

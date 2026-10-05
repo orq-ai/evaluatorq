@@ -30,8 +30,9 @@ jobs:
         run: uv run ruff format --check src
 
   check:
-    name: Typecheck + test
-    runs-on: ubuntu-latest
+    # Linux legs keep the bare `(3.x)` name, which the main ruleset requires.
+    name: Typecheck + test (${{ matrix.python-version }}${{ matrix.os != 'ubuntu-latest' && format(', {0}', matrix.os) || '' }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     # Only the 3.13 leg publishes coverage (see the two conditional steps below).
     permissions:
@@ -43,9 +44,21 @@ jobs:
         # Canonical dev version is 3.13; test backwards compat down to the
         # minimum supported (requires-python = ">=3.10").
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
 
     steps:
+      # Keeps the write token out of .git/config, where the test suite could read it; the coverage step gets it as input.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js for dashboard behavior tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
@@ -55,17 +68,20 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --all-extras --all-groups
 
-      - name: Typecheck (basedpyright)
-        run: uv run basedpyright
+      # Type results do not depend on the host OS or runtime version, so only
+      # the minimum-version Linux leg pays for it.
+      - name: Typecheck (ty)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.10'
+        run: uv run ty check
 
       - name: Test (unit only)
-        if: matrix.python-version != '3.13'
+        if: matrix.python-version != '3.13' || matrix.os != 'ubuntu-latest'
         run: uv run pytest -m 'not integration'
 
       # Coverage instrumentation costs wall-clock, so only the canonical leg pays
       # for it. The other legs run the same suite bare, above.
       - name: Test (unit only, with coverage)
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         run: uv run pytest -m 'not integration' --cov --cov-report=term
 
       # Posts a coverage comment on PRs and, on push to main, writes badge +
@@ -73,7 +89,7 @@ jobs:
       # built-in GITHUB_TOKEN — no secret to configure. Fork PRs get a read-only
       # token, so the comment is skipped there; the badge still updates on main.
       - name: Coverage badge + PR comment
-        if: matrix.python-version == '3.13'
+        if: matrix.python-version == '3.13' && matrix.os == 'ubuntu-latest'
         uses: py-cov-action/python-coverage-comment-action@v3
         continue-on-error: true
         with:

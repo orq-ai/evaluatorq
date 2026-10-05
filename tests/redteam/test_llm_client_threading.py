@@ -7,6 +7,7 @@ calling create_async_llm_client(), and that the env var priority is correct.
 from __future__ import annotations
 
 import asyncio
+import typing
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -107,7 +108,7 @@ class TestResolveBackendLlmClient:
         custom_client = MagicMock(spec=AsyncOpenAI)
         backend = resolve_backend('openai', llm_client=custom_client)
         # The OpenAIBackend stores the client directly as _client
-        assert backend._client is custom_client  # pyright: ignore[reportAttributeAccessIssue]
+        assert typing.cast(typing.Any, backend)._client is custom_client
 
     @patch('evaluatorq.redteam.backends.openai.create_async_llm_client')
     def test_openai_backend_falls_back_to_create(self, mock_create):
@@ -116,7 +117,7 @@ class TestResolveBackendLlmClient:
         mock_create.return_value = MagicMock(spec=AsyncOpenAI)
         backend = resolve_backend('openai', llm_client=None)
         mock_create.assert_called_once()
-        assert backend._client is mock_create.return_value  # pyright: ignore[reportAttributeAccessIssue]
+        assert typing.cast(typing.Any, backend)._client is mock_create.return_value
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +227,10 @@ class TestCreateOWASPEvaluatorLlmClient:
     @patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.get_evaluator_for_category')
     @patch('evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge.create_async_llm_client')
     async def test_scorer_uses_custom_client(self, mock_create, mock_get_eval):
+        from types import SimpleNamespace
+
         from evaluatorq import DataPoint, EvaluationResult
         from evaluatorq.redteam.frameworks.owasp.evaluatorq_bridge import create_owasp_evaluator
-
-        from types import SimpleNamespace
 
         custom_client = AsyncMock(spec=AsyncOpenAI)
         mock_response = MagicMock()

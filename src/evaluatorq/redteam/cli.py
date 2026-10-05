@@ -6,13 +6,12 @@ import asyncio
 import json
 import logging
 import re
-import shlex
 import sys
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import typer
 
@@ -20,7 +19,7 @@ from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TT
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
-from evaluatorq.common.cli_tty import should_skip_confirm
+from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.llm_limit import check_llm_parallelism_option
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
@@ -35,6 +34,7 @@ from evaluatorq.redteam.contracts import (
 )
 
 if TYPE_CHECKING:
+    from evaluatorq.contracts import AgentTarget
     from evaluatorq.redteam.contracts import RedTeamReport
 
 app = typer.Typer(
@@ -58,7 +58,7 @@ _RUN_EPILOG = examples(
 
 
 def _dashboard_command(directory: Path) -> str:
-    return f'eq dashboard {shlex.quote(str(directory))}'
+    return f'eq dashboard {shell_path(directory)}'
 
 
 def _split_csv(values: list[str] | None) -> list[str] | None:
@@ -339,7 +339,7 @@ def _resolve_run_options(
         resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
 
     target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
-    targets: list[str] | str = target if len(target) > 1 else target[0]
+    targets: list[str] | str = list(target) if len(target) > 1 else target[0]
 
     # Build LLMConfig from CLI flags
     config = LLMConfig(
@@ -665,7 +665,7 @@ def run(
     try:
         report = asyncio.run(
             red_team(
-                target=targets,  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+                target=cast('list[str | AgentTarget] | str', targets),
                 llm_config=config,
                 name=name,
                 mode=mode,
@@ -714,7 +714,7 @@ def run(
 
     if report_path:
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(report.model_dump(mode='json'), indent=2, default=str))
+        report_path.write_text(json.dumps(report.model_dump(mode='json'), indent=2, default=str), encoding='utf-8')
         typer.echo(f'Report saved to {report_path}')
 
     if report_md:
@@ -776,7 +776,7 @@ def _download_and_read_hf_dataset(hf_hub_download: Any, repo: str, filename: str
         )
         raise typer.Exit(code=1)
     try:
-        with open(local_path) as f:
+        with open(local_path, encoding='utf-8') as f:
             raw = json.load(f)
     except (OSError, json.JSONDecodeError) as e:
         typer.echo(f'Failed to read dataset file: {e}', err=True)
@@ -801,7 +801,7 @@ def _load_raw_dataset(dataset: str | None) -> Any:
         return _download_and_read_hf_dataset(hf_hub_download, repo, filename)
     path = Path(dataset)
     typer.echo(f'Validating local file: {path}')
-    with path.open() as f:
+    with path.open(encoding='utf-8') as f:
         return json.load(f)
 
 

@@ -634,4 +634,8 @@ def register_sim_compare_routes(app: Any, roots: list[Path] | None = None) -> No
                 '<p class="sim-empty">No conversation at that index.</p>', status_code=404, media_type='text/html'
             )
 
-        return Response(render_compare_transcript(ea, eb, run_a.run_name, run_b.run_name), media_type='text/html')
+        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
+
+        with cli_slug_render_scope():
+            body = render_compare_transcript(ea, eb, run_a.run_name, run_b.run_name)
+        return Response(body, media_type='text/html')

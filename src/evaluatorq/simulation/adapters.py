@@ -7,7 +7,7 @@ so users don't need to wire the plumbing themselves.
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from evaluatorq.contracts import AgentResponse, content_to_text
 
@@ -60,7 +60,7 @@ def from_orq_deployment(
 
     # Carry the key so the run-metadata label can render "deployment:<key>",
     # symmetric to how an AgentTarget exposes `agent_key`.
-    callback.deployment_key = agent_key  # pyright: ignore[reportFunctionMemberAccess]
+    cast('Any', callback).deployment_key = agent_key
     return callback
 
 

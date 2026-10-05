@@ -52,6 +52,23 @@ def test_dataset_export_as_obj_is_shared_implementation() -> None:
     assert dataset_export._as_obj is _datapoint_io._as_obj
 
 
+def test_parse_jsonl_returns_dicts_for_non_pydantic_class() -> None:
+    content = '{"name": "Priya"}\n{"name": "Sam"}\n'
+
+    assert dataset_export.parse_jsonl(content, cls=dict) == [
+        {'name': 'Priya'},
+        {'name': 'Sam'},
+    ]
+
+
+def test_parse_jsonl_validates_pydantic_models() -> None:
+    content = '{"input_tokens": 3, "output_tokens": 5}\n'
+
+    assert dataset_export.parse_jsonl(content, cls=TokenUsage) == [
+        TokenUsage(input_tokens=3, output_tokens=5)
+    ]
+
+
 _DP = {
     "id": "dp1",
     "persona": {

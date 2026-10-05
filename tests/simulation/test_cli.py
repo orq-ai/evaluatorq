@@ -1,13 +1,13 @@
 """Unit tests for evaluatorq.simulation.cli."""
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import IO
-
 import json
+import sys
+import typing
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +15,7 @@ from click.testing import Result
 from typer import Typer
 from typer.testing import CliRunner
 
+from evaluatorq.common.cli_tty import shell_path
 from evaluatorq.simulation.cli import (
     _auto_save_run,
     _configure_logging,
@@ -23,12 +24,12 @@ from evaluatorq.simulation.cli import (
     _resolve_agent_description,
     _resolve_target,
     _sanitise_run_name,
-    _shell_path,
     _write_report,
     app,
 )
 from evaluatorq.simulation.types import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
+
 
 class _OfflineCliRunner(CliRunner):
     """CliRunner that keeps these tests off the network by default.
@@ -87,7 +88,7 @@ def test_epilog_examples_use_only_real_flags(command: str) -> None:
     import typer
 
     click_group = typer.main.get_command(app)
-    subcommands = click_group.commands  # pyright: ignore[reportAttributeAccessIssue]
+    subcommands = typing.cast(typing.Any, click_group).commands
 
     def valid_flags(name: str) -> set[str]:
         flags: set[str] = set()
@@ -123,7 +124,7 @@ def test_output_flags_expose_short_aliases(command: str, long: str, short: str) 
     """Guard the self-describing output flags keep both their long and short spellings."""
     import typer
 
-    subcommands = typer.main.get_command(app).commands  # pyright: ignore[reportAttributeAccessIssue]
+    subcommands = typing.cast(typing.Any, typer.main.get_command(app)).commands
     opts = {opt for param in subcommands[command].params for opt in param.opts}
     assert long in opts, f'{command} missing {long}'
     assert short in opts, f'{command} missing {short}'
@@ -163,8 +164,10 @@ def test_provider_context_uses_openai_when_orq_is_absent(
     assert 'secret' not in output
 
 
-def test_shell_path_quotes_paths_with_spaces() -> None:
-    assert _shell_path(Path('/tmp/sim runs')) == "'/tmp/sim runs'"
+def test_shell_path_quotes_paths_with_spaces(tmp_path: Path) -> None:
+    spaced = tmp_path / 'sim runs'
+    quote_char = '"' if sys.platform == 'win32' else "'"
+    assert shell_path(spaced) == f'{quote_char}{spaced}{quote_char}'
 
 
 # ---------------------------------------------------------------------------
@@ -259,7 +262,7 @@ def _stub_run(
     """
     return _build_simulation_run(
         run_name="test-run",
-        mode=mode,
+        mode=typing.cast(typing.Any, mode),
         target_kind="openai_model",
         target="gpt-4o",
         target_model="gpt-4o",
@@ -545,7 +548,7 @@ def test_runs_suggests_dashboard_directory(tmp_path: Path) -> None:
     result = runner.invoke(app, ["runs", str(runs_dir)])
 
     assert result.exit_code == 0, result.output
-    assert f"open: eq dashboard '{runs_dir}'" in result.stdout
+    assert f"open: eq dashboard {shell_path(runs_dir)}" in result.stdout
 
 
 def test_runs_full_does_not_truncate(tmp_path: Path) -> None:
@@ -722,8 +725,7 @@ def test_simulate_saved_run_suggests_dashboard_directory(tmp_path: Path) -> None
     # stderr lines (e.g. the "Run saved" log). The dashboard hand-off must point
     # at the directory, not the specific run file.
     handoff = result.stderr.split('▸ Next', 1)[1]
-    assert "eq dashboard '" in handoff
-    assert str(runs_dir) in handoff
+    assert f"eq dashboard {shell_path(runs_dir)}" in handoff
     assert saved_run.name not in handoff
 
 
@@ -825,6 +827,8 @@ def test_run_report_and_autosave_both_written(
     # Without --no-save, --report writes the explicit file AND the
     # auto-save still lands under .evaluatorq/sim-runs/ (independent sinks).
     monkeypatch.chdir(tmp_path)
+    run_store = tmp_path / ".evaluatorq"
+    monkeypatch.setenv("EVALUATORQ_DIR", str(run_store))
     report = tmp_path / "report.json"
 
     with (
@@ -848,8 +852,8 @@ def test_run_report_and_autosave_both_written(
     assert result.exit_code == 0, result.output
     assert report.exists()
     assert json.loads(report.read_text())["mode"] == "run"
-    run_store = list((tmp_path / ".evaluatorq" / "sim-runs").glob("*.json"))
-    assert len(run_store) == 1
+    auto_saves = list((run_store / "sim-runs").glob("*.json"))
+    assert len(auto_saves) == 1
 
 
 def test_simulate_rejects_three_targets(tmp_path: Path) -> None:
@@ -2120,13 +2124,13 @@ def test_export_md_includes_stored_recommendations(tmp_path):
     """eq sim export --format md renders a run JSON's stored suggestions."""
     import json as _json
 
+    from evaluatorq.contracts import Message, TokenUsage
     from evaluatorq.simulation.types import (
         SimulationRecommendation,
         SimulationResult,
         SimulationRun,
         TerminatedBy,
     )
-    from evaluatorq.contracts import Message, TokenUsage
 
     result = SimulationResult(
         messages=[Message(role="user", content="hi"), Message(role="assistant", content="yo")],
@@ -2178,8 +2182,8 @@ def test_export_md_includes_stored_recommendations(tmp_path):
 def test_export_html_format(tmp_path):
     """eq sim export --format html writes a self-contained HTML report."""
     results = tmp_path / "results.jsonl"
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
     from evaluatorq.contracts import Message, TokenUsage
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
 
     r = SimulationResult(
         messages=[Message(role="user", content="hi")],

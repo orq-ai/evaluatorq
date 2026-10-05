@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from itertools import starmap
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_judge
+from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_classify_judges
 from evaluatorq.common.llm_call import classify_request_body
-from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig
+from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig, TokenUsage
 from evaluatorq.evaluatorq import evaluatorq
 from evaluatorq.types import DataPoint, DataPointResult, EvaluationResult, Evaluator, ScorerParameter
 
 from .debug import enabled as debug_enabled
-from .models import CompiledQuery, TraceClassification, TraceProjection, TraceRecord
+from .models import CompiledQuery, DimensionAnswer, TraceClassification, TraceProjection, TraceRecord
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -35,39 +36,65 @@ def build_datapoint(trace: TraceRecord, projection: TraceProjection) -> DataPoin
     )
 
 
-def build_classifier_evaluator(compiled: CompiledQuery, *, model: str, client: AsyncOpenAI) -> Evaluator:
-    """Configure one merged EvaluatorQ classify judge over the exact projected state."""
+def _question_key(index: int) -> str:
+    return f'd{index}'
+
+
+def build_classifier_evaluator(dimensions: Sequence[CompiledQuery], *, model: str, client: AsyncOpenAI) -> Evaluator:
+    """Configure one EvaluatorQ judge that asks every dimension about the exact projected state.
+
+    A classify model answers all dimensions in one call. The score's ``raw_output['dimensions']``
+    keeps one single-seat jury result per dimension, in dimension order.
+    """
+
+    questions = {_question_key(index): dimension.task for index, dimension in enumerate(dimensions)}
+    cfg = LLMCallConfig(model=model, timeout_ms=90_000)
 
     async def score(params: ScorerParameter) -> EvaluationResult:
         state = params['data'].inputs['classifier_state']
         trace_id = params['data'].inputs['trace_id']
-        question = compiled.task.model_copy(update={'state': state})
         if debug_enabled():
             logger.debug(
                 'Trace finder trace classifier request trace_id={} model={} input={}',
                 trace_id,
                 model,
-                json.dumps(classify_request_body(model, question.state, {'verdict': question}), ensure_ascii=False),
+                json.dumps(classify_request_body(model, state, questions), ensure_ascii=False),
             )
-        outcome = await run_judge(
+        outcomes = await run_classify_judges(
             client=client,
             model=model,
-            cfg=LLMCallConfig(model=model, timeout_ms=90_000),
-            prompt_template='',
-            replacements={},
+            cfg=cfg,
+            state=state,
+            questions=questions,
             span_attributes={'orq.llm.purpose': 'judge'},
-            classify=question,
         )
         if debug_enabled():
-            logger.debug(
-                'Trace finder trace classifier response trace_id={} model={} endpoint={} output={} error={}',
-                trace_id,
-                model,
-                outcome.endpoint,
-                outcome.raw_content or (json.dumps(outcome.raw_output) if outcome.raw_output is not None else ''),
-                outcome.error_message,
-            )
-        return _outcome_result(outcome, model=model)
+            for key, outcome in outcomes.items():
+                logger.debug(
+                    'Trace finder trace classifier response trace_id={} dimension={} model={} endpoint={} output={} error={}',
+                    trace_id,
+                    key,
+                    model,
+                    outcome.endpoint,
+                    outcome.raw_content or (json.dumps(outcome.raw_output) if outcome.raw_output is not None else ''),
+                    outcome.error_message,
+                )
+        results = [_outcome_result(outcomes[key], model=model) for key in questions]
+        # One /classify reply answers every dimension and rides on each outcome; count it once.
+        usages = {id(outcome.token_usage): outcome.token_usage for outcome in outcomes.values() if outcome.token_usage}
+        token_usage: TokenUsage | None = None
+        for usage in usages.values():
+            token_usage = usage if token_usage is None else token_usage + usage
+        return EvaluationResult(
+            value={key: result.value for key, result in zip(questions, results, strict=True)},
+            token_usage=token_usage,
+            raw_output={
+                'dimensions': [
+                    {'value': result.value, 'explanation': result.explanation, 'raw_output': result.raw_output}
+                    for result in results
+                ]
+            },
+        )
 
     return {'name': 'classifier', 'scorer': score}
 
@@ -141,8 +168,12 @@ def matches_selection(value: object, compiled: CompiledQuery) -> bool:
     return value >= selection.value if selection.operator == 'gte' else value <= selection.value
 
 
-def parse_datapoint_result(result: DataPointResult, compiled: CompiledQuery) -> TraceClassification:
-    """Collapse EvaluatorQ's result tree into one terminal UI classification."""
+def parse_datapoint_result(result: DataPointResult, dimensions: Sequence[CompiledQuery]) -> TraceClassification:
+    """Collapse EvaluatorQ's result tree into one trace result with an answer per dimension.
+
+    A dimension whose verdict cannot be read keeps its own error; the trace then carries every
+    dimension error and is not matched.
+    """
 
     raw_result = result.model_dump(mode='json', by_alias=True)
     inputs = result.data_point.inputs
@@ -163,34 +194,55 @@ def parse_datapoint_result(result: DataPointResult, compiled: CompiledQuery) -> 
         evaluator_score = scores[0]
         if evaluator_score.error:
             raise _TerminalResultError(evaluator_score.error)
-
-        score = evaluator_score.score
-        value = _validate_verdict(score.value, compiled, score.raw_output)
-        raw_answer = _raw_answer(score.raw_output)
-        confidence, probabilities = _classification_details(raw_answer)
-        return TraceClassification(
-            trace_id=trace_id,
-            span_id=span_id,
-            value=value,
-            confidence=confidence,
-            probabilities=probabilities,
-            matched=matches_selection(value, compiled),
-            summary=score.explanation,
-            raw_result=raw_result,
-        )
+        raw_output = evaluator_score.score.raw_output or {}
+        entries = raw_output.get('dimensions')
+        if not isinstance(entries, list) or len(entries) != len(dimensions):
+            raise _TerminalResultError(f'expected {len(dimensions)} dimension results')
     except _TerminalResultError as error:
+        logger.warning('Classifier result parsing failed for trace_id={} span_id={}: {}', trace_id, span_id, error)
+        return TraceClassification(trace_id=trace_id, span_id=span_id, error=str(error), raw_result=raw_result)
+
+    answers = tuple(starmap(_dimension_answer, zip(entries, dimensions, strict=True)))
+    errors = [
+        f'{dimension.name}: {answer.error}'
+        for answer, dimension in zip(answers, dimensions, strict=True)
+        if answer.error is not None
+    ]
+    if errors:
         logger.warning(
-            'Classifier result parsing failed for trace_id={} span_id={}: {}',
-            trace_id,
-            span_id,
-            error,
+            'Classifier dimensions failed for trace_id={} span_id={}: {}', trace_id, span_id, '; '.join(errors)
         )
-        return TraceClassification(
-            trace_id=trace_id,
-            span_id=span_id,
-            error=str(error),
-            raw_result=raw_result,
-        )
+    return TraceClassification(
+        trace_id=trace_id,
+        span_id=span_id,
+        answers=answers,
+        matched=not errors and all(answer.matched for answer in answers),
+        error='; '.join(errors) or None,
+        raw_result=raw_result,
+    )
+
+
+def _dimension_answer(entry: object, dimension: CompiledQuery) -> DimensionAnswer:
+    """Validate one dimension's single-seat jury result into its answer."""
+
+    try:
+        if not isinstance(entry, Mapping):
+            raise _TerminalResultError('malformed dimension result')
+        raw_output = entry.get('raw_output')
+        if raw_output is not None and not isinstance(raw_output, dict):
+            raise _TerminalResultError('malformed dimension result')
+        value = _validate_verdict(entry.get('value'), dimension, raw_output)
+        confidence, probabilities = _classification_details(_raw_answer(raw_output))
+    except _TerminalResultError as error:
+        return DimensionAnswer(error=str(error))
+    explanation = entry.get('explanation')
+    return DimensionAnswer(
+        value=value,
+        confidence=confidence,
+        probabilities=probabilities,
+        matched=matches_selection(value, dimension),
+        summary=explanation if isinstance(explanation, str) else None,
+    )
 
 
 def _validate_verdict(value: object, compiled: CompiledQuery, raw_output: dict[str, Any] | None) -> bool | float | str:
@@ -286,20 +338,31 @@ def _classification_details(raw_answer: dict[str, Any] | None) -> tuple[float | 
 async def run_classifier(
     traces: tuple[TraceRecord, ...],
     projections: dict[str, TraceProjection],
-    compiled: CompiledQuery,
+    dimensions: Sequence[CompiledQuery],
     *,
     model: str,
     client: AsyncOpenAI,
     parallelism: int,
     on_complete: Callable[[TraceClassification], Awaitable[None]],
 ) -> list[TraceClassification]:
-    """Evaluate all selected traces, forwarding each terminal result exactly once."""
+    """Evaluate all selected traces, forwarding each terminal result exactly once.
 
-    evaluator = build_classifier_evaluator(compiled, model=model, client=client)
+    With no dimensions the filters already answered the question: every trace is matched and
+    no classifier call is made.
+    """
+
     classifications: list[TraceClassification] = []
+    if not dimensions:
+        for trace in traces:
+            classification = TraceClassification(trace_id=trace.trace_id, span_id=trace.span_id, matched=True)
+            await on_complete(classification)
+            classifications.append(classification)
+        return classifications
+
+    evaluator = build_classifier_evaluator(dimensions, model=model, client=client)
 
     async def complete(result: DataPointResult) -> None:
-        classification = parse_datapoint_result(result, compiled)
+        classification = parse_datapoint_result(result, dimensions)
         await on_complete(classification)
         classifications.append(classification)
 

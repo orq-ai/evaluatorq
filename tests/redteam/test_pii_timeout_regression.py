@@ -47,7 +47,8 @@ def _make_strategy() -> AttackStrategy:
         delivery_methods=[DeliveryMethod.CRESCENDO],
         turn_type=TurnType.MULTI,
         objective_template='Test objective',
-    )  # pyright: ignore[reportArgumentType]
+
+    )
 
 
 def _adversarial_llm() -> AsyncMock:

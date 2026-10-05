@@ -246,12 +246,17 @@ def build_app_from_env():
     raw = os.environ.get(_ROOTS_ENV)
     roots = [Path(p) for p in json.loads(raw)] if raw else None
     app = build_app(roots)
+    import threading
+
+    from evaluatorq.dashboard.insights_review_projection import warm_review_projection
+
+    threading.Thread(target=warm_review_projection, name='review-map-warmup', daemon=True).start()
     nonce = os.environ.get(_BROWSER_NONCE_ENV)
     if nonce:
         from starlette.responses import PlainTextResponse
 
         @app.get('/_dashboard-ready')
-        def dashboard_ready() -> PlainTextResponse:
+        def dashboard_ready():
             return PlainTextResponse(nonce)
 
     return app

@@ -4,30 +4,90 @@ Deep-links now derive their host + workspace from each run's own
 ``experiment_url`` (``{host}/{workspace}/experiments/{id}``; see
 ``orq_links.parse_experiment_url``), which the web app resolves correctly for
 anyone with access — no API key, no workspace config, no ``orq`` CLI. This module
-is the fallback for runs without an ``experiment_url``: it reads the saved
-dashboard profile and workspace first, then the environment. Links are hidden
-when no workspace slug is available.
+is the fallback for runs without an ``experiment_url``: it reads the
+workspace from the environment, then discovers the active CLI credential's
+slug. Links are hidden when no workspace slug is available.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
+from contextlib import contextmanager
+from contextvars import ContextVar
+from time import monotonic
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from loguru import logger
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 DEFAULT_BASE_URL = 'https://my.orq.ai'
+_cli_slug_cache: dict[tuple[str | None, str | None, bool], tuple[float, str | None]] = {}
+_render_cli_slug_cache: ContextVar[dict[tuple[str | None, str | None], str | None] | None] = ContextVar(
+    'render_cli_slug_cache', default=None
+)
+
+
+@contextmanager
+def cli_slug_render_scope() -> Iterator[None]:
+    """Reuse CLI-session slug discovery for one render, then discard it."""
+    token = _render_cli_slug_cache.set({})
+    try:
+        yield
+    finally:
+        _render_cli_slug_cache.reset(token)
+
+
+def _cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool = False) -> str | None:
+    """Cache credential lookups and reuse CLI-session discovery within one render."""
+    key = (profile, fingerprint, use_cli_session)
+    render_cache = _render_cli_slug_cache.get() if use_cli_session else None
+    if render_cache is not None and (profile, fingerprint) in render_cache:
+        return render_cache[profile, fingerprint]
+    cached = _cli_slug_cache.get(key) if not use_cli_session else None
+    if cached is not None and cached[0] > monotonic():
+        return cached[1]
+
+    slug = _discover_cli_slug(profile, fingerprint, use_cli_session=use_cli_session)
+    if render_cache is not None:
+        render_cache[profile, fingerprint] = slug
+    return slug
+
+
+def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_session: bool) -> str | None:
+    from evaluatorq.dashboard.orq_scope import discover_orq_scope
+
+    scope = discover_orq_scope(profile, use_cli_session=use_cli_session)
+    slug = scope.workspace_key
+    if not slug:
+        logger.warning(
+            'Could not resolve the Orq workspace slug from the CLI: {}',
+            scope.error or 'the credential has no matching listed workspace',
+        )
+    if not use_cli_session:
+        _cli_slug_cache[profile, fingerprint, False] = (monotonic() + (300 if slug and fingerprint else 30), slug)
+    return slug
 
 
 def resolve_slug() -> str | None:
-    """Workspace slug saved in dashboard settings, or the environment fallback."""
-    from evaluatorq.trace_finder.settings import load_settings
-
-    saved = load_settings().orq_workspace
-    if saved:
-        return saved
+    """Workspace slug from the environment or active Orq CLI credential."""
     env = os.environ.get('ORQ_WORKSPACE') or os.environ.get('ORQ_WORKSPACE_SLUG')
-    return env.strip() or None if env and env.strip() else None
+    if env and env.strip():
+        return env.strip()
+    if not shutil.which('orq'):
+        return None
+    from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
+
+    settings = load_settings()
+    if settings.orq_auth_method == 'cli_profile' and settings.orq_profile:
+        return _cli_slug(settings.orq_profile, settings.orq_credential_fingerprint)
+    api_key = os.environ.get('ORQ_API_KEY', '').strip()
+    if api_key:
+        return _cli_slug(None, credential_fingerprint(api_key, os.environ.get('ORQ_BASE_URL')))
+    return _cli_slug(None, None, use_cli_session=True)
 
 
 def resolve_base_url() -> str:

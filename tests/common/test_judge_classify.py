@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import typing
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -17,10 +18,18 @@ from pydantic import ValidationError
 
 import evaluatorq
 from evaluatorq.common import judge as judge_mod
-from evaluatorq.common import llm_call
-from evaluatorq.common import model_catalogue
-from evaluatorq.common import tracing
-from evaluatorq.common.judge import ClassifyOutcome, ClassifyQuestion, ClassifyRequest, JudgeError, run_classify, run_judge
+from evaluatorq.common import llm_call, model_catalogue, tracing
+from evaluatorq.common.judge import (
+    ClassifyOutcome,
+    ClassifyQuestion,
+    ClassifyRequest,
+    EvaluatorResponsePayload,
+    JudgeError,
+    JudgeOutcome,
+    run_classify,
+    run_classify_judges,
+    run_judge,
+)
 from evaluatorq.contracts import LLMCallConfig
 
 ORQ_URL = 'https://my.orq.ai/v3/router'
@@ -81,7 +90,7 @@ def _client(*post_results: Any) -> Any:
 def _rate_limit() -> RateLimitError:
     return RateLimitError(
         'slow down',
-        response=SimpleNamespace(status_code=429, headers={}, request=None),  # pyright: ignore[reportArgumentType]
+        response=typing.cast(typing.Any, SimpleNamespace(status_code=429, headers={}, request=None)),
         body={'error': {'message': 'slow down'}},
     )
 
@@ -94,7 +103,7 @@ async def _judge(
     retry_count: int = 0,
     api: str = 'responses',
 ) -> Any:
-    cfg = LLMCallConfig(model=model, api=api, retry_count=retry_count)  # pyright: ignore[reportArgumentType]
+    cfg = LLMCallConfig(model=model, api=typing.cast(typing.Any, api), retry_count=retry_count)
     return await run_judge(
         client=client,
         model=model,
@@ -211,7 +220,7 @@ async def test_run_classify_disables_an_injected_clients_sdk_retries() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_classify_reports_requested_answer_keys_that_are_missing() -> None:
+async def test_run_classify_preserves_partial_answers_and_usage() -> None:
     client = _client(
         {
             'answers': {'tone': {'type': 'choice', 'choice': 'neutral'}},
@@ -229,10 +238,11 @@ async def test_run_classify_reports_requested_answer_keys_that_are_missing() -> 
 
     outcome = await run_classify(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), request=request)
 
-    assert outcome.error_kind is JudgeError.PARSE
-    assert outcome.response is None
-    assert outcome.error_message is not None
-    assert 'risk' in outcome.error_message
+    assert outcome.error_kind is None
+    assert outcome.response is not None
+    assert set(outcome.response.answers) == {'tone'}
+    assert outcome.token_usage is not None
+    assert outcome.token_usage.input_tokens == 120
 
 
 @pytest.mark.asyncio
@@ -791,8 +801,137 @@ async def test_a_readable_usage_block_still_lands_on_the_span():
 def test_a_criteria_shape_the_endpoint_would_reject_is_refused_locally(kwargs: dict[str, Any]):
     """Rejected before the call is paid for, not after a 400."""
     with pytest.raises(ValidationError):
-        ClassifyQuestion(instructions='q', state='s', **kwargs)  # pyright: ignore[reportArgumentType]
+        ClassifyQuestion(instructions='q', state='s', **kwargs)
 
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_answers_several_questions_in_one_classify_call() -> None:
+    """A classify-capable model answers every dimension in one round trip, keyed by question."""
+    client = _client({
+        'answers': {
+            'tone': {'type': 'choice', 'choice': 'neutral'},
+            'risk': {'type': 'noul', 'noul': 0.9},
+        },
+        'usage': _usage(),
+        'model': 'jev-latest',
+    })
+    questions = {
+        'tone': ClassifyQuestion(
+            kind='choice', instructions='Classify the tone.', criteria={'neutral': 'plain'}, state='ignored'
+        ),
+        'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state={'reply': 'hello'}, questions=questions
+    )
+
+    assert client.post.await_count == 1
+    assert set(outcomes) == {'tone', 'risk'}
+    assert outcomes['tone'].payload is not None
+    assert outcomes['tone'].payload.value == 'neutral'
+    assert outcomes['tone'].endpoint == 'classify'
+    assert outcomes['risk'].payload is not None
+    assert outcomes['risk'].payload.value is True
+    assert outcomes['risk'].endpoint == 'classify'
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_empty_questions_returns_immediately() -> None:
+    client = _client()
+
+    outcomes = await run_classify_judges(client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='x', questions={})
+
+    assert outcomes == {}
+    client.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question_for_a_non_classify_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model that cannot serve /classify gets one `run_judge` call per question, run concurrently."""
+    calls: list[dict[str, Any]] = []
+
+    async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:
+        calls.append(kwargs)
+        question = kwargs['classify']
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=f'answered-{question.instructions}', explanation='ok'),
+            endpoint='chat',
+        )
+
+    monkeypatch.setattr(judge_mod, 'run_judge', fake_run_judge)
+    questions = {
+        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+    }
+    client = _client()
+
+    outcomes = await run_classify_judges(
+        client=client, model='gpt-5-mini', cfg=LLMCallConfig(model='gpt-5-mini'), state='reply', questions=questions
+    )
+
+    assert len(calls) == 2
+    assert all('Judge the supplied state' in call['prompt_template'] for call in calls)
+    prompt_contexts = [json.loads(call['replacements']['classify_question']) for call in calls]
+    assert {context['instructions'] for context in prompt_contexts} == {'tone?', 'risk?'}
+    assert all(context['state'] == 'reply' for context in prompt_contexts)
+    client.post.assert_not_called()
+    assert outcomes['tone'].payload is not None
+    assert outcomes['tone'].payload.value == 'answered-tone?'
+    assert outcomes['risk'].payload is not None
+    assert outcomes['risk'].payload.value == 'answered-risk?'
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_maps_an_api_error_to_every_question_key() -> None:
+    """A failed classify call is a failure for every dimension it was asked about, not just one."""
+    client = _client(APITimeoutError(request=MagicMock()))
+    questions = {
+        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV, retry_count=0), state='reply', questions=questions
+    )
+
+    assert client.post.await_count == 1
+    assert set(outcomes) == {'tone', 'risk'}
+    for outcome in outcomes.values():
+        assert outcome.error_kind is JudgeError.TIMEOUT
+        assert outcome.endpoint == 'classify'
+        assert outcome.payload is None
+    assert outcomes['tone'] is not outcomes['risk']
+
+
+@pytest.mark.asyncio
+async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_error() -> None:
+    client = _client(
+        {
+            'answers': {'tone': {'type': 'noul', 'noul': 0.9}},
+            'usage': _usage(),
+            'model': 'jev-latest',
+        }
+    )
+    questions = {
+        'tone': ClassifyQuestion(kind='noul', instructions='tone?', state='x'),
+        'risk': ClassifyQuestion(kind='noul', instructions='risk?', state='x'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state='reply', questions=questions
+    )
+
+    assert outcomes['tone'].error_kind is None
+    missing = outcomes['risk']
+    assert missing.error_kind is JudgeError.PARSE
+    assert missing.endpoint == 'classify'
+    assert missing.token_usage is not None
+    assert missing.token_usage.input_tokens == 120
+    assert missing.raw_content is not None
+    assert 'tone' in missing.raw_content
 
 # ---------------------------------------------------------------------------
 # Capability is additive: the caller's question picks the endpoint (#245)

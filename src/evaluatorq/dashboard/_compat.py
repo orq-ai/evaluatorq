@@ -53,7 +53,7 @@ def _lifespan_from_handlers(on_startup, on_shutdown):
     return _lifespan
 
 
-def _starlette_compat_init(  # type: ignore[override]
+def _starlette_compat_init(
     self: _starlette_app.Starlette,
     debug: object = False,  # noqa: FBT002
     routes: object = None,
@@ -68,15 +68,15 @@ def _starlette_compat_init(  # type: ignore[override]
     # instead of discarding them. Only synthesize when no explicit lifespan
     # was given (Starlette forbids passing both).
     if lifespan is None and (on_startup or on_shutdown):
-        lifespan = _lifespan_from_handlers(on_startup, on_shutdown)  # type: ignore[arg-type]
+        lifespan = _lifespan_from_handlers(on_startup, on_shutdown)
     _orig_starlette_init(
         self,
-        debug=debug,  # type: ignore[arg-type]
-        routes=routes,  # type: ignore[arg-type]
-        middleware=middleware,  # type: ignore[arg-type]
-        exception_handlers=exception_handlers,  # type: ignore[arg-type]
-        lifespan=lifespan,  # type: ignore[arg-type]
+        debug=debug,
+        routes=routes,
+        middleware=middleware,
+        exception_handlers=exception_handlers,
+        lifespan=lifespan,
     )
 
 
-_starlette_app.Starlette.__init__ = _starlette_compat_init  # type: ignore[method-assign]
+_starlette_app.Starlette.__init__ = _starlette_compat_init

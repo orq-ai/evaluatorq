@@ -11,7 +11,7 @@ source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = [ "src/evaluatorq" ]
-include = [ "src/evaluatorq/py.typed", "src/evaluatorq/common/data/jury_judge_rates.json", "src/evaluatorq/**/*.css", "src/evaluatorq/**/*.js", "src/evaluatorq/**/*.woff2", "src/evaluatorq/**/*.svg", "src/evaluatorq/backends/docker/*" ]
+include = [ "src/evaluatorq/py.typed", "src/evaluatorq/common/data/jury_judge_rates.json", "src/evaluatorq/signals/tag_thresholds.json", "src/evaluatorq/**/*.css", "src/evaluatorq/**/*.js", "src/evaluatorq/**/*.woff2", "src/evaluatorq/**/*.svg", "src/evaluatorq/backends/docker/*" ]
 
 [tool.hatch.build.targets.sdist]
 exclude = [ "examples/", ".venv/", "tests/" ]
@@ -20,9 +20,11 @@ exclude = [ "examples/", ".venv/", "tests/" ]
 testpaths = [ "tests" ]
 python_files = [ "test_*.py", "*_test.py" ]
 norecursedirs = [ ".venv", "dist", "*.egg-info" ]
+addopts = [ "-m", "not integration and not slow" ]
 markers = [
   "integration: marks tests as integration tests (require ORQ_API_KEY in .env)",
-  "allow_network: test may open real outbound connections (exempt from the conftest network guard)"
+  "allow_network: test may open real outbound connections (exempt from the conftest network guard)",
+  "slow: marks tests that require real elapsed time for timeout or scheduler behavior"
 ]
 timeout = 120
 
@@ -189,58 +191,42 @@ src = [ "src" ]
     "backoff".msg = "Use evaluatorq.common.retry.with_retry."
     "requests".msg = "Use httpx (already a runtime dependency); async paths need it anyway."
 
-[tool.basedpyright]
-pythonVersion = "3.10"
+[tool.ty.src]
+include = [ "src", "tests", "*.py", "docs/*.py" ]
 exclude = [ "examples", "scripts", ".venv" ]
-reportIncompatibleVariableOverride = "none"
-reportExplicitAny = "none"
-reportMissingImports = "none"
-reportAny = "none"
-reportUnknownMemberType = "none"
-reportUnknownArgumentType = "none"
-reportUnknownVariableType = "none"
-reportUnknownParameterType = "none"
-reportUnknownLambdaType = "none"
-reportMissingTypeStubs = "none"
-reportUnusedCallResult = "none"
-reportUnannotatedClassAttribute = "none"
-reportPrivateUsage = "none"
-reportPrivateLocalImportUsage = "none"
-reportImplicitStringConcatenation = "none"
-reportUnusedImport = "none"
-reportDeprecated = "none"
-reportUnusedVariable = "none"
-reportMissingParameterType = "none"
-reportUnusedParameter = "none"
-reportUnreachable = "none"
-reportUnsupportedDunderAll = "none"
-reportImportCycles = "none"
-reportImplicitOverride = "none"
-reportUnusedFunction = "none"
-reportUntypedFunctionDecorator = "none"
-reportUnnecessaryIsInstance = "none"
-reportUnnecessaryTypeIgnoreComment = "none"
 
-# FastHTML's dynamic FT components (Script, Div, NotStr, etc.) and starlette
-# request injection type poorly. Scope the resulting noise to the dashboard
-# package so typecheck CI stays green without loosening the global config.
-[[tool.basedpyright.executionEnvironments]]
-root = "src/evaluatorq/dashboard"
-reportArgumentType = "none"
-reportAttributeAccessIssue = "none"
-reportGeneralTypeIssues = "none"
-reportMissingTypeArgument = "none"
-reportReturnType = "none"
+[tool.ty.environment]
+python-version = "3.10"
+python-platform = "all"
 
-# Dashboard tests use FastHTML components and deliberate fake section kinds /
-# untyped fixture dicts — same type-noise as the package, scoped the same way.
-[[tool.basedpyright.executionEnvironments]]
-root = "tests/dashboard"
-reportArgumentType = "none"
-reportAttributeAccessIssue = "none"
-reportGeneralTypeIssues = "none"
-reportMissingTypeArgument = "none"
-reportReturnType = "none"
+[tool.ty.rules]
+blanket-ignore-comment = "error"
+ignore-comment-unknown-rule = "error"
+missing-type-argument = "error"
+possibly-unresolved-reference = "error"
+unused-ignore-comment = "error"
+unused-type-ignore-comment = "error"
+unused-awaitable = "error"
+
+[[tool.ty.overrides]]
+include = [ "src/evaluatorq/dashboard" ]
+
+  [tool.ty.overrides.rules]
+  invalid-argument-type = "ignore"
+  invalid-return-type = "ignore"
+  invalid-type-form = "ignore"
+  missing-type-argument = "ignore"
+  unresolved-attribute = "ignore"
+
+[[tool.ty.overrides]]
+include = [ "tests/dashboard" ]
+
+  [tool.ty.overrides.rules]
+  invalid-argument-type = "ignore"
+  invalid-return-type = "ignore"
+  missing-type-argument = "ignore"
+  not-iterable = "ignore"
+  unresolved-attribute = "ignore"
 
 [project]
 name = "evaluatorq"
@@ -292,12 +278,19 @@ dependencies = [
 ]
   dashboard = [
   "python-fasthtml>=0.12.0,<0.15.0",
+  "cryptography>=42.0.0",
   "python-dotenv>=1.0.0,<2.0.0",
   "uvicorn>=0.30.0",
   "vl-convert-python>=1.6.0"
 ]
+  insights = [
+  "orq-ai-sdk>=4.14",
+  "numpy>=1.26",
+  "scipy>=1.11",
+  "umap-learn>=0.5.6"
+]
   all = [
-  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard]"
+  "evaluatorq[orq,otel,langchain,langgraph,openai-agents,pydantic-ai,crewai,redteam,simulation,dashboard,insights]"
 ]
 
   [project.scripts]
@@ -358,7 +351,8 @@ dev = [
   "pytest>=8.0.0",
   "pytest-asyncio>=1.2.0",
   "pytest-timeout>=2.3.0",
-  "basedpyright>=1.21.0",
+  "tomli>=2.0.0; python_version < '3.11'",
+  "ty==0.0.84",
   "ruff>=0.14.3",
   "orq-ai-sdk>=4.14",
   "anthropic>=0.75.0",
@@ -372,5 +366,5 @@ dev = [
   "pytest-cov>=7.0.0",
   "watchdog>=4.0.0",
   "openai-agents>=0.1.0",
-  "vl-convert-python>=1.6.0"
+  "vl-convert-python>=1.6.0",
 ]

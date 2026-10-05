@@ -1,0 +1,34 @@
+
+    <div class="insights-review-root" data-review-url="REVIEW_URL" data-run-progress="REVIEW_PROGRESS">
+    <div class="review-loading" id="review-loading" role="status">Loading run insights…</div>
+    <section class="review-error" id="review-error" role="alert" hidden>Could not load this run. <button type="button">Retry</button></section>
+    <header class="top">
+      <div class="crumbs"><a href="#" data-act="mock">Insights</a> / run</div>
+      <div class="titlerow">
+        <div><h1 id="title"></h1><div class="status" id="status"></div></div>
+        <div class="spacer"></div>
+        <button class="btn" data-act="mock">Export</button>
+        <button class="btn" data-act="mock">Re-run</button>
+        <button class="btn primary" id="newRun">+ New run</button>
+      </div>
+      <div class="pop" id="details"></div>
+    </header>
+
+    <section class="heads" id="heads" aria-label="Run highlights"></section>
+    <div class="fbar" id="fbar"></div>
+
+    <div class="explore">
+      <section class="stage" id="stage">
+        <div class="panel">
+          <div class="stagehead"><div class="tabs" id="tabs"></div><div class="dimsel" id="dims"></div><div class="ctl" id="ctl"></div></div>
+          <div class="canvas" id="canvas"></div>
+        </div>
+        <div class="panel tlist" id="tlist"></div>
+      </section>
+      <aside class="panel drawer" id="drawer"></aside>
+    </div>
+    </div>
+<div class="tip" id="tip"></div>
+<div class="toast" id="toast"></div>
+<div class="scrim" id="scrim"></div>
+<aside class="sheet" id="sheet"></aside>

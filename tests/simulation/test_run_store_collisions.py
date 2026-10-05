@@ -115,7 +115,7 @@ def test_auto_save_run_unlinks_partial_file_on_write_oserror(
         def bad_write(_data: str) -> int:
             raise OSError("disk full")
 
-        fh.write = bad_write  # type: ignore[method-assign]
+        fh.write = bad_write
         return fh
 
     monkeypatch.setattr(Path, "open", open_then_fail_write)

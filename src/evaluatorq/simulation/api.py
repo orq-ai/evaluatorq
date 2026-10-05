@@ -18,7 +18,7 @@ import uuid
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
@@ -2056,7 +2056,10 @@ async def _simulate_core(
         # _resolve_target's kind hint resolves the target_kind the dashboard reads;
         # hint is 'orq_agent' for AgentTarget / "agent:" strings, 'orq_deployment'
         # for "deployment:" strings, and None for plain callables.
-        target_kind = target_kind_hint or 'callback'
+        target_kind = cast(
+            "Literal['orq_agent', 'orq_deployment', 'vercel', 'openai_model', 'callback']",
+            target_kind_hint or 'callback',
+        )
         agent_info = None
         if target_kind == 'orq_agent':
             agent_key = _agent_key_of(target_agent) or target_name.removeprefix('agent:')

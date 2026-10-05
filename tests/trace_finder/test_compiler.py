@@ -17,42 +17,88 @@ from evaluatorq.trace_finder.compiler import (
     classification_legend,
     compile_query,
 )
-from evaluatorq.trace_finder.models import CompiledQuery, ValueSelection
+from evaluatorq.trace_finder.models import FILTER_OR_JUDGMENT_RULE, CompiledQuery, ValueSelection
+from evaluatorq.trace_finder.models import MAX_DIMENSIONS
 from evaluatorq.trace_finder.debug import cli_debug
 
 
 def choice_document() -> dict[str, Any]:
     return {
-        'task': {
-            'kind': 'choice',
-            'instructions': 'Classify the support need.',
-            'choice_criteria': [
-                {'label': 'billing', 'description': 'Billing help.'},
-                {'label': 'technical', 'description': 'Technical help.'},
-            ],
-            'score_criteria': None,
-            'noul_threshold': 0.5,
-        },
-        'selection': {'kind': 'values', 'values': ['billing']},
+        'dimensions': [
+            {
+                'name': 'Support need',
+                'task': {
+                    'kind': 'choice',
+                    'instructions': 'Classify the support need.',
+                    'choice_criteria': [
+                        {'label': 'billing', 'description': 'Billing help.'},
+                        {'label': 'technical', 'description': 'Technical help.'},
+                    ],
+                    'score_criteria': None,
+                    'noul_threshold': 0.5,
+                },
+                'selection': {'kind': 'values', 'values': ['billing']},
+            }
+        ],
         'numeric': {
             'tokens_min': 20_000,
             'tokens_max': None,
             'duration_ms_min': None,
             'duration_ms_max': None,
         },
+        'unsupported_reason': None,
     }
 
 
-def test_noul_yes_no_selection_is_normalized_to_booleans() -> None:
+@pytest.mark.parametrize(
+    ('word', 'expected'),
+    [('yes', True), ('true', True), ('True', True), ('no', False), ('false', False)],
+)
+def test_noul_word_selection_is_normalized_to_booleans(word: str, expected: bool) -> None:
     document = choice_document()
-    document['task'].update(kind='noul', choice_criteria=None)
-    document['selection'] = {'kind': 'values', 'values': ['yes']}
+    document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': [word]}
 
-    compiled, _ = CompilerWireQuery.model_validate(document).to_domain()
+    dimensions, _ = CompilerWireQuery.model_validate(document).to_domain()
+    compiled = dimensions[0]
 
     assert compiled.task.kind == 'noul'
     assert isinstance(compiled.selection, ValueSelection)
-    assert compiled.selection.values == (True,)
+    assert compiled.selection.values == (expected,)
+
+
+@pytest.mark.asyncio
+async def test_compile_query_names_a_non_numeric_plan_error(monkeypatch) -> None:
+    document = choice_document()
+    document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': ['maybe']}
+    calls = 0
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        nonlocal calls
+        calls += 1
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid plan') as raised:
+        await compile_query(cast(Any, object()), 'compiler-model', 'frustrated users')
+    assert 'numeric' not in str(raised.value)
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_compile_query_wraps_inconsistent_task_criteria(monkeypatch) -> None:
+    document = choice_document()
+    document['dimensions'][0]['task'].update(choice_criteria=None)
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid plan'):
+        await compile_query(cast(Any, object()), 'compiler-model', 'pick a label')
 
 
 class FakeStructuredResult:
@@ -74,7 +120,7 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     client = cast(Any, object())
     plan = await compile_query(client, 'compiler-model', '  find long billing requests  ')
 
-    assert plan.compiled.task.kind == 'choice'
+    assert plan.dimensions[0].task.kind == 'choice'
     assert plan.numeric.tokens_min == 20_000
     assert plan.numeric.duration_ms_min is None
     assert calls[0]['client'] is client
@@ -86,6 +132,111 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     assert calls[0]['label'] == 'trace_finder.compile'
     assert calls[0]['max_tokens'] == 2000
     assert calls[0]['api'] == 'responses'
+
+
+@pytest.mark.asyncio
+async def test_compile_query_retries_all_labels_selection(monkeypatch) -> None:
+    invalid = choice_document()
+    invalid['dimensions'][0]['selection']['values'] = ['billing', 'technical']
+    valid = choice_document()
+    responses = iter([invalid, valid])
+    calls: list[dict[str, Any]] = []
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        calls.append(kwargs)
+        return FakeStructuredResult(CompilerWireQuery.model_validate(next(responses)), raw=json.dumps(invalid))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+
+    selection = plan.dimensions[0].selection
+    assert isinstance(selection, ValueSelection)
+    assert selection.values == ('billing',)
+    assert len(calls) == 2
+    assert calls[1]['messages'][-2]['role'] == 'assistant'
+    assert 'selection must list only' in calls[1]['messages'][-1]['content']
+
+
+def test_compiler_wire_rejects_both_noul_values() -> None:
+    document = choice_document()
+    document['dimensions'][0]['task'].update(kind='noul', choice_criteria=None)
+    document['dimensions'][0]['selection'] = {'kind': 'values', 'values': [True, False]}
+
+    with pytest.raises(ValueError, match="dimension 'Support need'.*not both true and false"):
+        CompilerWireQuery.model_validate(document).to_domain()
+
+
+def test_compiler_wire_rejects_whitespace_dimension_names() -> None:
+    document = choice_document()
+    document['dimensions'][0]['name'] = ' \t '
+
+    with pytest.raises(ValidationError, match='dimension name must not be blank'):
+        CompilerWireQuery.model_validate(document)
+
+
+def test_compiler_wire_rejects_duplicate_dimension_names() -> None:
+    document = choice_document()
+    second = json.loads(json.dumps(document['dimensions'][0]))
+    second['name'] = ' support need '
+    document['dimensions'].append(second)
+
+    with pytest.raises(ValueError, match='dimension names must be unique'):
+        CompilerWireQuery.model_validate(document).to_domain()
+
+
+def test_compiler_wire_rejects_more_than_maximum_dimensions() -> None:
+    document = choice_document()
+    document['dimensions'] = [
+        {**document['dimensions'][0], 'name': f'Dimension {index}'} for index in range(MAX_DIMENSIONS + 1)
+    ]
+
+    with pytest.raises(ValueError, match=f'maximum is {MAX_DIMENSIONS}'):
+        CompilerWireQuery.model_validate(document).to_domain()
+
+
+@pytest.mark.asyncio
+async def test_compile_query_raises_after_two_invalid_plans(monkeypatch) -> None:
+    invalid = choice_document()
+    invalid['dimensions'][0]['selection']['values'] = ['billing', 'technical']
+    calls = 0
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        nonlocal calls
+        calls += 1
+        return FakeStructuredResult(CompilerWireQuery.model_validate(invalid), raw=json.dumps(invalid))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    with pytest.raises(CompileError, match='invalid plan.*selection must list only'):
+        await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_compile_query_retries_too_many_dimensions(monkeypatch) -> None:
+    invalid = choice_document()
+    invalid['dimensions'] = [
+        {**invalid['dimensions'][0], 'name': f'Dimension {index}'} for index in range(MAX_DIMENSIONS + 1)
+    ]
+    valid = choice_document()
+    responses = iter([invalid, valid])
+    calls: list[dict[str, Any]] = []
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        calls.append(kwargs)
+        response = next(responses)
+        return FakeStructuredResult(CompilerWireQuery.model_validate(response), raw=json.dumps(response))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'find billing requests')
+
+    assert len(plan.dimensions) == 1
+    assert len(calls) == 2
+    assert f'maximum is {MAX_DIMENSIONS}' in calls[1]['messages'][-1]['content']
+
+
+def test_compiler_prompt_explains_match_selection() -> None:
+    assert 'only answers that satisfy the request' in COMPILER_INSTRUCTIONS
 
 
 @pytest.mark.asyncio
@@ -204,7 +355,7 @@ async def test_compile_query_reports_impossible_strict_bounds(monkeypatch, query
 
     monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
 
-    with pytest.raises(CompileError, match='contradictory numeric bounds'):
+    with pytest.raises(CompileError, match='Compiler produced contradictory numeric bounds'):
         await compile_query(cast(Any, object()), 'compiler-model', query)
 
 
@@ -274,13 +425,57 @@ def test_compiler_wire_schema_is_strict_mode_compatible() -> None:
     schema = json.dumps(CompilerWireQuery.model_json_schema())
     assert 'oneOf' not in schema
     assert 'anyOf' in schema
-    assert CompilerWireQuery.model_validate(choice_document()).selection.kind == 'values'
+    assert CompilerWireQuery.model_validate(choice_document()).dimensions[0].selection.kind == 'values'
 
 
 def test_compiler_wire_selection_schema_forbids_extra_fields() -> None:
     document = choice_document()
-    document['selection']['unexpected'] = 1
+    document['dimensions'][0]['selection']['unexpected'] = 1
 
+    with pytest.raises(ValidationError):
+        CompilerWireQuery.model_validate(document)
+
+
+def test_compiler_prompt_keeps_descriptive_phrases_as_dimensions() -> None:
+    # "all coding agents with more than 50k tokens" once compiled to zero dimensions, so the
+    # filter picker found nothing and every trace over 50k matched, coding or not.
+    assert 'coding agents over 50k tokens' in COMPILER_INSTRUCTIONS
+    assert 'only when every part of the request' in COMPILER_INSTRUCTIONS
+
+
+def test_compiler_prompt_carries_the_shared_filter_or_judgment_rule() -> None:
+    # "which traces had tool errors?" once became status = error, which emptied the table before the
+    # "Tool errors" dimension could run; both planners must read the same rule.
+    assert FILTER_OR_JUDGMENT_RULE in COMPILER_INSTRUCTIONS
+    assert '"tool errors" -> judgment' in FILTER_OR_JUDGMENT_RULE
+    assert 'Aggregate questions' in FILTER_OR_JUDGMENT_RULE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('reason', 'expected'), [(None, None), ('  ', None), ('Costs per model.', 'Costs per model.')])
+async def test_compile_query_threads_the_unsupported_reason(monkeypatch, reason: str | None, expected: str | None) -> None:
+    document = choice_document()
+    document['dimensions'] = []
+    document['numeric'] = dict.fromkeys(document['numeric'])
+    document['unsupported_reason'] = reason
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'which model costs the most?')
+
+    assert plan.dimensions == ()
+    assert plan.unsupported_reason == expected
+
+
+def test_compiler_wire_schema_requires_a_nullable_unsupported_reason() -> None:
+    schema = CompilerWireQuery.model_json_schema()
+
+    assert 'unsupported_reason' in schema['required']
+    document = choice_document()
+    del document['unsupported_reason']
     with pytest.raises(ValidationError):
         CompilerWireQuery.model_validate(document)
 

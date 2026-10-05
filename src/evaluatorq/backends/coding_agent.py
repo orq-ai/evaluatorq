@@ -24,6 +24,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import types
@@ -52,6 +53,7 @@ from evaluatorq.backends.container import (
     unsafe_mounts,
     write_beat,
 )
+from evaluatorq.common.cli_tty import shell_join
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import NonRetryableTargetError
 from evaluatorq.common.tracing import record_token_usage, set_span_attrs, with_llm_span
@@ -100,11 +102,9 @@ class CodingAgentError(Exception):
         self.kill_reason = kill_reason
 
 
-class CodingAgentUnavailableError(  # pyright: ignore[reportUnsafeMultipleInheritance]
-    CodingAgentError, NonRetryableTargetError
-):
+class CodingAgentUnavailableError(CodingAgentError, NonRetryableTargetError):
     """Non-retryable codes: ``cli.not_found``, ``cli.timeout``, ``cli.prompt_too_long``,
-    ``cli.agent_not_found``, ``cli.image_missing``, and ``cli.container_start``. Retrying these
+    ``cli.agent_not_found``, ``cli.image_missing``, ``cli.container_start``, and ``cli.unsafe_shim``. Retrying these
     outcomes repeats the same failure, so the retry loop stops.
     """
 
@@ -251,6 +251,33 @@ def build_argv(
     return ['orq', 'launch', agent, *orq_flags, '-p', prompt, '--', *agent_args[1:]], None
 
 
+# cmd.exe re-parses a batch launcher's command line and CPython does not escape for it (BatBadBut).
+CMD_METACHARACTERS = frozenset('"%&|<>^!\r\n')
+BATCH_SUFFIXES = frozenset({'.bat', '.cmd'})
+
+
+def is_batch_launcher(executable: str) -> bool:
+    return sys.platform == 'win32' and Path(executable).suffix.lower() in BATCH_SUFFIXES
+
+
+def refuse_unsafe_batch_args(argv: list[str]) -> None:
+    if not is_batch_launcher(argv[0]):
+        return
+    native = (
+        'download orq-win32-x64.exe from https://github.com/orq-ai/orq-cli/releases and put it on PATH as orq.exe'
+        if Path(argv[0]).stem.lower() == 'orq'
+        else 'install the agent CLI as a native .exe'
+    )
+    for arg in argv[1:]:
+        if found := sorted(CMD_METACHARACTERS & set(arg)):
+            raise CodingAgentUnavailableError(
+                'cli.unsafe_shim',
+                f'{argv[0]} is a Windows batch-file launcher, and cmd.exe would interpret '
+                f'{", ".join(repr(c) for c in found)} in the argument {arg!r}. Remove those characters from '
+                f'`extra_args` or `model`, or {native} so evaluatorq can call it directly.',
+            )
+
+
 PROMPT_INSTRUCTION = (
     'You are continuing the conversation below. It is a JSON array of chat messages in order; '
     '"tool" entries are the results of your own earlier tool calls. Reply to the last "user" message. '
@@ -281,7 +308,8 @@ def render_prompt(messages: list[Message], *, system_prompt: str | None, inline_
     """Render the transcript as a delimited JSON conversation followed by the reply instruction.
 
     ``inline_system`` prepends ``system_prompt`` as a ``system`` entry for agents without a
-    system-prompt flag (codex, opencode). Claude receives it via ``--append-system-prompt`` instead.
+    system-prompt flag (codex, opencode), or for claude behind a Windows ``.cmd`` launcher; otherwise
+    Claude receives it via ``--append-system-prompt``.
     """
     entries: list[dict[str, Any]] = []
     if inline_system and system_prompt:
@@ -739,7 +767,8 @@ class CodingAgentTarget(AgentTarget):
         self._container_finalizer: weakref.finalize[Any, Any] | None = (
             weakref.finalize(self, release_containers_if_owner, self._creator_pid, self._owned) if container else None
         )
-        self._finalizer: weakref.finalize | None = None  # pyright: ignore[reportMissingTypeArgument]
+
+        self._finalizer: weakref.finalize[Any, Any] | None = None
         self._proc: asyncio.subprocess.Process | None = None
 
     @property
@@ -756,7 +785,7 @@ class CodingAgentTarget(AgentTarget):
             asyncio.to_thread(subprocess.run, argv, capture_output=True, text=True, timeout=timeout_s, check=False)
         )
         try:
-            return await asyncio.shield(operation)
+            return await asyncio.shield(operation)  # ty: ignore[invalid-return-type]
         except asyncio.CancelledError:
             # `to_thread` cannot stop subprocess.run. Wait for its bounded result before allowing cleanup
             # to issue `rm`, so a slow `docker run` cannot create a container after cleanup has passed.
@@ -783,7 +812,7 @@ class CodingAgentTarget(AgentTarget):
                 return self._container_name
             old_name = self._container_name
             marker = root / 'home' / '.evq-exit'
-            cause = marker.read_text().strip() if marker.exists() else None
+            cause = marker.read_text(encoding='utf-8').strip() if marker.exists() else None
             marker.unlink(missing_ok=True)
             log_kill(
                 self._agent,
@@ -801,8 +830,9 @@ class CodingAgentTarget(AgentTarget):
                 if any(phrase in detail.lower() for phrase in ('no such image', 'no such object', 'image not known')):
                     raise CodingAgentUnavailableError(
                         'cli.image_missing',
-                        f'image {opts.image!r} not found. Build it with `eq coding-agent build-image --tag {opts.image}` '
-                        f'or `{opts.binary} build -t {opts.image} {build_dir}`',
+                        f'image {opts.image!r} not found. Build it with '
+                        f'`{shell_join(["eq", "coding-agent", "build-image", "--tag", opts.image])}` '
+                        f'or `{shell_join([opts.binary, "build", "-t", opts.image, str(build_dir)])}`',
                     )
                 raise CodingAgentUnavailableError(
                     'cli.container_start',
@@ -969,21 +999,31 @@ class CodingAgentTarget(AgentTarget):
     async def respond(self, messages: list[Message]) -> AgentResponse:
         self._require_creator_process('respond')
         workdir = self._ensure_workdir()
-        prompt = render_prompt(
-            messages, system_prompt=self._system_prompt, inline_system=self._spec.system_prompt_flag is None
+        env = {**os.environ, **self._env}
+        # Looked up on the child PATH: Windows would search the parent's, and for .exe files only.
+        host_binary = (
+            shutil.which('orq' if self._launcher == 'orq' else self._spec.binary, path=env.get('PATH'))
+            if self._container is None
+            else None
         )
+        # A batch launcher cannot carry free text safely, so the system prompt rides in the stdin transcript.
+        inline_system = self._spec.system_prompt_flag is None or (
+            host_binary is not None and is_batch_launcher(host_binary)
+        )
+        prompt = render_prompt(messages, system_prompt=self._system_prompt, inline_system=inline_system)
         argv, stdin_text = build_argv(
             agent=self._agent,
             launcher=self._launcher,
             model=self._model,
             permission_mode=self._permission_mode,
-            system_prompt=self._system_prompt,
+            system_prompt=None if inline_system else self._system_prompt,
             extra_args=self._extra_args,
             orq=self._orq,
             prompt=prompt,
         )
+        if host_binary is not None:
+            argv = [host_binary, *argv[1:]]
         on_early_exit: Callable[[], Awaitable[None]] | None = None
-        env = {**os.environ, **self._env}
         agent_binary = argv[0]
         argv, on_early_exit, name = await self._prepare_container_exec(argv)
         async with with_llm_span(
@@ -1079,6 +1119,7 @@ class CodingAgentTarget(AgentTarget):
         Stdout is read in chunks, so neither a long JSONL line nor a partial one can stall or crash the read.
         The caller owns container cleanup after this method has killed the process group on early exit.
         """
+        refuse_unsafe_batch_args(argv)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

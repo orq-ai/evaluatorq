@@ -49,7 +49,7 @@ def read_json(path_str: str, mtime_ns: int) -> dict[str, object]:
         json.JSONDecodeError: When the file content is not valid JSON.
         OSError: When the file cannot be read.
     """
-    return json.loads(Path(path_str).read_text())  # type: ignore[return-value]
+    return json.loads(Path(path_str).read_text(encoding='utf-8'))
 
 
 def read_json_cached(path: Path) -> dict[str, object]:
@@ -231,14 +231,16 @@ def _card_from_manifest(m: RunManifest) -> ReportCard:
     )
 
 
-def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
-    """``(file count, newest mtime_ns)`` across every run store — a cheap staleness key.
+def fingerprint(roots: list[Path] | None = None) -> tuple[int, int, int]:
+    """``(file count, newest mtime_ns, identity hash)`` across every run store — a cheap staleness key.
 
     Callers cache expensive whole-store aggregates against this: one stat sweep
     instead of re-reading every report. Reports are write-once, so a new run
     always bumps the count; manifests are *not* (an in-flight run rewrites its
     own on every stage), so ``.manifests/`` is swept too and the newest mtime
-    catches that stage advance.
+    catches that stage advance. The identity hash covers each file's inode and size, because the
+    manifest is rewritten by ``os.replace`` and two writes inside one clock tick (about 16 ms on
+    Windows) leave the mtime unchanged while the replaced file's inode still moves.
 
     The report sweep goes through `_iter_report_files`, the same predicate
     the aggregate itself reads, so stage artifacts (``01_``/``02_``/``03_``) that
@@ -251,14 +253,17 @@ def fingerprint(roots: list[Path] | None = None) -> tuple[int, int]:
     roots = roots or default_roots()
     count = 0
     newest = 0
+    stamps: list[tuple[int, int]] = []
     for root in roots:
         for p in (*_iter_report_files([root]), *(root / MANIFESTS_DIR_NAME).glob('*.json')):
             count += 1
             try:
-                newest = max(newest, p.stat().st_mtime_ns)
+                st = p.stat()
             except OSError:  # a stat failure must not sink the whole sweep
                 continue
-    return (count, newest)
+            newest = max(newest, st.st_mtime_ns)
+            stamps.append((st.st_ino, st.st_size))
+    return (count, newest, hash(tuple(sorted(stamps))))
 
 
 def _backfill_manifest(path: Path, card: ReportCard) -> None:
@@ -310,11 +315,13 @@ def _backfill_manifest(path: Path, card: ReportCard) -> None:
         ended_at=card.created_at,
         report_path=str(path),
     )
-    # complete() is a no-op on an already-terminal manifest, so stamp directly —
-    # ManifestWriter.flush() is still the single writer of a sidecar.
-    manifest.summary = summary
-    manifest.summary_version = RUN_SUMMARY_VERSION
-    ManifestWriter(manifest, mpath).flush()
+    # Seed the writer before changing the summary: flush merges fields changed
+    # since construction onto the latest disk view, so the existing thin summary
+    # must remain the writer's baseline for this backfill to count as an update.
+    writer = ManifestWriter(manifest, mpath)
+    writer.manifest.summary = summary
+    writer.manifest.summary_version = RUN_SUMMARY_VERSION
+    writer.flush()
 
 
 def _report_summary(path: Path, surface: str) -> RunSummary | None:

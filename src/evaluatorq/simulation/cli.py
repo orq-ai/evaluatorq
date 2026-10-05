@@ -30,11 +30,10 @@ import asyncio
 import json
 import logging
 import os
-import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path  # noqa: TC003 — typer resolves the command annotations at runtime
-from typing import TYPE_CHECKING, Annotated, Any, NoReturn
+from typing import TYPE_CHECKING, Annotated, Any, NoReturn, cast
 
 import typer
 from loguru import logger
@@ -44,7 +43,7 @@ from evaluatorq.common.cli_epilog import examples as _examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
-from evaluatorq.common.cli_tty import should_skip_confirm
+from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.llm_limit import check_llm_parallelism_option, llm_concurrency_limit
 from evaluatorq.contracts import LLMCallConfig
@@ -179,7 +178,9 @@ def _resolve_target(
         )
     from evaluatorq.redteam.backends.openai import OpenAIModelTarget
 
-    return OpenAIModelTarget(model=openai_model)  # type: ignore[arg-type]  # pyright: ignore[reportArgumentType]
+    if openai_model is None:
+        raise typer.BadParameter('--openai-model is required for an OpenAI model target')
+    return OpenAIModelTarget(model=openai_model)
 
 
 def _require_orq_api_key(flag: str) -> None:
@@ -340,14 +341,9 @@ def _echo_generate_plan(
     asyncio.run(confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True))
 
 
-def _shell_path(path: Path) -> str:
-    """Render a path safely for a copyable shell command."""
-    return shlex.quote(str(path))
-
-
 def _dashboard_command(directory: Path) -> str:
     """Build the canonical multi-run dashboard command for *directory*."""
-    return f'eq dashboard {_shell_path(directory)}'
+    return f'eq dashboard {shell_path(directory)}'
 
 
 _TARGET_PLACEHOLDER = 'agent:<your-agent-key>'
@@ -361,7 +357,7 @@ def _simulate_command(datapoints_path: Path, target: str | None) -> str:
     ``_TARGET_HINT`` at the call site) rather than a bare ``<target>``.
     """
     target_part = target or _TARGET_PLACEHOLDER
-    return f'eq sim simulate -i {_shell_path(datapoints_path)} --target {target_part}'
+    return f'eq sim simulate -i {shell_path(datapoints_path)} --target {target_part}'
 
 
 def _render_rich(renderable: Any, *, soft_wrap: bool = False) -> str:
@@ -1732,7 +1728,7 @@ def _load_results_for_export(input_path: Path) -> tuple[list[Any], list[Any]]:
             run = None
         if run is not None:
             return list(run.results), list(run.recommendations or [])
-    results: list[SimulationResult] = parse_jsonl(content, cls=SimulationResult)  # pyright: ignore[reportAssignmentType]
+    results = parse_jsonl(content, cls=SimulationResult)
     return results, []
 
 
@@ -1957,7 +1953,7 @@ def upload_dataset(
 
     # ponytail: single bulk create; chunk if a set ever exceeds the API's array cap.
     # rows are plain dicts matching the SDK's CreateDatasetItem TypedDict shape.
-    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=rows)  # pyright: ignore[reportArgumentType]
+    client.datasets.create_datapoint(dataset_id=dataset_id, request_body=cast('Any', rows))
 
     base = os.environ.get('ORQ_BASE_URL', 'https://my.orq.ai').rstrip('/')
     typer.echo(f'Uploaded {len(rows)} datapoint(s) -> dataset {dataset_id} ({base})')

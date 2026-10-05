@@ -10,7 +10,6 @@ import importlib.metadata
 import os
 import posixpath
 import re
-import shlex
 import signal
 import socket
 import subprocess
@@ -22,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from evaluatorq.common.cli_tty import shell_join
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -389,7 +390,7 @@ def remove_containers(binary: str, context: str | None, names: Sequence[str], *,
                 return []
             pending = failed or [name for name in pending if name not in missing] or pending
             reason = proc.stderr.strip() or f'command exited with status {proc.returncode}'
-    command = shlex.join([*cli_prefix(binary, context), 'rm', '-f', *pending])
+    command = shell_join([*cli_prefix(binary, context), 'rm', '-f', *pending])
     logger.error(
         f'could not remove container(s) {", ".join(pending)}: {reason}. Their lease ends them within '
         f'{LEASE_CHECK_S * 2}s; to remove now run: {command}'
