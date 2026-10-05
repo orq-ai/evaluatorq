@@ -11,7 +11,7 @@ import pytest
 from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
 from evaluatorq.common.model_catalogue import clear_model_overrides, reset_catalogue_cache
-from evaluatorq.common.model_roles import set_cli_models
+from evaluatorq.common.model_roles import ROLE_ENV, set_cli_models
 
 
 class LeakedNetworkCall(AssertionError):
@@ -27,9 +27,16 @@ def _is_loopback(address: object) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _reset_cli_model_flags(monkeypatch):
-    """Keep the global --fast-model/--model-override state from leaking between tests."""
+def _reset_cli_model_flags(monkeypatch, tmp_path):
+    """Keep the global --fast-model/--model-override state, and a developer's own model env and settings, out of tests.
+
+    Tests that exercise one of these set it after this fixture runs, so theirs wins.
+    """
+    for name in (*ROLE_ENV.values(), "EVALUATORQ_COMPILER_MODEL", "EVALUATORQ_APPLY_MODEL"):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv("EVALUATORQ_MODEL_OVERRIDES", raising=False)
+    monkeypatch.setenv("EVALUATORQ_DASHBOARD_SETTINGS", str(tmp_path / "dashboard-settings.json"))
+    monkeypatch.setenv("EVALUATORQ_USER_SETTINGS", str(tmp_path / "user-settings.json"))
     set_cli_models()
     yield
     set_cli_models()
