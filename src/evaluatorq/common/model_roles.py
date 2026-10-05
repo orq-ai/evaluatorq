@@ -57,7 +57,7 @@ LEGACY_TASK_ENV: dict[str, str] = {
     'apply': 'EVALUATORQ_APPLY_MODEL',
 }
 
-# Internal: carries --model-override pairs (JSON) to subprocesses such as the
+# Internal: carries the CLI role flags and --model-override pairs (JSON) to subprocesses such as the
 # dashboard's Insights worker, which inherit os.environ but not process state.
 OVERRIDES_ENV = 'EVALUATORQ_MODEL_OVERRIDES'
 
@@ -97,18 +97,34 @@ def _env(name: str) -> str | None:
     return os.environ.get(name, '').strip() or None
 
 
-def _inherited_overrides() -> dict[str, str]:
+def export_cli_models() -> None:
+    """Publish this process's CLI flags in the environment for child processes to inherit."""
+    if _cli_roles or _cli_overrides:
+        os.environ[OVERRIDES_ENV] = json.dumps({'roles': _cli_roles, 'overrides': _cli_overrides})
+
+
+def _inherited_cli_models() -> tuple[dict[str, str], dict[str, str]]:
+    """The CLI flags a parent process exported, tolerating anything malformed."""
     raw = _env(OVERRIDES_ENV)
     if not raw:
-        return {}
+        return {}, {}
     try:
         loaded = json.loads(raw)
     except ValueError:
+        loaded = None
+    if not isinstance(loaded, dict):
         logger.warning('Ignoring malformed {}', OVERRIDES_ENV)
-        return {}
-    return (
-        {k: v for k, v in loaded.items() if k in TASKS and isinstance(v, str) and v} if isinstance(loaded, dict) else {}
-    )
+        return {}, {}
+
+    def pick(key: str, valid: Iterable[str]) -> dict[str, str]:
+        found = loaded.get(key)
+        found = found if isinstance(found, dict) else {}
+        good = {k: v.strip() for k, v in found.items() if k in valid and isinstance(v, str) and v.strip()}
+        if len(good) != len(found):
+            logger.warning('Ignoring unknown or blank {} in {}', key, OVERRIDES_ENV)
+        return good
+
+    return pick('roles', ROLES), pick('overrides', TASKS)
 
 
 def _legacy_env(task: str) -> str | None:
@@ -127,11 +143,14 @@ def _resolve(role: Role, task: str | None) -> tuple[str, str]:
         raise ValueError(f'task {task!r} belongs to role {TASKS[task]!r}, not {role!r}')
     from evaluatorq.trace_finder.settings import load_settings
 
-    overrides = _cli_overrides or _inherited_overrides()
-    if task and task in overrides:
-        return overrides[task], 'flag'
-    if role in _cli_roles:
-        return _cli_roles[role], 'flag'
+    if _cli_roles or _cli_overrides:
+        cli_roles, cli_overrides = _cli_roles, _cli_overrides
+    else:
+        cli_roles, cli_overrides = _inherited_cli_models()
+    if task and task in cli_overrides:
+        return cli_overrides[task], 'flag'
+    if role in cli_roles:
+        return cli_roles[role], 'flag'
     legacy = _legacy_env(task) if task else None
     if legacy:
         return legacy, 'env'

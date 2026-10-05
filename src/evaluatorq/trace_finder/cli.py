@@ -274,7 +274,7 @@ def find(
         str | None,
         typer.Option(
             '--classifier-model',
-            help=f'Model that classifies each trace via the Orq router. Default: {BUILTIN["classifier"]}. Requires Orq credentials.',
+            help=f'Model that classifies each trace via the Orq router (sets the finder.classifier task only, not the classifier role). Default: {BUILTIN["classifier"]}. Requires Orq credentials.',
         ),
     ] = None,
     json_path: Annotated[Path | None, typer.Option('--json', help='Write the completed run export to PATH.')] = None,

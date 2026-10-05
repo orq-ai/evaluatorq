@@ -11,6 +11,7 @@ import pytest
 from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
 from evaluatorq.common.model_catalogue import clear_model_overrides, reset_catalogue_cache
+from evaluatorq.common.model_roles import set_cli_models
 
 
 class LeakedNetworkCall(AssertionError):
@@ -23,6 +24,15 @@ def _is_loopback(address: object) -> bool:
         return False
     host = str(address[0])
     return host in {"127.0.0.1", "::1", "localhost", "0.0.0.0"}
+
+
+@pytest.fixture(autouse=True)
+def _reset_cli_model_flags(monkeypatch):
+    """Keep the global --fast-model/--model-override state from leaking between tests."""
+    monkeypatch.delenv("EVALUATORQ_MODEL_OVERRIDES", raising=False)
+    set_cli_models()
+    yield
+    set_cli_models()
 
 
 @pytest.fixture(autouse=True)

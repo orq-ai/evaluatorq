@@ -30,9 +30,6 @@ def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         monkeypatch.setenv(name, '')
     monkeypatch.setenv('COLUMNS', '200')
     monkeypatch.setenv('NO_COLOR', '1')
-    set_cli_models()
-    yield
-    set_cli_models()
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -54,25 +51,48 @@ def test_apply_model_flags_sets_roles_and_overrides() -> None:
     assert role_model('fast') == BUILTIN['fast']
 
 
-def test_apply_model_flags_exports_env_for_child_processes() -> None:
+def test_apply_model_flags_exports_one_internal_variable_not_role_env_vars() -> None:
     _apply_model_flags(fast='f/x', smart=None, classifier='c/x', embedding='e/x', overrides=['apply=c/d'])
-    assert os.environ['EVALUATORQ_FAST_MODEL'] == 'f/x'
-    assert os.environ['EVALUATORQ_CLASSIFIER_MODEL'] == 'c/x'
-    assert os.environ['EVALUATORQ_SMART_MODEL'] == ''
-    assert json.loads(os.environ['EVALUATORQ_MODEL_OVERRIDES']) == {'apply': 'c/d'}
+    assert json.loads(os.environ['EVALUATORQ_MODEL_OVERRIDES']) == {
+        'roles': {'fast': 'f/x', 'classifier': 'c/x', 'embedding': 'e/x'},
+        'overrides': {'apply': 'c/d'},
+    }
+    assert os.environ['EVALUATORQ_FAST_MODEL'] == ''
     assert role_model('embedding') == 'e/x'
 
 
-def test_overrides_in_the_env_reach_a_process_that_never_saw_the_flags(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A dashboard worker is a subprocess: it only inherits os.environ."""
-    monkeypatch.setenv('EVALUATORQ_MODEL_OVERRIDES', json.dumps({'apply': 'c/d'}))
+def _worker_env(monkeypatch: pytest.MonkeyPatch, payload: object) -> None:
+    """Simulate a subprocess: the environment is set, in-memory CLI state is empty."""
+    monkeypatch.setenv('EVALUATORQ_MODEL_OVERRIDES', payload if isinstance(payload, str) else json.dumps(payload))
     set_cli_models()
-    assert role_model('smart', task='apply') == 'c/d'
-    assert role_model('smart') == BUILTIN['smart']
 
 
-def test_malformed_internal_overrides_env_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv('EVALUATORQ_MODEL_OVERRIDES', '{not json')
+def test_worker_resolves_role_flag_above_a_settings_task_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / 'settings.json').write_text(json.dumps({'model_overrides': {'insights.summary': 'file/task'}}))
+    assert role_model('smart', task='insights.summary') == 'file/task'
+    _worker_env(monkeypatch, {'roles': {'smart': 'flag/smart'}})
+    assert role_model('smart', task='insights.summary') == 'flag/smart'
+
+
+def test_embedding_flag_reaches_the_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    _apply_model_flags(fast=None, smart=None, classifier=None, embedding='e/x', overrides=None)
+    exported = os.environ['EVALUATORQ_MODEL_OVERRIDES']
+    _worker_env(monkeypatch, exported)
+    assert role_model('embedding', task='insights.embedding') == 'e/x'
+
+
+def test_worker_task_override_beats_role_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    _worker_env(monkeypatch, {'roles': {'smart': 'flag/smart'}, 'overrides': {'apply': 'flag/apply'}})
+    assert role_model('smart', task='apply') == 'flag/apply'
+    assert role_model('smart') == 'flag/smart'
+
+
+@pytest.mark.parametrize(
+    'payload',
+    ['{not json', '[1]', {'roles': {'bogus': 'x', 'smart': ''}, 'overrides': {'bogus': 'x'}}, {'roles': 5}],
+)
+def test_worker_ignores_malformed_internal_variable(monkeypatch: pytest.MonkeyPatch, payload: object) -> None:
+    _worker_env(monkeypatch, payload)
     assert role_model('smart', task='apply') == BUILTIN['smart']
 
 

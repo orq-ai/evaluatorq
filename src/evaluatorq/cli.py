@@ -12,7 +12,6 @@ evaluatorq dashboard /path/to/run.json
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path  # noqa: TC003
 from typing import Annotated
@@ -22,7 +21,7 @@ import typer
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
-from evaluatorq.common.model_roles import BUILTIN, OVERRIDES_ENV, ROLE_ENV, TASKS, add_cli_models, parse_overrides
+from evaluatorq.common.model_roles import BUILTIN, TASKS, add_cli_models, export_cli_models, parse_overrides
 
 # ---------------------------------------------------------------------------
 # Top-level application
@@ -73,12 +72,7 @@ def _apply_model_flags(
     roles = {'fast': fast, 'smart': smart, 'classifier': classifier, 'embedding': embedding}
     add_cli_models(roles, parsed)  # ty: ignore[invalid-argument-type]
     # Subprocesses (the dashboard's Insights worker) inherit os.environ, not this state.
-    for role, env_name in ROLE_ENV.items():
-        value = (roles[role] or '').strip()
-        if value:
-            os.environ[env_name] = value
-    if parsed:
-        os.environ[OVERRIDES_ENV] = json.dumps({**json.loads(os.environ.get(OVERRIDES_ENV) or '{}'), **parsed})
+    export_cli_models()
 
 
 @app.callback(invoke_without_command=True)
@@ -165,7 +159,10 @@ def dashboard(
     ] = None,
     classifier_model: Annotated[
         str | None,
-        typer.Option('--classifier-model', help='Classifier model role, as the global --classifier-model.'),
+        typer.Option(
+            '--classifier-model',
+            help='Sets the classifier model role (every classifier task), as the global --classifier-model.',
+        ),
     ] = None,
     window_days: Annotated[
         int | None,

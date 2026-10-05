@@ -496,15 +496,14 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
         )
 
         assert result.exit_code == 0, result.output
-        assert json.loads(os.environ['EVALUATORQ_MODEL_OVERRIDES']) == {'finder.compiler': 'compiler/model'}
+        assert json.loads(os.environ['EVALUATORQ_MODEL_OVERRIDES']) == {
+            'roles': {'classifier': 'classifier/model'},
+            'overrides': {'finder.compiler': 'compiler/model'},
+        }
         assert 'EVALUATORQ_COMPILER_MODEL' not in os.environ
-        assert os.environ['EVALUATORQ_CLASSIFIER_MODEL'] == 'classifier/model'
         assert os.environ['EVALUATORQ_FINDER_WINDOW_DAYS'] == '14'
         assert os.environ['EVALUATORQ_FINDER_LIMIT'] == '5000'
         assert os.environ['EVALUATORQ_FINDER_PARALLELISM'] == '12'
     finally:
-        from evaluatorq.common.model_roles import set_cli_models
-
-        set_cli_models()
         for name in names:
             os.environ.pop(name, None)
