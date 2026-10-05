@@ -833,3 +833,27 @@ def test_a_bare_otel_message_object_keeps_its_parts() -> None:
     assert trace.import_error is None
     assert [message.content for message in trace.input_messages] == ['hi']
     assert [message.content for message in trace.output_messages] == ['hello']
+
+
+def test_orq_router_agent_output_role_is_imported_as_assistant() -> None:
+    answer = '{"explanation":"The sky appears blue.","abstain":false,"value":true}'
+    spans = [
+        _span(
+            'router-chat',
+            parent_id=None,
+            started_at='2026-01-01T00:00:00Z',
+            attributes={
+                'gen_ai': {
+                    'input': {'messages': [{'role': 'user', 'parts': [{'kind': 'text', 'text': 'Is the sky blue?'}]}]},
+                    'output': {
+                        'messages': [{'role': 'agent', 'parts': [{'kind': 'text', 'text': answer}]}],
+                    },
+                },
+            },
+        )
+    ]
+
+    imported = _trace_from_spans('router-trace', spans)
+
+    assert imported.import_error is None
+    assert [(message.role, message.content) for message in imported.output_messages] == [('assistant', answer)]

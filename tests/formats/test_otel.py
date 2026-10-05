@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import json
-from datetime import timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +13,7 @@ import pytest
 
 from evaluatorq.formats.otel import (
     OtelGenericPart,
+    OtelSpan,
     OtelTextPart,
     OtelToolCallPart,
     OtelToolCallResponsePart,
@@ -83,8 +84,46 @@ def test_nested_and_flat_attributes_both_accepted() -> None:
     assert tool.attributes['gen_ai.tool.call.id'] == 'call_1'
 
 
+@pytest.mark.parametrize(
+    'output',
+    [
+        {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'hello'}]},
+        {'message': {'role': 'assistant', 'parts': [{'type': 'text', 'content': 'hello'}]}},
+        {'messages': [{'role': 'assistant', 'parts': [{'type': 'text', 'content': 'hello'}]}]},
+    ],
+    ids=['direct-message', 'singular-wrapper', 'plural-wrapper'],
+)
+def test_nested_output_message_wrappers_are_parsed(output: dict[str, Any]) -> None:
+    trace = OtelTrace.from_orq([{'span_id': 's', 'attributes': {'gen_ai.output': output}}])
+    parsed = trace.spans[0].output_messages
+    assert parsed is not None
+    assert parsed[0].role == 'assistant'
+    assert isinstance(parsed[0].parts[0], OtelTextPart)
+    assert parsed[0].parts[0].content == 'hello'
+
+
+def test_nested_input_singular_message_wrapper_is_parsed() -> None:
+    trace = OtelTrace.from_orq([{
+        'span_id': 's',
+        'attributes': {
+            'gen_ai.input': {'message': {'role': 'user', 'parts': [{'type': 'text', 'content': 'hello'}]}},
+        },
+    }])
+
+    parsed = trace.spans[0].input_messages
+    assert parsed is not None
+    assert parsed[0].role == 'user'
+    assert isinstance(parsed[0].parts[0], OtelTextPart)
+    assert parsed[0].parts[0].content == 'hello'
+
+
 def test_flatten_attributes() -> None:
     assert flatten_attributes({'gen_ai': {'a': {'b': 1}}, 'x.y': 2}) == {'gen_ai.a.b': 1, 'x.y': 2}
+
+
+def test_output_dict_with_a_plain_message_key_is_still_flattened() -> None:
+    error = {'gen_ai': {'output': {'message': 'boom', 'code': 1}}}
+    assert flatten_attributes(error) == {'gen_ai.output.message': 'boom', 'gen_ai.output.code': 1}
 
 
 def test_bad_message_attribute_keeps_raw_attribute(caplog: pytest.LogCaptureFixture) -> None:
@@ -185,6 +224,17 @@ def test_orphan_parent_is_treated_as_root() -> None:
     assert [s.span_id for s in trace.roots()] == ['s']
 
 
+def test_naive_span_times_are_read_as_utc() -> None:
+    naive = datetime(2026, 1, 1, 1, 0)
+    span = OtelSpan(trace_id='t', span_id='s', start_time=naive, end_time=naive)
+    assert span.start_time == span.end_time == naive.replace(tzinfo=timezone.utc)
+
+    aware_earlier = OtelSpan(
+        trace_id='t', span_id='aware-earlier', start_time=datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+    )
+    assert [s.span_id for s in OtelTrace(spans=[span, aware_earlier]).roots()] == ['aware-earlier', 's']
+
+
 def _real() -> list[dict[str, Any]]:
     return json.loads(REAL_FIXTURE.read_text())['spans']
 
@@ -249,7 +299,7 @@ def test_router_root_direct_messages_parse_a2a_parts(container: str, caplog: pyt
     [span] = OtelTrace.from_orq([{'span_id': 'root', 'type': 'trace', 'attributes': {
         'gen_ai.operation.name': 'chat', 'gen_ai.output': value}}]).spans
     assert span.output_messages is not None
-    assert [parsed.role for parsed in span.output_messages] == ['agent']
+    assert [parsed.role for parsed in span.output_messages] == ['assistant']
     assert span.output_messages[0].parts == [OtelTextPart(type='text', content='Hello.')]
     assert 'Unknown OTel message part type' not in caplog.text
 
