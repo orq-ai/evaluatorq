@@ -274,24 +274,6 @@ test('trace shortcuts respect editable targets, modifiers, modal state, and rout
   assert.equal(focuses, 1);
 });
 
-test('finder placeholders rotate on the interval and stop after dismissal', () => {
-  const query = {
-    dataset: { finderPlaceholders: '["First example", "Second example"]' },
-    value: '',
-    placeholder: '',
-  };
-  const app = loadDashboard({ queryAll: () => [query] });
-
-  assert.equal(app.intervals.size, 1);
-  const [{ callback, delay }] = app.intervals.values();
-  assert.equal(delay, 4000);
-  callback();
-  assert.equal(query.placeholder, 'Second example');
-  query.dataset.finderPlaceholderDismissed = 'true';
-  callback();
-  assert.equal(query.placeholder, 'Second example');
-});
-
 test('trace Ask AI submits custom bounds and endpoint timezone offsets', () => {
   const app = submitExplorerQuery({
     mode: 'exact', now: Date.parse('2026-09-30T12:00:00Z'),

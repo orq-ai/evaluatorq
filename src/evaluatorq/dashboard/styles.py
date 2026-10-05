@@ -288,7 +288,6 @@ body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder
 .finder:has(> .finder-command) .finder-facets .facet-sub label { border-radius:6px; }
 .finder:has(> .finder-command) .finder-facets .facet-n { margin-left:auto; padding-left:12px; color:#686a74; font-size:11.5px; font-variant-numeric:tabular-nums; }
 .finder:has(> .finder-command) .finder-facets .facet-scope { margin:2px 10px 6px; color:#686a74; font-size:11px; line-height:1.35; }
-.finder:has(> .finder-command) .finder-command-textarea::placeholder { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 /* Below 1100px the question takes a full row, and no control is left alone on a row. In the command strip the second row holds
    Search in, AI settings and Search. In the toolbar the first row holds Filters and the quick views, and the
    second holds Export, the time range, Rows, Columns, Load and the view switch. */
@@ -3245,10 +3244,6 @@ i.k-system { background:var(--traj-system); }i.k-user { background:var(--traj-us
 .finder-command-lede { margin:0 0 8px; color:var(--text-body); font-size:13px; }
 .finder-scope-label { color:var(--text-muted); font-size:12px; white-space:nowrap; }
 .finder-command-help { margin:6px 0 0; color:var(--text-muted); font-size:11.5px; line-height:1.4; }
-.finder-command-examples { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin:8px 0 10px; font-size:12px; color:var(--text-muted); }
-.finder-command-examples button { border:1px solid #d5d8df; border-radius:999px; background:#fff; color:var(--text-body); font:inherit; padding:3px 10px; cursor:pointer; }
-.finder-command-examples button:hover { background:#f5f5f6; }
-.finder-command-examples button:focus-visible { outline:2px solid #025558; outline-offset:1px; }
 .finder-command:has(input[name="scope"][value="within"]:checked) .scope-new,
 .finder-command:has(input[name="scope"][value="new"]:checked) .scope-within { display:none; }
 .finder-progress .part { display:contents; }
@@ -3259,7 +3254,7 @@ i.k-system { background:var(--traj-system); }i.k-user { background:var(--traj-us
 .finder:has(> .finder-command) .xr-view-icon { display:inline-flex; flex:none; width:14px; height:14px; }
 .finder:has(> .finder-command) .xr-view-icon svg { display:block; width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
 .xr-help { display:inline-grid; place-items:center; width:13px; height:13px; margin-left:4px; border:1px solid currentColor; border-radius:50%; font-size:9px; font-weight:700; line-height:1; opacity:.6; vertical-align:1px; }
-@media (max-width:1000px) { .finder-command-examples { flex-wrap:nowrap; overflow-x:auto; }.finder-command-examples button { flex:none; white-space:nowrap; }.finder-command-lede { font-size:12px; margin-bottom:6px; }.finder-command-help { font-size:11px; }.finder:has(> .finder-command) .finder-command-examples { flex-wrap:wrap; overflow:visible; }.finder:has(> .finder-command) .finder-command-examples button { flex:0 1 auto; min-width:0; white-space:normal; text-align:left; } }
+@media (max-width:1000px) { .finder-command-lede { font-size:12px; margin-bottom:6px; }.finder-command-help { font-size:11px; } }
 """
 
 

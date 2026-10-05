@@ -342,27 +342,6 @@
   });
 
   // Delegated so the finder handlers survive HTMX fragment swaps.
-  document.body.addEventListener('focusin', function (evt) {
-    const query = evt.target.closest('.finder-command-textarea[data-finder-placeholders]');
-    if (!query) return;
-    query.dataset.finderPlaceholderDismissed = 'true';
-    query.placeholder = '';
-  });
-  window.setInterval(function () {
-    document.querySelectorAll('.finder-command-textarea[data-finder-placeholders]').forEach(function (query) {
-      if (query.dataset.finderPlaceholderDismissed === 'true' || query.value || document.activeElement === query) return;
-      try {
-        const placeholders = JSON.parse(query.dataset.finderPlaceholders || '[]');
-        if (!Array.isArray(placeholders) || placeholders.length < 2) return;
-        const index = (Number(query.dataset.finderPlaceholderIndex || 0) + 1) % placeholders.length;
-        query.dataset.finderPlaceholderIndex = String(index);
-        query.placeholder = placeholders[index];
-      } catch (_error) {
-        query.dataset.finderPlaceholderDismissed = 'true';
-      }
-    });
-  }, 4000);
-
   document.body.addEventListener('click', function (evt) {
     const example = evt.target.closest('[data-finder-example]');
     if (example) {

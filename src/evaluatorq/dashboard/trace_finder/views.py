@@ -52,6 +52,7 @@ COMMAND_EXAMPLES = (
 )
 SCOPE_HELP_WITHIN = 'Within results reads every loaded trace, including rows outside the current tab or page.'
 SCOPE_HELP_NEW = 'New search searches the chosen time range up to the Rows limit, then loads the matches.'
+COMMAND_PLACEHOLDER = ' · '.join(COMMAND_EXAMPLES)
 ASK_AI_COST_NOTE = 'Each question is answered by an AI model, so it takes a few seconds and costs a little.'
 FACET_LABELS = (
     ('project', 'project'),
@@ -129,10 +130,6 @@ def traces_command_strip(
     """Compact AI query strip used by /traces; /find keeps its own legacy search hero."""
     disabled = '' if api_available else ' disabled'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
-    chips = ''.join(
-        f'<button type="button" data-finder-example="{esc(sample)}">{esc(sample)}</button>'
-        for sample in COMMAND_EXAMPLES
-    )
     auto_scope_attr = ' data-auto-scope="pending"' if auto_scope_pending else ''
     return (
         '<section class="finder-hero finder-command">'
@@ -140,8 +137,7 @@ def traces_command_strip(
         '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls, #explorer-load-form" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
-        f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question, e.g. {esc(COMMAND_EXAMPLES[0])}" '
-        f'data-finder-placeholders="{esc(json.dumps(COMMAND_EXAMPLES))}" required{disabled}>'
+        f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="{esc(COMMAND_PLACEHOLDER)}" required{disabled}>'
         f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="{esc(mode)}">'
         '<span class="finder-scope-label" id="finder-scope-label">Search in</span>'
         f'<div id="finder-scope" class="finder-seg" role="radiogroup" aria-labelledby="finder-scope-label"'
@@ -153,7 +149,6 @@ def traces_command_strip(
         '</form>'
         f'<p class="finder-command-help"><span class="scope-within">{esc(SCOPE_HELP_WITHIN)}</span>'
         f'<span class="scope-new">{esc(SCOPE_HELP_NEW)}</span> {esc(ASK_AI_COST_NOTE)}</p>'
-        f'<div class="finder-command-examples"><span>Try</span>{chips}</div>'
         f'{error_html}</section>'
     )
 
