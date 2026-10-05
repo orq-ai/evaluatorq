@@ -91,6 +91,58 @@ def test_schema_violation_and_missing_schema_jsonschema_basis():
     assert no_schema.value is None
 
 
+def test_response_local_schema_is_selected_at_each_tool_call():
+    from openai.types.responses import Response
+
+    from evaluatorq.formats.responses import ResponsesConversation
+
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'lookup', 'arguments': '{"wrong": 1}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'one'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'lookup', 'arguments': '{"b": 1}'},
+    ]
+    first_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['a']}}]
+    second_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['b']}}]
+    base = {
+        'created_at': 1, 'model': 'gpt-x', 'object': 'response', 'parallel_tool_calls': False,
+        'tool_choice': 'auto', 'status': 'completed', 'usage': None,
+    }
+    conversation = ResponsesConversation(items=items, responses=[
+        Response.model_validate({**base, 'id': 'resp_a', 'output': [items[0]], 'tools': first_tools}),
+        Response.model_validate({**base, 'id': 'resp_b', 'output': [items[2]], 'tools': second_tools}),
+    ])
+    trajectory = conversation.to_atif()
+
+    signal = _values(trajectory, 'invalid_schema_tool_call_count')['invalid_schema_tool_call_count']
+    assert signal.value == 1
+    assert [item.call_id for item in signal.evidence] == ['a']
+
+
+def test_unmapped_responses_tool_activity_invalidates_only_tool_dependent_signals():
+    from evaluatorq.formats.responses import ResponsesConversation
+
+    trajectory = ResponsesConversation(items=[
+        {'type': 'custom_tool_call', 'call_id': 'custom-1', 'name': 'lookup', 'input': 'query'},
+        {'type': 'custom_tool_call_output', 'call_id': 'custom-1', 'output': 'answer'},
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'finished'}]},
+    ]).to_atif()
+    values = _values(
+        trajectory,
+        'tool_call_count',
+        'llm_call_count',
+        'max_autonomous_steps',
+        'terminal_answer_present',
+        'tool_churn',
+    )
+
+    assert values['tool_call_count'].value is None
+    assert values['tool_call_count'].preconditions[-1].name == 'source tool activity represented'
+    assert values['llm_call_count'].value == 2
+    assert values['max_autonomous_steps'].value is None
+    assert values['terminal_answer_present'].value is None
+    assert values['tool_churn'].value is None
+
+
 def test_schema_validation_reports_no_basis_without_optional_dependency(monkeypatch):
     import builtins
 
@@ -124,8 +176,7 @@ def test_unusable_tool_schema_has_no_basis():
     report = _values(trajectory, 'invalid_schema_tool_call_count')['invalid_schema_tool_call_count']
     assert report.value is None
     assert 'unusable tool schema' in (report.no_basis or '')
-    assert report.preconditions[-1].name == 'tool schemas valid'
-    assert report.preconditions[-1].met is False
+    assert any(pc.name == 'tool schemas valid' and pc.met is False for pc in report.preconditions)
 
 
 def test_command_family_runs_and_oscillation():

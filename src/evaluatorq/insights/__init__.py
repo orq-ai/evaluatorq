@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.trace_document import TraceDocument, TraceMetadata
+
 from . import presets
 from .models import (
     Cluster,
@@ -43,7 +45,9 @@ __all__ = [
     'LabelSpec',
     'PriorityPoint',
     'StageFailure',
+    'TraceDocument',
     'TraceInsight',
+    'TraceMetadata',
     'TraceSummary',
     'insights',
     'insights_sync',

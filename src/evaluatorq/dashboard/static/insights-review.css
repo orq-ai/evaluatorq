@@ -402,4 +402,25 @@ kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--border-default
   @media (prefers-reduced-motion:reduce) { .review-loading::before { animation:none; } }
   .review-error button { margin-left:8px; text-decoration:underline; }
   @media(max-width:760px) { .app-shell { grid-template-columns:30px minmax(0,1fr); } .app-sidebar { width:30px; min-width:30px; } .app-content.insights-review-content { padding:0 12px 32px; } }
+  .signal-panel { margin:18px 0; padding-top:12px; border-top:1px solid var(--border-subtle); }
+  .signal-panel h5 { display:flex; align-items:center; gap:8px; }
+  .signal-panel h5>span { color:var(--text-faint); font-size:11px; font-weight:500; }
+  .signal-empty { margin:7px 0; color:var(--text-faint); }
+  .signal-row { margin:6px 0; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-card); }
+  .signal-row>summary,.signal-coverage>summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 10px; cursor:pointer; font-weight:600; }
+  .signal-row>summary:hover,.signal-coverage>summary:hover { background:var(--surface-hover); }
+  .signal-summary-meta { display:flex; align-items:center; gap:8px; color:var(--text-faint); font-size:11px; font-weight:500; }
+  .signal-badge { display:inline-block; margin:5px 6px 0 0; padding:1px 7px; border-radius:999px; background:var(--surface-subtle); color:var(--text-body); font-size:10px; font-style:normal; }
+  .signal-badge.no-basis { background:#fff0e8; color:#a53b17; }
+  .signal-badge.approximate { background:#fff7d6; color:#785b0b; }
+  .signal-badge.measured { background:#e6f4ef; color:#176d58; }
+  .signal-body { padding:0 10px 10px; overflow-wrap:anywhere; }
+  .signal-body h6 { margin:12px 0 4px; font-size:11px; }
+  .signal-meta { display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px; padding:4px 0; }
+  .signal-meta>b { color:var(--text-faint); font-weight:500; }
+  .signal-evidence,.signal-preconditions { margin:0; padding-left:19px; }
+  .signal-evidence li,.signal-preconditions li { padding:3px 0; overflow-wrap:anywhere; }
+  .signal-preconditions li span { display:block; color:var(--text-faint); }
+  .signal-coverage { margin-top:8px; border:1px solid var(--border-subtle); border-radius:8px; }
+  .signal-coverage pre { margin:0; padding:0 10px 10px; white-space:pre-wrap; overflow-wrap:anywhere; font:11px/1.45 var(--mono); }
 }

@@ -9,6 +9,7 @@ from typing import Any, cast
 
 import pytest
 
+from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.contracts import Usage
 from evaluatorq.insights import pipeline
 from evaluatorq.insights.models import (
@@ -155,7 +156,7 @@ async def test_finder_missing_traces_are_visible_in_run_warnings(monkeypatch: py
 
     async def resolve(*args, **kwargs):
         return ResolvedPopulation(
-            traces=traces,
+            traces=[ensure_trace_document(trace) for trace in traces],
             compiled=None,
             echo={'mode': 'export', 'n_matched_ids': 4, 'n_missing_export_ids': 3},
             n_scanned=1,
@@ -180,7 +181,7 @@ async def test_dashboard_finder_snapshot_records_origin_and_snapshot_identity(
 
     async def resolve(*args, **kwargs):
         return ResolvedPopulation(
-            traces=traces,
+            traces=[ensure_trace_document(trace) for trace in traces],
             compiled=None,
             echo={'mode': 'export', 'finder_export': str(tmp_path / 'private-snapshot.json')},
             n_scanned=1,
@@ -319,6 +320,12 @@ async def test_summary_failure_is_per_trace(monkeypatch: pytest.MonkeyPatch, tmp
     assert run.status == 'completed'
     assert run.counts['n_failed_traces'] == 1
     assert run.counts['per_stage_failed'] == 2
+    assert all(trace.signals is not None for trace in run.traces)
+    signal_report = run.traces[0].signals
+    assert signal_report is not None
+    assert signal_report.results['user_message_count'].value == 1
+    assert run.config.signals is not None
+    assert run.config.signals.tag_thresholds is not None
     assert run.traces[0].errors['summary'] == 'summary failed'
 
 
@@ -540,7 +547,7 @@ async def test_local_projection_omission_is_visible_in_saved_run(monkeypatch: py
 
     async def local_population(*args, **kwargs):
         return ResolvedPopulation(
-            traces=traces,
+            traces=[ensure_trace_document(trace) for trace in traces],
             compiled=None,
             echo={'mode': 'snapshot', 'n_projection_truncated': 1, 'n_source_messages': 2, 'n_omitted_messages': 1},
             n_scanned=1,

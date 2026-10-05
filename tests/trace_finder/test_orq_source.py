@@ -12,6 +12,7 @@ import pytest
 
 from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot
+from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.trace_finder.orq_source import (
     MAX_SPAN_PAGES,
     OrqSourceError,
@@ -176,6 +177,91 @@ def test_build_oql_keeps_the_base_filter_unless_a_model_or_provider_is_picked() 
 def test_build_oql_rejects_a_project_name_that_cannot_be_resolved() -> None:
     with pytest.raises(OrqSourceError, match='cannot resolve selected project names'):
         build_oql(FacetSelection(project=frozenset({'Missing'})), NumericFilters(), {})
+
+
+@pytest.mark.asyncio
+async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_into_atif() -> None:
+    source_summary = summary(
+        'selected',
+        messages=[
+            {'role': 'user', 'content': 'find the invoice'},
+            {'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': 'call-1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}
+            ]},
+            {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'found'},
+        ],
+    )
+    source_summary.leading_span_id = 'selected-span'
+    selected_detail = span('selected-span', minute=1)
+    selected_detail.ended_at = START + timedelta(minutes=2)
+    selected_detail.attributes = {
+        'openresponses.request': json.dumps({'tools': [{'type': 'function', 'name': 'lookup'}]}),
+        'openresponses.response': json.dumps({
+            'output': [{'type': 'function_call', 'id': 'fc_1', 'call_id': 'call-1', 'name': 'lookup', 'arguments': '{}'}],
+            'usage': {'input_tokens': 40, 'output_tokens': 12, 'input_tokens_details': {'cached_tokens': 8}},
+        }),
+    }
+    tool_detail = span('matching-tool', minute=2, span_type='span.tool')
+    tool_detail.parent_span_id = 'selected-span'
+    tool_detail.attributes = {'gen_ai': {'tool': {'call': {'id': 'call-1'}}}}
+    tool_detail.status = 'error'
+    sibling = span('sibling', minute=3)
+    sibling.attributes = {'gen_ai': {'tool': {'call': {'id': 'other-call'}}}}
+    sibling.status = 'error'
+    traces = FakeTraces(
+        {None: ([source_summary], False, None)},
+        spans={'selected': [span('selected-span', minute=1), tool_detail, sibling]},
+        details={
+            ('selected', 'selected-span'): selected_detail,
+            ('selected', 'matching-tool'): tool_detail,
+            ('selected', 'sibling'): sibling,
+        },
+    )
+    source = make_source(FakeOrq(traces))
+    try:
+        snapshot = await source.load_async(
+            START, END, 1, facets=FacetSelection(), numeric=NumericFilters()
+        )
+        (enriched,) = await source.enrich_selected_signal_spans(snapshot.traces)
+    finally:
+        source.close()
+
+    document = ensure_trace_document(enriched)
+    step = next(step for step in document.trajectory.steps if step.source == 'agent' and step.tool_calls)
+    assert step.metrics is not None
+    assert (step.metrics.prompt_tokens, step.metrics.completion_tokens, step.metrics.cached_tokens) == (40, 12, 8)
+    assert step.extra is not None
+    assert step.extra['evaluatorq.responses_tools'] == [{'type': 'function', 'name': 'lookup'}]
+    invocation = step.extra['invocation']
+    assert isinstance(invocation, dict)
+    assert invocation['start_timestamp'] < invocation['end_timestamp']
+    observation = step.observation
+    assert observation is not None
+    assert observation.results[0].extra is not None
+    assert observation.results[0].extra['status'] == 'error'
+    assert document.metadata.capture_metadata['signal_span_coverage']['matched_call_ids'] == ['call-1']
+    assert 'signal_selected_span' not in document.metadata.capture_metadata
+    assert 'signal_tool_spans' not in document.metadata.capture_metadata
+    assert traces.get_span_calls
+    assert {call['span_id'] for call in traces.get_span_calls} <= {'selected-span', 'matching-tool'}
+
+
+@pytest.mark.asyncio
+async def test_selected_span_enrichment_records_missing_selected_span_coverage() -> None:
+    source_summary = summary('missing-span', messages=[{'role': 'user', 'content': 'hello'}])
+    source_summary.leading_span_id = 'gone'
+    traces = FakeTraces({None: ([source_summary], False, None)}, spans={'missing-span': []})
+    source = make_source(FakeOrq(traces))
+    try:
+        snapshot = await source.load_async(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+        (enriched,) = await source.enrich_selected_signal_spans(snapshot.traces)
+    finally:
+        source.close()
+
+    coverage = enriched.capture_metadata['signal_span_coverage']
+    assert coverage['selected_span_id'] == 'gone'
+    assert coverage['selected_span_found'] is False
+    assert 'signal_selected_span' not in enriched.capture_metadata
 
 
 def test_saved_project_id_does_not_expand_a_duplicate_project_name() -> None:
@@ -1597,3 +1683,25 @@ async def test_search_rejects_naive_datetime() -> None:
 
     with pytest.raises(OrqSourceError, match='start must include a timezone offset'):
         await source.search(datetime(2026, 9, 20), END, 1, facets=FacetSelection(), numeric=NumericFilters())
+
+
+@pytest.mark.asyncio
+async def test_selected_span_detail_failure_keeps_messages_and_records_coverage() -> None:
+    source_summary = summary('partial-detail', messages=[{'role': 'user', 'content': 'hello'}])
+    source_summary.leading_span_id = 'selected-span'
+    traces = FakeTraces(
+        {None: ([source_summary], False, None)},
+        spans={'partial-detail': [span('selected-span', minute=1)]},
+    )
+    source = make_source(FakeOrq(traces))
+    try:
+        snapshot = await source.load_async(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+        (enriched,) = await source.enrich_selected_signal_spans(snapshot.traces)
+    finally:
+        source.close()
+    assert enriched.messages == snapshot.traces[0].messages
+    coverage = enriched.capture_metadata['signal_span_coverage']
+    assert coverage['selected_span_found'] is True
+    assert coverage['selected_detail_captured'] is False
+    assert len(coverage['enrichment_errors']) == 1
+    assert 'KeyError' in coverage['enrichment_errors'][0]

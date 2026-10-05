@@ -20,7 +20,21 @@ if TYPE_CHECKING:
     from evaluatorq.formats.otel import OtelTrace
 
 _KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message', 'compaction'}
-_MODEL_OUTPUT_TYPES = frozenset({'reasoning', 'function_call', 'custom_tool_call', 'mcp_call'})
+_MODEL_OUTPUT_TYPES = frozenset({
+    'reasoning',
+    'function_call',
+    'custom_tool_call',
+    'mcp_call',
+    'file_search_call',
+    'web_search_call',
+    'computer_call',
+    'tool_search_call',
+    'image_generation_call',
+    'code_interpreter_call',
+    'local_shell_call',
+    'shell_call',
+    'apply_patch_call',
+})
 _INPUT_ITEM: TypeAdapter[ResponseInputItem] = TypeAdapter(ResponseInputItem)
 _OUTPUT_ITEM: TypeAdapter[ResponseOutputItem] = TypeAdapter(ResponseOutputItem)
 

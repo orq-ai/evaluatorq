@@ -33,6 +33,15 @@ def test_the_registry_contains_group_a_and_reports_the_config_version() -> None:
     assert report.config_version == 'v3-local-cc-2026-09-29'
 
 
+def test_tool_activity_dependencies_are_registered_and_tags_inherit_them() -> None:
+    assert registry.TOOL_ACTIVITY_DEPENDENT_SIGNALS <= set(registry.SIGNALS)
+    assert registry._TAG_TOOL_DEPENDENCIES == {
+        'long_autonomous_run', 'delegation_heavy', 'error_heavy', 'tool_churn', 'tool_loop', 'stalled',
+        'output_heavy', 'inefficient_execution',
+    }
+    assert registry._TAG_TOOL_DEPENDENCIES <= set(registry.SIGNALS)
+
+
 def test_a_raising_signal_becomes_no_basis(monkeypatch: pytest.MonkeyPatch) -> None:
     _table(monkeypatch)
     report = compute_signals(traj([user()]))

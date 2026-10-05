@@ -13,6 +13,8 @@ from typing_extensions import Self
 from evaluatorq.common.judge import ClassifyQuestion
 from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic needs the runtime model type.
+from evaluatorq.signals.config import SignalsConfig  # noqa: TC001 — Pydantic field type.
+from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic field type.
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
@@ -193,6 +195,8 @@ class TraceInsight(BaseModel):
     labels: dict[str, LabelAnswer] = {}
     summary: TraceSummary | None = None
     tool_stats: ToolStats | None = None
+    signals: SignalReport | None = None
+    source_coverage: dict[str, Any] = Field(default_factory=dict)
     assignments: dict[str, ClusterAssignment] = {}
     coords: dict[str, tuple[FiniteFloat, FiniteFloat, FiniteFloat]] = {}
     errors: dict[str, str] = {}
@@ -271,6 +275,7 @@ class InsightsConfig(BaseModel):
     cache: bool = True
     coding_analysis: bool = False
     coding_labels: list[LabelSpec] = Field(default_factory=list)
+    signals: SignalsConfig | None = None
 
     @model_validator(mode='after')
     def _selections_are_unique(self) -> Self:
@@ -290,7 +295,7 @@ class InsightsConfig(BaseModel):
 class InsightsRun(BaseModel):
     """The full, persisted result of one insights run — written as `insights_<timestamp>_<slug>.json`."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     # None on runs saved before the stamp existed.
     evaluatorq_version: str | None = None
     run_id: str

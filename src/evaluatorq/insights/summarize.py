@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.trace_document import TraceDocument
     from evaluatorq.insights.cache import InsightsCache
     from evaluatorq.insights.usage import UsageLedger
     from evaluatorq.trace_finder.models import TraceRecord
@@ -85,13 +86,13 @@ Be specific and domain-aware. Avoid generic phrasing like "the user asked a ques
 Now produce the structured analysis. Remember: the "task" and "request" fields describe what the END-USER above wanted from the assistant — not what this prompt asked you to do."""
 
 
-def _build_prompt(trace: TraceRecord) -> str:
+def _build_prompt(trace: TraceRecord | TraceDocument) -> str:
     conversation = delimit(conversation_view(trace), tag='conversation')
     return render_template(SUMMARY_PROMPT, {'conversation': conversation})
 
 
 async def _summarize_one(
-    trace: TraceRecord,
+    trace: TraceRecord | TraceDocument,
     *,
     client: AsyncOpenAI,
     model: str,
@@ -136,7 +137,7 @@ async def _summarize_one(
 
 
 async def summarize_traces(
-    traces: Sequence[TraceRecord],
+    traces: Sequence[TraceRecord | TraceDocument],
     *,
     client: AsyncOpenAI,
     model: str,

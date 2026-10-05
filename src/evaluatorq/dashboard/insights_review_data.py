@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote, urlencode
 
 from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.insights_review_projection import review_xy, review_xy_state
@@ -21,6 +22,42 @@ if TYPE_CHECKING:
 def review_trace_key(trace: TraceInsight) -> str:
     """Return a stable per-span key; trace IDs alone can repeat across spans."""
     return f'{trace.trace_id}:{trace.span_id}'
+
+
+def _signal_summary(trace: TraceInsight) -> dict[str, object] | None:
+    report = getattr(trace, 'signals', None)
+    if report is None:
+        return None
+    return {
+        'config_version': report.config_version,
+        'results': {
+            name: {
+                'name': item.name,
+                'group': item.group,
+                'value': item.value,
+                'approximate': item.approximate,
+                'no_basis': item.no_basis,
+                'reason': item.reason,
+                'rule_version': item.rule_version,
+            }
+            for name, item in report.results.items()
+        },
+    }
+
+
+def build_signal_detail_payload(run: InsightsRun, trace_id: str, span_id: str) -> dict[str, object] | None:
+    """Return one saved trace's full signal report and coverage, or None when the key is not in this run."""
+    trace = next((item for item in run.traces if item.trace_id == trace_id and item.span_id == span_id), None)
+    if trace is None:
+        return None
+    report = getattr(trace, 'signals', None)
+    return {
+        'trace_id': trace.trace_id,
+        'span_id': trace.span_id,
+        'has_signals': report is not None,
+        'signals': report.model_dump(mode='json') if report is not None else None,
+        'source_coverage': dict(getattr(trace, 'source_coverage', {}) or {}),
+    }
 
 
 def _timestamp(value: datetime | None) -> str | None:
@@ -72,10 +109,12 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
 
         summary = trace.summary
         stats = trace.tool_stats
+        signal_summary = _signal_summary(trace)
         assignment = {name: value.base for name, value in trace.assignments.items()}
         traces.append({
             'id': review_trace_key(trace),
             'trace_id': trace.trace_id,
+            'span_id': trace.span_id,
             'trace_url': _trace_href(run, trace),
             'orq_url': (
                 trace_span_url(trace.trace_id, trace.span_id)
@@ -101,6 +140,15 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'tools': dict(stats.tools) if stats else {},
             'skills': dict(stats.skills) if stats else {},
             'commands': dict(stats.commands) if stats else {},
+            'has_signals': signal_summary is not None,
+            'has_signal_details': signal_summary is not None,
+            'signals': signal_summary,
+            'signal_detail_url': (
+                f'/insights/{quote(run.run_id, safe="")}/trace-signals.json?'
+                f'{urlencode({"trace_id": trace.trace_id, "span_id": trace.span_id})}'
+                if signal_summary is not None
+                else None
+            ),
         })
 
     dimensions = {

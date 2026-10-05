@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.insights.summarize import _build_prompt
 from evaluatorq.insights.transcript import conversation_view, tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.models import TraceRecord
@@ -77,9 +80,10 @@ def _fixtures() -> tuple[TraceRecord, TraceRecord]:
     return trace, _trace(long_messages, trace_id='long')
 
 
-def test_current_classifier_payloads_match_pre_migration_snapshots() -> None:
+@pytest.mark.parametrize('use_atif', [False, True], ids=['legacy-source', 'canonical-document'])
+def test_current_classifier_payloads_match_pre_migration_snapshots(use_atif: bool) -> None:
     expected = json.loads(FIXTURE.read_text())
-    trace, long_trace = _fixtures()
+    trace, long_trace = (ensure_trace_document(trace) if use_atif else trace for trace in _fixtures())
     full_long = tool_activity_chunks(long_trace, budget=10**6)[0]
 
     actual = {

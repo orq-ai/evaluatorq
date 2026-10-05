@@ -816,7 +816,20 @@ function select(kind, id) {
 }
 function renderDrawer() {
   const el = $('drawer');
+  const openSignalDetails = [...el.querySelectorAll('.signal-row[open], .signal-coverage[open]')].map(node => {
+    if (node.classList.contains('signal-row')) return ['row', node.querySelector('summary span')?.textContent || ''];
+    return ['coverage', ''];
+  });
+  const selectedTrace = S.sel && S.sel.kind === 'trace' ? byId[S.sel.id] : null;
+  if (selectedTrace && selectedTrace.has_signal_details) loadSignalDetails(selectedTrace);
+  else if (activeSignalDetailRequest) cancelSignalDetails();
   el.innerHTML = S.sel ? (S.sel.kind === 'cluster' ? clusterPanel(C[S.sel.id]) : tracePanel(byId[S.sel.id])) : S.view === 'activity' ? (S.activityItem ? activityDetail() : activityWelcome()) : glance();
+  for (const [kind, name] of openSignalDetails) {
+    const node = kind === 'coverage'
+      ? el.querySelector('.signal-coverage')
+      : [...el.querySelectorAll('.signal-row')].find(row => row.querySelector('summary span')?.textContent === name);
+    if (node) node.open = true;
+  }
   el.querySelectorAll('[data-close-activity]').forEach(b => b.onclick = () => { S.activityItem = null; commit(); });
   el.querySelectorAll('[data-activity-pair]').forEach(b => b.onclick = () => activitySelect(b.dataset.kind, b.dataset.name));
   el.querySelectorAll('[data-close]').forEach(b => b.onclick = () => select(null));
@@ -829,6 +842,10 @@ function renderDrawer() {
   el.querySelectorAll('[data-act="cluster-traces"]').forEach(b => b.onclick = () => viewClusterTraces(C[S.sel.id]));
   el.querySelectorAll('[data-act="cluster-question"]').forEach(b => b.onclick = () => turnClusterIntoQuestion(C[S.sel.id]));
   el.querySelectorAll('[data-helpers]').forEach(b => b.onclick = () => { S.helpers = !S.helpers; renderDrawer(); });
+  el.querySelectorAll('[data-signal-retry]').forEach(b => b.onclick = () => {
+    const trace = byId[b.dataset.signalRetry];
+    if (trace) { loadSignalDetails(trace, true); renderDrawer(); }
+  });
   bindMock(el);
 }
 function labelBlock(l, ts) {
@@ -959,6 +976,111 @@ function safeOrqUrl(value) {
     return url.protocol === 'https:' ? url.href : '';
   } catch (_) { return ''; }
 }
+function signalValue(value) {
+  if (value == null) return 'No value recorded';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+const signalDetailCache = new Map();
+const signalDetailFailures = new Map();
+let activeSignalDetailRequest = null;
+function cacheSignalDetails(traceId, detail) {
+  signalDetailCache.delete(traceId);
+  signalDetailCache.set(traceId, detail);
+  while (signalDetailCache.size > 20) signalDetailCache.delete(signalDetailCache.keys().next().value);
+  signalDetailFailures.delete(traceId);
+}
+function signalDetailsFor(traceId) {
+  return signalDetailCache.get(traceId) || null;
+}
+function signalDetailsLoading(traceId) {
+  return Boolean(activeSignalDetailRequest && activeSignalDetailRequest.traceId === traceId);
+}
+function cancelSignalDetails() {
+  if (!activeSignalDetailRequest) return;
+  activeSignalDetailRequest.controller.abort();
+  activeSignalDetailRequest = null;
+}
+function loadSignalDetails(trace, retry = false) {
+  if (!trace || !trace.has_signal_details || !trace.signal_detail_url) return;
+  if (signalDetailCache.has(trace.id) || signalDetailsLoading(trace.id)) return;
+  if (signalDetailFailures.has(trace.id) && !retry) return;
+  if (activeSignalDetailRequest) cancelSignalDetails();
+  if (retry) signalDetailFailures.delete(trace.id);
+  const request = {traceId: trace.id, controller: new AbortController()};
+  activeSignalDetailRequest = request;
+  fetch(trace.signal_detail_url, {
+    headers: {'Accept': 'application/json'},
+    signal: request.controller.signal,
+  }).then(async response => {
+    if (!response.ok) throw new Error(response.status === 404 ? 'Saved signal details were not found.' : `Request failed (${response.status}).`);
+    const detail = await response.json();
+    if (detail.trace_id !== trace.trace_id || detail.span_id !== trace.span_id) throw new Error('Signal details did not match this trace.');
+    if (!request.controller.signal.aborted) cacheSignalDetails(trace.id, detail);
+  }).catch(error => {
+    if (!request.controller.signal.aborted) {
+      signalDetailFailures.delete(trace.id);
+      signalDetailFailures.set(trace.id, error.message || 'Could not load signal details.');
+      while (signalDetailFailures.size > 20) signalDetailFailures.delete(signalDetailFailures.keys().next().value);
+    }
+  }).finally(() => {
+    if (activeSignalDetailRequest === request) activeSignalDetailRequest = null;
+    if (S.sel && S.sel.kind === 'trace' && S.sel.id === trace.id) renderDrawer();
+  });
+}
+function signalStatus(signal) {
+  if (signal.no_basis) return 'No basis';
+  if (signal.approximate) return 'Approximate';
+  return 'Measured';
+}
+function signalEvidence(evidence) {
+  if (!evidence.length) return '<p class="signal-empty">No evidence references.</p>';
+  return `<ul class="signal-evidence">${evidence.map(ref => {
+    const path = Array.isArray(ref.agent_path) && ref.agent_path.length ? ` · agent path ${ref.agent_path.map(esc).join(' / ')}` : '';
+    const call = ref.call_id ? ` · call ${esc(ref.call_id)}` : '';
+    const reason = ref.reason ? ` · ${esc(ref.reason)}` : '';
+    const subgroup = ref.subgroup ? ` · ${esc(ref.subgroup)}` : '';
+    const related = Array.isArray(ref.related) && ref.related.length ? ` · related ${ref.related.map(item => esc(JSON.stringify(item))).join(', ')}` : '';
+    const relatedCalls = Array.isArray(ref.related_call_ids) && ref.related_call_ids.length ? ` · related calls ${ref.related_call_ids.map(esc).join(', ')}` : '';
+    return `<li>Step ${esc(ref.step_id)}${path}${call}${reason}${subgroup}${related}${relatedCalls}</li>`;
+  }).join('')}</ul>`;
+}
+function signalPreconditions(preconditions) {
+  if (!preconditions.length) return '<p class="signal-empty">No preconditions recorded.</p>';
+  return `<ul class="signal-preconditions">${preconditions.map(item => {
+    const met = item.met === 'partial' ? 'Partial' : item.met ? 'Met' : 'Not met';
+    return `<li><b>${esc(met)} · ${esc(item.name)}</b>${item.required ? ' · required' : ' · optional'}${item.detail ? `<span>${esc(item.detail)}</span>` : ''}</li>`;
+  }).join('')}</ul>`;
+}
+function signalsPanel(t) {
+  if (!t.has_signals || !t.signals) return '<section class="signal-panel"><h5>Signals</h5><p class="signal-empty">Signals were not measured for this trace.</p></section>';
+  const report = t.signals, results = report.results || {}, names = Object.keys(results).sort();
+  const fullReport = signalDetailsFor(t.id)?.signals;
+  const fullResults = fullReport?.results || {};
+  const loading = signalDetailsLoading(t.id);
+  const failure = signalDetailFailures.get(t.id);
+  const rows = names.map(name => {
+    const signal = results[name] || {}, status = signalStatus(signal), group = signal.group ? `Group ${esc(signal.group)}` : 'Group unknown';
+    const value = signal.no_basis ? esc(signal.no_basis) : esc(signalValue(signal.value));
+    const tags = signal.group === 'D' ? `<div class="signal-meta"><b>Tags</b><span>${esc(signalValue(signal.value))}</span></div>` : '';
+    const reason = signal.reason ? `<div class="signal-meta"><b>Reason</b><span>${esc(signal.reason)}</span></div>` : '';
+    const rule = signal.rule_version ? `<div class="signal-meta"><b>Rule version</b><span>${esc(signal.rule_version)}</span></div>` : '';
+    const approximate = signal.approximate ? '<span class="signal-badge approximate">Approximate</span>' : '';
+    const noBasis = signal.no_basis ? '<span class="signal-badge no-basis">No basis</span>' : '';
+    const detail = fullResults[name];
+    const detailMarkup = detail
+      ? `<h6>Preconditions (${(detail.preconditions || []).length})</h6>${signalPreconditions(detail.preconditions || [])}<h6>Evidence (${(detail.evidence || []).length})</h6>${signalEvidence(detail.evidence || [])}`
+      : `<p class="signal-empty">${loading ? 'Loading signal details…' : failure ? 'Signal details could not be loaded.' : 'Signal details are not loaded.'}</p>`;
+    return `<details class="signal-row"><summary><span>${esc(name)}</span><span class="signal-summary-meta">${group}<i class="signal-badge ${signal.no_basis ? 'no-basis' : signal.approximate ? 'approximate' : 'measured'}">${esc(status)}</i></span></summary><div class="signal-body"><div class="signal-meta"><b>Value</b><span>${value}</span></div>${noBasis}${approximate}${tags}${reason}${rule}${detailMarkup}</div></details>`;
+  }).join('');
+  const coverageData = signalDetailsFor(t.id)?.source_coverage || {};
+  const coverage = Object.keys(coverageData).length
+    ? `<details class="signal-coverage"><summary>Source coverage</summary><pre>${esc(JSON.stringify(coverageData, null, 2))}</pre></details>` : '';
+  const loadState = failure
+    ? `<p class="signal-empty" role="status">Could not load signal details: ${esc(failure)} <button class="btn" data-signal-retry="${esc(t.id)}">Retry</button></p>`
+    : loading ? '<p class="signal-empty" role="status">Loading signal details…</p>' : '';
+  const reportInfo = `<div class="signal-meta"><b>Config version</b><span>${esc(report.config_version || 'Unknown')}</span></div>`;
+  return `<section class="signal-panel"><h5>Signals <span>${names.length} recorded</span></h5>${reportInfo}${loadState}${names.length ? rows : '<p class="signal-empty">No signals were recorded for this trace.</p>'}${coverage}</section>`;
+}
 function tracePanel(t) {
   const traceUrl = safeTraceUrl(t.trace_url);
   const orqUrl = safeOrqUrl(t.orq_url);
@@ -970,6 +1092,7 @@ function tracePanel(t) {
     <h2>${esc(t.topic || 'Trace')}</h2><p>${esc(t.summary || 'No summary for this trace.')}</p>
     ${t.request ? `<h5>What the user asked</h5><div class="quote">${esc(t.request)}</div>` : ''}
     ${hasErr(t) ? `<h5>Assistant mistakes · ${t.errors.length}</h5><ul class="errs">${t.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
+    ${signalsPanel(t)}
     <h5>Coding work</h5>
     <div class="stats" style="margin-top:0"><div class="stat"><div class="l">Task</div><div class="v" style="font-size:13px">${chip('task_type', t)}</div></div><div class="stat"><div class="l">Outcome</div><div class="v" style="font-size:13px">${outcomeHtml(t)}</div></div>
       <div class="stat"><div class="l">Verified</div><div class="v" style="font-size:13px">${chip('verified', t)}</div></div><div class="stat"><div class="l">Frustration</div><div class="v">${frusHtml(frus(t))}</div></div>

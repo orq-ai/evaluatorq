@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from evaluatorq.signals import autonomy, structure, tags, tools
+from evaluatorq.signals import preconditions as pre
 from evaluatorq.signals.config import SignalsConfig
-from evaluatorq.signals.models import Group, SignalFn, SignalReport, SignalResult
+from evaluatorq.signals.models import Group, Precondition, SignalFn, SignalReport, SignalResult
 from evaluatorq.signals.walk import SignalContext
 
 if TYPE_CHECKING:
@@ -38,6 +39,53 @@ def _merge(*tables: SignalTable) -> SignalTable:
 
 SIGNALS: SignalTable = _merge(structure.SIGNALS, tools.SIGNALS, autonomy.SIGNALS, tags.SIGNALS)
 SIGNAL_NAMES: tuple[str, ...] = tuple(SIGNALS)
+
+# These values depend on complete tool activity. Keep this list explicit: the registry test checks that every
+# registered signal whose implementation reads tool calls is declared here, and that every name is registered.
+TOOL_ACTIVITY_DEPENDENT_SIGNALS = frozenset({
+    'tool_call_count',
+    'unique_tools_used',
+    'tool_call_value_count',
+    'bash_command_value_count',
+    'webview_value_count',
+    'loaded_skill_value_count',
+    'tool_error_count',
+    'tool_error_rate',
+    'duplicate_tool_call_count',
+    'tool_retry_count',
+    'tool_succeeded_after_retry_count',
+    'invalid_schema_tool_call_count',
+    'consecutive_same_tool_max',
+    'consecutive_command_family_max',
+    'identical_tool_call_run_count',
+    'tool_oscillation_count',
+    'tool_loop_count',
+    'distinct_tool_arg_ratio',
+    'empty_tool_result_count',
+    'max_tool_result_bytes',
+    'total_tool_result_bytes',
+    'max_autonomous_steps',
+    'avg_autonomous_steps',
+    'max_llm_tool_cycles',
+    'terminal_answer_present',
+    'human_interruption_count',
+    'subagent_step_share',
+    'parallel_tool_batch_count',
+    'max_parallel_tool_calls',
+    'wall_time_ms',
+    'active_time_ms',
+    'tool_time_ms',
+    'max_autonomous_duration_ms',
+})
+_TAG_TOOL_DEPENDENCIES = frozenset(
+    name
+    for rule_name, dependencies in tags.TAG_DEPENDENCIES.items()
+    if any(dependency in TOOL_ACTIVITY_DEPENDENT_SIGNALS for dependency in dependencies)
+    for name in (rule_name,)
+)
+_UNKNOWN_DEPENDENCIES = (TOOL_ACTIVITY_DEPENDENT_SIGNALS | _TAG_TOOL_DEPENDENCIES) - set(SIGNALS)
+if _UNKNOWN_DEPENDENCIES:
+    raise ValueError(f'Tool-activity dependency names are not registered: {sorted(_UNKNOWN_DEPENDENCIES)}')
 
 
 def compute_signals(
@@ -79,9 +127,49 @@ def compute_signals(
         return report(results={n: SignalResult(name=n, group=g, no_basis=why) for n, (g, _) in selected.items()})
     for name, (group, fn) in selected.items():
         try:
-            results[name] = fn(ctx)
+            computed = fn(ctx)
+            if name in TOOL_ACTIVITY_DEPENDENT_SIGNALS:
+                computed = _require_source_tool_coverage(computed, ctx)
+            elif name in _TAG_TOOL_DEPENDENCIES:
+                computed = _inherit_source_tool_coverage(computed, name, ctx.results)
+            results[name] = computed
         except Exception as exc:  # noqa: BLE001 - failure isolation: one broken signal must not hide the others
             logger.warning('Signal {} failed: {}: {}', name, type(exc).__name__, exc)
             results[name] = SignalResult(name=name, group=group, no_basis=f'signal raised {type(exc).__name__}: {exc}')
         ctx.results[name] = results[name]
     return report(results=results)
+
+
+def _require_source_tool_coverage(computed: SignalResult, ctx: SignalContext) -> SignalResult:
+    coverage = pre.source_tool_coverage(ctx)
+    pcs = [*computed.preconditions, coverage]
+    if coverage.met is False:
+        return SignalResult(
+            name=computed.name,
+            group=computed.group,
+            approximate=computed.approximate,
+            no_basis=coverage.detail,
+            preconditions=pcs,
+        )
+    return computed.model_copy(update={'preconditions': pcs})
+
+
+def _inherit_source_tool_coverage(computed: SignalResult, name: str, prior: dict[str, SignalResult]) -> SignalResult:
+    unavailable = [
+        dependency
+        for dependency in tags.TAG_DEPENDENCIES.get(name, ())
+        if (item := prior.get(dependency)) is not None
+        and any(pc.name == 'source tool activity represented' and pc.met is False for pc in item.preconditions)
+    ]
+    if not unavailable:
+        return computed
+    detail = f'tool-dependent metrics unavailable: {", ".join(unavailable)}'
+    coverage = Precondition(name='source tool activity represented', met=False, detail=detail)
+    pcs = [*computed.preconditions, coverage]
+    return SignalResult(
+        name=computed.name,
+        group=computed.group,
+        approximate=computed.approximate,
+        no_basis=detail,
+        preconditions=pcs,
+    )

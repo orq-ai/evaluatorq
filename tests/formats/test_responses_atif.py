@@ -71,6 +71,31 @@ def test_response_output_holds_the_output_items_of_each_step() -> None:
     assert [[o.type for o in r.output] for r in back.responses] == [['reasoning', 'function_call'], ['message']]
 
 
+def test_response_tool_definitions_are_kept_with_their_response() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'lookup', 'arguments': '{"a": 1}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'one'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'lookup', 'arguments': '{"b": 1}'},
+    ]
+    first_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['a']}}]
+    second_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['b']}}]
+    conv = ResponsesConversation(items=items, responses=[
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'output': [items[0]], 'tools': first_tools}),
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'id': 'resp_2', 'output': [items[2]], 'tools': second_tools}),
+    ])
+
+    trajectory = conv.to_atif()
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_tools'] == first_tools
+    assert trajectory.steps[1].extra is not None
+    assert trajectory.steps[1].extra['evaluatorq.responses_tools'] == second_tools
+    back = trajectory.to_responses()
+    assert back.responses is not None
+    assert [response.model_dump(mode='json', exclude_none=True)['tools'] for response in back.responses] == [
+        first_tools, second_tools
+    ]
+
+
 def test_response_output_that_disagrees_with_items_is_rejected() -> None:
     conv = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', None), _response('gpt-y', None)])
     assert conv.responses is not None
@@ -541,6 +566,20 @@ def test_custom_and_mcp_calls_belong_to_response_and_agent_step() -> None:
     assert step.extra is not None and step.extra['evaluatorq.responses_output_items'] == [custom, mcp]
     back = conv.to_atif().to_responses()
     assert back.items[1:] == [custom, mcp]
+
+
+def test_builtin_tool_call_roundtrips_and_is_reported_as_unmapped_activity() -> None:
+    from evaluatorq.signals import compute_signals
+
+    item = {'type': 'file_search_call', 'id': 'fs_1', 'queries': ['find'], 'status': 'completed'}
+    trajectory = ResponsesConversation(items=[item]).to_atif()
+
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_output_items'] == [item]
+    assert trajectory.to_responses().items == [item]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'file_search_call' in (signal.no_basis or '')
 
 
 def test_custom_tool_result_round_trips_with_its_call() -> None:

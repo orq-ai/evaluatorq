@@ -6,7 +6,11 @@ import json
 from datetime import datetime, timezone
 from typing import cast
 
-from evaluatorq.dashboard.insights_review_data import build_review_payload, review_trace_key
+from evaluatorq.dashboard.insights_review_data import (
+    build_review_payload,
+    build_signal_detail_payload,
+    review_trace_key,
+)
 from evaluatorq.insights.models import (
     ClusterAssignment,
     InsightsConfig,
@@ -18,6 +22,7 @@ from evaluatorq.insights.models import (
     TraceSummary,
 )
 from evaluatorq.insights.transcript import SHELL_TOOLS, ToolStats
+from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -204,6 +209,78 @@ def test_legacy_run_without_tool_stats_is_explicitly_unmeasured():
     assert no_summary['has_summary'] is False
     assert no_summary['summary'] is None
     assert no_summary['errors'] == []
+
+
+def test_review_payload_includes_compact_signal_summaries_without_evidence_or_preconditions():
+    report = SignalReport(
+        trajectory_id='trajectory-1',
+        config_version='signals-v3',
+        results={
+            'tool_retries': SignalResult(
+                name='tool_retries',
+                group='B',
+                value=1,
+                evidence=[Evidence(step_id=4, agent_path=('agent-1',), call_id='call-2', reason='retry')],
+                approximate=True,
+                preconditions=[Precondition(name='tool_results_present', met='partial', detail='One result omitted')],
+            ),
+            'tool_success': SignalResult(
+                name='tool_success',
+                group='B',
+                no_basis='tool results were not captured',
+                preconditions=[Precondition(name='tool_results_present', met=False, detail='No tool results')],
+            ),
+            'trajectory_tags': SignalResult(name='trajectory_tags', group='D', value={'coding': True}),
+        },
+    )
+    trace = _trace('signal-span').model_copy(
+        update={'signals': report, 'source_coverage': {'source': 'otel', 'partial': True}}
+    )
+
+    row = _trace_rows(build_review_payload(_run([trace])))[0]
+
+    assert row['has_signals'] is True
+    assert row['has_signal_details'] is True
+    assert row['trace_id'] == 'same-trace'
+    assert row['span_id'] == 'signal-span'
+    assert row['signals'] == {
+        'config_version': 'signals-v3',
+        'results': {
+            'tool_retries': {
+                'name': 'tool_retries', 'group': 'B', 'value': 1, 'approximate': True,
+                'no_basis': None, 'reason': None, 'rule_version': None,
+            },
+            'tool_success': {
+                'name': 'tool_success', 'group': 'B', 'value': None, 'approximate': False,
+                'no_basis': 'tool results were not captured', 'reason': None, 'rule_version': None,
+            },
+            'trajectory_tags': {
+                'name': 'trajectory_tags', 'group': 'D', 'value': {'coding': True}, 'approximate': False,
+                'no_basis': None, 'reason': None, 'rule_version': None,
+            },
+        },
+    }
+    assert row['signal_detail_url'] == '/insights/review-test/trace-signals.json?trace_id=same-trace&span_id=signal-span'
+    serialized = json.dumps(row)
+    assert 'conversation' not in serialized
+    assert 'tool results were not captured' in serialized
+    assert 'trajectory_tags' in serialized
+    assert 'call-2' not in serialized
+    assert 'tool_results_present' not in serialized
+
+    detail = build_signal_detail_payload(_run([trace]), 'same-trace', 'signal-span')
+    assert detail is not None
+    assert detail['signals'] == report.model_dump(mode='json')
+    assert detail['source_coverage'] == {'source': 'otel', 'partial': True}
+
+
+def test_review_payload_marks_missing_legacy_signals_as_unmeasured():
+    trace = _trace_rows(build_review_payload(_run([_trace('legacy-signal-span')])))[0]
+
+    assert trace['has_signals'] is False
+    assert trace['signals'] is None
+    assert trace['has_signal_details'] is False
+    assert trace['signal_detail_url'] is None
 
 
 def test_review_payload_keeps_all_5000_traces_and_json_serializes():

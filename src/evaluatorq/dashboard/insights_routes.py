@@ -19,7 +19,7 @@ from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.auth import auth_identity
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
-from evaluatorq.dashboard.insights_review_data import build_review_payload
+from evaluatorq.dashboard.insights_review_data import build_review_payload, build_signal_detail_payload
 from evaluatorq.dashboard.insights_review_views import review_page
 from evaluatorq.dashboard.insights_uploads import (
     UploadRequestTooLargeError,
@@ -444,6 +444,38 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             )
         return Response(
             json.dumps(build_review_payload(run), ensure_ascii=False, separators=(',', ':')),
+            media_type='application/json',
+            headers={'Cache-Control': 'no-store'},
+        )
+
+    @app.get('/insights/{run_id}/trace-signals.json')
+    def insights_trace_signals(req: Request, run_id: str) -> Response:
+        """Read the saved signal details for one trace; this route never loads source data or calls a model."""
+        _, loaded, _ = _entries(get_insights_runs_dir())
+        resolved = _resolve(run_id, loaded)
+        if resolved is None:
+            payload: dict[str, object] = {'error': 'Insights run not found'}
+            status_code = 404
+        elif not isinstance(resolved[1], InsightsRun):
+            payload = {'error': f'Insights run is unreadable: {resolved[1]}'}
+            status_code = 422
+        else:
+            trace_id = req.query_params.get('trace_id')
+            span_id = req.query_params.get('span_id')
+            if not trace_id or not span_id:
+                payload = {'error': 'trace_id and span_id are required'}
+                status_code = 400
+            else:
+                detail = build_signal_detail_payload(resolved[1], trace_id, span_id)
+                if detail is None:
+                    payload = {'error': 'Trace not found in this Insights run'}
+                    status_code = 404
+                else:
+                    payload = detail
+                    status_code = 200
+        return Response(
+            json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+            status_code=status_code,
             media_type='application/json',
             headers={'Cache-Control': 'no-store'},
         )

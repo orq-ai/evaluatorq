@@ -69,6 +69,7 @@ _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text'})
 _UNMAPPED_OUTPUTS_KEY = 'evaluatorq.responses_output_items'
 _UNMAPPED_RESULTS_KEY = 'evaluatorq.responses_result_items'
 _RESULT_ORDER_KEY = 'evaluatorq.responses_result_order'
+_RESPONSE_TOOLS_KEY = 'evaluatorq.responses_tools'
 _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']] = {
     'image/jpeg': 'image/jpeg',
     'image/png': 'image/png',
@@ -158,6 +159,10 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         else:
             logger.warning('Responses custom_tool_call {!r} has no call_id; skipping it.', item.get('name'))
 
+    def unsupported_tool_call(index: int, item: dict[str, Any]) -> None:
+        """Keep unsupported Responses tool activity available for roundtrip and signal coverage checks."""
+        current_agent(index).unmapped_outputs.append(item)
+
     handlers = {
         'message': message,
         'reasoning': lambda index, item: current_agent(index).reasoning.append(item),
@@ -168,6 +173,10 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         'custom_tool_call_output': lambda _, item: _attach_custom_output(item, drafts),
         'compaction': lambda _, item: drafts.append(_Draft(source='system', item=item)),
     }
+    for item in items:
+        kind = item.get('type')
+        if isinstance(kind, str) and kind.endswith('_call') and kind not in handlers:
+            handlers[kind] = unsupported_tool_call
     walk_items(items, handlers, 'ATIF')
     return drafts
 
@@ -327,6 +336,9 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
         placeholder = _is_placeholder(response)
         extra.update(_response_extra(response, placeholder=placeholder))
         if not placeholder:
+            response_tools = [tool.model_dump(mode='json', exclude_none=True) for tool in response.tools]
+            if response_tools:
+                extra[_RESPONSE_TOOLS_KEY] = response_tools
             fields = {
                 'model_name': response.model or None,
                 'timestamp': (
@@ -640,6 +652,10 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
     if status is not None and not (isinstance(status, str) and status in _RESPONSE_STATUSES):
         _warn_foreign('status', step.step_id, status)
         status = None
+    tools = extra.get(_RESPONSE_TOOLS_KEY, [])
+    if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
+        _warn_foreign(_RESPONSE_TOOLS_KEY, step.step_id, tools)
+        tools = []
     return Response.model_validate({
         'id': response_id or 'resp_' + stable_hex(seed, 'response', str(step.step_id), length=24),
         'created_at': _epoch(step.timestamp),
@@ -648,7 +664,7 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
         'output': output,
         'parallel_tool_calls': False,
         'tool_choice': 'auto',
-        'tools': [],
+        'tools': tools,
         'status': status or 'completed',
         'error': _extra_model(extra, 'error', ResponseError, step.step_id),
         'incomplete_details': _extra_model(extra, 'incomplete_details', IncompleteDetails, step.step_id),

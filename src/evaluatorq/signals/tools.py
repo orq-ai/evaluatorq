@@ -10,7 +10,13 @@ from typing import Any, Literal
 from evaluatorq.signals import preconditions as pre
 from evaluatorq.signals.models import Evidence, Precondition, SignalFn, SignalResult, result
 from evaluatorq.signals.shell import shell_command_family
-from evaluatorq.signals.walk import CallRecord, SignalContext, raw_tool_arguments, result_text, tool_schemas
+from evaluatorq.signals.walk import (
+    CallRecord,
+    SignalContext,
+    call_tool_schemas,
+    raw_tool_arguments,
+    result_text,
+)
 
 
 def _call_ev(record: CallRecord, reason: str = '') -> Evidence:
@@ -234,10 +240,9 @@ def invalid_schema_tool_call_count(ctx: SignalContext) -> SignalResult:
             preconditions=pcs,
         )
     evidence = []
-    root_schemas = tool_schemas(ctx.trajectory)
     for record in ctx.calls:
-        schemas = tool_schemas(record.step.trajectory)
-        definition = schemas.get(record.call.function_name) or root_schemas.get(record.call.function_name)
+        schemas = call_tool_schemas(record, ctx.trajectory)
+        definition = schemas.get(record.call.function_name)
         schema = definition.get('parameters') if definition else None
         if not isinstance(schema, dict):
             continue

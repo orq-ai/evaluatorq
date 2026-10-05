@@ -861,6 +861,137 @@ class OrqTraceSource:
             return []
         return await self._list_spans(trace_id, asyncio.Semaphore(self._hydration_concurrency))
 
+    async def enrich_selected_signal_spans(self, records: Sequence[TraceRecord]) -> tuple[TraceRecord, ...]:
+        """Attach status from spans matching selected transcript tool-call IDs only.
+
+        Span listing happens after population selection. A sibling span contributes
+        nothing unless its recorded call ID exactly matches a call in that trace's
+        projected conversation.
+        """
+        semaphore = asyncio.Semaphore(self._hydration_concurrency)
+
+        async def enrich(record: TraceRecord) -> TraceRecord:
+            call_ids = {
+                str(call_id)
+                for message in record.messages
+                if message.get('role') == 'assistant'
+                for call in message.get('tool_calls') or []
+                if isinstance(call, Mapping) and (call_id := (call.get('id') or call.get('call_id')))
+            }
+            try:
+                spans = await self._list_spans(record.trace_id, semaphore)
+                by_id = {
+                    str(span_id): span for span in spans if (span_id := (_field(span, 'span_id') or _field(span, 'id')))
+                }
+                selected_span = by_id.get(record.span_id)
+                if selected_span is None:
+                    coverage = {
+                        'selected_span_id': record.span_id,
+                        'selected_span_found': False,
+                        'scoped_span_count': 0,
+                        'matched_tool_span_count': 0,
+                        'missing_call_ids': sorted(call_ids),
+                    }
+                    logger.warning(
+                        'selected trace {} span {} was missing during signal enrichment',
+                        record.trace_id,
+                        record.span_id,
+                    )
+                    return record.model_copy(
+                        update={'capture_metadata': {**record.capture_metadata, 'signal_span_coverage': coverage}}
+                    )
+                children: dict[str, list[str]] = defaultdict(list)
+                for span in spans:
+                    child_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
+                    parent_id = _field(span, 'parent_span_id') or _field(span, 'parent_id')
+                    if child_id and parent_id:
+                        children[str(parent_id)].append(child_id)
+                scoped_ids = {record.span_id}
+                queue = deque([record.span_id])
+                while queue:
+                    for child_id in children.get(queue.popleft(), []):
+                        if child_id not in scoped_ids:
+                            scoped_ids.add(child_id)
+                            queue.append(child_id)
+                matching = [
+                    span
+                    for span_id, span in by_id.items()
+                    if span_id in scoped_ids and _span_tool_call_id(span) in call_ids
+                ]
+                statuses: dict[str, dict[str, Any]] = {}
+                enrichment_errors: list[str] = []
+                for span in matching:
+                    span_id = str(_field(span, 'span_id') or _field(span, 'id') or '')
+                    call_id = _span_tool_call_id(span)
+                    if not span_id or call_id is None:
+                        continue
+                    try:
+                        detail_response, raw_response = await self._get_span(record.trace_id, span_id, semaphore)
+                        detail = _field(detail_response, 'span') or detail_response
+                        raw_detail = _field(raw_response, 'span') if raw_response else None
+                        detail = raw_detail or _plain(detail)
+                    except Exception as error:  # noqa: BLE001 - summary status may still carry coverage
+                        enrichment_errors.append(f'{span_id}: {type(error).__name__}: {error}')
+                        detail = span
+                    status = _signal_status(detail)
+                    if status:
+                        statuses[call_id] = status
+                try:
+                    selected_response, selected_raw = await self._get_span(record.trace_id, record.span_id, semaphore)
+                    selected_detail = _field(selected_response, 'span') or selected_response
+                    selected_raw_span = _field(selected_raw, 'span') if selected_raw else None
+                    selected_detail = selected_raw_span or _plain(selected_detail)
+                    selected_detail_captured = True
+                except Exception as error:  # noqa: BLE001 - retain explicit missing-coverage state
+                    enrichment_errors.append(f'{record.span_id}: {type(error).__name__}: {error}')
+                    selected_detail = selected_span
+                    selected_detail_captured = False
+                selected_data = _selected_span_signal_data(selected_detail, record.messages)
+                coverage = {
+                    'selected_span_id': record.span_id,
+                    'selected_span_found': True,
+                    'scoped_span_count': len(scoped_ids),
+                    'matched_tool_span_count': len(matching),
+                    'matched_call_ids': sorted(statuses),
+                    'missing_call_ids': sorted(call_ids - set(statuses)),
+                    'selected_data_correlated': bool(selected_data.get('step_order') is not None),
+                    'responses_items_captured': sum(
+                        len(items)
+                        for items in _mapping(selected_data.get('output_items_by_order')).values()
+                        if isinstance(items, list)
+                    ),
+                    'selected_detail_captured': selected_detail_captured,
+                    'enrichment_errors': enrichment_errors,
+                }
+                if selected_data.get('output_item_count') and selected_data.get('step_order') is None:
+                    logger.warning(
+                        'selected trace {} response items could not be correlated to one transcript step',
+                        record.trace_id,
+                    )
+                capture_metadata = {
+                    **record.capture_metadata,
+                    'signal_span_coverage': coverage,
+                    'signal_tool_spans': statuses,
+                    'signal_selected_span': selected_data,
+                }
+                return record.model_copy(update={'capture_metadata': capture_metadata})
+            except Exception as error:  # noqa: BLE001 - enrichment must not discard a selected trace
+                logger.warning('selected trace {} signal-span enrichment failed: {}', record.trace_id, error)
+                return record.model_copy(
+                    update={
+                        'capture_metadata': {
+                            **record.capture_metadata,
+                            'signal_span_coverage': {
+                                'selected_span_id': record.span_id,
+                                'selected_span_found': False,
+                                'enrichment_error': f'{type(error).__name__}: {error}',
+                            },
+                        }
+                    }
+                )
+
+        return tuple(await asyncio.gather(*(enrich(record) for record in records)))
+
     async def first_error_message(self, trace_id: str, spans: Sequence[Any]) -> str | None:
         """Fetch the first errored span's status text from its raw SDK response, when present."""
         if not trace_id or self._registration is None:
@@ -1420,6 +1551,222 @@ def _numeric_metadata(*sources: Any, name: str) -> int | None:
     except (TypeError, ValueError, OverflowError):
         return None
     return result if result >= 0 else None
+
+
+def _span_tool_call_id(span: Any) -> str | None:
+    raw = _plain(span)
+    if not isinstance(raw, Mapping):
+        return None
+    attributes = raw.get('attributes')
+    if not isinstance(attributes, Mapping):
+        return None
+    gen_ai = attributes.get('gen_ai')
+    tool = gen_ai.get('tool') if isinstance(gen_ai, Mapping) else None
+    call = tool.get('call') if isinstance(tool, Mapping) else None
+    candidates = [
+        attributes.get('gen_ai.tool.call.id'),
+        attributes.get('tool_call_id'),
+        attributes.get('call_id'),
+        gen_ai.get('tool.call.id') if isinstance(gen_ai, Mapping) else None,
+        call.get('id') if isinstance(call, Mapping) else None,
+    ]
+    return next((value for value in candidates if isinstance(value, str) and value), None)
+
+
+def _selected_span_signal_data(span: Any, messages: Sequence[dict[str, Any]]) -> dict[str, Any]:  # noqa: C901 -- correlate optional raw fields and output IDs in one bounded span payload.
+    """Extract source payload, usage, tools and timing correlated to this selected LLM span."""
+    raw = _plain(span)
+    attributes = _mapping(_field(raw, 'attributes'))
+    gen_ai = _mapping(attributes.get('gen_ai'))
+    tool = _mapping(gen_ai.get('tool'))
+    definitions = tool.get('definitions') or attributes.get('gen_ai.tool.definitions')
+    request_candidates = [
+        attributes.get('openresponses.request'),
+        attributes.get('orq.openresponses.request'),
+        _field(_mapping(attributes.get('openresponses')), 'request'),
+        _field(_mapping(_field(_mapping(attributes.get('orq')), 'openresponses')), 'request'),
+    ]
+    for candidate in request_candidates:
+        decoded = _plain(candidate)
+        if isinstance(decoded, str):
+            try:
+                decoded = json.loads(decoded)
+            except json.JSONDecodeError:
+                continue
+        if isinstance(decoded, Mapping):
+            if isinstance(decoded.get('tools'), list):
+                definitions = decoded['tools']
+                break
+    usage = _mapping(_field(raw, 'usage') or gen_ai.get('usage'))
+    input_details = _mapping(usage.get('input_tokens_details') or usage.get('prompt_tokens_details'))
+    prompt_tokens = _first_number(usage, 'input_tokens', 'prompt_tokens')
+    completion_tokens = _first_number(usage, 'output_tokens', 'completion_tokens')
+    cached_tokens = _first_number(input_details, 'cached_tokens', 'cache_read_input_tokens')
+    cost = _first_number(usage, 'cost_usd', 'cost')
+    metrics = {
+        key: value
+        for key, value in {
+            'prompt_tokens': prompt_tokens,
+            'completion_tokens': completion_tokens,
+            'cached_tokens': cached_tokens,
+            'cost_usd': cost,
+        }.items()
+        if value is not None
+    }
+    start = _parse_time(_field(raw, 'started_at') or _field(raw, 'start_time'))
+    end = _parse_time(_field(raw, 'ended_at') or _field(raw, 'end_time'))
+    candidates = [
+        attributes.get('openresponses.response'),
+        attributes.get('orq.openresponses.response'),
+        _field(_mapping(attributes.get('openresponses')), 'response'),
+        _field(_mapping(_field(_mapping(attributes.get('orq')), 'openresponses')), 'response'),
+    ]
+    items: list[dict[str, Any]] = []
+    for candidate in candidates:
+        decoded = _plain(candidate)
+        if isinstance(decoded, str):
+            try:
+                decoded = json.loads(decoded)
+            except json.JSONDecodeError:
+                continue
+        if isinstance(decoded, Mapping):
+            response_usage = _mapping(decoded.get('usage'))
+            if response_usage and not usage:
+                usage = response_usage
+            decoded = decoded.get('output')
+        if isinstance(decoded, list):
+            items = [dict(item) for item in decoded if isinstance(item, Mapping)]
+            if items:
+                break
+
+    # Correlate output items only by a raw Responses call ID or exact output text.
+    # Ambiguous items remain captured as span evidence with coverage marked false.
+    matched_orders: set[int] = set()
+    item_sidecars: dict[str, list[dict[str, Any]]] = {}
+    unmapped_items: list[dict[str, Any]] = []
+    for item in items:
+        item_type = item.get('type')
+        call_id = item.get('call_id')
+        candidates_order: set[int] = set()
+        if isinstance(call_id, str) and call_id:
+            for index, message in enumerate(messages):
+                if message.get('role') == 'assistant' and any(
+                    isinstance(call, Mapping) and (call.get('id') or call.get('call_id')) == call_id
+                    for call in message.get('tool_calls') or []
+                ):
+                    candidates_order.add(index)
+        elif item_type == 'message':
+            text = _response_item_text(item)
+            for index, message in enumerate(messages):
+                if (
+                    message.get('role') == 'assistant'
+                    and isinstance(message.get('content'), str)
+                    and text == message['content']
+                ):
+                    candidates_order.add(index)
+        if len(candidates_order) != 1:
+            if item_type != 'message':
+                unmapped_items.append(item)
+            continue
+        order = next(iter(candidates_order))
+        matched_orders.add(order)
+        # Custom/MCP items carry fields ATIF cannot model; keep their source payload
+        # beside the correlated step. Standard calls are already represented natively.
+        if item_type in {'custom_tool_call', 'custom_tool_call_output', 'mcp_call'} or (
+            isinstance(item_type, str) and item_type.startswith('orq:')
+        ):
+            item_sidecars.setdefault(str(order), []).append(item)
+        elif item_type in {'function_call', 'function_call_output', 'message'}:
+            item_sidecars.setdefault(str(order), []).append({
+                key: item[key]
+                for key in ('id', 'call_id', 'type', 'name', 'status', 'error_type', 'finish_reason')
+                if key in item
+            })
+    selected_order = next(iter(matched_orders)) if len(matched_orders) == 1 else None
+    input_details = _mapping(usage.get('input_tokens_details') or usage.get('prompt_tokens_details'))
+    metrics = {
+        key: value
+        for key, value in {
+            'prompt_tokens': _first_number(usage, 'input_tokens', 'prompt_tokens'),
+            'completion_tokens': _first_number(usage, 'output_tokens', 'completion_tokens'),
+            'cached_tokens': _first_number(input_details, 'cached_tokens', 'cache_read_input_tokens'),
+            'cost_usd': _first_number(usage, 'cost_usd', 'cost'),
+        }.items()
+        if value is not None
+    }
+    result: dict[str, Any] = {
+        'step_order': selected_order,
+        'output_items_by_order': item_sidecars,
+        'unmapped_output_items': unmapped_items,
+        'output_item_count': len(items),
+        'tool_definitions': definitions if isinstance(definitions, list) else [],
+        'tool_definitions_present': isinstance(definitions, list),
+    }
+    if metrics:
+        result['metrics'] = metrics
+    if start is not None:
+        result['started_at'] = start.isoformat()
+        result['start_timestamp'] = start.timestamp()
+    if end is not None:
+        result['ended_at'] = end.isoformat()
+        result['end_timestamp'] = end.timestamp()
+    return result
+
+
+def _response_item_text(item: Mapping[str, Any]) -> str | None:
+    content = item.get('content')
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            part.get('text') or part.get('refusal')
+            for part in content
+            if isinstance(part, Mapping) and isinstance(part.get('text') or part.get('refusal'), str)
+        ]
+        return ''.join(parts) if parts else None
+    return None
+
+
+def _first_number(mapping: Mapping[str, Any], *names: str) -> int | float | None:
+    for name in names:
+        value = mapping.get(name)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _signal_status(span: Any) -> dict[str, Any]:
+    raw = _plain(span)
+    attributes = _mapping(_field(raw, 'attributes'))
+    status = next(
+        (
+            value
+            for value in (
+                attributes.get('gen_ai.tool.call.status'),
+                attributes.get('tool.status'),
+                attributes.get('status'),
+            )
+            if isinstance(value, str) and value.strip()
+        ),
+        None,
+    )
+    result: dict[str, Any] = {}
+    start = _parse_time(_field(raw, 'started_at') or _field(raw, 'start_time'))
+    end = _parse_time(_field(raw, 'ended_at') or _field(raw, 'end_time'))
+    if start is not None:
+        result['start_timestamp'] = start.timestamp()
+    if end is not None:
+        result['end_timestamp'] = end.timestamp()
+    if is_error_span(raw):
+        result['status'] = 'error'
+        error_type = attributes.get('error.type') or attributes.get('error_type')
+        if isinstance(error_type, str) and error_type:
+            result['error_type'] = error_type
+        return result
+    if status:
+        lowered = status.casefold()
+        result['status'] = 'error' if 'error' in lowered or 'fail' in lowered else status
+    return result
 
 
 def _tool_names(*sources: Any) -> tuple[str, ...]:

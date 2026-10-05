@@ -8,6 +8,8 @@ Use signals when you need repeatable measurements of an agent run's structure, t
 
 `compute_signals()` takes an `AtifTrajectory` and returns a `SignalReport`. Convert a trace's raw Orq span records to ATIF first with `OtelTrace.from_orq(...).to_atif()`. The raw span records are the `v3spans` list from Orq's trace endpoint; `evaluatorq.formats` converts records but does not fetch them.
 
+Responses conversion preserves each response's tool definitions on its originating ATIF step. Schema checks use those definitions for that step, including an explicitly empty list, so a later response's schema does not change how an earlier call is checked. Unsupported custom, MCP, or builtin tool activity remains recorded as source data; signals that depend on complete tool activity return `no_basis`, and independent signals remain available. [Trace Insights](insights.md#trace-signals) computes these reports automatically and saves them with its trace results.
+
 ```python
 from pathlib import Path
 from tempfile import TemporaryDirectory

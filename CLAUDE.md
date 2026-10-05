@@ -144,6 +144,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Rendering a whole message list as one text blob | `common.messages.messages_to_text` | `''.join(...)` over `content` — it glues turns into one word, drops `tool_calls` (so an agent that acted scores as silent) and lets tool JSON read as the agent's answer |
 | Turning a `TraceInput` or loaded traces into rows | `common.trace_input.load_traces` (fetch + one `partition_traces` log) | `fetch_traces` then a hand-rolled usable/failed split |
 | Computing trace signals | `evaluatorq.signals.compute_signals` | ad-hoc counting over trajectories |
+| Representing an Insights conversation with trace metadata | `common.trace_document.TraceDocument`; convert with `ensure_trace_document`, render with `prompt_messages` | a second stored message list beside the ATIF trajectory |
 | Building an Orq SDK client | `common.orq_client.resolve_orq_client` | `Orq(...)` anywhere but that module |
 | Rendering a transcript as Responses `input` | `openresponses.input_items.messages_to_responses_input` | a hand-built `{'role', 'content'}` list — an assistant turn needs `output_text` parts or the Orq router **silently drops it** |
 

@@ -19,6 +19,7 @@ from evaluatorq import __version__
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
+from evaluatorq.common.trace_document import ensure_trace_document, trace_document_with_signals
 from evaluatorq.insights.cache import InsightsCache
 from evaluatorq.insights.describe import ClusterName, describe_clusters, describe_top_level
 from evaluatorq.insights.embed import embed_texts
@@ -44,6 +45,7 @@ from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.insights.transcript import tool_stats
 from evaluatorq.insights.usage import UsageLedger
+from evaluatorq.signals import SignalsConfig, compute_signals
 from evaluatorq.trace_finder.settings import effective_settings
 
 MIN_CLUSTER_SIZE = 5
@@ -416,6 +418,7 @@ async def insights(  # noqa: C901
     cache: bool = True,
     coding_analysis: bool = False,
     coding_labels: Sequence[str] | None = None,
+    signals_config: SignalsConfig | None = None,
     run_name: str | None = None,
     runs_dir: Path | None = None,
     _run_id: str | None = None,
@@ -443,6 +446,8 @@ async def insights(  # noqa: C901
             raise ValueError(f'unknown Insights coding label(s): {", ".join(sorted(unknown))}')
         selected_coding = [coding_by_name[name] for name in coding_labels]
     coding_enabled = coding_analysis or (coding_labels is not None and bool(selected_coding))
+    signal_settings = signals_config or SignalsConfig()
+    signal_settings = signal_settings.model_copy(update={'tag_thresholds': signal_settings.resolved_tag_thresholds()})
     for limit_name, limit_value in (
         ('max_clusters', max_clusters),
         ('max_subclusters', max_subclusters),
@@ -471,6 +476,7 @@ async def insights(  # noqa: C901
         cache=cache,
         coding_analysis=coding_analysis,
         coding_labels=selected_coding,
+        signals=signal_settings,
     )
     run = InsightsRun(
         evaluatorq_version=__version__,
@@ -545,6 +551,12 @@ async def insights(  # noqa: C901
                 compiler_model=compiler_model,
                 classifier_model=classifier_model,
             )
+            measured = []
+            for source_trace in resolved.traces:
+                document = ensure_trace_document(source_trace)
+                report = await asyncio.to_thread(compute_signals, document.trajectory, config=signal_settings)
+                measured.append(trace_document_with_signals(document, report))
+            resolved.traces = measured
             run.population = {
                 **resolved.echo,
                 'n_scanned': resolved.n_scanned,
@@ -573,6 +585,8 @@ async def insights(  # noqa: C901
                     agent_name=trace.agent_name or '',
                     project=trace.project or '',
                     tool_stats=tool_stats(trace),
+                    signals=trace.metadata.signals,
+                    source_coverage=trace.metadata.capture_metadata,
                 )
                 for trace in resolved.traces
             ]

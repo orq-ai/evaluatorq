@@ -33,3 +33,9 @@ def test_insights_review_facet_filters() -> None:
     script = Path(__file__).with_name('insights_review_filters.cjs')
     result = subprocess.run(['node', str(script)], capture_output=True, text=True, check=False, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_insights_review_signal_details() -> None:
+    script = Path(__file__).with_name('insights_review_signals.cjs')
+    result = subprocess.run(['node', str(script)], capture_output=True, text=True, check=False, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr
