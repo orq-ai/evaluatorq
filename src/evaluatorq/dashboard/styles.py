@@ -795,7 +795,10 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .rich-pick--compact .model-option, .rich-pick--compact .rich-pick-disabled { padding: 5px 10px; }
 .rich-pick--compact .rich-pick-id { display: flex; align-items: baseline; gap: 8px; }
 .rich-pick--compact .rich-pick-id strong { flex: none; }
-.settings-field select { width: 100%; box-sizing: border-box; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; }
+.settings-field select { width: 100%; box-sizing: border-box; appearance: none; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 28px 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; font-family: var(--font-mono); cursor: pointer; }
+/* Same ▾ glyph and inset as the model pickers above it, in place of the native arrow. */
+.settings-select { position: relative; display: block; }
+.settings-select::after { content: "▾"; position: absolute; right: 10px; top: 50%; transform: translateY(-50%); color: var(--text-faint); font-family: var(--font-mono); pointer-events: none; }
 .settings-auth-step { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .settings-auth-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; padding: 12px 0 2px; }
 .settings-auth-choice { min-width: 0; height: 100%; border: 1px solid var(--border-default); border-radius: 12px; background: var(--surface-card); overflow: hidden; }

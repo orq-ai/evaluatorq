@@ -950,7 +950,7 @@ def settings_body(
     )
     field_rows.append(
         '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
-        f'<span class="config-val"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></div>'
+        f'<span class="config-val"><span class="settings-select"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></span></div>'
     )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     if preview:
