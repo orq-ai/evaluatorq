@@ -589,6 +589,7 @@ class TargetConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 # Re-export from evaluatorq.contracts so existing imports continue to work.
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.contracts import (  # noqa: F401
     DEFAULT_PIPELINE_MODEL,
     DEFAULT_TARGET_MAX_TOKENS,
@@ -639,7 +640,7 @@ class EvaluatorConfig(LLMCallConfig):
         description='Primary judge model shorthand; normalized to judges[0].',
     )
     judges: list[str] = Field(
-        default_factory=lambda: [DEFAULT_PIPELINE_MODEL],
+        default_factory=lambda: [role_model('smart', task='redteam.evaluator')],
         min_length=1,
         description='Judge model IDs. judges[0] is the primary evaluator model.',
     )
@@ -930,7 +931,9 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     # --- Role-based call configs ----------------------------------------------
-    attacker: LLMCallConfig = Field(default_factory=LLMCallConfig)
+    attacker: LLMCallConfig = Field(
+        default_factory=lambda: LLMCallConfig(model=role_model('smart', task='redteam.attacker'))
+    )
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
 
     # --- Retry configuration --------------------------------------------------
@@ -999,8 +1002,8 @@ class LLMConfig(BaseModel):
         return self.retry_count + 1
 
 
-# Module-level default used by internal pipeline components.
-# Import this in other modules; tests can monkeypatch it.
+# Module-level default for the non-model knobs (timeouts, retries). Its model fields are
+# import-time snapshots and must not be read; build `LLMConfig()` to resolve them by role.
 PIPELINE_CONFIG = LLMConfig()
 
 

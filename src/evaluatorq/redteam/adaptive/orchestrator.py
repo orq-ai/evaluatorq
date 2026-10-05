@@ -29,6 +29,7 @@ from evaluatorq.common.content_filter import (
     regenerate_on_content_filter,
 )
 from evaluatorq.common.llm_call import execute_chat_completion
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import delimit, xml_escape
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
@@ -47,7 +48,6 @@ from evaluatorq.redteam.adaptive.tool_chaining import (
 )
 from evaluatorq.redteam.backends.base import Backend
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentContext,
     AttackStrategy,
@@ -579,7 +579,7 @@ class MultiTurnOrchestrator:
     def __init__(
         self,
         llm_client: AsyncOpenAI,
-        model: str = DEFAULT_PIPELINE_MODEL,
+        model: str | None = None,
         backend: Backend | None = None,
         attacker_instructions: str | None = None,
         verbosity: int = 0,
@@ -598,7 +598,7 @@ class MultiTurnOrchestrator:
             pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
         """
         self.llm_client = llm_client
-        self.model = model
+        self.model = model or role_model('smart', task='redteam.attacker')
         self._backend = backend
         self.attacker_instructions = attacker_instructions
         self.verbosity = verbosity

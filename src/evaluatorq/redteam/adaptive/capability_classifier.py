@@ -13,8 +13,8 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.llm_call import execute_chat_parse
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentCapability,
     AgentContext,
@@ -131,7 +131,7 @@ Inference rules:
 async def classify_agent_capabilities(
     agent_context: AgentContext,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
 ) -> AgentCapabilities:
@@ -150,6 +150,7 @@ async def classify_agent_capabilities(
     Returns:
         AgentCapabilities with all classified capabilities
     """
+    model = model or role_model('smart', task='redteam.attacker')
     cfg = pipeline_config or PIPELINE_CONFIG
     capabilities: dict[str, list[AgentCapability]] = {}
 

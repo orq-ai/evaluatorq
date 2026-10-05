@@ -42,13 +42,13 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.messages import coerce_content_text
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.target_call import call_target_with_retry
 from evaluatorq.common.tracing import record_llm_response
 from evaluatorq.contracts import Message
 from evaluatorq.redteam.adaptive.capability_classifier import AgentCapabilities
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AgentCapability,
     LLMConfig,
@@ -447,7 +447,7 @@ def _to_capabilities(inference: BlackboxCapabilityInference) -> dict[str, list[A
 async def classify_agent_capabilities_blackbox(
     agent_target: AgentTarget,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     pipeline_config: LLMConfig | None = None,
 ) -> BlackboxAgentCapabilities:
     """Classify an agent's capabilities from conversational probes alone.
@@ -472,6 +472,7 @@ async def classify_agent_capabilities_blackbox(
         a whole capability group never got an answered probe (a coverage gap) —
         never merely because the agent was fully probed and has no capabilities.
     """
+    model = model or role_model('smart', task='redteam.attacker')
     cfg = pipeline_config or PIPELINE_CONFIG
 
     transcript, unprobed_groups = await _run_probes(

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 from pydantic import BaseModel, Field, ValidationError
 
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.redteam.contracts import (
     DEFAULT_PIPELINE_MODEL,
     DEFAULT_TARGET_MAX_TOKENS,
@@ -41,8 +42,8 @@ def test_llm_config_has_role_based_fields():
     cfg = LLMConfig()
     assert isinstance(cfg.attacker, LLMCallConfig)
     assert isinstance(cfg.evaluator, EvaluatorConfig)
-    assert cfg.attacker.model == DEFAULT_PIPELINE_MODEL
-    assert cfg.evaluator.model == DEFAULT_PIPELINE_MODEL
+    assert cfg.attacker.model == role_model('smart', task='redteam.attacker')
+    assert cfg.evaluator.model == role_model('smart', task='redteam.evaluator')
 
 
 def test_llm_config_custom_roles():

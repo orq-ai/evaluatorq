@@ -19,7 +19,8 @@ if TYPE_CHECKING:
     from evaluatorq.redteam.contracts import AgentContext, AttackStrategy
 
 from evaluatorq.common.llm_call import execute_chat_parse
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL, PIPELINE_CONFIG, LLMConfig
+from evaluatorq.common.model_roles import role_model
+from evaluatorq.redteam.contracts import PIPELINE_CONFIG, LLMConfig
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
 
@@ -148,7 +149,7 @@ async def adapt_prompt_to_tools(
     strategy: AttackStrategy,
     *,
     llm_client: AsyncOpenAI,
-    model: str = DEFAULT_PIPELINE_MODEL,
+    model: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
 ) -> str:
@@ -168,6 +169,7 @@ async def adapt_prompt_to_tools(
     Returns:
         Adapted prompt (or original if no tools or none relevant)
     """
+    model = model or role_model('smart', task='redteam.attacker')
     cfg = pipeline_config or PIPELINE_CONFIG
     if not agent_context.tools:
         return base_prompt
