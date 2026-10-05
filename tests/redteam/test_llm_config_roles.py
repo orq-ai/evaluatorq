@@ -29,7 +29,7 @@ def test_call_config_with_only_temperature_follows_smart_and_keeps_temperature()
 
 
 def test_dict_form_follows_smart() -> None:
-    assert LLMConfig(attacker={'temperature': 0.7}).attacker.model == 'env/smart'  # ty: ignore[invalid-argument-type]
+    assert LLMConfig(attacker={'temperature': 0.7}).attacker.model == 'env/smart'
 
 
 def test_explicit_model_is_kept() -> None:
