@@ -1394,6 +1394,9 @@ def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatc
             return None
 
     monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [])
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://eu.orq.ai', 'eu.orq.ai', 'ada@orq.ai', None, 'valid', True),
+    ))
     monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
     monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setattr(
@@ -1414,6 +1417,10 @@ def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatc
     assert seen[0].orq_auth_method == 'cli_profile'
     assert seen[0].orq_profile == 'work'
     assert seen[0].orq_oauth_server == 'https://eu.orq.ai'
+
+    client.get('/settings/models', params={'field': 'fast_model', 'orq_oauth_server': 'http://169.254.169.254'})
+    # A server the CLI has no login for is ignored, so a caller cannot point the CLI at any host.
+    assert seen[1].orq_oauth_server != 'http://169.254.169.254'
 
 
 def test_model_field_offers_workspace_models_grouped_by_provider(

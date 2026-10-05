@@ -101,6 +101,8 @@ def export_cli_models() -> None:
     """Publish this process's CLI flags in the environment for child processes to inherit."""
     if _cli_roles or _cli_overrides:
         os.environ[OVERRIDES_ENV] = json.dumps({'roles': _cli_roles, 'overrides': _cli_overrides})
+    else:
+        os.environ.pop(OVERRIDES_ENV, None)
 
 
 def _inherited_cli_models() -> tuple[dict[str, str], dict[str, str]]:

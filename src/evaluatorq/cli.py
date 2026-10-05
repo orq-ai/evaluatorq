@@ -21,7 +21,14 @@ import typer
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
-from evaluatorq.common.model_roles import BUILTIN, TASKS, add_cli_models, export_cli_models, parse_overrides
+from evaluatorq.common.model_roles import (
+    BUILTIN,
+    TASKS,
+    add_cli_models,
+    export_cli_models,
+    parse_overrides,
+    set_cli_models,
+)
 
 # ---------------------------------------------------------------------------
 # Top-level application
@@ -58,6 +65,7 @@ def _version_callback(value: bool) -> None:  # noqa: FBT001
 
 def _apply_model_flags(
     *,
+    replace: bool = False,
     fast: str | None,
     smart: str | None,
     classifier: str | None,
@@ -70,7 +78,8 @@ def _apply_model_flags(
     except ValueError as exc:
         raise typer.BadParameter(str(exc), param_hint='--model-override') from exc
     roles = {'fast': fast, 'smart': smart, 'classifier': classifier, 'embedding': embedding}
-    add_cli_models(roles, parsed)  # ty: ignore[invalid-argument-type]
+    # The root callback replaces state left by an earlier in-process invocation; a subcommand adds to the root's.
+    (set_cli_models if replace else add_cli_models)(roles, parsed)  # ty: ignore[invalid-argument-type]
     # Subprocesses (the dashboard's Insights worker) inherit os.environ, not this state.
     export_cli_models()
 
@@ -109,6 +118,7 @@ def _main(
 ) -> None:
     """Evaluation framework for AI systems."""
     _apply_model_flags(
+        replace=True,
         fast=fast_model,
         smart=smart_model,
         classifier=classifier_model,

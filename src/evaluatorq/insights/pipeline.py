@@ -45,7 +45,6 @@ from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.insights.transcript import tool_stats
 from evaluatorq.insights.usage import UsageLedger
-from evaluatorq.trace_finder.settings import effective_settings
 
 MIN_CLUSTER_SIZE = 5
 LOW_CONFIDENCE = 0.6
@@ -451,7 +450,6 @@ async def insights(  # noqa: C901
     ):
         if limit_value < 1:
             raise ValueError(f'{limit_name} must be positive')
-    settings = effective_settings()
     compiler_model = compiler_model or role_model('fast', task='finder.compiler')
     # An explicit classifier_model covers both stages; otherwise population search
     # follows finder.classifier and labelling follows insights.labels.

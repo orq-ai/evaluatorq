@@ -133,6 +133,15 @@ def test_root_flags_apply_before_a_subcommand_runs() -> None:
     assert role_model('smart') == 'a/b'
 
 
+def test_a_second_invocation_does_not_keep_the_first_ones_flags() -> None:
+    CliRunner().invoke(app, ['--smart-model', 'a/b', '--model-override', 'apply=c/d', 'dashboard', '--help'])
+    result = CliRunner().invoke(app, ['dashboard', '--help'])
+    assert result.exit_code == 0
+    assert role_model('smart') == BUILTIN['smart']
+    assert role_model('smart', task='apply') == BUILTIN['smart']
+    assert 'EVALUATORQ_MODEL_OVERRIDES' not in os.environ
+
+
 def test_sim_model_flag_unset_leaves_roles_to_resolve() -> None:
     from evaluatorq.simulation.cli import _generation_model, _sim_llm_config
 

@@ -36,7 +36,7 @@ from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
 DEFAULT_JUDGE_MODEL = DEFAULT_SMART_MODEL
-"""Judge model when the caller names neither ``model=`` nor ``judges=``."""
+"""Built-in judge model. At runtime a call naming neither ``model=`` nor ``judges=`` uses ``role_model('smart')``, which flags, env and settings can change."""
 
 DEFAULT_JURY_MAX_TOKENS = 8000
 

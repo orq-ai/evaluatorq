@@ -391,8 +391,15 @@ async def _settings_models(req: Request) -> NotStr:
         update = {'orq_auth_method': requested_method, 'orq_profile': name or None}
     elif name:
         update = {'orq_auth_method': 'cli_profile', 'orq_profile': name}
-    if params.get('orq_oauth_server'):
-        update['orq_oauth_server'] = params['orq_oauth_server']
+    # An unsaved server choice must be one of the CLI's own logins: this GET carries no CSRF token,
+    # so an arbitrary URL here would let any caller point the Orq CLI at a host of their choosing.
+    server = params.get('orq_oauth_server')
+    if server and server != settings.orq_oauth_server:
+        sessions = await asyncio.to_thread(list_oauth_sessions)
+        if server not in {session.server for session in sessions}:
+            server = None
+    if server:
+        update['orq_oauth_server'] = server
     settings = settings.model_copy(update=update)
     if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
         return NotStr(
