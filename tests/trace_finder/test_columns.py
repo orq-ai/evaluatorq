@@ -30,6 +30,11 @@ def test_trace_column_combines_name_and_agent_and_escapes_text() -> None:
     assert '<small>support<&</small>' not in rendered
 
 
+def test_trace_column_shows_only_the_trace_id_without_an_agent() -> None:
+    rendered = COLUMNS['trace'].render(TraceRow(trace_id='323c4cfd9', name='responses.openai'))
+    assert '<small>323c4cfd</small>' in rendered
+
+
 def test_model_column_shows_served_model_before_summary_model() -> None:
     row = TraceRow(
         trace_id='served', models=('gpt-5.6-terra',), response_models=('openai/gpt-5.6-terra',)
