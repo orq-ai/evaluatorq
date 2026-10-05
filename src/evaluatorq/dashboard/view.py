@@ -753,15 +753,16 @@ MODEL_FIELDS = {
 }
 
 
-def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
+def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, note: str = '') -> str:
     """A two-level model menu (provider, then model) with a Custom free-text entry.
 
     Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
-    Without a catalogue the field stays a plain text box.
+    Without a catalogue the field stays a plain text box, followed by ``note`` (why) when given.
     """
     label = MODEL_FIELDS[name]
     if not groups:
-        return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
+        box = f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
+        return f'{box}<span class="settings-auth-hint">{esc(note)}</span>' if note else box
     known = any(value in ids for ids in groups.values())
     items: list[str] = []
     subs: list[str] = []
@@ -906,6 +907,21 @@ def profile_field(chosen: str, profiles: Sequence[Any], *, describedby: str = ''
     )
 
 
+# The auth controls whose change re-fetches each model list; the model inputs themselves are left out so a pick never loops.
+MODEL_FIELD_TRIGGER = (
+    "load, change[['orq_auth_method','orq_profile','orq_oauth_server'].includes(target.name)] "
+    'from:closest form delay:10ms'
+)
+
+
+def _model_field_include(name: str) -> str:
+    """Selectors for the inputs a model-list fetch needs; never the whole form, which holds the CSRF token."""
+    return (
+        f'#{name}-field input[name={name}], input[name=orq_auth_method]:checked, '
+        'input[name=orq_profile], input[name=orq_oauth_server]'
+    )
+
+
 def settings_body(
     config: list[tuple[str, str | list[str]]],
     settings: Any | None = None,
@@ -926,18 +942,14 @@ def settings_body(
         value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
         return '' if value is None else str(value)
 
-    profile_params = {
-        'profile': setting_value('orq_profile'),
-        'auth_method': setting_value('orq_auth_method') or 'environment',
-    }
-    profile_query = urlencode(profile_params)
     field_rows: list[str] = []
     for name, label in MODEL_FIELDS.items():
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
         control = (
-            f'<span hx-get="/settings/models?field={name}&amp;{esc(profile_query)}" hx-trigger="load" '
-            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {})}</span>'
+            f'<span class="settings-model-field" id="{esc(name)}-field" hx-get="/settings/models?field={esc(name)}" '
+            f'hx-trigger="{esc(MODEL_FIELD_TRIGGER)}" hx-include="{esc(_model_field_include(name))}" '
+            f'hx-swap="innerHTML">{model_control(name, setting_value(name), {})}</span>'
         )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'

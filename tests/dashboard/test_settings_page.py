@@ -1209,8 +1209,77 @@ _CHOICES = {'openai': ['openai/gpt-5.6-luna'], 'typesafe': ['typesafe/jev-latest
 def test_settings_page_renders_model_fields_before_the_catalogue_loads(client: TestClient) -> None:
     html = client.get('/settings').text
 
-    assert '<span hx-get="/settings/models?field=compiler_model&amp;profile=&amp;auth_method=environment" hx-trigger="load"' in html
+    assert 'id="compiler_model-field" hx-get="/settings/models?field=compiler_model"' in html
     assert '<input id="compiler_model" name="compiler_model" type="text"' in html
+
+
+def test_model_fields_reload_when_the_authentication_choice_changes(client: TestClient) -> None:
+    html = client.get('/settings').text
+
+    for name in ('compiler_model', 'classifier_model', 'apply_model'):
+        tag = html[html.index(f'id="{name}-field"') :].split('>', 1)[0]
+        assert 'hx-trigger="load, change[' in tag
+        assert 'orq_auth_method' in tag
+        assert 'orq_profile' in tag
+        assert 'orq_oauth_server' in tag
+        assert 'from:closest form' in tag
+        assert 'hx-swap="innerHTML"' in tag
+        include = tag.split('hx-include="', 1)[1].split('"', 1)[0]
+        assert f'#{name}-field input[name={name}]' in include
+        assert 'input[name=orq_auth_method]:checked' in include
+        assert 'csrf' not in include.lower()
+
+
+def test_model_field_asks_for_a_cli_profile_before_fetching(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def never(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        raise AssertionError('no fetch without a profile')
+
+    monkeypatch.setattr(app_module, 'models_by_provider', never)
+
+    html = client.get(
+        '/settings/models',
+        params={'field': 'compiler_model', 'orq_auth_method': 'cli_profile', 'compiler_model': 'x'},
+    ).text
+
+    assert html.startswith('<input id="compiler_model" name="compiler_model" type="text" value="x"')
+    assert 'Choose a CLI profile' in html
+
+
+def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[DashboardSettings] = []
+
+    def selected_auth(settings: DashboardSettings, **_kwargs: object) -> SimpleNamespace:
+        seen.append(settings)
+        return SimpleNamespace(method='cli_profile', api_key='profile-key', base_url='https://profile.example')
+
+    async def choices(_client: object, *, classify: bool = False) -> dict[str, list[str]]:
+        return _CHOICES
+
+    class FakeLLM:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [])
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
+    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(
+        app_module, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
+    )
+
+    html = client.get(
+        '/settings/models',
+        params={
+            'field': 'compiler_model',
+            'orq_auth_method': 'cli_profile',
+            'orq_profile': 'work',
+            'orq_oauth_server': 'https://eu.orq.ai',
+        },
+    ).text
+
+    assert 'model-pick' in html
+    assert seen[0].orq_auth_method == 'cli_profile'
+    assert seen[0].orq_profile == 'work'
+    assert seen[0].orq_oauth_server == 'https://eu.orq.ai'
 
 
 def test_model_field_offers_workspace_models_grouped_by_provider(
@@ -1336,3 +1405,15 @@ async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: p
         'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
         'typesafe': ['typesafe/jev-latest'],
     }
+
+
+def test_model_field_explains_a_missing_api_key(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setenv('EVALUATORQ_USER_SETTINGS', str(tmp_path / 'user-settings.json'))
+
+    html = client.get(
+        '/settings/models', params={'field': 'compiler_model', 'auth_method': 'environment', 'compiler_model': 'x'}
+    ).text
+
+    assert html.startswith('<input id="compiler_model" name="compiler_model" type="text" value="x"')
+    assert 'No Orq API key' in html

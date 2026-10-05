@@ -51,7 +51,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.common.cli_oauth import list_oauth_sessions
-from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
 from evaluatorq.common.model_catalogue import models_by_provider
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
@@ -380,13 +380,20 @@ async def _settings_models(req: Request) -> NotStr:
     if field not in MODEL_FIELDS:
         return NotStr('')
     value = req.query_params.get(field, '')
-    name = req.query_params.get('profile', '')
+    params = req.query_params
+    name = params.get('orq_profile') or params.get('profile') or ''
     settings = effective_settings()
-    requested_method = req.query_params.get('auth_method')
+    requested_method = params.get('orq_auth_method') or params.get('auth_method')
+    update: dict[str, Any] = {}
     if requested_method in ('environment', 'cli_profile', 'stored_api_key', 'cli_oauth'):
-        settings = settings.model_copy(update={'orq_auth_method': requested_method, 'orq_profile': name or None})
+        update = {'orq_auth_method': requested_method, 'orq_profile': name or None}
     elif name:
-        settings = settings.model_copy(update={'orq_auth_method': 'cli_profile', 'orq_profile': name})
+        update = {'orq_auth_method': 'cli_profile', 'orq_profile': name}
+    if params.get('orq_oauth_server'):
+        update['orq_oauth_server'] = params['orq_oauth_server']
+    settings = settings.model_copy(update=update)
+    if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
+        return NotStr(model_control(field, value, {}, note='Choose a CLI profile to load its models.'))
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
     groups: dict[str, list[str]] = {}
     try:
@@ -410,9 +417,18 @@ async def _settings_models(req: Request) -> NotStr:
             finally:
                 if resolved.owned:
                     await resolved.client.close()
-    except (ImportError, OSError, RuntimeError, ValueError):
-        pass
-    return NotStr(model_control(field, value, groups))
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.warning('Could not load the model catalogue for {}: {}', field, exc)
+        if isinstance(exc, MissingLLMCredentialsError):
+            note = (
+                "No Orq API key for the chosen authentication method, so the model list can't load. "
+                'Set one under Authentication, or type a model id.'
+            )
+        else:
+            note = "Couldn't load the model list from Orq. Type a model id."
+    else:
+        note = '' if groups else 'Orq returned no models for this field. Type a model id.'
+    return NotStr(model_control(field, value, groups, note=note))
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
