@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+from openai import APIStatusError, BadRequestError, InternalServerError, RateLimitError
 
+from evaluatorq.common import model_catalogue
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeError, JudgeOutcome
 from evaluatorq.signals import classify_tool_doors
 from evaluatorq.signals.config import SignalsConfig
@@ -128,23 +133,133 @@ async def test_run_without_tool_calls_makes_no_requests(monkeypatch: pytest.Monk
         JudgeOutcome(payload=EvaluatorResponsePayload(value='maybe', explanation='invalid')),
     ],
 )
-async def test_failed_classification_is_no_basis_not_benign(
+async def test_failed_classification_is_unknown_and_counts_are_kept(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     outcome: JudgeOutcome,
 ) -> None:
-    _fake_judge(monkeypatch, {'rm -rf build': outcome, 'Read': 'benign'})
+    _fake_judge(monkeypatch, {'rm -rf build': outcome, 'git push': 'one_way'})
     trajectory = traj([
         user(),
-        agent(calls=[call('Bash', {'command': 'rm -rf build'}, 'a'), call('Read', {'file_path': 'x'}, 'b')]),
+        agent(calls=[call('Bash', {'command': 'rm -rf build'}, 'a'), call('Bash', {'command': 'git push'}, 'b')]),
     ])
 
     results = await classify_tool_doors(trajectory, client=_CLIENT)
 
-    for result in results.values():
-        assert result.value is None
-        assert result.no_basis == 'door_classification: 1 of 2 tool calls could not be classified'
+    assert {name: r.value for name, r in results.items()} == {
+        'one_way_call_count': 1,
+        'two_way_call_count': 0,
+        'unknown_call_count': 1,
+    }
+    assert [(e.call_id, e.reason, e.subgroup) for e in results['unknown_call_count'].evidence] == [
+        ('a', 'Bash: rm -rf build', 'unknown'),
+    ]
     assert 'rm -rf build' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unknown_is_never_offered_to_jev(monkeypatch: pytest.MonkeyPatch) -> None:
+    labels: list[set[str]] = []
+
+    async def judge(**kwargs: Any) -> JudgeOutcome:
+        labels.append(set(kwargs['classify'].criteria))
+        return JudgeOutcome(payload=EvaluatorResponsePayload(value='benign', explanation='classified'))
+
+    monkeypatch.setattr('evaluatorq.signals.doors.run_judge', judge)
+
+    await classify_tool_doors(traj([user(), agent(calls=[call('Read', {}, 'a')])]), client=_CLIENT)
+
+    assert labels == [{'benign', 'two_way', 'one_way'}]
+
+
+# --- Retry: through the real run_judge, with a fake router client and no backoff sleep. ---
+
+_ORQ_URL = 'https://my.orq.ai/v3/router'
+
+
+@pytest.fixture
+def jev_router(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
+    """Route the classifier model to /classify and record backoff waits instead of sleeping."""
+    model_catalogue.reset_catalogue_cache()
+    entry = model_catalogue.ModelInfo(0.0, 0.0, 'typesafe', supports_responses=False, supports_classify=True)
+
+    async def fake_load(client: Any = None) -> dict[str, Any]:  # noqa: ARG001
+        return {'typesafe/jev-latest': entry, 'jev-latest': entry}
+
+    waits: list[float] = []
+
+    async def no_sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', fake_load)
+    monkeypatch.setattr('evaluatorq.common.retry.asyncio.sleep', no_sleep)
+    monkeypatch.delenv('EVALUATORQ_CLASSIFIER_MODEL', raising=False)
+    yield waits
+    model_catalogue.reset_catalogue_cache()
+
+
+def _router_client(*post_results: Any) -> Any:
+    client = MagicMock()
+    client.base_url = _ORQ_URL
+    client.post = AsyncMock(side_effect=list(post_results))
+    return client
+
+
+def _status_error(cls: type[APIStatusError], status: int) -> APIStatusError:
+    response = httpx.Response(status, request=httpx.Request('POST', f'{_ORQ_URL}/classify'))
+    return cls('failed', response=response, body=None)
+
+
+def _choice(label: str) -> dict[str, Any]:
+    answer = {'type': 'choice', 'choice': label, 'probabilities': {label: 0.9}}
+    return {'answers': {'verdict': answer}, 'usage': {'input_tokens': 10, 'output_tokens': 1}, 'model': 'jev-latest'}
+
+
+def _one_shell_call() -> Any:
+    return traj([user(), agent(calls=[call('Bash', {'command': 'git push --force'}, 'a')])])
+
+
+@pytest.mark.asyncio
+async def test_transient_errors_are_retried_then_succeed(jev_router: list[float]) -> None:
+    client = _router_client(
+        _status_error(RateLimitError, 429), _status_error(InternalServerError, 503), _choice('one_way')
+    )
+
+    results = await classify_tool_doors(_one_shell_call(), client=client)
+
+    assert client.post.await_count == 3
+    assert len(jev_router) == 2
+    assert jev_router[1] > jev_router[0]
+    assert results['one_way_call_count'].value == 1
+    assert results['unknown_call_count'].value == 0
+
+
+@pytest.mark.asyncio
+async def test_exhausted_retries_become_unknown_with_counts_returned(jev_router: list[float]) -> None:
+    client = _router_client(*(_status_error(InternalServerError, 500) for _ in range(4)))
+
+    results = await classify_tool_doors(_one_shell_call(), client=client)
+
+    assert client.post.await_count == 4
+    assert len(jev_router) == 3
+    assert {name: r.value for name, r in results.items()} == {
+        'one_way_call_count': 0,
+        'two_way_call_count': 0,
+        'unknown_call_count': 1,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('first', ['bad_request', 'off_label_reply'])
+async def test_non_transient_error_is_not_retried(jev_router: list[float], first: str) -> None:
+    failure = _status_error(BadRequestError, 400) if first == 'bad_request' else _choice('maybe')
+    client = _router_client(failure, _choice('one_way'))
+
+    results = await classify_tool_doors(_one_shell_call(), client=client)
+
+    assert client.post.await_count == 1
+    assert jev_router == []
+    assert results['unknown_call_count'].value == 1
 
 
 @pytest.mark.asyncio
@@ -159,5 +274,6 @@ async def test_unavailable_client_leaves_every_call_unclassified(
 
     results = await classify_tool_doors(trajectory)
 
-    assert results['one_way_call_count'].no_basis is not None
+    assert results['unknown_call_count'].value == 1
+    assert results['one_way_call_count'].value == 0
     assert 'no credentials' in caplog.text
