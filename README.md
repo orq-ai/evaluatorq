@@ -266,6 +266,19 @@ Everything is environment variables; none are required for local evaluation. `OR
 
 → [Configuration](https://orq-ai.github.io/evaluatorq/configuration/) · [Tracing](https://orq-ai.github.io/evaluatorq/tracing/)
 
+### Superset workspaces
+
+Superset worktrees run `.superset/setup.sh` after creation and
+`.superset/teardown.sh` before deletion. To try the hooks manually, run setup
+from a Superset-created worktree; it copies `.env` from the main checkout only
+when the destination is absent, links the shared `.evaluatorq` run store, then
+runs `uv sync --all-extras`. Run teardown before discarding local work. It
+archives a binary-capable patch for tracked changes and a tarball of untracked,
+non-ignored files under `$HOME/.superset/archive/evaluatorq/<worktree>-<timestamp>-<unique-suffix>`
+(or `SUPERSET_ARCHIVE_ROOT`); archive write failures stop cleanup. Ignored files
+(including `.env`) are excluded. These scripts do not prove Superset invokes its
+delete hook; test them in a disposable worktree before relying on that lifecycle.
+
 ## Development
 
 [uv](https://docs.astral.sh/uv/) manages the environment, [ruff](https://docs.astral.sh/ruff/) lints and formats, [ty](https://docs.astral.sh/ty/) type-checks, and pytest runs the suite:
