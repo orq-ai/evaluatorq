@@ -798,9 +798,9 @@ def test_traces_csv_exports_filtered_sorted_visible_rows_across_pages(explorer_c
     assert response.headers['content-type'].startswith('text/csv')
     assert response.headers['content-disposition'] == 'attachment; filename="traces.csv"'
     assert len(table) == 6
-    assert table[0][1] == 'Trace / agent'
-    assert table[1][1] == 'trace-0004'
-    assert table[-1][1] == 'trace-0000'
+    assert table[0][2] == 'Trace / agent'
+    assert table[1][2] == 'trace-0004'
+    assert table[-1][2] == 'trace-0000'
 
 
 def test_traces_csv_matches_rendered_matched_only_rows_across_pages(explorer_client) -> None:
