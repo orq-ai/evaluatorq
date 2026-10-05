@@ -5,6 +5,7 @@
 - ``GET /``                   → combined Dashboard landing (no ``surface``), or a
                                per-kind run list when ``?surface=redteam|sim|pairwise``
 - ``GET /settings``           → editable settings plus read-only runtime details
+- ``GET /settings/oauth-sessions?value=`` → CLI OAuth session field with checked token status (HTMX)
 - ``GET /r/{rid}``            → embedded report view in the dashboard shell
 - ``GET /r/{rid}/export``     → standalone HTML export (alias: export.html)
 - ``GET /r/{rid}/export.html``→ standalone HTML export (full document)
@@ -49,6 +50,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
+from evaluatorq.common.cli_oauth import list_oauth_sessions
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.model_catalogue import models_by_provider
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
@@ -76,6 +78,7 @@ from evaluatorq.dashboard.view import (
     filter_fragment,
     landing_body,
     model_control,
+    oauth_session_field,
     redteam_overview_body,
     render_filter_form,
     report_actions,
@@ -362,6 +365,13 @@ async def _settings(req: Request) -> NotStr:
         profiles=profiles,
     )
     return NotStr(page('Settings', body, active_nav='settings'))
+
+
+async def _settings_oauth_sessions(req: Request) -> NotStr:
+    """The CLI OAuth server field, loaded after the page because checking an expired login calls Orq."""
+    value = req.query_params.get('value') or DEFAULT_ORQ_BASE_URL
+    sessions = await asyncio.to_thread(list_oauth_sessions)
+    return NotStr(oauth_session_field(value, sessions))
 
 
 async def _settings_models(req: Request) -> NotStr:
@@ -939,6 +949,7 @@ def register_report_routes(app: FastHTML) -> None:
     app.get('/settings')(_settings)
     app.post('/settings')(_save_settings)
     app.get('/settings/models')(_settings_models)
+    app.get('/settings/oauth-sessions')(_settings_oauth_sessions)
     app.get('/search')(_search)
     app.get('/r/{rid}')(_report_view)
     app.get('/r/{rid}/sim/agent-card')(_sim_agent_card)

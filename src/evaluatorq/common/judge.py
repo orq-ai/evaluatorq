@@ -24,7 +24,7 @@ from evaluatorq.common.llm_call import (
 )
 from evaluatorq.common.llm_client import client_routes_through_orq
 from evaluatorq.common.messages import coerce_content_text
-from evaluatorq.common.model_catalogue import qualified_model, supports_classify
+from evaluatorq.common.model_catalogue import is_known_classify_model, qualified_model, supports_classify
 from evaluatorq.common.responses import first_responses_refusal, parse_responses_response, responses_stop_reason
 from evaluatorq.common.retry import with_retry, without_client_retries
 from evaluatorq.common.structured_output import warn_unread_config_fields
@@ -1173,6 +1173,22 @@ async def _attempt(
         ).model_copy(update={'endpoint': 'chat'})
 
 
+# Classify/prompt mismatches already warned about, keyed by model and direction. The same
+# judge runs once per datapoint and `DEFAULT_PIPELINE_MODEL` is classify-capable, so without
+# this every attack evaluation in a red-team run logs a line the caller cannot act on from
+# `red_team()`. Same reasoning as `_classify_fallback_warned` in `model_catalogue`.
+_classify_mismatch_warned: set[tuple[str, str]] = set()
+
+
+def _warn_classify_mismatch_once(model: str, direction: str, message: str) -> None:
+    """Log ``message`` for this ``model`` and ``direction`` at most once per process."""
+    key = (model, direction)
+    if key in _classify_mismatch_warned:
+        return
+    _classify_mismatch_warned.add(key)
+    logger.warning(message, model)
+
+
 async def run_judge(
     *,
     client: AsyncOpenAI,
@@ -1189,15 +1205,24 @@ async def run_judge(
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
 
-    **Classify models.** A model the catalogue marks as classify-only (Jev) is
-    judged on the router's ``/classify`` endpoint from the ``classify`` question.
+    **Classify models.** A judge is asked on the router's ``/classify`` endpoint when
+    the caller supplied a ``classify`` question and the catalogue says the model serves
+    that endpoint. The flag alone does not mean classify-*only*, so it never redirects a
+    caller who asked for the prompt path.
     The prompt, the verdict schema and the sampling keywords play no part in that
     call: the leg warns per call about every `LLMCallConfig` field it does not
     read, and the keywords that are not config fields (``system_prompt``,
     ``prompt``, ``temperature``, ``structured_output``) are warned about once by
-    the caller that set them — `llm_jury` does it at construction. Such a model
-    reached without a ``classify`` question is an error, not a fallback: prompting
-    it would produce a bill and no verdict.
+    the caller that set them — `llm_jury` does it at construction.
+
+    The ``classify`` question decides that routing, not the catalogue: the endpoint
+    follows what the caller asked for, and the catalogue only says whether that
+    endpoint is available. ``supports_classify`` is additive, so a model that gains
+    it while still serving chat keeps behaving exactly as before for a caller that
+    never asked for classify. A model this package ships as classify-*only*
+    (`is_known_classify_model`) is the one exception: reached without a ``classify``
+    question it errors before the call, because prompting it would produce a bill and
+    no verdict. Every other mismatch degrades to the prompt path and says so.
 
     **Which endpoint.** ``cfg.api='responses'`` (the default for evaluators) sends
     the call to the Orq router's Responses endpoint — the one it prices — but only
@@ -1227,24 +1252,52 @@ async def run_judge(
     temp: float | None = cfg.temperature if isinstance(temperature, _UseCfg) else temperature
     client = without_client_retries(client)
     raw_content = ['{}']
-    # Decided before the endpoint resolution below, and independently of `cfg.api`:
-    # a classify model serves neither chat nor Responses, so `api='responses'` (what
-    # `llm_jury` always sets) says nothing about it.
-    use_classify = client_routes_through_orq(client) and await supports_classify(model, client)
-    if use_classify and classify is None:
+    # Decided before the endpoint resolution below, and independently of `cfg.api`.
+    # The caller's intent picks the endpoint; the catalogue only says whether the
+    # wanted one is available. `supports_classify` is *additive* — the router keeps
+    # granting classify to models that also serve chat — so a model gaining it must
+    # never change what a caller who never asked for classify receives. Reading the
+    # capability as "classify-only" is what broke every red-team judge when
+    # `openai/gpt-5.6-luna` picked the flag up (#245).
+    wants_classify = classify is not None
+    serves_classify = client_routes_through_orq(client) and await supports_classify(model, client)
+    if not wants_classify and is_known_classify_model(model):
+        # A model this package ships as classify-*only*. Prompting it buys a provider
+        # rejection rather than a verdict, so fail before the call instead of after it.
+        # The built-in list is the right signal here precisely because it does not grow
+        # when the router grants classify to a chat model, and it is deliberately checked
+        # without `serves_classify`: whether this client routes through the router does not
+        # change what the model can serve, and `register_model` remains the way to correct
+        # the built-in list for a caller who knows better.
         logger.error(
-            'Judge [{}] is a classify model but the caller built no classify question for it; '
+            'Judge [{}] is a classify-only model but the caller built no classify question for it; '
             'from `llm_jury`, pass `criteria` and, for numeric verdicts, `levels`',
             model,
         )
         return JudgeOutcome(
             error_kind=JudgeError.UNKNOWN,
             error_message=(
-                f'{model} is a classify model but the caller passed no classify question. '
+                f'{model} is a classify-only model but the caller passed no classify question. '
                 f'From llm_jury, pass `criteria` and, for numeric verdicts, `levels`; '
                 f'direct run_judge callers must pass `classify`.'
             ),
             endpoint=None,
+        )
+    use_classify = wants_classify and serves_classify
+    if serves_classify and not wants_classify:
+        _warn_classify_mismatch_once(
+            model,
+            'prompted',
+            'Judge [{}] serves the classify endpoint, but the caller built no classify question; '
+            'judging it on the prompt path instead. From `llm_jury`, pass `criteria` and, for '
+            'numeric verdicts, `levels` to judge it on classify.',
+        )
+    elif wants_classify and not serves_classify:
+        _warn_classify_mismatch_once(
+            model,
+            'dropped',
+            'Judge [{}] does not serve the classify endpoint; dropping the classify question and '
+            'judging it on the prompt path instead.',
         )
     classify_question = classify if use_classify else None
     if use_classify:

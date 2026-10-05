@@ -62,10 +62,13 @@ class _ModelInfoFields(NamedTuple):
     # — absence is "unknown", never "empty".
     reasoning_efforts: frozenset[str] | None = None
     # Whether the model serves the router's ``/classify`` endpoint rather than a
-    # chat/responses one. Last and defaulted so the positional call sites keep working.
+    # chat/responses one. Defaulted so the positional call sites keep working.
     supports_classify: bool = False
     # The catalogue's ``model_type`` (``chat``, ``embedding``, ``tts``, …); ``''`` when unstated.
     model_type: str = ''
+    # The effort the provider applies when none is sent. ``None`` when the
+    # catalogue names no default.
+    default_reasoning_effort: str | None = None
 
 
 class ModelInfo(_ModelInfoFields):
@@ -91,6 +94,7 @@ class ModelInfo(_ModelInfoFields):
         reasoning_efforts: frozenset[str] | None = None,
         supports_classify: bool = False,  # noqa: FBT001, FBT002 — positional to match the tuple field order
         model_type: str = '',
+        default_reasoning_effort: str | None = None,
     ) -> ModelInfo:
         """Normalize an empty ``reasoning_efforts`` to ``None``.
 
@@ -115,6 +119,7 @@ class ModelInfo(_ModelInfoFields):
             reasoning_efforts or None,
             supports_classify,
             model_type,
+            default_reasoning_effort,
         )
 
 
@@ -258,6 +263,18 @@ def _entry_metadata(entry: dict[str, object]) -> dict[str, object]:
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _reasoning_effort_config(entry: dict[str, object]) -> dict[str, object] | None:
+    """The ``reasoningEffort`` parameter's ``config`` for one catalogue entry, or ``None``."""
+    parameters = entry.get('parameters')
+    if not isinstance(parameters, list):
+        return None
+    for parameter in parameters:
+        if isinstance(parameter, dict) and parameter.get('parameter') == 'reasoningEffort':
+            config = parameter.get('config')
+            return config if isinstance(config, dict) else None
+    return None
+
+
 def _parse_reasoning_efforts(entry: dict[str, object]) -> frozenset[str] | None:
     """Accepted ``reasoning.effort`` values for one catalogue entry, or ``None``.
 
@@ -268,19 +285,19 @@ def _parse_reasoning_efforts(entry: dict[str, object]) -> frozenset[str] | None:
     level without a schema change. ``None`` when the entry has no such parameter,
     which the caller must treat as "cannot validate", not "nothing allowed".
     """
-    parameters = entry.get('parameters')
-    if not isinstance(parameters, list):
+    config = _reasoning_effort_config(entry)
+    options = config.get('options') if config else None
+    if not isinstance(options, list):
         return None
-    for parameter in parameters:
-        if not isinstance(parameter, dict) or parameter.get('parameter') != 'reasoningEffort':
-            continue
-        config = parameter.get('config')
-        options = config.get('options') if isinstance(config, dict) else None
-        if not isinstance(options, list):
-            return None
-        values = {o['value'] for o in options if isinstance(o, dict) and isinstance(o.get('value'), str)}
-        return frozenset(values) or None
-    return None
+    values = {o['value'] for o in options if isinstance(o, dict) and isinstance(o.get('value'), str)}
+    return frozenset(values) or None
+
+
+def _parse_default_reasoning_effort(entry: dict[str, object]) -> str | None:
+    """The effort the provider applies when none is sent, from the same parameter's ``config.default``."""
+    config = _reasoning_effort_config(entry)
+    default = config.get('default') if config else None
+    return default if isinstance(default, str) and default else None
 
 
 def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
@@ -330,6 +347,7 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
             reasoning_efforts=_parse_reasoning_efforts(entry),
             supports_classify=classify_flag is True,
             model_type=str(entry.get('model_type') or ''),
+            default_reasoning_effort=_parse_default_reasoning_effort(entry),
         )
         models[f'{provider}/{model_id}'] = info
         existing = models.get(model_id)

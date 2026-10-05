@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import typing
+from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -54,6 +55,7 @@ def _jev_entry() -> model_catalogue.ModelInfo:
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch: pytest.MonkeyPatch):
     model_catalogue.reset_catalogue_cache()
+    judge_mod._classify_mismatch_warned.clear()
 
     async def fake_load(client=None):  # noqa: ANN001, ARG001
         return {
@@ -930,3 +932,143 @@ async def test_run_classify_judges_keeps_partial_reply_and_returns_missing_key_e
     assert missing.token_usage.input_tokens == 120
     assert missing.raw_content is not None
     assert 'tone' in missing.raw_content
+
+# ---------------------------------------------------------------------------
+# Capability is additive: the caller's question picks the endpoint (#245)
+# ---------------------------------------------------------------------------
+
+
+def _chat_reply() -> Any:
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"value": true, "explanation": "ok"}'))],
+        usage={'prompt_tokens': 3, 'completion_tokens': 2, 'total_tokens': 5},
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_chat_model_that_gains_classify_stays_on_the_prompt_path(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """The router grants classify to models that also serve chat.
+
+    A caller that never built a classify question must be unaffected by that. This is the
+    regression that stopped every red-team judge scoring when `openai/gpt-5.6-luna` picked
+    the flag up, and it fails on the pre-fix gate.
+    """
+
+    async def catalogue(client=None):  # noqa: ANN001, ARG001
+        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)}  # noqa: FBT003
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
+    model_catalogue.reset_catalogue_cache()
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    handler_id = logger.add(caplog.handler, format='{message}', level='WARNING')
+    try:
+        outcome = await _judge(client, None, model='gpt-5-mini', api='chat_completions')
+    finally:
+        logger.remove(handler_id)
+
+    assert outcome.error_kind is None
+    assert outcome.endpoint == 'chat'
+    assert outcome.payload is not None
+    assert outcome.payload.value is True
+    client.post.assert_not_called()
+    assert 'built no classify question' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_classify_question_announces_itself(caplog: pytest.LogCaptureFixture):
+    """A question the model cannot be asked is dropped, and the degrade says so."""
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    handler_id = logger.add(caplog.handler, format='{message}', level='WARNING')
+    try:
+        outcome = await _judge(client, _noul_question(), model='gpt-5-mini', api='chat_completions')
+    finally:
+        logger.remove(handler_id)
+
+    assert outcome.endpoint == 'chat'
+    assert 'does not serve the classify endpoint' in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_classify_only_model_fails_before_the_call_even_off_the_router():
+    """Routing does not change what the model can serve.
+
+    The classify endpoint is the router's, so an injected non-Orq client cannot reach it —
+    but prompting a classify-only model still buys a rejection rather than a verdict, so the
+    guard must not hang off the routing check.
+    """
+    client = MagicMock()
+    client.base_url = 'https://api.openai.com/v1'
+    client.post = AsyncMock()
+    client.chat.completions.create = AsyncMock()
+    client.chat.completions.parse = AsyncMock()
+
+    outcome = await _judge(client, None)
+
+    assert outcome.error_kind is JudgeError.UNKNOWN
+    assert outcome.error_message is not None
+    assert JEV in outcome.error_message
+    assert outcome.endpoint is None
+    client.post.assert_not_called()
+    client.chat.completions.create.assert_not_called()
+    client.chat.completions.parse.assert_not_called()
+
+
+@contextmanager
+def _captured_warnings():
+    """Collect warning lines from a loguru sink of our own.
+
+    Not `caplog`: its handler bridge records one loguru line twice, so a count taken there
+    measures the bridge. A sink appending to a list counts what the logger actually emitted,
+    which is the behaviour these tests are about.
+    """
+    lines: list[str] = []
+    handler_id = logger.add(lines.append, format='{message}', level='WARNING')
+    try:
+        yield lines
+    finally:
+        logger.remove(handler_id)
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_path_degrade_warns_once_per_model(monkeypatch: pytest.MonkeyPatch):
+    """`DEFAULT_PIPELINE_MODEL` is classify-capable, so a per-call line would be one per attack."""
+
+    async def catalogue(client=None):  # noqa: ANN001, ARG001
+        return {'gpt-5-mini': model_catalogue.ModelInfo(0.00025, 0.002, 'openai', True, supports_classify=True)}  # noqa: FBT003
+
+    monkeypatch.setattr(model_catalogue, '_load_catalogue', catalogue)
+    model_catalogue.reset_catalogue_cache()
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    with _captured_warnings() as lines:
+        for _ in range(3):
+            outcome = await _judge(client, None, model='gpt-5-mini', api='chat_completions')
+            assert outcome.error_kind is None
+
+    emitted = [line for line in lines if 'built no classify question' in line]
+    assert len(emitted) == 1, emitted
+    assert client.chat.completions.create.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_the_dropped_question_degrade_warns_once_per_model():
+    """The other direction dedupes too: a question dropped on every call is still one line."""
+    client = _client()
+    client.chat.completions.create = AsyncMock(return_value=_chat_reply())
+
+    with _captured_warnings() as lines:
+        for _ in range(3):
+            outcome = await _judge(client, _noul_question(), model='gpt-5-mini', api='chat_completions')
+            assert outcome.endpoint == 'chat'
+
+    emitted = [line for line in lines if 'does not serve the classify endpoint' in line]
+    assert len(emitted) == 1, emitted
+    assert client.chat.completions.create.await_count == 3

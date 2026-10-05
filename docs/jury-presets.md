@@ -14,21 +14,21 @@ correctness = llm_jury(
 
 ## The presets
 
-Costs are USD per 1,000 pointwise items at 1,500 input and 150 output tokens, uncached, one call per judge per item. Every figure is recomputed from the committed model garden snapshot in the test suite, so the table below cannot drift away from what the code seats.
+Costs are USD per 1,000 pointwise items at 1,500 input and 1,500 output tokens, uncached, one call per judge per item. The token counts are a flat assumption, the same for every seat whatever its reasoning effort. Every figure is recomputed from the committed model garden snapshot in the test suite, so the table below cannot drift away from what the code seats.
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
-| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-5.6-luna`<br>`google/gemini-3.6-flash` | majority | 4.64 | `deepseek/deepseek-v4-flash` |
-| **Strong Jury** | `anthropic/claude-opus-5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 23.63 | `deepseek/deepseek-v4-pro` |
-| **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`baseten/kimi-k3`<br>`zai/glm-5.2` | majority | 10.29 | `minimax/MiniMax-M2.7` |
-| **EU Region** | `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0`<br>`google/eu.gemini-3.5-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 6.56 | `google/eu.claude-sonnet-5` |
-| **Single-Provider Trio** | `openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-5.6-luna` | majority | 14.28 | `openai/gpt-5.4-nano` |
+| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-5.6-luna`<br>`google/gemini-3.6-flash` | majority | 17.56 | `deepseek/deepseek-flash` |
+| **Strong Jury** | `anthropic/claude-opus-5-5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 85.50 | `deepseek/deepseek-v4-pro` |
+| **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`baseten/kimi-k3`<br>`zai/glm-5.2` | majority | 37.66 | `minimax/MiniMax-M2.7` |
+| **EU Region** | `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0`<br>`google/eu.gemini-3.5-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 27.75 | `google/eu.claude-sonnet-5` |
+| **Single-Provider Trio** | `openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-5.6-luna` | majority | 59.10 | `openai/gpt-5.4-nano` |
 
 ## Which one to pick
 
 **Balanced Trio** is the default and the right answer for most subjective evaluation. Three lineages means three different ways of being wrong, which is the whole reason to run a panel instead of one judge three times.
 
-**Strong Jury** costs five times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
+**Strong Jury** costs nearly five times as much and is for verdicts that compound: customer-facing benchmarks, preference data you will train on, anything where a wrong label outlives the run that produced it.
 
 **Open-Weight / Portable** buys independence from any closed frontier vendor, and a migration path if you later want to serve the judges yourself. It is not the cheap option: it costs twice the default trio, because the open-weight cards that would make it cheaper are dominated by models already seated elsewhere.
 
@@ -51,35 +51,32 @@ Presets are pointwise panels, one call per judge per item, so `assignment="cycli
 
 ## What a preset does not carry
 
-Each seat is ranked and costed at a particular reasoning effort, which `JuryPreset.seated_efforts()` reports:
+A preset sends no reasoning effort, so each seat runs at its provider's default. `JuryPreset.seated_efforts()` reports it, with `None` for a model whose catalog entry has no effort setting:
 
 ```python
 from evaluatorq import get_preset
 
 get_preset("Strong Jury").seated_efforts()
-# {'anthropic/claude-opus-5': 'high', 'openai/gpt-5.6-sol': 'max', 'google/gemini-3.6-flash': 'high'}
+# {'anthropic/claude-opus-5-5': 'medium', 'openai/gpt-5.6-sol': 'medium', 'google/gemini-3.6-flash': 'medium'}
 ```
 
-Those are the rungs the cards were scored at rather than values to send. A card that only distinguishes thinking from not thinking is scored at `reasoning` or `none`, and no provider accepts either as a `reasoning_effort`, so read the mapping as a report of where a panel was ranked and priced. `llm_jury()` takes one `reasoning_effort` for the whole panel, so a preset whose seats disagree cannot express itself through it. Per-judge call settings are a schema change and a separate ticket. Until then a panel run at the provider defaults is being run at an operating point it was not costed at, which is why the published figures are a floor rather than an estimate.
+`llm_jury()` takes one `reasoning_effort` for the whole panel, so passing one overrides every seat's default. Per-judge call settings are a schema change and a separate ticket.
 
-Three more limits worth knowing before you quote a number:
+Two more limits worth knowing before you quote a number:
 
 - Agreement between these panels and human raters is inherited from the literature, not measured on orq data. There is no human-agreement baseline behind any of these presets.
-- Some seats are costed at a cheaper rung than the one they are seated at, which `JuryPreset.priced_below_seated_effort()` lists. The captured blend for those judges is the price at the rung the probe measured, so the published $/1k understates them until someone re-probes the panel at its seated effort. Disclosed rather than corrected, because correcting it is a re-probe of every panel and not an arithmetic fix.
-- Measured spend runs above the table when a judge reasons without being asked to. Gemini has been observed spending several hundred unrequested reasoning tokens on a one-sentence verdict, and a probe put Balanced Trio 25% over its own figure.
+- The 1,500 output tokens are an assumption, not a measurement. A judge that reasons less than that on your items costs less than the table, and one that reasons more costs more.
 
 ## How a preset stays current
 
-Seats are derived rather than hand-listed. Each one is the best buy within its own lineage on the two axes every autorouter-eligible model card carries, an Artificial Analysis intelligence index and a 3:1 blended price. Lineage diversity is the point of a panel, so seats are compared in-family: judged against the whole garden, most seats look dominated, and acting on that would collapse every panel onto whichever vendor is cheapest this month and recreate exactly the correlated errors a panel exists to cancel.
+Seats are chosen in this package. Each one is the best buy within its own lineage, ranked on its Artificial Analysis intelligence index at the model's default reasoning effort against its price, because the default is the effort a preset call runs at. Lineage diversity is the point of a panel, so seats are compared in-family: judged against the whole catalog, most seats look dominated, and acting on that would collapse every panel onto whichever vendor is cheapest this month and recreate exactly the correlated errors a panel exists to cancel.
 
-The derivation is not in this package. It reads a capture of the whole model garden and is rerun, reviewed and argued in the research repo that owns the capture; what ships here is its output, the panels and the rates they were costed at, in `common/data/jury_judge_rates.json`. That file records what each seated judge bills, the reasoning rung it was ranked at, and when the rates were captured.
+`common/data/jury_judge_rates.json` records what each seated judge bills, the default reasoning effort it runs at, and when both were captured. Every published figure is recomputed from those rates on every test run, so a repricing fails CI instead of quietly making the docs wrong. An opt-in integration test (`ORQ_API_KEY` plus `RUN_PRICING_DRIFT=1`) compares the table against the live catalog, which is how a repricing or a changed default gets noticed in the first place.
 
-What this package does hold you to is that the published table matches the code: every figure in it is recomputed from those captured rates on every test run, so a repricing fails CI instead of quietly making the docs wrong. An opt-in integration test (`ORQ_API_KEY` plus `RUN_PRICING_DRIFT=1`) goes further and compares the captured rates against the live catalog, which is how a repricing gets noticed in the first place. Judging whether a seat has been overtaken, retired or left behind by its lineage is a question about the whole garden, so it is answered where the whole garden lives.
-
-Waiting for a test run to notice a repricing means waiting for someone to push. `scripts/refresh_jury_judge_rates.py` re-reads the rates from the live catalog and rewrites the table, and a monthly workflow runs it and opens a pull request when anything moved. It refreshes the rates only: `seated_effort` and `priced_at_ceiling` come from the derivation and are carried over untouched, so a repricing is applied while a reseating stays a decision someone makes against the whole garden. The same run also checks each seat's rung against the values the catalog says that model accepts, and it refuses to report a whole table of retirements when what actually failed was the key.
+Waiting for a test run to notice a repricing means waiting for someone to push. `scripts/refresh_jury_judge_rates.py` re-reads each seat's rates and default reasoning effort from the live catalog and rewrites the table, and a monthly workflow runs it and opens a pull request when anything moved. A repricing, a changed default and a seat missing from the catalog are each printed as a decision for a human, and the script refuses to report a whole table of retirements when what actually failed was the key.
 
 A preset that is not in `PRESETS` still owes you a reason. `DROPPED_PRESETS` records one that shipped and was then retired, `WITHHELD_PRESETS` one that is derived and costed but not seated because a seat cannot do the job yet, and asking for either by name raises an error carrying that reason rather than a bare "unknown preset".
 
-Cheap Aggregate is the entry in `WITHHELD_PRESETS`. It is the five-judge volume panel at $2.56 per 1k and the derivation stands, but `minimax/MiniMax-M2.7` answers a `json_schema` response format with prose, and the fallback that would resend the schema as instructions only fires when a provider rejects the request outright, not when a 200 comes back the wrong shape. Four voting seats is an even panel, which is the one shape the validator exists to reject, and it slips through only because the validator counts declared seats rather than voting ones. Seating the named reserve does not rescue it either: `zai/glm-5.2` costs $2.76 per 1k for that seat alone and takes the panel past the default trio, which is the reason the panel exists gone. It ships when the judge path falls back on an unparseable 200.
+Cheap Aggregate is the entry in `WITHHELD_PRESETS`. It is a five-judge volume panel, but `minimax/MiniMax-M2.7` answers a `json_schema` response format with prose, and the fallback that would resend the schema as instructions only fires when a provider rejects the request outright, not when a 200 comes back the wrong shape. Four voting seats is an even panel, which is the one shape the validator exists to reject, and it slips through only because the validator counts declared seats rather than voting ones. Seating the named reserve does not rescue it either: `zai/glm-5.2` costs $8.70 per 1k for that seat alone, which defeats a budget panel. It ships when the judge path falls back on an unparseable 200 as well as on a rejected request.
 
-Value Trio is the one entry in `DROPPED_PRESETS` so far. It shipped as the budget panel, and was retired when a repricing left Cheap Aggregate cheaper on paper with five judges to its three, while a probe measured Value Trio at 83% over its own published figure. Asking for it by name raises an error carrying that reason rather than a bare "unknown preset".
+Value Trio is the one entry in `DROPPED_PRESETS`. It was a budget panel whose measured cost ran far above its published figure, because two of its judges wrote long prose verdicts. Asking for it by name raises an error carrying that reason rather than a bare "unknown preset".
