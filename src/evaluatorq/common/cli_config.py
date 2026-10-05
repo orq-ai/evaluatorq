@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import json
 import sys
-import types
-import typing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar, cast
@@ -123,9 +121,9 @@ def resolve_config(
         value = cli_args[flag.param]
         _set_path(overrides, flag.path, value if flag.to_value is None else flag.to_value(value))
     try:
-        return model.model_validate(_deep_merge(data, overrides))
+        return model.model_validate(_deep_merge(data, overrides), extra='forbid')
     except ValidationError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+        raise typer.BadParameter(_validation_message(exc)) from exc
 
 
 def model_kwargs(config: BaseModel) -> dict[str, Any]:
@@ -147,10 +145,10 @@ def _read_source(source: str, *, flag: str) -> tuple[str, str]:
 def parse_json_config(raw: str, model: type[BaseModel], *, flag: str, origin: str | None = None) -> dict[str, Any]:
     """Parse a JSON document, validate it against ``model`` and return the parsed dict.
 
-    Unknown keys are rejected at every depth. The top level is rejected by the model's own ``extra='forbid'``.
-    Nested models such as ``LLMCallConfig`` ignore unknown keys, so a misspelt ``"temprature"`` would otherwise
-    vanish; those are checked here. The document's own JSON is returned, not the validated model re-dumped: a
-    field whose serialization alias differs from its validation name would otherwise be silently dropped.
+    Unknown keys are rejected at every depth by validating with ``extra='forbid'`` per call, which also covers
+    nested models that ignore extras by default (a misspelt ``"temprature"`` would otherwise vanish). The
+    document's own JSON is returned, not the validated model re-dumped: a field whose serialization alias
+    differs from its validation name would otherwise be silently dropped.
     """
     where = f'{origin}: ' if origin else ''
     try:
@@ -158,12 +156,9 @@ def parse_json_config(raw: str, model: type[BaseModel], *, flag: str, origin: st
     except ValueError as exc:
         raise typer.BadParameter(f'{where}{exc}', param_hint=flag) from exc
     try:
-        model.model_validate(data)
+        model.model_validate(data, extra='forbid')
     except ValidationError as exc:
-        raise typer.BadParameter(f'{where}{exc}', param_hint=flag) from exc
-    unknown = _unknown_keys(model, data, path='')
-    if unknown:
-        raise typer.BadParameter(f'{where}unknown key(s): {", ".join(unknown)}', param_hint=flag)
+        raise typer.BadParameter(_validation_message(exc, where), param_hint=flag) from exc
     return cast('dict[str, Any]', data)
 
 
@@ -216,37 +211,21 @@ def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]
     return merged
 
 
-def _nested_models(annotation: Any) -> list[type[BaseModel]]:
-    """Pydantic models reachable through ``Optional``, union and ``list`` wrappers of ``annotation``."""
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        return [annotation]
-    origin = typing.get_origin(annotation)
-    if origin is None:
-        return []
-    args = typing.get_args(annotation)
-    if origin in (typing.Union, types.UnionType, list, tuple, set, frozenset):
-        return [model for arg in args for model in _nested_models(arg)]
-    return []
+def _dotted(loc: tuple[int | str, ...]) -> str:
+    """``('a', 'b', 0, 'c')`` as ``a.b[0].c``."""
+    path = ''
+    for part in loc:
+        if isinstance(part, int):
+            path += f'[{part}]'
+        else:
+            path += f'.{part}' if path else part
+    return path
 
 
-def _unknown_keys(model: type[BaseModel], data: Any, *, path: str) -> list[str]:
-    if isinstance(data, list):
-        items = cast('list[Any]', data)
-        return [key for index, item in enumerate(items) for key in _unknown_keys(model, item, path=f'{path}[{index}]')]
-    if not isinstance(data, dict) or model.model_config.get('extra') == 'allow':
-        return []
-    fields = dict(model.model_fields)
-    fields.update({info.alias: info for info in model.model_fields.values() if info.alias})
-    unknown: list[str] = []
-    for key, value in cast('dict[str, Any]', data).items():
-        location = f'{path}.{key}' if path else str(key)
-        info = fields.get(key)
-        if info is None:
-            unknown.append(location)
-            continue
-        # Only descend when the annotation names exactly one model: in a union of two models a key the
-        # first lacks may belong to the second, and pydantic has already chosen between them.
-        candidates = _nested_models(info.annotation)
-        if len(candidates) == 1:
-            unknown.extend(_unknown_keys(candidates[0], value, path=location))
-    return unknown
+def _validation_message(exc: ValidationError, where: str = '') -> str:
+    """``exc`` as text: a pure unknown-key failure names each key's full path, anything else is pydantic's own."""
+    errors = exc.errors()
+    if errors and all(error['type'] == 'extra_forbidden' for error in errors):
+        paths = ', '.join(_dotted(error['loc']) for error in errors)
+        return f'{where}unknown key(s): {paths}. Extra inputs are not permitted.'
+    return f'{where}{exc}'
