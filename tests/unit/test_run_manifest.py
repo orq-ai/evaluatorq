@@ -16,6 +16,7 @@ from evaluatorq.common.run_manifest import (
     ManifestWriter,
     fail_if_running,
     list_manifests,
+    read_manifest,
     start_manifest,
     update_manifest,
 )
@@ -266,6 +267,17 @@ def test_fail_marks_open_stage_errored(tmp_path: Path) -> None:
 
 def test_list_empty_when_no_dir(tmp_path: Path) -> None:
     assert list_manifests(tmp_path / 'nope') == []
+
+
+def test_read_manifest_finds_a_run_by_id(tmp_path: Path) -> None:
+    start_manifest(run_id='abc123', surface='sim', run_name='demo', runs_dir=tmp_path)
+    start_manifest(run_id='other', surface='sim', run_name='other', runs_dir=tmp_path)
+
+    found = read_manifest(tmp_path, 'abc123')
+
+    assert found is not None
+    assert found.run_id == 'abc123'
+    assert read_manifest(tmp_path, 'missing') is None
 
 
 def test_end_stage_with_error_marks_stage_errored(tmp_path: Path) -> None:

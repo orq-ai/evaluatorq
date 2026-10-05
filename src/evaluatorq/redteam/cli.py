@@ -8,19 +8,29 @@ import logging
 import re
 import sys
 from collections import Counter
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
+from evaluatorq.common.cli_config import (
+    JSON_OUTPUT_HELP,
+    Flag,
+    config_option_help,
+    echo_schema,
+    json_flag,
+    model_kwargs,
+    reserve_stdout_for_json,
+    resolve_config,
+)
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
-from evaluatorq.common.llm_limit import check_llm_parallelism_option
+from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option
+from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.redteam.contracts import (
@@ -31,9 +41,10 @@ from evaluatorq.redteam.contracts import (
     SaveMode,
     Vulnerability,
 )
+from evaluatorq.redteam.run_config import RedTeamCliConfig
+from evaluatorq.redteam.runner import DEFAULT_MAX_TURNS
 
 if TYPE_CHECKING:
-    from evaluatorq.contracts import AgentTarget
     from evaluatorq.redteam.contracts import RedTeamReport
 
 app = typer.Typer(
@@ -53,6 +64,8 @@ _RUN_EPILOG = examples(
     'eq redteam run -t agent:my-agent -c ASI01',
     '# replay the last run against a new agent version (same attacks, new target)',
     'eq redteam run -t agent:my-agent-v2 --from-run latest',
+    '# every red_team() keyword argument from a JSON file, the report as JSON on stdout',
+    'eq redteam run --config run.json --json > report.json',
 )
 
 
@@ -244,50 +257,98 @@ def _evaluation_error_hint(report: RedTeamReport) -> str:
     return f'Dominant failure: {top_code} ({top_n}/{len(causes)} unscored attacks){detail}. {_GENERIC_EVAL_HINT}'
 
 
-@dataclass(frozen=True)
-class RunOptions:
-    strategies: list[str] | None
-    delivery_methods: list[DeliveryMethod | str] | None
-    categories: list[str] | None
-    vulnerabilities: list[str] | None
-    target_config: Any
-    targets: list[str] | str
-    config: LLMConfig
+def _cli_default(field: str) -> Any:
+    """`RedTeamCliConfig`'s default for ``field``, for a flag's help text."""
+    return RedTeamCliConfig.model_fields[field].default
 
 
-def _resolve_run_options(
-    target: list[str],
-    categories: list[str] | None,
-    vulnerabilities: list[str] | None,
-    strategies: list[str] | None,
-    delivery_methods: list[str] | None,
-    system_prompt: str | None,
-    attack_model: str | None,
-    evaluator_model: str | None,
-    min_evaluation_coverage: float,
-    target_timeout_ms: int,
-    max_target_retries: int,
-    retry_count: int,
-    max_tool_continuations: int,
-    target_reasoning_effort: str | None,
-) -> RunOptions:
-    """Flatten, validate and resolve ``eq redteam run``'s raw CLI flags into a RunOptions bundle.
+# What ``--from-run`` replays from the stored run, so ``red_team()`` rejects each of these alongside
+# ``previous_run`` (``runner.py``'s "replay decides the cases" check). Passing it drops them from the file.
+_REPLAY_FIELDS = (
+    'mode',
+    'dataset',
+    'categories',
+    'vulnerabilities',
+    'strategies',
+    'datapoints',
+    'attack_techniques',
+    'delivery_methods',
+    'max_per_category',
+    'max_dynamic_datapoints',
+    'max_static_datapoints',
+)
 
-    Raises ``typer.BadParameter`` on an unknown vulnerability ID or an unknown
+# Order matters: later rows win for a shared field, so the narrow LLM flags beat ``--llm-config`` and
+# ``-q`` beats ``-v``. A row names the `RedTeamCliConfig` field the click parameter sets, by default the
+# parameter's own name.
+_RUN_FLAGS: tuple[Flag, ...] = (
+    Flag('target'),
+    Flag('name'),
+    Flag('mode'),
+    Flag('categories'),
+    Flag('vulnerabilities'),
+    Flag('strategies'),
+    Flag('delivery_methods'),
+    Flag('max_turns'),
+    Flag('max_per_category'),
+    Flag('attacker_instructions'),
+    Flag('datapoint_parallelism'),
+    Flag('llm_parallelism'),
+    Flag('generate_strategies'),
+    Flag('generated_strategy_count'),
+    Flag('max_dynamic_datapoints'),
+    Flag('max_static_datapoints'),
+    Flag('cleanup_memory'),
+    Flag('dataset', replaces=('datapoints', 'previous_run')),
+    Flag('from_run', 'previous_run', replaces=_REPLAY_FIELDS),
+    Flag('artifacts_dir'),
+    Flag('save'),
+    Flag('executive_summary', 'generate_executive_summary'),
+    Flag('recommendations'),
+    Flag('system_prompt', 'target_config.system_prompt'),
+    json_flag('llm_config_json', 'llm_config', LLMConfig, flag='--llm-config'),
+    Flag('attack_model', 'llm_config.attacker.model'),
+    Flag('evaluator_model', 'llm_config.evaluator.model'),
+    Flag('min_evaluation_coverage', 'llm_config.evaluator.min_evaluation_coverage'),
+    Flag('target_timeout_ms', 'llm_config.target_agent_timeout_ms'),
+    Flag('max_target_retries', 'llm_config.max_target_retries'),
+    Flag('retry_count', 'llm_config.retry_count'),
+    Flag('max_tool_continuations', 'llm_config.max_tool_continuations'),
+    Flag('target_reasoning_effort', 'llm_config.target_reasoning_effort'),
+    Flag('verbose', 'verbosity', to_value=lambda count: count + 1),
+    Flag('quiet', 'verbosity', to_value=lambda _quiet: 0),
+)
+
+
+def _normalise_run_config(cfg: RedTeamCliConfig) -> RedTeamCliConfig:
+    """Split CSV values, collapse a one-item ``target`` list and reject unknown names.
+
+    Splits comma-separated ``categories``, ``vulnerabilities``, ``strategies`` and delivery methods
+    (``-s a,b`` == ``-s a -s b``), and collapses a one-item ``target`` list to its string. Requires a
+    target. Raises ``typer.BadParameter`` on an unknown vulnerability ID or an unknown
     strategy name. An unknown delivery method is deliberately not fatal: it is
     kept as a literal string so a dataset's custom delivery method stays
-    filterable, and a warning is echoed to stderr.
+    filterable, and a warning is echoed to stderr. The result is built with ``model_copy``, which does not
+    re-validate.
     """
-    from evaluatorq.redteam.contracts import LLMCallConfig, TargetConfig
+    if not cfg.target:
+        raise typer.BadParameter('provide --target, or set "target" in --config.', param_hint="'--target'")
+    target = cfg.target[0] if isinstance(cfg.target, list) and len(cfg.target) == 1 else cfg.target
 
-    # Allow comma-separated values within repeatable flags (-s a,b == -s a -s b).
-    # Done before validation so the checks below see individual tokens.
-    strategies = _split_csv(strategies)
-    delivery_tokens = _split_csv(delivery_methods)
-    categories = _split_csv(categories)
-    vulnerabilities = _split_csv(vulnerabilities)
+    strategies = _split_csv(cfg.strategies)
+    from evaluatorq.redteam.delivery_method_registry import (
+        delivery_method_str,
+        is_known_delivery_method,
+        list_available_delivery_methods,
+        resolve_delivery_methods,
+    )
 
-    # Validate vulnerability IDs early for a clean error message
+    delivery_tokens = _split_csv(
+        [delivery_method_str(d) for d in cfg.delivery_methods] if cfg.delivery_methods else None
+    )
+    categories = _split_csv(cfg.categories)
+    vulnerabilities = _split_csv(cfg.vulnerabilities)
+
     if vulnerabilities:
         from evaluatorq.redteam.vulnerability_registry import CATEGORY_TO_VULNERABILITY
 
@@ -298,8 +359,6 @@ def _resolve_run_options(
                     f'Unknown vulnerability ID: {v!r}. Valid IDs: {sorted(vi.value for vi in Vulnerability)}'
                 )
 
-    # Validate strategy names early: must be a registered strategy or a
-    # runtime-generated name (generated_* prefix). Mirrors --vulnerability.
     if strategies:
         from evaluatorq.redteam.adaptive.strategy_registry import known_strategy_names
 
@@ -318,13 +377,6 @@ def _resolve_run_options(
     # delivery method is still filterable) with a warning, not a hard error.
     resolved_delivery_methods: list[DeliveryMethod | str] | None = None
     if delivery_tokens:
-        from evaluatorq.redteam.delivery_method_registry import (
-            delivery_method_str,
-            is_known_delivery_method,
-            list_available_delivery_methods,
-            resolve_delivery_methods,
-        )
-
         unknown = [d for d in delivery_tokens if not is_known_delivery_method(d)]
         if unknown:
             # delivery_method_str, not str(): a member's str() is its repr on the
@@ -337,45 +389,28 @@ def _resolve_run_options(
             )
         resolved_delivery_methods = resolve_delivery_methods(list(delivery_tokens))
 
-    target_config = TargetConfig(system_prompt=system_prompt) if system_prompt else None
-    targets: list[str] | str = list(target) if len(target) > 1 else target[0]
-
-    # Build LLMConfig from CLI flags
-    # An omitted model stays unset; LLMConfig then resolves it from the smart role.
-    config = LLMConfig(
-        attacker=LLMCallConfig(**({'model': attack_model} if attack_model else {})),
-        evaluator=EvaluatorConfig(
-            **({'model': evaluator_model} if evaluator_model else {}),
-            min_evaluation_coverage=min_evaluation_coverage,
-        ),
-        target_agent_timeout_ms=target_timeout_ms,
-        max_target_retries=max_target_retries,
-        retry_count=retry_count,
-        max_tool_continuations=max_tool_continuations,
-        target_reasoning_effort=target_reasoning_effort,
-    )
-
-    return RunOptions(
-        strategies=strategies,
-        delivery_methods=resolved_delivery_methods,
-        categories=categories,
-        vulnerabilities=vulnerabilities,
-        target_config=target_config,
-        targets=targets,
-        config=config,
+    return cfg.model_copy(
+        update={
+            'target': target,
+            'strategies': strategies,
+            'delivery_methods': resolved_delivery_methods,
+            'categories': categories,
+            'vulnerabilities': vulnerabilities,
+        }
     )
 
 
 @app.command(no_args_is_help=True, epilog=_RUN_EPILOG)
 def run(
+    ctx: typer.Context,
     target: Annotated[
-        list[str],
+        list[str] | None,
         typer.Option(
             '--target',
             '-t',
-            help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>" (deployments need --mode static). For OpenAI models use OpenAIModelTarget in the Python API. Repeatable.',
+            help='Target identifier(s), e.g. "agent:<key>" or "deployment:<key>" (deployments need --mode static). For OpenAI models use OpenAIModelTarget in the Python API. Repeatable. Required unless --config sets "target".',
         ),
-    ],
+    ] = None,
     name: Annotated[
         str | None,
         typer.Option('--name', '-n', help="Experiment name (defaults to 'red-team')."),
@@ -436,7 +471,7 @@ def run(
         typer.Option(
             help=(
                 'Maximum conversation turns for multi-turn attacks. '
-                "Defaults to 5, or to the replayed run's turn budget with --from-run."
+                f"Defaults to {DEFAULT_MAX_TURNS}, or to the replayed run's turn budget with --from-run."
             )
         ),
     ] = None,
@@ -469,48 +504,53 @@ def run(
         ),
     ] = None,
     min_evaluation_coverage: Annotated[
-        float,
+        float | None,
         typer.Option(
             min=0.0,
             max=1.0,
             help='Fraction of attacks that must produce a verdict, else exit non-zero. '
             'Pass 0 to warn instead of failing; a run where nothing could be scored '
-            'still exits non-zero regardless.',
+            'still exits non-zero regardless. '
+            f'Defaults to {EvaluatorConfig.model_fields["min_evaluation_coverage"].default}.',
         ),
-    ] = EvaluatorConfig.model_fields['min_evaluation_coverage'].default,
+    ] = None,
     target_timeout_ms: Annotated[
-        int,
+        int | None,
         typer.Option(
             '--target-timeout-ms',
-            help='Per-call timeout (ms) for target invocations.',
+            help='Per-call timeout (ms) for target invocations. '
+            f'Defaults to {LLMConfig.model_fields["target_agent_timeout_ms"].default}.',
         ),
-    ] = LLMConfig.model_fields['target_agent_timeout_ms'].default,
+    ] = None,
     max_target_retries: Annotated[
-        int,
+        int | None,
         typer.Option(
             '--max-target-retries',
             min=0,
             max=10,
-            help='Retries for a failed target transport call before abandoning its attacker turn.',
+            help='Retries for a failed target transport call before abandoning its attacker turn. '
+            f'Defaults to {LLMConfig.model_fields["max_target_retries"].default}.',
         ),
-    ] = LLMConfig.model_fields['max_target_retries'].default,
+    ] = None,
     retry_count: Annotated[
-        int,
+        int | None,
         typer.Option(
             '--retry-count',
             min=0,
             max=10,
             help='Retries (after the initial call) for pipeline-owned LLM calls and ORQ '
-            'context/enrichment/cleanup — distinct from --max-target-retries.',
+            'context/enrichment/cleanup — distinct from --max-target-retries. '
+            f'Defaults to {LLMConfig.model_fields["retry_count"].default}.',
         ),
-    ] = LLMConfig.model_fields['retry_count'].default,
+    ] = None,
     max_tool_continuations: Annotated[
-        int,
+        int | None,
         typer.Option(
             '--max-tool-continuations',
-            help='Max client-driven tool-result continuation rounds for ORQ agents that emit pending_tool_calls.',
+            help='Max client-driven tool-result continuation rounds for ORQ agents that emit pending_tool_calls. '
+            f'Defaults to {LLMConfig.model_fields["max_tool_continuations"].default}.',
         ),
-    ] = LLMConfig.model_fields['max_tool_continuations'].default,
+    ] = None,
     target_reasoning_effort: Annotated[
         str | None,
         typer.Option(
@@ -520,30 +560,38 @@ def run(
         ),
     ] = None,
     datapoint_parallelism: Annotated[
-        int,
+        int | None,
         typer.Option(
             '--datapoint-parallelism',
             '--parallelism',
-            help='Maximum number of concurrent datapoints/jobs (tasks). --parallelism is a deprecated alias.',
+            help='Maximum number of concurrent datapoints/jobs (tasks). --parallelism is a deprecated alias. '
+            f'Defaults to {DEFAULT_DATAPOINT_PARALLELISM}.',
         ),
-    ] = 10,
+    ] = None,
     llm_parallelism: Annotated[
         int | None,
         typer.Option(
             '--llm-parallelism',
             callback=check_llm_parallelism_option,
-            help='Ceiling on in-flight LLM requests for the whole run. Defaults to 10, -1 for no limit; '
+            help=f'Ceiling on in-flight LLM requests for the whole run. Defaults to {DEFAULT_LLM_PARALLELISM}, '
+            '-1 for no limit; '
             'size it against your provider concurrency limit.',
         ),
     ] = None,
     generated_strategy_count: Annotated[
-        int,
-        typer.Option(help='Number of strategies to generate per category.'),
-    ] = 2,
-    no_generate_strategies: Annotated[  # noqa: FBT002
-        bool,
-        typer.Option('--no-generate-strategies', help='Disable LLM-based strategy generation.'),
-    ] = False,
+        int | None,
+        typer.Option(
+            help='Number of strategies to generate per category. '
+            f'Defaults to {_cli_default("generated_strategy_count")}.'
+        ),
+    ] = None,
+    generate_strategies: Annotated[
+        bool | None,
+        typer.Option(
+            '--generate-strategies/--no-generate-strategies',
+            help=f'LLM-based strategy generation. Defaults to {_cli_default("generate_strategies")}.',
+        ),
+    ] = None,
     max_dynamic_datapoints: Annotated[
         int | None,
         typer.Option(help='Cap dynamic (generated) datapoints.'),
@@ -552,10 +600,13 @@ def run(
         int | None,
         typer.Option(help='Cap static (dataset) datapoints.'),
     ] = None,
-    no_cleanup_memory: Annotated[  # noqa: FBT002
-        bool,
-        typer.Option('--no-cleanup-memory', help='Skip memory entity cleanup after dynamic runs.'),
-    ] = False,
+    cleanup_memory: Annotated[
+        bool | None,
+        typer.Option(
+            '--cleanup-memory/--no-cleanup-memory',
+            help=f'Clean up memory entities after dynamic runs. Defaults to {_cli_default("cleanup_memory")}.',
+        ),
+    ] = None,
     dataset: Annotated[
         str | None,
         typer.Option(help='Dataset source: local path, "hf:org/repo", or "hf:org/repo/file.json".'),
@@ -578,11 +629,12 @@ def run(
         typer.Option('--artifacts-dir', help='Directory for saved JSON files. Required with --save detail.'),
     ] = None,
     save: Annotated[
-        SaveMode,
+        SaveMode | None,
         typer.Option(
-            help="What to persist: 'none' (no files), 'final' (summary only), or 'detail' (all stage artifacts)."
+            help="What to persist: 'none' (no files), 'final' (summary only), or 'detail' (all stage artifacts). "
+            f'Defaults to {_cli_default("save").value}.'
         ),
-    ] = SaveMode.FINAL,
+    ] = None,
     yes: Annotated[  # noqa: FBT002
         bool,
         typer.Option('--yes', '-y', help='Skip confirmation prompt.'),
@@ -593,7 +645,10 @@ def run(
             '--verbose',
             '-v',
             count=True,
-            help='Increase verbosity (-v per-attack progress + info logs, -vv debug logs).',
+            help=(
+                'Increase verbosity (-v per-attack progress + info logs, -vv debug logs). The CLI defaults to '
+                f'{_cli_default("verbosity")}, a summary progress bar; red_team() defaults to silent.'
+            ),
         ),
     ] = 0,
     quiet: Annotated[  # noqa: FBT002
@@ -618,91 +673,70 @@ def run(
             help='Directory path to write an HTML report. Filename is auto-generated.',
         ),
     ] = None,
-    executive_summary: Annotated[  # noqa: FBT002
-        bool,
+    executive_summary: Annotated[
+        bool | None,
         typer.Option(
             '--executive-summary/--no-executive-summary',
-            help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds).',
+            help='Generate an LLM narrative executive summary at the top of the report (needs LLM creds). '
+            f'Defaults to {_cli_default("generate_executive_summary")}.',
         ),
-    ] = True,
-    recommendations: Annotated[  # noqa: FBT002
-        bool,
+    ] = None,
+    recommendations: Annotated[
+        bool | None,
         typer.Option(
             '--recommendations/--no-recommendations',
-            help='Generate LLM remediation recommendations for the top focus areas (needs LLM creds).',
+            help='Generate LLM remediation recommendations for the top focus areas (needs LLM creds). '
+            f'Defaults to {_cli_default("recommendations")}.',
         ),
-    ] = True,
+    ] = None,
     system_prompt: Annotated[
         str | None,
         typer.Option('--system-prompt', help='System prompt for the target model/agent.'),
     ] = None,
+    config_source: Annotated[
+        str | None,
+        typer.Option(
+            '--config',
+            metavar='PATH|-',
+            help=config_option_help('red_team()', 'eq redteam schema'),
+        ),
+    ] = None,
+    llm_config_json: Annotated[
+        str | None,
+        typer.Option(
+            '--llm-config',
+            metavar='JSON',
+            help=(
+                'LLMConfig as a JSON object, e.g. \'{"attacker": {"temperature": 0.9}}\'. Merged field by field '
+                'into "llm_config" from --config. --attack-model, --evaluator-model, --min-evaluation-coverage, '
+                '--target-timeout-ms, --max-target-retries, --retry-count, --max-tool-continuations and '
+                '--target-reasoning-effort win over it for their own field when passed.'
+            ),
+        ),
+    ] = None,
+    json_output: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option('--json', help=JSON_OUTPUT_HELP),
+    ] = False,
 ) -> None:
     """Run red teaming against one or more targets."""
-    if quiet:
-        verbose = -1
-    _configure_logging(verbose)
+    cli_args = dict(locals())
+    emit_json = reserve_stdout_for_json(ctx) if json_output else None
+    cfg = resolve_config(ctx, RedTeamCliConfig, _RUN_FLAGS, cli_args, config_source=config_source)
+    _configure_logging(cfg.verbosity - 1)
+    cfg = _normalise_run_config(cfg)
+    targets: str = cfg.target if isinstance(cfg.target, str) else ', '.join(cfg.target or ())
 
     from evaluatorq.common.replay import ReplayError
     from evaluatorq.redteam import red_team
     from evaluatorq.redteam.exceptions import CancelledError, RedTeamError
     from evaluatorq.redteam.hooks import RichHooks
 
-    options = _resolve_run_options(
-        target=target,
-        categories=categories,
-        vulnerabilities=vulnerabilities,
-        strategies=strategies,
-        delivery_methods=delivery_methods,
-        system_prompt=system_prompt,
-        attack_model=attack_model,
-        evaluator_model=evaluator_model,
-        min_evaluation_coverage=min_evaluation_coverage,
-        target_timeout_ms=target_timeout_ms,
-        max_target_retries=max_target_retries,
-        retry_count=retry_count,
-        max_tool_continuations=max_tool_continuations,
-        target_reasoning_effort=target_reasoning_effort,
-    )
-    strategies = options.strategies
-    resolved_delivery_methods = options.delivery_methods
-    categories = options.categories
-    vulnerabilities = options.vulnerabilities
-    target_config = options.target_config
-    targets = options.targets
-    config = options.config
+    kwargs = model_kwargs(cfg)
+    kwargs['hooks'] = RichHooks(skip_confirm=should_skip_confirm(yes))
 
     try:
-        report = asyncio.run(
-            red_team(
-                target=cast('list[str | AgentTarget] | str', targets),
-                llm_config=config,
-                name=name,
-                mode=mode,
-                categories=categories,
-                vulnerabilities=vulnerabilities,
-                strategies=strategies,
-                delivery_methods=resolved_delivery_methods,
-                max_turns=max_turns,
-                max_per_category=max_per_category,
-                datapoint_parallelism=datapoint_parallelism,
-                llm_parallelism=llm_parallelism,
-                generate_strategies=not no_generate_strategies,
-                generated_strategy_count=generated_strategy_count,
-                max_dynamic_datapoints=max_dynamic_datapoints,
-                max_static_datapoints=max_static_datapoints,
-                cleanup_memory=not no_cleanup_memory,
-                dataset=dataset,
-                previous_run=from_run,
-                hooks=RichHooks(skip_confirm=should_skip_confirm(yes)),
-                artifacts_dir=artifacts_dir,
-                save=save,
-                target_config=target_config,
-                generate_executive_summary=executive_summary,
-                recommendations=recommendations,
-                attacker_instructions=attacker_instructions,
-                verbosity=verbose + 1,
-            )
-        )
+        report = asyncio.run(red_team(**kwargs))
     except CancelledError:
         typer.echo('Run cancelled.')
         raise typer.Exit(code=0)
@@ -727,14 +761,15 @@ def run(
         typer.echo(f'Report saved to {report_path}')
 
     if report_md:
-        target_label = targets if isinstance(targets, str) else ', '.join(targets)
-        md_path = write_markdown_report(report, output_dir=report_md, target=target_label)
+        md_path = write_markdown_report(report, output_dir=report_md, target=targets)
         typer.echo(f'Markdown report written to {md_path}')
 
     if report_html:
-        target_label = targets if isinstance(targets, str) else ', '.join(targets)
-        html_path = write_html_report(report, output_dir=report_html, target=target_label)
+        html_path = write_html_report(report, output_dir=report_html, target=targets)
         typer.echo(f'HTML report written to {html_path}')
+
+    if emit_json is not None:
+        emit_json(report)
 
     # Coverage gates run last, after artifacts are written — those artifacts are exactly
     # what you need to diagnose the failure, so they must exist before we exit non-zero.
@@ -757,6 +792,23 @@ def run(
             err=True,
         )
         raise typer.Exit(code=1)
+
+
+@app.command()
+def schema(
+    input_schema: Annotated[  # noqa: FBT002
+        bool,
+        typer.Option(
+            '--input/--output',
+            help='--input (default): the shape `eq redteam run --config` accepts. '
+            '--output: the RedTeamReport that `eq redteam run --json` prints.',
+        ),
+    ] = True,
+) -> None:
+    """Print the JSON schema of `eq redteam run`'s config file or of its JSON report."""
+    from evaluatorq.redteam.contracts import RedTeamReport
+
+    echo_schema(RedTeamCliConfig if input_schema else RedTeamReport, output=not input_schema)
 
 
 def _import_hf_download() -> Any:

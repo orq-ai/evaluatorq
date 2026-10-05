@@ -103,7 +103,7 @@ eq insights --query "customers asking about refunds" --label ./resolution-label.
 
 ## Analyze coding agents
 
-Pass `--coding` (or `coding_analysis=True` in Python, or tick **Coding agents** in the dashboard wizard) to add coding-agent labels to a run. Insights first asks the classifier whether each trace comes from a coding agent, using only a count of the tools, shell programs, and skills the trace called. Traces it answers yes for get two more sets of questions; other traces get only the labels you selected.
+Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Coding agent questions** in the dashboard run form) to add coding-agent labels to a run. Insights first asks the classifier whether each trace comes from a coding agent, using only a count of the tools, shell programs, and skills the trace called. Traces it answers yes for get two more sets of questions; other traces get only the labels you selected.
 
 | Label | Kind | Read from | Answers |
 |---|---|---|---|
@@ -150,19 +150,63 @@ Select a trace to open its saved summary, label answers, dimension assignments, 
 
 ### Start a run in the dashboard
 
-Click **+ New Run** to open the launch sheet. Choose one of the starting templates, then select recent traces, traces matching a question, a Finder export, or a local trace snapshot. A question asks the classifier to keep only traces that match, from the selected time window. Recent traces and question matches can use the window, trace limit, and available facet filters. Finder exports and snapshots already define their population, so they cannot be combined with those filters.
+Open **Insights → New run**, or click **+ New run** or **Re-run** on a run page. The new-run page and the run-page dialog render the same three-step form on the server, so both offer the same choices. **Re-run** prefills the form from the saved run. A rejected submission comes back with everything you entered and the error, on the page and in the dialog.
 
-Choose discovered dimensions and fixed questions in the sheet. The templates set an initial selection that you can adjust. You can choose individual coding-agent labels; Insights still uses its `coding_agent` classifier gate and asks the selected coding questions only for traces it identifies as coding-agent sessions. Alternatively, keep the full coding bundle enabled. Coding-label answers that were not asked are not failed answers.
+The step bar shows `1 · Traces`, `2 · Analysis` and `3 · Review`. **Continue** validates the current step, and **Start run** appears on the last. The same bar carries a one-line estimate of traces, cost and time that updates as you change the form.
 
-You can add a custom yes/no, choice, or 1–5 score question. A choice question needs answer names and descriptions; a score question needs five criteria. The sheet validates question names and criteria before launch, and custom questions cannot reuse preset or coding-label names. The source upload accepts validated Finder exports up to 10 MiB and trace snapshots up to 100 MiB. Use the JSON export from Trace Finder for a Finder source; a snapshot must contain a non-empty `traces` array in the format below.
+**1 · Traces.** Choose a source:
 
-The sheet estimates trace count, cost, and duration from a priced prior run when it has a usable basis. If the prior run has partial price coverage, the sheet says actual cost may be higher. Without a reliable prior cost, it shows that the estimate is unavailable. The exact cost and progress become visible as the run proceeds. The dashboard continues the run in the background if you restart the dashboard, and saved stage status remains on the run page.
+| Source | Population | Window, limit and filters |
+|---|---|---|
+| Recent | Recent traces from Orq | Apply |
+| Question | Traces from the window that the classifier says match your question | Apply |
+| Finder export | The traces in a Trace Finder JSON export | Do not apply; the file defines the population |
+| Local file | A trace snapshot with embedded messages | Do not apply; the file defines the population |
 
-For recent traces or a semantic query, choose any project, agent, model, provider, status, product, trace type, or tool values shown under **Filter by facets**. The values come from Orq for the selected window and reload when you change it. Multiple values within one facet include any matching value; different facets must all match. The choices are applied before the trace limit. If Orq cannot provide facet values, the sheet explains that filters are unavailable. A raw array of session objects is not a snapshot; convert it to `Snapshot` JSON before uploading it.
+For the two file sources, click **Browse…** and choose a file. There is no path field: the dashboard stores the upload under a random name and keeps the original file name for the run. The dashboard accepts Finder exports up to 10 MiB and snapshots up to 100 MiB. A larger file does not upload; run it from the terminal with `eq insights --from-finder PATH` or `eq insights --from-snapshot PATH`. For a snapshot, the form reports the measured truncation before you start.
+
+For Recent and Question, **+ Filter** opens the same filter menu as Traces and Trace search, and each chosen value appears as a removable chip. Every value shows how many traces in the selected window carry it, and values are ordered from most to least frequent. Multiple values within one facet match any of them; different facets must all match, and the filters apply before the trace limit. The menu loads from Orq for the selected window. If Orq rejects the credential or cannot be reached, the form says so and keeps your chosen filters; fix the credential in **Settings → Authentication** and click **Retry**.
+
+**2 · Analysis.** A **Preset** ticks a starting selection that you can then change. The presets are **Find failures** (group by failure and intent; ask about assistant mistakes and frustration), **Understand intents** (group by intent), and **Coding agent** (group by intent and failure; ask about frustration; ask the task type, outcome, unfixed error and risky action coding questions). The rest of the step is:
+
+- **Group traces by** offers the discovered dimensions `intent`, `failure` and `sentiment`.
+- **Ask about every trace** offers the labels `sentiment`, `customer_satisfaction`, `made_errors` and `user_frustration`. **+ Write your own question** adds a custom yes/no, choice, or 1–5 score question. A choice question needs answer names and descriptions, and a score question needs five criteria. Custom names cannot reuse a preset or coding-label name, and the form validates them before launch.
+- **Coding agent questions** are individual toggles. Insights still uses its `coding_agent` classifier gate and asks the selected coding questions only for traces it identifies as coding-agent sessions. A coding answer that was not asked is not a failed answer.
+
+Without **Assistant mistakes**, the run estimates the error share from the summaries instead of asking it directly. Insights adds the `sentiment` label itself when you group by sentiment and have not selected it.
+
+**3 · Review.** Name the run (optional), choose models, set the number of parallel requests, and read the plan and the estimate. **Models** are four grouped Orq pickers, the same menus as the model fields in Settings:
+
+| Picker | Used for | Default |
+|---|---|---|
+| Summary model | The per-trace summary | The `summary_model` default of `InsightsConfig` |
+| Classifier model | Label questions; must serve `/classify` | The classifier model from Settings |
+| Embedding model | Embeddings of the summaries | The `embedding_model` default of `InsightsConfig` |
+| Question compiler | Compiling a Question source into a population filter; shown only for that source | The compiler model from Settings |
+
+The run uses the models you pick and records them in its config, so **Re-run** prefills them. Starting a run is rejected when the Orq catalogue says the classifier cannot serve `/classify` or the embedding model is not an embedding model. When the catalogue is unavailable, the pickers become text boxes, a typed id is accepted, and a warning is logged. A blank field falls back to the default.
+
+**Expected stages** lists the stages the run will report, produced by the same plan the run uses, so the progress list on the run page matches it. The estimate is described below.
+
+### Read the estimate
+
+The estimate is a ceiling computed before any request is made. It states a basis beside every number, and it shows `unknown` with the reason instead of a number it cannot ground.
+
+- **Traces.** A Finder export or snapshot gives an exact count, read from the file. Recent and Question give `up to N`: the smallest of the trace limit and the Orq count for your filters. With no filters it uses the workspace's status counts. With several facets it takes the smallest of the per-facet sums, because a trace must match them all. If Orq truncated a facet's values, or you filter by a project id Orq cannot count, the bound falls back to the trace limit and says why. If the file's count cannot be read, the count is `unknown`.
+- **Cost.** Per stage, traces multiplied by tokens per trace multiplied by the stage model's price in the Orq catalogue. The token figures are caps, not measurements: the classifier and summary read at most the conversation view cap of 75,000 characters at three characters per token, a classify answer is four tokens, the summary writes up to its `max_tokens`, and an embedding is as long as the summary cap. A stage whose model has no price shows `unknown` and is left out of the total, which then reads `(priced stages only)`.
+- **Time.** Median per-trace seconds for each stage from your earlier Insights runs, scaled to the parallelism you chose when those runs recorded theirs. It reads `estimated after your first run` until a completed run exists, and `(timed stages only)` when some stages have no earlier timing. The figure is rough.
+
+A Question source labels every trace in range, but only the matching traces reach the summary and embedding stages. Those stages therefore show a range from zero to every trace, and the total shows `$low to $high`. The review step also lists the stages with their traces, cost, time and basis, names what is unknown, and states what the estimate leaves out: trace selection (question compiling and filter choice), and cluster naming and merging.
+
+Choosing coding questions adds one more classify call per trace, shown as its own row. It is an upper bound, because the call runs only for traces the gate identifies as coding agents, and it is timed at the whole label stage.
+
+The exact cost and progress become visible as the run proceeds. The dashboard continues the run in the background if you restart the dashboard, and saved stage status remains on the run page.
+
+A raw array of session objects is not a snapshot; convert it to `Snapshot` JSON before uploading it.
 
 ### Local trace file format
 
-A local trace file contains a `traces` array. Each trace needs an ID, a span ID, a timestamp with a timezone, a non-empty `messages` array, and the metadata fields shown below. Empty strings mean the source did not provide a value; do not fill unknown model or provider names by guessing. Save this example as `traces.json`, start `eq dashboard`, choose **Local trace file** in the new-run wizard, and enter its absolute path. The dashboard validates the file before starting the run.
+A local trace file contains a `traces` array. Each trace needs an ID, a span ID, a timestamp with a timezone, a non-empty `messages` array, and the metadata fields shown below. Empty strings mean the source did not provide a value; do not fill unknown model or provider names by guessing. Save this example as `traces.json`, start `eq dashboard`, choose **Local file** in the new-run form, click **Browse…** and choose the file. The dashboard validates the file before starting the run.
 
 ```json
 {
@@ -189,7 +233,7 @@ A local trace file contains a `traces` array. Each trace needs an ID, a span ID,
 
 When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject an empty snapshot. A Finder export cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
 
-Insights sends at most 50,000 projected UTF-8 bytes per trace to its summary model, plus the analysis prompt. The byte count conservatively bounds tokenizer tokens but does not measure them with the selected model's tokenizer. For a local trace file, the wizard measures truncation before you start the run. For recent traces, a question, or a Finder export, the completed run page reports it after loading the traces from Orq. The report shows how many traces hit the budget, how many whole messages were omitted, and the source and projected byte totals. Tool-result excerpts are shortened separately, so the whole-message count does not describe every byte removed. Split sessions into meaningful shorter traces if the full conversation needs to influence the analysis.
+Insights sends at most 50,000 projected UTF-8 bytes per trace to its summary model, plus the analysis prompt. The byte count conservatively bounds tokenizer tokens but does not measure them with the selected model's tokenizer. For a local trace file, the run form measures truncation before you start the run. For recent traces, a question, or a Finder export, the completed run page reports it after loading the traces from Orq. The report shows how many traces hit the budget, how many whole messages were omitted, and the source and projected byte totals. Tool-result excerpts are shortened separately, so the whole-message count does not describe every byte removed. Split sessions into meaningful shorter traces if the full conversation needs to influence the analysis.
 
 Each run has a state file under `.evaluatorq/insights-runs/.manifests/<run-id>.json` and a report in `.evaluatorq/insights-runs/`. The state file records the stage plan, current stage, outcomes, errors, and report path. The report's `evaluatorq_version` field records the evaluatorq version that produced it; reports saved before this field existed have `null`. The report's `population` block records the source: the filters and time window for a live selection, or the file path and a SHA-256 of its contents (`snapshot_sha256` or `finder_export_sha256`) for a file. A file uploaded in the dashboard is stored under a random name, so its original file name is kept in `source_name`. If a run fails before writing its report, it still appears in the dashboard with the failed stage and error. The worker log is under `.evaluatorq/insights-runs/.logs/<run-id>.log`.
 

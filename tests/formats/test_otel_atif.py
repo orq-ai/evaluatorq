@@ -138,6 +138,21 @@ def test_router_chat_agent_output_is_an_assistant_turn() -> None:
     assert [(step.source, step.message) for step in traj.steps] == [('user', 'hello'), ('agent', 'hi')]
 
 
+def test_message_finish_reason_round_trips_through_step_extra() -> None:
+    span = _chat('finish', [_text('user', 'hello')], [{**_text('assistant', 'hi'), 'finish_reason': 'stop'}])
+
+    trajectory = OtelTrace.from_orq([span]).to_atif()
+
+    assert trajectory.steps[1].extra is not None
+    assert trajectory.steps[1].extra['finish_reasons'] == ['stop']
+    round_trip = trajectory.to_otel()
+    chat = next(span for span in round_trip.spans if span.operation == 'chat')
+    assert chat.output_messages is not None and chat.output_messages[0].finish_reason == 'stop'
+    assert chat.attributes['gen_ai.response.finish_reasons'] == ['stop']
+    back = round_trip.to_atif()
+    assert back.steps[1].extra is not None and back.steps[1].extra['finish_reasons'] == ['stop']
+
+
 def test_router_responses_root_mirrors_child_only_once() -> None:
     inputs = [_text('user', 'write hello.py')]
     outputs = [_text('agent', 'hello.py')]
@@ -164,6 +179,136 @@ def test_router_responses_root_mirrors_child_only_once() -> None:
     assert trace.spans[0].output_messages == trace.spans[1].output_messages
     traj = trace.to_atif()
     assert [(step.source, step.message) for step in traj.steps] == [('user', 'write hello.py'), ('agent', 'hello.py')]
+
+
+def test_router_responses_mirror_keeps_prior_agent_tool_turns(caplog: pytest.LogCaptureFixture) -> None:
+    inputs = [
+        _text('user', 'Create and run a file.'),
+        {'role': 'assistant', 'finish_reason': 'tool_calls', 'parts': [
+            {'type': 'tool_call', 'id': 'call-create', 'name': 'Create', 'arguments': {'file': 'hello.py'}}]},
+        {'role': 'tool', 'parts': [
+            {'type': 'tool_call_response', 'id': 'call-create', 'response': 'created hello.py'}]},
+        {'role': 'assistant', 'parts': [
+            {'type': 'tool_call', 'id': 'call-run', 'name': 'Execute', 'arguments': {'command': 'python hello.py'}}]},
+        {'role': 'tool', 'parts': [
+            {'type': 'tool_call_response', 'id': 'call-run', 'response': 'hello'}]},
+        _text('assistant', 'Output: hello'),
+        _text('user', 'Which file did you create?'),
+    ]
+    output = [_text('assistant', 'hello.py')]
+    root_input = {'_value': 'Which file did you create?', 'messages': inputs}
+    root_output = {'_value': [{'type': 'message', 'role': 'assistant', 'content': 'hello.py'}], 'messages': output}
+    child_output = {'type': 'text', 'messages': output}
+    raw = [
+        {
+            'span_id': 'root',
+            'type': 'trace',
+            'attributes': {'gen_ai': {'input': root_input, 'output': root_output}, 'gen_ai.operation.name': 'chat'},
+        },
+        {
+            'span_id': 'router-responses',
+            'parent_span_id': 'root',
+            'type': 'span.responses',
+            'attributes': {
+                'gen_ai.operation.name': 'chat',
+                'gen_ai': {'input': root_input, 'output': child_output},
+            },
+        },
+    ]
+
+    trajectory = OtelTrace.from_orq(raw).to_atif()
+
+    assert [(step.source, step.message) for step in trajectory.steps] == [
+        ('user', 'Create and run a file.'),
+        ('agent', ''),
+        ('agent', ''),
+        ('agent', 'Output: hello'),
+        ('user', 'Which file did you create?'),
+        ('agent', 'hello.py'),
+    ]
+    calls = [step.tool_calls[0] for step in trajectory.steps if step.tool_calls]
+    assert [(call.tool_call_id, call.function_name) for call in calls] == [
+        ('call-create', 'Create'),
+        ('call-run', 'Execute'),
+    ]
+    results = [step.observation.results[0] for step in trajectory.steps if step.observation]
+    assert [(result.source_call_id, result.content) for result in results] == [
+        ('call-create', 'created hello.py'),
+        ('call-run', 'hello'),
+    ]
+    assert trajectory.steps[1].extra is not None
+    assert trajectory.steps[1].extra['finish_reasons'] == ['tool_calls']
+    assert not [record for record in caplog.records if record.levelno >= 30]
+
+
+def _call(call_id: str, name: str = 'lookup') -> dict[str, Any]:
+    return {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': call_id, 'name': name, 'arguments': {}}]}
+
+
+def _response(call_id: str | None, response: str) -> dict[str, Any]:
+    part = {'type': 'tool_call_response', 'response': response, **({'id': call_id} if call_id else {})}
+    return {'role': 'tool', 'parts': [part]}
+
+
+def _linked_results(traj: AtifTrajectory) -> list[tuple[int, str | None, object]]:
+    return [
+        (step.step_id, result.source_call_id, result.content)
+        for step in traj.steps
+        for result in (step.observation.results if step.observation else [])
+    ]
+
+
+@pytest.mark.parametrize('boundary_role', ['user', 'system'])
+def test_history_result_after_a_boundary_still_matches_its_call_by_id(
+    boundary_role: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    inputs = [_text('user', 'First'), _call('call-old'), _text(boundary_role, 'New context'),
+              _response('call-old', 'late result')]
+    traj = OtelTrace.from_orq([_chat('c', inputs, [_text('assistant', 'Done')])]).to_atif()
+
+    assert [step.source for step in traj.steps] == ['user', 'agent', boundary_role, 'agent']
+    assert _linked_results(traj) == [(2, 'call-old', 'late result')]
+    assert 'match no earlier call' not in caplog.text
+
+
+def test_history_results_follow_call_ids_not_order() -> None:
+    inputs = [_text('user', 'Go'), _call('call-a'), _call('call-b'),
+              _response('call-b', 'b result'), _response('call-a', 'a result')]
+    traj = OtelTrace.from_orq([_chat('c', inputs, [_text('assistant', 'Done')])]).to_atif()
+
+    assert sorted(_linked_results(traj)) == [(2, 'call-a', 'a result'), (3, 'call-b', 'b result')]
+
+
+def test_later_span_input_result_links_to_the_call_in_that_input() -> None:
+    first = {**_chat('a', [_text('user', 'q')], [_text('assistant', 'a1')]), 'started_at': 1}
+    later_input = [_text('user', 'q'), _text('assistant', 'a1'), _text('user', 'q2'), _call('x'), _response('x', 'R')]
+    later = {**_chat('b', later_input, [_text('assistant', 'a2')]), 'started_at': 2}
+
+    traj = OtelTrace.from_orq([first, later]).to_atif()
+
+    assert [(s.source, s.message) for s in traj.steps] == [
+        ('user', 'q'), ('agent', 'a1'), ('user', 'q2'), ('agent', ''), ('agent', 'a2')
+    ]
+    assert _linked_results(traj) == [(4, 'x', 'R')]
+
+
+def test_history_result_with_no_matching_call_is_unlinked_on_the_nearest_agent_step(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    inputs = [_response('early', 'before any agent'), _text('user', 'Go'), _call('call-a'),
+              _response('unknown', 'stray'), _response(None, 'no id')]
+    traj = OtelTrace.from_orq([_chat('c', inputs, [_text('assistant', 'Done')])]).to_atif()
+
+    assert [step.source for step in traj.steps] == ['user', 'agent', 'agent']
+    orphans = traj.steps[1].observation
+    assert orphans is not None
+    assert [(r.source_call_id, r.content, r.extra) for r in orphans.results] == [
+        (None, 'before any agent', {'orphan_call_id': 'early'}),
+        (None, 'stray', {'orphan_call_id': 'unknown'}),
+        (None, 'no id', None),
+    ]
+    assert traj.steps[2].observation is None
+    assert '3 tool results in chat input match no earlier call' in caplog.text
 
 
 def test_router_mirror_ignores_non_transcript_message_metadata() -> None:
@@ -374,11 +519,10 @@ def _text(role: str, text: str) -> dict[str, Any]:
     return {'role': role, 'parts': [{'type': 'text', 'content': text}]}
 
 
-def test_history_before_first_chat_span_is_warned_and_dropped(caplog: pytest.LogCaptureFixture) -> None:
+def test_first_chat_span_keeps_its_earlier_assistant_turns() -> None:
     span = _chat('c', [_text('user', 'a'), _text('assistant', 'b'), _text('user', 'c')], [_text('assistant', 'd')])
     traj = OtelTrace.from_orq([span]).to_atif()
-    assert [(s.source, s.message) for s in traj.steps] == [('user', 'a'), ('user', 'c'), ('agent', 'd')]
-    assert 'history of 1 messages before the first chat span is not converted' in caplog.text
+    assert [(s.source, s.message) for s in traj.steps] == [('user', 'a'), ('agent', 'b'), ('user', 'c'), ('agent', 'd')]
 
 
 def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:
@@ -392,6 +536,18 @@ def test_call_without_id_gets_stable_id_and_no_result_entry() -> None:
     assert step.tool_calls[0].extra == {RAW_ARGUMENTS_EXTRA_KEY: 'not json'}
     assert step.observation is None
     assert OtelTrace.from_orq(raw).to_atif() == first
+
+
+def test_unparsed_tool_arguments_round_trip_through_otel(caplog: pytest.LogCaptureFixture) -> None:
+    call = {'role': 'assistant', 'parts': [{'type': 'tool_call', 'id': 'c1', 'name': 'f', 'arguments': 'not json'}]}
+    first = OtelTrace.from_orq([_chat('c', [_text('user', 'a')], [call])]).to_atif()
+
+    assert "Tool call 'f' arguments are not a JSON object" in caplog.text
+    tool_span = next(span for span in first.to_otel().spans if span.operation == 'execute_tool')
+    assert tool_span.attributes['gen_ai.tool.call.arguments'] == 'not json'
+    round_trip = first.to_otel().to_atif()
+    assert round_trip.steps[1].tool_calls is not None
+    assert round_trip.steps[1].tool_calls[0].extra == {RAW_ARGUMENTS_EXTRA_KEY: 'not json'}
 
 
 def test_raw_arguments_are_written_back_as_the_string() -> None:
@@ -909,6 +1065,20 @@ def _steps(*specs: tuple[Literal['system', 'user', 'agent'], str]) -> AtifTrajec
 
 def _sig(traj: AtifTrajectory) -> list[tuple[str, Any]]:
     return [(s.source, s.message) for s in traj.steps]
+
+
+@pytest.mark.parametrize(
+    ('extra', 'error_type'),
+    [({'error_type': 'timeout'}, 'timeout'), ({'status': 'failed'}, '_OTHER')],
+    ids=['error-type', 'failed-response'],
+)
+def test_failed_agent_step_becomes_an_error_chat_span(extra: dict[str, Any], error_type: str) -> None:
+    traj = AtifTrajectory(session_id='s', agent=AtifAgent(name='a', version='1'), steps=[
+        AtifStep(step_id=1, source='user', message='q'),
+        AtifStep(step_id=2, source='agent', message='a', extra=extra),
+    ])
+    chat = next(span for span in traj.to_otel().spans if span.operation == 'chat')
+    assert (chat.status, chat.attributes['error.type']) == ('error', error_type)
 
 
 def test_steps_after_the_last_agent_step_round_trip() -> None:

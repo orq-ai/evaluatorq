@@ -51,10 +51,9 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.common.cli_oauth import list_oauth_sessions
-from evaluatorq.common.llm_client import MissingLLMCredentialsError, resolve_llm_client
-from evaluatorq.common.model_catalogue import models_by_provider
+from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
-from evaluatorq.dashboard import library, metrics, report_tabs
+from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.filter_request import parse_selections
@@ -77,7 +76,6 @@ from evaluatorq.dashboard.view import (
     SURFACE_LABELS,
     filter_fragment,
     landing_body,
-    model_control,
     model_field_source,
     oauth_session_field,
     redteam_overview_body,
@@ -90,6 +88,7 @@ from evaluatorq.dashboard.view import (
     runs_screen_body,
     search_results,
     settings_body,
+    settings_model_control,
     sim_overview_body,
 )
 from evaluatorq.trace_finder.settings import (
@@ -397,32 +396,17 @@ async def _settings_models(req: Request) -> NotStr:
     settings = settings.model_copy(update=update)
     if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
         return NotStr(
-            model_control(field, value, {}, note=_join_notes(env_note, 'Choose a CLI profile to load its models.'))
+            settings_model_control(
+                field, value, {}, note=_join_notes(env_note, 'Choose a CLI profile to load its models.')
+            )
         )
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
-    groups: dict[str, list[str]] = {}
     try:
         auth = resolve_dashboard_auth(settings, profiles=profiles)
-        if auth.method == 'cli_oauth':
-            orq, llm = build_auth_clients(auth)
-            try:
-                groups = await models_by_provider(llm, kind=kind)
-            finally:
-                await close_orq_client(orq)
-                await llm.close()
-        else:
-            resolved = resolve_llm_client(
-                extra_api_key=auth.api_key,
-                orq_host=auth.base_url,
-                require_orq=True,
-                max_retries=0,
-            )
-            try:
-                groups = await models_by_provider(resolved.client, kind=kind)
-            finally:
-                if resolved.owned:
-                    await resolved.client.close()
+        async with model_choices.catalogue_client(auth) as client:
+            groups = await model_choices.models_by_provider(client, kind=kind)
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        groups = {}
         logger.warning('Could not load the model catalogue for {}: {}', field, exc)
         if isinstance(exc, MissingLLMCredentialsError):
             note = (
@@ -433,7 +417,7 @@ async def _settings_models(req: Request) -> NotStr:
             note = "Couldn't load the model list from Orq. Type a model id."
     else:
         note = '' if groups else 'Orq returned no models for this field. Type a model id.'
-    return NotStr(model_control(field, value, groups, note=_join_notes(env_note, note)))
+    return NotStr(settings_model_control(field, value, groups, note=_join_notes(env_note, note)))
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901

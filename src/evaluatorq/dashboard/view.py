@@ -773,27 +773,28 @@ def model_field_source(name: str) -> tuple[str, str]:
     return '', ''
 
 
-def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, note: str = '') -> str:
+def model_control(
+    name: str, value: str, groups: Mapping[str, Sequence[str]], *, label: str, note: str = '', default: str = ''
+) -> str:
     """A two-level model menu (provider, then model) with a Custom free-text entry.
 
     Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
     Without a catalogue the field stays a plain text box. ``note`` (why, or where the value came from)
-    follows either form. An empty value means the role's built-in default, which the field names.
+    follows either form. With ``default`` (a role's built-in model) an empty value means that default,
+    which the field names, and the menu offers "Use default"; without it a value is required.
     """
-    label = MODEL_FIELDS[name][0]
-    default = f'{BUILTIN[model_field_role(name)]} (default)'
+    default = f'{default} (default)' if default else ''
     note_html = f'<span class="settings-auth-hint">{esc(note)}</span>' if note else ''
     if not groups:
-        box = (
-            f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" placeholder="{esc(default)}">'
-        )
+        hint = f'placeholder="{esc(default)}"' if default else 'required'
+        box = f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" {hint}>'
         return f'{box}{note_html}'
     known = not value or any(value in ids for ids in groups.values())
     use_default = (
         f'<button type="button" class="model-option{" is-selected" if not value else ""}" data-model=""'
         f' aria-pressed="{"false" if value else "true"}">Use default</button>'
     )
-    items: list[str] = [use_default]
+    items: list[str] = [use_default] if default else []
     subs: list[str] = []
     for index, (provider, ids) in enumerate((*groups.items(), ('Custom…', ()))):
         key = f'{name}-{index}'
@@ -824,8 +825,15 @@ def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *,
         )
     return (
         f'<span class="model-pick"><input type="hidden" name="{esc(name)}" value="{esc(value)}">'
-        f'<button type="button" id="{esc(name)}" class="model-pick-btn" data-default="{esc(default)}" aria-haspopup="true" aria-expanded="false">{esc(value or default)}</button>'
+        f'<button type="button" id="{esc(name)}" class="model-pick-btn" data-default="{esc(default)}" aria-haspopup="true" aria-expanded="false">{esc(value or default or "Choose a model")}</button>'
         f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>{note_html}'
+    )
+
+
+def settings_model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, note: str = '') -> str:
+    """``model_control`` for a Settings role field: its label, and its role's built-in as the default."""
+    return model_control(
+        name, value, groups, label=MODEL_FIELDS[name][0], note=note, default=BUILTIN[model_field_role(name)]
     )
 
 
@@ -979,7 +987,7 @@ def settings_body(
         control = (
             f'<span class="settings-model-field" id="{esc(name)}-field" hx-get="/settings/models?field={esc(name)}" '
             f'hx-trigger="{esc(MODEL_FIELD_TRIGGER)}" hx-include="{esc(_model_field_include(name))}" '
-            f'hx-swap="innerHTML">{model_control(name, pinned or setting_value(name), {}, note=note)}</span>'
+            f'hx-swap="innerHTML">{settings_model_control(name, pinned or setting_value(name), {}, note=note)}</span>'
         )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
@@ -1004,7 +1012,7 @@ def settings_body(
     )
     field_rows.append(
         '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
-        f'<span class="config-val"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></div>'
+        f'<span class="config-val"><span class="settings-select"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></span></div>'
     )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     if preview:

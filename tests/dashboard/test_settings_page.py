@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 from evaluatorq.common.cli_oauth import OAuthSession
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
+from evaluatorq.dashboard import model_choices
 from evaluatorq.dashboard import apply_ui
 from evaluatorq.dashboard.trace_finder import routes as finder_routes
 from evaluatorq.dashboard.trace_finder.search_views import search_page_html
@@ -1367,7 +1368,7 @@ def test_model_field_asks_for_a_cli_profile_before_fetching(client: TestClient, 
     async def never(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
         raise AssertionError('no fetch without a profile')
 
-    monkeypatch.setattr(app_module, 'models_by_provider', never)
+    monkeypatch.setattr(model_choices, 'models_by_provider', never)
 
     html = client.get(
         '/settings/models',
@@ -1394,9 +1395,9 @@ def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatc
 
     monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [])
     monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setattr(
-        app_module, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
+        model_choices, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
     )
 
     html = client.get(
@@ -1421,7 +1422,7 @@ def test_model_field_offers_workspace_models_grouped_by_provider(
     async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
         return _CHOICES
 
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
     html = client.get('/settings/models', params={'field': 'fast_model', 'fast_model': 'openai/gpt-5.6-luna'}).text
@@ -1442,7 +1443,7 @@ def test_model_field_ignores_a_missing_profile_rather_than_using_the_environment
     async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
         return _CHOICES
 
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
     html = client.get('/settings/models', params={'field': 'fast_model', 'profile': 'gone'}).text
@@ -1474,16 +1475,16 @@ def test_model_field_uses_selected_authentication(
         calls.append('orq closed')
 
     monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
-    monkeypatch.setattr(app_module, 'close_orq_client', close_orq)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'close_orq_client', close_orq)
     if method == 'cli_oauth':
-        monkeypatch.setattr(app_module, 'build_auth_clients', lambda _auth: (object(), llm))
+        monkeypatch.setattr(model_choices, 'build_auth_clients', lambda _auth: (object(), llm))
     else:
         def resolve_llm(**kwargs: object) -> SimpleNamespace:
             calls.append(kwargs)
             return SimpleNamespace(client=llm, owned=True)
 
-        monkeypatch.setattr(app_module, 'resolve_llm_client', resolve_llm)
+        monkeypatch.setattr(model_choices, 'resolve_llm_client', resolve_llm)
 
     html = client.get('/settings/models', params={'field': 'fast_model', 'auth_method': method}).text
 
@@ -1564,9 +1565,9 @@ def test_model_field_filters_the_catalogue_by_the_fields_kind(client: TestClient
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setattr(
-        app_module, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
+        model_choices, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
     )
     for name in ('fast_model', 'smart_model', 'classifier_model', 'embedding_model'):
         client.get('/settings/models', params={'field': name})
@@ -1584,9 +1585,9 @@ def test_model_field_offers_use_default_and_labels_an_empty_value(
         async def close(self) -> None:
             return None
 
-    monkeypatch.setattr(app_module, 'models_by_provider', choices)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setattr(
-        app_module, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
+        model_choices, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
     )
 
     html = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': ''}).text

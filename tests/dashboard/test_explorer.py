@@ -799,9 +799,9 @@ def test_traces_csv_exports_filtered_sorted_visible_rows_across_pages(explorer_c
     assert response.headers['content-type'].startswith('text/csv')
     assert response.headers['content-disposition'] == 'attachment; filename="traces.csv"'
     assert len(table) == 6
-    assert table[0][1] == 'Trace / agent'
-    assert table[1][1] == 'trace-0004'
-    assert table[-1][1] == 'trace-0000'
+    assert table[0][2] == 'Trace / agent'
+    assert table[1][2] == 'trace-0004'
+    assert table[-1][2] == 'trace-0000'
 
 
 def test_traces_csv_matches_rendered_matched_only_rows_across_pages(explorer_client) -> None:
@@ -2557,10 +2557,10 @@ def test_ai_match_column_appears_after_results_and_can_be_hidden(explorer_client
 
 
 def test_generated_filter_chip_carries_ai_badge() -> None:
-    from evaluatorq.dashboard.trace_finder.views import _facet_chips
+    from evaluatorq.dashboard.facet_picker import render_facet_chips
     from evaluatorq.trace_finder.models import FacetSelection
 
-    html = _facet_chips(
+    html = render_facet_chips(
         FacetSelection(model=frozenset({'gpt-5.6-luna', 'claude-sonnet-5'})),
         generated=FacetSelection(model=frozenset({'gpt-5.6-luna'})),
     )
@@ -2568,10 +2568,10 @@ def test_generated_filter_chip_carries_ai_badge() -> None:
 
 
 def test_numeric_chip_formats_total_tokens_with_grouping() -> None:
-    from evaluatorq.dashboard.trace_finder.views import _facet_chips
+    from evaluatorq.dashboard.facet_picker import render_facet_chips
     from evaluatorq.trace_finder.models import NumericFilters
 
-    html = _facet_chips(FacetSelection(), NumericFilters(tokens_min=20_001), removable=True)
+    html = render_facet_chips(FacetSelection(), NumericFilters(tokens_min=20_001), removable=True)
     assert '<b>total tokens</b><span class="v">≥ 20,001</span>' in html
     assert 'aria-label="Edit total tokens ≥ 20,001"' in html
 
@@ -2588,11 +2588,69 @@ def test_narrowed_empty_state_and_status_explain_loaded_row_scope() -> None:
 
 
 def test_facet_menu_calls_numeric_token_bound_total_tokens() -> None:
-    from evaluatorq.dashboard.trace_finder.views import facet_menu
+    from evaluatorq.dashboard.facet_picker import render_facet_menu
 
-    html = facet_menu()
+    html = render_facet_menu(None, form_id='finder-query-form')
     assert '<span>total tokens</span>' in html
     assert '<div class="hd">total tokens</div>' in html
+
+
+def test_explorer_form_id_alone_does_not_make_the_menu_row_scoped() -> None:
+    from evaluatorq.dashboard.trace_finder.views import facet_menu
+
+    assert 'data-refresh-on-open' not in facet_menu(FacetCatalogue(), form_id='explorer-load-form')
+    assert 'data-refresh-on-open' in facet_menu(FacetCatalogue(), form_id='explorer-load-form', row_scoped=True)
+
+
+def test_facet_menu_counts_sort_values_with_catalogue_order_breaking_ties() -> None:
+    from evaluatorq.dashboard.facet_picker import render_facet_menu
+
+    catalogue = FacetCatalogue(model=('alpha', 'beta', 'gamma', 'delta'))
+    html = render_facet_menu(
+        catalogue,
+        form_id='finder-query-form',
+        counts={'model': {'alpha': 1, 'beta': 5, 'gamma': 1}},
+        count_note='Traces in the last 7 days',
+    )
+
+    assert html.index('>beta<') < html.index('>alpha<') < html.index('>gamma<') < html.index('>delta<')
+    assert 'Traces in the last 7 days' in html
+    assert 'value="beta"><span>beta</span><span class="facet-n" title="Traces in the last 7 days">5</span>' in html
+    # A catalogue value the counts do not mention is counted as zero.
+    assert 'value="delta"><span>delta</span><span class="facet-n" title="Traces in the last 7 days">0</span>' in html
+
+
+def test_facet_menu_shows_no_badge_for_an_uncounted_value_of_a_truncated_facet() -> None:
+    from evaluatorq.dashboard.facet_picker import render_facet_menu
+
+    catalogue = FacetCatalogue(model=('alpha', 'delta'), truncated_facets=frozenset({'model'}))
+    html = render_facet_menu(catalogue, form_id='finder-query-form', counts={'model': {'alpha': 4}}, count_note='n')
+
+    assert 'value="alpha"><span>alpha</span><span class="facet-n" title="n">4</span>' in html
+    assert 'value="delta"><span>delta</span></label>' in html
+
+
+def test_facet_menu_counts_skip_facets_without_counts_and_escape_the_note() -> None:
+    from evaluatorq.dashboard.facet_picker import render_facet_menu
+
+    catalogue = FacetCatalogue(model=('alpha',), status=('ok',))
+    html = render_facet_menu(catalogue, form_id='f', counts={'model': {'alpha': 3}}, count_note='<b>n</b>')
+
+    status_sub = html[html.index('data-facet-sub="status"') :]
+    status_sub = status_sub[: status_sub.index('data-facet-sub=', 1)]
+    assert 'value="ok"' in status_sub
+    assert 'class="facet-n"' not in status_sub
+    assert '&lt;b&gt;n&lt;/b&gt;' in html
+    assert '<b>n</b>' not in html
+
+
+def test_facet_menu_without_counts_has_no_badge_or_note() -> None:
+    from evaluatorq.dashboard.facet_picker import render_facet_menu
+
+    html = render_facet_menu(FacetCatalogue(model=('alpha',)), form_id='f', count_note='Traces in the last 7 days')
+
+    assert 'class="facet-n"' not in html
+    assert 'Traces in the last 7 days' not in html
 
 
 def test_narrowed_status_accounts_for_traces_without_conversation() -> None:
@@ -2762,8 +2820,19 @@ def test_facet_menu_counts_values_from_loaded_rows_only() -> None:
     assert html.index('gpt-6-luna') < html.index('claude-x') < html.index('unused')
     assert '<span class="facet-n" title="Loaded traces">2</span>' in html
     assert '<span class="facet-n" title="Loaded traces">0</span>' in html
-    # Without rows the menu is unchanged (the /find surface).
+    # Without rows or Orq counts the menu carries no badges.
     assert 'class="facet-n"' not in facet_menu(catalogue)
+
+
+def test_find_facet_menu_shows_orq_counts_for_the_window() -> None:
+    from evaluatorq.dashboard.trace_finder.views import facet_menu
+
+    catalogue = FacetCatalogue(model=('a', 'b'), value_counts={'model': {'a': 2, 'b': 9}})
+    html = facet_menu(catalogue, window_days=7)
+
+    assert 'Traces in the last 7 days' in html
+    assert html.index('>b<') < html.index('>a<')
+    assert '<span class="facet-n" title="Traces in the last 7 days">9</span>' in html
 
 
 def test_failed_load_offers_retry_and_plain_words_for_an_orq_outage() -> None:

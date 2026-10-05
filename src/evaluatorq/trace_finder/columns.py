@@ -106,8 +106,8 @@ MATCH = 'match'
 
 _ENTRIES = (
     Column('started', 'Time', lambda r: r.started_at, _time, default=True),
-    Column('trace', 'Trace / agent', lambda r: r.name or r.trace_id, _trace, default=True),
     Column('status', 'Status', lambda r: r.status, _status, default=True),
+    Column('trace', 'Trace / agent', lambda r: r.name or r.trace_id, _trace, default=True),
     Column('error_message', 'Error details', lambda _r: None, _error_message),
     Column('name', 'Name', lambda r: r.name, lambda r: _text(r.name)),
     Column('agent', 'Agent', lambda r: r.agent_name, lambda r: _text(r.agent_name)),

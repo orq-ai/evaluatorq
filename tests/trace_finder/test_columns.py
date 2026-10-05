@@ -11,7 +11,7 @@ from evaluatorq.trace_finder.rows import TraceRow
 
 
 def test_defaults_are_the_agreed_set() -> None:
-    assert DEFAULT_COLUMNS == ('started', 'trace', 'status', 'model', 'tokens_in', 'tokens_out', 'cache_pct', 'cost', 'duration', 'match')
+    assert DEFAULT_COLUMNS == ('started', 'status', 'trace', 'model', 'tokens_in', 'tokens_out', 'cache_pct', 'cost', 'duration', 'match')
     assert 'name' not in DEFAULT_COLUMNS
     assert 'provider' not in DEFAULT_COLUMNS
 

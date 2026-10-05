@@ -390,7 +390,11 @@
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
       closeMenus(ownMenu);
-      if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
+      if (ownMenu) {
+        ownMenu.style.left = ''; ownMenu.style.top = '';
+        ownMenu.classList.toggle('open');
+        if (!ownMenu.classList.contains('open')) announceFacetsClosed(ownMenu);
+      }
       addFilter.setAttribute('aria-expanded', ownMenu && ownMenu.classList.contains('open') ? 'true' : 'false');
       return;
     }
@@ -409,7 +413,9 @@
     }
     const chipOpen = evt.target.closest('[data-chip-open]');
     if (chipOpen) {
-      const menu = document.querySelector('.finder-controls .finder-facets');
+      // The menu that belongs to the chip's own picker; /traces toolbar chips sit outside it and use the page's menu.
+      const scope = chipOpen.closest('.finder-controls');
+      const menu = scope ? scope.querySelector('.finder-facets') : document.querySelector('.finder-controls .finder-facets');
       const target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
       if (target) {
         // Anchor the menu under the clicked chip instead of under + Filter.
@@ -537,9 +543,14 @@
     document.querySelectorAll('.finder-facets.open').forEach(function (menu) {
       if (menu === except) return;
       menu.classList.remove('open');
+      announceFacetsClosed(menu);
       const trigger = menu.parentElement.querySelector('[data-explorer-filters], .add, .model-pick-btn');
       if (trigger) trigger.setAttribute('aria-expanded', 'false');
     });
+  }
+  // Tell the page a filter menu closed so it can apply the picks; model pickers share the markup but not the event.
+  function announceFacetsClosed(menu) {
+    if (!menu.closest('.model-pick')) menu.dispatchEvent(new CustomEvent('facets:closed', { bubbles: true }));
   }
 
   function pickModel(from, model) {

@@ -50,8 +50,13 @@ async def load_facet_catalogue(
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    values_by_name = {name: values for name, (values, _) in zip(_FACET_FIELDS, results, strict=True)}
-    truncated_facets = frozenset(name for name, (_, truncated) in zip(_FACET_FIELDS, results, strict=True) if truncated)
+    values_by_name = {name: values for name, (values, _, _) in zip(_FACET_FIELDS, results, strict=True)}
+    truncated_facets = frozenset(
+        name for name, (_, truncated, _) in zip(_FACET_FIELDS, results, strict=True) if truncated
+    )
+    value_counts = {
+        name: counts for name, (_, _, counts) in zip(_FACET_FIELDS, results, strict=True) if counts is not None
+    }
     if truncated_facets:
         logger.warning(
             'Orq facet values exceed the {}-value limit for {}; using returned values ranked by frequency',
@@ -65,7 +70,13 @@ async def load_facet_catalogue(
         raise ValueError(f'cannot resolve facet project ids: {sorted(missing_projects)}')
     labels = project_labels(project_names)
     values_by_name['project'] = tuple(labels[project_id] for project_id in values_by_name['project'])
-    return FacetCatalogue.model_validate({**values_by_name, 'truncated_facets': truncated_facets})
+    if 'project' in value_counts:
+        value_counts['project'] = {labels[project_id]: count for project_id, count in value_counts['project'].items()}
+    return FacetCatalogue.model_validate({
+        **values_by_name,
+        'truncated_facets': truncated_facets,
+        'value_counts': value_counts,
+    })
 
 
 def project_labels(project_names: Mapping[str, str]) -> dict[str, str]:
@@ -85,20 +96,30 @@ async def _safe_facet_values(
     start: datetime,
     end: datetime,
     limit: int,
-) -> tuple[tuple[str, ...], bool]:
+) -> tuple[tuple[str, ...], bool, dict[str, int] | None]:
+    """Return values ranked by trace count, the overflow flag, and each value's count.
+
+    The counts are ``None`` unless Orq reported a count for every value it returned.
+    """
     response = await client.traces.list_facet_values_async(field=field, from_=start, to=end, limit=limit)
     raw_values = _read(response, 'values')
     if not isinstance(raw_values, (list, tuple)):
         raise TypeError(f'trace facet field {field} returned no readable values')
     ranked: list[tuple[str, int, int]] = []
+    counted = True
     for index, item in enumerate(raw_values):
         value = _read(item, 'value')
         if not isinstance(value, str) or not value or value == 'unknown':
             continue
         count = _read(item, 'count')
-        ranked.append((value, count if type(count) is int and count >= 0 else 0, index))
+        valid = type(count) is int and count >= 0
+        counted = counted and valid
+        ranked.append((value, count if valid else 0, index))
     ranked.sort(key=lambda item: (-item[1], item[2]))
-    return tuple(dict.fromkeys(value for value, _, _ in ranked)), bool(_read(response, 'has_more'))
+    counts: dict[str, int] = {}
+    for value, count, _ in ranked:
+        counts.setdefault(value, count)
+    return tuple(counts), bool(_read(response, 'has_more')), counts if counted and counts else None
 
 
 async def _project_names(client: Orq) -> dict[str, str]:

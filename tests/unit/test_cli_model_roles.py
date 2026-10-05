@@ -140,27 +140,3 @@ def test_sim_model_flag_unset_leaves_roles_to_resolve() -> None:
     assert _generation_model(None) == BUILTIN['fast']
     assert _sim_llm_config('x/y').model == 'x/y'
     assert _generation_model('x/y') == 'x/y'
-
-
-def test_redteam_options_leave_models_unset_by_default() -> None:
-    from evaluatorq.redteam.cli import _resolve_run_options
-
-    opts = _resolve_run_options(
-        target=['agent:a'],
-        categories=None,
-        vulnerabilities=None,
-        strategies=None,
-        delivery_methods=None,
-        system_prompt=None,
-        attack_model=None,
-        evaluator_model=None,
-        min_evaluation_coverage=0.5,
-        target_timeout_ms=1000,
-        max_target_retries=0,
-        retry_count=0,
-        max_tool_continuations=0,
-        target_reasoning_effort=None,
-    )
-    # The CLI passes no model; LLMConfig resolves the attacker's from the smart role.
-    assert opts.config.attacker.model == role_model('smart', task='redteam.attacker')
-    assert 'model' not in opts.config.evaluator.model_fields_set

@@ -1205,7 +1205,7 @@ requires-dist = [
     { name = "orq-ai-sdk", marker = "extra == 'insights'", specifier = ">=4.14" },
     { name = "orq-ai-sdk", marker = "extra == 'orq'", specifier = ">=4.14" },
     { name = "orq-ai-sdk", marker = "extra == 'simulation'", specifier = ">=4.14" },
-    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic", specifier = ">=2.12" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'all'", specifier = ">=1.0.0" },
     { name = "pydantic-ai-slim", extras = ["openai"], marker = "extra == 'pydantic-ai'", specifier = ">=1.0.0" },
     { name = "python-dotenv", marker = "extra == 'all'", specifier = ">=1.0.0,<2.0.0" },

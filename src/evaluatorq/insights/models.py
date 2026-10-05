@@ -263,6 +263,7 @@ class InsightsConfig(BaseModel):
     dimensions: list[DimensionName]
     summary_model: str = Field(default_factory=lambda: role_model('smart', task='insights.summary'))
     classifier_model: str = Field(default_factory=lambda: role_model('classifier', task='insights.labels'))
+    compiler_model: str | None = None
     embedding_model: str = Field(default_factory=lambda: role_model('embedding', task='insights.embedding'))
     max_clusters: int = Field(default=15, ge=1)
     max_subclusters: int = Field(default=15, ge=1)

@@ -362,6 +362,7 @@ def start_manifest(
     runs_dir: Path,
     planned_stages: list[str] | None = None,
     stage_labels: dict[str, str] | None = None,
+    parallelism: int | None = None,
 ) -> ManifestWriter:
     """Create + persist a ``running`` manifest, returning its writer."""
     now = datetime.now(tz=timezone.utc)
@@ -372,6 +373,7 @@ def start_manifest(
         status=ManifestStatus.RUNNING,
         planned_stages=planned_stages or [],
         stage_labels=stage_labels or {},
+        parallelism=parallelism,
         started_at=now,
         updated_at=now,
     )
@@ -394,6 +396,11 @@ def list_manifests(runs_dir: Path) -> list[RunManifest]:
             # surface — make it visible (warning), not silent (debug).
             logger.warning(f'Skipping unreadable manifest {p}: {exc}')
     return sorted(out, key=lambda m: m.started_at, reverse=True)
+
+
+def read_manifest(runs_dir: Path, run_id: str) -> RunManifest | None:
+    """Read the manifest of run *run_id* in *runs_dir*, or ``None`` when absent or unreadable."""
+    return _read_manifest(_manifests_dir(runs_dir) / f'{run_id}.json')
 
 
 def summary_is_current(manifest: RunManifest) -> bool:
