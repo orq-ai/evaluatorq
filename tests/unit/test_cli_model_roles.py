@@ -122,6 +122,11 @@ def test_redteam_run_help_points_at_the_smart_role() -> None:
     assert 'smart model role' in re.sub(r'[\s│]+', ' ', out)
 
 
+def test_dashboard_classifier_flag_help_says_a_task_override_wins() -> None:
+    out = re.sub(r'[\s│]+', ' ', _help('dashboard'))
+    assert 'root --model-override for a classifier task wins over it' in out
+
+
 def test_root_flags_apply_before_a_subcommand_runs() -> None:
     result = CliRunner().invoke(app, ['--smart-model', 'a/b', 'dashboard', '--help'])
     assert result.exit_code == 0

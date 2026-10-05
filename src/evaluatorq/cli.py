@@ -161,7 +161,8 @@ def dashboard(
         str | None,
         typer.Option(
             '--classifier-model',
-            help='Sets the classifier model role (every classifier task), as the global --classifier-model.',
+            help='Sets the classifier model role (every classifier task), as the global --classifier-model. '
+            'A root --model-override for a classifier task wins over it.',
         ),
     ] = None,
     window_days: Annotated[
