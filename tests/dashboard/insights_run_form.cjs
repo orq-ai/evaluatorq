@@ -6,7 +6,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {Document, DOMParser} = require('./minidom.cjs');
 
-const fixtures = JSON.parse(process.env.INSIGHTS_RUN_FORM_FIXTURES);
+// Fixtures arrive on stdin: as an environment variable they exceed Linux's 128 KiB per-string limit.
+const fixtures = JSON.parse(fs.readFileSync(0, 'utf8'));
 const source = fs.readFileSync(path.resolve(__dirname, '../../src/evaluatorq/dashboard/static/insights-run-form.js'), 'utf8');
 
 const FACET_MARKUP = '<div class="finder-controls"><span class="addwrap"><div class="finder-facets" id="menu">'
