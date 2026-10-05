@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlencode
 
 from loguru import logger
@@ -15,12 +16,26 @@ from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this
 from starlette.responses import RedirectResponse, Response
 
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
+from evaluatorq.common.reports import esc
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
 from evaluatorq.dashboard.auth import auth_identity
+from evaluatorq.dashboard.insights_estimate_views import (
+    render_compact_estimate,
+    render_estimate,
+    render_estimate_unavailable,
+)
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
 from evaluatorq.dashboard.insights_review_data import build_review_payload
 from evaluatorq.dashboard.insights_review_views import review_page
+from evaluatorq.dashboard.insights_run_form import (
+    INSIGHTS_MODEL_FIELDS,
+    RunFormValues,
+    facet_options,
+    render_plan,
+    render_run_form,
+    render_run_page,
+)
 from evaluatorq.dashboard.insights_uploads import (
     UploadRequestTooLargeError,
     cleanup_expired_uploads,
@@ -30,9 +45,7 @@ from evaluatorq.dashboard.insights_uploads import (
 )
 from evaluatorq.dashboard.insights_views import (
     TABS,
-    facet_options,
     map_payload,
-    new_run_page,
     overview_page,
     projection_notice,
     running_page,
@@ -41,19 +54,25 @@ from evaluatorq.dashboard.insights_views import (
     trace_detail_page,
     unreadable_page,
 )
-from evaluatorq.dashboard.security import request_rejected
+from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
+from evaluatorq.dashboard.security import csrf_token, request_rejected
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
+from evaluatorq.dashboard.view import model_control
+from evaluatorq.insights.estimate import StageModels, estimate_run, stage_seconds, trace_bound
 from evaluatorq.insights.models import InsightsRun, label_key
 from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
+from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from evaluatorq.common.model_catalogue import ModelInfo
     from evaluatorq.contracts import RunManifest
     from evaluatorq.dashboard.auth import DashboardAuth
+    from evaluatorq.insights.estimate import RunEstimate
 
 
 def _entries(
@@ -108,6 +127,93 @@ def _entries(
 
 def _html(content: str, status_code: int = 200, media_type: str = 'text/html') -> Response:
     return Response(content, status_code=status_code, media_type=media_type)
+
+
+def _validation_message(exc: Exception) -> str:
+    if isinstance(exc, ValidationError):
+        return '; '.join(error['msg'].removeprefix('Value error, ') for error in exc.errors())
+    return str(exc)
+
+
+async def _estimate(app: Any, spec: InsightsLaunchSpec) -> RunEstimate:
+    """The traces, cost and time a run with *spec* would use, from the catalogue, prices and earlier runs."""
+    finder_count: int | None = None
+    snapshot_count: int | None = None
+    catalogue = FacetCatalogue()
+    if spec.source == 'finder':
+        raw = spec.validated_finder_export_snapshot()
+        finder_count = None if raw is None else len(RunExport.model_validate_json(raw).matched_trace_ids)
+    elif spec.source == 'snapshot':
+        try:
+            snapshot_count = (await asyncio.to_thread(preview_snapshot, spec.snapshot_path))['n_traces']
+        except PopulationError as exc:
+            logger.warning('Could not count the traces in the local file for the estimate: {}', exc)
+    else:
+        loaded, _, _ = await _catalogue(app, spec.window_days)
+        catalogue = loaded or FacetCatalogue()
+    bound = trace_bound(
+        spec.source,
+        catalogue=catalogue,
+        facets=spec.facets,
+        limit=spec.limit,
+        finder_count=finder_count,
+        snapshot_count=snapshot_count,
+    )
+    models = StageModels(summary=spec.summary_model, classifier=spec.classifier_model, embedding=spec.embedding_model)
+    prices: dict[str, ModelInfo | None] = {}
+    try:
+        auth = selected_dashboard_auth(app)
+    except (RuntimeError, ValueError) as exc:
+        logger.warning('No Orq catalogue for the Insights estimate prices: {}', exc)
+    else:
+        chosen = sorted({models.summary, models.classifier, models.embedding})
+        entries = await asyncio.gather(*(catalogue_entry(auth, model) for model in chosen))
+        prices = dict(zip(chosen, entries, strict=True))
+    seconds = await asyncio.to_thread(stage_seconds, get_insights_runs_dir())
+    return estimate_run(
+        bound=bound,
+        dimensions=spec.dimension_names(),
+        question_count=len(spec.labels) + len(spec.custom_labels),
+        coding=spec.coding_enabled,
+        models=models,
+        prices=prices,
+        seconds=seconds,
+        parallelism=spec.parallelism,
+        query=spec.source == 'query',
+        sentiment_selected='sentiment' in spec.labels,
+    )
+
+
+async def _model_rejection(auth: DashboardAuth, spec: InsightsLaunchSpec) -> str | None:
+    """Why the catalogue says a chosen model cannot do its job, or `None` when it can or cannot be checked."""
+    unchecked: list[str] = []
+    for field, wrong_for in (
+        ('classifier_model', lambda info: not info.supports_classify),
+        ('embedding_model', lambda info: info.model_type != 'embedding'),
+    ):
+        model = getattr(spec, field)
+        if not model:
+            continue
+        info = await catalogue_entry(auth, model)
+        if info is None:
+            unchecked.append(field)
+        elif wrong_for(info):
+            what = 'serve /classify' if field == 'classifier_model' else 'produce embeddings'
+            return f'{INSIGHTS_MODEL_FIELDS[field][1]} {model} cannot {what}. Choose another from the list.'
+    if unchecked:
+        logger.warning(
+            'Orq model catalogue has no entry for {}; accepting the typed values unchecked',
+            ' and '.join(f'{field} {getattr(spec, field)!r}' for field in unchecked),
+        )
+    return None
+
+
+def _run_form_response(values: RunFormValues, error: str | None, status_code: int) -> Response:
+    """The run form as a page or a dialog fragment to match `values.mount`."""
+    token = csrf_token()
+    if values.mount == 'dialog':
+        return _html(render_run_form(values, csrf=token, error=error), status_code)
+    return _html(render_run_page(values, csrf=token, error=error), status_code)
 
 
 def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> tuple[Path, InsightsRun | str] | None:
@@ -271,8 +377,43 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         return _html(overview_page(entries, runs, manifests))
 
     @app.get('/insights/new')
-    def insights_new() -> Response:
-        return _html(new_run_page())
+    def insights_new(req: Request) -> Response:
+        directory = get_insights_runs_dir()
+        rerun_id = req.query_params.get('rerun')
+        if rerun_id:
+            _, loaded, _ = _entries(directory)
+            resolved = _resolve(rerun_id, loaded)
+            if resolved is None or not isinstance(resolved[1], InsightsRun):
+                return _html('<p class="insights-empty">Insights run not found.</p>', 404)
+            values = RunFormValues.from_run(resolved[1], directory)
+        else:
+            values = RunFormValues.defaults()
+        mount: Literal['page', 'dialog'] = 'dialog' if req.query_params.get('mount') == 'dialog' else 'page'
+        return _run_form_response(replace(values, mount=mount), None, 200)
+
+    @app.get('/insights/new/plan')
+    async def insights_new_plan(req: Request) -> Response:
+        compact = req.query_params.get('compact') == '1'
+
+        def validated() -> tuple[InsightsLaunchSpec, list[tuple[str, str]]]:
+            spec = InsightsLaunchSpec.model_validate(RunFormValues.from_form(req.query_params).launch_fields())
+            return spec, [] if compact else spec.stages()
+
+        try:
+            spec, stages = await asyncio.to_thread(validated)
+        except (ValidationError, ValueError, TypeError) as exc:
+            message = _validation_message(exc)
+            if compact:
+                return _html(render_estimate_unavailable(message))
+            return _html(f'<p class="insights-error" role="alert">{esc(message)}</p>', 422)
+        estimate = await _estimate(req.app, spec)
+        if compact:
+            return _html(render_compact_estimate(estimate))
+        return _html(
+            f'<div data-part="estimate">{render_estimate(estimate, stages)}</div>'
+            f'<div data-part="compact">{render_compact_estimate(estimate)}</div>'
+            f'<div data-part="plan">{render_plan(spec, stages)}</div>'
+        )
 
     @app.get('/insights/facets')
     async def insights_facets(req: Request) -> Response:
@@ -294,6 +435,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 selection,
                 profile_name=profile_name,
                 credential_rejected=credential_rejected,
+                window_days=window_days,
             )
         )
 
@@ -360,48 +502,46 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             return _html('<p class="insights-error" role="alert">This trace snapshot contains no traces.</p>', 422)
         return _html(projection_notice(coverage))
 
+    @app.get('/insights/models')
+    async def insights_models(req: Request) -> Response:
+        field = req.query_params.get('field', '')
+        if field not in INSIGHTS_MODEL_FIELDS:
+            return _html('')
+        kind, label = INSIGHTS_MODEL_FIELDS[field]
+        try:
+            groups = await model_groups(selected_dashboard_auth(req.app), kind)
+        except (RuntimeError, ValueError) as exc:
+            logger.warning('No model catalogue for the Insights run form ({}): {}', field, exc)
+            groups = {}
+        return _html(model_control(field, req.query_params.get(field, ''), groups, label=label))
+
     @app.post('/insights/runs')
     async def insights_start(req: Request) -> Response:
         form = await req.form()
         rejected = request_rejected(req, form)
         directory = get_insights_runs_dir()
-        if rejected:
-            return _html(new_run_page(error=rejected), 403)
-        custom_labels_raw = str(form.get('custom_labels_json', '[]'))
         try:
-            custom_labels = json.loads(custom_labels_raw)
-            if not isinstance(custom_labels, list):
-                raise TypeError('Custom questions must be a JSON list.')
-            spec = await asyncio.to_thread(
-                InsightsLaunchSpec.model_validate,
-                {
-                    'name': form.get('name', ''),
-                    'source': form.get('source', 'recent'),
-                    'query': form.get('query', ''),
-                    'finder_export': form.get('finder_export', ''),
-                    'snapshot_path': form.get('snapshot_path', ''),
-                    'source_name': form.get('source_name', ''),
-                    'window_days': form.get('window_days', 7),
-                    'limit': form.get('limit', 100),
-                    'facets': {name: form.getlist(f'facet_{name}') for name in FACET_NAMES},
-                    'parallelism': form.get('parallelism', 20),
-                    'labels': form.getlist('labels'),
-                    'coding_labels': form.getlist('coding_labels'),
-                    'custom_labels': custom_labels,
-                    'dimensions': form.getlist('dimensions'),
-                    'coding_analysis': form.get('coding_analysis') == 'on',
-                },
-            )
+            values = RunFormValues.from_form(form)
+            unreadable = None
+        except ValueError as exc:
+            values = replace(RunFormValues.defaults(), mount='dialog' if form.get('mount') == 'dialog' else 'page')
+            unreadable = _validation_message(exc)
+        if rejected:
+            return _run_form_response(values, rejected, 403)
+        if unreadable:
+            return _run_form_response(values, unreadable, 422)
+        try:
+            spec = await asyncio.to_thread(InsightsLaunchSpec.model_validate, values.launch_fields())
         except (ValidationError, ValueError, TypeError) as exc:
-            message = (
-                '; '.join(error['msg'] for error in exc.errors()) if isinstance(exc, ValidationError) else str(exc)
-            )
-            return _html(new_run_page(error=message), 422)
+            return _run_form_response(values, _validation_message(exc), 422)
         try:
             auth = selected_dashboard_auth(req.app)
             identity = await asyncio.to_thread(auth_identity, auth, req.app.state.finder_settings)
         except (RuntimeError, ValueError) as exc:
-            return _html(new_run_page(error=str(exc)), 422)
+            return _run_form_response(values, str(exc), 422)
+        model_error = await _model_rejection(auth, spec)
+        if model_error:
+            return _run_form_response(values, model_error, 422)
         run_id = await asyncio.to_thread(
             launch_insights, spec, directory, auth_method=auth.method, auth_identity=identity
         )
@@ -416,9 +556,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             return _html('<h1>Insights run not found</h1>', 404)
         _, run = resolved
         if isinstance(run, InsightsRun):
-            return _html(
-                review_page(run, manifest=manifests.get(run.run_id), rerun=req.query_params.get('rerun') == '1')
-            )
+            return _html(review_page(run, manifest=manifests.get(run.run_id)))
         if run in ('running', 'error', 'cancelled', 'completed') and run_id in manifests:
             return _html(running_page(run_id, manifests[run_id].run_name, manifests[run_id]))
         return _html(unreadable_page(str(run)))

@@ -753,13 +753,12 @@ MODEL_FIELDS = {
 }
 
 
-def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
+def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, label: str) -> str:
     """A two-level model menu (provider, then model) with a Custom free-text entry.
 
     Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
     Without a catalogue the field stays a plain text box.
     """
-    label = MODEL_FIELDS[name]
     if not groups:
         return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
     known = any(value in ids for ids in groups.values())
@@ -937,7 +936,7 @@ def settings_body(
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
         control = (
             f'<span hx-get="/settings/models?field={name}&amp;{esc(profile_query)}" hx-trigger="load" '
-            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {})}</span>'
+            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {}, label=label)}</span>'
         )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'

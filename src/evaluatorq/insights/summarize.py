@@ -35,6 +35,9 @@ if TYPE_CHECKING:
     from evaluatorq.insights.usage import UsageLedger
     from evaluatorq.trace_finder.models import TraceRecord
 
+# Output cap for one summary call; `estimate.py` prices a summary and its embedding from it.
+SUMMARY_MAX_TOKENS = 4096
+
 # Ported from `trace_intelligence/core/summarization.py::DEFAULT_SUMMARY_PROMPT`.
 # The scalar fields upstream packed into this schema (`user_frustration`,
 # `customer_satisfaction`, `made_errors`, `concerning_score`, `sentiment`) are
@@ -114,7 +117,7 @@ async def _summarize_one(
                 model=model,
                 messages=messages,
                 response_format=TraceSummary,
-                max_tokens=4096,
+                max_tokens=SUMMARY_MAX_TOKENS,
                 label='insights.summary',
             )
         except Exception as exc:  # noqa: BLE001 - a per-trace failure must never fail the run
