@@ -431,13 +431,15 @@ def test_dashboard_shutdown_closes_finder_stores(tmp_path: Path, monkeypatch: py
 
 
 def test_settings_page_shows_saved_values(client: TestClient, settings_file: Path) -> None:
-    settings = DashboardSettings(
-        compiler_model='saved/compiler',
-        classifier_model='saved/classifier',
-        apply_model='saved/apply',
-        window_days=11,
-        limit=123,
-        parallelism=19,
+    settings = DashboardSettings.model_validate(
+        {
+            'compiler_model': 'saved/compiler',
+            'classifier_model': 'saved/classifier',
+            'apply_model': 'saved/apply',
+            'window_days': 11,
+            'limit': 123,
+            'parallelism': 19,
+        }
     )
     save_settings(settings, settings_file)
 

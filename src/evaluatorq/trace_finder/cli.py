@@ -17,6 +17,7 @@ from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_roles import set_cli_models
 from evaluatorq.common.orq_client import (
     DEFAULT_ORQ_BASE_URL,
     OrqProfile,
@@ -307,9 +308,14 @@ def find(
         'window_days': window_days,
         'limit': limit,
         'parallelism': parallelism,
-        'compiler_model': compiler_model,
-        'classifier_model': classifier_model,
     })
+    set_cli_models(
+        overrides={
+            task: model
+            for task, model in (('finder.compiler', compiler_model), ('finder.classifier', classifier_model))
+            if model
+        }
+    )
     orq = None
     try:
         saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None

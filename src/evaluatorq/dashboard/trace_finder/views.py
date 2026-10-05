@@ -7,6 +7,7 @@ import shlex
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.apply_ui import drawer as drawer_shell
 from evaluatorq.dashboard.security import csrf_field
@@ -1120,7 +1121,7 @@ def run_status(snapshot: RunSnapshot, settings: DashboardSettings, *, has_explor
     show_only_url = '/find/rows?quick_view=matches' if has_explorer else None
     return (
         f'<div id="{RUN_STATUS_ID}">{indicator}'
-        f'{progress(snapshot, classifier_model=settings.classifier_model, show_only_url=show_only_url)}{details}</div>'
+        f'{progress(snapshot, classifier_model=role_model("classifier", task="finder.classifier"), show_only_url=show_only_url)}{details}</div>'
     )
 
 

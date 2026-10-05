@@ -157,11 +157,15 @@ else:
 # Pipeline defaults (mirrored from redteam.contracts for shared use)
 # ---------------------------------------------------------------------------
 
-# The one default model. Red team reads it directly; simulation, the jury and
-# the dashboard's apply flow alias it as DEFAULT_MODEL, DEFAULT_JUDGE_MODEL and
-# DEFAULT_APPLY_MODEL. Provider-prefixed for the Orq router; a caller pointing
-# at OpenAI directly overrides with the bare id.
-DEFAULT_PIPELINE_MODEL: str = 'openai/gpt-5.6-luna'
+# Built-in model per role. `evaluatorq.common.model_roles.role_model` resolves the
+# configured model for a role at call time; these are its last fallback.
+DEFAULT_FAST_MODEL: str = 'openai/gpt-5.6-luna'
+DEFAULT_SMART_MODEL: str = 'openai/gpt-6-luna'
+DEFAULT_CLASSIFIER_MODEL: str = 'typesafe/jev-latest'
+DEFAULT_EMBEDDING_MODEL: str = 'openai/text-embedding-3-small'
+# The fast built-in, kept so existing imports keep working. New code asks
+# `role_model` instead, so settings and env vars apply.
+DEFAULT_PIPELINE_MODEL: str = DEFAULT_FAST_MODEL
 # Completion-token budget per call, shared by red team and simulation. On a
 # reasoning model this covers hidden reasoning as well as the visible answer,
 # which is why 5000 stopped being enough when the default model became one.
@@ -1836,7 +1840,11 @@ class RunManifest(BaseModel):
 
 
 __all__ = [
+    'DEFAULT_CLASSIFIER_MODEL',
+    'DEFAULT_EMBEDDING_MODEL',
+    'DEFAULT_FAST_MODEL',
     'DEFAULT_PIPELINE_MODEL',
+    'DEFAULT_SMART_MODEL',
     'DEFAULT_TARGET_MAX_TOKENS',
     'DEFAULT_TARGET_TIMEOUT_MS',
     'EVAL_ERROR_RAW_OUTPUT_KEY',

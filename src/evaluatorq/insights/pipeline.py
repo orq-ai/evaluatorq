@@ -17,6 +17,7 @@ from loguru import logger
 
 from evaluatorq import __version__
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.insights.cache import InsightsCache
@@ -451,8 +452,8 @@ async def insights(  # noqa: C901
         if limit_value < 1:
             raise ValueError(f'{limit_name} must be positive')
     settings = effective_settings()
-    compiler_model = compiler_model or settings.compiler_model
-    classifier_model = classifier_model or settings.classifier_model
+    compiler_model = compiler_model or role_model('fast', task='finder.compiler')
+    classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
     run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()

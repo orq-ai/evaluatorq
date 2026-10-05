@@ -587,7 +587,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     ):
         override = os.environ.get(env_name, '').strip()
         if override and values[name] == override:
-            values[name] = getattr(current, name)
+            values[name] = getattr(current, name, '')
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
     method = form_data.get('orq_auth_method')
     if method is None and 'orq_profile' in form_data:

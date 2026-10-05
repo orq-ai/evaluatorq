@@ -43,12 +43,12 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.reports import esc
 from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
 from evaluatorq.dashboard.security import _CSRF_TOKEN as _SECURITY_CSRF_TOKEN
 from evaluatorq.dashboard.security import CSRF_FIELD as _SECURITY_CSRF_FIELD
 from evaluatorq.dashboard.security import csrf_field, request_rejected
-from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -105,7 +105,7 @@ DEFAULT_APPLY_MODEL = DEFAULT_PIPELINE_MODEL
 
 def apply_model() -> str:
     """The model used to merge recommendations into agent instructions."""
-    return effective_settings().apply_model
+    return role_model('smart', task='apply')
 
 
 # ---------------------------------------------------------------------------
