@@ -408,10 +408,10 @@ async def insights(  # noqa: C901
     max_clusters: int = 15,
     max_subclusters: int = 15,
     outlier_zscore: float | None = None,
-    summary_model: str = 'openai/gpt-6-luna',
+    summary_model: str | None = None,
     classifier_model: str | None = None,
     compiler_model: str | None = None,
-    embedding_model: str = 'openai/text-embedding-3-small',
+    embedding_model: str | None = None,
     priority_dimension: DimensionName = 'intent',
     parallelism: int = 100,
     cache: bool = True,
@@ -454,6 +454,8 @@ async def insights(  # noqa: C901
     settings = effective_settings()
     compiler_model = compiler_model or role_model('fast', task='finder.compiler')
     classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
+    summary_model = summary_model or role_model('smart', task='insights.summary')
+    embedding_model = embedding_model or role_model('embedding', task='insights.embedding')
     run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()

@@ -228,9 +228,9 @@ def insights_cmd(
         typer.Option('--outlier-zscore', min=0, help='Move far-away traces to noise using this z-score.'),
     ] = None,
     summary_model: Annotated[
-        str,
-        typer.Option('--summary-model', help='Model used to summarize each trace.'),
-    ] = 'openai/gpt-6-luna',
+        str | None,
+        typer.Option('--summary-model', help='Model used to summarize each trace. Defaults to the smart model role.'),
+    ] = None,
     classifier_model: Annotated[
         str | None,
         typer.Option(
@@ -239,9 +239,12 @@ def insights_cmd(
         ),
     ] = None,
     embedding_model: Annotated[
-        str,
-        typer.Option('--embedding-model', help='Model used to embed discovered-dimension text.'),
-    ] = 'openai/text-embedding-3-small',
+        str | None,
+        typer.Option(
+            '--embedding-model',
+            help='Model used to embed discovered-dimension text. Defaults to the embedding model role.',
+        ),
+    ] = None,
     priority_dimension: Annotated[
         str | None,
         typer.Option(

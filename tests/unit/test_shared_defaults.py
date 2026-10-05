@@ -33,7 +33,7 @@ def test_dashboard_apply_default_model_is_the_shared_one():
     # dashboard extra, and this invariant must not go unchecked in a core run.
     apply_ui = pytest.importorskip('evaluatorq.dashboard.apply_ui')
 
-    assert apply_ui.DEFAULT_APPLY_MODEL == DEFAULT_PIPELINE_MODEL
+    assert apply_ui.DEFAULT_APPLY_MODEL == DEFAULT_SMART_MODEL
 
 
 def test_simulation_token_budget_is_the_shared_one():
