@@ -28,7 +28,7 @@ When you open `/traces`, the backend begins loading up to 200 trace summaries fr
 
 The initial trace request returns summaries for the table (status, timing, tokens, cost, and models). While summaries load, the dashboard warms trajectory data for the first page of up to 100 rows. The table reports summary completion as soon as those rows arrive; Trajectories shows loading placeholders and polls until its first page is ready. Later pages load trajectory data when you open them, and message content for the drawer loads when you open a row.
 
-On **Traces**, the totals strip and the compact **By model** summary use the rows currently shown, so errors, AI matches, facets, and within-results narrowing update both. A trace with more than one model counts under each model, but its trace-level cost is left unknown because the total cannot be attributed to one model. Costs also show as unknown when a trace has no cost or when currencies are missing or mixed.
+On **Traces**, the totals strip uses the rows currently shown, so errors, AI matches, facets, and within-results narrowing update it. To see one model's trace count and cost, filter by that model.
 
 ## The table and the Columns menu
 

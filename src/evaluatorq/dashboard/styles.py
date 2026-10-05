@@ -33,11 +33,6 @@ _TRACES_DENSITY_CSS = """
 .finder:has(> .finder-command) .xr-toolbar { order:-1; }
 .finder:has(> .finder-command) .xr-status { order:0; min-height:32px; padding:0 16px; border-bottom:1px solid #ebebed; font-size:11px; }
 .finder:has(> .finder-command) .xr-totals { order:0; padding:6px 16px; border-bottom-color:#ebebed; }
-.finder:has(> .finder-command) .xr-model-groups { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 14px; padding:5px 16px 7px; border-bottom:1px solid #ebebed; color:#25232e; font-size:11px; font-variant-numeric:tabular-nums; }
-.finder:has(> .finder-command) .xr-model-heading { color:#686a74; font-size:10px; font-weight:650; }
-.finder:has(> .finder-command) .xr-model-groups ul { display:flex; flex-wrap:wrap; gap:5px 14px; margin:0; padding:0; list-style:none; }
-.finder:has(> .finder-command) .xr-model-groups li { display:flex; gap:5px; }
-.finder:has(> .finder-command) .xr-model-name { font-weight:650; }
 .finder:has(> .finder-command) .xr-totals { align-items:center; gap:4px 17px; min-height:34px; padding:4px 16px; }
 .finder:has(> .finder-command) .xr-total { display:inline-flex; flex:0 0 auto; align-items:center; gap:5px; min-width:0; padding:2px 0; border:0; background:transparent; }
 .finder:has(> .finder-command) .xr-total-mark { display:grid; flex:none; place-items:center; width:17px; height:17px; border-radius:4px; background:#edf0f5; color:#586783; font-size:11px; font-weight:700; }
