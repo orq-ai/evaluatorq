@@ -146,9 +146,14 @@ class TestPublishedCost:
 
     def test_the_published_tokens_are_the_ones_the_figures_were_costed_at(self):
         """The figures mean nothing without the item they are per, so tie the two together."""
-        seat = judge_rates('openai/gpt-5.6-luna')
+        router_id = PRESETS['Balanced Trio'].judges[0]
+        seat = judge_rates(router_id)
         assert seat is not None
-        alone = JuryPreset(**_preset(judges=(('openai/gpt-5.6-luna',) * 1), estimated_cost_per_1k=0.0))
+        alone = JuryPreset(**_preset(
+            judges=(router_id,),
+            reserve_judges=PRESETS['Balanced Trio'].reserve_judges,
+            estimated_cost_per_1k=0.0,
+        ))
         expected = (seat.input_rate * ESTIMATED_PROMPT_TOKENS + seat.output_rate * ESTIMATED_COMPLETION_TOKENS) / 1_000
 
         assert alone.cost_per_1k() == pytest.approx(expected, abs=0.005)

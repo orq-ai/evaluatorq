@@ -52,11 +52,6 @@
       "output_rate": 1.25,
       "default_reasoning_effort": "none"
     },
-    "openai/gpt-5.6-luna": {
-      "input_rate": 0.2,
-      "output_rate": 1.2,
-      "default_reasoning_effort": "medium"
-    },
     "openai/gpt-5.6-sol": {
       "input_rate": 4.0,
       "output_rate": 20.0,
@@ -65,6 +60,11 @@
     "openai/gpt-5.6-terra": {
       "input_rate": 2.0,
       "output_rate": 12.0,
+      "default_reasoning_effort": "medium"
+    },
+    "openai/gpt-6-luna": {
+      "input_rate": 0.1,
+      "output_rate": 0.5,
       "default_reasoning_effort": "medium"
     },
     "wafer/Kimi-K3": {

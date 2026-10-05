@@ -18,11 +18,13 @@ Costs are USD per 1,000 pointwise items at 1,500 input and 1,500 output tokens, 
 
 | Preset | Judges | Aggregation | $ / 1k | Reserve |
 | --- | --- | --- | --- | --- |
-| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-5.6-luna`<br>`google/gemini-3.6-flash` | majority | 17.56 | `deepseek/deepseek-flash` |
+| **Balanced Trio** (default) | `deepseek/deepseek-v4-pro`<br>`openai/gpt-6-luna`<br>`google/gemini-3.6-flash` | majority | 16.36 | `deepseek/deepseek-flash` |
 | **Strong Jury** | `anthropic/claude-opus-5-5`<br>`openai/gpt-5.6-sol`<br>`google/gemini-3.6-flash` | majority | 85.50 | `deepseek/deepseek-v4-pro` |
 | **Open-Weight / Portable** | `deepseek/deepseek-v4-pro`<br>`wafer/Kimi-K3`<br>`zai/glm-5.2` | majority | 34.28 | `minimax/MiniMax-M2.7` |
 | **EU Region** | `aws/eu.anthropic.claude-haiku-4-5-20251001-v1:0`<br>`google/eu.gemini-3.5-flash`<br>`azure/eu.gpt-5.6-luna` | majority | 27.75 | `google/eu.claude-sonnet-5` |
-| **Single-Provider Trio** | `openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-5.6-luna` | majority | 59.10 | `openai/gpt-5.4-nano` |
+| **Single-Provider Trio** | `openai/gpt-5.6-sol`<br>`openai/gpt-5.6-terra`<br>`openai/gpt-6-luna` | majority | 57.90 | `openai/gpt-5.4-nano` |
+
+Balanced Trio and Single-Provider Trio use GPT-6 Luna at its `medium` default. On the same Artificial Analysis Intelligence Index v4.3.2, [GPT-6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-6-luna-medium) scores 29.93 against [GPT-5.6 Luna (Medium)](https://artificialanalysis.ai/models/gpt-5-6-luna-medium)'s 25.04, while Orq's captured rates fall from $0.20/$1.20 to $0.10/$0.50 per million input/output tokens. Do not compare these scores with the older index values still present on some catalogue cards. The EU preset keeps its EU-hosted GPT-5.6 Luna seat; the US-hosted successor is not a residency-compatible replacement.
 
 ## Which one to pick
 

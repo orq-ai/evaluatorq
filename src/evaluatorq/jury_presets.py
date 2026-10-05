@@ -218,14 +218,14 @@ BALANCED_TRIO = JuryPreset(
     name='Balanced Trio',
     judges=(
         'deepseek/deepseek-v4-pro',
-        'openai/gpt-5.6-luna',
+        'openai/gpt-6-luna',
         'google/gemini-3.6-flash',
     ),
     # Same lineage as the seat it backs, so a promotion keeps the panel at three
     # families.
     reserve_judges=('deepseek/deepseek-flash',),
     use_when='Default subjective eval. Three families, three error surfaces.',
-    estimated_cost_per_1k=17.56,
+    estimated_cost_per_1k=16.36,
 )
 
 STRONG_JURY = JuryPreset(
@@ -274,7 +274,7 @@ SINGLE_PROVIDER_TRIO = JuryPreset(
     judges=(
         'openai/gpt-5.6-sol',
         'openai/gpt-5.6-terra',
-        'openai/gpt-5.6-luna',
+        'openai/gpt-6-luna',
     ),
     reserve_judges=('openai/gpt-5.4-nano',),
     use_when=(
@@ -283,7 +283,7 @@ SINGLE_PROVIDER_TRIO = JuryPreset(
         'family diversity: errors correlate and OpenAI-generated outputs face a '
         'self-preference risk the panel cannot vote away.'
     ),
-    estimated_cost_per_1k=59.1,
+    estimated_cost_per_1k=57.9,
 )
 
 PRESETS: MappingProxyType[str, JuryPreset] = MappingProxyType({
