@@ -341,28 +341,35 @@
     }
   });
 
-  // Delegated so the finder handlers survive HTMX fragment swaps.
-  document.body.addEventListener('focusin', function (evt) {
-    const query = evt.target.closest('.finder-command-textarea[data-finder-placeholders]');
-    if (!query) return;
-    query.dataset.finderPlaceholderDismissed = 'true';
-    query.placeholder = '';
-  });
-  window.setInterval(function () {
-    document.querySelectorAll('.finder-command-textarea[data-finder-placeholders]').forEach(function (query) {
-      if (query.dataset.finderPlaceholderDismissed === 'true' || query.value || document.activeElement === query) return;
-      try {
-        const placeholders = JSON.parse(query.dataset.finderPlaceholders || '[]');
-        if (!Array.isArray(placeholders) || placeholders.length < 2) return;
-        const index = (Number(query.dataset.finderPlaceholderIndex || 0) + 1) % placeholders.length;
-        query.dataset.finderPlaceholderIndex = String(index);
-        query.placeholder = placeholders[index];
-      } catch (_error) {
-        query.dataset.finderPlaceholderDismissed = 'true';
-      }
+  // Keep only complete example buttons in the question field, including after resizing.
+  function fitFinderExamples(row) {
+    if (!row.getClientRects().length) return;
+    const buttons = Array.from(row.querySelectorAll('button'));
+    buttons.forEach(function (button) { button.hidden = false; });
+    const right = row.getBoundingClientRect().right;
+    let full = false;
+    buttons.forEach(function (button) {
+      if (button.getBoundingClientRect().right > right) full = true;
+      button.hidden = full;
     });
-  }, 4000);
+  }
+  const finderExamplesObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(function (entries) {
+    entries.forEach(function (entry) { fitFinderExamples(entry.target); });
+  });
+  function initFinderExamples() {
+    document.querySelectorAll('.finder-command-examples').forEach(function (row) {
+      fitFinderExamples(row);
+      if (finderExamplesObserver) finderExamplesObserver.observe(row);
+    });
+  }
+  document.addEventListener('DOMContentLoaded', initFinderExamples);
+  document.body.addEventListener('htmx:afterSettle', function () {
+    if (finderExamplesObserver) finderExamplesObserver.disconnect();
+    initFinderExamples();
+  });
+  if (document.fonts) document.fonts.ready.then(initFinderExamples);
 
+  // Delegated so the finder handlers survive HTMX fragment swaps.
   document.body.addEventListener('click', function (evt) {
     const example = evt.target.closest('[data-finder-example]');
     if (example) {
@@ -372,6 +379,13 @@
         query.focus();
         query.dispatchEvent(new Event('input', { bubbles: true }));
       }
+      return;
+    }
+
+    const questionField = evt.target.closest('.finder-command-query .col');
+    if (questionField) {
+      const query = questionField.querySelector('.finder-command-textarea');
+      if (query) query.focus();
       return;
     }
 
