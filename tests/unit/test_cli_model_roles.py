@@ -156,5 +156,6 @@ def test_redteam_options_leave_models_unset_by_default() -> None:
         max_tool_continuations=0,
         target_reasoning_effort=None,
     )
-    assert 'model' not in opts.config.attacker.model_fields_set
+    # The CLI passes no model; LLMConfig resolves the attacker's from the smart role.
+    assert opts.config.attacker.model == role_model('smart', task='redteam.attacker')
     assert 'model' not in opts.config.evaluator.model_fields_set
