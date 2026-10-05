@@ -947,7 +947,7 @@ async def test_models_by_provider_embedding_kind_lists_only_embedding_models(mon
         {'model_id': 'embed-v4', 'provider': 'cohere', 'model_type': 'embedding', 'input_cost': 1, 'output_cost': 0},
         {'model_id': 'gpt-5.6-luna', 'provider': 'openai', 'model_type': 'chat', 'input_cost': 1, 'output_cost': 1},
     ]
-    catalogue = pricing._parse_catalogue(entries)  # pyright: ignore[reportPrivateUsage]
+    catalogue = pricing._parse_catalogue(entries)
 
     async def load(client: object = None) -> dict[str, ModelInfo]:
         return catalogue

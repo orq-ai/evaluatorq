@@ -273,8 +273,8 @@ class RunFormValues:
         return cls(
             source=source,
             query=str(population.get('query') or ''),
-            window_days=int(population.get('window_days', 7)),  # type: ignore[call-overload]
-            limit=int(population.get('limit', 500)),  # type: ignore[call-overload]
+            window_days=int(population.get('window_days', 7)),
+            limit=int(population.get('limit', 500)),
             facets=FacetSelection.model_validate(population.get('facets') or {}),
             dimensions=tuple(run.config.dimensions),
             labels=tuple(name for name in LABEL_PRESETS if name in configured),
@@ -300,12 +300,12 @@ class RunFormValues:
         """Parse the form fields from `FormData` or query parameters; raises `ValueError` on malformed numbers or JSON."""
         mount: Mount = 'dialog' if form.get('mount') == 'dialog' else 'page'
         return cls(
-            source=str(form.get('source') or 'recent'),  # type: ignore[arg-type]
+            source=str(form.get('source') or 'recent'),
             query=str(form.get('query') or ''),
             window_days=_whole_number(form, 'window_days', 7, 'Window'),
             limit=_whole_number(form, 'limit', 100, 'Trace limit'),
             facets=FacetSelection.model_validate({name: _getlist(form, f'facet_{name}') for name in FACET_NAMES}),
-            dimensions=tuple(_getlist(form, 'dimensions')),  # type: ignore[arg-type]
+            dimensions=tuple(_getlist(form, 'dimensions')),
             labels=tuple(_getlist(form, 'labels')),
             coding_labels=tuple(_getlist(form, 'coding_labels')),
             custom_labels=_custom_labels(str(form.get('custom_labels_json') or '[]')),

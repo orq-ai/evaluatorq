@@ -740,6 +740,7 @@ test('Picking a model from a list tells the form the hidden value changed', () =
   const sub = { getAttribute: () => 'model' };
   const classes = { contains: () => true, toggle() {} };
   const option = {
+    hasAttribute: () => false,
     classList: classes,
     getAttribute: name => (name === 'data-model' ? 'gpt-5.6-luna' : null),
     setAttribute() {},
