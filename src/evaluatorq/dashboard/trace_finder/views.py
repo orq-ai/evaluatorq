@@ -1072,8 +1072,8 @@ def body(
             'Apply filters only</button></div>'
         )
     if snapshot.state == 'idle':
-        unavailable = field(snapshot, api_available=False) if not api_available else ''
-        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}{unavailable}'
+        # The dot field is Trace search's canvas; Traces shows the auth error banner instead.
+        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}'
     controls_html = controls(
         snapshot,
         settings,

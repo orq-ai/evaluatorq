@@ -1516,15 +1516,17 @@
       const scope = document.getElementById('finder-scope');
       const within = scope?.querySelector('input[name="scope"][value="within"]');
       const fresh = scope?.querySelector('input[name="scope"][value="new"]');
+      // Rows exist now, so Within results is always usable; only the auto-select waits on the user not having chosen.
+      if (within) within.disabled = false;
       if (scope?.getAttribute('data-auto-scope') === 'pending' && within && fresh) {
-        within.disabled = false;
         within.checked = true;
         fresh.checked = false;
         scope.removeAttribute('data-auto-scope');
       }
     }
   });
-  document.body.addEventListener('click', function (evt) {
+  // `change`, not `click`: a click on the still-disabled Within results is not a choice and must not cancel the auto-select.
+  document.body.addEventListener('change', function (evt) {
     if (evt.target.closest('#finder-scope')) {
       document.getElementById('finder-scope')?.removeAttribute('data-auto-scope');
     }

@@ -464,6 +464,36 @@ test('overlapping explorer OOB swaps restore each captured table state in order'
   assert.equal(secondReplacement.rows.get('row-second').classList.contains('sel'), true);
 });
 
+test('initial load enables Within results even after a click on it while it was disabled', () => {
+  function scopeGroup() {
+    const attributes = { 'data-auto-scope': 'pending' };
+    const within = { disabled: true, checked: false };
+    const fresh = { disabled: false, checked: true };
+    return {
+      within, fresh,
+      getAttribute(name) { return attributes[name] ?? null; },
+      removeAttribute(name) { delete attributes[name]; },
+      querySelector(selector) { return selector.includes('"within"') ? within : selector.includes('"new"') ? fresh : null; },
+    };
+  }
+  const results = { id: 'explorer-results', hasAttribute: name => name === 'data-initial-load' };
+  const inScope = { matches: () => false, closest: selector => (selector === '#finder-scope' ? {} : null) };
+
+  // A click on the disabled radio is not a choice: the auto-select still applies.
+  let scope = scopeGroup();
+  let app = loadDashboard({ elements: new Map([['finder-scope', scope], ['explorer-results', results]]) });
+  app.body.emit('click', { target: inScope });
+  app.body.emit('htmx:oobAfterSwap', { detail: { target: results } });
+  assert.deepEqual([scope.within.disabled, scope.within.checked, scope.fresh.checked], [false, true, false]);
+
+  // A real choice of New search keeps it, but Within results still becomes usable.
+  scope = scopeGroup();
+  app = loadDashboard({ elements: new Map([['finder-scope', scope], ['explorer-results', results]]) });
+  app.body.emit('change', { target: inScope });
+  app.body.emit('htmx:oobAfterSwap', { detail: { target: results } });
+  assert.deepEqual([scope.within.disabled, scope.within.checked, scope.fresh.checked], [false, false, true]);
+});
+
 test('drawer history restores a prior view and closes after its exit animation', () => {
   const dialogEvents = emitter();
   const content = { innerHTML: '' };

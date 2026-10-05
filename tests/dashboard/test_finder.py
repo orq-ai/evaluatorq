@@ -612,6 +612,20 @@ def test_find_without_api_key_renders_empty_state(monkeypatch: pytest.MonkeyPatc
     assert '<span class="finder-key-hint"' not in response.text
 
 
+def test_traces_without_api_key_shows_auth_error_not_search_canvas(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
+    app = build_app(roots=[tmp_path])
+    app.state.finder_unavailable_reason = 'stale resolver error from another surface'
+    client = TestClient(app, raise_server_exceptions=True)
+    response = client.get('/traces')
+    assert response.status_code == 200
+    assert 'Set ORQ_API_KEY to load traces' not in response.text
+    assert 'class="finder-field' not in response.text
+    assert 'ORQ_API_KEY is not set' in response.text
+    assert 'stale resolver error' not in response.text
+
+
 def test_find_run_starts_polling_and_completed_poll_shows_matches(setup_finder) -> None:
     store, client = setup_finder
     response = client.post('/find/run', data=csrf_data({'surface': 'search', 'query': 'frustrated customers', 'mode': 'immediate'}))

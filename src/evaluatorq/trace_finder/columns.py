@@ -71,8 +71,8 @@ def _time(row: TraceRow) -> str:
 
 def _trace(row: TraceRow) -> str:
     name = row.name or row.trace_id
-    agent = row.agent_name or '—'
-    return f'<span class="trace-name">{esc(name)}</span><small>{esc(agent)} · {esc(row.trace_id[:8])}</small>'
+    agent = f'{esc(row.agent_name)} · ' if row.agent_name else ''
+    return f'<span class="trace-name">{esc(name)}</span><small>{agent}{esc(row.trace_id[:8])}</small>'
 
 
 def _cache(row: TraceRow) -> str:
