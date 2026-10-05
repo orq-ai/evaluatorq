@@ -281,3 +281,17 @@ def test_encrypted_key_fails_closed_when_encryption_key_changes(monkeypatch: pyt
     with pytest.raises(RuntimeError, match='cannot be decrypted'):
         read_stored_api_key(encrypted)
     secure_credentials._encryption_key.cache_clear()
+
+
+def test_blank_task_override_does_not_block_legacy_migration() -> None:
+    settings = DashboardSettings.model_validate(
+        {'compiler_model': 'custom/compiler', 'model_overrides': {'finder.compiler': '  '}}
+    )
+    assert settings.model_overrides == {'finder.compiler': 'custom/compiler'}
+
+
+def test_non_blank_task_override_still_beats_legacy_value() -> None:
+    settings = DashboardSettings.model_validate(
+        {'compiler_model': 'custom/compiler', 'model_overrides': {'finder.compiler': 'mine/x'}}
+    )
+    assert settings.model_overrides == {'finder.compiler': 'mine/x'}

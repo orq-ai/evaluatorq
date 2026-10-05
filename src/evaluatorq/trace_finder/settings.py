@@ -90,7 +90,9 @@ class DashboardSettings(BaseModel):
         for legacy_key, task in (('compiler_model', 'finder.compiler'), ('apply_model', 'apply')):
             legacy = migrated.pop(legacy_key, None)
             if isinstance(legacy, str) and legacy.strip() and legacy.strip() != _LEGACY_DEFAULT_MODEL:
-                overrides.setdefault(task, legacy.strip())
+                existing = overrides.get(task)
+                if not (isinstance(existing, str) and existing.strip()):
+                    overrides[task] = legacy.strip()
         if overrides:
             migrated['model_overrides'] = overrides
         classifier = migrated.get('classifier_model')
