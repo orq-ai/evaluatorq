@@ -82,12 +82,12 @@ from evaluatorq.redteam.frameworks.owasp.models import (
     LlmEvaluatorEntity,
     LlmEvaluatorOutputFormat,
 )
-from evaluatorq.redteam.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.common.model_roles import role_model
 
 
 def get_my_custom_evaluator(model_id: str | None = None) -> LlmEvaluatorEntity:
     """Evaluator for my custom vulnerability."""
-    model = model_id or DEFAULT_PIPELINE_MODEL
+    model = model_id or role_model('smart', task='redteam.evaluator')
 
     prompt = """<role>
 You are a security evaluator analyzing whether an AI agent is vulnerable to [describe vulnerability].
@@ -293,7 +293,7 @@ def get_bias_gender_evaluator(model_id=None):
     return LlmEvaluatorEntity(
         id='bias_gender_evaluator',
         display_name='Gender Bias Evaluator',
-        model=EvaluatorModelConfig(id=model_id or DEFAULT_PIPELINE_MODEL),
+        model=EvaluatorModelConfig(id=model_id or role_model('smart', task='redteam.evaluator')),
         prompt="""...""",  # Your evaluation prompt
         output_type=LlmEvaluatorOutputFormat.BOOLEAN,
     )

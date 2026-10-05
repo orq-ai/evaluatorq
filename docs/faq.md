@@ -53,7 +53,7 @@ You need an LLM key wherever a simulator, attacker, or judge LLM runs — `OPENA
 
 ### Which models run the simulator / attacker / judge — can I change them?
 
-They default to an LLM routed via `OPENAI_API_KEY` or `ORQ_API_KEY`. Override per surface: red teaming takes `llm_config=LLMConfig(attacker=..., evaluator=...)`, and simulation takes `llm_config=LLMCallConfig(...)` — one config for the user simulator, the judge, the generators, the recommendations pass and the executive summary. The CLI spells the model-only case as `--sim-model`.
+They default to model roles: the attacker and every judge run on the `smart` role (`openai/gpt-6-luna`), the simulated user on the `fast` role (`openai/gpt-5.6-luna`), routed via `OPENAI_API_KEY` or `ORQ_API_KEY`. Change a role for every surface at once with `EVALUATORQ_SMART_MODEL` or `EVALUATORQ_FAST_MODEL` (see [Configuration › Models](configuration.md#models)), or override per surface: red teaming takes `llm_config=LLMConfig(attacker=..., evaluator=...)`, and simulation takes `llm_config=LLMCallConfig(...)` — one config for the user simulator, the judge, the generators, the recommendations pass and the executive summary. The CLI spells the model-only case as `--sim-model`.
 
 ```python
 from evaluatorq.redteam import LLMConfig, LLMCallConfig

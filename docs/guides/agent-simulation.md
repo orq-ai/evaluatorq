@@ -536,7 +536,7 @@ To **extend** the coverage, call `extend_from_dataset()` with that same ID. It r
 
 Extension sends every distinct seed object to the model. A large dataset can make that prompt expensive or too long for the model's context window; use a smaller dataset of representative cases when generating new ones.
 
-This example uses `ORQ_API_KEY` from the setup above and the default simulation model, `openai/gpt-5.6-luna`. Replace the dataset ID and agent key with yours:
+This example uses `ORQ_API_KEY` from the setup above and the default generation model, the `fast` role (`openai/gpt-5.6-luna`). Replace the dataset ID and agent key with yours:
 
 ```python
 import asyncio

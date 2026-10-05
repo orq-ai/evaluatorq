@@ -202,27 +202,25 @@ The CLI and dashboard also accept minimum and maximum bounds explicitly.
 
 ## Settings and precedence
 
-The dashboard **Settings** page at `/settings` has separate **Models** and **Authentication** sections. Models contains the compiler model, classifier model, and apply-recommendations model. **Ask AI on traces** controls whether Ask AI on **Traces** classifies immediately (**Just proceed**, the default) or pauses on the compiled plan (**Review first**); runs over 500 loaded traces always pause for review. Save settings to `.evaluatorq/dashboard-settings.json`, or set `EVALUATORQ_DASHBOARD_SETTINGS` to another JSON file. The separate Trace search page has per-run window, limit, and parallelism controls; environment variables and saved settings provide their defaults. On Traces, the toolbar range and row limit drive New search, while Within results classifies every loaded trace across tabs and pages.
+The dashboard **Settings** page at `/settings` has separate **Models** and **Authentication** sections. Models contains the four model roles: fast, smart, classifier and embedding. **Ask AI on traces** controls whether Ask AI on **Traces** classifies immediately (**Just proceed**, the default) or pauses on the compiled plan (**Review first**); runs over 500 loaded traces always pause for review. Save settings to `.evaluatorq/dashboard-settings.json`, or set `EVALUATORQ_DASHBOARD_SETTINGS` to another JSON file. The separate Trace search page has per-run window, limit, and parallelism controls; environment variables and saved settings provide their defaults. On Traces, the toolbar range and row limit drive New search, while Within results classifies every loaded trace across tabs and pages.
 
 Authentication offers four sources for dashboard requests: **Environment** reads `ORQ_API_KEY` and `ORQ_BASE_URL` from the dashboard process; **CLI API-key profile** reuses a key and host from `orq auth profile list`; **CLI OAuth** uses a saved `orq auth login` session; and **Enter API key** stores a key you provide. **CLI OAuth** lists the logins from `orq auth sessions`, one per server, each with a status: **Valid**, **Signed out**, or **Couldn't check**. When a login's access token has expired, Settings asks the CLI to refresh it once with `orq auth whoami`, in the background after the page has loaded. A refresh that works marks it **Valid** and saves the new tokens, as the CLI's next call would. A rejected refresh marks it **Signed out**; run `orq auth login --server <url>` for that server. A timeout or network error shows **Couldn't check**. A login whose session file the CLI cannot read is listed as **Unreadable** and cannot be selected until you sign in to that server again. Without the `orq` CLI or any saved login, the picker becomes a server URL field. Settings remembers the selected method. The manually entered key is encrypted in the settings file, while its encryption key stays in macOS Keychain. On other platforms, set `EVALUATORQ_DASHBOARD_KEY_ENCRYPTION_KEY` to a Fernet key. The CLI handles OAuth token storage and refresh; evaluatorq does not copy or read the OAuth token. A startup toast links to Settings when the selected method needs action or its validity check could not reach Orq; a successful check stays quiet. The check calls Orq's trace-facet endpoint, so it confirms access to that endpoint and does not test model availability. The saved method stays active until you save another. If the selected credential is missing or rejected, the dashboard asks you to take action instead of switching to another source. CLI profiles without an accessible key remain unavailable. An apply preview must be made again if its credentials change before confirmation.
 
 Authentication has no workspace or project selector. Each method searches all projects accessible to its credential unless you choose a project facet for that run. Set `ORQ_WORKSPACE` for trace links when a run has no experiment URL; it is separate from authentication. Pass `--project` to choose a project facet for one `eq find` run. An explicit `--profile NAME` overrides the saved choice; without that flag, `eq find` uses the saved profile only when **CLI API-key profile** is selected in Settings, and otherwise uses `ORQ_API_KEY` and `ORQ_BASE_URL`. The dashboard's OAuth and manually entered API-key methods do not change credentials used by `eq find`.
 
-Settings resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. Trace search window, limit, and parallelism are set per run; Settings edits model defaults and Ask AI review mode. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
-
-
-Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
+Models resolve through the roles described under [Configuration › Models](configuration.md#models): the compiler runs on the `fast` role (`openai/gpt-5.6-luna` by default) and the classifier on the `classifier` role (`typesafe/jev-latest`). The `finder.compiler` and `finder.classifier` tasks pin either one alone. For the finder's other settings, values resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. Trace search window, limit, and parallelism are set per run; Settings edits the model roles and Ask AI review mode. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
 | Setting | Default | Environment variable |
 |---|---|---|
-| Compiler model | `openai/gpt-5.6-luna` | `EVALUATORQ_COMPILER_MODEL` |
+| Fast model (query compiler) | `openai/gpt-5.6-luna` | `EVALUATORQ_FAST_MODEL` |
 | Classifier model | `typesafe/jev-latest` | `EVALUATORQ_CLASSIFIER_MODEL` |
-| Apply-recommendations model | `openai/gpt-5.6-luna` | `EVALUATORQ_APPLY_MODEL` |
 | Trace search window default | 7 days (1–90) | `EVALUATORQ_FINDER_WINDOW_DAYS` |
 | Trace search limit default | 500 (max 5000) | `EVALUATORQ_FINDER_LIMIT` |
 | Trace search parallelism default | 100 (max 200) | `EVALUATORQ_FINDER_PARALLELISM` |
 
-The dashboard command accepts `--compiler-model`, `--classifier-model`, `--window-days`, `--limit`, and `--parallelism`; these override defaults for finder runs started by that process. Trace search lets you set the window, limit, and parallelism for each run.
+`EVALUATORQ_COMPILER_MODEL` still works as a deprecated override for the `finder.compiler` task and logs a warning once per process.
+
+The dashboard command accepts `--compiler-model`, `--classifier-model`, `--window-days`, `--limit`, and `--parallelism`; these override defaults for finder runs started by that process. `--compiler-model` pins the `finder.compiler` task; `--classifier-model` sets the whole classifier role. Trace search lets you set the window, limit, and parallelism for each run.
 
 ## CLI reference
 
@@ -249,8 +247,8 @@ For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
 | `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |
 | `--parallelism INTEGER` (`1`–`200`) | Concurrent classify calls. |
-| `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Default: `openai/gpt-5.6-luna`. |
-| `--classifier-model TEXT` | Model that classifies each trace through the Orq router. Default: `typesafe/jev-latest`. |
+| `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Pins the `finder.compiler` task; default is the `fast` role, `openai/gpt-5.6-luna`. |
+| `--classifier-model TEXT` | Model that classifies each trace through the Orq router. Pins the `finder.classifier` task; default is the `classifier` role, `typesafe/jev-latest`. |
 | `--json PATH` | Write the completed run export to `PATH`. |
 | `--positive-only` | Keep only matched trace records in `--json` exports; the terminal table already shows matches and keeps its full-run summary. |
 | `--project TEXT` | Project facet; repeatable. Restricts this run to matching projects. |

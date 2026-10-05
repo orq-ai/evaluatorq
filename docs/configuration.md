@@ -47,16 +47,108 @@ Head to [Getting Started](guides/getting-started.md) and run something.
 
 ## What to set first
 
-Four decisions cover almost every real configuration. The rest of this page is reference material you can read when you hit a specific need.
+Five decisions cover almost every real configuration. The rest of this page is reference material you can read when you hit a specific need.
 
 | Decision | Variable | Default | Notes |
 |---|---|---|---|
 | **Which backend runs my LLM calls?** | `ORQ_API_KEY` or `OPENAI_API_KEY` | — | Set one. `ORQ_API_KEY` unlocks datasets, deployments and tracing, and wins when both are set; `OPENAI_API_KEY` (plus `OPENAI_BASE_URL` for a non-OpenAI host) is the standalone route. |
 | **Where do run reports land?** | `EVALUATORQ_DIR` | `.evaluatorq` in the current directory | The run store that red teaming (`runs/`) and simulation (`sim-runs/`) write to, and that the [dashboard](dashboard.md) reads. |
 | **Do I want traces?** | `ORQ_DISABLE_TRACING` | off (traces enabled when `ORQ_API_KEY` **or** `OTEL_EXPORTER_OTLP_ENDPOINT` is set, and the `otel` extra is installed) | Set to `1`, `true`, `yes` or `on` to send nothing. Point traces elsewhere with `OTEL_EXPORTER_OTLP_ENDPOINT`. See [Tracing](tracing.md). |
+| **Which models run each step?** | `EVALUATORQ_FAST_MODEL`, `EVALUATORQ_SMART_MODEL` | `openai/gpt-5.6-luna`, `openai/gpt-6-luna` | Four model roles cover every LLM call evaluatorq makes. See [Models](#models). |
 | **Do dashboard links open my Orq workspace?** | `ORQ_WORKSPACE` | unset | Your workspace slug for runs without an experiment URL. Without one, their deep-link buttons are hidden. |
 
 Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI error into a full traceback, and `EVALUATORQ_CAPTURE_MESSAGE_CONTENT=false` keeps prompts and responses out of your spans.
+
+## Models
+
+A **model role** names a kind of work, and each role has one configured model. evaluatorq has four roles, and every LLM call it makes on your behalf belongs to one of them. Every role has a working default, so reach for this section when a run costs more than you want, when you are going OpenAI-direct, or when you want one model everywhere. A call that is handed an explicit model (`LLMCallConfig(model=...)`, `--attack-model`) ignores roles entirely.
+
+| Role | Built-in default | What runs on it |
+|---|---|---|
+| `fast` | `openai/gpt-5.6-luna` | The simulated user, simulation generators (persona, scenario, first message, datapoints, from-traces), the simulation recommendations pass and executive summary, and the trace-finder query compiler. |
+| `smart` | `openai/gpt-6-luna` | Red-team attack generation (attacker, objective and attack generators, the adaptive orchestrator, capability and blackbox classifiers) and the red-team executive summary, every judge and evaluator (red-team and OWASP evaluators, the simulation judge, the default `llm_jury()` panel), apply-recommendations, and Insights summaries. |
+| `classifier` | `typesafe/jev-latest` | Ask AI and trace-finder classification, Insights labels, and signal tool-role classification. |
+| `embedding` | `openai/text-embedding-3-small` | Insights embeddings. |
+
+The smart default is a larger model than the fast one, so red-team, simulation-judge and apply runs cost more than they did before roles existed. To keep the old model everywhere, set `EVALUATORQ_SMART_MODEL=openai/gpt-5.6-luna`.
+
+### Pin one task
+
+A **task** is one named use of a role. A task override pins that single use to a model and leaves the rest of the role alone. The keys are fixed.
+
+| Task | Role | What it covers |
+|---|---|---|
+| `redteam.attacker` | `smart` | Attack generation, including the adaptive orchestrator. |
+| `redteam.evaluator` | `smart` | Red-team and OWASP evaluators. |
+| `sim.user` | `fast` | The simulated user. |
+| `sim.judge` | `smart` | The simulation judge. |
+| `sim.generator` | `fast` | Persona, scenario, first-message and datapoint generation, simulation recommendations and executive summary. |
+| `finder.compiler` | `fast` | The trace-finder query compiler. |
+| `finder.classifier` | `classifier` | Ask AI and trace-finder classification. |
+| `apply` | `smart` | The dashboard's apply-recommendations merge. |
+| `insights.summary` | `smart` | Insights per-trace summaries. |
+| `insights.labels` | `classifier` | Insights label questions. |
+| `insights.embedding` | `embedding` | Insights embeddings. |
+| `signals` | `classifier` | Signal tool-role classification. |
+
+### How a model is chosen
+
+evaluatorq takes the first of these that is set, highest first:
+
+1. A per-command flag or an explicit `model=` argument, such as `--attack-model` or `LLMCallConfig(model=...)`.
+2. `--model-override TASK=MODEL` on the command line.
+3. A role flag: `--fast-model`, `--smart-model`, `--classifier-model` or `--embedding-model`.
+4. The deprecated task variables `EVALUATORQ_COMPILER_MODEL` (task `finder.compiler`) and `EVALUATORQ_APPLY_MODEL` (task `apply`).
+5. `model_overrides` for the task in the settings file.
+6. The role variable: `EVALUATORQ_FAST_MODEL`, `EVALUATORQ_SMART_MODEL` or `EVALUATORQ_CLASSIFIER_MODEL`. The embedding role has no variable.
+7. The role field in the settings file.
+8. The built-in default.
+
+A task override is more specific than a role, so a task override in the settings file beats a role variable. A variable that is empty or only whitespace counts as unset.
+
+### Set models in the settings file
+
+The dashboard Settings page and the trace finder read and write `.evaluatorq/dashboard-settings.json`, or the path in `EVALUATORQ_DASHBOARD_SETTINGS`. The same file feeds the library and the CLI. A role field left out, or `null`, means use the default.
+
+```json
+{
+  "smart_model": "openai/gpt-5.6-luna",
+  "embedding_model": "openai/text-embedding-3-large",
+  "model_overrides": {
+    "apply": "openai/gpt-6-luna",
+    "finder.compiler": "openai/gpt-5.6-luna"
+  }
+}
+```
+
+A file saved before roles existed still loads. Its `compiler_model` and `apply_model` become the `finder.compiler` and `apply` overrides when they differ from the old default `openai/gpt-5.6-luna`, and are dropped when they match it, so the old default is not frozen into your file. A `classifier_model` equal to `typesafe/jev-latest` is dropped the same way. An override for an unknown task or with a blank model is dropped with a warning, and the rest of the file still loads. The dashboard saves only what you chose in the form: a model that came from an environment variable or a CLI flag is never written back to the file.
+
+### Set models on the command line
+
+These options go before the subcommand, for example `eq --smart-model gpt-6-luna redteam run ...`.
+
+| Option | Sets |
+|---|---|
+| `--fast-model MODEL` | The `fast` role. |
+| `--smart-model MODEL` | The `smart` role. |
+| `--classifier-model MODEL` | The `classifier` role. |
+| `--embedding-model MODEL` | The `embedding` role. |
+| `--model-override TASK=MODEL` | One task from the table above. Repeatable. |
+
+An unknown task, or a pair without `=`, exits with an error that lists the valid tasks. Subcommands keep their own model flags (`--attack-model`, `--sim-model`, `--summary-model` and the others), which rank above everything here. `eq dashboard` and `eq find` also take `--compiler-model`, a `finder.compiler` override, and `--classifier-model`.
+
+### Go OpenAI-direct
+
+The built-in defaults are provider-prefixed because the default route is the Orq router, which resolves `provider/model`. With only `OPENAI_API_KEY` set, calls go straight to OpenAI, which rejects `openai/gpt-6-luna`. Set the bare ids on the two roles that run there, and the failure goes away for every command at once:
+
+```bash
+export OPENAI_API_KEY=...
+export EVALUATORQ_FAST_MODEL=gpt-5.6-luna
+export EVALUATORQ_SMART_MODEL=gpt-6-luna
+eq redteam run -t agent:my-agent
+```
+
+The classifier role defaults to a model served only by the Orq router, so Ask AI, `eq find`, Insights and the classify judge need `ORQ_API_KEY`.
 
 ## Full environment variable reference
 
@@ -69,6 +161,20 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 | `OPENAI_API_KEY` | Red-team / sim only, if not using Orq | — | API key for the OpenAI (or compatible) backend. Used by the red teaming pipeline and agent simulation when `ORQ_API_KEY` is absent. Not required for core `evaluatorq()` evaluation. |
 | `OPENAI_BASE_URL` | No | OpenAI default | Redirect OpenAI-compatible calls to a different host (vLLM, OpenRouter, Azure, local). Honoured by the red teaming LLM client. **Not** honoured on the simulation conversation path, which resolves its client with `honor_openai_base_url=False` — inject a pre-built client there instead. Simulation's post-run calls (recommendations and the executive summary) do honour it, because they resolve their own client at the default. |
 | `EVALUATORQ_CATALOGUE_TIMEOUT_S` | No | `30` | HTTP timeout in seconds for the `GET /v2/models` model-catalogue fetch, read once at import (unlike the three `EVALUATORQ_LLM_*` vars under [Simulation LLM defaults](#simulation-llm-defaults), which are read at call time). The catalogue supplies per-model prices, Responses support, and accepted reasoning-effort values. A failed fetch is **not** cached immediately: the first two failures leave the catalogue unloaded so a later call can still succeed, and only the third gives up and degrades the rest of the process to unpriced and chat-completions-only. Each failure logs a warning naming the attempt number. |
+
+### Model roles
+
+See [Models](#models) for what each role runs and the order they are resolved in.
+
+| Variable | Required? | Default | What it does |
+|---|---|---|---|
+| `EVALUATORQ_FAST_MODEL` | No | `openai/gpt-5.6-luna` | Model for the `fast` role: the simulated user, simulation generators, and the trace-finder compiler. |
+| `EVALUATORQ_SMART_MODEL` | No | `openai/gpt-6-luna` | Model for the `smart` role: red-team attacks, every judge and evaluator, apply-recommendations, and Insights summaries. Set it to `openai/gpt-5.6-luna` to restore the previous default. |
+| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Model for the `classifier` role: Ask AI and trace-finder classification, Insights labels, and signal tool-role classification. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
+| `EVALUATORQ_COMPILER_MODEL` | No | unset | **Deprecated.** Pins the `finder.compiler` task. Logs one warning per process. Use `--model-override finder.compiler=MODEL`, `model_overrides` in the settings file, or `EVALUATORQ_FAST_MODEL`. |
+| `EVALUATORQ_APPLY_MODEL` | No | unset | **Deprecated.** Pins the `apply` task. Logs one warning per process. Use `--model-override apply=MODEL`, `model_overrides` in the settings file, or `EVALUATORQ_SMART_MODEL`. |
+
+The embedding role has no variable; set it with `--embedding-model` or `embedding_model` in the settings file.
 
 ### Runs, storage and output
 
@@ -84,10 +190,7 @@ Two more worth knowing before you need them: `EQ_DEBUG=1` turns a one-line CLI e
 |---|---|---|---|
 | `ORQ_WORKSPACE` / `ORQ_WORKSPACE_SLUG` | No | unset | Workspace slug used to build dashboard deep-links into the Orq UI for runs without an experiment URL. `ORQ_WORKSPACE` wins over `ORQ_WORKSPACE_SLUG`. When neither is set, those deep-link buttons are hidden. See [Dashboard](dashboard.md). |
 | `ORQ_UI_BASE_URL` | No | Saved profile host, then `ORQ_BASE_URL`, then `https://my.orq.ai` | Base URL for dashboard deep-links into the Orq UI. Set this when the UI host differs from the selected profile's API host. |
-| `EVALUATORQ_APPLY_MODEL` | No | `openai/gpt-5.6-luna` | Model used by the dashboard's apply-recommendations merge. Shown in the dashboard config panel. See [Dashboard](dashboard.md). |
 | `EVALUATORQ_DASHBOARD_SETTINGS` | No | `.evaluatorq/dashboard-settings.json` | Path to the JSON file used for dashboard and trace-finder models and the selected authentication method. |
-| `EVALUATORQ_COMPILER_MODEL` | No | `openai/gpt-5.6-luna` | Trace-finder model that compiles a natural-language query into a semantic classifier task. Explicit CLI or dashboard overrides win. See [Trace finder](trace-finder.md). |
-| `EVALUATORQ_CLASSIFIER_MODEL` | No | `typesafe/jev-latest` | Classifier model used by the trace finder for facet selection and per-trace classification, and by opt-in signal tool-role classification. Trace-finder CLI or dashboard overrides win for that surface. See [Trace finder](trace-finder.md) and [Signals](signals.md). |
 | `EVALUATORQ_FINDER_WINDOW_DAYS` | No | `7` | Default number of recent days searched by the trace finder. Valid values are `1` through `90`. |
 | `EVALUATORQ_FINDER_LIMIT` | No | `500` | Default maximum number of traces selected for trace-finder classification. Valid values are `1` through `5000`. |
 | `EVALUATORQ_FINDER_PARALLELISM` | No | `100` | Default number of concurrent per-trace classify calls. Valid values are `1` through `200`. |

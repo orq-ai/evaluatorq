@@ -1,2 +1,2 @@
-!!! warning "Going OpenAI-direct? Override the model default"
-    Every model default is `openai/gpt-5.6-luna` — provider-prefixed, because the default route is the Orq router, which resolves `provider/model`. With only `OPENAI_API_KEY` set, calls go straight to OpenAI, which does **not** know that id and rejects it. Pass the bare `gpt-5.6-luna` (or any other OpenAI model id) on every model flag you use.
+!!! warning "Going OpenAI-direct? Override the model roles"
+    The default fast and smart models are `openai/gpt-5.6-luna` and `openai/gpt-6-luna` — provider-prefixed, because the default route is the Orq router, which resolves `provider/model`. With only `OPENAI_API_KEY` set, calls go straight to OpenAI, which does **not** know those ids and rejects them. Set `EVALUATORQ_FAST_MODEL=gpt-5.6-luna` and `EVALUATORQ_SMART_MODEL=gpt-6-luna` once, or pass the bare id on every model flag you use. The Models section of the Configuration page covers the roles.
