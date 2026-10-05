@@ -44,7 +44,7 @@ htmlcov/
 Thumbs.db
 
 # Project-specific
-.evaluatorq/
+/.evaluatorq
 
 # Environment files
 .env

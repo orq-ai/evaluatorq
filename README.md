@@ -274,7 +274,7 @@ from a Superset-created worktree; it copies `.env` from the main checkout only
 when the destination is absent, links the shared `.evaluatorq` run store, then
 runs `uv sync --all-extras`. Run teardown before discarding local work. It
 archives a binary-capable patch for tracked changes and a tarball of untracked,
-non-ignored files under `$HOME/.superset/archive/evaluatorq/<worktree>-<timestamp>`
+non-ignored files under `$HOME/.superset/archive/evaluatorq/<worktree>-<timestamp>-<unique-suffix>`
 (or `SUPERSET_ARCHIVE_ROOT`); archive write failures stop cleanup. Ignored files
 (including `.env`) are excluded. These scripts do not prove Superset invokes its
 delete hook; test them in a disposable worktree before relying on that lifecycle.

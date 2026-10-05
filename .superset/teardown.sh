@@ -13,13 +13,14 @@ BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo detached)"
 # Archives live outside every checkout, under ~/.superset/archive/<repo>/, so they
 # survive deleting the worktree AND never show up in `git status`.
 ARCHIVE_ROOT="${SUPERSET_ARCHIVE_ROOT:-$HOME/.superset/archive}"
-DEST="$ARCHIVE_ROOT/$(basename "$MAIN")/$(basename "$PWD")-$(date +%Y%m%d-%H%M%S)"
+ARCHIVE_PARENT="$ARCHIVE_ROOT/$(basename "$MAIN")"
 
 # Archive uncommitted work: a patch plus any untracked, non-ignored files.
 # Committed work survives in the shared object store via the branch; this covers
 # the rest.
 if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-  mkdir -p "$DEST"
+  mkdir -p "$ARCHIVE_PARENT"
+  DEST="$(mktemp -d "$ARCHIVE_PARENT/$(basename "$PWD")-$(date +%Y%m%d-%H%M%S)-XXXXXX")"
   {
     echo "branch: $BRANCH"
     echo "head:   $(git rev-parse HEAD 2>/dev/null || echo none)"

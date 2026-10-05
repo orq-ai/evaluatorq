@@ -18,7 +18,8 @@ fi
 
 # 2. Shared run store. Symlink, never copy: previous runs, sim-runs and the
 #    dashboard's history stay visible from every workspace.
-if [ -d "$MAIN/.evaluatorq" ] && [ ! -e .evaluatorq ] && [ ! -L .evaluatorq ]; then
+if [ ! -e .evaluatorq ] && [ ! -L .evaluatorq ]; then
+  mkdir -p "$MAIN/.evaluatorq"
   ln -s "$MAIN/.evaluatorq" .evaluatorq
   echo "setup: linked .evaluatorq -> $MAIN/.evaluatorq"
 fi
