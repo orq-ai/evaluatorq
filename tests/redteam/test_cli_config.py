@@ -173,6 +173,15 @@ def test_a_bad_config_is_rejected_before_anything_runs(tmp_path: Path, payload: 
     fake.assert_not_called()
 
 
+@pytest.mark.parametrize('value', [0, -5])
+def test_a_config_llm_parallelism_the_flag_would_reject_is_a_usage_error(tmp_path: Path, value: int) -> None:
+    result, fake = _invoke(['--config', _write(tmp_path, {'target': 'agent:x', 'llm_parallelism': value})])
+
+    assert result.exit_code == 2
+    assert 'llm_parallelism' in _flat(result.output)
+    fake.assert_not_called()
+
+
 def test_a_missing_config_file_is_a_usage_error(tmp_path: Path) -> None:
     result, fake = _invoke(['--config', str(tmp_path / 'absent.json')])
 

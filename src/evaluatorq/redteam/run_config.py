@@ -8,9 +8,11 @@ its JSON schema. Python objects (an ``AgentTarget``, ``hooks``, ``llm_client``) 
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 — pydantic resolves field annotations at runtime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AfterValidator, BaseModel, ConfigDict
 
+from evaluatorq.common.llm_limit import check_llm_parallelism
 from evaluatorq.redteam.contracts import (
     AttackTechnique,
     DeliveryMethod,
@@ -44,7 +46,7 @@ class RedTeamRunConfig(BaseModel):
     max_turns: int | None = None
     max_per_category: int | None = None
     datapoint_parallelism: int | None = None
-    llm_parallelism: int | None = None
+    llm_parallelism: Annotated[int | None, AfterValidator(check_llm_parallelism)] = None
     generate_strategies: bool = True
     generated_strategy_count: int = 2
     max_dynamic_datapoints: int | None = None

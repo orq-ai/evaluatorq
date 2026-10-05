@@ -12,9 +12,11 @@ The internal ``SimulationConfig`` is not reused: it carries the Python objects t
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003 — pydantic resolves field annotations at runtime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
+from evaluatorq.common.llm_limit import check_llm_parallelism
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001 — pydantic resolves field annotations at runtime
 from evaluatorq.simulation._config import (
     DEFAULT_MAX_TARGET_RETRIES,
@@ -39,7 +41,7 @@ class _SharedRunConfig(BaseModel):
     evaluator_names: list[str] | None = None
     scoring: SimulationScoringConfig | None = None
     datapoint_parallelism: int | None = Field(default=None, ge=1)
-    llm_parallelism: int | None = None
+    llm_parallelism: Annotated[int | None, AfterValidator(check_llm_parallelism)] = None
     target_agent_timeout_ms: int = Field(default=DEFAULT_TARGET_AGENT_TIMEOUT_MS, gt=0)
     max_target_retries: int = Field(default=DEFAULT_MAX_TARGET_RETRIES, ge=0)
     target_reasoning_effort: str | None = None

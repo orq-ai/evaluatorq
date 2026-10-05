@@ -200,6 +200,8 @@ def test_simulate_rejects_unknown_keys(tmp_path: Path, payload: dict[str, Any], 
     [
         ('simulate', 'max_turns', 0),
         ('simulate', 'datapoint_parallelism', 0),
+        ('simulate', 'llm_parallelism', 0),
+        ('simulate', 'llm_parallelism', -5),
         ('simulate', 'target_agent_timeout_ms', 0),
         ('simulate', 'max_target_retries', -1),
         ('simulate', 'max_tool_result_chars', 0),
