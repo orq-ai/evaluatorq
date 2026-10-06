@@ -6,7 +6,7 @@ tokens.  This module supplies the chrome that consumes them: the sidebar shell,
 the topbar, the combined landing, the per-kind run lists, and the report-view
 filter/body split.
 
-Inlined as the last ``<style>`` block by ``shell.page()`` so its rules win on
+Placed last in ``shell.dashboard_css()`` so its rules win on
 equal specificity and all ``var(--…)`` references resolve.
 """
 
