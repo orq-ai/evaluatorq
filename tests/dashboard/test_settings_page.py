@@ -1442,6 +1442,30 @@ def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatc
     assert seen[1].orq_oauth_server != 'http://169.254.169.254'
 
 
+def test_model_field_rejects_a_saved_oauth_server_the_cli_has_no_login_for(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, settings_file: Path
+) -> None:
+    seen: list[DashboardSettings] = []
+
+    def selected_auth(settings: DashboardSettings, **_kwargs: object) -> SimpleNamespace:
+        seen.append(settings)
+        raise ValueError('stop before any network call')
+
+    save_settings(
+        DashboardSettings.model_validate({'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'http://169.254.169.254'}),
+        settings_file,
+    )
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://eu.orq.ai', 'eu.orq.ai', 'ada@orq.ai', None, 'valid', True),
+    ))
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
+
+    client.get('/settings/models', params={'field': 'fast_model'})
+    client.get('/settings/models', params={'field': 'fast_model', 'orq_oauth_server': 'http://169.254.169.254'})
+
+    assert [s.orq_oauth_server for s in seen] == [None, None]
+
+
 def test_model_field_offers_workspace_models_grouped_by_provider(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
