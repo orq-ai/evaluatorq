@@ -14,6 +14,7 @@ from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
+from evaluatorq.dashboard.ui_components import component_assets
 from evaluatorq.insights.models import label_key, label_order
 from evaluatorq.insights.population import describe_projection_coverage
 
@@ -645,7 +646,7 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
         body,
         active_nav='insights',
         back_html=back,
-        head_html=f'{_SIGNALS_STYLESHEET}{_SIGNALS_SCRIPT}',
+        head_html=f'{component_assets()}{_SIGNALS_STYLESHEET}{_SIGNALS_SCRIPT}',
     )
 
 

@@ -6,6 +6,7 @@ const {Document} = require('./minidom.cjs');
 const signalsSource = fs.readFileSync('src/evaluatorq/dashboard/static/insights-signals.js', 'utf8');
 const signalsContext = {window: {}};
 vm.createContext(signalsContext);
+vm.runInContext(fs.readFileSync('src/evaluatorq/dashboard/static/ui-components.js', 'utf8'), signalsContext);
 vm.runInContext(signalsSource, signalsContext);
 const component = signalsContext.window.EvaluatorqSignals;
 assert.ok(component, 'the shared signal view should be exposed');
@@ -32,8 +33,8 @@ const detail = {signals: {results: {
 }}};
 
 const panel = component.render({report, detail});
-assert.match(panel, /class="signal-browser"[^>]*data-signal-key="browser"/);
-assert.match(panel, /<details class="signal-browser"[^>]*data-signal-key="browser">/,
+assert.match(panel, /class="signal-browser eq-foldout"[^>]*data-signal-key="browser"/);
+assert.match(panel, /<details class="signal-browser eq-foldout"[^>]*data-signal-key="browser">/,
   'the complete signal browser starts collapsed');
 assert.match(panel, /data-signal-focus="tool_loop"/);
 assert.doesNotMatch(panel, /data-signal-focus="(?:retry|approximate_tag|unnecessary_tool|unsupported_tag|tag_score)"/,
@@ -46,18 +47,18 @@ assert.match(panel, /tag_score/);
 assert.match(panel, />0</, 'numeric zero remains a recorded signal value');
 assert.match(panel, />false</, 'boolean false remains a recorded signal value');
 assert.match(panel, /Approximate/);
-assert.match(panel, /class="signal-feedback [^"]+"/);
+assert.match(panel, /class="eq-result [^"]+"/);
 
 for (const level of ['L1', 'L2', 'L3', 'L4']) {
-  assert.match(panel, new RegExp(`<details class="signal-level [^"]*" data-signal-level="${level}" data-signal-key="level:${level}"`),
+  assert.match(panel, new RegExp(`<details class="signal-level [^"]*"[^>]*data-signal-level="${level}" data-signal-key="level:${level}"`),
     `${level} is an independently collapsible level`);
 }
-assert.match(panel, /<details class="signal-level [^"]*" data-signal-level="L1" data-signal-key="level:L1">/,
+assert.match(panel, /<details class="signal-level [^"]*"[^>]*data-signal-level="L1" data-signal-key="level:L1">/,
   'levels start collapsed');
 assert.match(panel, /data-signal-key="row:tool_loop"/);
 assert.match(panel, /data-signal-key="row:retry"/);
 assert.match(panel, /data-signal-key="evidence:tool_loop"/);
-assert.match(panel, /<details class="signal-evidence-section"[^>]*data-signal-key="evidence:tool_loop">/,
+assert.match(panel, /<details class="signal-evidence-section eq-foldout"[^>]*data-signal-key="evidence:tool_loop">/,
   'evidence starts collapsed independently from its signal row');
 assert.match(panel, /class="signal-row[^"]*"[^>]*data-signal-name="tool_loop"/);
 const dom = new Document(panel);
@@ -77,10 +78,10 @@ for (const row of toolLoopLevel.querySelectorAll('.signal-row')) {
   assert.equal(row.querySelector('code.signal-code'), null, 'L4 rows do not repeat each tag name as a code header');
 }
 const zeroTagRow = dom.querySelector('details[data-signal-key="row:tag_score"]');
-assert.equal(zeroTagRow.querySelector('.signal-result-value').textContent, '0');
+assert.equal(zeroTagRow.querySelector('.eq-result-value').textContent, '0');
 assert.ok(zeroTagRow.querySelector('.signal-badge.measured'));
 const countsRow = dom.querySelector('details[data-signal-key="row:tool_counts"]');
-assert.equal(countsRow.querySelector('.signal-result-value').textContent, '2 entries');
+assert.equal(countsRow.querySelector('.eq-result-value').textContent, '2 entries');
 assert.ok(panel.includes('&lt;img src=x onerror=alert(1)&gt;'), 'object keys are escaped in the breakdown');
 assert.doesNotMatch(panel, /<img src=x onerror=alert\(1\)>/);
 const countKeys = countsRow.querySelectorAll('dt').map(node => node.textContent);
@@ -111,7 +112,7 @@ assert.match(noFlags, /No flagged L4 signals|No signals were recorded|No signal 
 assert.match(noFlags, /unknown/);
 
 const missingValuePanel = new Document(component.render({report: {results: {missing: {group: 'B', value: null}}}}));
-assert.equal(missingValuePanel.querySelector('.signal-result-value').textContent, 'No value',
+assert.equal(missingValuePanel.querySelector('.eq-result-value').textContent, 'No value',
   'the primary result keeps an absent value distinct from an explicit no-basis reason');
 
 const emptyPanel = component.render({report: {results: {}}});
@@ -207,7 +208,7 @@ const drawerPanel = context.signalsPanel(summary);
 assert.match(drawerPanel, /L4/);
 assert.match(drawerPanel, /tool_loop/);
 assert.doesNotMatch(drawerPanel, /data-signal-focus="retry"/);
-assert.match(drawerPanel, /<details class="signal-browser"[^>]*data-signal-key="browser">/,
+assert.match(drawerPanel, /<details class="signal-browser eq-foldout"[^>]*data-signal-key="browser">/,
   'the review drawer keeps the signal hierarchy folded until opened');
 assert.doesNotMatch(drawerPanel, /Step 5|Source coverage/);
 

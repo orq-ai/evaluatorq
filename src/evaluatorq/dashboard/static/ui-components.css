@@ -1,0 +1,34 @@
+/* Reusable dashboard foldouts, result feedback, and preconditions. Uses theme.py tokens. */
+.eq-components { --ui-accent:var(--teal-600); --ui-tint:var(--teal-50); min-width:0; container-type:inline-size; font:13px/1.5 var(--font-sans,var(--sans)); color:var(--text-body); }
+.eq-foldout { min-width:0; font:inherit; color:var(--text-body); }
+.eq-foldout>summary { display:flex; align-items:center; gap:10px; padding:12px 0; cursor:pointer; list-style:none; color:var(--text-body); overflow-wrap:anywhere; transition:background-color 180ms ease-out,color 180ms ease-out; }
+.eq-foldout>summary:hover { background:var(--ui-tint,var(--teal-50)); }
+.eq-foldout>summary::after { content:''; display:block; flex:none; margin-left:auto; width:6px; height:6px; justify-self:center; border:solid var(--text-body); border-width:0 1.5px 1.5px 0; transform:rotate(-45deg); transition:transform 180ms cubic-bezier(.22,1,.36,1); }
+.eq-foldout[open]>summary::after { transform:rotate(45deg); }
+.eq-foldout>summary::-webkit-details-marker { display:none; }
+.eq-foldout>summary:focus-visible { outline:2px solid var(--teal-600); outline-offset:2px; border-radius:4px; }
+.eq-result { padding:14px; border:0; border-radius:6px; background:var(--ui-tint,var(--teal-50)); color:var(--ui-accent,var(--teal-600)); overflow-wrap:anywhere; }
+.eq-result--negative { background:var(--red-50); color:var(--red-700); }
+.eq-result--positive { background:var(--green-50); color:var(--teal-600); }
+.eq-result--warning { background:var(--orange-50); color:var(--orange-700); }
+.eq-result--neutral { background:var(--surface-sunken); color:var(--text-body); }
+.eq-result-heading { display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; }
+.eq-result-status { font-size:13px; font-weight:600; }
+.eq-result-value { min-width:0; font:600 22px/1.2 var(--font-sans,var(--sans)); letter-spacing:-.025em; overflow-wrap:anywhere; color:inherit; }
+.eq-result-value--numeric { font:600 26px/1.2 var(--font-mono,var(--mono)); }
+.eq-result p { max-width:70ch; margin:8px 0 0; font-size:13px; color:var(--text-body); text-wrap:pretty; }
+.eq-check-count { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--text-muted); font-size:12px; margin-bottom:10px; }
+.eq-check-count meter { width:80px; height:8px; accent-color:var(--teal-600); }
+.eq-components .eq-preconditions { list-style:none; margin:0; padding:0; }
+.eq-preconditions li { display:grid; grid-template-columns:20px minmax(0,1fr); gap:8px; padding:10px 0; margin:0; border-top:1px solid var(--border-subtle); }
+.eq-check-icon { display:grid; place-items:center; width:20px; height:20px; border-radius:4px; background:var(--red-50); color:var(--red-700); font-weight:600; }
+.eq-preconditions .met .eq-check-icon { background:var(--green-50); color:var(--teal-600); }
+.eq-preconditions .partial .eq-check-icon { background:var(--orange-50); color:var(--orange-700); }
+.eq-check-title { display:flex; flex-wrap:wrap; align-items:baseline; gap:3px 8px; }
+.eq-check-title b { font-size:12px; font-weight:600; color:var(--text-strong); }
+.eq-check-title>span { color:var(--text-muted); font-size:11px; }
+.eq-preconditions p { max-width:70ch; margin:4px 0 0; color:var(--text-body); font-size:12px; text-wrap:pretty; }
+.eq-empty { margin:8px 0; color:var(--text-muted); overflow-wrap:anywhere; }
+@media (prefers-reduced-motion:reduce) {
+  .eq-foldout>summary,.eq-foldout>summary::after { transition:none; }
+}

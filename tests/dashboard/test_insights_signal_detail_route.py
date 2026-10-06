@@ -131,6 +131,8 @@ def test_trace_detail_page_mounts_saved_signals(tmp_path, monkeypatch) -> None:
             'source_coverage': {'source': 'snapshot', 'partial': True},
         },
     }
+    assert '/static/ui-components.css' in response.text
+    assert response.text.index('/static/ui-components.js') < response.text.index('/static/insights-signals.js')
     assert '/static/insights-signals.css' in response.text
     assert '/static/insights-signals.js' in response.text
 
@@ -154,5 +156,7 @@ def test_trace_detail_page_mounts_missing_signals_as_null(tmp_path, monkeypatch)
 def test_review_page_loads_shared_signal_widget_before_review_script() -> None:
     html = review_page(_run())
 
+    assert '/static/ui-components.css' in html
+    assert html.index('/static/ui-components.js') < html.index('/static/insights-signals.js')
     assert '/static/insights-signals.css' in html
     assert html.index('/static/insights-signals.js') < html.index('/static/insights-review.js')
