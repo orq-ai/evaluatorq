@@ -29,6 +29,7 @@ main{min-width:0;padding:0 28px 48px}
 .btn.primary{background:var(--text-strong);border-color:var(--text-strong);color:#fff}
 .btn.primary:hover{background:#3a3845}
 .btn.sm{height:28px;padding:0 10px;font-size:12px}
+.trace-open{float:right;color:var(--teal-600);text-decoration:none}
 .status{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:8px;color:var(--text-muted)}
 .status .dot{display:inline-flex;align-items:center;gap:6px;color:var(--green-600);font-weight:500}
 .status .dot::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green-600);box-shadow:0 0 0 3px rgba(41,157,143,.15)}

@@ -63,7 +63,7 @@
     const results = report.results || {}, names = Object.keys(results);
     const fullResults = options.detail?.signals?.results || {};
     const flagged = names.filter(name => state(results[name]).kind === 'flagged').sort();
-    const unknownTags = names.filter(name => results[name].group === 'D' && state(results[name]).kind === 'no-basis').length;
+    const unknownTags = options.showCoverageNote === false ? 0 : names.filter(name => results[name].group === 'D' && state(results[name]).kind === 'no-basis').length;
     const highlights = `<div class="signal-highlights"><div class="signal-highlights-heading"><h5>Flagged signals</h5><span>${flagged.length}</span></div>${flagged.length ? `<div class="signal-tags">${flagged.map(name => `<button type="button" class="signal-tag" data-signal-focus="${esc(name)}" aria-label="View ${esc(title(name))}"><span aria-hidden="true">!</span>${esc(title(name))}<span aria-hidden="true">›</span></button>`).join('')}</div>` : '<p class="signal-empty">No flagged L4 signals.</p>'}${unknownTags ? `<p class="signal-coverage-note">${unknownTags} L4 ${unknownTags === 1 ? 'tag has' : 'tags have'} no basis.</p>` : ''}</div>`;
     const error = options.error ? `<p class="signal-empty" role="status">Could not load signal details: ${esc(options.error)} <button type="button" class="btn" data-signal-retry="${esc(options.retryId || '')}">Retry</button></p>` : options.loading ? '<p class="signal-empty" role="status">Loading signal details…</p>' : '';
     const groups = Object.keys(labels).reverse().map(level => {
