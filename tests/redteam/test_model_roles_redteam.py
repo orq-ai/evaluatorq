@@ -48,6 +48,22 @@ def test_explicit_model_wins() -> None:
     assert LLMConfig(attacker=LLMCallConfig(model='x/y')).attacker.model == 'x/y'
 
 
+def test_orchestrator_attacks_with_the_pipeline_config_model_and_otherwise_the_live_role() -> None:
+    from unittest.mock import AsyncMock
+
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.redteam.adaptive.orchestrator import MultiTurnOrchestrator
+    from evaluatorq.redteam.contracts import LLMConfig
+
+    configured = LLMConfig(attacker=LLMCallConfig(model='cfg/attacker'))
+    # Set after PIPELINE_CONFIG was built at import, as a CLI flag would be.
+    set_cli_models(roles={'smart': 'flag/smart'})
+
+    assert MultiTurnOrchestrator(llm_client=AsyncMock(), pipeline_config=configured).model == 'cfg/attacker'
+    assert MultiTurnOrchestrator(llm_client=AsyncMock()).model == 'flag/smart'
+    assert MultiTurnOrchestrator(llm_client=AsyncMock(), model='arg/model', pipeline_config=configured).model == 'arg/model'
+
+
 def test_jury_default_is_smart(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.llm_jury import _resolve_panel
 

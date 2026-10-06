@@ -1025,6 +1025,18 @@ def evaluator_model_for(model: str | None, cfg: LLMCallConfig | EvaluatorConfig 
     return role_model('smart', task='redteam.evaluator')
 
 
+def attacker_model_for(model: str | None, pipeline_config: LLMConfig | None) -> str:
+    """The attack model: *model*, else the caller's *pipeline_config* attacker, else the ``redteam.attacker`` task's model.
+
+    Never reads `PIPELINE_CONFIG`, whose models are import-time snapshots.
+    """
+    if model:
+        return model
+    if pipeline_config is not None:
+        return pipeline_config.attacker.model
+    return role_model('smart', task='redteam.attacker')
+
+
 # ---------------------------------------------------------------------------
 # OWASP category names (self-contained, no external dependency)
 # ---------------------------------------------------------------------------

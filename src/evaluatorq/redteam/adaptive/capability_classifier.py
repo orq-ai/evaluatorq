@@ -13,12 +13,12 @@ from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from pydantic import BaseModel, Field
 
 from evaluatorq.common.llm_call import execute_chat_parse
-from evaluatorq.common.model_roles import role_model
 from evaluatorq.redteam.contracts import (
     PIPELINE_CONFIG,
     AgentCapability,
     AgentContext,
     LLMConfig,
+    attacker_model_for,
 )
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
@@ -150,7 +150,7 @@ async def classify_agent_capabilities(
     Returns:
         AgentCapabilities with all classified capabilities
     """
-    model = model or role_model('smart', task='redteam.attacker')
+    model = attacker_model_for(model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     capabilities: dict[str, list[AgentCapability]] = {}
 

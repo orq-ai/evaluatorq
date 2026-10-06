@@ -29,7 +29,6 @@ from evaluatorq.common.content_filter import (
     regenerate_on_content_filter,
 )
 from evaluatorq.common.llm_call import execute_chat_completion
-from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.prompt_cache import apply_cache_breakpoints, caching_applies
 from evaluatorq.common.sanitize import delimit, xml_escape
 from evaluatorq.common.target_call import TargetCallResult, call_target_with_retry, default_map_error
@@ -55,6 +54,7 @@ from evaluatorq.redteam.contracts import (
     OrchestratorResult,
     TokenUsage,
     Turn,
+    attacker_model_for,
     turns_to_messages,
 )
 from evaluatorq.redteam.exceptions import RedTeamError
@@ -598,7 +598,7 @@ class MultiTurnOrchestrator:
             pipeline_config: Optional LLMConfig instance. Defaults to module-level PIPELINE_CONFIG.
         """
         self.llm_client = llm_client
-        self.model = model or role_model('smart', task='redteam.attacker')
+        self.model = attacker_model_for(model, pipeline_config)
         self._backend = backend
         self.attacker_instructions = attacker_instructions
         self.verbosity = verbosity

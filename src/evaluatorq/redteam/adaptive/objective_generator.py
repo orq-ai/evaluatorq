@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from evaluatorq.common.content_filter import is_content_filter_error, regenerate_on_content_filter
 from evaluatorq.common.llm_call import execute_chat_parse
-from evaluatorq.common.model_roles import role_model
 from evaluatorq.redteam.contracts import (
     OWASP_CATEGORY_NAMES,
     PIPELINE_CONFIG,
@@ -29,6 +28,7 @@ from evaluatorq.redteam.contracts import (
     Severity,
     TurnType,
     Vulnerability,
+    attacker_model_for,
 )
 from evaluatorq.redteam.tracing import with_llm_span
 from evaluatorq.redteam.utils import safe_substitute
@@ -352,7 +352,7 @@ async def generate_objectives_for_vulnerability(
     Returns:
         List of generated objectives with requirements
     """
-    model = model or role_model('smart', task='redteam.attacker')
+    model = attacker_model_for(model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     vdef = VULNERABILITY_DEFS.get(vuln)
     vulnerability_name = vdef.name if vdef is not None else vuln.value
@@ -413,7 +413,7 @@ async def generate_objectives_for_category(
     Returns:
         List of generated objectives with requirements
     """
-    model = model or role_model('smart', task='redteam.attacker')
+    model = attacker_model_for(model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     vuln = resolve_category_safe(category)
     if vuln is not None:
