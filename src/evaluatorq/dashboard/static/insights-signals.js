@@ -41,9 +41,9 @@
     const displayValue = signal.group === 'D' && typeof signal.value === 'boolean' ? status.label : value(signal.value);
     const breakdown = signal.value != null && typeof signal.value === 'object' && !signal.no_basis
       ? `<dl class="signal-value-entries">${Object.entries(signal.value).map(([key, item]) => `<div><dt>${esc(key)}</dt><dd>${esc(value(item))}</dd></div>`).join('')}</dl>` : '';
-    const resultValue = signal.no_basis || signal.value == null ? 'No basis'
+    const resultValue = signal.no_basis || signal.value == null ? status.label
       : typeof signal.value === 'object' ? `${Object.keys(signal.value).length} entries` : displayValue;
-    const result = `<div class="signal-feedback ${status.kind}"><div class="signal-result-heading"><span>Result</span><span class="signal-badge ${status.kind}">${status.label}</span></div><strong class="signal-result-value">${esc(resultValue)}</strong>${signal.no_basis ? `<p>${esc(signal.no_basis)}</p>` : signal.reason ? `<p>${esc(signal.reason)}</p>` : ''}${breakdown}</div>`;
+    const result = `<div class="signal-feedback ${status.kind}" role="group" aria-label="Result"><div class="signal-result-heading"><strong class="signal-result-value">${esc(resultValue)}</strong>${resultValue !== status.label ? `<span class="signal-result-status">${status.label}</span>` : ''}</div>${signal.no_basis ? `<p>${esc(signal.no_basis)}</p>` : signal.reason ? `<p>${esc(signal.reason)}</p>` : ''}${breakdown}</div>`;
     const checks = detail
       ? preconditions(detail.preconditions || [])
       : `<p class="signal-empty">${options.loading ? 'Loading preconditions…' : options.error ? 'Preconditions could not be loaded.' : 'Preconditions are not loaded.'}</p>`;
@@ -59,7 +59,7 @@
     const fullResults = options.detail?.signals?.results || {};
     const flagged = names.filter(name => state(results[name]).kind === 'flagged').sort();
     const unknownTags = names.filter(name => results[name].group === 'D' && state(results[name]).kind === 'no-basis').length;
-    const highlights = `<div class="signal-highlights"><div class="signal-highlights-heading"><h5>Flagged signals</h5><span>${flagged.length}</span></div>${flagged.length ? `<div class="signal-tags">${flagged.map(name => `<button type="button" class="signal-tag" data-signal-focus="${esc(name)}" aria-label="View ${esc(title(name))}"><span aria-hidden="true">!</span>${esc(title(name))}<span aria-hidden="true">↗</span></button>`).join('')}</div>` : '<p class="signal-empty">No flagged L4 signals.</p>'}${unknownTags ? `<p class="signal-coverage-note">${unknownTags} L4 ${unknownTags === 1 ? 'tag has' : 'tags have'} no basis.</p>` : ''}</div>`;
+    const highlights = `<div class="signal-highlights"><div class="signal-highlights-heading"><h5>Flagged signals</h5><span>${flagged.length}</span></div>${flagged.length ? `<div class="signal-tags">${flagged.map(name => `<button type="button" class="signal-tag" data-signal-focus="${esc(name)}" aria-label="View ${esc(title(name))}"><span aria-hidden="true">!</span>${esc(title(name))}<span aria-hidden="true">›</span></button>`).join('')}</div>` : '<p class="signal-empty">No flagged L4 signals.</p>'}${unknownTags ? `<p class="signal-coverage-note">${unknownTags} L4 ${unknownTags === 1 ? 'tag has' : 'tags have'} no basis.</p>` : ''}</div>`;
     const error = options.error ? `<p class="signal-empty" role="status">Could not load signal details: ${esc(options.error)} <button type="button" class="btn" data-signal-retry="${esc(options.retryId || '')}">Retry</button></p>` : options.loading ? '<p class="signal-empty" role="status">Loading signal details…</p>' : '';
     const groups = Object.keys(labels).map(level => {
       const groupNames = names.filter(name => levels[results[name].group] === level);

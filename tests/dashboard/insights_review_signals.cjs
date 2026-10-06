@@ -110,6 +110,10 @@ assert.doesNotMatch(noFlags, /data-signal-focus=/);
 assert.match(noFlags, /No flagged L4 signals|No signals were recorded|No signal flags|No flags/i);
 assert.match(noFlags, /unknown/);
 
+const missingValuePanel = new Document(component.render({report: {results: {missing: {group: 'B', value: null}}}}));
+assert.equal(missingValuePanel.querySelector('.signal-result-value').textContent, 'No value',
+  'the primary result keeps an absent value distinct from an explicit no-basis reason');
+
 const emptyPanel = component.render({report: {results: {}}});
 assert.match(emptyPanel, /No flagged L4 signals|No signals were recorded|No signal flags|No flags/i);
 const missingPanel = component.render({report: null});
