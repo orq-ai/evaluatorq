@@ -208,3 +208,39 @@ def test_tool_activity_splits_a_long_trace_into_chunks_that_each_keep_the_task()
     assert all(chunk.startswith('USER: THE ORIGINAL TASK') and len(chunk) <= full // 3 for chunk in chunks)
     assert f'[part 1 of {len(chunks)} ' in chunks[0]
     assert sum(chunk.count('CALL Read') for chunk in chunks) == 40
+
+
+def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_without_the_output() -> None:
+    secret = 'sk-live-super-secret-token'
+    trace = _trace(
+        {'role': 'user', 'content': 'Fix the parser.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'Bash', {'command': 'uv run pytest -q'})]},
+        {
+            'role': 'tool',
+            'tool_call_id': 'c1',
+            'status': 'success',
+            'content': f'FAILED tests/test_parser.py::test_empty\n2 failed, 5 passed\nTOKEN={secret}\nexit code: 1',
+        },
+        {'role': 'assistant', 'tool_calls': [_call('c2', 'Bash', {'command': 'uv run pytest -q'})]},
+        {'role': 'tool', 'tool_call_id': 'c2', 'status': 'success', 'content': '7 passed, 0 failed'},
+    )
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'output shows: nonzero_exit, tests_failed' in view
+    assert view.count('output shows') == 1  # '0 failed' is not a failure
+    assert secret not in view
+    assert 'test_parser.py::test_empty' not in view
+
+
+def test_failure_markers_only_apply_to_shell_calls() -> None:
+    trace = _trace(
+        {'role': 'user', 'content': 'Read the log.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'Read', {'path': 'log.txt'})]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'status': 'success', 'content': 'Traceback (most recent call last):'},
+    )
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'output shows' not in view
+    assert 'result body omitted' in view

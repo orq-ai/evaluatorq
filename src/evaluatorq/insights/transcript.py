@@ -7,10 +7,10 @@ Three views, each for one `/classify` call:
   to one line each and tool outputs are dropped. The opening user turns are
   never cut; an over-budget trace loses its middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
-- `tool_activity_chunks`: every tool call with its input and status, and each
-  result body reduced to a diagnostic category, for the questions that need to
-  see what a command did; a long trace is split into several chunks rather than
-  losing more than 30% of its middle.
+- `tool_activity_chunks`: every tool call with its input, status, and fixed
+  labels for what its output showed (never the output itself), for the
+  questions that need to see what a command did; a long trace is split into
+  several chunks rather than losing more than 30% of its middle.
 
 Nothing here calls a model.
 """
@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from evaluatorq.common.trace_document import TraceDocument, prompt_messages
-from evaluatorq.contracts import content_to_text
+from evaluatorq.contracts import content_to_text, tool_result_to_text
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
@@ -48,6 +48,26 @@ USER_TURN_CHARS = 8_000
 
 SKILL_TOOL = 'Skill'
 SHELL_TOOLS = frozenset({'Bash', 'bash', 'shell', 'exec_command', 'run_shell_command'})
+# Failure markers searched in shell output. A command can fail inside a call
+# whose status is `completed` (a non-zero exit code or failing tests in the
+# output), so the status alone misses it. Only the label leaves this module.
+# Substring heuristics: `cat` of a test file can match too, so the
+# classifier treats a label as a hint. Upgrade to exit-code fields if traces carry them.
+OUTPUT_MARKERS = (
+    (
+        'nonzero_exit',
+        re.compile(r'exit(?:ed with)? (?:code|status)[: ]+[1-9]|process exited with code [1-9]', re.IGNORECASE),
+    ),
+    (
+        'tests_failed',
+        re.compile(r'\b[1-9]\d* (?:failed|failing|errors?)\b|^FAILED |tests? failed', re.IGNORECASE | re.MULTILINE),
+    ),
+    ('exception', re.compile(r'Traceback \(most recent call last\)|^panic:|Unhandled exception', re.MULTILINE)),
+    (
+        'build_failed',
+        re.compile(r'\bSyntaxError\b|error\[E\d+\]|error TS\d+|build failed|compilation failed', re.IGNORECASE),
+    ),
+)
 _REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 _SKILL_ARG = re.compile(r'"skill"\s*:\s*"([^"]+)"')
 _STRING_FIELD = re.compile(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)')
@@ -205,7 +225,8 @@ def tool_activity_chunks(trace: TraceRecord | TraceDocument, budget: int = VIEW_
 
     Used for the questions that need to see what a command did: whether an error
     stayed unfixed, and whether an action was risky. Assistant prose is left out,
-    and each tool result body is replaced by its diagnostic category.
+    and each tool result body is replaced by its diagnostic category or, for a
+    shell call, by the failure markers found in its output.
     A view that fits after cutting at most `MAX_CUT_SHARE` of it from the middle is
     one chunk; a longer one is split into consecutive chunks of at most `budget`
     characters, each starting with the opening user turns, for the caller to ask
@@ -263,10 +284,22 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
     paired = (result,) if result else ()
     status = _tool_call_status(call_id, paired)
     # Tool result bodies can contain credentials or user data. Keep only the
-    # fixed diagnostic category already used by the trace projection layer.
+    # fixed diagnostic category already used by the trace projection layer, or
+    # fixed failure-marker labels for a shell call's output.
     category = _tool_result_category(call_id, paired)
-    evidence = f'diagnostic: {category}' if category is not None else 'result body omitted'
+    markers = _output_markers(result) if result and name in SHELL_TOOLS else []
+    if category is not None:
+        evidence = f'diagnostic: {category}'
+    elif markers:
+        evidence = f'output shows: {", ".join(markers)}'
+    else:
+        evidence = 'result body omitted'
     return f'CALL {name} [{status}]: {call_input}\n  → {evidence}'
+
+
+def _output_markers(result: dict[str, Any]) -> list[str]:
+    text = tool_result_to_text(result.get('content'))
+    return [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
 
 
 def _fit(lines: list[str], budget: int, *, keep_opening_users: bool) -> str:
