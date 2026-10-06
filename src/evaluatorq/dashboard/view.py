@@ -70,21 +70,25 @@ def _dashboard_js_version() -> str:
         return '0'
 
 
-def head_assets() -> tuple[Script, ...]:
+VEGA_SCRIPTS = ('/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js')
+
+
+def head_assets(*, charts: bool = False) -> tuple[Script, ...]:
     """Return FastHTML header elements for vendored JS assets.
 
     The ``/static/`` files are vendored under ``dashboard/static/`` and served
-    by the app; these Script tags wire them into every report page.
+    by the app; these Script tags wire them into every report page. The ~800KB
+    vega trio only ships with ``charts``: a chart that arrives later in an htmx
+    swap makes dashboard.js load it on demand.
     """
+    vega = tuple(Script(src=src) for src in VEGA_SCRIPTS) if charts else ()
     return (
         Script(src='/static/htmx.min.js'),
-        Script(src='/static/vega.min.js'),
-        Script(src='/static/vega-lite.min.js'),
-        Script(src='/static/vega-embed.min.js'),
+        # vega stays non-deferred: inline body scripts call vegaEmbed during parse.
+        *vega,
         # defer: dashboard.js runs at document.body-level (event delegation) — without
         # defer it executes during <head> parse when document.body is still null and
-        # throws, aborting all its handlers (incl. the sim-entity modal). vega stays
-        # non-deferred: inline body scripts call vegaEmbed during parse.
+        # throws, aborting all its handlers (incl. the sim-entity modal).
         Script(src=f'/static/dashboard.js?v={_dashboard_js_version()}', defer=True),
     )
 

@@ -50,5 +50,6 @@ def test_insights_run_form_controller() -> None:
         text=True,
         check=False,
         timeout=30,
+
     )
     assert result.returncode == 0, result.stdout + result.stderr

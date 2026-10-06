@@ -33,7 +33,7 @@ function classList() {
 
 function loadDashboard({
   elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces', dateClass = Date,
-  htmx = null,
+  htmx = null, logger = console,
 } = {}) {
   const body = Object.assign(emitter(), {
     children: [],
@@ -120,7 +120,7 @@ function loadDashboard({
     },
   };
   vm.runInNewContext(source, {
-    document, window, history, location: { hash: '' },
+    document, window, history, location: { hash: '' }, console: logger,
     FormData: class {}, Date: dateClass, CSS: { escape: value => value },
     Event: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
   });
@@ -275,22 +275,12 @@ test('trace shortcuts respect editable targets, modifiers, modal state, and rout
   assert.equal(focuses, 1);
 });
 
-test('finder placeholders rotate on the interval and stop after dismissal', () => {
-  const query = {
-    dataset: { finderPlaceholders: '["First example", "Second example"]' },
-    value: '',
-    placeholder: '',
-  };
-  const app = loadDashboard({ queryAll: () => [query] });
-
-  assert.equal(app.intervals.size, 1);
-  const [{ callback, delay }] = app.intervals.values();
-  assert.equal(delay, 4000);
-  callback();
-  assert.equal(query.placeholder, 'Second example');
-  query.dataset.finderPlaceholderDismissed = 'true';
-  callback();
-  assert.equal(query.placeholder, 'Second example');
+test('finder placeholder stays fixed when focusing the question', () => {
+  const query = { placeholder: 'Ask a question about your traces…' };
+  const app = loadDashboard();
+  app.body.emit('focusin', { target: { closest: () => query } });
+  assert.equal(query.placeholder, 'Ask a question about your traces…');
+  assert.equal(app.intervals.size, 0);
 });
 
 test('trace Ask AI submits custom bounds and endpoint timezone offsets', () => {
@@ -781,4 +771,120 @@ test('Picking a model from a list tells the form the hidden value changed', () =
   app.body.emit('click', { target });
   assert.equal(hidden.value, 'gpt-5.6-luna');
   assert.deepEqual(events, [['change', true, 'gpt-5.6-luna']]);
+});
+
+test('a chart swapped into a page without vega loads the vega trio in order, then embeds it', async () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const chart = { id: 'insights-crosstab' };
+  const island = { textContent: '{"mark":"bar"}', getAttribute: () => 'insights-crosstab' };
+  const scope = {
+    querySelector: selector => (selector === '.vega-chart' || selector === '#insights-crosstab' ? chart : null),
+    querySelectorAll: selector => (selector === '[data-vega-for]' ? [island] : []),
+  };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const embeds = [];
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  for (const src of ['/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js']) {
+    await flush();
+    assert.equal(appended.at(-1).src, src);
+    if (src.endsWith('vega-embed.min.js')) {
+      app.window.vegaEmbed = (el, spec) => { embeds.push([el, spec]); return Promise.resolve({}); };
+    }
+    appended.at(-1).onload();
+  }
+  await flush();
+
+  assert.equal(appended.length, 3);
+  assert.equal(embeds.length, 1);
+  assert.equal(embeds[0][0], chart);
+  assert.equal(JSON.stringify(embeds[0][1]), '{"mark":"bar"}');
+});
+
+test('a vega script that fails to load marks the swapped chart as failed and the next swap retries', async () => {
+  const logged = [];
+  const app = loadDashboard({ logger: { error: (...args) => logged.push(args) } });
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const chart = { id: 'insights-crosstab', textContent: '' };
+  const island = { textContent: '{"mark":"bar"}', getAttribute: () => 'insights-crosstab' };
+  const scope = {
+    querySelector: selector => (selector === '.vega-chart' || selector === '#insights-crosstab' ? chart : null),
+    querySelectorAll: selector => (selector === '[data-vega-for]' ? [island] : selector === '.vega-chart' ? [chart] : []),
+  };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+    await flush();
+    appended.at(-1).onload();
+    await flush();
+    assert.equal(appended.at(-1).src, '/static/vega-lite.min.js');
+    appended.at(-1).onerror(new Error('blocked'));
+    await flush();
+    await flush();
+
+    assert.equal(chart.textContent, 'Chart failed to load. Reload the page to retry.');
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0][0], 'Vega failed to load');
+    assert.deepEqual(unhandled, []);
+
+    app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+    await flush();
+    assert.equal(appended.length, 3);
+    assert.equal(appended.at(-1).src, '/static/vega.min.js');
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('two chart swaps into one target while vega loads fetch vega once and embed only the latest swap', async () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const chart = { id: 'insights-crosstab' };
+  let spec = '{"mark":"bar"}';
+  const island = { get textContent() { return spec; }, getAttribute: () => 'insights-crosstab' };
+  const scope = {
+    querySelector: selector => (selector === '.vega-chart' || selector === '#insights-crosstab' ? chart : null),
+    querySelectorAll: selector => (selector === '[data-vega-for]' ? [island] : []),
+  };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const embeds = [];
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  spec = '{"mark":"line"}';
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  for (const src of ['/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js']) {
+    await flush();
+    assert.equal(appended.at(-1).src, src);
+    if (src.endsWith('vega-embed.min.js')) {
+      app.window.vegaEmbed = (el, embedded) => { embeds.push(JSON.stringify(embedded)); return Promise.resolve({}); };
+    }
+    appended.at(-1).onload();
+  }
+  await flush();
+
+  assert.equal(appended.length, 3);
+  assert.deepEqual(embeds, ['{"mark":"line"}']);
+});
+
+test('a swap without a chart draws its insights maps and never loads vega', () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const queried = [];
+  const scope = {
+    querySelector: () => null,
+    querySelectorAll: selector => { queried.push(selector); return []; },
+  };
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+
+  assert.deepEqual(queried, ['.insights-map-chart']);
+  assert.deepEqual(appended, []);
 });

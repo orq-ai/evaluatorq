@@ -38,7 +38,7 @@ eq dashboard /path/to/my/reports
 # Optional direct deep-link — open a single report file
 eq dashboard .evaluatorq/runs/red-team_20260626_143024.json
 
-# Bind a custom host / port (default 127.0.0.1:8080)
+# Bind a custom host / port (default 127.0.0.1:8080); -p is short for --port
 eq dashboard --host 0.0.0.0 --port 8888
 
 # Enable “View Traces” links in reports. Use the workspace slug from the
