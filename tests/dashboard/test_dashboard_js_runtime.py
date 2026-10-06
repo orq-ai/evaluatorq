@@ -31,7 +31,6 @@ def test_drawer_closing_class_has_exit_animation() -> None:
 
 def test_insights_run_form_controller() -> None:
     import json
-    import os
     from dataclasses import replace
 
     from evaluatorq.dashboard.insights_run_form import RunFormValues, render_run_form, render_run_page
@@ -44,12 +43,15 @@ def test_insights_run_form_controller() -> None:
         ),
     }
     script = Path(__file__).with_name('insights_run_form.cjs')
+    # Fixtures go in on stdin, not an env var: on Linux a single env string is
+    # capped at 128KB (MAX_ARG_STRLEN) and the rendered markup exceeds it, which
+    # fails exec("node") with E2BIG. stdin has no such cap; macOS/Windows did not.
     result = subprocess.run(
         ['node', str(script)],
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
-        env={**os.environ, 'INSIGHTS_RUN_FORM_FIXTURES': json.dumps(fixtures)},
+        input=json.dumps(fixtures),
     )
     assert result.returncode == 0, result.stdout + result.stderr

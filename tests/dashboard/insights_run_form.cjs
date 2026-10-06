@@ -6,7 +6,10 @@ const path = require('node:path');
 const vm = require('node:vm');
 const {Document, DOMParser} = require('./minidom.cjs');
 
-const fixtures = JSON.parse(process.env.INSIGHTS_RUN_FORM_FIXTURES);
+// Read the fixtures from stdin, not an env var: on Linux a single env string is
+// capped at 128KB (MAX_ARG_STRLEN), and the rendered form markup exceeds it, so
+// exec("node") fails with E2BIG ("Argument list too long"). stdin has no such cap.
+const fixtures = JSON.parse(fs.readFileSync(0, 'utf8'));
 const source = fs.readFileSync(path.resolve(__dirname, '../../src/evaluatorq/dashboard/static/insights-run-form.js'), 'utf8');
 
 const FACET_MARKUP = '<div class="finder-controls"><span class="addwrap"><div class="finder-facets" id="menu">'
