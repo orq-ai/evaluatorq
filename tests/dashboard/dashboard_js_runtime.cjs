@@ -824,3 +824,50 @@ test('a vega script that fails to load marks the swapped chart as failed and the
     process.off('unhandledRejection', onUnhandled);
   }
 });
+
+test('two chart swaps into one target while vega loads fetch vega once and embed only the latest swap', async () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const chart = { id: 'insights-crosstab' };
+  let spec = '{"mark":"bar"}';
+  const island = { get textContent() { return spec; }, getAttribute: () => 'insights-crosstab' };
+  const scope = {
+    querySelector: selector => (selector === '.vega-chart' || selector === '#insights-crosstab' ? chart : null),
+    querySelectorAll: selector => (selector === '[data-vega-for]' ? [island] : []),
+  };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const embeds = [];
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  spec = '{"mark":"line"}';
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  for (const src of ['/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js']) {
+    await flush();
+    assert.equal(appended.at(-1).src, src);
+    if (src.endsWith('vega-embed.min.js')) {
+      app.window.vegaEmbed = (el, embedded) => { embeds.push(JSON.stringify(embedded)); return Promise.resolve({}); };
+    }
+    appended.at(-1).onload();
+  }
+  await flush();
+
+  assert.equal(appended.length, 3);
+  assert.deepEqual(embeds, ['{"mark":"line"}']);
+});
+
+test('a swap without a chart draws its insights maps and never loads vega', () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const queried = [];
+  const scope = {
+    querySelector: () => null,
+    querySelectorAll: selector => { queried.push(selector); return []; },
+  };
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+
+  assert.deepEqual(queried, ['.insights-map-chart']);
+  assert.deepEqual(appended, []);
+});

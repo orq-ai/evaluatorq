@@ -61,7 +61,7 @@ from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.model_choices import model_groups
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
-from evaluatorq.dashboard.shell import dashboard_css, page
+from evaluatorq.dashboard.shell import dashboard_css, dashboard_css_version, page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -253,11 +253,11 @@ def _index(req: Request) -> NotStr:
     return NotStr(page(label, body, active_surface=surface))
 
 
-def _dashboard_css() -> Response:
-    # The URL carries a content hash (shell.dashboard_css_href), so the sheet can be cached forever.
-    return Response(
-        dashboard_css(), media_type='text/css', headers={'Cache-Control': 'public, max-age=31536000, immutable'}
-    )
+def _dashboard_css(v: str = '') -> Response:
+    # Only the current content hash (shell.dashboard_css_href) is safe to cache forever: a stale or missing
+    # `v` would otherwise pin today's sheet under a URL that a later version must be able to change.
+    cache = 'public, max-age=31536000, immutable' if v == dashboard_css_version() else 'no-cache'
+    return Response(dashboard_css(), media_type='text/css', headers={'Cache-Control': cache})
 
 
 async def _auth_status(req: Request) -> JSONResponse:
