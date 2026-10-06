@@ -30,9 +30,15 @@ uv run python run.py
 
 This runs one adaptive red team against Ava for `goal_hijacking` (ASI01) and `prompt_injection` (LLM01), prints clean `RichHooks` output, and writes the report to `results/ava_XXX.json`. The `VULNERABLE` sample findings live in that JSON under `results`.
 
-## Record the GIF (for the human)
+## The recorded run
 
-Record the terminal while `run.py` executes (hooks output only — no DEBUG logs). Then:
+![Red team run against Ava: goal hijacking and prompt injection, ending on a summary with 2 of 3 goal-hijacking attacks flagged vulnerable (67% attack success)](../../../docs/assets/redteam-demo.gif)
+
+The run targets `openai/gpt-4o-mini` (`DEMO_TARGET_MODEL`, the default) with `openai/gpt-5.4-mini` as the attacker and judge. The split matters: a safety-heavy frontier model as the target resists these attacks on its own training regardless of Ava's weak prompt, which hides the agent-level flaw; a more instruction-following target exposes it. The attacker and judge stay strong so the attacks are good and the verdicts are trustworthy.
+
+### Re-recording
+
+Record the terminal while `run.py` executes (hooks output only — set `LOGURU_LEVEL=WARNING` to drop DEBUG logs). Then:
 
 ```bash
 ffmpeg -i in.mp4 -vf "fps=8,scale=800:-1" -loop 0 out.gif
@@ -47,6 +53,6 @@ Target well under 5MB. Keep only the hooks output in frame so the recording stay
 - `agents/vulnerable.py` — `Ava`, the weak-prompt agent (the deliverable).
 - `agents/secure.py` — `Rex`, hardened sibling for contrast.
 - `tools.py` — `lookup_order`, `issue_refund` local stubs.
-- `config.py` — model id (`openai/gpt-5.4-mini` via the orq router).
+- `config.py` — models: `MODEL` (attacker/judge, `openai/gpt-5.4-mini`) and `TARGET_MODEL` (Ava, `openai/gpt-4o-mini`), both via the orq router.
 - `attacker_instructions.txt` — domain context steering the attacker.
 - `run.py` — drives `red_team()` and writes the result JSON.

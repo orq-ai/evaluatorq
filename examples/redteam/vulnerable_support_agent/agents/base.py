@@ -22,7 +22,7 @@ from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ToolInfo
 from openai import AsyncOpenAI
 
-from config import MODEL
+from config import TARGET_MODEL
 from tools import ToolCall, issue_refund, lookup_order
 
 MAX_TOOL_ITERATIONS = 10
@@ -72,7 +72,7 @@ class SupportAgent(AgentTarget):
     """Tool-capable agent implementing evaluatorq's ``AgentTarget`` protocol."""
 
     system_prompt: str = ""
-    model: str = MODEL
+    model: str = TARGET_MODEL
 
     def __init__(self, *, client: AsyncOpenAI | None = None) -> None:
         # call_target_with_retry is the single retry owner for target calls, so
