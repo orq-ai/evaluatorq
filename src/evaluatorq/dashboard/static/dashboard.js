@@ -621,11 +621,12 @@
 
   function pickModel(from, model) {
     const pick = from.closest('.model-pick');
-    pick.querySelector('input[type="hidden"]').value = model;
-    pick.querySelector('input[type="hidden"]').dispatchEvent(new Event('change', { bubbles: true }));
+    const hidden = pick.querySelector('input[type="hidden"]');
+    const changed = hidden.value !== model;
+    hidden.value = model;
     const button = pick.querySelector('.model-pick-btn');
     if (from.hasAttribute('data-rich')) button.innerHTML = from.innerHTML;
-    else button.textContent = model || 'Choose a model';
+    else button.textContent = model || button.getAttribute('data-default') || 'Choose a model';
     pick.querySelectorAll('.model-option').forEach(function (other) {
       other.classList.toggle('is-selected', other === from);
       other.setAttribute('aria-pressed', other === from ? 'true' : 'false');
@@ -635,6 +636,7 @@
     const owner = sub && pick.querySelector('.facet-item[data-facet="' + sub.getAttribute('data-facet-sub') + '"]');
     if (owner && model) owner.querySelector('.chev').insertAdjacentHTML('beforebegin', '<span class="count">✓</span>');
     if (from.classList.contains('model-option')) closeModelMenu(pick);
+    if (changed) hidden.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   document.body.addEventListener('input', function (evt) {

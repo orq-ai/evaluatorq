@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from evaluatorq.common.cli_oauth import OAuthSession
+from evaluatorq.common.model_roles import BUILTIN
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import model_choices
@@ -26,7 +27,12 @@ from evaluatorq.trace_finder import FacetCatalogue, RunSnapshot
 from evaluatorq.trace_finder.settings import DashboardSettings, load_settings, save_settings
 
 
-_MODELS = {'compiler_model': 'compiler/custom', 'classifier_model': 'classifier/custom', 'apply_model': 'apply/custom'}
+_MODELS = {
+    'fast_model': 'fast/custom',
+    'smart_model': 'smart/custom',
+    'classifier_model': 'classifier/custom',
+    'embedding_model': 'embed/custom',
+}
 
 
 def csrf_data(values: dict[str, str] | None = None) -> dict[str, str]:
@@ -40,14 +46,17 @@ def settings_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     path = tmp_path / 'dashboard-settings.json'
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
     for name in (
-        'EVALUATORQ_COMPILER_MODEL',
+        'EVALUATORQ_FAST_MODEL',
+        'EVALUATORQ_SMART_MODEL',
         'EVALUATORQ_CLASSIFIER_MODEL',
+        'EVALUATORQ_COMPILER_MODEL',
         'EVALUATORQ_APPLY_MODEL',
         'EVALUATORQ_FINDER_WINDOW_DAYS',
         'EVALUATORQ_FINDER_LIMIT',
         'EVALUATORQ_FINDER_PARALLELISM',
     ):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('EVALUATORQ_USER_SETTINGS', str(tmp_path / 'user-settings.json'))
     monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: ())
     return path
 
@@ -61,9 +70,9 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     response = client.post(
         '/settings',
         data=csrf_data({
-            'compiler_model': 'compiler/custom',
+            'fast_model': 'fast/custom',
             'classifier_model': 'classifier/custom',
-            'apply_model': 'apply/custom',
+            'smart_model': 'smart/custom',
             'window_days': '14',
             'limit': '42',
             'parallelism': '7',
@@ -73,7 +82,7 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
 
     assert response.status_code == 303
     assert response.headers['location'] == '/settings?saved=1'
-    assert 'compiler/custom' in settings_file.read_text()
+    assert 'fast/custom' in settings_file.read_text()
     saved = json.loads(settings_file.read_text())
     assert saved['limit'] == DashboardSettings.model_fields['limit'].default
     assert saved['parallelism'] == DashboardSettings.model_fields['parallelism'].default
@@ -102,9 +111,9 @@ def test_settings_ignores_per_run_ai_limits(client: TestClient, settings_file: P
 
 def test_settings_post_requires_csrf_and_same_origin(client: TestClient) -> None:
     values = {
-        'compiler_model': 'compiler/custom',
+        'fast_model': 'fast/custom',
         'classifier_model': 'classifier/custom',
-        'apply_model': 'apply/custom',
+        'smart_model': 'smart/custom',
         'window_days': '14',
         'limit': '42',
         'parallelism': '7',
@@ -121,9 +130,9 @@ def test_invalid_hidden_numeric_field_is_ignored(client: TestClient, settings_fi
     response = client.post(
         '/settings',
         data=csrf_data({
-            'compiler_model': 'compiler/custom',
+            'fast_model': 'fast/custom',
             'classifier_model': 'classifier/custom',
-            'apply_model': 'apply/custom',
+            'smart_model': 'smart/custom',
             'limit': '9999',
         }),
     )
@@ -146,7 +155,7 @@ def test_environment_overrides_are_not_persisted_by_save(
     monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '42')
     response = client.post(
         '/settings',
-        data=csrf_data({'compiler_model': 'compiler/custom', 'classifier_model': 'classifier/custom', 'apply_model': 'apply/custom'}),
+        data=csrf_data({'fast_model': 'fast/custom', 'classifier_model': 'classifier/custom', 'smart_model': 'smart/custom'}),
     )
 
     assert response.status_code == 303
@@ -172,49 +181,192 @@ def test_unchanged_environment_numeric_overrides_are_not_persisted(
 def test_unchanged_environment_model_overrides_are_not_persisted(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'env/compiler')
+    monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'env/fast')
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
     monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'env/classifier')
-    monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'env/apply')
 
     response = client.post('/settings', data=csrf_data({
-        'compiler_model': 'env/compiler',
+        'fast_model': 'env/fast',
+        'smart_model': 'env/smart',
         'classifier_model': 'env/classifier',
-        'apply_model': 'env/apply',
+        'embedding_model': '',
     }))
 
     assert response.status_code == 303
     saved = json.loads(settings_file.read_text())
-    assert saved['compiler_model'] == DashboardSettings.model_fields['compiler_model'].default
-    assert saved['classifier_model'] == DashboardSettings.model_fields['classifier_model'].default
-    assert saved['apply_model'] == DashboardSettings.model_fields['apply_model'].default
+    assert saved['fast_model'] is None
+    assert saved['smart_model'] is None
+    assert saved['classifier_model'] is None
+    assert saved['embedding_model'] is None
+
+
+def test_unchanged_environment_model_keeps_the_saved_value(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_settings(DashboardSettings.model_validate({'smart_model': 'saved/smart'}), settings_file)
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'smart_model': 'env/smart'}))
+
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['smart_model'] == 'saved/smart'
+
+
+def test_page_shows_the_environment_model_and_says_where_it_came_from(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+
+    html = client.get('/settings').text
+
+    assert '<input id="smart_model" name="smart_model" type="text" value="env/smart"' in html
+    assert 'Set by EVALUATORQ_SMART_MODEL' in html
+    assert 'Set by EVALUATORQ_FAST_MODEL' not in html
+
+
+def test_model_field_notes_an_environment_model(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    html = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': 'env/smart'}).text
+
+    assert 'Set by EVALUATORQ_SMART_MODEL' in html
+
+
+def test_embedding_environment_model_is_shown_without_overwriting_the_saved_choice(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_settings(DashboardSettings.model_validate({'embedding_model': 'saved/embed'}), settings_file)
+    monkeypatch.setenv('EVALUATORQ_EMBEDDING_MODEL', 'env/embed')
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    html = client.get('/settings').text
+    assert '<input id="embedding_model" name="embedding_model" type="text" value="env/embed"' in html
+    assert 'Set by EVALUATORQ_EMBEDDING_MODEL' in html
+    field = client.get('/settings/models', params={'field': 'embedding_model', 'embedding_model': 'env/embed'})
+    assert 'Set by EVALUATORQ_EMBEDDING_MODEL' in field.text
+
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'embedding_model': 'env/embed'}))
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['embedding_model'] == 'saved/embed'
 
 
 def test_explicit_model_edit_beats_environment_override(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'env/compiler')
+    monkeypatch.setenv('EVALUATORQ_FAST_MODEL', 'env/fast')
 
-    response = client.post('/settings', data=csrf_data({**_MODELS, 'compiler_model': 'new/compiler'}))
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'fast_model': 'new/fast'}))
 
     assert response.status_code == 303
-    assert json.loads(settings_file.read_text())['compiler_model'] == 'new/compiler'
+    assert json.loads(settings_file.read_text())['fast_model'] == 'new/fast'
 
 
-def test_blank_model_is_rejected(client: TestClient) -> None:
-    response = client.post(
-        '/settings',
-        data=csrf_data({
-            'compiler_model': '  ',
-            'classifier_model': 'classifier/custom',
-            'apply_model': 'apply/custom',
-            'window_days': '14',
-            'limit': '42',
-            'parallelism': '7',
-        }),
-    )
+def test_blank_model_is_saved_as_the_default(client: TestClient, settings_file: Path) -> None:
+    save_settings(DashboardSettings.model_validate({'fast_model': 'saved/fast'}), settings_file)
 
-    assert response.status_code == 422
-    assert 'model identifier must not be blank' in response.text
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'fast_model': '  '}))
+
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['fast_model'] is None
+
+
+def test_a_missing_model_field_keeps_the_saved_value(client: TestClient, settings_file: Path) -> None:
+    save_settings(DashboardSettings.model_validate({'embedding_model': 'saved/embed'}), settings_file)
+
+    response = client.post('/settings', data=csrf_data({'fast_model': 'fast/custom'}))
+
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['embedding_model'] == 'saved/embed'
+
+
+def test_saving_keeps_the_task_overrides(client: TestClient, settings_file: Path) -> None:
+    save_settings(DashboardSettings.model_validate({'model_overrides': {'apply': 'anthropic/claude-opus-5-5'}}), settings_file)
+
+    response = client.post('/settings', data=csrf_data(_MODELS))
+
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['model_overrides'] == {'apply': 'anthropic/claude-opus-5-5'}
+
+
+def test_page_lists_the_task_overrides_read_only(client: TestClient, settings_file: Path) -> None:
+    save_settings(DashboardSettings.model_validate({'model_overrides': {'apply': 'anthropic/claude-opus-5-5'}}), settings_file)
+
+    html = client.get('/settings').text
+
+    assert 'apply → anthropic/claude-opus-5-5' in html
+    assert 'settings file' in html
+    assert 'name="model_overrides"' not in html
+
+
+def test_page_lists_cli_and_legacy_env_task_overrides(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    set_cli_models(overrides={'sim.user': 'cli/user'})
+    monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'env/apply')
+
+    html = client.get('/settings').text
+
+    assert 'sim.user → cli/user' in html
+    assert '--model-override' in html
+    assert 'apply → env/apply' in html
+    assert 'EVALUATORQ_APPLY_MODEL' in html
+
+
+def test_page_hides_a_file_override_that_a_higher_source_shadows(
+    client: TestClient, settings_file: Path
+) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    save_settings(DashboardSettings.model_validate({'model_overrides': {'apply': 'file/apply'}}), settings_file)
+    set_cli_models(overrides={'apply': 'cli/apply'})
+
+    html = client.get('/settings').text
+
+    assert 'apply → cli/apply' in html
+    assert 'file/apply' not in html
+
+
+def test_saving_keeps_file_overrides_and_never_persists_cli_ones(
+    client: TestClient, settings_file: Path
+) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    save_settings(DashboardSettings.model_validate({'model_overrides': {'apply': 'file/apply'}}), settings_file)
+    set_cli_models(overrides={'apply': 'cli/apply', 'sim.user': 'cli/user'})
+
+    client.post('/settings', data=csrf_data(_MODELS))
+
+    assert json.loads(settings_file.read_text())['model_overrides'] == {'apply': 'file/apply'}
+
+
+def test_page_without_task_overrides_has_no_overrides_row(client: TestClient) -> None:
+    assert 'Task overrides' not in client.get('/settings').text
+
+
+def test_page_labels_the_four_roles_and_says_what_each_runs(client: TestClient) -> None:
+    html = client.get('/settings').text
+
+    for label, hint in (
+        ('Fast model', 'Trace search, simulated users'),
+        ('Smart model', 'Attack generation, judges, Insights summaries, apply-recommendations'),
+        ('Classifier model', 'Ask AI, Insights labels, signals'),
+        ('Embedding model', 'Insights maps'),
+    ):
+        assert f'>{label}</label>' in html
+        assert hint in html
+    assert 'Default sim model' not in html
+    assert 'Apply-recommendations model' not in html
+
+
+def test_an_empty_model_field_shows_the_builtin_default(client: TestClient) -> None:
+    html = client.get('/settings').text
+
+    assert f'placeholder="{BUILTIN["smart"]} (default)"' in html
+    assert f'placeholder="{BUILTIN["embedding"]} (default)"' in html
+    assert ' required' not in html.split('id="fast_model-field"', 1)[1].split('</span>', 1)[0]
 
 
 def test_saving_settings_invalidates_initialized_finder_store(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -235,7 +387,7 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
             closed.append(self.name)
 
     async def build_store(app: Any) -> Store:
-        models.append(app.state.finder_settings.compiler_model)
+        models.append(app.state.finder_settings.fast_model)
         return Store(f'store-{len(models)}')
 
     monkeypatch.setattr(finder_routes, '_build_store', build_store)
@@ -247,9 +399,9 @@ def test_saving_settings_invalidates_initialized_finder_store(client: TestClient
     response = client.post(
         '/settings',
         data=csrf_data({
-            'compiler_model': 'new/compiler',
+            'fast_model': 'new/compiler',
             'classifier_model': 'classifier/custom',
-            'apply_model': 'apply/custom',
+            'smart_model': 'smart/custom',
             'window_days': '14',
             'limit': '42',
             'parallelism': '7',
@@ -296,7 +448,7 @@ async def test_trace_store_created_during_settings_save_uses_new_generation(
             self.closed = True
 
     async def build_store(runtime: Any) -> Store:
-        model = runtime.state.finder_settings.compiler_model
+        model = runtime.state.finder_settings.fast_model
         models.append(model)
         if detached.is_set():
             stale_build_started.set()
@@ -317,16 +469,16 @@ async def test_trace_store_created_during_settings_save_uses_new_generation(
     with TestClient(app, follow_redirects=False) as client:
         first_page = await asyncio.to_thread(client.get, '/traces')
         assert first_page.status_code == 200
-        assert models == [app.state.finder_settings.compiler_model]
+        assert models == [app.state.finder_settings.fast_model]
 
         save_request = asyncio.create_task(
             asyncio.to_thread(
                 client.post,
                 '/settings',
                 data=csrf_data({
-                    'compiler_model': 'new/compiler',
+                    'fast_model': 'new/compiler',
                     'classifier_model': 'classifier/custom',
-                    'apply_model': 'apply/custom',
+                    'smart_model': 'smart/custom',
                     'window_days': '14',
                     'limit': '42',
                     'parallelism': '7',
@@ -432,22 +584,26 @@ def test_dashboard_shutdown_closes_finder_stores(tmp_path: Path, monkeypatch: py
 
 
 def test_settings_page_shows_saved_values(client: TestClient, settings_file: Path) -> None:
-    settings = DashboardSettings(
-        compiler_model='saved/compiler',
-        classifier_model='saved/classifier',
-        apply_model='saved/apply',
-        window_days=11,
-        limit=123,
-        parallelism=19,
+    settings = DashboardSettings.model_validate(
+        {
+            'fast_model': 'saved/fast',
+            'classifier_model': 'saved/classifier',
+            'smart_model': 'saved/smart',
+            'embedding_model': 'saved/embed',
+            'window_days': 11,
+            'limit': 123,
+            'parallelism': 19,
+        }
     )
     save_settings(settings, settings_file)
 
     response = client.get('/settings')
 
     assert response.status_code == 200
-    assert 'value="saved/compiler"' in response.text
+    assert 'value="saved/fast"' in response.text
     assert 'value="saved/classifier"' in response.text
-    assert 'value="saved/apply"' in response.text
+    assert 'value="saved/smart"' in response.text
+    assert 'value="saved/embed"' in response.text
     assert 'name="window_days"' not in response.text
     assert 'name="limit"' not in response.text
     assert 'name="parallelism"' not in response.text
@@ -497,15 +653,11 @@ def test_environment_auth_ignores_old_and_submitted_scope(
     assert run.population.facets.project_id is None
 
 
-def test_apply_model_uses_saved_setting_then_environment(
+def test_apply_model_uses_the_saved_override_then_the_legacy_environment(
     monkeypatch: pytest.MonkeyPatch, settings_file: Path
 ) -> None:
     save_settings(
-        DashboardSettings.model_validate(
-            {
-                'apply_model': 'saved/apply',
-            }
-        ),
+        DashboardSettings.model_validate({'model_overrides': {'apply': 'saved/apply'}}),
         settings_file,
     )
 
@@ -1210,8 +1362,108 @@ _CHOICES = {'openai': ['openai/gpt-5.6-luna'], 'typesafe': ['typesafe/jev-latest
 def test_settings_page_renders_model_fields_before_the_catalogue_loads(client: TestClient) -> None:
     html = client.get('/settings').text
 
-    assert '<span hx-get="/settings/models?field=compiler_model&amp;profile=&amp;auth_method=environment" hx-trigger="load"' in html
-    assert '<input id="compiler_model" name="compiler_model" type="text"' in html
+    assert 'id="fast_model-field" hx-get="/settings/models?field=fast_model"' in html
+    assert '<input id="fast_model" name="fast_model" type="text"' in html
+
+
+def test_model_fields_reload_when_the_authentication_choice_changes(client: TestClient) -> None:
+    html = client.get('/settings').text
+
+    for name in ('fast_model', 'smart_model', 'classifier_model', 'embedding_model'):
+        tag = html[html.index(f'id="{name}-field"') :].split('>', 1)[0]
+        assert 'hx-trigger="load, change[' in tag
+        assert 'orq_auth_method' in tag
+        assert 'orq_profile' in tag
+        assert 'orq_oauth_server' in tag
+        assert 'from:closest form' in tag
+        assert 'hx-swap="innerHTML"' in tag
+        include = tag.split('hx-include="', 1)[1].split('"', 1)[0]
+        assert f'#{name}-field input[name={name}]' in include
+        assert 'input[name=orq_auth_method]:checked' in include
+        assert 'csrf' not in include.lower()
+
+
+def test_model_field_asks_for_a_cli_profile_before_fetching(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def never(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        raise AssertionError('no fetch without a profile')
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', never)
+
+    html = client.get(
+        '/settings/models',
+        params={'field': 'fast_model', 'orq_auth_method': 'cli_profile', 'fast_model': 'x'},
+    ).text
+
+    assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x"')
+    assert 'Choose a CLI profile' in html
+
+
+def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[DashboardSettings] = []
+
+    def selected_auth(settings: DashboardSettings, **_kwargs: object) -> SimpleNamespace:
+        seen.append(settings)
+        return SimpleNamespace(method='cli_profile', api_key='profile-key', base_url='https://profile.example')
+
+    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+        return _CHOICES
+
+    class FakeLLM:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [])
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://eu.orq.ai', 'eu.orq.ai', 'ada@orq.ai', None, 'valid', True),
+    ))
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
+    monkeypatch.setattr(
+        model_choices, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
+    )
+
+    html = client.get(
+        '/settings/models',
+        params={
+            'field': 'fast_model',
+            'orq_auth_method': 'cli_profile',
+            'orq_profile': 'work',
+            'orq_oauth_server': 'https://eu.orq.ai',
+        },
+    ).text
+
+    assert 'model-pick' in html
+    assert seen[0].orq_auth_method == 'cli_profile'
+    assert seen[0].orq_profile == 'work'
+    assert seen[0].orq_oauth_server == 'https://eu.orq.ai'
+
+    client.get('/settings/models', params={'field': 'fast_model', 'orq_oauth_server': 'http://169.254.169.254'})
+    # A server the CLI has no login for is ignored, so a caller cannot point the CLI at any host.
+    assert seen[1].orq_oauth_server != 'http://169.254.169.254'
+
+
+def test_model_field_rejects_a_saved_oauth_server_the_cli_has_no_login_for(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, settings_file: Path
+) -> None:
+    seen: list[DashboardSettings] = []
+
+    def selected_auth(settings: DashboardSettings, **_kwargs: object) -> SimpleNamespace:
+        seen.append(settings)
+        raise ValueError('stop before any network call')
+
+    save_settings(
+        DashboardSettings.model_validate({'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'http://169.254.169.254'}),
+        settings_file,
+    )
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://eu.orq.ai', 'eu.orq.ai', 'ada@orq.ai', None, 'valid', True),
+    ))
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', selected_auth)
+
+    client.get('/settings/models', params={'field': 'fast_model'})
+    client.get('/settings/models', params={'field': 'fast_model', 'orq_oauth_server': 'http://169.254.169.254'})
+
+    assert [s.orq_oauth_server for s in seen] == [None, None]
 
 
 def test_model_field_offers_workspace_models_grouped_by_provider(
@@ -1223,10 +1475,10 @@ def test_model_field_offers_workspace_models_grouped_by_provider(
     monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-    html = client.get('/settings/models', params={'field': 'compiler_model', 'compiler_model': 'openai/gpt-5.6-luna'}).text
+    html = client.get('/settings/models', params={'field': 'fast_model', 'fast_model': 'openai/gpt-5.6-luna'}).text
 
-    assert '<input type="hidden" name="compiler_model" value="openai/gpt-5.6-luna">' in html
-    assert '<button type="button" id="compiler_model" class="model-pick-btn"' in html
+    assert '<input type="hidden" name="fast_model" value="openai/gpt-5.6-luna">' in html
+    assert '<button type="button" id="fast_model" class="model-pick-btn"' in html
     assert '<div class="hd">openai</div>' in html
     assert 'data-model="openai/gpt-5.6-luna" aria-pressed="true">gpt-5.6-luna</button>' in html
 
@@ -1244,7 +1496,7 @@ def test_model_field_ignores_a_missing_profile_rather_than_using_the_environment
     monkeypatch.setattr(model_choices, 'models_by_provider', choices)
     monkeypatch.setenv('ORQ_API_KEY', 'test-key')
 
-    html = client.get('/settings/models', params={'field': 'compiler_model', 'profile': 'gone'}).text
+    html = client.get('/settings/models', params={'field': 'fast_model', 'profile': 'gone'}).text
 
     assert 'Custom…' not in html
 
@@ -1284,7 +1536,7 @@ def test_model_field_uses_selected_authentication(
 
         monkeypatch.setattr(model_choices, 'resolve_llm_client', resolve_llm)
 
-    html = client.get('/settings/models', params={'field': 'compiler_model', 'auth_method': method}).text
+    html = client.get('/settings/models', params={'field': 'fast_model', 'auth_method': method}).text
 
     assert 'data-model="openai/gpt-5.6-luna"' in html
     assert method in calls
@@ -1297,18 +1549,18 @@ def test_model_field_uses_selected_authentication(
 
 
 def test_model_menu_submits_its_hidden_value(client: TestClient, settings_file: Path) -> None:
-    response = client.post('/settings', data=csrf_data({**_MODELS, 'compiler_model': 'my/own-model'}))
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'fast_model': 'my/own-model'}))
 
     assert response.status_code == 303
-    assert json.loads(settings_file.read_text())['compiler_model'] == 'my/own-model'
+    assert json.loads(settings_file.read_text())['fast_model'] == 'my/own-model'
 
 
 def test_model_field_stays_free_text_without_a_catalogue(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('ORQ_API_KEY', raising=False)
 
-    html = client.get('/settings/models', params={'field': 'compiler_model', 'compiler_model': 'x/y'}).text
+    html = client.get('/settings/models', params={'field': 'fast_model', 'fast_model': 'x/y'}).text
 
-    assert html.startswith('<input id="compiler_model" name="compiler_model" type="text" value="x/y"')
+    assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x/y"')
 
 
 @pytest.mark.asyncio
@@ -1337,3 +1589,102 @@ async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: p
         'tensorix': ['tensorix/z-ai/glm-5.3-flash'],
         'typesafe': ['typesafe/jev-latest'],
     }
+    assert await model_catalogue.models_by_provider(kind='embedding') == {'openai': ['openai/text-embedding-4']}
+
+
+def test_model_field_explains_a_missing_api_key(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    monkeypatch.setenv('EVALUATORQ_USER_SETTINGS', str(tmp_path / 'user-settings.json'))
+
+    html = client.get(
+        '/settings/models', params={'field': 'fast_model', 'auth_method': 'environment', 'fast_model': 'x'}
+    ).text
+
+    assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x"')
+    assert 'No Orq API key' in html
+
+
+def test_model_field_filters_the_catalogue_by_the_fields_kind(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    kinds: list[str] = []
+
+    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+        kinds.append(kind)
+        return _CHOICES
+
+    class FakeLLM:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
+    monkeypatch.setattr(
+        model_choices, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
+    )
+    for name in ('fast_model', 'smart_model', 'classifier_model', 'embedding_model'):
+        client.get('/settings/models', params={'field': name})
+
+    assert kinds == ['chat', 'chat', 'classify', 'embedding']
+
+
+def test_model_field_offers_use_default_and_labels_an_empty_value(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+        return _CHOICES
+
+    class FakeLLM:
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
+    monkeypatch.setattr(
+        model_choices, 'resolve_llm_client', lambda **_kwargs: SimpleNamespace(client=FakeLLM(), owned=True)
+    )
+
+    html = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': ''}).text
+
+    assert '<input type="hidden" name="smart_model" value="">' in html
+    assert f'{BUILTIN["smart"]} (default)</button>' in html
+    assert 'data-model="" aria-pressed="true">Use default</button>' in html
+    assert html.index('Use default') < html.index('<span>openai</span>')
+
+    chosen = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': 'openai/gpt-5.6-luna'}).text
+    assert 'data-model="" aria-pressed="false">Use default</button>' in chosen
+
+
+def test_page_shows_a_command_line_model_and_says_which_flag_set_it(client: TestClient) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    set_cli_models(roles={'smart': 'openai/gpt-6'})
+
+    html = client.get('/settings').text
+
+    assert '<input id="smart_model" name="smart_model" type="text" value="openai/gpt-6"' in html
+    assert 'Set by --smart-model' in html
+    assert 'Set by --fast-model' not in html
+
+
+def test_model_field_notes_a_command_line_model(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    set_cli_models(roles={'smart': 'openai/gpt-6'})
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    html = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': 'openai/gpt-6'}).text
+
+    assert 'Set by --smart-model' in html
+    assert 'EVALUATORQ_SMART_MODEL' not in html
+
+
+def test_saving_does_not_persist_a_command_line_model(client: TestClient, settings_file: Path) -> None:
+    from evaluatorq.common.model_roles import set_cli_models
+
+    save_settings(DashboardSettings.model_validate({'smart_model': 'saved/smart'}), settings_file)
+    set_cli_models(roles={'smart': 'openai/gpt-6', 'embedding': 'cli/embed'})
+
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'smart_model': 'openai/gpt-6', 'embedding_model': 'cli/embed'}))
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['smart_model'] == 'saved/smart'
+    assert saved['embedding_model'] is None

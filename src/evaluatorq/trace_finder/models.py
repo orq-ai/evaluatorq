@@ -329,6 +329,8 @@ class RunSnapshot:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: str | None = None
+    classifier_model: str | None = None
+    """The model the store classifies with, fixed when the store was built."""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'results', MappingProxyType(dict(self.results)))

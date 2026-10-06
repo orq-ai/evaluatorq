@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 
 from pydantic import ValidationError
 
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.facet_picker import render_facet_chips, render_facet_menu, window_count_note
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, Source, get_finder_exports_dir
@@ -19,10 +20,9 @@ from evaluatorq.dashboard.insights_uploads import is_uploaded_source
 from evaluatorq.dashboard.insights_views import _back_to_runs
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.view import model_control
-from evaluatorq.insights.models import DimensionName, InsightsConfig, LabelSpec
+from evaluatorq.insights.models import DimensionName, LabelSpec
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
-from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -203,13 +203,12 @@ INSIGHTS_MODEL_FIELDS: MappingProxyType[str, tuple[ModelKind, str]] = MappingPro
 
 
 def _model_defaults() -> dict[str, str]:
-    """What a run uses when the form does not choose: the pipeline's own defaults and the Settings models."""
-    settings = effective_settings()
+    """What a run uses when the form does not choose: each Insights task's model role."""
     return {
-        'summary_model': str(InsightsConfig.model_fields['summary_model'].default),
-        'classifier_model': settings.classifier_model,
-        'embedding_model': str(InsightsConfig.model_fields['embedding_model'].default),
-        'compiler_model': settings.compiler_model,
+        'summary_model': role_model('smart', task='insights.summary'),
+        'classifier_model': role_model('classifier', task='insights.labels'),
+        'embedding_model': role_model('embedding', task='insights.embedding'),
+        'compiler_model': role_model('fast', task='finder.compiler'),
     }
 
 

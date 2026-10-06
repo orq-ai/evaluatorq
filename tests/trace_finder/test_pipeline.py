@@ -36,6 +36,31 @@ async def test_filter_selector_falls_back_to_the_settings_window_when_bounds_are
 
 
 @pytest.mark.asyncio
+async def test_a_store_keeps_the_classifier_it_was_built_with_after_the_role_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[str] = []
+
+    async def fake_catalogue(orq: Any, *, start: datetime, end: datetime, limit: int) -> FacetCatalogue:
+        return FacetCatalogue()
+
+    async def fake_select(client: Any, model: str, catalogue: FacetCatalogue, query: str) -> FilterSelectionResult:
+        seen.append(model)
+        return FilterSelectionResult(FacetSelection())
+
+    monkeypatch.setattr(pipeline, 'load_facet_catalogue', fake_catalogue)
+    monkeypatch.setattr(pipeline, 'select_filters_with_response', fake_select)
+    monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'acme/built-with')
+    store = pipeline.build_run_store(DashboardSettings(), client=cast(Any, object()), orq=cast(Any, object()))
+    monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'acme/changed-later')
+
+    await store._filter_selector('refunds', PopulationRequest())
+
+    assert seen == ['acme/built-with']
+    assert (await store.snapshot()).classifier_model == 'acme/built-with'
+
+
+@pytest.mark.asyncio
 async def test_population_loader_uses_the_configured_window_when_bounds_are_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

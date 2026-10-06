@@ -35,7 +35,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from fasthtml.core import FastHTML, NotStr
@@ -51,14 +51,14 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.common.cli_oauth import list_oauth_sessions
+from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
-from evaluatorq.dashboard import library, metrics, report_tabs
+from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
-from evaluatorq.dashboard.model_choices import model_groups
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import dashboard_css, dashboard_css_version, page
@@ -76,7 +76,7 @@ from evaluatorq.dashboard.view import (
     SURFACE_LABELS,
     filter_fragment,
     landing_body,
-    model_control,
+    model_field_source,
     oauth_session_field,
     redteam_overview_body,
     render_filter_form,
@@ -88,6 +88,7 @@ from evaluatorq.dashboard.view import (
     runs_screen_body,
     search_results,
     settings_body,
+    settings_model_control,
     sim_overview_body,
 )
 from evaluatorq.trace_finder.settings import (
@@ -167,31 +168,18 @@ def _settings_config(
     settings: DashboardSettings | None = None,
 ) -> list[tuple[str, str | list[str]]]:
     """Build the read-only runtime config shown on the Settings page: the run
-    stores being scanned, the default sim model, and API-key presence with a
+    stores being scanned and API-key presence with a
     masked suffix (never the full value)."""
     from evaluatorq.dashboard.library import default_roots
     from evaluatorq.dashboard.orq_workspace import classify_host, resolve_base_url, resolve_slug
-    from evaluatorq.simulation.types import DEFAULT_MODEL
 
     scan_roots = roots if roots is not None else default_roots()
     store_paths = [str(p) for p in scan_roots] or ['—']
-    from evaluatorq.dashboard.apply_ui import APPLY_MODEL_ENV, DEFAULT_APPLY_MODEL, apply_model
-
     settings = settings or effective_settings()
-    config: list[tuple[str, str | list[str]]] = [('Run stores', store_paths)]
-    config.append(('Default sim model', DEFAULT_MODEL))
-    model = apply_model()
-    source = (
-        APPLY_MODEL_ENV
-        if os.environ.get(APPLY_MODEL_ENV, '').strip()
-        else 'saved'
-        if model != DEFAULT_APPLY_MODEL
-        else 'default'
-    )
-    config.extend((
-        ('Apply-recommendations model', f'{model} ({source})'),
+    config: list[tuple[str, str | list[str]]] = [
+        ('Run stores', store_paths),
         ('Authentication method', settings.orq_auth_method.replace('_', ' ')),
-    ))
+    ]
     if settings.orq_auth_method == 'cli_profile' and settings.orq_profile is not None and profile is None:
         config.append(('Orq profile status', 'unavailable — choose Environment or another profile'))
     if profile is not None:
@@ -380,27 +368,71 @@ async def _settings_oauth_sessions(req: Request) -> NotStr:
     return NotStr(oauth_session_field(value, sessions))
 
 
+_MODEL_FIELD_KINDS: dict[str, Literal['chat', 'classify', 'embedding']] = {
+    'fast_model': 'chat',
+    'smart_model': 'chat',
+    'classifier_model': 'classify',
+    'embedding_model': 'embedding',
+}
+
+
+def _join_notes(*notes: str) -> str:
+    return ' '.join(note for note in notes if note)
+
+
 async def _settings_models(req: Request) -> NotStr:
     """One settings model field as its workspace menu, or as the text box when there is no catalogue."""
     field = req.query_params.get('field', '')
     if field not in MODEL_FIELDS:
         return NotStr('')
     value = req.query_params.get(field, '')
-    name = req.query_params.get('profile', '')
+    params = req.query_params
+    name = params.get('orq_profile') or params.get('profile') or ''
     settings = effective_settings()
-    requested_method = req.query_params.get('auth_method')
+    pinned, pinned_note = model_field_source(field)
+    env_note = pinned_note if pinned and value == pinned else ''
+    kind = _MODEL_FIELD_KINDS[field]
+    requested_method = params.get('orq_auth_method') or params.get('auth_method')
+    update: dict[str, Any] = {}
     if requested_method in ('environment', 'cli_profile', 'stored_api_key', 'cli_oauth'):
-        settings = settings.model_copy(update={'orq_auth_method': requested_method, 'orq_profile': name or None})
+        update = {'orq_auth_method': requested_method, 'orq_profile': name or None}
     elif name:
-        settings = settings.model_copy(update={'orq_auth_method': 'cli_profile', 'orq_profile': name})
+        update = {'orq_auth_method': 'cli_profile', 'orq_profile': name}
+    # The server must be one of the CLI's own logins: this GET carries no CSRF token, so an arbitrary
+    # URL would let any caller point the Orq CLI at a host of their choosing. A saved value is checked
+    # too whenever OAuth will use it, since a settings file can hold any URL.
+    server = params.get('orq_oauth_server') or settings.orq_oauth_server
+    method = update.get('orq_auth_method', settings.orq_auth_method)
+    if server and (method == 'cli_oauth' or server != settings.orq_oauth_server):
+        sessions = await asyncio.to_thread(list_oauth_sessions)
+        if server not in {session.server for session in sessions}:
+            server = None
+    update['orq_oauth_server'] = server
+    settings = settings.model_copy(update=update)
+    if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
+        return NotStr(
+            settings_model_control(
+                field, value, {}, note=_join_notes(env_note, 'Choose a CLI profile to load its models.')
+            )
+        )
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
     try:
         auth = resolve_dashboard_auth(settings, profiles=profiles)
-    except (ImportError, OSError, RuntimeError, ValueError):
-        groups: dict[str, list[str]] = {}
+        async with model_choices.catalogue_client(auth) as client:
+            groups = await model_choices.models_by_provider(client, kind=kind)
+    except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        groups = {}
+        logger.warning('Could not load the model catalogue for {}: {}', field, exc)
+        if isinstance(exc, MissingLLMCredentialsError):
+            note = (
+                "No Orq API key for the chosen authentication method, so the model list can't load. "
+                'Set one under Authentication, or type a model id.'
+            )
+        else:
+            note = "Couldn't load the model list from Orq. Type a model id."
     else:
-        groups = await model_groups(auth, 'classify' if field == 'classifier_model' else 'chat')
-    return NotStr(model_control(field, value, groups, label=MODEL_FIELDS[field]))
+        note = '' if groups else 'Orq returned no models for this field. Type a model id.'
+    return NotStr(settings_model_control(field, value, groups, note=_join_notes(env_note, note)))
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
@@ -549,17 +581,15 @@ def _log_finder_store_close_failures(stores: list[Any], results: list[Any]) -> N
 
 def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> dict[str, object]:
     """Keep unchanged environment overrides out of the saved file."""
-    values: dict[str, object] = {
-        name: form_data.get(name, '') for name in ('compiler_model', 'classifier_model', 'apply_model')
-    }
-    for name, env_name in (
-        ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
-        ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),
-        ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
-    ):
-        override = os.environ.get(env_name, '').strip()
-        if override and values[name] == override:
-            values[name] = getattr(current, name)
+    values: dict[str, object] = {'model_overrides': current.model_overrides}
+    for name in MODEL_FIELDS:
+        saved = getattr(current, name)
+        if name not in form_data:
+            values[name] = saved
+            continue
+        submitted = str(form_data[name]).strip() or None
+        # A value that only came from the environment or a flag is not the user's choice, so the saved one stays.
+        values[name] = saved if submitted and submitted == model_field_source(name)[0] else submitted
     values['orq_profile'] = form_data.get('orq_profile', current.orq_profile)
     method = form_data.get('orq_auth_method')
     if method is None and 'orq_profile' in form_data:

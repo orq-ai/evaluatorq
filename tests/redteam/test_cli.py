@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from click.testing import Result as CliResult
 from typer.testing import CliRunner
 
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.redteam.cli import app
 from evaluatorq.redteam.contracts import (
     AgentInfo,
@@ -654,6 +655,15 @@ class TestLLMConfigFlagForwarding:
         assert config.attacker.model == "openai/attacker-model"
         assert config.evaluator.judges == ["openai/judge-model"]
 
+    def test_model_flags_default_to_the_smart_role(self):
+        result, mock_rt = _run_with_mocked_red_team(["run", "--target", "agent:test-agent", "--yes"])
+        assert result.exit_code == 0, result.output
+        # No model flag, so the CLI passes no config and red_team() builds LLMConfig(), which resolves the smart role.
+        assert mock_rt.call_args.kwargs["llm_config"] is None
+        from evaluatorq.redteam.contracts import LLMConfig
+
+        assert LLMConfig().attacker.model == role_model("smart", task="redteam.attacker")
+
     def test_min_evaluation_coverage_reaches_the_evaluator_config(self):
         result, mock_rt = _run_with_mocked_red_team(
             ["run", "--target", "agent:test-agent", "--min-evaluation-coverage", "0.25", "--yes"]
@@ -676,3 +686,44 @@ class TestLLMConfigFlagForwarding:
         )
         assert result.exit_code == 2, result.output
         mock_rt.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Model roles reach the attacker when --attack-model is omitted
+# ---------------------------------------------------------------------------
+
+
+class TestAttackerModelRole:
+    """The attacker follows the smart role (and its task override) unless --attack-model is set."""
+
+    @staticmethod
+    def _attacker_model(args: list[str], extra: list[str] | None = None) -> str:
+        from evaluatorq.cli import _register_subapps
+        from evaluatorq.cli import app as root_app
+
+        if not root_app.registered_groups:
+            _register_subapps(root_app)
+        with patch("evaluatorq.redteam.red_team", new=AsyncMock(return_value=_make_mock_report())) as mock_rt:
+            result = runner.invoke(
+                root_app,
+                [*args, "redteam", "run", "--target", "agent:test-agent", "--yes", *(extra or [])],
+                catch_exceptions=False,
+            )
+        assert result.exit_code == 0, result.output
+        from evaluatorq.redteam.contracts import LLMConfig
+
+        # red_team() falls back to LLMConfig() when the CLI passes none; build it while the root flags are set.
+        config = mock_rt.call_args.kwargs["llm_config"] or LLMConfig()
+        return config.attacker.model
+
+    def test_smart_model_flag_reaches_the_attacker(self):
+        assert self._attacker_model(["--smart-model", "flag/smart"]) == "flag/smart"
+
+    def test_model_override_reaches_the_attacker(self):
+        assert self._attacker_model(["--model-override", "redteam.attacker=flag/task"]) == "flag/task"
+
+    def test_attack_model_flag_still_wins(self):
+        model = self._attacker_model(
+            ["--model-override", "redteam.attacker=flag/task"], extra=["--attack-model", "explicit/model"]
+        )
+        assert model == "explicit/model"

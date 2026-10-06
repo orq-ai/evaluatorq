@@ -39,7 +39,11 @@ from evaluatorq.common.structured_output import (
     usage_from_exception,
 )
 from evaluatorq.common.trace_input import load_traces, partition_traces
-from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario, SimulationDatapoint
+from evaluatorq.simulation.types import (  # noqa: TC001 — pydantic resolves these at runtime
+    Persona,
+    Scenario,
+    SimulationDatapoint,
+)
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
 from evaluatorq.simulation.utils.structured_output import generate_structured
 from evaluatorq.types import Trace, TraceInput
@@ -276,7 +280,7 @@ async def _summarize_conversation(
 async def summarize_conversations(
     conversations: list[TraceConversation],
     *,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
@@ -320,9 +324,11 @@ async def summarize_conversations(
             Zero rows is a caller error on every surface, not a run of zero personas.
     """
     from evaluatorq.openresponses.client import build_simulation_client
-    from evaluatorq.simulation._config import resolve_sim_llm_config
+    from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
 
-    llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='summarize_conversations')
+    llm_config = sim_role_config(
+        resolve_sim_llm_config(model=model, llm_config=llm_config, caller='summarize_conversations'), 'sim.generator'
+    )
     model = llm_config.model
     config = config or TraceAnalysisConfig()
     llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
@@ -478,7 +484,7 @@ async def datapoints_from_traces(
     source: TraceInput | Sequence[Trace | TraceConversation] | None = None,
     *,
     conversations: Sequence[Trace | TraceConversation] | None = None,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
@@ -543,10 +549,12 @@ async def datapoints_from_traces(
         raise TypeError("datapoints_from_traces() got both 'source' and its legacy alias 'conversations'.")
     conversations = await _resolve_trace_conversations(source, orq_api_key=orq_api_key, base_url=base_url)
     from evaluatorq.openresponses.client import build_simulation_client
-    from evaluatorq.simulation._config import resolve_sim_llm_config
+    from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
     from evaluatorq.simulation.generators.first_message_generator import FirstMessageGenerator
 
-    llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='datapoints_from_traces')
+    llm_config = sim_role_config(
+        resolve_sim_llm_config(model=model, llm_config=llm_config, caller='datapoints_from_traces'), 'sim.generator'
+    )
     model = llm_config.model
     config = config or TraceAnalysisConfig()
     llm_client, owned = build_simulation_client(client or llm_config.client, extra_api_key=api_key, max_retries=0)
@@ -695,7 +703,7 @@ async def extend_from_traces(
     *,
     num_datapoints: int,
     agent_description: str | None = None,
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     llm_config: LLMCallConfig | None = None,
     client: AsyncOpenAI | None = None,
     api_key: str | None = None,
@@ -732,10 +740,12 @@ async def extend_from_traces(
             Zero rows is a caller error on every surface, not a run of zero personas.
     """
     from evaluatorq.openresponses.client import build_simulation_client
-    from evaluatorq.simulation._config import resolve_sim_llm_config
+    from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
     from evaluatorq.simulation.generators.datapoint_generator import DatapointGenerator
 
-    llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='extend_from_traces')
+    llm_config = sim_role_config(
+        resolve_sim_llm_config(model=model, llm_config=llm_config, caller='extend_from_traces'), 'sim.generator'
+    )
     model = llm_config.model
 
     if not conversations:

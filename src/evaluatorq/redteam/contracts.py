@@ -589,6 +589,7 @@ class TargetConfig(BaseModel):
 # ---------------------------------------------------------------------------
 
 # Re-export from evaluatorq.contracts so existing imports continue to work.
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.contracts import (  # noqa: F401
     DEFAULT_PIPELINE_MODEL,
     DEFAULT_TARGET_MAX_TOKENS,
@@ -639,7 +640,7 @@ class EvaluatorConfig(LLMCallConfig):
         description='Primary judge model shorthand; normalized to judges[0].',
     )
     judges: list[str] = Field(
-        default_factory=lambda: [DEFAULT_PIPELINE_MODEL],
+        default_factory=lambda: [role_model('smart', task='redteam.evaluator')],
         min_length=1,
         description='Judge model IDs. judges[0] is the primary evaluator model.',
     )
@@ -930,8 +931,17 @@ class LLMConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     # --- Role-based call configs ----------------------------------------------
-    attacker: LLMCallConfig = Field(default_factory=LLMCallConfig)
+    attacker: LLMCallConfig = Field(
+        default_factory=lambda: LLMCallConfig(model=role_model('smart', task='redteam.attacker'))
+    )
     evaluator: EvaluatorConfig = Field(default_factory=EvaluatorConfig)
+
+    @model_validator(mode='after')
+    def _attacker_follows_smart_role(self) -> 'LLMConfig':
+        """An attacker config that never named a model gets the smart role's, not the class default."""
+        if 'model' not in self.attacker.model_fields_set:
+            self.attacker = self.attacker.model_copy(update={'model': role_model('smart', task='redteam.attacker')})
+        return self
 
     # --- Retry configuration --------------------------------------------------
     # Retries after the initial call (0 disables) for pipeline-owned LLM calls and
@@ -999,9 +1009,32 @@ class LLMConfig(BaseModel):
         return self.retry_count + 1
 
 
-# Module-level default used by internal pipeline components.
-# Import this in other modules; tests can monkeypatch it.
+# Module-level default for the non-model knobs (timeouts, retries). Its model fields are
+# import-time snapshots and must not be read; build `LLMConfig()` to resolve them by role.
 PIPELINE_CONFIG = LLMConfig()
+
+
+def evaluator_model_for(model: str | None, cfg: LLMCallConfig | EvaluatorConfig | None) -> str:
+    """The primary judge model: *model*, else the one *cfg* names, else the ``redteam.evaluator`` task's model."""
+    if model:
+        return model
+    if isinstance(cfg, EvaluatorConfig):
+        return cfg.primary_model
+    if cfg is not None and 'model' in cfg.model_fields_set:
+        return cfg.model
+    return role_model('smart', task='redteam.evaluator')
+
+
+def attacker_model_for(model: str | None, pipeline_config: LLMConfig | None) -> str:
+    """The attack model: *model*, else the caller's *pipeline_config* attacker, else the ``redteam.attacker`` task's model.
+
+    Never reads `PIPELINE_CONFIG`, whose models are import-time snapshots.
+    """
+    if model:
+        return model
+    if pipeline_config is not None:
+        return pipeline_config.attacker.model
+    return role_model('smart', task='redteam.attacker')
 
 
 # ---------------------------------------------------------------------------

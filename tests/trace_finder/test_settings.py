@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.common.model_roles import BUILTIN, role_model, set_cli_models
 from evaluatorq.trace_finder.settings import (
     DashboardSettings,
     effective_settings,
@@ -22,9 +22,11 @@ from evaluatorq.trace_finder import secure_credentials
 def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
     path = tmp_path / 'nested' / 'dashboard-settings.json'
     settings = DashboardSettings(
-        compiler_model='compiler/model',
+        fast_model='fast/model',
+        smart_model='smart/model',
         classifier_model='classifier/model',
-        apply_model='apply/model',
+        embedding_model='embedding/model',
+        model_overrides={'apply': 'apply/model'},
         window_days=14,
         limit=42,
         parallelism=7,
@@ -93,9 +95,9 @@ def test_effective_settings_precedence_is_file_then_environment_then_overrides(
     path = tmp_path / 'dashboard-settings.json'
     save_settings(
         DashboardSettings(
-            compiler_model='file/compiler',
+            fast_model='file/fast',
             classifier_model='file/classifier',
-            apply_model='file/apply',
+            model_overrides={'apply': 'file/apply'},
             window_days=8,
             limit=80,
             parallelism=8,
@@ -103,21 +105,22 @@ def test_effective_settings_precedence_is_file_then_environment_then_overrides(
         path,
     )
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
-    monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'env/compiler')
     monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'env/classifier')
     monkeypatch.setenv('EVALUATORQ_APPLY_MODEL', 'env/apply')
+    set_cli_models()
 
     settings = effective_settings(
         {
-            'compiler_model': 'override/compiler',
             'window_days': 21,
             'limit': None,
         }
     )
 
-    assert settings.compiler_model == 'override/compiler'
-    assert settings.classifier_model == 'env/classifier'
-    assert settings.apply_model == 'env/apply'
+    # Models resolve through role_model, not effective_settings.
+    assert settings.fast_model == 'file/fast'
+    assert role_model('fast') == 'file/fast'
+    assert role_model('classifier') == 'env/classifier'
+    assert role_model('smart', task='apply') == 'env/apply'
     assert settings.window_days == 21
     assert settings.limit == 80
     assert settings.parallelism == 8
@@ -162,10 +165,51 @@ def test_settings_path_uses_environment_override(monkeypatch: pytest.MonkeyPatch
     assert settings_path() == path
 
 
-def test_default_settings_match_shared_pipeline_default() -> None:
+def test_default_settings_have_no_saved_models() -> None:
     settings = DashboardSettings.model_validate({})
-    assert settings.compiler_model == DEFAULT_PIPELINE_MODEL
-    assert settings.apply_model == DEFAULT_PIPELINE_MODEL
+    assert settings.fast_model is None
+    assert settings.smart_model is None
+    assert settings.classifier_model is None
+    assert settings.embedding_model is None
+    assert settings.model_overrides == {}
+    assert role_model('fast') == BUILTIN['fast']
+
+
+def test_blank_role_model_means_default() -> None:
+    settings = DashboardSettings.model_validate({'fast_model': '  ', 'smart_model': ' a/b '})
+    assert settings.fast_model is None
+    assert settings.smart_model == 'a/b'
+
+
+def test_unknown_and_blank_model_overrides_are_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level('WARNING'):
+        settings = DashboardSettings.model_validate(
+            {'model_overrides': {'apply': 'a/b', 'bogus': 'c/d', 'sim.judge': ' '}}
+        )
+    assert settings.model_overrides == {'apply': 'a/b'}
+    assert 'bogus' in caplog.text
+
+
+def test_legacy_settings_load_without_defaults_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(
+        json.dumps(
+            {
+                'compiler_model': 'custom/compiler',
+                'apply_model': 'openai/gpt-5.6-luna',
+                'classifier_model': 'custom/classifier',
+                'window_days': 9,
+            }
+        )
+    )
+    with caplog.at_level('WARNING'):
+        settings = load_settings(path)
+    assert 'using defaults' not in caplog.text
+    assert settings.window_days == 9
+    assert settings.model_overrides == {'finder.compiler': 'custom/compiler'}
+    assert settings.classifier_model == 'custom/classifier'
 
 
 def test_explorer_columns_round_trip_and_unknown_keys_drop(tmp_path: Path) -> None:
@@ -237,3 +281,17 @@ def test_encrypted_key_fails_closed_when_encryption_key_changes(monkeypatch: pyt
     with pytest.raises(RuntimeError, match='cannot be decrypted'):
         read_stored_api_key(encrypted)
     secure_credentials._encryption_key.cache_clear()
+
+
+def test_blank_task_override_does_not_block_legacy_migration() -> None:
+    settings = DashboardSettings.model_validate(
+        {'compiler_model': 'custom/compiler', 'model_overrides': {'finder.compiler': '  '}}
+    )
+    assert settings.model_overrides == {'finder.compiler': 'custom/compiler'}
+
+
+def test_non_blank_task_override_still_beats_legacy_value() -> None:
+    settings = DashboardSettings.model_validate(
+        {'compiler_model': 'custom/compiler', 'model_overrides': {'finder.compiler': 'mine/x'}}
+    )
+    assert settings.model_overrides == {'finder.compiler': 'mine/x'}

@@ -128,6 +128,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Building call params | `LLMCallConfig.request_params(...)` (`contracts.py`) | hand-built `extra_kwargs` dict — it skips the reserved-key guard |
 | Resolving an LLM client | `common.llm_client.resolve_llm_client` | `AsyncOpenAI(...)` anywhere but that module |
 | Retry / backoff | `common.retry.with_retry`, or the SDK's own `max_retries` — **exactly one of the two** | a second retry layer on a client that already retries (they multiply) |
+| Choosing the default model for a call | `common.model_roles.role_model(role, task=...)` (roles `fast`, `smart`, `classifier`, `embedding`) | `DEFAULT_PIPELINE_MODEL` as a parameter default — it is the fast built-in, and a parameter default snapshots it at import so a role setting never reaches the call |
 | Calling the target under test | `common.target_call.call_target_with_retry` | ad-hoc `respond()` + try/except |
 | LLM-as-judge | `common.judge.run_judge`; multi-judge via `common.jury` | new judge prompt + parse loop |
 | OTel spans, token usage, cost | `common.tracing` (`with_llm_span`, `record_token_usage`, `record_llm_response`) | `get_tracer` / `start_as_current_span` outside a `tracing.py` module |
@@ -213,10 +214,13 @@ These tests use fakes and do not require API credentials. The repository does no
 - `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
 - `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
-- `EVALUATORQ_APPLY_MODEL` — model for the dashboard's apply-recommendations merge (default `openai/gpt-5.6-luna`, the shared `DEFAULT_PIPELINE_MODEL`)
+- `EVALUATORQ_FAST_MODEL` — model for the fast role: simulated user, simulation generators, trace-finder compiler (default `openai/gpt-6-luna`, the `DEFAULT_PIPELINE_MODEL` alias)
+- `EVALUATORQ_SMART_MODEL` — model for the smart role: red-team attacks, every judge and evaluator, apply-recommendations, Insights summaries (default `openai/gpt-6-sol`)
+- `EVALUATORQ_APPLY_MODEL` — deprecated; pins the `apply` task. Use `--model-override apply=...`, the settings file's `model_overrides`, or `EVALUATORQ_SMART_MODEL`
 - `EVALUATORQ_DASHBOARD_SETTINGS` — path to the dashboard and trace-finder settings JSON (default `.evaluatorq/dashboard-settings.json`)
-- `EVALUATORQ_COMPILER_MODEL` — trace-finder compiler model (default `openai/gpt-5.6-luna`)
-- `EVALUATORQ_CLASSIFIER_MODEL` — trace-finder classifier model (default `typesafe/jev-latest`)
+- `EVALUATORQ_COMPILER_MODEL` — deprecated; pins the `finder.compiler` task. Use `--model-override finder.compiler=...` or `EVALUATORQ_FAST_MODEL`
+- `EVALUATORQ_CLASSIFIER_MODEL` — model for the classifier role: Ask AI, trace-finder classification, Insights labels, signals (default `typesafe/jev-latest`)
+- `EVALUATORQ_EMBEDDING_MODEL` — model for the embedding role: Insights embeddings (default `openai/text-embedding-3-small`)
 - `EVALUATORQ_FINDER_WINDOW_DAYS` — trace-finder lookback window in days (default `7`)
 - `EVALUATORQ_FINDER_LIMIT` — trace-finder population cap (default `500`)
 - `EVALUATORQ_FINDER_PARALLELISM` — concurrent trace-finder classify calls (default `100`)

@@ -31,7 +31,7 @@ Targets — provide **exactly one**:
 |---|---|---|
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. May be omitted when `--target` is an Orq agent (fetched automatically). |
 | `--name` / `-n` | `str \| None` / unset | Run name. Unset unless passed: the SDK then saves the run as `sim` and names an uploaded experiment `simulation-<timestamp>-<id>`. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, persona/scenario/first-message generation, the recommendations pass and the executive summary. Sets `llm_config.model`. |
+| `--sim-model` | `str \| None` / unset | Model for the user-simulator, the judge, persona/scenario/first-message generation, the recommendations pass and the executive summary. Unset, the simulated user, recommendations, executive summary and persona/scenario/first-message generation run on the `fast` role (`openai/gpt-6-luna` by default) and the judge runs on the `smart` role (`openai/gpt-6-sol` by default); a value here applies to all of them. Sets `llm_config.model`. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Unset unless passed; the SDK default is `10`. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. Unset unless passed; the SDK default is `10`. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
@@ -80,7 +80,7 @@ There is no `--target-reasoning-effort` flag here — it is a `eq sim run` flag 
 | `--from-run` | `str \| None` | Replay a previous run from `.evaluatorq/sim-runs/`: pass its file name, run id, path, or `"latest"`. Re-runs the exact same personas, scenarios, and first messages; only the target/evaluators may differ. |
 | `--memory-entity` | `str \| None` / `None` | Memory `entity_id` sent with every `agent:<key>` (or bare `<key>`) target call, for agents with a memory store attached. Omit to mint a fresh id per conversation; pass one to reuse a specific (e.g. seeded) entity, shared across the run. |
 | `--name` / `-n` | `str \| None` / unset | Run name. Unset unless passed: the SDK then saves the run as `sim` and names an uploaded experiment `simulation-<timestamp>-<id>`. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for the user-simulator, the judge, the recommendations pass and the executive summary. Sets `llm_config.model`. |
+| `--sim-model` | `str \| None` / unset | Model for the user-simulator, the judge, the recommendations pass and the executive summary. Unset, the simulated user, recommendations and executive summary run on the `fast` role (`openai/gpt-6-luna` by default) and the judge runs on the `smart` role (`openai/gpt-6-sol` by default); a value here applies to all of them. Sets `llm_config.model`. |
 | `--max-turns` | `int` / `10` | Maximum conversation turns. Unset unless passed; the SDK uses the replayed run's cap with `--from-run`, else `10`. |
 | `--datapoint-parallelism` | `int` / `10` | Concurrent simulations. Unset unless passed; the SDK default is `10`. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |
@@ -211,7 +211,7 @@ eq sim generate --datapoints dp.jsonl --agent-description "..."
 | `--datapoints` / `-d` | `Path` (required) | Path to write generated datapoints JSONL. |
 | `--agent-description` | `str \| None` / `None` | Free-text description of the agent. |
 | `--target` | `str \| None` / `None` | Agent target used to fetch the description when `--agent-description` is omitted. Accepts `agent:<key>`. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for persona/scenario/first-message generation. |
+| `--sim-model` | `str \| None` / `None` | Model for persona/scenario/first-message generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
 | `--num-personas` | `int` / `5` | Number of personas to generate. |
 | `--num-scenarios` | `int` / `5` | Number of scenarios to generate. |
 | `--persona-seed` | `str` (repeatable) / `None` | Archetype seed for a persona, e.g. `"angry retiree"` (repeatable). Each seed becomes one persona the LLM fleshes out — overrides `--num-personas`. Omit to auto-generate. |
@@ -242,7 +242,7 @@ Fetches recent traces from the Orq traces API (requires `ORQ_API_KEY`) and build
 | `--search` | `str \| None` | Free-text search applied to the trace list. |
 | `--extend` | `int` / `0` | Also generate N distribution-matched datapoints on top of the direct per-trace ones (extra LLM calls). `0` disables extension. |
 | `--agent-description` | `str \| None` | Agent description used for `--extend` generation. Optional; inferred from the traffic profile if omitted. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for persona/scenario inference and extension generation. |
+| `--sim-model` | `str \| None` / `None` | Model for persona/scenario inference and extension generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests while building datapoints. `-1` disables it. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
@@ -266,7 +266,7 @@ Markdown/HTML exports include remediation suggestions if the input run JSON alre
 | `--output` / `-o` | `Path` (required) | Path to write the exported file. |
 | `--format` | `str` / `openresponses` | Export format: `openresponses` (payload JSON), `md` (Markdown report), `html` (HTML report). |
 | `--recommendations` | `bool` / `False` | For `md`/`html`: generate LLM remediation suggestions at export time if none are stored. Extra LLM cost; uses `--sim-model`. |
-| `--sim-model` | `str` / `openai/gpt-5.6-luna` | Model for `--recommendations` generation. |
+| `--sim-model` | `str \| None` / `None` | Model for `--recommendations` generation. Unset resolves the `fast` role (`openai/gpt-6-luna` by default). |
 | `--target-label` | `str` / `agent` | Target name shown in md/html report headers. |
 
 ---

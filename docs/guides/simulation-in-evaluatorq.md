@@ -157,7 +157,7 @@ The user simulator and the judge are model calls, so `turn_count` and `goal_achi
 | `target` | — | The agent under test, as a callable taking `list[Message]`. |
 | `agent_key` | — | An Orq deployment key, used instead of `target`. Exactly one of the two is required; if both are given, `target` wins. |
 | `max_turns` | `10` | Turn budget per conversation. Hitting it stops the run with `terminated_by: max_turns`. |
-| `model` | `openai/gpt-5.6-luna` | The model for the **user simulator and the judge** — not for the agent under test, which is whatever `target` or `agent_key` resolves to. |
+| `model` | unset: the simulated user runs on the `fast` role (`openai/gpt-6-luna`), the judge on the `smart` role (`openai/gpt-6-sol`) | One model for the **user simulator and the judge**, when set — not for the agent under test, which is whatever `target` or `agent_key` resolves to. |
 | `user_simulator` | built-in | A custom `BaseAgent` to play the user. |
 | `judge` | built-in | A custom `BaseAgent` to score the conversation. |
 

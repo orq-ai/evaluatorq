@@ -34,7 +34,6 @@ from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.dashboard.library import _manifest_card_id, report_id
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     DeliveryMethod,
     EvaluatorConfig,
     LLMConfig,
@@ -483,7 +482,8 @@ def run(
     attack_model: Annotated[
         str | None,
         typer.Option(
-            help=f'Model for adversarial prompt generation. Defaults to {DEFAULT_PIPELINE_MODEL}. {MODEL_OPTION_NOTE}'
+            help=f'Model for adversarial prompt generation. Default: the smart model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
         ),
     ] = None,
     attacker_instructions: Annotated[
@@ -499,7 +499,8 @@ def run(
     evaluator_model: Annotated[
         str | None,
         typer.Option(
-            help=f'Model for OWASP evaluation scoring. Defaults to {DEFAULT_PIPELINE_MODEL}. {MODEL_OPTION_NOTE}'
+            help=f'Model for OWASP evaluation scoring. Default: the smart model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
         ),
     ] = None,
     min_evaluation_coverage: Annotated[

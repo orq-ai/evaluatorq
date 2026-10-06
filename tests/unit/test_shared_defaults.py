@@ -7,19 +7,25 @@ Each surface stays individually overridable (`--sim-model`, `--attack-model`,
 
 import pytest
 
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, DEFAULT_TARGET_MAX_TOKENS
+from evaluatorq.contracts import (
+    DEFAULT_FAST_MODEL,
+    DEFAULT_PIPELINE_MODEL,
+    DEFAULT_SMART_MODEL,
+    DEFAULT_TARGET_MAX_TOKENS,
+)
 from evaluatorq.llm_jury import DEFAULT_JUDGE_MODEL
 from evaluatorq.simulation.agents.base import DEFAULT_MAX_TOKENS
 from evaluatorq.simulation.types import DEFAULT_MODEL
 
 
 def test_shared_default_is_provider_prefixed():
-    assert DEFAULT_PIPELINE_MODEL == 'openai/gpt-5.6-luna'
+    assert DEFAULT_PIPELINE_MODEL == 'openai/gpt-6-luna'
 
 
-def test_every_surface_default_model_is_the_shared_one():
+def test_every_surface_default_model_is_its_role_default():
     assert DEFAULT_MODEL == DEFAULT_PIPELINE_MODEL
-    assert DEFAULT_JUDGE_MODEL == DEFAULT_PIPELINE_MODEL
+    assert DEFAULT_JUDGE_MODEL == DEFAULT_SMART_MODEL
+    assert DEFAULT_PIPELINE_MODEL == DEFAULT_FAST_MODEL
 
 
 def test_dashboard_apply_default_model_is_the_shared_one():
@@ -27,7 +33,7 @@ def test_dashboard_apply_default_model_is_the_shared_one():
     # dashboard extra, and this invariant must not go unchecked in a core run.
     apply_ui = pytest.importorskip('evaluatorq.dashboard.apply_ui')
 
-    assert apply_ui.DEFAULT_APPLY_MODEL == DEFAULT_PIPELINE_MODEL
+    assert apply_ui.DEFAULT_APPLY_MODEL == DEFAULT_SMART_MODEL
 
 
 def test_simulation_token_budget_is_the_shared_one():

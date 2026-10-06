@@ -41,12 +41,13 @@ from evaluatorq.openresponses.client import build_simulation_client
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.tracing import span_message_text, with_llm_span
-from evaluatorq.simulation.types import DEFAULT_MODEL, Message
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from openai import AsyncOpenAI
+
+    from evaluatorq.simulation.types import Message
 
 logger = logging.getLogger(__name__)
 
@@ -131,15 +132,15 @@ class AgentConfig:
     Deprecated: use `evaluatorq.contracts.LLMCallConfig` instead. `AgentConfig`
     is kept for backwards compatibility and will be removed in a future release.
 
-    Every field except ``model``, ``client``, ``api_key`` and ``api`` defaults
+    Every field except ``client``, ``api_key`` and ``api`` defaults
     to ``None`` here (not `LLMCallConfig`'s own defaults): ``None`` means
     "caller didn't touch this", so `_config_from_agent_config` omits it from
     the constructed `LLMCallConfig`, letting the per-call-site literal / env
     fallback apply — exactly as if this legacy class had never been in the
-    way.
+    way. A ``model`` left at ``None`` lets the agent pick its model role.
     """
 
-    model: str = DEFAULT_MODEL
+    model: str | None = None
     client: AsyncOpenAI | None = None
     api_key: str | None = None
     api: Literal['chat_completions', 'responses'] = 'chat_completions'
@@ -189,10 +190,12 @@ def _config_from_agent_config(agent_cfg: AgentConfig) -> tuple[LLMCallConfig, st
     ``api`` is the one deliberate exception: it always lands in
     ``model_fields_set`` so that the legacy path stays pinned to
     ``chat_completions`` against `BaseAgent.DEFAULT_API`, regardless of
-    whether the caller touched it. ``model`` is unconditional too, since it
-    has a non-``None`` default on `AgentConfig` and is always meaningful.
+    whether the caller touched it. ``model`` follows the ``None`` rule, so an
+    unset one leaves the agent to resolve its model role.
     """
-    kwargs: dict[str, Any] = {'model': agent_cfg.model, 'api': agent_cfg.api}
+    kwargs: dict[str, Any] = {'api': agent_cfg.api}
+    if agent_cfg.model is not None:
+        kwargs['model'] = agent_cfg.model
     if agent_cfg.client is not None:
         kwargs['client'] = agent_cfg.client
     for field in _MIRRORED_FIELDS:
@@ -222,13 +225,19 @@ class BaseAgent(UsageTracking, ABC):
     # the judge's 400 would surface as a failed run, not as a bad setting.
     REQUIRED_API: ClassVar[Literal['chat_completions', 'responses'] | None] = None
 
+    # The model-role task (see `evaluatorq.common.model_roles.TASKS`) this agent resolves
+    # its model from when the config does not set one explicitly.
+    MODEL_TASK: ClassVar[str] = 'sim.user'
+
     def __init__(self, config: LLMCallConfig | AgentConfig | None = None) -> None:
+        # Deferred: `_config` imports the reports layer, which imports this module.
+        from evaluatorq.simulation._config import sim_role_config
+
         # Normalise legacy AgentConfig into LLMCallConfig
         extra_api_key: str | None = None
         if isinstance(config, AgentConfig):
-            self.config, extra_api_key = _config_from_agent_config(config)
-        else:
-            self.config = config or LLMCallConfig(model=DEFAULT_MODEL)
+            config, extra_api_key = _config_from_agent_config(config)
+        self.config = sim_role_config(config, self.MODEL_TASK)
         if self.REQUIRED_API is not None:
             if 'api' in self.config.model_fields_set and self.config.api != self.REQUIRED_API:
                 logger.warning(

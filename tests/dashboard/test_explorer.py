@@ -1776,6 +1776,11 @@ def test_traces_filters_button_opens_the_facet_menu_directly(explorer_client) ->
     assert "window.htmx.trigger(menu, 'refreshFacets')" in js
 
 
+def test_dashboard_js_shows_the_default_model_when_a_picker_is_cleared() -> None:
+    js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
+    assert "button.textContent = model || button.getAttribute('data-default') || 'Choose a model';" in js
+
+
 def test_dashboard_js_keeps_facet_search_and_rows_controls_sequenced() -> None:
     js = Path('src/evaluatorq/dashboard/static/dashboard.js').read_text()
     assert "!evt.target.matches('.facet-search')" in js

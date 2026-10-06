@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.model_roles import role_model
+
 from .classifier import run_classifier
 from .compiler import compile_query
 from .explorer import ExplorerStore
@@ -50,12 +52,15 @@ def build_run_store(
             if cleanup is not None:
                 await cleanup()
 
+    # Resolved once, so the badge, filter selection and classification all name the same model.
+    classifier_model = role_model('classifier', task='finder.classifier')
+
     async def filter_selector(query: str, request: PopulationRequest) -> FilterSelectionResult:
         end = request.end or datetime.now(timezone.utc)
         start = request.start or end - timedelta(days=settings.window_days)
         try:
             catalogue = await load_facet_catalogue(orq, start=start, end=end, limit=50)
-            return await select_filters_with_response(client, settings.classifier_model, catalogue, query)
+            return await select_filters_with_response(client, classifier_model, catalogue, query)
         except Exception as error:  # noqa: BLE001 - explicit filters and semantic classification remain available
             logger.warning('Trace filter selection unavailable or incomplete: {}; skipping generated filters', error)
             return FilterSelectionResult(FacetSelection(), error=str(error))
@@ -72,10 +77,11 @@ def build_run_store(
         )
 
     return RunStore(
-        compiler=partial(compile_query, client, settings.compiler_model),
+        compiler=partial(compile_query, client, role_model('fast', task='finder.compiler')),
         filter_selector=filter_selector,
         population_loader=population_loader,
-        run_classifier=partial(run_classifier, model=settings.classifier_model, client=client),
+        run_classifier=partial(run_classifier, model=classifier_model, client=client),
         close=close,
         explorer=explorer,
+        classifier_model=classifier_model,
     )

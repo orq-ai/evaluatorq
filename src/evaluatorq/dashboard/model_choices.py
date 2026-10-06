@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 @asynccontextmanager
-async def _catalogue_client(auth: DashboardAuth) -> AsyncIterator[AsyncOpenAI]:
+async def catalogue_client(auth: DashboardAuth) -> AsyncIterator[AsyncOpenAI]:
     """The client the catalogue is read through, closing whatever this opened.
 
     Yields:
@@ -49,7 +49,7 @@ async def _catalogue_client(auth: DashboardAuth) -> AsyncIterator[AsyncOpenAI]:
 async def model_groups(auth: DashboardAuth, kind: ModelKind) -> dict[str, list[str]]:
     """Models of ``kind`` grouped by provider, or ``{}`` when the catalogue cannot be loaded."""
     try:
-        async with _catalogue_client(auth) as client:
+        async with catalogue_client(auth) as client:
             return await models_by_provider(client, kind=kind)
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
         logger.warning('Orq model catalogue unavailable for {} models ({}): {}', kind, type(exc).__name__, exc)
@@ -59,7 +59,7 @@ async def model_groups(auth: DashboardAuth, kind: ModelKind) -> dict[str, list[s
 async def catalogue_entry(auth: DashboardAuth, model: str) -> ModelInfo | None:
     """The catalogue entry for ``model``, or ``None`` when it is unlisted or the catalogue cannot be loaded."""
     try:
-        async with _catalogue_client(auth) as client:
+        async with catalogue_client(auth) as client:
             return await get_model_info(model, client)
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
         logger.warning('Orq model catalogue unavailable for {} ({}): {}', model, type(exc).__name__, exc)

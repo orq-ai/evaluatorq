@@ -45,10 +45,11 @@ def test_insights_run_form_controller() -> None:
     script = Path(__file__).with_name('insights_run_form.cjs')
     result = subprocess.run(
         ['node', str(script)],
+        input=json.dumps(fixtures),
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
-        input=json.dumps(fixtures),
+
     )
     assert result.returncode == 0, result.stdout + result.stderr

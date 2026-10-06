@@ -5,13 +5,14 @@ from __future__ import annotations
 import functools
 import json
 import math
-import os
 from importlib import resources
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from evaluatorq.common.model_roles import role_model
 
 ErrorDetection = Literal['status', 'status_and_content']
 Canonicalisation = Literal['sorted_keys', 'exact']
@@ -67,7 +68,7 @@ def default_alert_thresholds() -> dict[str, float]:
 
 
 def _default_classifier_model() -> str:
-    return os.environ.get('EVALUATORQ_CLASSIFIER_MODEL', 'typesafe/jev-latest')
+    return role_model('classifier', task='signals')
 
 
 class ClassifierConfig(BaseModel):
@@ -75,7 +76,7 @@ class ClassifierConfig(BaseModel):
 
     model_config = _FROZEN
     model: str = Field(default_factory=_default_classifier_model)
-    """Read from `EVALUATORQ_CLASSIFIER_MODEL` when the config is constructed, not at import."""
+    """Resolved as the classifier role (flag, env, settings file) when the config is constructed, not at import."""
     enabled: bool = False
 
 

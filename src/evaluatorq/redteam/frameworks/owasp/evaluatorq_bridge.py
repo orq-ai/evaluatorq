@@ -28,7 +28,6 @@ from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     DeliveryMethod,
     EvaluatorConfig,
@@ -36,6 +35,7 @@ from evaluatorq.redteam.contracts import (
     LLMCallConfig,
     RedTeamInput,
     StaticDataset,
+    evaluator_model_for,
     normalize_category,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
@@ -254,7 +254,7 @@ async def _owasp_judge_fn(
 
 
 def create_owasp_evaluator(
-    evaluator_model: str = DEFAULT_PIPELINE_MODEL,
+    evaluator_model: str | None = None,
     llm_client: AsyncOpenAI | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     cfg: LLMCallConfig | EvaluatorConfig | None = None,
@@ -270,6 +270,7 @@ def create_owasp_evaluator(
     # Build the client + merged cfg ONCE here (not per datapoint). Creating them
     # inside scorer() would spin up a fresh AsyncOpenAI connection pool for every
     # datapoint in a batch, none explicitly closed. Mirrors OWASPEvaluator.__init__.
+    evaluator_model = evaluator_model_for(evaluator_model, cfg)
     resolved_cfg = cfg or PIPELINE_CONFIG.evaluator
     # max_retries=0: run_judge owns retry via with_retry, so the SDK's own budget would
     # stack on top of it. An injected client keeps the budget its owner chose.
