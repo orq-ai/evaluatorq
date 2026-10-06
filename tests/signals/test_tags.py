@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from evaluatorq.signals import SignalsConfig, TagThresholds, compute_signals
+from evaluatorq.signals.models import SignalResult
 from evaluatorq.signals.registry import SIGNALS
+from evaluatorq.signals.tags import Clause, TagRule, _tag_signal
+from evaluatorq.signals.walk import SignalContext
 
-from .conftest import agent, call, failed, traj, user
+from .conftest import agent, bare, call, failed, traj, user
 
 
 def _thresholds(**updates: float) -> TagThresholds:
@@ -62,6 +65,75 @@ def test_tag_has_no_basis_when_all_alternatives_are_unavailable() -> None:
     assert tag.value is None
     assert tag.no_basis is not None
     assert 'required metrics' in tag.no_basis
+
+
+def test_false_tool_churn_gate_determines_false_with_unknown_retry_metric() -> None:
+    trajectory = traj([
+        agent(calls=[call('fetch', {'q': 'first'}, 'first')], results=[bare('result')]),
+        agent(calls=[call('fetch', {'q': 'second'}, 'second')], results=[bare('result')]),
+    ])
+    config = SignalsConfig(tag_thresholds=_thresholds(**{
+        'tool_churn.tool_call_count': 100,
+        'tool_churn.distinct_tool_arg_ratio': 0,
+    }))
+
+    report = compute_signals(trajectory, config, only=['tool_churn'])
+    tag = report.results['tool_churn']
+
+    assert report.results['tool_retry_count'].no_basis is not None
+    assert tag.value is False
+    assert tag.no_basis is None
+    assert any('tool_call_count' in pc.name and pc.met is False for pc in tag.preconditions)
+
+
+def _synthetic_tag(rule: TagRule, values: dict[str, float | None]) -> SignalResult:
+    results = {
+        name: (
+            SignalResult(name=name, group='B', value=value)
+            if value is not None
+            else SignalResult(name=name, group='B', no_basis='test metric unavailable')
+        )
+        for name, value in values.items()
+    }
+    config = SignalsConfig()
+    context = SignalContext.build(traj([agent()]), config)
+    context.results.update(results)
+    return _tag_signal(rule)(context)
+
+
+def test_tag_resolution_uses_upper_bound_for_unknown_alternatives() -> None:
+    rule = TagRule(
+        'synthetic_rule',
+        'synthetic test rule',
+        gate=(Clause('gate', '>', fixed=0),),
+        any_of=(Clause('first', '>', fixed=0), Clause('second', '>', fixed=0)),
+        need=2,
+    )
+
+    impossible = _synthetic_tag(rule, {'gate': None, 'first': 1, 'second': 0})
+    still_possible = _synthetic_tag(rule, {'gate': None, 'first': 1, 'second': None})
+    alternatives_met_gate_unknown = _synthetic_tag(rule, {'gate': None, 'first': 1, 'second': 2})
+
+    assert impossible.value is False
+    assert impossible.no_basis is None
+    assert still_possible.value is None
+    assert still_possible.no_basis is not None
+    assert alternatives_met_gate_unknown.value is None
+    assert alternatives_met_gate_unknown.no_basis is not None
+
+
+def test_false_mandatory_gate_overrides_unknown_alternatives() -> None:
+    rule = TagRule(
+        'synthetic_rule',
+        'synthetic test rule',
+        gate=(Clause('gate', '>', fixed=0),),
+        any_of=(Clause('first', '>', fixed=0), Clause('second', '>', fixed=0)),
+    )
+
+    tag = _synthetic_tag(rule, {'gate': 0, 'first': None, 'second': 0})
+
+    assert tag.value is False
+    assert tag.no_basis is None
 
 
 def test_tag_percentile_override_uses_configured_cohort_table() -> None:

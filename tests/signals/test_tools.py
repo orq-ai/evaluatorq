@@ -252,6 +252,68 @@ def test_alternate_retry_definition_and_window():
     assert narrow['tool_retry_count'].value == 0
 
 
+def test_retry_counts_are_zero_without_matching_calls_even_when_statuses_are_missing():
+    names = ['lookup_user', 'get_order', 'search_flights', 'think', 'calculate', 'update_booking']
+    trajectory = traj([
+        agent(calls=[call(name, {}, f'call-{index}')], results=[bare('ordinary result')])
+        for index, name in enumerate(names)
+    ])
+    configs = [
+        SignalsConfig(),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=1),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=4),
+    ]
+
+    for config in configs:
+        values = _values(
+            trajectory, 'tool_retry_count', 'tool_succeeded_after_retry_count', config=config
+        )
+        for name in ('tool_retry_count', 'tool_succeeded_after_retry_count'):
+            assert values[name].value == 0
+            assert values[name].no_basis is None
+            status = next(pc for pc in values[name].preconditions if pc.name == 'explicit error status')
+            assert status.met is True
+            assert status.required is False
+            assert 'no calls match an earlier call' in status.detail
+
+
+def test_retry_candidate_with_unknown_status_remains_no_basis_for_each_definition():
+    trajectory = traj([
+        agent(calls=[call('fetch', {'q': 1}, 'first')], results=[bare('response')]),
+        agent(calls=[call('fetch', {'q': 1}, 'second')], results=[bare('response')]),
+    ])
+    configs = [
+        SignalsConfig(),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=1),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=3),
+    ]
+
+    for config in configs:
+        values = _values(
+            trajectory, 'tool_retry_count', 'tool_succeeded_after_retry_count', config=config
+        )
+        for name in ('tool_retry_count', 'tool_succeeded_after_retry_count'):
+            assert values[name].value is None
+            assert values[name].no_basis is not None
+            assert 'explicit error status' in values[name].no_basis
+
+
+def test_retry_candidate_without_a_result_remains_no_basis():
+    trajectory = traj([
+        agent(calls=[call('fetch', {'q': 1}, 'first')]),
+        agent(calls=[call('fetch', {'q': 1}, 'second')], results=[ok('response')]),
+    ])
+
+    values = _values(trajectory, 'tool_retry_count', 'tool_succeeded_after_retry_count')
+
+    assert values['tool_retry_count'].value is None
+    assert values['tool_retry_count'].no_basis is not None
+    assert 'retry candidate results' in values['tool_retry_count'].no_basis
+    assert values['tool_succeeded_after_retry_count'].value is None
+    assert values['tool_succeeded_after_retry_count'].no_basis is not None
+    assert 'retry candidate results' in values['tool_succeeded_after_retry_count'].no_basis
+
+
 def test_exact_canonicalisation_preserves_argument_key_order():
     trajectory = traj([
         agent(calls=[call('lookup', {'a': 1, 'b': 2}, 'first')], results=[ok()]),

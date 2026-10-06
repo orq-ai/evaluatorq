@@ -120,8 +120,8 @@ The Insights dashboard displays these groups as **L1 Structure**, **L2 Tools**, 
 | `tool_error_count` | Tool results marked as errors. | Tool results with status or error metadata |
 | `tool_error_rate` | Error results divided by tool calls. | Tool results with status or error metadata |
 | `duplicate_tool_call_count` | Repeated calls with the same tool and canonical arguments. | Tool calls |
-| `tool_retry_count` | Calls that repeat a prior failed call under the configured retry definition. | Tool calls and error status |
-| `tool_succeeded_after_retry_count` | Retries that follow a failed call and then succeed. | Tool calls and error status |
+| `tool_retry_count` | Calls that repeat a prior failed call under the configured retry definition. | Tool calls; error status when a matching prior call exists |
+| `tool_succeeded_after_retry_count` | Retries that follow a failed call and then succeed. | Tool calls; error status when a matching prior call exists |
 | `invalid_schema_tool_call_count` | Calls that do not conform to a recorded tool definition. | Tool calls and tool definitions |
 | `consecutive_same_tool_max` | Longest run of calls to one tool. | Tool calls |
 | `consecutive_command_family_max` | Longest run of shell commands in one command family. | Tool calls classified as bash |
@@ -156,6 +156,8 @@ Autonomous step counts include delegated subagent work between root user message
 | `max_autonomous_duration_ms` | Longest root-agent segment duration between user messages. | Root user and agent steps with timing |
 
 ### D — Tags
+
+A tag is false when a mandatory condition is known to be false, or when the remaining unknown conditions cannot supply enough matches for its rule. It is true when its mandatory conditions and enough alternatives are known to match. Missing measurements produce **No basis** only when the result could still be either true or false.
 
 | Tag | Meaning |
 |---|---|

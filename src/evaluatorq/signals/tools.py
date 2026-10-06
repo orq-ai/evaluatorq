@@ -131,11 +131,12 @@ def duplicate_tool_call_count(ctx: SignalContext) -> SignalResult:
     return result('duplicate_tool_call_count', 'B', len(evidence), evidence, [pre.args_parseable(ctx)])
 
 
-def _retry_links(ctx: SignalContext) -> dict[int, CallRecord]:
+def _retry_candidates(ctx: SignalContext) -> dict[int, list[CallRecord]]:
+    """Calls whose preceding match could make them a retry under the configured rule."""
     streams: dict[tuple[str, ...], list[CallRecord]] = defaultdict(list)
     for record in ctx.calls:
         streams[record.step.agent_path].append(record)
-    links: dict[int, CallRecord] = {}
+    candidates: dict[int, list[CallRecord]] = {}
     for stream in streams.values():
         for position, record in enumerate(stream):
             if ctx.config.retry_definition == 'consecutive_same_tool':
@@ -145,10 +146,70 @@ def _retry_links(ctx: SignalContext) -> dict[int, CallRecord]:
                 window = stream[max(0, position - ctx.config.retry_window) : position]
                 key = _fingerprint(record, ctx)
                 matches = [prior for prior in window if _fingerprint(prior, ctx) == key]
-            failed = [prior for prior in matches if _error_reason(prior, ctx)]
-            if failed:
-                links[record.seq] = failed[-1]
+            if matches:
+                candidates[record.seq] = matches
+    return candidates
+
+
+def _retry_links(ctx: SignalContext, candidates: dict[int, list[CallRecord]]) -> dict[int, CallRecord]:
+    links: dict[int, CallRecord] = {}
+    for seq, matches in candidates.items():
+        record = ctx.calls[seq]
+        failed = [prior for prior in matches if _error_reason(prior, ctx)]
+        if failed:
+            links[record.seq] = failed[-1]
     return links
+
+
+def _retry_status_precondition(
+    ctx: SignalContext,
+    candidates: dict[int, list[CallRecord]],
+    *,
+    retry_results: list[CallRecord] | None = None,
+) -> Precondition:
+    """Require error information only where an eligible retry could depend on it."""
+    prior_by_seq = {prior.seq: prior for matches in candidates.values() for prior in matches}
+    if not prior_by_seq:
+        return Precondition(
+            name='explicit error status',
+            met=True,
+            detail='no calls match an earlier call under the configured retry rule',
+            required=False,
+        )
+
+    relevant = dict(prior_by_seq)
+    for retry in retry_results or ():
+        relevant[retry.seq] = retry
+    records = list(relevant.values())
+    missing_results = [record for record in records if record.result is None]
+    if missing_results:
+        missing = ', '.join(
+            f'{record.call.function_name} @step {record.step.step.step_id}' for record in missing_results
+        )
+        return Precondition(
+            name='retry candidate results',
+            met=False,
+            detail=f'{len(records) - len(missing_results)} of {len(records)} possible retry results available; missing: {missing}',
+            required=True,
+        )
+
+    if ctx.config.error_detection != 'status':
+        known = sum(record.is_error is not None for record in records)
+        content_note = ' (content sniffing only)' if known < len(records) else ''
+        return Precondition(
+            name='explicit error status',
+            met=known == len(records),
+            detail=f'{known} of {len(records)} possible retry results carry an error status{content_note}',
+            required=False,
+        )
+
+    known = sum(record.is_error is not None for record in records)
+    return Precondition(
+        name='explicit error status',
+        met=known == len(records),
+        detail=f'{known} of {len(records)} possible retry results carry an error status',
+        required=True,
+    )
 
 
 def _changed_args(before: CallRecord, after: CallRecord) -> list[str]:
@@ -169,15 +230,21 @@ def _retry_evidence(record: CallRecord, failed: CallRecord, ctx: SignalContext) 
 
 
 def tool_retry_count(ctx: SignalContext) -> SignalResult:
-    links = _retry_links(ctx)
+    candidates = _retry_candidates(ctx)
+    links = _retry_links(ctx, candidates)
     evidence = [_retry_evidence(r, links[r.seq], ctx) for r in ctx.calls if r.seq in links]
     return result(
-        'tool_retry_count', 'B', len(evidence), evidence, [pre.explicit_error_status(ctx), pre.results_matched(ctx)]
+        'tool_retry_count',
+        'B',
+        len(evidence),
+        evidence,
+        [_retry_status_precondition(ctx, candidates), pre.results_matched(ctx)],
     )
 
 
 def tool_succeeded_after_retry_count(ctx: SignalContext) -> SignalResult:
-    links = _retry_links(ctx)
+    candidates = _retry_candidates(ctx)
+    links = _retry_links(ctx, candidates)
     evidence = []
     for record in ctx.calls:
         if record.seq not in links or record.result is None or _error_reason(record, ctx):
@@ -203,7 +270,12 @@ def tool_succeeded_after_retry_count(ctx: SignalContext) -> SignalResult:
         'B',
         len(evidence),
         evidence,
-        [pre.explicit_error_status(ctx), pre.results_matched(ctx)],
+        [
+            _retry_status_precondition(
+                ctx, candidates, retry_results=[record for record in ctx.calls if record.seq in links]
+            ),
+            pre.results_matched(ctx),
+        ],
     )
 
 
