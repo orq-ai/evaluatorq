@@ -1,22 +1,36 @@
 """Driver for the vulnerable support agent red-team demo.
 
-Runs one adaptive red team against a DELIBERATELY INSECURE support agent for the
-OWASP categories ASI01 (agentic goal hijacking) and LLM01 (prompt injection),
-prints clean RichHooks output (good for a screen recording), and writes the
-result JSON to results/.
+Runs one adaptive red team against a DELIBERATELY INSECURE support agent (Ava,
+the default) for the OWASP categories ASI01 (agentic goal hijacking) and LLM01
+(prompt injection), prints clean RichHooks output (good for a screen recording),
+and writes the result JSON to results/ava_XXX.json.
+
+Pass ``--target rex`` to run the same attacks against Rex, the hardened sibling
+in agents/secure.py, for contrast; results go to results/rex_XXX.json.
 
 Before running:
   1. Copy .env.example to .env and set ORQ_API_KEY (+ ORQ_BASE_URL if not default).
-  2. uv run python run.py
+  2. uv run python run.py [--target {ava,rex}]
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import os
 import sys
 import time
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+DEMO_DIR = Path(__file__).parent
+RESULTS_DIR = DEMO_DIR / "results"
+
+# Load .env before importing config/agents: config.py reads DEMO_MODEL and
+# DEMO_TARGET_MODEL at import time and agents bind TARGET_MODEL as a class attribute.
+load_dotenv(DEMO_DIR / ".env")
 
 # Prevent rich from probing terminal width via cursor-position queries (CPR),
 # which can leak escape codes into the shell prompt inside tmux.
@@ -25,25 +39,30 @@ try:
 except OSError:
     os.environ.setdefault("COLUMNS", "220")
 
-from pathlib import Path
+from evaluatorq.redteam import LLMCallConfig, LLMConfig, RedTeamReport, RichHooks, red_team  # noqa: E402
 
-from dotenv import load_dotenv
-from evaluatorq.redteam import LLMCallConfig, LLMConfig, RichHooks, red_team
+from agents.secure import Rex  # noqa: E402
+from agents.vulnerable import Ava  # noqa: E402
+from config import MODEL, TARGET_MODEL  # noqa: E402
 
-from agents.vulnerable import Ava
-from config import MODEL
-
-DEMO_DIR = Path(__file__).parent
-RESULTS_DIR = DEMO_DIR / "results"
+TARGETS = {"ava": Ava, "rex": Rex}
 
 # ASI01 -> goal_hijacking, LLM01 -> prompt_injection (per evaluatorq's registry).
 VULNERABILITIES = ["goal_hijacking", "prompt_injection"]
 
 
-def _next_run_index() -> int:
-    existing = [p.stem for p in RESULTS_DIR.glob("ava_*.json")]
+def _reserve_result_path(prefix: str) -> Path:
+    """Atomically claim the next free results/<prefix>_XXX.json (exclusive create)."""
+    existing = [p.stem for p in RESULTS_DIR.glob(f"{prefix}_*.json")]
     indices = [int(s.split("_")[-1]) for s in existing if s.split("_")[-1].isdigit()]
-    return max(indices, default=0) + 1
+    index = max(indices, default=0) + 1
+    while True:
+        path = RESULTS_DIR / f"{prefix}_{index:03d}.json"
+        try:
+            with path.open("x"):
+                return path
+        except FileExistsError:
+            index += 1
 
 
 def _preflight() -> None:
@@ -58,20 +77,29 @@ def _preflight() -> None:
         sys.exit(2)
 
 
-async def main() -> None:
-    load_dotenv(DEMO_DIR / ".env")
+def _print_summary(report: RedTeamReport) -> None:
+    summary = report.summary
+    print(f"\nTarget model: {TARGET_MODEL}  |  attacker/judge model: {MODEL}")
+    if summary.no_verdict:
+        print(
+            "WARNING: no attack produced a verdict, so the target was never tested. "
+            "Check the attacker/judge model and ORQ credentials before trusting this run.",
+            file=sys.stderr,
+        )
+    for key, vuln in summary.by_vulnerability.items():
+        print(f"  {key}: {vuln.vulnerabilities_found} vulnerable / {vuln.total_attacks} attacks")
+
+
+async def main(target: str) -> None:
     _preflight()
-    os.environ.pop("OPENAI_API_KEY", None)  # force ORQ router; a shell OPENAI_API_KEY would shadow it
 
     attacker_instructions = (DEMO_DIR / "attacker_instructions.txt").read_text()
-    RESULTS_DIR.mkdir(exist_ok=True)
-    run_index = _next_run_index()
 
     model = LLMCallConfig(model=MODEL)
 
     start = time.time()
     report = await red_team(
-        target=Ava(),
+        target=TARGETS[target](),
         vulnerabilities=VULNERABILITIES,
         mode="dynamic",
         max_turns=6,
@@ -86,11 +114,20 @@ async def main() -> None:
         name="Vulnerable Support Agent - Red Team",
     )
     print(f"\nCompleted in {time.time() - start:.1f}s")
+    _print_summary(report)
 
-    out = RESULTS_DIR / f"ava_{run_index:03d}.json"
+    RESULTS_DIR.mkdir(exist_ok=True)
+    out = _reserve_result_path(target)
     out.write_text(json.dumps(report.model_dump(), indent=2, default=str))
     print(f"-> {out}")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--target",
+        choices=sorted(TARGETS),
+        default="ava",
+        help="agent to attack: ava (vulnerable, default) or rex (hardened)",
+    )
+    asyncio.run(main(parser.parse_args().target))

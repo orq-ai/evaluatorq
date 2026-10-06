@@ -4,9 +4,8 @@ version = "0.1.0"
 description = "Deliberately insecure support agent for a reproducible evaluatorq red-team demo"
 requires-python = ">=3.12"
 dependencies = [
-  "evaluatorq[orq,redteam]>=1.3.0",
+  "evaluatorq[orq,redteam]>=1.27.0",
   "openai>=1.40",
-  "rich>=13.9",
   "python-dotenv>=1.0",
 ]
 

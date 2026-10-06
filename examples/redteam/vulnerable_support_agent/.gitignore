@@ -2,3 +2,5 @@
 results/*.json
 __pycache__/
 .venv/
+.evaluatorq/
+.ruff_cache/

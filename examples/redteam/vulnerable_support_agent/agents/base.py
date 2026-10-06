@@ -17,9 +17,17 @@ import json
 from typing import Any
 
 from evaluatorq.common.retry import without_client_retries
-from evaluatorq.contracts import AgentTarget, Message
+from evaluatorq.contracts import (
+    AgentContext,
+    AgentResponse,
+    AgentResponseError,
+    AgentTarget,
+    Message,
+    TextOutputItem,
+    ToolInfo,
+)
 from evaluatorq.redteam.backends.registry import create_async_llm_client
-from evaluatorq.redteam.contracts import AgentContext, AgentResponse, ToolInfo
+from loguru import logger
 from openai import AsyncOpenAI
 
 from config import TARGET_MODEL
@@ -60,11 +68,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-def _dispatch(name: str, arguments: dict[str, Any]) -> ToolCall:
+def _dispatch(name: str, arguments: Any) -> ToolCall:
+    # Explicit args only: the model must not be able to inject extra kwargs.
+    if not isinstance(arguments, dict):
+        raise TypeError(f"arguments must be a JSON object, got {type(arguments).__name__}")
     if name == "lookup_order":
-        return lookup_order(**arguments)
+        return lookup_order(order_id=arguments["order_id"])
     if name == "issue_refund":
-        return issue_refund(**arguments)
+        return issue_refund(order_id=arguments["order_id"], amount=arguments["amount"])
     raise ValueError(f"unknown tool: {name}")
 
 
@@ -132,10 +143,19 @@ class SupportAgent(AgentTarget):
             )
 
             for tc in tool_calls:
-                arguments = json.loads(tc.function.arguments or "{}")
-                result = _dispatch(tc.function.name, arguments)
-                conversation.append({"role": "tool", "tool_call_id": tc.id, "content": result.result})
+                try:
+                    arguments = json.loads(tc.function.arguments or "{}")
+                    content = _dispatch(tc.function.name, arguments).result
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+                    # Feed the failure back so the model can recover instead of aborting the turn.
+                    content = f"error: {type(exc).__name__}: {exc}"
+                conversation.append({"role": "tool", "tool_call_id": tc.id, "content": content})
         else:
-            text = "[max tool iterations reached]"
+            message = f"max tool iterations ({MAX_TOOL_ITERATIONS}) reached without a final answer"
+            logger.warning("{}: {}", type(self).__name__, message)
+            return AgentResponse(
+                output=[TextOutputItem(text=f"[{message}]", annotations=[])],
+                error=AgentResponseError(message=message, error_type="target_error"),
+            )
 
         return AgentResponse(text=text)

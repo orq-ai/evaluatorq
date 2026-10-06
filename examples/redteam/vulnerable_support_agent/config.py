@@ -12,7 +12,7 @@ MODEL = os.environ.get("DEMO_MODEL", "openai/gpt-5.4-mini")
 # instructions while the attacker and judge stay strong. A safety-heavy frontier
 # model resists the attacks on its own training regardless of Ava's prompt, which
 # hides the agent-level vulnerability this demo exists to show; a more
-# instruction-following model exposes it. gpt-4o-mini is a widely deployed, older
-# model that falls reliably, so the demo loses out of the box. Override with
-# DEMO_TARGET_MODEL to try another target.
+# instruction-following model exposes it. With gpt-4o-mini as the target, the
+# recorded run lost 2 of 3 goal-hijacking attacks and 0 of 3 prompt-injection
+# attacks; dynamic runs vary. Override with DEMO_TARGET_MODEL to try another target.
 TARGET_MODEL = os.environ.get("DEMO_TARGET_MODEL", "openai/gpt-4o-mini")
