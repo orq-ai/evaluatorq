@@ -45,11 +45,21 @@
     if (!scope.querySelector('.vega-chart')) return;
     if (!window.vegaEmbed) {
       // The page shipped without vega (shell.page adds it only when the initial
-      // body has a chart); load it once, then embed this swap's charts.
+      // body has a chart); load it once, then embed this swap's charts. A later
+      // swap into the same target while vega loads replaces this one's DOM, so
+      // only the latest swap per target embeds (an older one would draw its
+      // stale spec into the newer chart and leak the first view).
       const detail = evt.detail;
+      pendingVegaSwaps.set(scope, detail);
       loadVega().then(
-        function () { embedSwappedCharts(scope, detail); },
+        function () {
+          if (pendingVegaSwaps.get(scope) !== detail) return;
+          pendingVegaSwaps.delete(scope);
+          embedSwappedCharts(scope, detail);
+        },
         function (error) {
+          if (pendingVegaSwaps.get(scope) !== detail) return;
+          pendingVegaSwaps.delete(scope);
           console.error('Vega failed to load', error);
           scope.querySelectorAll('.vega-chart').forEach(function (el) {
             el.textContent = 'Chart failed to load. Reload the page to retry.';
@@ -61,6 +71,7 @@
     embedSwappedCharts(scope, evt.detail);
   });
 
+  const pendingVegaSwaps = new WeakMap();
   let vegaLoading = null;
   function loadVega() {
     if (!vegaLoading) {

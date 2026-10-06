@@ -34,9 +34,14 @@ def dashboard_css() -> str:
 
 
 @functools.cache
+def dashboard_css_version() -> str:
+    """Content hash of ``dashboard_css()``; the ``v`` query value that marks a URL as safe to cache forever."""
+    return hashlib.sha256(dashboard_css().encode()).hexdigest()[:12]
+
+
 def dashboard_css_href() -> str:
     """Content-hashed URL, so the browser caches the ~500KB sheet once instead of every page inlining it."""
-    return f'/static/dashboard.css?v={hashlib.sha256(dashboard_css().encode()).hexdigest()[:12]}'
+    return f'/static/dashboard.css?v={dashboard_css_version()}'
 
 
 # Sidebar collapse: runs at body-top so the class lands on <html> before the

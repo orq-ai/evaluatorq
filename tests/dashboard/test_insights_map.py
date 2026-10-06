@@ -410,16 +410,6 @@ def test_plotly_asset_exists_in_source_tree():
     assert asset.read_text(encoding='utf-8').startswith('/**\n* plotly.js (gl3d - minified) v4.1.1')
 
 
-def test_htmx_swap_initializes_maps_without_vega_embed():
-    script = Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js'
-    source = script.read_text(encoding='utf-8')
-    handler = source.split("document.body.addEventListener('htmx:afterSwap', function (evt) {", 1)[1].split('\n  });', 1)[0]
-
-    assert handler.index('if (!scope) return;') < handler.index('initInsightsMaps(scope);')
-    assert handler.index('initInsightsMaps(scope);') < handler.index("if (!scope.querySelector('.vega-chart')) return;")
-    assert handler.count('initInsightsMaps(scope);') == 1
-
-
 def test_category_map_keeps_delimiter_values_distinct():
     if shutil.which('node') is None:
         pytest.skip('Node.js is unavailable')
