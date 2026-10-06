@@ -222,8 +222,8 @@ def test_review_projection_payload_matches_keys_for_dataset_rows(monkeypatch):
     def _isfinite(_values: _Array) -> SimpleNamespace:
         return SimpleNamespace(all=lambda: True)
 
-    numpy.asarray = _asarray  # type: ignore[attr-defined]
-    numpy.isfinite = _isfinite  # type: ignore[attr-defined]
+    setattr(numpy, 'asarray', _asarray)
+    setattr(numpy, 'isfinite', _isfinite)
 
     class _Umap:
         def __init__(self, **_kwargs: Any) -> None:
@@ -233,7 +233,7 @@ def test_review_projection_payload_matches_keys_for_dataset_rows(monkeypatch):
             return [(float(index), float(index + 1)) for index in range(len(rows))]
 
     umap = ModuleType('umap')
-    umap.UMAP = _Umap  # type: ignore[attr-defined]
+    setattr(umap, 'UMAP', _Umap)
     monkeypatch.setitem(sys.modules, 'numpy', numpy)
     monkeypatch.setitem(sys.modules, 'umap', umap)
 
