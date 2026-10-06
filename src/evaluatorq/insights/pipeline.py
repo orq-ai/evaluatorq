@@ -586,7 +586,7 @@ async def insights(  # noqa: C901
                     project=trace.project or '',
                     tool_stats=tool_stats(trace),
                     signals=trace.metadata.signals,
-                    source_coverage=trace.metadata.capture_metadata,
+                    source_coverage=trace.source_coverage,
                 )
                 for trace in resolved.traces
             ]

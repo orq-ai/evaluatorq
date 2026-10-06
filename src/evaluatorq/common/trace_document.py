@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime  # noqa: TC003 -- Pydantic resolves this annotated model field at runtime.
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
 
 _EXTRA_PREFIX = 'evaluatorq.insights.'
 _ROLE_SOURCE = {'system': 'system', 'developer': 'system', 'user': 'user'}
+_TRAJECTORY_ID_NAMESPACE = 'https://evaluatorq.orq.ai/trace-document/v1/'
 
 
 class TraceMetadata(BaseModel):
@@ -90,6 +92,11 @@ class TraceDocument(BaseModel):
         """Compatibility view, freshly rendered from the trajectory on access."""
         return tuple(prompt_messages(self))
 
+    @property
+    def source_coverage(self) -> dict[str, Any]:
+        """Safe provenance and span-coverage summary for persisted review data."""
+        return _source_coverage_projection(self.metadata.capture_metadata)
+
     def __getattr__(self, name: str) -> Any:
         """Forward legacy metadata field reads while keeping their storage nested."""
         metadata = self.__dict__.get('metadata')
@@ -121,6 +128,39 @@ def trace_document_with_signals(document: TraceDocument, report: SignalReport) -
     ):
         raise ValueError('signal report trajectory_id does not match the trace document')
     return document.model_copy(update={'metadata': document.metadata.model_copy(update={'signals': report})})
+
+
+def _source_coverage_projection(capture: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep known provenance and bounded coverage summaries, excluding captured payload sidecars."""
+    projected: dict[str, Any] = {}
+    for key in ('source', 'start', 'end', 'project_id', 'incomplete_reason'):
+        value = capture.get(key)
+        if isinstance(value, str):
+            projected[key] = value
+
+    raw_coverage = capture.get('signal_span_coverage')
+    if not isinstance(raw_coverage, Mapping):
+        return projected
+    coverage: dict[str, Any] = {}
+    for key in ('selected_span_id', 'enrichment_error'):
+        value = raw_coverage.get(key)
+        if isinstance(value, str):
+            coverage[key] = value
+    for key in ('selected_span_found', 'selected_data_correlated', 'selected_detail_captured'):
+        value = raw_coverage.get(key)
+        if isinstance(value, bool):
+            coverage[key] = value
+    for key in ('scoped_span_count', 'matched_tool_span_count', 'responses_items_captured'):
+        value = raw_coverage.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            coverage[key] = value
+    for key in ('matched_call_ids', 'missing_call_ids', 'enrichment_errors'):
+        value = raw_coverage.get(key)
+        if isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value):
+            coverage[key] = list(value)
+    if coverage:
+        projected['signal_span_coverage'] = coverage
+    return projected
 
 
 def prompt_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any]]:
@@ -349,7 +389,8 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
             steps[owner.step_id - 1] = replacement
             call_steps[call_id] = [replacement if candidate is owner else candidate for candidate in owners]
 
-    trajectory_id = metadata.trace_id or 'trace'
+    identity = json.dumps([metadata.trace_id, metadata.span_id], ensure_ascii=False, separators=(',', ':'))
+    trajectory_id = str(uuid5(NAMESPACE_URL, f'{_TRAJECTORY_ID_NAMESPACE}{identity}'))
     return AtifTrajectory(
         trajectory_id=trajectory_id,
         agent=AtifAgent(name=metadata.agent_name or 'unknown', version='unknown', model_name=metadata.model),
@@ -363,6 +404,8 @@ def _atif_message(content: Any, extra: dict[str, Any], prefix: str) -> str | lis
     converted = _atif_content(content, extra, prefix)
     if isinstance(converted, list):
         return converted
+    if content is None and not extra.get(f'{prefix}content_present', True):
+        return ''
     extra[f'{prefix}content_override'] = content
     return ''
 
@@ -491,6 +534,8 @@ def _atif_call(raw: Any, *, fallback_id: str) -> AtifToolCall | None:
     call = dict(raw)
     raw_function = call.get('function')
     function: Mapping[str, Any] = raw_function if isinstance(raw_function, Mapping) else call
+    name_keys = [key for key in ('name', 'tool_name') if key in function]
+    argument_keys = [key for key in ('arguments', 'input') if key in function]
     name = function.get('name') or function.get('tool_name') or '(unnamed)'
     raw_arguments = function.get('arguments', function.get('input', {}))
     arguments, raw_argument_provenance = atif_tool_arguments(raw_arguments, name)
@@ -501,6 +546,8 @@ def _atif_call(raw: Any, *, fallback_id: str) -> AtifToolCall | None:
     nested = isinstance(call.get('function'), Mapping)
     extra: dict[str, Any] = {
         f'{_EXTRA_PREFIX}nested_function': nested,
+        f'{_EXTRA_PREFIX}name_keys': name_keys,
+        f'{_EXTRA_PREFIX}argument_keys': argument_keys,
         f'{_EXTRA_PREFIX}id_key': 'id' if 'id' in call else 'call_id' if 'call_id' in call else 'item_id',
         f'{_EXTRA_PREFIX}id_present': id_present,
         f'{_EXTRA_PREFIX}generated_id': call_id,
@@ -518,7 +565,9 @@ def _atif_call(raw: Any, *, fallback_id: str) -> AtifToolCall | None:
     if raw_argument_provenance is not None:
         extra[RAW_ARGUMENTS_EXTRA_KEY] = raw_argument_provenance
     if isinstance(raw_function, Mapping):
-        function_fields = {k: v for k, v in raw_function.items() if k not in {'name', 'arguments'}}
+        function_fields = {
+            k: v for k, v in raw_function.items() if k not in {'name', 'tool_name', 'arguments', 'input'}
+        }
         if function_fields:
             extra[f'{_EXTRA_PREFIX}function_fields'] = function_fields
     return AtifToolCall(
@@ -548,20 +597,18 @@ def _render_call(call: AtifToolCall) -> dict[str, Any]:
         id_key = extra.get(f'{_EXTRA_PREFIX}id_key', 'id')
         if extra.get(f'{_EXTRA_PREFIX}id_present') or call.tool_call_id != extra.get(f'{_EXTRA_PREFIX}generated_id'):
             outer[id_key] = call.tool_call_id
-        if 'tool_name' in outer:
-            outer['tool_name'] = call.function_name
-        else:
-            outer['name'] = call.function_name
-        if 'input' in outer:
-            outer['input'] = arguments
-        else:
-            outer['arguments'] = arguments
+        name_keys = extra.get(f'{_EXTRA_PREFIX}name_keys', ['name'])
+        argument_keys = extra.get(f'{_EXTRA_PREFIX}argument_keys', ['arguments'])
+        for key in name_keys:
+            outer[key] = call.function_name
+        for key in argument_keys:
+            outer[key] = arguments
         return outer
-    function = {
-        **(extra.get(f'{_EXTRA_PREFIX}function_fields') or {}),
-        'name': call.function_name,
-        'arguments': arguments,
-    }
+    function = dict(extra.get(f'{_EXTRA_PREFIX}function_fields') or {})
+    for key in extra.get(f'{_EXTRA_PREFIX}name_keys', ['name']):
+        function[key] = call.function_name
+    for key in extra.get(f'{_EXTRA_PREFIX}argument_keys', ['arguments']):
+        function[key] = arguments
     outer = dict(extra.get(f'{_EXTRA_PREFIX}call_outer_fields') or {})
     if extra.get(f'{_EXTRA_PREFIX}id_present') or call.tool_call_id != extra.get(f'{_EXTRA_PREFIX}generated_id'):
         outer.setdefault(str(extra.get(f'{_EXTRA_PREFIX}id_key', 'id')), call.tool_call_id)

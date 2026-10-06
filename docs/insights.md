@@ -134,9 +134,22 @@ A **trace signal** is a deterministic measurement of recorded structure, tool us
 
 Inside the pipeline, a `TraceDocument` holds `metadata: TraceMetadata` and `trajectory: AtifTrajectory`. The conversation lives in the ATIF trajectory; the complete typed signal report lives in `metadata.signals`. Existing message snapshots are converted at the source boundary. Conversion cannot recover information that the source never recorded.
 
+Message-only snapshots support message and tool-call counts, argument repetition, and result sizes. The measurements below need additional recorded fields; absent fields produce **No basis** under the default signal settings.
+
+| Measurements | Missing input in a message-only snapshot |
+|---|---|
+| `total_input_tokens`, `total_output_tokens`, `total_tokens`, `cache_read_token_share`, `peak_context_tokens` | Per-model-call token usage, including cached tokens where required. |
+| `finish_reason_length_count` | Recorded model finish reasons. |
+| `tool_error_count`, `tool_error_rate`, `tool_retry_count`, `tool_succeeded_after_retry_count` | Explicit error or success status on tool results. Content-based error detection can provide an estimate when enabled in `SignalsConfig`. |
+| `invalid_schema_tool_call_count` | Tool definitions active when each call was made. |
+| `wall_time_ms`, `active_time_ms`, `llm_time_ms`, `tool_time_ms` | Recorded model and tool timestamps. Some measurements can be approximate when only model-step timestamps exist. |
+| `max_autonomous_duration_ms` | A timestamp on the root user step that starts each segment, plus timestamps on subsequent root agent activity. |
+
+Tags report **No basis** when missing measurements leave the rule's result undetermined; an available measurement can still establish that some tags fire. Known shell, web, skill, and subagent tools have built-in roles in `SignalsConfig.tool_roles`; add mappings for custom names to count them in those roles. Delegation measurements describe only subagent structure actually captured in ATIF. See the [signal reference](signals.md#signal-reference) for each measurement's inputs. A snapshot that carries richer capture metadata may support more measurements; its saved preconditions show the actual coverage.
+
 Open a trace in a saved run to inspect its signals. **Approximate** marks an estimate, **No basis** means the required data is missing, and **Unmeasured** means an older run has no saved report. A measured zero is a real value. Unsupported custom or MCP tool activity makes affected tool measurements unavailable instead of displaying an incomplete count as zero. Evidence references identify recorded steps and tool calls; inspecting the original conversation still requires its source.
 
-New runs use storage schema version 2 and save each trace's full `signals` report and `source_coverage`, plus the effective `config.signals` settings and resolved tag thresholds. Version 1 runs remain readable and show their signals as unmeasured. Insights does not save a separate local ATIF document or conversation body, and opening a saved signal report makes no source or model requests.
+New runs use storage schema version 2 and save each trace's full `signals` report and `source_coverage` summary, plus the effective `config.signals` settings and resolved tag thresholds. The coverage summary retains known provenance, span counts, missing call IDs, and enrichment failures; arbitrary source payload sidecars are excluded. Version 1 runs remain readable and show their signals as unmeasured. Insights does not save a separate local ATIF document or conversation body, and opening a saved signal report makes no source or model requests.
 
 Read the saved reports from Python. This prints one line per saved trace; if there are no saved runs, it prints nothing.
 

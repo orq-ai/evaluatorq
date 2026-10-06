@@ -20,7 +20,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from loguru import logger
 
+from evaluatorq.common.messages import content_part_text
 from evaluatorq.common.trace_input import detect_message_format, parse_messages
+from evaluatorq.formats._shared import join_text
 from evaluatorq.openresponses.otel_messages import is_responses_item
 
 from .facets import _project_names, project_labels
@@ -1598,21 +1600,6 @@ def _selected_span_signal_data(span: Any, messages: Sequence[dict[str, Any]]) ->
                 definitions = decoded['tools']
                 break
     usage = _mapping(_field(raw, 'usage') or gen_ai.get('usage'))
-    input_details = _mapping(usage.get('input_tokens_details') or usage.get('prompt_tokens_details'))
-    prompt_tokens = _first_number(usage, 'input_tokens', 'prompt_tokens')
-    completion_tokens = _first_number(usage, 'output_tokens', 'completion_tokens')
-    cached_tokens = _first_number(input_details, 'cached_tokens', 'cache_read_input_tokens')
-    cost = _first_number(usage, 'cost_usd', 'cost')
-    metrics = {
-        key: value
-        for key, value in {
-            'prompt_tokens': prompt_tokens,
-            'completion_tokens': completion_tokens,
-            'cached_tokens': cached_tokens,
-            'cost_usd': cost,
-        }.items()
-        if value is not None
-    }
     start = _parse_time(_field(raw, 'started_at') or _field(raw, 'start_time'))
     end = _parse_time(_field(raw, 'ended_at') or _field(raw, 'end_time'))
     candidates = [
@@ -1718,12 +1705,8 @@ def _response_item_text(item: Mapping[str, Any]) -> str | None:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = [
-            part.get('text') or part.get('refusal')
-            for part in content
-            if isinstance(part, Mapping) and isinstance(part.get('text') or part.get('refusal'), str)
-        ]
-        return ''.join(parts) if parts else None
+        parts = [text for part in content if (text := content_part_text(part)) is not None]
+        return join_text(parts) if parts else None
     return None
 
 

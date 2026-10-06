@@ -5,10 +5,15 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.common.trace_document import ensure_trace_document, prompt_messages
-from evaluatorq.common.trace_document import TraceDocument, TraceMetadata
+from evaluatorq.common.trace_document import (
+    TraceDocument,
+    TraceMetadata,
+    ensure_trace_document,
+    prompt_messages,
+    trace_document_with_signals,
+)
 from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifTrajectory
-from evaluatorq.signals import compute_signals
+from evaluatorq.signals import SignalReport, compute_signals
 from evaluatorq.trace_finder.models import TraceRecord
 
 
@@ -57,6 +62,54 @@ def test_trace_document_reconstructs_exact_existing_projection() -> None:
     assert prompt_messages(document) == list(trace.messages)
     assert document.trajectory.steps[2].observation is not None
     assert len(document.trajectory.steps[2].observation.results) == 1
+
+
+def test_legacy_trace_trajectory_id_is_stable_and_separate_from_source_identity() -> None:
+    trace = _trace({'role': 'user', 'content': 'hello'})
+
+    first = ensure_trace_document(trace)
+    repeated = ensure_trace_document(trace)
+
+    assert first.trajectory.trajectory_id == repeated.trajectory.trajectory_id
+    assert first.trajectory.trajectory_id != trace.trace_id
+
+
+def test_legacy_trace_trajectory_id_includes_selected_span_identity() -> None:
+    trace = _trace({'role': 'user', 'content': 'hello'})
+    other_span = trace.model_copy(update={'span_id': 'span-2'})
+
+    first_id = ensure_trace_document(trace).trajectory.trajectory_id
+    second_id = ensure_trace_document(other_span).trajectory.trajectory_id
+    assert first_id != second_id
+
+
+def test_native_trace_document_trajectory_id_is_preserved() -> None:
+    document = TraceDocument(
+        metadata=TraceMetadata(
+            trace_id='source-trace',
+            span_id='source-span',
+            timestamp=datetime(2026, 10, 5, tzinfo=timezone.utc),
+        ),
+        trajectory=AtifTrajectory(
+            trajectory_id='native-trajectory',
+            agent=AtifAgent(name='agent', version='1'),
+            steps=[AtifStep(step_id=1, source='user', message='hello')],
+        ),
+    )
+
+    assert ensure_trace_document(document).trajectory.trajectory_id == 'native-trajectory'
+
+
+def test_signal_attachment_checks_atif_trajectory_id() -> None:
+    document = ensure_trace_document(_trace({'role': 'user', 'content': 'hello'}))
+    report = compute_signals(document.trajectory, only=[])
+
+    assert trace_document_with_signals(document, report).metadata.signals is report
+    with pytest.raises(ValueError, match='trajectory_id does not match'):
+        trace_document_with_signals(
+            document,
+            SignalReport(trajectory_id=document.metadata.trace_id, results={}, config_version='1'),
+        )
 
 
 def test_prompt_renderer_reads_native_atif_message_content() -> None:
@@ -192,6 +245,66 @@ def test_idless_tool_call_keeps_no_fabricated_prompt_id() -> None:
     assert call.tool_call_id.startswith('unknown-')
     assert prompt_messages(document)[0]['tool_calls'] == [
         {'type': 'function', 'function': {'name': 'run', 'arguments': '{}'}}
+    ]
+
+
+@pytest.mark.parametrize(
+    ('raw_call', 'mutated_call'),
+    [
+        (
+            {'call_id': 'c', 'tool_name': 'run', 'input': {'cmd': 'pwd'}},
+            {'call_id': 'c', 'tool_name': 'renamed', 'input': {'cmd': 'ls'}},
+        ),
+        (
+            {'id': 'c', 'function': {'tool_name': 'run', 'input': {'cmd': 'pwd'}}},
+            {'id': 'c', 'function': {'tool_name': 'renamed', 'input': {'cmd': 'ls'}}},
+        ),
+        (
+            {'id': 'c', 'function': {'name': 'run', 'arguments': {'cmd': 'pwd'}}},
+            {'id': 'c', 'function': {'name': 'renamed', 'arguments': {'cmd': 'ls'}}},
+        ),
+    ],
+)
+def test_tool_call_shape_roundtrips_and_mutations_use_native_values(
+    raw_call: dict[str, Any], mutated_call: dict[str, Any]
+) -> None:
+    document = ensure_trace_document(_trace({'role': 'assistant', 'tool_calls': [raw_call]}))
+    step = document.trajectory.steps[0]
+    assert step.tool_calls is not None
+    call = step.tool_calls[0]
+
+    assert prompt_messages(document)[0]['tool_calls'] == [raw_call]
+    changed_call = call.model_copy(update={'function_name': 'renamed', 'arguments': {'cmd': 'ls'}})
+    changed = document.model_copy(update={
+        'trajectory': document.trajectory.model_copy(update={
+            'steps': [step.model_copy(update={'tool_calls': [changed_call]})],
+        }),
+    })
+    assert prompt_messages(changed)[0]['tool_calls'] == [mutated_call]
+
+
+@pytest.mark.parametrize(
+    'raw_call',
+    [
+        {'id': 'c'},
+        {'id': 'c', 'function': {}},
+    ],
+)
+def test_tool_call_missing_name_and_arguments_stay_missing(raw_call: dict[str, Any]) -> None:
+    document = ensure_trace_document(_trace({'role': 'assistant', 'tool_calls': [raw_call]}))
+
+    assert prompt_messages(document)[0]['tool_calls'] == [raw_call]
+
+
+def test_prompt_renderer_preserves_absent_content_and_explicit_null_content() -> None:
+    document = ensure_trace_document(_trace(
+        {'role': 'assistant'},
+        {'role': 'assistant', 'content': None},
+    ))
+
+    assert prompt_messages(document) == [
+        {'role': 'assistant'},
+        {'role': 'assistant', 'content': None},
     ]
 
 

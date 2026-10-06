@@ -24,6 +24,7 @@ from evaluatorq.insights.models import (
     TraceSummary,
 )
 from evaluatorq.insights.population import ResolvedPopulation
+from evaluatorq.insights.store import load_run
 from evaluatorq.trace_finder.models import Snapshot, TraceRecord
 
 
@@ -75,6 +76,73 @@ async def test_local_snapshot_pipeline_does_not_resolve_orq_client(
     assert run.status == 'completed'
     assert run.population['mode'] == 'snapshot'
     assert run.population['n_scanned'] == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_capture_sidecars_are_excluded_from_saved_review_coverage(
+    tmp_path: Path,
+) -> None:
+    sentinel = 'SOURCE_BODY_SENTINEL'
+    trace = _trace(0).model_copy(update={
+        'capture_metadata': {
+            'source': 'snapshot',
+            'incomplete_reason': 'partial source capture',
+            'raw_transcript': {'messages': [{'content': sentinel}]},
+            'unknown_provenance': sentinel,
+            'signal_span_coverage': {
+                'selected_span_id': 'span-0',
+                'selected_span_found': True,
+                'scoped_span_count': 3,
+                'matched_tool_span_count': 1,
+                'matched_call_ids': ['call-1'],
+                'missing_call_ids': ['call-missing'],
+                'responses_items_captured': 2,
+                'selected_data_correlated': True,
+                'selected_detail_captured': False,
+                'enrichment_errors': ['span-2: TimeoutError'],
+                'raw_payload': {'content': sentinel},
+            },
+        }
+    })
+    snapshot_path = tmp_path / 'snapshot.json'
+    snapshot_path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
+
+    run = await pipeline.insights(
+        InsightsPopulation.from_snapshot(snapshot_path),
+        dimensions=(),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+    )
+    saved_path = next((tmp_path / 'runs').glob('insights_*.json'))
+    saved_text = saved_path.read_text(encoding='utf-8')
+    restored = load_run(saved_path)
+
+    assert sentinel not in saved_text
+    assert restored.traces[0].source_coverage == {
+        'source': 'snapshot',
+        'incomplete_reason': 'partial source capture',
+        'signal_span_coverage': {
+            'selected_span_id': 'span-0',
+            'selected_span_found': True,
+            'scoped_span_count': 3,
+            'matched_tool_span_count': 1,
+            'matched_call_ids': ['call-1'],
+            'missing_call_ids': ['call-missing'],
+            'responses_items_captured': 2,
+            'selected_data_correlated': True,
+            'selected_detail_captured': False,
+            'enrichment_errors': ['span-2: TimeoutError'],
+        },
+    }
+    assert restored.traces[0].signals is not None
+    assert restored.traces[0].signals.results['user_message_count'].value == 1
+
+    from evaluatorq.dashboard.insights_review_data import build_signal_detail_payload
+
+    detail = build_signal_detail_payload(restored, trace.trace_id, trace.span_id)
+    assert detail is not None
+    assert detail['source_coverage'] == restored.traces[0].source_coverage
+    assert sentinel not in json.dumps(detail)
 
 
 def _patch_clients(monkeypatch: pytest.MonkeyPatch) -> None:

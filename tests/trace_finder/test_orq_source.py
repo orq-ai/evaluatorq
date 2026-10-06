@@ -10,15 +10,17 @@ from typing import Any, cast
 
 import pytest
 
+from evaluatorq.common.trace_document import ensure_trace_document
+from evaluatorq.formats.responses import ResponsesConversation
 from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot
-from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.trace_finder.orq_source import (
     MAX_SPAN_PAGES,
     OrqSourceError,
     OrqTraceSource,
-    _RawResponseCapture,
     _conversation_messages,
+    _RawResponseCapture,
+    _selected_span_signal_data,
     build_oql,
 )
 from evaluatorq.trace_finder.rows import TraceRow
@@ -179,25 +181,81 @@ def test_build_oql_rejects_a_project_name_that_cannot_be_resolved() -> None:
         build_oql(FacetSelection(project=frozenset({'Missing'})), NumericFilters(), {})
 
 
+def test_selected_response_text_correlation_matches_responses_normalization() -> None:
+    response_items = [{
+        'type': 'message',
+        'role': 'assistant',
+        'content': [
+            {'type': 'output_text', 'text': 'first'},
+            {'type': 'output_text', 'text': ''},
+            {'type': 'output_text', 'text': 'second'},
+            {'type': 'refusal', 'refusal': ''},
+        ],
+    }]
+    normalized = ResponsesConversation(items=response_items).to_chat().messages
+    start = START
+    end = START + timedelta(seconds=2)
+
+    selected = _selected_span_signal_data(
+        {
+            'started_at': start.isoformat(),
+            'ended_at': end.isoformat(),
+            'attributes': {
+                'openresponses.response': json.dumps({
+                    'output': response_items,
+                    'usage': {
+                        'input_tokens': 40,
+                        'output_tokens': 12,
+                        'input_tokens_details': {'cached_tokens': 8},
+                    },
+                }),
+            },
+        },
+        [{'role': 'assistant', 'content': normalized[0].content}],
+    )
+
+    assert normalized[0].content == 'first\nsecond'
+    assert selected['step_order'] == 0
+    assert selected['metrics'] == {'prompt_tokens': 40, 'completion_tokens': 12, 'cached_tokens': 8}
+    assert selected['start_timestamp'] == start.timestamp()
+    assert selected['end_timestamp'] == end.timestamp()
+
+
 @pytest.mark.asyncio
 async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_into_atif() -> None:
+    source_messages = [
+        {'role': 'user', 'content': 'find the invoice'},
+        {'role': 'assistant', 'content': 'first\nsecond', 'tool_calls': [
+            {'id': 'call-1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}
+        ]},
+        {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'found'},
+    ]
     source_summary = summary(
         'selected',
-        messages=[
-            {'role': 'user', 'content': 'find the invoice'},
-            {'role': 'assistant', 'content': None, 'tool_calls': [
-                {'id': 'call-1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}}
-            ]},
-            {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'found'},
-        ],
+        messages=source_messages,
     )
     source_summary.leading_span_id = 'selected-span'
     selected_detail = span('selected-span', minute=1)
     selected_detail.ended_at = START + timedelta(minutes=2)
+    response_items = [
+        {
+            'type': 'message',
+            'role': 'assistant',
+            'content': [
+                {'type': 'output_text', 'text': 'first'},
+                {'type': 'output_text', 'text': ''},
+                {'type': 'output_text', 'text': 'second'},
+                {'type': 'refusal', 'refusal': ''},
+            ],
+        },
+        {'type': 'function_call', 'id': 'fc_1', 'call_id': 'call-1', 'name': 'lookup', 'arguments': '{}'},
+    ]
+    normalized = ResponsesConversation(items=response_items).to_chat().messages
+    assert normalized[0].content == 'first\nsecond'
     selected_detail.attributes = {
         'openresponses.request': json.dumps({'tools': [{'type': 'function', 'name': 'lookup'}]}),
         'openresponses.response': json.dumps({
-            'output': [{'type': 'function_call', 'id': 'fc_1', 'call_id': 'call-1', 'name': 'lookup', 'arguments': '{}'}],
+            'output': response_items,
             'usage': {'input_tokens': 40, 'output_tokens': 12, 'input_tokens_details': {'cached_tokens': 8}},
         }),
     }
@@ -227,6 +285,7 @@ async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_in
         source.close()
 
     document = ensure_trace_document(enriched)
+    assert document.messages == tuple(source_messages)
     step = next(step for step in document.trajectory.steps if step.source == 'agent' and step.tool_calls)
     assert step.metrics is not None
     assert (step.metrics.prompt_tokens, step.metrics.completion_tokens, step.metrics.cached_tokens) == (40, 12, 8)
@@ -240,6 +299,7 @@ async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_in
     assert observation.results[0].extra is not None
     assert observation.results[0].extra['status'] == 'error'
     assert document.metadata.capture_metadata['signal_span_coverage']['matched_call_ids'] == ['call-1']
+    assert document.metadata.capture_metadata['signal_span_coverage']['selected_data_correlated'] is True
     assert 'signal_selected_span' not in document.metadata.capture_metadata
     assert 'signal_tool_spans' not in document.metadata.capture_metadata
     assert traces.get_span_calls
