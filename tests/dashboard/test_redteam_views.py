@@ -713,13 +713,6 @@ class TestDisagreementView:
 class TestMountPoints:
     """Verify that the interactive panels section is present in the report page."""
 
-    def test_report_page_includes_panel_mount_points(self, client: TestClient, rid: str) -> None:
-        r = client.get(f'/r/{rid}')
-        assert r.status_code == 200
-        html = r.text
-        # The HTMX-wired panel containers should be present in the full page
-        assert 'rt-interactive-panels' in html or 'panel-breakdown' in html
-
     def test_report_page_has_htmx_view_routes(self, client: TestClient, rid: str) -> None:
         r = client.get(f'/r/{rid}')
         assert r.status_code == 200

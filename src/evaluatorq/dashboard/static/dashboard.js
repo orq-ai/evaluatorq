@@ -42,14 +42,47 @@
     if (scope && scope.id === 'insights-content') syncInsightsTab();
     if (!scope) return;
     initInsightsMaps(scope);
-    if (!window.vegaEmbed) return;
+    if (!scope.querySelector('.vega-chart')) return;
+    if (!window.vegaEmbed) {
+      // The page shipped without vega (shell.page adds it only when the initial
+      // body has a chart); load it once, then embed this swap's charts.
+      const detail = evt.detail;
+      loadVega().then(function () { embedSwappedCharts(scope, detail); });
+      return;
+    }
+    embedSwappedCharts(scope, evt.detail);
+  });
 
+  let vegaLoading = null;
+  function loadVega() {
+    if (!vegaLoading) {
+      // Sequential: vega-lite and vega-embed read window.vega at load.
+      vegaLoading = ['/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js'].reduce(
+        function (chain, src) {
+          return chain.then(function () {
+            return new Promise(function (resolve, reject) {
+              const script = document.createElement('script');
+              script.src = src;
+              script.onload = resolve;
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+          });
+        },
+        Promise.resolve(),
+      );
+      vegaLoading.catch(function () { vegaLoading = null; });
+    }
+    return vegaLoading;
+  }
+
+  function embedSwappedCharts(scope, detail) {
     let tags = scope.querySelectorAll('[data-vega-for]');
     // htmx removes script tags when allowScriptTags is false, including the
     // application/json islands that hold chart specs. Read those inert tags
     // from the response so the swapped chart can still be embedded.
-    if (!tags.length && scope.querySelector('.vega-chart') && evt.detail.xhr) {
-      const response = new DOMParser().parseFromString(evt.detail.xhr.responseText, 'text/html');
+    if (!tags.length && detail.xhr) {
+      const response = new DOMParser().parseFromString(detail.xhr.responseText, 'text/html');
       tags = response.querySelectorAll('[data-vega-for]');
     }
     tags.forEach(function (tag) {
@@ -77,7 +110,7 @@
         window.__orqVegaViews[id] = r;
       });
     });
-  });
+  }
 
   function syncInsightsTab() {
     const nav = document.querySelector('.insights-tabs');

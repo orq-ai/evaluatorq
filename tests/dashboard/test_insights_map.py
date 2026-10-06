@@ -416,7 +416,7 @@ def test_htmx_swap_initializes_maps_without_vega_embed():
     handler = source.split("document.body.addEventListener('htmx:afterSwap', function (evt) {", 1)[1].split('\n  });', 1)[0]
 
     assert handler.index('if (!scope) return;') < handler.index('initInsightsMaps(scope);')
-    assert handler.index('initInsightsMaps(scope);') < handler.index('if (!window.vegaEmbed) return;')
+    assert handler.index('initInsightsMaps(scope);') < handler.index("if (!scope.querySelector('.vega-chart')) return;")
     assert handler.count('initInsightsMaps(scope);') == 1
 
 

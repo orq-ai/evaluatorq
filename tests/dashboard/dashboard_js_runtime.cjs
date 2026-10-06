@@ -755,3 +755,33 @@ test('Picking a model from a list tells the form the hidden value changed', () =
   assert.equal(hidden.value, 'gpt-5.6-luna');
   assert.deepEqual(events, [['change', true, 'gpt-5.6-luna']]);
 });
+
+test('a chart swapped into a page without vega loads the vega trio in order, then embeds it', async () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const chart = { id: 'insights-crosstab' };
+  const island = { textContent: '{"mark":"bar"}', getAttribute: () => 'insights-crosstab' };
+  const scope = {
+    querySelector: selector => (selector === '.vega-chart' || selector === '#insights-crosstab' ? chart : null),
+    querySelectorAll: selector => (selector === '[data-vega-for]' ? [island] : []),
+  };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const embeds = [];
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  for (const src of ['/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js']) {
+    await flush();
+    assert.equal(appended.at(-1).src, src);
+    if (src.endsWith('vega-embed.min.js')) {
+      app.window.vegaEmbed = (el, spec) => { embeds.push([el, spec]); return Promise.resolve({}); };
+    }
+    appended.at(-1).onload();
+  }
+  await flush();
+
+  assert.equal(appended.length, 3);
+  assert.equal(embeds.length, 1);
+  assert.equal(embeds[0][0], chart);
+  assert.equal(JSON.stringify(embeds[0][1]), '{"mark":"bar"}');
+});

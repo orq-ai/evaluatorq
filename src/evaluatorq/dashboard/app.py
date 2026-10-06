@@ -61,7 +61,7 @@ from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.model_choices import model_groups
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
-from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.shell import dashboard_css, page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -251,6 +251,13 @@ def _index(req: Request) -> NotStr:
         rows = [r for r in metrics.run_rows(roots) if r.surface == surface]
         body = runs_screen_body(rows, surface)
     return NotStr(page(label, body, active_surface=surface))
+
+
+def _dashboard_css() -> Response:
+    # The URL carries a content hash (shell.dashboard_css_href), so the sheet can be cached forever.
+    return Response(
+        dashboard_css(), media_type='text/css', headers={'Cache-Control': 'public, max-age=31536000, immutable'}
+    )
 
 
 async def _auth_status(req: Request) -> JSONResponse:
@@ -983,6 +990,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     initialize_finder_settings(app)
     app.add_middleware(TraceSessionMiddleware, app_state=app.state)
     app.get('/auth/status')(_auth_status)
+    app.get('/static/dashboard.css')(_dashboard_css)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for
     # /r/{rid}/export.html, export.md, export.csv, export.json etc.
