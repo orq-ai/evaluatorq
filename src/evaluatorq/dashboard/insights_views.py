@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 from datetime import datetime, timezone
 from math import isfinite
-from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
@@ -13,13 +11,10 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
 from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
-from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
-from evaluatorq.dashboard.trace_finder.views import facet_menu
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.insights.models import label_key, label_order
 from evaluatorq.insights.population import describe_projection_coverage
-from evaluatorq.trace_finder.models import FACET_NAMES
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -27,7 +22,6 @@ if TYPE_CHECKING:
 
     from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import Cluster, InsightsRun, TraceInsight
-    from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
 
 TABS = ('dimensions', 'labels', 'crosstab', 'traces', 'priority', 'map')
 TAB_LABELS = {
@@ -38,15 +32,6 @@ TAB_LABELS = {
     'priority': 'Priority matrix',
     'map': '3D Map',
 }
-
-
-def _wizard_js_version() -> str:
-    """Version the wizard script so returning browsers load updated controls."""
-    try:
-        path = Path(__file__).parent / 'static' / 'insights-wizard.js'
-        return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
-    except OSError:
-        return '0'
 
 
 def _stage_name(manifest: RunManifest) -> str:
@@ -1258,116 +1243,3 @@ def unreadable_page(error: str) -> str:
         f'<p>{esc(error)}</p></section></div></div>'
     )
     return page('Insights', body, active_nav='insights', back_html=_back_to_runs())
-
-
-def facet_options(
-    catalogue: FacetCatalogue | None,
-    selection: FacetSelection,
-    *,
-    profile_name: str | None = None,
-    credential_rejected: bool = False,
-) -> str:
-    """Render the Finder facet choices for an Insights window, retaining selected values."""
-    if catalogue is None and credential_rejected:
-        if profile_name == 'CLI OAuth':
-            credential = 'Orq rejected the CLI OAuth sign-in. Run <code>orq auth login</code> and try again.'
-        elif profile_name == 'Saved API key':
-            credential = 'Orq rejected the API key entered in Settings. Enter a key with trace access and Save.'
-        elif profile_name == 'ORQ_API_KEY' or not profile_name:
-            credential = (
-                'Orq rejected the dashboard Environment credentials for this workspace. Check '
-                '<code>ORQ_API_KEY</code> and <code>ORQ_BASE_URL</code>.'
-            )
-        else:
-            credential = (
-                f'Orq rejected the key for profile <code>{esc(profile_name)}</code>. Check that this profile '
-                'has trace access to the workspace selected in Settings.'
-            )
-        unavailable = (
-            f'<p class="insights-facet-unavailable" role="status">{credential} In '
-            '<a href="/settings" target="_blank" rel="noopener">Settings → Authentication</a>, choose a '
-            'matching profile or workspace, Save, then click '
-            '<button type="button" data-retry-facets>Retry</button>. Your selected filters are kept.</p>'
-        )
-    elif catalogue is None:
-        unavailable = (
-            '<p class="insights-facet-unavailable" role="status">Could not load filter choices from Orq. '
-            'In <a href="/settings" target="_blank" rel="noopener">Settings → Authentication</a>, select an Orq '
-            'profile with trace access and Save. If you use the environment API key, set <code>ORQ_API_KEY</code> for the '
-            'dashboard and restart it. Then click <button type="button" data-retry-facets>Retry</button>. '
-            'Your selected filters are kept.</p>'
-        )
-    else:
-        unavailable = ''
-    if catalogue is None and not any(getattr(selection, name) for name in FACET_NAMES):
-        return unavailable
-    menu = facet_menu(catalogue, form_id='insights-new-form', selection=selection, include_numeric=False)
-    return (
-        f'{unavailable}<div class="finder-controls insights-filter-picker">'
-        '<span class="addwrap"><button class="add" type="button" aria-haspopup="true" '
-        'aria-label="Add a trace filter">+ Filter</button>'
-        f'{menu}</span><div class="insights-selected-facets" aria-live="polite"></div></div>'
-    )
-
-
-def new_run_page(*, error: str | None = None) -> str:
-    """Render the three-step run form; JavaScript only controls presentation."""
-    error_html = f'<p class="insights-error" role="alert">{esc(error)}</p>' if error else ''
-    body = (
-        '<div class="insights-layout">'
-        '<div class="insights-main insights-wizard">'
-        '<header class="insights-wizard-head"><h2>New Insights run</h2>'
-        '<p>Choose the traces and what to learn from them.</p></header>'
-        f'{error_html}'
-        '<div class="insights-wizard-steps" aria-label="Wizard steps"><span class="active">1 · Traces</span>'
-        '<span>2 · Analysis</span><span>3 · Review</span></div>'
-        '<form id="insights-new-form" method="post" action="/insights/runs">'
-        f'{csrf_field()}'
-        '<section class="insights-wizard-step" data-step="1"><h3>Which traces?</h3>'
-        '<div class="insights-source-options">'
-        '<label><input type="radio" name="source" value="recent" checked><b>Recent traces</b><small>Analyze a recent window.</small></label>'
-        '<label><input type="radio" name="source" value="query"><b>Search by question</b><small>Include only matching traces.</small></label>'
-        '<label><input type="radio" name="source" value="finder"><b>Finder export</b><small>Use a saved set of matches.</small></label>'
-        '<label><input type="radio" name="source" value="snapshot"><b>Local trace file</b><small>Analyze a saved trace snapshot.</small></label>'
-        '</div>'
-        '<label class="insights-form-field" data-source="query">Question<textarea name="query" rows="3" maxlength="500" placeholder="Which conversations are about refunds?"></textarea></label>'
-        '<label class="insights-form-field" data-source="finder">Finder JSON filename<input name="finder_export" type="text" placeholder="Filename from Finder download"><small>Download a completed Finder run first, or place a valid export in the dashboard finder-exports directory.</small></label>'
-        '<label class="insights-form-field" data-source="snapshot">Trace snapshot JSON path<input name="snapshot_path" type="text" placeholder="/path/to/trace-snapshot.json"></label>'
-        '<div id="insights-snapshot-preview" data-source="snapshot" aria-live="polite"></div>'
-        '<div class="insights-form-grid" data-source="recent query">'
-        '<label class="insights-form-field">Window (days)<input name="window_days" type="number" min="1" max="90" value="7"></label>'
-        '<label class="insights-form-field">Trace limit<input name="limit" type="number" min="1" max="5000" value="100"></label></div>'
-        '<div class="insights-facet-control" data-source="recent query"><div class="insights-facet-head">'
-        '<b>Filter by facets</b><span>Only traces with these values in the selected window are included.</span></div>'
-        '<div id="insights-facet-options" aria-live="polite"><p class="insights-muted">Loading facet values…</p></div></div>'
-        '</section>'
-        '<section class="insights-wizard-step" data-step="2"><h3>What should Insights find?</h3>'
-        '<p>Choose labels for fixed questions and dimensions for discovered groups.</p>'
-        '<fieldset><legend>Labels</legend><div class="insights-choice-grid">'
-        '<label><input type="checkbox" name="labels" value="sentiment"> Sentiment</label>'
-        '<label><input type="checkbox" name="labels" value="customer_satisfaction"> Customer satisfaction'
-        '<small>The priority matrix needs this label.</small></label>'
-        '</div></fieldset><fieldset><legend>Dimensions</legend><div class="insights-choice-grid">'
-        '<label><input type="checkbox" name="dimensions" value="intent" checked> Intent</label>'
-        '<label><input type="checkbox" name="dimensions" value="failure"> Failure</label>'
-        '<label><input type="checkbox" name="dimensions" value="sentiment"> Sentiment</label>'
-        '</div></fieldset>'
-        '<fieldset><legend>Coding agents</legend><div class="insights-choice-grid">'
-        '<label><input type="checkbox" name="coding_analysis"> Analyze coding agents'
-        '<small>Checks each trace for a coding agent and, for the ones that are, asks task type, outcome, '
-        'verification, scope, corrections, unfixed errors and risky actions.</small></label></div></fieldset>'
-        '<label class="insights-form-field">Parallel requests<input name="parallelism" type="number" min="1" max="200" value="20"></label>'
-        '</section>'
-        '<section class="insights-wizard-step" data-step="3"><h3>Review and start</h3>'
-        '<label class="insights-form-field">Run name <span>(optional)</span><input name="name" maxlength="80" placeholder="Weekly support review"></label>'
-        '<div id="insights-run-preview" class="insights-run-preview" aria-live="polite"></div>'
-        '<p class="insights-muted">The run reads the selected traces and makes model requests. Progress appears in its run page.</p>'
-        '</section>'
-        '<p id="insights-wizard-error" class="insights-error" role="alert" hidden></p>'
-        '<div class="insights-wizard-actions"><button type="button" data-wizard-back>Back</button>'
-        '<button type="button" data-wizard-next>Continue</button>'
-        '<button type="submit" data-wizard-start>Start run</button></div>'
-        f'</form></div></div><script src="/static/insights-run-common.js" defer></script>'
-        f'<script src="/static/insights-wizard.js?v={_wizard_js_version()}" defer></script>'
-    )
-    return page('New Insights run', body, active_nav='insights', back_html=_back_to_runs())

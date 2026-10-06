@@ -14,6 +14,7 @@ from urllib.parse import quote
 from loguru import logger
 
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.facet_picker import render_facet_chips
 from evaluatorq.trace_finder.columns import COLUMNS, MATCH, Column, fmt_cost, fmt_duration, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.explorer import (
     CONVERSATION_METRICS,
@@ -689,9 +690,7 @@ def _toolbar(
     )
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary xr-load" type="submit" form="explorer-load-form">Load</button>'
-    from evaluatorq.dashboard.trace_finder.views import _facet_chips
-
-    chips = _facet_chips(view.facets, view.numeric, removable=True)
+    chips = render_facet_chips(view.facets, view.numeric, removable=True)
     active = chips.count('class="chip ')
     label = f'Filters · {active}' if active else 'Filters'
     return (
@@ -727,37 +726,7 @@ def _pager(view: ExplorerView, results: Mapping[str, TraceClassification] | None
     return f'<div class="xr-pager">{prev}<span>Page {page + 1} of {pages} · {PAGE_ROWS} per page</span>{nxt}</div>'
 
 
-def _model_totals(rows: Sequence[TraceRow]) -> str:
-    """Summarize traces and safely attributable cost for each model in the shown rows."""
-    grouped: dict[str, list[TraceRow]] = {}
-    for row in rows:
-        for model in set(row.models) or {'Unknown model'}:
-            grouped.setdefault(model, []).append(row)
-
-    items: list[str] = []
-    for model, model_rows in sorted(grouped.items(), key=lambda item: (-len(item[1]), item[0].casefold())):
-        currencies = {row.currency for row in model_rows}
-        can_sum_cost = (
-            all(len(row.models) == 1 and row.cost_total is not None and row.currency for row in model_rows)
-            and len(currencies) == 1
-        )
-        cost = sum(row.cost_total or 0 for row in model_rows) if can_sum_cost else None
-        currency = next(iter(currencies)) if can_sum_cost else None
-        items.append(
-            f'<li><span class="xr-model-name">{esc(model)}</span> '
-            f'<span>{len(model_rows):,} {"trace" if len(model_rows) == 1 else "traces"}</span> '
-            f'<span>{fmt_cost(cost, currency)}</span></li>'
-        )
-    if not items:
-        return '<div class="xr-model-groups" aria-label="Trace count and cost by model"><span>No traces by model</span></div>'
-    return (
-        '<div class="xr-model-groups" aria-label="Trace count and cost by model"><span class="xr-model-heading">By model</span><ul>'
-        + ''.join(items)
-        + '</ul></div>'
-    )
-
-
-def _totals_strip(rows: Sequence[TraceRow], *, traces_layout: bool = False) -> str:
+def _totals_strip(rows: Sequence[TraceRow]) -> str:
     """One line of sums over the rows the table shows, so a filter visibly moves the numbers."""
     t = totals(rows)
     share = f'{t.cache_share:.0%}' if t.cache_share is not None else fmt_tokens(None)
@@ -780,8 +749,7 @@ def _totals_strip(rows: Sequence[TraceRow], *, traces_layout: bool = False) -> s
         f'<b class="xr-total-value">{value if available else "Unavailable"}</b></span></span>'
         for label, display, icon, value, available in parts
     )
-    grouped = _model_totals(rows) if traces_layout else ''
-    return f'<div class="xr-totals" aria-label="Totals for the traces shown">{cells}</div>{grouped}'
+    return f'<div class="xr-totals" aria-label="Totals for the traces shown">{cells}</div>'
 
 
 def results(
@@ -959,11 +927,7 @@ def results(
         ):
             body = _empty('No matches.', 'No loaded traces match this filter.')
         inner = f'{banner}{body}{_pager(view, results)}'
-    totals_strip = (
-        _totals_strip(view.visible_rows(judged), traces_layout=traces_layout)
-        if view.rows or view.state == 'loaded'
-        else ''
-    )
+    totals_strip = _totals_strip(view.visible_rows(judged)) if view.rows or view.state == 'loaded' else ''
     inner = f'{status}{totals_strip}{inner}'
     error_html = f'<div class="finder-review finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     section_body = f'{error_html}{inner}'

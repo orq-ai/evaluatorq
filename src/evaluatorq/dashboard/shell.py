@@ -17,12 +17,27 @@ The CSS layers, in cascade order, are:
 from __future__ import annotations
 
 import base64
+import functools
+import hashlib
 from pathlib import Path
 
 from evaluatorq.common.reports import esc, load_css
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
 from evaluatorq.dashboard.view import PAIRWISE_ICON_PATH, SURFACE_LABELS, head_assets
+
+
+@functools.cache
+def dashboard_css() -> str:
+    """The three CSS layers above as one stylesheet, served at ``dashboard_css_href()``."""
+    return f'{load_css()}\n{EDITORIAL_CSS}\n{DASHBOARD_CSS}\n'
+
+
+@functools.cache
+def dashboard_css_href() -> str:
+    """Content-hashed URL, so the browser caches the ~500KB sheet once instead of every page inlining it."""
+    return f'/static/dashboard.css?v={hashlib.sha256(dashboard_css().encode()).hexdigest()[:12]}'
+
 
 # Sidebar collapse: runs at body-top so the class lands on <html> before the
 # sidebar paints (no flash). State persists in localStorage across the full-page
@@ -210,7 +225,9 @@ def page(
     active_nav: str | None = None,
     actions_html: str = '',
     back_html: str = '',
-    shell_variant: str | None = None,
+    body_class: str = '',
+    head_html: str = '',
+    topbar: bool = True,
 ) -> str:
     """Render a complete HTML page in the dashboard sidebar shell.
 
@@ -224,35 +241,27 @@ def page(
             default.
         actions_html: Optional pre-rendered HTML for the topbar action area
             (e.g. export buttons on a report view).
+        back_html: Optional pre-rendered topbar lead replacing the title.
+        body_class: Extra class appended to ``eq-dashboard`` on ``<body>``.
+        head_html: Trusted markup placed after the shared head assets.
+        topbar: ``False`` omits the ``<header class="app-topbar">`` bar.
 
     Returns:
         A complete HTML document string starting with ``<!DOCTYPE html>``.
     """
-    css = load_css()
-    if shell_variant == 'insights-review':
-        nav_key = _resolve_nav(active_surface, active_nav)
-        sidebar = _sidebar_html(nav_key)
-        scripts = ''.join(str(a) for a in head_assets())
-        return (
-            '<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
-            '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
-            f'{_favicon_link()}<title>{esc(title)} | evaluatorq</title>\n'
-            f'<style>\n{css}\n</style>\n<style>\n{EDITORIAL_CSS}\n</style>\n'
-            f'<style>\n{DASHBOARD_CSS}\n</style>\n{scripts}'
-            '<link rel="stylesheet" href="/static/insights-review.css">\n'
-            '<script src="/static/insights-run-common.js" defer></script>\n'
-            '<script src="/static/insights-review.js" defer></script>\n</head>\n'
-            '<body class="eq-dashboard eq-insights-review">\n'
-            f'{_SIDEBAR_TOGGLE_SCRIPT}<div class="app-shell">{sidebar}'
-            f'<div class="app-main"><main class="app-content insights-review-content">{body_html}</main></div>'
-            '</div></body></html>\n'
-        )
+    css_link = f'<link rel="stylesheet" href="{dashboard_css_href()}">\n'
     nav_key = _resolve_nav(active_surface, active_nav)
     sidebar = _sidebar_html(nav_key)
-    scripts = ''.join(str(a) for a in head_assets())
+    scripts = ''.join(str(a) for a in head_assets(charts='data-vega-for' in body_html))
     # On report pages the run name is the hero H1, so the topbar carries the
     # back link instead of repeating the title.
     topbar_lead = back_html or f'<h1 class="app-title">{esc(title)}</h1>'
+    topbar_html = (
+        f'<header class="app-topbar">\n{topbar_lead}\n<div class="app-actions">{actions_html}</div>\n</header>\n'
+        if topbar
+        else ''
+    )
+    body_classes = f'eq-dashboard {body_class}'.strip()
 
     return (
         '<!DOCTYPE html>\n'
@@ -262,21 +271,17 @@ def page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f'{_favicon_link()}'
         f'<title>{esc(title)} | evaluatorq</title>\n'
-        f'<style>\n{css}\n</style>\n'
-        f'<style>\n{EDITORIAL_CSS}\n</style>\n'
-        f'<style>\n{DASHBOARD_CSS}\n</style>\n'
+        f'{css_link}'
         f'{scripts}\n'
+        f'{head_html}'
         '</head>\n'
-        '<body class="eq-dashboard">\n'
+        f'<body class="{body_classes}">\n'
         f'{_SIDEBAR_TOGGLE_SCRIPT}'
         f'{_AUTH_TOAST_SCRIPT}'
         '<div class="app-shell">\n'
         f'{sidebar}\n'
         '<div class="app-main">\n'
-        '<header class="app-topbar">\n'
-        f'{topbar_lead}\n'
-        f'<div class="app-actions">{actions_html}</div>\n'
-        '</header>\n'
+        f'{topbar_html}'
         '<main class="app-content">\n'
         f'{body_html}\n'
         '</main>\n'

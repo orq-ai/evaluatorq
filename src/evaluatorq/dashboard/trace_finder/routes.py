@@ -358,11 +358,11 @@ def _unavailable_reason(app: Any) -> str:
         auth = selected_dashboard_auth(app)
     except ValueError as exc:
         return str(exc)
+    if auth.method == 'environment' and not auth.api_key:
+        return 'ORQ_API_KEY is not set. Choose an authentication method in Settings.'
     failure = getattr(app.state, 'finder_unavailable_reason', None)
     if failure:
         return str(failure)
-    if auth.method == 'environment' and not auth.api_key:
-        return 'ORQ_API_KEY is not set. Choose an authentication method in Settings.'
     return 'Choose a working authentication method in Settings to load traces'
 
 
@@ -1544,6 +1544,8 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 form_id=form_id,
                 selection=selection,
                 loaded_rows=loaded_rows,
+                row_scoped=params.get('counts') == 'loaded',
+                window_days=parsed.window_days,
             )
         )
 

@@ -65,7 +65,7 @@ assert.match(canvas.innerHTML, /Done/);
 const startup = source.slice(source.lastIndexOf('\nfromUrl();\nrenderHeader();'), source.lastIndexOf('\n})();'));
 assert.ok(startup.includes('render();'), 'review startup is present');
 Object.assign(context, {
-  fromUrl() {}, renderHeader() {}, bindMock() {}, render() {}, shouldPrefillRerun: false,
+  fromUrl() {}, renderHeader() {}, bindMock() {}, render() {}, openRerun() {},
   location: {hash: ''}, document: {}, tops() { throw new Error('no dimension exists'); },
 });
 vm.runInContext(startup, context);

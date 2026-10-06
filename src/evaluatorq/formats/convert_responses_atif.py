@@ -8,6 +8,7 @@ tool result between them come back as separate steps.
 
 from __future__ import annotations
 
+import json
 import mimetypes
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -382,15 +383,98 @@ def _unset_usage(response: Response) -> frozenset[str]:
 
 
 def _response_extra(response: Response, *, placeholder: bool) -> dict[str, Any]:
-    """Response fields kept in step `extra`; a placeholder's made-up id is not one of them."""
+    """Response fields kept in step `extra`; a placeholder's made-up id is not one of them.
+
+    The outcome becomes `extra.error_type` and `extra.finish_reasons`, the keys OTel reads. `status`, `error`
+    and `incomplete_details` are kept as well only when they say more than those two keys reproduce.
+    """
     extra: dict[str, Any] = {} if placeholder else {'response_id': response.id}
-    if response.status is not None and response.status != 'completed':
+    error_type, finish_reasons = _read_outcome(
+        response.error.code if response.error else None,
+        response.incomplete_details.reason if response.incomplete_details else None,
+        response.metadata,
+    )
+    if error_type is not None:
+        extra['error_type'] = error_type
+    if finish_reasons is not None:
+        extra['finish_reasons'] = finish_reasons
+    derived = _outcome_fields(error_type, finish_reasons, failed=error_type is not None)
+    if response.status is not None and response.status != derived['status']:
         extra['status'] = response.status
-    if response.error is not None:
-        extra['error'] = response.error.model_dump(mode='json')
-    if response.incomplete_details is not None:
-        extra['incomplete_details'] = response.incomplete_details.model_dump(mode='json')
-    return extra
+    error = response.error.model_dump(mode='json') if response.error is not None else None
+    if error != derived['error']:
+        extra['error'] = error
+    incomplete = response.incomplete_details.model_dump(mode='json') if response.incomplete_details else None
+    if incomplete != derived['incomplete_details']:
+        extra['incomplete_details'] = incomplete
+    return {key: value for key, value in extra.items() if value is not None}
+
+
+# A step's outcome is its error type and finish reasons (the OTel `error.type` and
+# `gen_ai.response.finish_reasons`). A Response holds it as `status`, `error` and `incomplete_details`, whose
+# values are closed enums; what they cannot hold goes to `Response.metadata`, which wins on the way back.
+ERROR_TYPE_KEY = 'atif_error_type'
+FINISH_REASONS_KEY = 'atif_finish_reasons'
+_ERROR_CODES: frozenset[str] = frozenset(get_args(ResponseError.model_fields['code'].annotation))
+_INCOMPLETE_REASONS = {'length': 'max_output_tokens', 'content_filter': 'content_filter'}
+_FINISH_REASONS = {reason: finish for finish, reason in _INCOMPLETE_REASONS.items()}
+
+
+def _outcome_fields(error_type: str | None, finish_reasons: list[str] | None, *, failed: bool) -> dict[str, Any]:
+    """The Response `status`, `error` and `incomplete_details` that state an outcome."""
+    if failed:
+        code = error_type if error_type in _ERROR_CODES else 'server_error'
+        error = {'code': code, 'message': error_type or 'error'}
+        return {'status': 'failed', 'error': error, 'incomplete_details': None}
+    reason = next((_INCOMPLETE_REASONS[f] for f in finish_reasons or [] if f in _INCOMPLETE_REASONS), None)
+    if reason is not None:
+        return {'status': 'incomplete', 'error': None, 'incomplete_details': {'reason': reason}}
+    return {'status': 'completed', 'error': None, 'incomplete_details': None}
+
+
+def _read_outcome(
+    error_code: str | None, incomplete_reason: str | None, metadata: dict[str, str] | None
+) -> tuple[str | None, list[str] | None]:
+    """Error type and finish reasons from a Response's fields, overridden by the metadata keys."""
+    error_type = error_code
+    finish_reasons = [_FINISH_REASONS[incomplete_reason]] if incomplete_reason in _FINISH_REASONS else None
+    metadata = metadata or {}
+    if ERROR_TYPE_KEY in metadata:
+        error_type = metadata[ERROR_TYPE_KEY] or None
+    if FINISH_REASONS_KEY in metadata:
+        try:
+            stored = json.loads(metadata[FINISH_REASONS_KEY])
+        except json.JSONDecodeError:
+            stored = None
+        if stored is None or (isinstance(stored, list) and all(isinstance(f, str) for f in stored)):
+            finish_reasons = cast('list[str] | None', stored)
+        else:
+            logger.warning('Response metadata {} is not a list of strings; ignoring it', FINISH_REASONS_KEY)
+    return error_type, finish_reasons
+
+
+def _step_outcome(step: AtifStep) -> tuple[str | None, list[str] | None, bool]:
+    """Error type, finish reasons, and whether the call failed (an error type, an `error` finish reason, or
+    an OTel invocation status of `error`)."""
+    extra = step.extra or {}
+    error_type = extra.get('error_type')
+    if error_type is not None and not isinstance(error_type, str):
+        _warn_foreign('error_type', step.step_id, error_type)
+        error_type = None
+    finish_reasons = extra.get('finish_reasons')
+    if finish_reasons is not None and not (
+        isinstance(finish_reasons, list) and all(isinstance(f, str) for f in finish_reasons)
+    ):
+        _warn_foreign('finish_reasons', step.step_id, finish_reasons)
+        finish_reasons = None
+    finish_reasons = cast('list[str] | None', finish_reasons)
+    invocation = extra.get('invocation')
+    failed = (
+        error_type is not None
+        or 'error' in (finish_reasons or [])
+        or (isinstance(invocation, dict) and cast('dict[str, Any]', invocation).get('status') == 'error')
+    )
+    return error_type, finish_reasons, failed
 
 
 def _metrics_from_usage(usage: ResponseUsage | None, unset: frozenset[str]) -> AtifMetrics | None:
@@ -426,6 +510,12 @@ def atif_to_responses(traj: AtifTrajectory) -> ResponsesConversation:
     A step without model, metrics or timestamp gets a placeholder (`model=''`, `usage=None`, `created_at=0.0`),
     which `responses_to_atif` reads back as absent. Responses usage has no unset token count, so an unset ATIF
     count is written as 0 and named in `Response.metadata['atif_unset_usage']`, which reads back as unset.
+
+    A step's outcome (`extra.error_type`, `extra.finish_reasons`, an `extra.invocation` status of `error`) sets
+    `status`, `error` and `incomplete_details`: a failed call is `failed`, a `length` or `content_filter` finish
+    is `incomplete`. What those closed enums cannot hold is kept in `Response.metadata['atif_error_type']` and
+    `['atif_finish_reasons']`, which win on the way back. An explicit `extra.status`, `extra.error` or
+    `extra.incomplete_details` overrides the derived value.
 
     Lost: embedded and referenced subagent trajectories (warned), results with no `source_call_id`
     (warned), metrics `cost_usd`, `prompt_token_ids`, `completion_token_ids` and `logprobs` (warned),
@@ -656,6 +746,17 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
     if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
         _warn_foreign(_RESPONSE_TOOLS_KEY, step.step_id, tools)
         tools = []
+    error_type, finish_reasons, failed = _step_outcome(step)
+    derived = _outcome_fields(error_type, finish_reasons, failed=failed)
+    error = _extra_model(extra, 'error', ResponseError, step.step_id) or derived['error']
+    incomplete = (
+        _extra_model(extra, 'incomplete_details', IncompleteDetails, step.step_id) or (derived['incomplete_details'])
+    )
+    read_back = _read_outcome(error['code'] if error else None, incomplete['reason'] if incomplete else None, None)
+    if read_back[0] != error_type:
+        metadata = {**(metadata or {}), ERROR_TYPE_KEY: error_type or ''}
+    if read_back[1] != finish_reasons:
+        metadata = {**(metadata or {}), FINISH_REASONS_KEY: json.dumps(finish_reasons)}
     return Response.model_validate({
         'id': response_id or 'resp_' + stable_hex(seed, 'response', str(step.step_id), length=24),
         'created_at': _epoch(step.timestamp),
@@ -665,9 +766,9 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
         'parallel_tool_calls': False,
         'tool_choice': 'auto',
         'tools': tools,
-        'status': status or 'completed',
-        'error': _extra_model(extra, 'error', ResponseError, step.step_id),
-        'incomplete_details': _extra_model(extra, 'incomplete_details', IncompleteDetails, step.step_id),
+        'status': status or derived['status'],
+        'error': error,
+        'incomplete_details': incomplete,
         'usage': usage,
         'metadata': metadata,
     })

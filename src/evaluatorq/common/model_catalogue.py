@@ -36,7 +36,7 @@ import asyncio
 import hashlib
 import math
 import os
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Literal, NamedTuple
 
 import httpx
 from loguru import logger
@@ -433,11 +433,14 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
         return _catalogues[cache_key]
 
 
-async def models_by_provider(client: AsyncOpenAI | None = None, *, classify: bool = False) -> dict[str, list[str]]:
+ModelKind = Literal['chat', 'classify', 'embedding']
+
+
+async def models_by_provider(client: AsyncOpenAI | None = None, *, kind: ModelKind = 'chat') -> dict[str, list[str]]:
     """Catalogue ids as ``provider/model``, grouped by provider, both levels sorted.
 
-    ``classify=True`` lists the models that serve ``/classify``; otherwise the chat
-    models. Empty when the catalogue is unavailable, so a caller can fall back to
+    ``kind='classify'`` lists the models that serve ``/classify``, ``'embedding'`` the
+    embedding models and ``'chat'`` the chat models. Empty when the catalogue is unavailable, so a caller can fall back to
     free text.
     """
     # `_parse_catalogue` files each entry under its bare and its qualified key with
@@ -448,7 +451,7 @@ async def models_by_provider(client: AsyncOpenAI | None = None, *, classify: boo
             qualified[id(info)] = (info, key)
     grouped: dict[str, list[str]] = {}
     for info, key in qualified.values():
-        if info.supports_classify if classify else info.model_type == 'chat':
+        if info.supports_classify if kind == 'classify' else info.model_type == kind:
             grouped.setdefault(info.provider, []).append(key)
     return {provider: sorted(ids) for provider, ids in sorted(grouped.items())}
 

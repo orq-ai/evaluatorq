@@ -26,7 +26,6 @@ for (const t of T) {
   if (!byTraceId.has(t.trace_id)) byTraceId.set(t.trace_id, []);
   byTraceId.get(t.trace_id).push(t.id);
 }
-const shouldPrefillRerun = root.dataset.rerun === 'true';
 const QUAL = ['#2ebd85', '#ff8f34', '#7e22ce', '#025558', '#2f80ed', '#df5325', '#00b8a0', '#4fa8d8'];
 const ERR_YES = '#df5325', ERR_NO = '#9fcfc7', OTHER = '#bdbbb5';
 const MIN_N = 5;              // smallest group a headline may speak about
@@ -955,12 +954,11 @@ function viewClusterTraces(c) {
 }
 function turnClusterIntoQuestion(c) {
   const slug = c.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  NR.tpl = null;
-  NR.adding = true;
-  NR.kindDraft = 'noul';
-  NR.nameDraft = `about_${slug || 'this_theme'}`;
-  NR.questionDraft = `Did the agent handle ${c.name} well?`;
-  openSheet();
+  openSheet(NEW_RUN_URL, 'New Insights run', form => InsightsRunForm.draftQuestion(form, {
+    name: `about_${slug || 'this_theme'}`,
+    kind: 'noul',
+    text: `Did the agent handle ${c.name} well?`,
+  }));
 }
 function safeTraceUrl(value) {
   if (typeof value !== 'string' || !value.trim()) return '';
@@ -1123,219 +1121,33 @@ function toast(msg) { const t = $('toast'); t.textContent = msg; t.classList.add
 function bindMock(root) { root.querySelectorAll('[data-act="mock"]').forEach(b => b.onclick = e => { e.preventDefault(); toast('Not wired up in this mock.'); }); }
 function render() { $('tip').classList.remove('on'); renderHeadlines(); renderFilterbar(); renderStage(); renderTraces(); renderDrawer(); }
 
-/* ---------- new run ---------- */
-const TPL = [
-  {id: 'fail', name: 'Find failures', d: 'Where does the agent go wrong?', dims: ['failure', 'intent'], labels: ['made_errors', 'user_frustration']},
-  {id: 'intent', name: 'Understand intents', d: 'What do users come for?', dims: ['intent'], labels: []},
-  {id: 'code', name: 'Coding agent', d: 'Frustration, outcome, risky actions', dims: ['intent', 'failure'], labels: ['user_frustration', 'task_type', 'outcome', 'unfixed_error', 'risky_action']},
-];
-const QUESTIONS = [['user_frustration', 'User frustration 1–5', 'score'], ['task_type', 'Task type', 'choice'], ['outcome', 'Outcome', 'choice'], ['unfixed_error', 'Unfixed error?', 'yes/no'], ['risky_action', 'Risky action (kind)', 'choice'], ['made_errors', 'Did the assistant make a mistake?', 'yes/no']];
-const NR = {tpl: 'fail', src: 'recent', limit: 200, days: 7, dims: new Set(['failure', 'intent']), labels: new Set(['made_errors', 'user_frustration']), coding: new Set(), custom: [], adding: false, facetsDown: false, facetMarkup: '', facets: {}, snapshotPath: '', finderPath: '', sourceNames: {snapshot: '', finder: ''}, token: '', error: '', busy: false, runName: ''};
-if (shouldPrefillRerun && D.rerun) {
-  const rerun = D.rerun;
-  NR.tpl = null;
-  NR.src = rerun.source === 'query' ? 'question' : rerun.source === 'snapshot' ? 'file' : rerun.source;
-  NR.query = rerun.query || '';
-  NR.days = rerun.window_days || 7;
-  NR.limit = rerun.limit || 100;
-  NR.runName = rerun.name || '';
-  NR.dims = new Set(rerun.dimensions || []);
-  NR.labels = new Set(rerun.labels || []);
-  NR.coding = new Set(rerun.coding_labels || []);
-  NR.custom = rerun.custom_labels || [];
-  NR.facets = Object.fromEntries(Object.entries(rerun.facets || {}).map(([name, values]) => [`facet_${name}`, values]));
-  if (rerun.source === 'snapshot' && !rerun.fresh_selection_required) { NR.snapshotPath = rerun.source_path || ''; NR.sourceNames.snapshot = rerun.source_name || ''; }
-  if (rerun.source === 'finder' && !rerun.fresh_selection_required) { NR.finderPath = rerun.source_path || ''; NR.sourceNames.finder = rerun.source_name || ''; }
-  if (rerun.fresh_selection_required) NR.error = 'The original local file is no longer available. Browse for a fresh file to continue.';
-}
-const QUESTION_TEXT = {
-  user_frustration: ['How frustrated does the user sound?', 'score', ['1: Calm', '2: Slightly dissatisfied', '3: Frustrated', '4: Very frustrated', '5: Angry']],
-  task_type: ['What kind of task is the agent doing?', 'choice', {implementation: 'Implementing or changing code', debugging: 'Finding or fixing a bug', review: 'Reviewing code', explanation: 'Explaining or answering', other: 'Other'}],
-  outcome: ['What was the outcome of the task?', 'choice', {done: 'Completed', partial: 'Partially completed', not_done: 'Not completed', cut_off: 'Cut off', inconclusive: 'Inconclusive'}],
-  unfixed_error: ['Did an error remain unfixed?', 'noul', null],
-  risky_action: ['What risky action occurred?', 'choice', {none: 'None', deleted: 'Deleted files', history_rewrite: 'Rewrote history', merged_or_closed: 'Merged or closed a PR', published: 'Published', infra_change: 'Changed infrastructure', secret_exposed: 'Exposed a secret'}],
-  made_errors: ['Did the assistant make a mistake?', 'noul', null],
-  verified: ['Was the result verified?', 'choice', {verified: 'Verified', claimed_without_check: 'Claimed without checking', unverified: 'Unverified', not_applicable: 'Not applicable'}],
-  scope_creep: ['Did the agent make changes outside the requested scope?', 'noul', null],
-  user_corrections: ['How many times did the user correct the agent?', 'score', ['1: None', '2: One', '3: Two', '4: Three', '5: Four or more']],
-};
-function codingQuestionOption(key) {
-  return QUESTIONS.find(question => question[0] === key) || [key, human(key), QUESTION_TEXT[key]?.[1] || 'choice'];
-}
-const GENERAL_QUESTIONS = ['made_errors', 'user_frustration'];
-const CODING_QUESTIONS = ['task_type', 'outcome', 'unfixed_error', 'risky_action', 'verified', 'scope_creep', 'user_corrections'];
-let facetAbort = null;
-async function ensureCsrf() {
-  if (NR.token) return NR.token;
-  NR.token = await InsightsRunCommon.csrfToken(null);
-  return NR.token;
-}
-async function loadFacets() {
-  if (!['recent', 'query'].includes(InsightsRunCommon.normalizeSource(NR.src))) return;
-  if (facetAbort) facetAbort.abort();
-  facetAbort = new AbortController();
-  const response = await InsightsRunCommon.requestFacets(NR.days, NR.facets, facetAbort.signal);
-  if (!response.ok) throw new Error('Facet values could not be loaded.');
-  NR.facetMarkup = await response.text();
-}
-function selectedLabels() {
-  return [...NR.labels].filter(k => GENERAL_QUESTIONS.includes(k));
-}
-function captureFacets() {
-  const sheet = $('sheet');
-  if (!sheet) return;
-  const inputs = [...sheet.querySelectorAll('input[name^="facet_"]')];
-  const names = new Set(inputs.map(input => input.name));
-  names.forEach(name => {
-    NR.facets[name] = inputs.filter(input => input.name === name && input.checked).map(input => input.value);
-  });
-}
-function renderSelectedFacets() {
-  const sheet = $('sheet');
-  const host = sheet?.querySelector('.insights-selected-facets');
-  if (!host) return;
-  host.innerHTML = Object.entries(NR.facets).flatMap(([name, values]) => {
-    const facet = name.replace(/^facet_/, '');
-    const facetItem = [...sheet.querySelectorAll('.facet-item')].find(item => item.dataset.facet === facet);
-    const label = facetItem?.querySelector('span')?.textContent?.trim() || facet.replace(/_/g, ' ') || 'Filter';
-    return (Array.isArray(values) ? values : [values]).map(value =>
-      `<span class="chip"><b>${esc(label)}</b><span class="v">${esc(value)}</span><button type="button" class="finder-chip-remove" data-remove-facet="${esc(name)}" data-facet-value="${esc(value)}" aria-label="Remove ${esc(label)} ${esc(value)}">×</button></span>`
-    );
-  }).join('');
-}
-function customLabel(name) {
-  const instructions = $('cqText')?.value.trim() || '';
-  const kind = $('cqKind')?.value || NR.kindDraft || 'noul';
-  let criteria;
-  if (kind === 'choice') criteria = Object.fromEntries(($('cqCriteria')?.value || '').split('\n').map(v => v.trim()).filter(Boolean).map(v => [v, v]));
-  if (kind === 'score') criteria = ($('cqCriteria')?.value || '').split('\n').map(v => v.trim()).filter(Boolean);
-  return {name, instructions, kind, ...(criteria ? {criteria} : {})};
-}
-function sheetErrorMarkup() {
-  return `<p id="sheetError" class="warn-line" role="alert" ${NR.error ? '' : 'hidden'}>${esc(NR.error)}</p>`;
-}
-function renderSheet() {
-  captureFacets();
-  const n = ['recent', 'question'].includes(NR.src) ? NR.limit : null;
-  const estimateText = 'Unavailable';
-  const estimateBasis = 'No priced prior run is available as a reliable basis for this estimate.';
-  const src = {
-    recent: `<div class="fld"><label>Last</label><input type="number" id="days" value="${NR.days}" style="max-width:80px"><span style="color:var(--text-muted)">days, up to</span><input type="number" id="limit" value="${NR.limit}" style="max-width:90px"><span style="color:var(--text-muted)">traces</span></div>`,
-    question: `<div class="fld"><label>Question</label><textarea id="sourceQuestion" aria-label="Question to match" placeholder="e.g. customers asking about refunds"></textarea></div><div class="hint-line">The classifier reads each trace in the window and keeps only the ones that match.</div>
-      <div class="fld"><label>Last</label><input type="number" id="days" value="${NR.days}" style="max-width:80px"><span style="color:var(--text-muted)">days, up to</span><input type="number" id="limit" value="${NR.limit}" style="max-width:90px"><span style="color:var(--text-muted)">traces</span></div>`,
-    finder: `<div class="fld"><label>Export</label><input id="finderPath" readonly aria-label="Selected Finder export" value="${esc(NR.finderPath)}"><button class="btn" type="button" data-browse="finder">Browse…</button><input type="file" accept="application/json,.json" data-file="finder" hidden></div><div class="hint-line">${NR.finderPath ? 'Validated Finder export selected.' : 'Choose a Finder export JSON file.'}</div>`,
-    file: `<div class="fld"><label>File</label><input id="snapshotPath" readonly aria-label="Selected trace snapshot" value="${esc(NR.snapshotPath)}"><button class="btn" type="button" data-browse="snapshot">Browse…</button><input type="file" accept="application/json,.json" data-file="snapshot" hidden></div><div id="snapshotNotice" class="hint-line" role="status">${NR.snapshotPath ? 'Measuring selected snapshot…' : 'Choose a trace snapshot JSON file.'}</div>`,
-  }[NR.src];
-  const facets = NR.src === 'recent' || NR.src === 'question'
-    ? (NR.facetsDown
-      ? `<div class="warn-line">Orq didn't return the list of agents and projects, so filters can't be offered right now. The run will include every trace in the window. <button class="linkbtn" data-fd>Retry</button></div>`
-      : `<div class="fld"><label>Only</label><div class="facet-options">${NR.facetMarkup || '<span class="hint-line" role="status">Loading facet values…</span>'}</div></div>`)
-    : '';
-  const custom = NR.adding ? `<div class="card" style="margin-top:10px"><div class="fld" style="margin-top:0"><label>Name</label><input id="cqName" placeholder="needs_human_follow_up"></div>
-      <div class="fld"><label>Answer type</label><select id="cqKind"><option value="noul" ${NR.kindDraft === 'noul' ? 'selected' : ''}>Yes / no</option><option value="choice" ${NR.kindDraft === 'choice' ? 'selected' : ''}>One of a list</option><option value="score" ${NR.kindDraft === 'score' ? 'selected' : ''}>Score 1–5</option></select></div>
-      <div class="fld"><label>Question</label><textarea id="cqText" placeholder="Should a human follow up on this conversation?">${esc(NR.questionDraft || '')}</textarea></div>
-      <div class="fld criteria-field" hidden><label>Answer options</label><textarea id="cqCriteria" aria-label="Answer options, one per line" placeholder="billing question&#10;bug report"></textarea></div>
-      <div class="fld"><label></label><button class="btn sm primary" id="cqAdd">Add question</button><button class="btn sm" id="cqCancel">Cancel</button></div></div>` : '';
-  $('sheet').innerHTML = `<header><h2 id="sheetTitle">New Insights run</h2><button id="closeSheet" aria-label="Close">×</button></header>
-    <div class="body">
-      ${sheetErrorMarkup()}
-      <h3>Start from</h3><div class="tpls">${TPL.map(t => `<button class="tpl ${NR.tpl === t.id ? 'on' : ''}" data-tpl="${t.id}"><b>${t.name}</b><span>${t.d}</span></button>`).join('')}</div>
-      <h3>Which traces</h3>
-      <div class="card"><div class="seg">${[['recent', 'Recent'], ['question', 'Question'], ['finder', 'Finder export'], ['file', 'Local file']].map(([k, l]) => `<button class="${NR.src === k ? 'on' : ''}" data-src="${k}">${l}</button>`).join('')}</div>${src}${facets}</div>
-      <h3>Group traces by</h3>
-      <div class="toggles">${[['intent', 'Intent', 'what users asked'], ['failure', 'Failure', 'what went wrong']].map(([k, l, s]) => `<button class="tg ${NR.dims.has(k) ? 'on' : ''}" data-dim="${k}">${NR.dims.has(k) ? '✓ ' : ''}${l} <small>${s}</small></button>`).join('')}</div>
-      <h3>Ask about every trace</h3>
-      <div class="toggles">${QUESTIONS.filter(([k]) => GENERAL_QUESTIONS.includes(k)).map(([k, l, kind]) => `<button type="button" class="tg ${NR.labels.has(k) ? 'on' : ''}" aria-pressed="${NR.labels.has(k)}" data-lab="${k}">${NR.labels.has(k) ? '✓ ' : ''}${l} <small>${kind}</small></button>`).join('')}${NR.custom.map(c => `<span class="tg on">✓ ${esc(c.name)} <small>custom</small></span>`).join('')}${NR.adding ? '' : '<button type="button" class="tg" id="cqOpen">+ Write your own question</button>'}</div>
-      <h3>Coding agent questions</h3><div class="toggles">${CODING_QUESTIONS.map(k => { const l = codingQuestionOption(k); return `<button type="button" class="tg ${NR.coding.has(k) ? 'on' : ''}" aria-pressed="${NR.coding.has(k)}" data-coding="${k}">${NR.coding.has(k) ? '✓ ' : ''}${l[1]} <small>${QUESTION_TEXT[k]?.[1] || l[2]}</small></button>`; }).join('')}</div>
-      ${custom}
-      ${NR.labels.has('made_errors') ? '' : `<div class="hint-line">Without "Did the assistant make a mistake?", error share is estimated from the summaries instead of asked directly.</div>`}
-      <h3>Name this run</h3><div class="fld"><label for="runName">Run name</label><input id="runName" maxlength="80" value="${esc(NR.runName)}" placeholder="Optional"></div>
-    </div>
-    <footer><div class="est"><div><small>Traces</small><b>${n == null ? 'Unavailable' : `up to ${n}`}</b></div><div><small>Cost</small><b>${estimateText}</b></div><div><small>Time</small><b>Unavailable</b></div>
-      <span class="basis">${esc(estimateBasis)}</span></div>
-      <button class="btn primary" id="startRun">Start run</button></footer>`;
-  const sh = $('sheet');
-  sh.querySelectorAll('input[name^="facet_"]').forEach(input => { input.checked = (NR.facets[input.name] || []).includes(input.value); input.addEventListener('change', () => { captureFacets(); renderSelectedFacets(); }); });
-  renderSelectedFacets();
-  sh.querySelector('.insights-selected-facets')?.addEventListener('click', event => {
-    const remove = event.target.closest('[data-remove-facet]');
-    if (!remove) return;
-    event.stopPropagation();
-    const name = remove.dataset.removeFacet;
-    const value = remove.dataset.facetValue;
-    NR.facets[name] = (NR.facets[name] || []).filter(selected => selected !== value);
-    sh.querySelectorAll('input[name^="facet_"]').forEach(input => { if (input.name === name && input.value === value) input.checked = false; });
-    renderSelectedFacets();
-  });
-  $('closeSheet').onclick = closeSheet;
-  sh.querySelectorAll('[data-tpl]').forEach(b => b.onclick = () => { const t = TPL.find(x => x.id === b.dataset.tpl); NR.tpl = t.id; NR.dims = new Set(t.dims); NR.labels = new Set(t.labels.filter(k => GENERAL_QUESTIONS.includes(k))); NR.coding = new Set(t.labels.filter(k => CODING_QUESTIONS.includes(k))); renderSheet(); });
-  sh.querySelectorAll('[data-src]').forEach(b => b.onclick = () => { NR.src = b.dataset.src; renderSheet(); });
-  sh.querySelectorAll('[data-dim]').forEach(b => b.onclick = () => { const k = b.dataset.dim; NR.dims.has(k) ? NR.dims.delete(k) : NR.dims.add(k); NR.tpl = null; renderSheet(); });
-  sh.querySelectorAll('[data-lab]').forEach(b => b.onclick = () => { const k = b.dataset.lab; NR.labels.has(k) ? NR.labels.delete(k) : NR.labels.add(k); NR.tpl = null; renderSheet(); });
-  sh.querySelectorAll('[data-coding]').forEach(b => b.onclick = () => { const k = b.dataset.coding; NR.coding.has(k) ? NR.coding.delete(k) : NR.coding.add(k); NR.tpl = null; renderSheet(); });
-  sh.querySelectorAll('[data-fd]').forEach(b => b.onclick = () => { NR.facetsDown = !NR.facetsDown; renderSheet(); });
-  const lim = $('limit'); if (lim) lim.onchange = e => { NR.limit = Math.max(1, +e.target.value || 1); renderSheet(); };
-  const op = $('cqOpen'); if (op) op.onclick = () => { NR.adding = true; renderSheet(); };
-  const ad = $('cqAdd'); if (ad) ad.onclick = () => { const spec = customLabel($('cqName').value.trim()); if (!spec.name || !spec.instructions || (spec.kind === 'choice' && Object.keys(spec.criteria || {}).length < 2) || (spec.kind === 'score' && spec.criteria?.length !== 5)) { $('sheetError').textContent = spec.kind === 'score' ? 'Add exactly five score criteria, one per line.' : 'Enter a name and question; choice questions need at least two options.'; $('sheetError').hidden = false; return; } if (NR.custom.some(c => c.name === spec.name) || LABELS.some(c => c.name === spec.name)) { $('sheetError').textContent = 'That question name is already in use.'; $('sheetError').hidden = false; return; } NR.custom.push(spec); NR.nameDraft = ''; NR.criteriaDraft = ''; NR.questionDraft = ''; NR.kindDraft = ''; NR.adding = false; NR.error = ''; renderSheet(); };
-  const cc = $('cqCancel'); if (cc) cc.onclick = () => { NR.adding = false; renderSheet(); };
-  const kindSelect = $('cqKind'); if (kindSelect) { if (!NR.kindDraft) NR.kindDraft = kindSelect.value; const field = sh.querySelector('.criteria-field'); field.hidden = kindSelect.value === 'noul'; kindSelect.onchange = () => { NR.kindDraft = kindSelect.value; const criteriaField = sh.querySelector('.criteria-field'); criteriaField.hidden = kindSelect.value === 'noul'; $('cqCriteria').placeholder = kindSelect.value === 'score' ? '1: Lowest\n2: Low\n3: Moderate\n4: High\n5: Highest' : 'option_one\noption_two'; }; }
-  if ($('cqName')) $('cqName').oninput = () => { NR.nameDraft = $('cqName').value; };
-  if ($('cqCriteria')) $('cqCriteria').oninput = () => { NR.criteriaDraft = $('cqCriteria').value; };
-  if ($('cqText')) $('cqText').oninput = () => { NR.questionDraft = $('cqText').value; };
-  sh.querySelectorAll('[data-browse]').forEach(button => button.onclick = () => sh.querySelector(`[data-file="${button.dataset.browse}"]`).click());
-  sh.querySelectorAll('[data-file]').forEach(input => input.onchange = async () => { const kind = input.dataset.file; try { buttonBusy(input, true); const result = await InsightsRunCommon.uploadSource(kind, input.files[0], null); NR.error = ''; NR.sourceNames[kind] = input.files[0].name; if (kind === 'snapshot') { NR.snapshotPath = result.path; renderSheet(); await previewSnapshot(); } else { NR.finderPath = result.path; renderSheet(); } } catch (err) { NR.error = err.message || 'Upload failed.'; renderSheet(); } finally { buttonBusy(input, false); } });
-  const startButton = $('startRun');
-  startButton.disabled = NR.busy;
-  startButton.textContent = NR.busy ? 'Starting…' : 'Start run';
-  startButton.onclick = async () => {
-    NR.error = '';
-    if (InsightsRunCommon.validateSource({source: NR.src, query: $('sourceQuestion')?.value || ''}) === 'query') { NR.error = 'Enter a question to match.'; renderSheet(); $('sourceQuestion').focus(); return; }
-    if (NR.adding) { NR.error = 'Finish or cancel the custom question first.'; renderSheet(); return; }
-    const selectionIssue = InsightsRunCommon.validateSelection({selectionCount: NR.labels.size + NR.coding.size + NR.custom.length + NR.dims.size, parallelismValid: true});
-    if (selectionIssue === 'selection') { NR.error = 'Select at least one question or grouping.'; renderSheet(); return; }
-    try {
-      NR.busy = true; renderSheet();
-      const populationSource = ['recent', 'question'].includes(NR.src);
-      const sourceIssue = InsightsRunCommon.validateSource({
-        source: NR.src,
-        finderPath: NR.src === 'finder' ? NR.finderPath : undefined,
-        snapshotPath: NR.src === 'file' ? NR.snapshotPath : undefined,
-        windowValid: populationSource ? Number.isInteger(Number(NR.days)) && Number(NR.days) >= 1 && Number(NR.days) <= 90 : undefined,
-        limitValid: populationSource ? Number.isInteger(Number(NR.limit)) && Number(NR.limit) >= 1 && Number(NR.limit) <= 5000 : undefined,
-      });
-      if (sourceIssue) { NR.error = sourceIssue === 'window' ? 'Enter a valid window and trace limit.' : 'Browse to select and validate the source file first.'; NR.busy = false; renderSheet(); return; }
-      const source = InsightsRunCommon.normalizeSource(NR.src);
-      captureFacets();
-      const body = new FormData(); body.set('csrf', await ensureCsrf()); body.set('name', $('runName').value.trim()); body.set('source', source); body.set('query', source === 'query' ? $('sourceQuestion').value.trim() : ''); body.set('finder_export', NR.finderPath); body.set('snapshot_path', NR.snapshotPath); body.set('source_name', NR.src === 'finder' ? NR.sourceNames.finder : NR.src === 'file' ? NR.sourceNames.snapshot : ''); body.set('window_days', String(NR.days)); body.set('limit', String(NR.limit)); body.set('parallelism', '20');
-      selectedLabels().forEach(v => body.append('labels', v)); NR.coding.forEach(v => body.append('coding_labels', v)); NR.dims.forEach(v => body.append('dimensions', v)); body.set('custom_labels_json', JSON.stringify(NR.custom));
-      Object.entries(NR.facets).forEach(([name, values]) => values.forEach(value => body.append(name, value)));
-      const response = await fetch('/insights/runs', {method: 'POST', body});
-      if (response.redirected && response.url.includes('/insights/')) { location.assign(response.url); return; }
-      const html = await response.text(); const doc = new DOMParser().parseFromString(html, 'text/html'); const message = doc.querySelector('[role="alert"]')?.textContent?.trim() || 'The run could not be started. Your selections are still here.';
-      NR.error = message; NR.busy = false; renderSheet();
-    } catch (err) { NR.error = err.message || 'The run could not be started. Your selections are still here.'; NR.busy = false; renderSheet(); }
-  };
-  if (['recent', 'question'].includes(NR.src) && !NR.facetMarkup) loadFacets().then(renderSheet).catch(e => { NR.facetsDown = true; NR.facetMarkup = `<p class="warn-line" role="status">${esc(e.message)} Filters are unavailable.</p>`; renderSheet(); });
-  const days = $('days'); if (days) days.onchange = () => { NR.days = Math.max(1, Math.min(90, Number(days.value) || 7)); NR.facetMarkup = ''; renderSheet(); };
-  const sourceQuestion = $('sourceQuestion'); if (sourceQuestion) sourceQuestion.oninput = () => { NR.query = sourceQuestion.value; };
-  const runName = $('runName'); if (runName) runName.oninput = () => { NR.runName = runName.value; };
-  if (NR.query && sourceQuestion) sourceQuestion.value = NR.query;
-  if (NR.criteriaDraft && $('cqCriteria')) $('cqCriteria').value = NR.criteriaDraft;
-  if (NR.nameDraft && $('cqName')) $('cqName').value = NR.nameDraft;
-  if (NR.questionDraft && $('cqText')) $('cqText').value = NR.questionDraft;
-  bindMock(sh);
-}
-function buttonBusy(input, busy) { input.disabled = busy; }
-async function previewSnapshot() {
-  const notice = $('snapshotNotice'); if (!notice || !NR.snapshotPath) return;
-  notice.textContent = 'Measuring selected snapshot…';
-  try { const response = await InsightsRunCommon.requestSnapshotPreview(NR.snapshotPath, await ensureCsrf()); const html = await response.text(); const doc = new DOMParser().parseFromString(html, 'text/html'); const content = doc.body.textContent.trim(); if (!response.ok) throw new Error(content || 'Snapshot could not be measured.'); notice.textContent = content; }
-  catch (e) { notice.textContent = e.message; }
-}
+/* ---------- run form dialog ---------- */
+const NEW_RUN_URL = '/insights/new?mount=dialog';
 let sheetOpener = null;
-function openSheet() { sheetOpener = document.activeElement; renderSheet(); const sheet = $('sheet'); sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-modal', 'true'); sheet.setAttribute('aria-labelledby', 'sheetTitle'); sheet.classList.add('on'); $('scrim').classList.add('on'); sheet.querySelector('button, input, textarea, select')?.focus(); }
+async function openSheet(url, title, ready) {
+  sheetOpener = document.activeElement;
+  const sheet = $('sheet');
+  sheet.innerHTML = `<header><h2 id="sheetTitle">${esc(title)}</h2><button type="button" id="closeSheet" aria-label="Close">×</button></header><div class="body" id="sheetBody"><p class="insights-muted" role="status">Loading the run form…</p></div>`;
+  sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-modal', 'true'); sheet.setAttribute('aria-labelledby', 'sheetTitle');
+  $('closeSheet').onclick = closeSheet;
+  sheet.classList.add('on'); $('scrim').classList.add('on'); $('closeSheet').focus();
+  const body = $('sheetBody');
+  try {
+    const response = await fetch(url, {headers: {Accept: 'text/html'}});
+    if (!response.ok) throw new Error('The run form could not be loaded.');
+    body.innerHTML = await response.text();
+    const form = body.querySelector('#insights-new-form');
+    InsightsRunForm.mount(form);
+    if (ready) ready(form);
+  } catch (err) {
+    body.innerHTML = `<p class="insights-error" role="alert">${esc(err.message)} <button type="button" class="linkbtn" id="sheetRetry">Retry</button></p>`;
+    $('sheetRetry').onclick = () => openSheet(url, title, ready);
+  }
+}
 function closeSheet() { $('sheet').classList.remove('on'); $('scrim').classList.remove('on'); sheetOpener?.focus(); }
-$('newRun').onclick = openSheet;
+const openRerun = () => openSheet(`/insights/new?rerun=${encodeURIComponent(D.run.id)}&mount=dialog`, 'Re-run Insights');
+$('newRun').onclick = () => openSheet(NEW_RUN_URL, 'New Insights run');
+$('rerun')?.addEventListener('click', e => { e.preventDefault(); openRerun(); });
 $('scrim').onclick = closeSheet;
 
 document.addEventListener('keydown', e => {
@@ -1360,6 +1172,6 @@ fromUrl();
 renderHeader();
 bindMock(document);
 render();
-if (shouldPrefillRerun) openSheet();
+if (/[?&]rerun=1(?:&|$)/.test(location.search)) openRerun();
 
 })();

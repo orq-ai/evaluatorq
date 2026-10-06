@@ -51,8 +51,6 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
 from evaluatorq.common.cli_oauth import list_oauth_sessions
-from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.model_catalogue import models_by_provider
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
@@ -60,9 +58,10 @@ from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
+from evaluatorq.dashboard.model_choices import model_groups
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
-from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.shell import dashboard_css, page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -254,6 +253,13 @@ def _index(req: Request) -> NotStr:
     return NotStr(page(label, body, active_surface=surface))
 
 
+def _dashboard_css() -> Response:
+    # The URL carries a content hash (shell.dashboard_css_href), so the sheet can be cached forever.
+    return Response(
+        dashboard_css(), media_type='text/css', headers={'Cache-Control': 'public, max-age=31536000, immutable'}
+    )
+
+
 async def _auth_status(req: Request) -> JSONResponse:
     """Verify the selected dashboard credential for the startup toast."""
 
@@ -388,31 +394,13 @@ async def _settings_models(req: Request) -> NotStr:
     elif name:
         settings = settings.model_copy(update={'orq_auth_method': 'cli_profile', 'orq_profile': name})
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
-    groups: dict[str, list[str]] = {}
     try:
         auth = resolve_dashboard_auth(settings, profiles=profiles)
-        if auth.method == 'cli_oauth':
-            orq, llm = build_auth_clients(auth)
-            try:
-                groups = await models_by_provider(llm, classify=field == 'classifier_model')
-            finally:
-                await close_orq_client(orq)
-                await llm.close()
-        else:
-            resolved = resolve_llm_client(
-                extra_api_key=auth.api_key,
-                orq_host=auth.base_url,
-                require_orq=True,
-                max_retries=0,
-            )
-            try:
-                groups = await models_by_provider(resolved.client, classify=field == 'classifier_model')
-            finally:
-                if resolved.owned:
-                    await resolved.client.close()
     except (ImportError, OSError, RuntimeError, ValueError):
-        pass
-    return NotStr(model_control(field, value, groups))
+        groups: dict[str, list[str]] = {}
+    else:
+        groups = await model_groups(auth, 'classify' if field == 'classifier_model' else 'chat')
+    return NotStr(model_control(field, value, groups, label=MODEL_FIELDS[field]))
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
@@ -1002,6 +990,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     initialize_finder_settings(app)
     app.add_middleware(TraceSessionMiddleware, app_state=app.state)
     app.get('/auth/status')(_auth_status)
+    app.get('/static/dashboard.css')(_dashboard_css)
     # NOTE: static_route_exts is registered AFTER all custom routes so that
     # its catch-all /{fname:path}.{ext:static} does not steal requests for
     # /r/{rid}/export.html, export.md, export.csv, export.json etc.

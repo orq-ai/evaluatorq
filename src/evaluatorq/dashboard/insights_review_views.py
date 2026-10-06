@@ -11,10 +11,14 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import InsightsRun
 
+from evaluatorq.dashboard.insights_run_form import run_form_script_tag
 from evaluatorq.dashboard.shell import page
 
+_REVIEW_STYLESHEET = '<link rel="stylesheet" href="/static/insights-review.css">\n'
+_REVIEW_SCRIPT = '<script src="/static/insights-review.js" defer></script>\n'
 
-def review_page(run: InsightsRun, manifest: RunManifest | None = None, *, rerun: bool = False) -> str:
+
+def review_page(run: InsightsRun, manifest: RunManifest | None = None) -> str:
     """Render the review shell; trace content is fetched from the JSON endpoint."""
     from pathlib import Path
 
@@ -30,11 +34,7 @@ def review_page(run: InsightsRun, manifest: RunManifest | None = None, *, rerun:
     )
     body = body.replace(
         '<button class="btn" data-act="mock">Re-run</button>',
-        f'<a class="btn" href="/insights/{run_url}?rerun=1">Re-run</a>',
-    )
-    body = body.replace(
-        ' data-run-progress="REVIEW_PROGRESS"',
-        f' data-run-progress="REVIEW_PROGRESS" data-rerun="{str(rerun).lower()}"',
+        f'<a class="btn" id="rerun" href="/insights/{run_url}?rerun=1">Re-run</a>',
     )
     progress = None
     if manifest is not None:
@@ -48,4 +48,11 @@ def review_page(run: InsightsRun, manifest: RunManifest | None = None, *, rerun:
         }
     body = body.replace('REVIEW_PROGRESS', escape(json.dumps(progress, separators=(',', ':')), quote=True))
     body = body.replace('<header class="top">', '<header class="top" id="header">', 1)
-    return page(run.run_name, body, active_nav='insights', shell_variant='insights-review')
+    return page(
+        run.run_name,
+        body,
+        active_nav='insights',
+        body_class='eq-insights-review',
+        topbar=False,
+        head_html=f'{_REVIEW_STYLESHEET}{run_form_script_tag()}\n{_REVIEW_SCRIPT}',
+    )

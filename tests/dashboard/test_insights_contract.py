@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec
-from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
+from evaluatorq.insights.presets import LABEL_PRESETS
 
 
 def test_launch_resolves_selected_general_coding_and_custom_labels() -> None:
@@ -59,7 +59,3 @@ def test_launch_rejects_invalid_custom_labels(labels: list[dict[str, object]]) -
         InsightsLaunchSpec(labels=preset, custom_labels=labels, dimensions=['intent'])
 
 
-def test_legacy_coding_analysis_still_requests_full_coding_bundle() -> None:
-    spec = InsightsLaunchSpec(coding_analysis=True, dimensions=['intent'])
-    assert spec.coding_enabled is True
-    assert [label.name for label in spec.coding_label_specs()] == [label.name for label in CODING_LABELS[1:]]

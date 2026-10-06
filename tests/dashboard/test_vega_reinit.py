@@ -23,7 +23,9 @@ import pytest
 from starlette.testclient import TestClient
 
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.dashboard.library import report_id
+from evaluatorq.dashboard.shell import page
 
 # Re-use the report factory from the filter test suite — no duplication.
 from tests.dashboard.test_filter import _write_rt_report
@@ -75,20 +77,20 @@ class TestShellScriptTags:
         assert r.status_code == 200
         assert '/static/htmx.min.js' in r.text
 
-    def test_report_page_includes_vega_embed(self, client: TestClient, roots: list[Path]) -> None:
-        """GET /r/{rid} must include /static/vega-embed.min.js."""
+    def test_page_without_charts_skips_vega(self, client: TestClient, roots: list[Path]) -> None:
+        """The redteam report renders server-side SVG, so the ~800KB vega trio stays off the page."""
         rid = report_id(_rt_path(roots))
         r = client.get(f'/r/{rid}')
         assert r.status_code == 200
-        assert '/static/vega-embed.min.js' in r.text
+        assert 'data-vega-for' not in r.text
+        assert 'vega' not in r.text.split('</head>', 1)[0]
 
-    def test_report_page_includes_vega_and_vega_lite(self, client: TestClient, roots: list[Path]) -> None:
-        """GET /r/{rid} must include /static/vega.min.js and /static/vega-lite.min.js."""
-        rid = report_id(_rt_path(roots))
-        r = client.get(f'/r/{rid}')
-        assert r.status_code == 200
-        assert '/static/vega.min.js' in r.text
-        assert '/static/vega-lite.min.js' in r.text
+    def test_page_with_chart_loads_vega_in_head_before_body(self) -> None:
+        """A client-side chart in the initial body needs vega loaded before its inline embed script runs."""
+        text = page('Chart', render_embed({'mark': 'bar'}, 'chart-1'))
+        head = text.split('</head>', 1)[0]
+        positions = [head.index(f'/static/{name}') for name in ('vega.min.js', 'vega-lite.min.js', 'vega-embed.min.js')]
+        assert positions == sorted(positions)
 
     def test_index_page_includes_dashboard_js(self, client: TestClient) -> None:
         """GET / (index) must also include /static/dashboard.js."""
@@ -107,8 +109,7 @@ class TestShellScriptTags:
         head_section = text[:head_end]
         assert '/static/dashboard.js' in head_section
         assert '/static/htmx.min.js' in head_section
-        assert '/static/vega-embed.min.js' in head_section
-
+        assert '/static/dashboard.css?v=' in head_section
 
 # ---------------------------------------------------------------------------
 # Filter fragment: Vega data contract (data-vega-for + vega-chart)

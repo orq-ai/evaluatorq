@@ -42,14 +42,55 @@
     if (scope && scope.id === 'insights-content') syncInsightsTab();
     if (!scope) return;
     initInsightsMaps(scope);
-    if (!window.vegaEmbed) return;
+    if (!scope.querySelector('.vega-chart')) return;
+    if (!window.vegaEmbed) {
+      // The page shipped without vega (shell.page adds it only when the initial
+      // body has a chart); load it once, then embed this swap's charts.
+      const detail = evt.detail;
+      loadVega().then(
+        function () { embedSwappedCharts(scope, detail); },
+        function (error) {
+          console.error('Vega failed to load', error);
+          scope.querySelectorAll('.vega-chart').forEach(function (el) {
+            el.textContent = 'Chart failed to load. Reload the page to retry.';
+          });
+        },
+      );
+      return;
+    }
+    embedSwappedCharts(scope, evt.detail);
+  });
 
+  let vegaLoading = null;
+  function loadVega() {
+    if (!vegaLoading) {
+      // Sequential: vega-lite and vega-embed read window.vega at load.
+      vegaLoading = ['/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js'].reduce(
+        function (chain, src) {
+          return chain.then(function () {
+            return new Promise(function (resolve, reject) {
+              const script = document.createElement('script');
+              script.src = src;
+              script.onload = resolve;
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+          });
+        },
+        Promise.resolve(),
+      );
+      vegaLoading.catch(function () { vegaLoading = null; });
+    }
+    return vegaLoading;
+  }
+
+  function embedSwappedCharts(scope, detail) {
     let tags = scope.querySelectorAll('[data-vega-for]');
     // htmx removes script tags when allowScriptTags is false, including the
     // application/json islands that hold chart specs. Read those inert tags
     // from the response so the swapped chart can still be embedded.
-    if (!tags.length && scope.querySelector('.vega-chart') && evt.detail.xhr) {
-      const response = new DOMParser().parseFromString(evt.detail.xhr.responseText, 'text/html');
+    if (!tags.length && detail.xhr) {
+      const response = new DOMParser().parseFromString(detail.xhr.responseText, 'text/html');
       tags = response.querySelectorAll('[data-vega-for]');
     }
     tags.forEach(function (tag) {
@@ -77,7 +118,7 @@
         window.__orqVegaViews[id] = r;
       });
     });
-  });
+  }
 
   function syncInsightsTab() {
     const nav = document.querySelector('.insights-tabs');
@@ -390,7 +431,11 @@
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
       closeMenus(ownMenu);
-      if (ownMenu) { ownMenu.style.left = ''; ownMenu.style.top = ''; ownMenu.classList.toggle('open'); }
+      if (ownMenu) {
+        ownMenu.style.left = ''; ownMenu.style.top = '';
+        ownMenu.classList.toggle('open');
+        if (!ownMenu.classList.contains('open')) announceFacetsClosed(ownMenu);
+      }
       addFilter.setAttribute('aria-expanded', ownMenu && ownMenu.classList.contains('open') ? 'true' : 'false');
       return;
     }
@@ -409,7 +454,9 @@
     }
     const chipOpen = evt.target.closest('[data-chip-open]');
     if (chipOpen) {
-      const menu = document.querySelector('.finder-controls .finder-facets');
+      // The menu that belongs to the chip's own picker; /traces toolbar chips sit outside it and use the page's menu.
+      const scope = chipOpen.closest('.finder-controls');
+      const menu = scope ? scope.querySelector('.finder-facets') : document.querySelector('.finder-controls .finder-facets');
       const target = menu && menu.querySelector('.facet-item[data-facet="' + chipOpen.getAttribute('data-chip-open') + '"]');
       if (target) {
         // Anchor the menu under the clicked chip instead of under + Filter.
@@ -537,14 +584,20 @@
     document.querySelectorAll('.finder-facets.open').forEach(function (menu) {
       if (menu === except) return;
       menu.classList.remove('open');
+      announceFacetsClosed(menu);
       const trigger = menu.parentElement.querySelector('[data-explorer-filters], .add, .model-pick-btn');
       if (trigger) trigger.setAttribute('aria-expanded', 'false');
     });
+  }
+  // Tell the page a filter menu closed so it can apply the picks; model pickers share the markup but not the event.
+  function announceFacetsClosed(menu) {
+    if (!menu.closest('.model-pick')) menu.dispatchEvent(new CustomEvent('facets:closed', { bubbles: true }));
   }
 
   function pickModel(from, model) {
     const pick = from.closest('.model-pick');
     pick.querySelector('input[type="hidden"]').value = model;
+    pick.querySelector('input[type="hidden"]').dispatchEvent(new Event('change', { bubbles: true }));
     const button = pick.querySelector('.model-pick-btn');
     if (from.hasAttribute('data-rich')) button.innerHTML = from.innerHTML;
     else button.textContent = model || 'Choose a model';
@@ -1516,15 +1569,17 @@
       const scope = document.getElementById('finder-scope');
       const within = scope?.querySelector('input[name="scope"][value="within"]');
       const fresh = scope?.querySelector('input[name="scope"][value="new"]');
+      // Rows exist now, so Within results is always usable; only the auto-select waits on the user not having chosen.
+      if (within) within.disabled = false;
       if (scope?.getAttribute('data-auto-scope') === 'pending' && within && fresh) {
-        within.disabled = false;
         within.checked = true;
         fresh.checked = false;
         scope.removeAttribute('data-auto-scope');
       }
     }
   });
-  document.body.addEventListener('click', function (evt) {
+  // `change`, not `click`: a click on the still-disabled Within results is not a choice and must not cancel the auto-select.
+  document.body.addEventListener('change', function (evt) {
     if (evt.target.closest('#finder-scope')) {
       document.getElementById('finder-scope')?.removeAttribute('data-auto-scope');
     }

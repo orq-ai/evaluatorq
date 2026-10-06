@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports import esc
+from evaluatorq.dashboard.facet_picker import render_facet_chips
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_finder import views as shared
@@ -79,9 +80,9 @@ def _controls(
     )
     return (
         f'<div class="finder-controls" id="finder-controls">{hidden}{scope}'
-        f'{shared._facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"})}'  # noqa: SLF001
+        f'{render_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"})}'
         f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
-        f'{shared.facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending)}'
+        f'{shared.facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending, window_days=window_days)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<span class="quiet"><b>Window</b><input {keep["window_days"]} form="{form_id}" name="window_days" type="number" min="1" max="90" value="{values["window_days"]}" style="width:64px" '
         'hx-get="/find/facets?form_id='

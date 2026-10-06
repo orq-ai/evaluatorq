@@ -243,6 +243,8 @@ def _otel_messages(value: Any, *, default_role: _ROLE) -> list[Message]:
             continue
         raw_role = raw.get('role') or default_role
         role = raw_role.strip().lower() if isinstance(raw_role, str) else raw_role
+        if role == 'agent':
+            role = 'assistant'
         text, tool_calls, tool_responses = _otel_parts(raw['parts'])
         if role == 'tool' and tool_responses:
             messages.extend(tool_responses)

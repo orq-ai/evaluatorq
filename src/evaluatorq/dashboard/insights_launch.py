@@ -20,7 +20,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from loguru import logger
-from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
@@ -881,13 +881,15 @@ class InsightsLaunchSpec(BaseModel):
     custom_labels: list[LabelSpec] = Field(default_factory=list, max_length=10)
     coding_labels: list[str] = Field(default_factory=list, max_length=len(_CODING_PRESETS))
     dimensions: list[DimensionName] = Field(default_factory=_default_dimensions)
+    summary_model: str = Field(default='', max_length=200)
+    classifier_model: str = Field(default='', max_length=200)
+    embedding_model: str = Field(default='', max_length=200)
+    compiler_model: str = Field(default='', max_length=200)
     _finder_export_snapshot: str | None = PrivateAttr(default=None)
 
     def validated_finder_export_snapshot(self) -> str | None:
         """Return the bounded Finder JSON captured during source validation."""
         return self._finder_export_snapshot
-
-    coding_analysis: bool = False
 
     def _validate_snapshot_source(self) -> None:
         if self.source != 'snapshot':
@@ -961,13 +963,7 @@ class InsightsLaunchSpec(BaseModel):
         reserved = {spec.name for spec in CODING_LABELS}
         if reserved.intersection(all_names):
             raise ValueError('Custom labels cannot use names reserved for coding analysis.')
-        if (
-            not self.labels
-            and not self.custom_labels
-            and not self.dimensions
-            and not self.coding_analysis
-            and not self.coding_labels
-        ):
+        if not self.labels and not self.custom_labels and not self.dimensions and not self.coding_labels:
             raise ValueError('Select at least one label or dimension.')
         return self
 
@@ -983,20 +979,43 @@ class InsightsLaunchSpec(BaseModel):
             limit=self.limit,
         )
 
+    @field_validator('summary_model', 'classifier_model', 'embedding_model', 'compiler_model')
+    @classmethod
+    def _strip_model(cls, value: str) -> str:
+        return value.strip()
+
+    def model_overrides(self) -> dict[str, str]:
+        """The chosen models as `insights()` keywords; a blank field keeps that function's own default."""
+        chosen = {
+            'summary_model': self.summary_model,
+            'classifier_model': self.classifier_model,
+            'embedding_model': self.embedding_model,
+            'compiler_model': self.compiler_model,
+        }
+        return {name: model for name, model in chosen.items() if model}
+
     def label_specs(self) -> list[LabelSpec]:
         return [*(LABEL_PRESETS[name] for name in self.labels), *self.custom_labels]
 
     @property
     def coding_enabled(self) -> bool:
-        return self.coding_analysis or bool(self.coding_labels)
+        return bool(self.coding_labels)
 
     def coding_label_specs(self) -> list[LabelSpec]:
-        if self.coding_analysis:
-            return list(CODING_LABELS[1:])
         return [_CODING_PRESETS[name] for name in self.coding_labels]
 
     def dimension_names(self) -> list[DimensionName]:
         return list(self.dimensions)
+
+    def stages(self, population: InsightsPopulation | None = None) -> list[tuple[str, str]]:
+        """The `(stage name, title)` plan a run with this spec reports, as `launch_insights` records it."""
+        if population is None:
+            population, _ = _population_for_launch_plan(self)
+        return stage_plan(
+            population,
+            [*self.label_specs(), *(CODING_LABELS[:1] if self.coding_enabled else ()), *self.coding_label_specs()],
+            self.dimension_names(),
+        )
 
 
 class InsightsLaunchPayload(BaseModel):
@@ -1033,11 +1052,7 @@ def launch_insights(
     run_id = str(uuid.uuid4())
     run_name = spec.name.strip() or f'Insights {datetime.now().astimezone():%Y-%m-%d %H:%M}'
     population, finder_snapshot = _population_for_launch_plan(spec)
-    plan = stage_plan(
-        population,
-        [*spec.label_specs(), *(CODING_LABELS[:1] if spec.coding_enabled else ()), *spec.coding_label_specs()],
-        spec.dimension_names(),
-    )
+    plan = spec.stages(population)
     writer = start_manifest(
         run_id=run_id,
         surface='insights',
@@ -1045,6 +1060,7 @@ def launch_insights(
         runs_dir=runs_dir,
         planned_stages=[name for name, _ in plan],
         stage_labels=dict(plan),
+        parallelism=spec.parallelism,
     )
     snapshot_path: Path | None = None
     reference_path: Path | None = None
