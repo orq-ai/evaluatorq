@@ -131,6 +131,7 @@ async def test_run_without_tool_calls_makes_no_requests(monkeypatch: pytest.Monk
         JudgeOutcome(error_kind=JudgeError.PARSE, error_message='bad answer'),
         JudgeOutcome(payload=EvaluatorResponsePayload(value=None, explanation='abstained', abstain=True)),
         JudgeOutcome(payload=EvaluatorResponsePayload(value='maybe', explanation='invalid')),
+        JudgeOutcome(payload=EvaluatorResponsePayload(value='unknown', explanation='not a label Jev may choose')),
     ],
 )
 async def test_failed_classification_is_unknown_and_counts_are_kept(
@@ -158,18 +159,53 @@ async def test_failed_classification_is_unknown_and_counts_are_kept(
 
 
 @pytest.mark.asyncio
-async def test_unknown_is_never_offered_to_jev(monkeypatch: pytest.MonkeyPatch) -> None:
-    labels: list[set[str]] = []
+async def test_response_local_tool_definitions_supply_the_description(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_judge(monkeypatch, {'deploy': 'one_way'})
+    trajectory = traj([
+        user(),
+        agent(
+            calls=[call('deploy', {'env': 'prod'}, 'a')],
+            extra={'evaluatorq.responses_tools': [{'name': 'deploy', 'description': 'Deploy to production.'}]},
+        ),
+    ])
 
-    async def judge(**kwargs: Any) -> JudgeOutcome:
-        labels.append(set(kwargs['classify'].criteria))
-        return JudgeOutcome(payload=EvaluatorResponsePayload(value='benign', explanation='classified'))
+    results = await classify_tool_doors(trajectory, client=_CLIENT)
 
-    monkeypatch.setattr('evaluatorq.signals.doors.run_judge', judge)
+    assert seen == [{'tool_name': 'deploy', 'tool_description': 'Deploy to production.'}]
+    assert results['one_way_call_count'].value == 1
 
-    await classify_tool_doors(traj([user(), agent(calls=[call('Read', {}, 'a')])]), client=_CLIENT)
 
-    assert labels == [{'benign', 'two_way', 'one_way'}]
+@pytest.mark.asyncio
+async def test_first_description_seen_wins_across_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_judge(monkeypatch, {'deploy': 'one_way'})
+
+    def step(description: str, call_id: str) -> Any:
+        return agent(
+            calls=[call('deploy', {}, call_id)],
+            extra={'evaluatorq.responses_tools': [{'name': 'deploy', 'description': description}]},
+        )
+
+    await classify_tool_doors(traj([user(), step('First.', 'a'), step('Second.', 'b')]), client=_CLIENT)
+
+    assert seen == [{'tool_name': 'deploy', 'tool_description': 'First.'}]
+
+
+@pytest.mark.asyncio
+async def test_unmapped_tool_activity_leaves_every_count_without_basis(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _fake_judge(monkeypatch, {})
+    trajectory = traj([
+        user(),
+        agent(extra={'evaluatorq.responses_output_items': [{'type': 'mcp_call', 'name': 'delete_repo'}]}),
+    ])
+
+    results = await classify_tool_doors(trajectory, client=_CLIENT)
+
+    assert seen == []
+    assert set(results) == {'one_way_call_count', 'two_way_call_count', 'unknown_call_count'}
+    for item in results.values():
+        assert item.value is None
+        assert item.no_basis is not None
+        assert 'delete_repo' in item.no_basis
 
 
 # --- Retry: through the real run_judge, with a fake router client and no backoff sleep. ---

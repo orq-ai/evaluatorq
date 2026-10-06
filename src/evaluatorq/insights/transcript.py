@@ -7,9 +7,10 @@ Three views, each for one `/classify` call:
   to one line each and tool outputs are dropped. The opening user turns are
   never cut; an over-budget trace loses its middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
-- `tool_activity_chunks`: every tool call with its input, status and an output
-  excerpt, for the questions that need to see what a command did; a long trace
-  is split into several chunks rather than losing more than 30% of its middle.
+- `tool_activity_chunks`: every tool call with its input and status, and each
+  result body reduced to a diagnostic category, for the questions that need to
+  see what a command did; a long trace is split into several chunks rather than
+  losing more than 30% of its middle.
 
 Nothing here calls a model.
 """

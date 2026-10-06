@@ -20,7 +20,8 @@ from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.signals.config import SignalsConfig
 from evaluatorq.signals.models import Evidence, SignalResult, result
-from evaluatorq.signals.walk import CallRecord, calls, raw_tool_arguments, tool_schemas, walk
+from evaluatorq.signals.preconditions import source_tool_coverage
+from evaluatorq.signals.walk import CallRecord, SignalContext, call_tool_schemas, raw_tool_arguments
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -83,13 +84,15 @@ def _clip(text: str, edge: int) -> str:
 
 
 def _descriptions(trajectory: AtifTrajectory, records: list[CallRecord]) -> dict[str, str]:
-    """Tool name to description from the tool definitions of every trajectory that made a call."""
+    """Tool name to description, from the definitions active for each call; the first description seen wins."""
     found: dict[str, str] = {}
-    for holder in (trajectory, *(record.step.trajectory for record in records)):
-        for name, schema in tool_schemas(holder).items():
-            description = schema.get('description')
-            if isinstance(description, str) and description.strip() and name not in found:
-                found[name] = description.strip()
+    for record in records:
+        name = record.call.function_name
+        if name in found:
+            continue
+        description = call_tool_schemas(record, trajectory).get(name, {}).get('description')
+        if isinstance(description, str) and description.strip():
+            found[name] = description.strip()
     return found
 
 
@@ -146,20 +149,27 @@ async def classify_tool_doors(
 
     Shell tools (role `'bash'` in `config.tool_roles`) are classified per distinct command string, long commands
     clipped to their first and last 2,000 characters. Every other tool is classified once by name, plus its
-    description when the trajectory carries tool definitions; its arguments are not sent. Only called tools are
-    classified. Calls run concurrently, bounded by the process-wide LLM limit when one is set.
+    description when the definitions active for its call carry one (the first description seen for a name wins);
+    its arguments are not sent. Only called tools are classified. Calls run concurrently, bounded by the
+    process-wide LLM limit when one is set.
 
     Retry is owned by `run_judge` (one layer): each classification is retried up to 3 times with exponential
     backoff on rate limits, 5xx and transport failures. A classification that still fails, abstains or answers
     outside the labels is logged and becomes `unknown`, never benign.
 
-    Returns `one_way_call_count`, `two_way_call_count` and `unknown_call_count`, always with a value. Each result's
-    evidence names its calls with `reason` set to the tool name (and command, for a shell call) and `subgroup` to
-    the class. The resolved client is closed when this function creates it; an injected client remains
-    caller-owned.
+    Returns `one_way_call_count`, `two_way_call_count` and `unknown_call_count`. Each result's evidence names its
+    calls with `reason` set to the tool name (and command, for a shell call) and `subgroup` to the class. When
+    the run has tool activity the signals cannot read (a Responses call kept outside ATIF `tool_calls`), every
+    count is no-basis, with the `source tool activity represented` precondition unmet, and Jev is not called:
+    the counts would otherwise read zero for calls that were made. The resolved client is closed when this
+    function creates it; an injected client remains caller-owned.
     """
     resolved_config = config or SignalsConfig()
-    records = calls(walk(trajectory))
+    ctx = SignalContext.build(trajectory, resolved_config)
+    records = ctx.calls
+    coverage = source_tool_coverage(ctx)
+    if coverage.met is False:
+        return {name: result(name, 'B', None, preconditions=[coverage]) for name in DOOR_SIGNAL_NAMES}
     subjects: dict[int, _Subject] = {}
     for record in records:
         name = record.call.function_name
@@ -184,7 +194,7 @@ async def classify_tool_doors(
             for record in records
             if doors[subjects[record.seq]] == door
         ]
-        out[name] = result(name, 'B', len(evidence), evidence)
+        out[name] = result(name, 'B', len(evidence), evidence, preconditions=[coverage])
     return out
 
 
