@@ -232,6 +232,24 @@ def test_model_field_notes_an_environment_model(client: TestClient, monkeypatch:
     assert 'Set by EVALUATORQ_SMART_MODEL' in html
 
 
+def test_embedding_environment_model_is_shown_without_overwriting_the_saved_choice(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    save_settings(DashboardSettings.model_validate({'embedding_model': 'saved/embed'}), settings_file)
+    monkeypatch.setenv('EVALUATORQ_EMBEDDING_MODEL', 'env/embed')
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    html = client.get('/settings').text
+    assert '<input id="embedding_model" name="embedding_model" type="text" value="env/embed"' in html
+    assert 'Set by EVALUATORQ_EMBEDDING_MODEL' in html
+    field = client.get('/settings/models', params={'field': 'embedding_model', 'embedding_model': 'env/embed'})
+    assert 'Set by EVALUATORQ_EMBEDDING_MODEL' in field.text
+
+    response = client.post('/settings', data=csrf_data({**_MODELS, 'embedding_model': 'env/embed'}))
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['embedding_model'] == 'saved/embed'
+
+
 def test_explicit_model_edit_beats_environment_override(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -345,7 +363,7 @@ def test_page_labels_the_four_roles_and_says_what_each_runs(client: TestClient) 
 def test_an_empty_model_field_shows_the_builtin_default(client: TestClient) -> None:
     html = client.get('/settings').text
 
-    assert 'placeholder="openai/gpt-6-luna (default)"' in html
+    assert 'placeholder="openai/gpt-6-sol (default)"' in html
     assert 'placeholder="openai/text-embedding-3-small (default)"' in html
     assert ' required' not in html.split('id="fast_model-field"', 1)[1].split('</span>', 1)[0]
 
@@ -1600,7 +1618,7 @@ def test_model_field_offers_use_default_and_labels_an_empty_value(
     html = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': ''}).text
 
     assert '<input type="hidden" name="smart_model" value="">' in html
-    assert 'openai/gpt-6-luna (default)</button>' in html
+    assert 'openai/gpt-6-sol (default)</button>' in html
     assert 'data-model="" aria-pressed="true">Use default</button>' in html
     assert html.index('Use default') < html.index('<span>openai</span>')
 

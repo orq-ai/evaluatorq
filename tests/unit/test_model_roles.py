@@ -12,7 +12,7 @@ from evaluatorq.common.model_roles import BUILTIN, parse_overrides, role_model, 
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'settings.json'))
-    for name in ('EVALUATORQ_FAST_MODEL', 'EVALUATORQ_SMART_MODEL', 'EVALUATORQ_CLASSIFIER_MODEL',
+    for name in ('EVALUATORQ_FAST_MODEL', 'EVALUATORQ_SMART_MODEL', 'EVALUATORQ_CLASSIFIER_MODEL', 'EVALUATORQ_EMBEDDING_MODEL',
                  'EVALUATORQ_COMPILER_MODEL', 'EVALUATORQ_APPLY_MODEL'):
         monkeypatch.delenv(name, raising=False)
     set_cli_models()
@@ -25,8 +25,8 @@ def _write(tmp_path: Path, values: dict[str, object]) -> None:
 
 
 def test_builtin_defaults() -> None:
-    assert role_model('fast') == 'openai/gpt-5.6-luna'
-    assert role_model('smart') == 'openai/gpt-6-luna'
+    assert role_model('fast') == 'openai/gpt-6-luna'
+    assert role_model('smart') == 'openai/gpt-6-sol'
     assert role_model('classifier') == 'typesafe/jev-latest'
     assert role_model('embedding') == 'openai/text-embedding-3-small'
 
@@ -38,6 +38,22 @@ def test_precedence_flag_env_file_default(tmp_path: Path, monkeypatch: pytest.Mo
     assert role_model('smart') == 'env/smart'
     set_cli_models({'smart': 'flag/smart'})
     assert role_model('smart') == 'flag/smart'
+
+
+def test_embedding_environment_precedence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write(tmp_path, {'embedding_model': 'file/embed'})
+    monkeypatch.setenv('EVALUATORQ_EMBEDDING_MODEL', '  env/embed  ')
+    assert role_model('embedding', task='insights.embedding') == 'env/embed'
+    assert model_roles.role_source('embedding') == 'env'
+    set_cli_models({'embedding': 'flag/embed'})
+    assert role_model('embedding', task='insights.embedding') == 'flag/embed'
+    set_cli_models()
+    _write(tmp_path, {'model_overrides': {'insights.embedding': 'file/pinned'}})
+    assert role_model('embedding', task='insights.embedding') == 'file/pinned'
+    assert role_model('embedding') == 'env/embed'
+    _write(tmp_path, {'embedding_model': 'file/embed'})
+    monkeypatch.setenv('EVALUATORQ_EMBEDDING_MODEL', '   ')
+    assert role_model('embedding') == 'file/embed'
 
 
 def test_task_override_beats_role(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -37,7 +37,7 @@ def test_attacker_task_override() -> None:
 
     set_cli_models(overrides={'redteam.attacker': 'a/b'})
     assert LLMConfig().attacker.model == 'a/b'
-    assert LLMConfig().evaluator.judges[0] == 'openai/gpt-6-luna'
+    assert LLMConfig().evaluator.judges[0] == 'openai/gpt-6-sol'
 
 
 def test_explicit_model_wins() -> None:

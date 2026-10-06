@@ -19,7 +19,7 @@ from evaluatorq.simulation.types import DEFAULT_MODEL
 
 
 def test_shared_default_is_provider_prefixed():
-    assert DEFAULT_PIPELINE_MODEL == 'openai/gpt-5.6-luna'
+    assert DEFAULT_PIPELINE_MODEL == 'openai/gpt-6-luna'
 
 
 def test_every_surface_default_model_is_its_role_default():

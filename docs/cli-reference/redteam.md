@@ -23,9 +23,9 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--delivery-method` / `-d` | `str` (repeatable) | Restrict to one or more delivery methods. Repeatable and/or comma-separated. |
 | `--max-turns` | `int` / `5` | Maximum conversation turns for multi-turn attacks. |
 | `--max-per-category` | `int \| None` / `None` | Cap strategies per category. |
-| `--attack-model` | `str \| None` / `None` | Model for adversarial prompt generation. Unset resolves the `smart` role (`openai/gpt-6-luna` by default); see [Configuration › Models](../configuration.md#models). |
+| `--attack-model` | `str \| None` / `None` | Model for adversarial prompt generation. Unset resolves the `smart` role (`openai/gpt-6-sol` by default); see [Configuration › Models](../configuration.md#models). |
 | `--attacker-instructions` | `str \| None` / `None` | Domain-specific context to steer attack generation. |
-| `--evaluator-model` | `str \| None` / `None` | Model for OWASP evaluation scoring. Unset resolves the `smart` role (`openai/gpt-6-luna` by default). |
+| `--evaluator-model` | `str \| None` / `None` | Model for OWASP evaluation scoring. Unset resolves the `smart` role (`openai/gpt-6-sol` by default). |
 | `--min-evaluation-coverage` | `float` / `0.8` | Fraction of attacks that must produce a verdict, else exit non-zero. `0` warns instead of failing; a run where nothing could be scored still exits non-zero regardless. See **Exit codes** below. |
 | `--datapoint-parallelism` | `int` / `10` | Maximum concurrent datapoints/jobs. `--parallelism` is a deprecated alias. |
 | `--llm-parallelism` | `int` / `10` | Ceiling on in-flight LLM requests for the whole run. `-1` disables it. |

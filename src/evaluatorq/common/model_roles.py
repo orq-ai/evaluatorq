@@ -36,6 +36,7 @@ ROLE_ENV: dict[Role, str] = {
     'fast': 'EVALUATORQ_FAST_MODEL',
     'smart': 'EVALUATORQ_SMART_MODEL',
     'classifier': 'EVALUATORQ_CLASSIFIER_MODEL',
+    'embedding': 'EVALUATORQ_EMBEDDING_MODEL',
 }
 TASKS: dict[str, Role] = {
     'redteam.attacker': 'smart',

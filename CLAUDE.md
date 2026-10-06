@@ -214,12 +214,13 @@ These tests use fakes and do not require API credentials. The repository does no
 - `ORQ_WORKSPACE` (or `ORQ_WORKSPACE_SLUG`) — workspace slug for dashboard→Orq trace deep-links; buttons hidden when unset
 - `ORQ_UI_BASE_URL` — optional Orq UI base for deep-links (defaults to `ORQ_BASE_URL` or `https://my.orq.ai`)
 - `EVALUATORQ_PROPAGATE_TRACE_CONTEXT` — `false`/`0` stops W3C `traceparent` injection on outgoing LLM/target calls (default on)
-- `EVALUATORQ_FAST_MODEL` — model for the fast role: simulated user, simulation generators, trace-finder compiler (default `openai/gpt-5.6-luna`, the `DEFAULT_PIPELINE_MODEL` alias)
-- `EVALUATORQ_SMART_MODEL` — model for the smart role: red-team attacks, every judge and evaluator, apply-recommendations, Insights summaries (default `openai/gpt-6-luna`)
+- `EVALUATORQ_FAST_MODEL` — model for the fast role: simulated user, simulation generators, trace-finder compiler (default `openai/gpt-6-luna`, the `DEFAULT_PIPELINE_MODEL` alias)
+- `EVALUATORQ_SMART_MODEL` — model for the smart role: red-team attacks, every judge and evaluator, apply-recommendations, Insights summaries (default `openai/gpt-6-sol`)
 - `EVALUATORQ_APPLY_MODEL` — deprecated; pins the `apply` task. Use `--model-override apply=...`, the settings file's `model_overrides`, or `EVALUATORQ_SMART_MODEL`
 - `EVALUATORQ_DASHBOARD_SETTINGS` — path to the dashboard and trace-finder settings JSON (default `.evaluatorq/dashboard-settings.json`)
 - `EVALUATORQ_COMPILER_MODEL` — deprecated; pins the `finder.compiler` task. Use `--model-override finder.compiler=...` or `EVALUATORQ_FAST_MODEL`
-- `EVALUATORQ_CLASSIFIER_MODEL` — model for the classifier role: Ask AI, trace-finder classification, Insights labels, signals (default `typesafe/jev-latest`). The embedding role has no variable; use `--embedding-model` or the settings file
+- `EVALUATORQ_CLASSIFIER_MODEL` — model for the classifier role: Ask AI, trace-finder classification, Insights labels, signals (default `typesafe/jev-latest`)
+- `EVALUATORQ_EMBEDDING_MODEL` — model for the embedding role: Insights embeddings (default `openai/text-embedding-3-small`)
 - `EVALUATORQ_FINDER_WINDOW_DAYS` — trace-finder lookback window in days (default `7`)
 - `EVALUATORQ_FINDER_LIMIT` — trace-finder population cap (default `500`)
 - `EVALUATORQ_FINDER_PARALLELISM` — concurrent trace-finder classify calls (default `100`)

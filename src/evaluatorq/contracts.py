@@ -159,8 +159,8 @@ else:
 
 # Built-in model per role. `evaluatorq.common.model_roles.role_model` resolves the
 # configured model for a role at call time; these are its last fallback.
-DEFAULT_FAST_MODEL: str = 'openai/gpt-5.6-luna'
-DEFAULT_SMART_MODEL: str = 'openai/gpt-6-luna'
+DEFAULT_FAST_MODEL: str = 'openai/gpt-6-luna'
+DEFAULT_SMART_MODEL: str = 'openai/gpt-6-sol'
 DEFAULT_CLASSIFIER_MODEL: str = 'typesafe/jev-latest'
 DEFAULT_EMBEDDING_MODEL: str = 'openai/text-embedding-3-small'
 # The fast built-in, kept so existing imports keep working. New code asks

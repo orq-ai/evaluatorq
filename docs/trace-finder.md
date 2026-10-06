@@ -208,11 +208,11 @@ Authentication offers four sources for dashboard requests: **Environment** reads
 
 Authentication has no workspace or project selector. Each method searches all projects accessible to its credential unless you choose a project facet for that run. Set `ORQ_WORKSPACE` for trace links when a run has no experiment URL; it is separate from authentication. Pass `--project` to choose a project facet for one `eq find` run. An explicit `--profile NAME` overrides the saved choice; without that flag, `eq find` uses the saved profile only when **CLI API-key profile** is selected in Settings, and otherwise uses `ORQ_API_KEY` and `ORQ_BASE_URL`. The dashboard's OAuth and manually entered API-key methods do not change credentials used by `eq find`.
 
-Models resolve through the roles described under [Configuration › Models](configuration.md#models): the compiler runs on the `fast` role (`openai/gpt-5.6-luna` by default) and the classifier on the `classifier` role (`typesafe/jev-latest`). The `finder.compiler` and `finder.classifier` tasks pin either one alone. For the finder's other settings, values resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. Trace search window, limit, and parallelism are set per run; Settings edits the model roles and Ask AI review mode. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
+Models resolve through the roles described under [Configuration › Models](configuration.md#models): the compiler runs on the `fast` role (`openai/gpt-6-luna` by default) and the classifier on the `classifier` role (`typesafe/jev-latest`). The `finder.compiler` and `finder.classifier` tasks pin either one alone. For the finder's other settings, values resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. Trace search window, limit, and parallelism are set per run; Settings edits the model roles and Ask AI review mode. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
 | Setting | Default | Environment variable |
 |---|---|---|
-| Fast model (query compiler) | `openai/gpt-5.6-luna` | `EVALUATORQ_FAST_MODEL` |
+| Fast model (query compiler) | `openai/gpt-6-luna` | `EVALUATORQ_FAST_MODEL` |
 | Classifier model | `typesafe/jev-latest` | `EVALUATORQ_CLASSIFIER_MODEL` |
 | Trace search window default | 7 days (1–90) | `EVALUATORQ_FINDER_WINDOW_DAYS` |
 | Trace search limit default | 500 (max 5000) | `EVALUATORQ_FINDER_LIMIT` |
@@ -247,7 +247,7 @@ For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
 | `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |
 | `--parallelism INTEGER` (`1`–`200`) | Concurrent classify calls. |
-| `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Pins the `finder.compiler` task; default is the `fast` role, `openai/gpt-5.6-luna`. |
+| `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Pins the `finder.compiler` task; default is the `fast` role, `openai/gpt-6-luna`. |
 | `--classifier-model TEXT` | Model that classifies each trace through the Orq router. Pins the `finder.classifier` task; default is the `classifier` role, `typesafe/jev-latest`. |
 | `--json PATH` | Write the completed run export to `PATH`. |
 | `--positive-only` | Keep only matched trace records in `--json` exports; the terminal table already shows matches and keeps its full-run summary. |

@@ -72,8 +72,8 @@ def test_explicit_model_applies_to_every_role():
 def test_none_config_resolves_role():
     from evaluatorq.simulation._config import sim_role_config
 
-    assert sim_role_config(None, 'sim.user').model == 'openai/gpt-5.6-luna'
-    assert sim_role_config(None, 'sim.judge').model == 'openai/gpt-6-luna'
+    assert sim_role_config(None, 'sim.user').model == 'openai/gpt-6-luna'
+    assert sim_role_config(None, 'sim.judge').model == 'openai/gpt-6-sol'
 
 
 def test_agents_built_directly_pick_their_role(monkeypatch):
