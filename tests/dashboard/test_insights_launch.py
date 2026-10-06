@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import os
 import re
 from datetime import datetime, timedelta
@@ -2230,7 +2232,13 @@ def test_running_and_completed_pages_show_manifest_stages(monkeypatch: pytest.Mo
     assert completed.status_code == 200
     assert 'Load recent traces' in completed.text
     assert 'Cluster and map intent' in completed.text
-    assert 'skipped' in completed.text
+    # insights-review.js marks planned stages without a record as skipped.
+    match = re.search(r'data-run-progress="([^"]*)"', completed.text)
+    assert match is not None
+    progress = json.loads(html.unescape(match.group(1)))
+    assert progress['status'] == 'completed'
+    assert [stage['name'] for stage in progress['stages']] == ['population', 'summary']
+    assert progress['planned_stages'] == ['population', 'summary', 'dimension:intent', 'write']
 
 
 def test_chosen_models_reach_insights_and_blank_ones_keep_the_pipeline_default(

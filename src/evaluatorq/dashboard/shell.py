@@ -17,12 +17,32 @@ The CSS layers, in cascade order, are:
 from __future__ import annotations
 
 import base64
+import functools
+import hashlib
 from pathlib import Path
 
 from evaluatorq.common.reports import esc, load_css
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
 from evaluatorq.dashboard.view import PAIRWISE_ICON_PATH, SURFACE_LABELS, head_assets
+
+
+@functools.cache
+def dashboard_css() -> str:
+    """The three CSS layers above as one stylesheet, served at ``dashboard_css_href()``."""
+    return f'{load_css()}\n{EDITORIAL_CSS}\n{DASHBOARD_CSS}\n'
+
+
+@functools.cache
+def dashboard_css_version() -> str:
+    """Content hash of ``dashboard_css()``; the ``v`` query value that marks a URL as safe to cache forever."""
+    return hashlib.sha256(dashboard_css().encode()).hexdigest()[:12]
+
+
+def dashboard_css_href() -> str:
+    """Content-hashed URL, so the browser caches the ~500KB sheet once instead of every page inlining it."""
+    return f'/static/dashboard.css?v={dashboard_css_version()}'
+
 
 # Sidebar collapse: runs at body-top so the class lands on <html> before the
 # sidebar paints (no flash). State persists in localStorage across the full-page
@@ -234,10 +254,10 @@ def page(
     Returns:
         A complete HTML document string starting with ``<!DOCTYPE html>``.
     """
-    css = load_css()
+    css_link = f'<link rel="stylesheet" href="{dashboard_css_href()}">\n'
     nav_key = _resolve_nav(active_surface, active_nav)
     sidebar = _sidebar_html(nav_key)
-    scripts = ''.join(str(a) for a in head_assets())
+    scripts = ''.join(str(a) for a in head_assets(charts='data-vega-for' in body_html))
     # On report pages the run name is the hero H1, so the topbar carries the
     # back link instead of repeating the title.
     topbar_lead = back_html or f'<h1 class="app-title">{esc(title)}</h1>'
@@ -256,9 +276,7 @@ def page(
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
         f'{_favicon_link()}'
         f'<title>{esc(title)} | evaluatorq</title>\n'
-        f'<style>\n{css}\n</style>\n'
-        f'<style>\n{EDITORIAL_CSS}\n</style>\n'
-        f'<style>\n{DASHBOARD_CSS}\n</style>\n'
+        f'{css_link}'
         f'{scripts}\n'
         f'{head_html}'
         '</head>\n'

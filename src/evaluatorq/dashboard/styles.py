@@ -6,7 +6,7 @@ tokens.  This module supplies the chrome that consumes them: the sidebar shell,
 the topbar, the combined landing, the per-kind run lists, and the report-view
 filter/body split.
 
-Inlined as the last ``<style>`` block by ``shell.page()`` so its rules win on
+Placed last in ``shell.dashboard_css()`` so its rules win on
 equal specificity and all ``var(--…)`` references resolve.
 """
 
@@ -283,6 +283,12 @@ body:has(.finder-command) .finder-status.done, body:has(.finder-command) .finder
 .finder:has(> .finder-command) .finder-facets .facet-sub label { border-radius:6px; }
 .finder:has(> .finder-command) .finder-facets .facet-n { margin-left:auto; padding-left:12px; color:#686a74; font-size:11.5px; font-variant-numeric:tabular-nums; }
 .finder:has(> .finder-command) .finder-facets .facet-scope { margin:2px 10px 6px; color:#686a74; font-size:11px; line-height:1.35; }
+.finder:has(> .finder-command) .finder-command-query .col { position:relative; padding:8px 12px; border:1px solid #c4c8ce; border-radius:7px; background:#fff; box-shadow:0 1px 2px #28263005; }
+.finder:has(> .finder-command) .finder-command-query .col:focus-within { border-color:#025558; box-shadow:0 0 0 2px #0255580e; }
+.finder:has(> .finder-command) .finder-command-examples { position:absolute; left:16px; right:16px; top:50%; transform:translateY(-50%); margin:0; }
+.finder:has(> .finder-command) .col:has(.finder-command-textarea:focus) .finder-command-examples,
+.finder:has(> .finder-command) .col:has(.finder-command-textarea:not(:placeholder-shown)) .finder-command-examples { display:none; }
+.finder:has(> .finder-command) .finder-command-textarea:placeholder-shown:not(:focus)::placeholder { color:transparent; }
 .finder:has(> .finder-command) .finder-command-textarea::placeholder { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 /* Below 1100px the question takes a full row, and no control is left alone on a row. In the command strip the second row holds
    Search in, AI settings and Search. In the toolbar the first row holds Filters and the quick views, and the
@@ -3245,9 +3251,12 @@ i.k-system { background:var(--traj-system); }i.k-user { background:var(--traj-us
 .finder-command-lede { margin:0 0 8px; color:var(--text-body); font-size:13px; }
 .finder-scope-label { color:var(--text-muted); font-size:12px; white-space:nowrap; }
 .finder-command-help { margin:6px 0 0; color:var(--text-muted); font-size:11.5px; line-height:1.4; }
-.finder-command-examples { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; margin:8px 0 10px; font-size:12px; color:var(--text-muted); }
-.finder-command-examples button { border:1px solid #d5d8df; border-radius:999px; background:#fff; color:var(--text-body); font:inherit; padding:3px 10px; cursor:pointer; }
-.finder-command-examples button:hover { background:#f5f5f6; }
+.finder-command-examples { display:flex; flex-wrap:nowrap; align-items:center; gap:8px; overflow:hidden; margin:0 4px 6px; font-size:12px; color:var(--text-muted); }
+.finder-command-examples > * { flex:none; white-space:nowrap; }
+.finder-command-examples button[hidden] { display:none; }
+.finder-command-examples button { border:1px solid #bfc6cf; border-radius:6px; background:#f3f5f7; color:#494753; font:inherit; padding:6px 12px; box-shadow:0 1px 1px #0000000a; cursor:pointer; }
+.finder-command-examples button:hover { background:#e5eeee; border-color:#025558; color:#025558; }
+.finder-command-examples button:active { background:#d6e5e5; box-shadow:none; }
 .finder-command-examples button:focus-visible { outline:2px solid #025558; outline-offset:1px; }
 .finder-command:has(input[name="scope"][value="within"]:checked) .scope-new,
 .finder-command:has(input[name="scope"][value="new"]:checked) .scope-within { display:none; }
@@ -3259,7 +3268,7 @@ i.k-system { background:var(--traj-system); }i.k-user { background:var(--traj-us
 .finder:has(> .finder-command) .xr-view-icon { display:inline-flex; flex:none; width:14px; height:14px; }
 .finder:has(> .finder-command) .xr-view-icon svg { display:block; width:14px; height:14px; fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
 .xr-help { display:inline-grid; place-items:center; width:13px; height:13px; margin-left:4px; border:1px solid currentColor; border-radius:50%; font-size:9px; font-weight:700; line-height:1; opacity:.6; vertical-align:1px; }
-@media (max-width:1000px) { .finder-command-examples { flex-wrap:nowrap; overflow-x:auto; }.finder-command-examples button { flex:none; white-space:nowrap; }.finder-command-lede { font-size:12px; margin-bottom:6px; }.finder-command-help { font-size:11px; }.finder:has(> .finder-command) .finder-command-examples { flex-wrap:wrap; overflow:visible; }.finder:has(> .finder-command) .finder-command-examples button { flex:0 1 auto; min-width:0; white-space:normal; text-align:left; } }
+@media (max-width:1000px) { .finder-command-lede { font-size:12px; margin-bottom:6px; }.finder-command-help { font-size:11px; } }
 """
 
 
