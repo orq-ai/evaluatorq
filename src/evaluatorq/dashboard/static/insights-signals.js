@@ -35,44 +35,75 @@
     }).join('')}</ul>`;
   }
   function row(name, signal, detail, options) {
-    const status = state(signal), level = levels[signal.group] || 'Unknown';
+    const status = state(signal);
     const metric = signal.group !== 'D' && signal.value != null && !signal.no_basis
       ? `<span class="signal-summary-value">${esc(typeof signal.value === 'object' ? `${Object.keys(signal.value).length} entries` : value(signal.value))}</span>` : '';
-    const result = signal.no_basis
-      ? `<div class="signal-feedback no-basis"><span class="signal-result-icon">—</span><div><strong>Not measurable</strong><p>${esc(signal.no_basis)}</p></div></div>`
-      : `<div class="signal-feedback ${status.kind}"><span class="signal-result-value">${esc(value(signal.value))}</span><div><strong>${status.label}</strong>${signal.reason ? `<p>${esc(signal.reason)}</p>` : ''}${signal.approximate ? '<p>Approximate measurement</p>' : ''}</div></div>`;
-    const details = detail
-      ? `<h6>Preconditions <span>${(detail.preconditions || []).length}</span></h6>${preconditions(detail.preconditions || [])}<h6>Evidence <span>${(detail.evidence || []).length}</span></h6>${evidence(detail.evidence || [])}`
-      : `<p class="signal-empty">${options.loading ? 'Loading signal details…' : options.error ? 'Signal details could not be loaded.' : 'Signal details are not loaded.'}</p>`;
-    return `<details class="signal-row ${status.kind}" data-signal-name="${esc(name)}"><summary><span class="signal-state-icon" aria-hidden="true">${status.icon}</span><span class="signal-title">${esc(title(name))}${options.level === 'all' ? `<small>${level}</small>` : ''}</span><span class="signal-summary-meta">${metric}<span class="signal-badge ${status.kind}">${status.label}</span></span></summary><div class="signal-body"><code class="signal-code">${esc(name)}</code>${result}${details}${signal.rule_version ? `<div class="signal-rule">Rule ${esc(signal.rule_version)}</div>` : ''}</div></details>`;
+    const displayValue = signal.group === 'D' && typeof signal.value === 'boolean' ? status.label : value(signal.value);
+    const breakdown = signal.value != null && typeof signal.value === 'object' && !signal.no_basis
+      ? `<dl class="signal-value-entries">${Object.entries(signal.value).map(([key, item]) => `<div><dt>${esc(key)}</dt><dd>${esc(value(item))}</dd></div>`).join('')}</dl>` : '';
+    const resultValue = signal.no_basis || signal.value == null ? 'No basis'
+      : typeof signal.value === 'object' ? `${Object.keys(signal.value).length} entries` : displayValue;
+    const result = `<div class="signal-feedback ${status.kind}"><div class="signal-result-heading"><span>Result</span><span class="signal-badge ${status.kind}">${status.label}</span></div><strong class="signal-result-value">${esc(resultValue)}</strong>${signal.no_basis ? `<p>${esc(signal.no_basis)}</p>` : signal.reason ? `<p>${esc(signal.reason)}</p>` : ''}${breakdown}</div>`;
+    const checks = detail
+      ? preconditions(detail.preconditions || [])
+      : `<p class="signal-empty">${options.loading ? 'Loading preconditions…' : options.error ? 'Preconditions could not be loaded.' : 'Preconditions are not loaded.'}</p>`;
+    const refs = detail?.evidence || [];
+    const technicalName = signal.group === 'D' ? '' : `<code class="signal-code">${esc(name)}</code>`;
+    const evidenceDetails = detail ? `<details class="signal-evidence-section" data-signal-key="evidence:${esc(name)}"><summary>Evidence<span>${refs.length}</span></summary>${evidence(refs)}</details>` : '';
+    return `<details class="signal-row ${status.kind}" data-signal-name="${esc(name)}" data-signal-key="row:${esc(name)}"><summary><span class="signal-state-icon" aria-hidden="true">${status.icon}</span><span class="signal-title">${esc(title(name))}</span><span class="signal-summary-meta">${metric}<span class="signal-badge ${status.kind}">${status.label}</span></span></summary><div class="signal-body">${result}${technicalName}<section class="signal-checks"><h6>Preconditions${detail ? `<span>${(detail.preconditions || []).length}</span>` : ''}</h6>${checks}</section>${evidenceDetails}${signal.rule_version ? `<div class="signal-rule">Rule ${esc(signal.rule_version)}</div>` : ''}</div></details>`;
   }
   function render(options) {
     const report = options.report;
     if (!report) return '<section class="signal-panel"><h5>Signals</h5><p class="signal-empty">Signals were not measured for this trace.</p></section>';
-    const level = options.level || 'L4', results = report.results || {};
-    const names = Object.keys(results).filter(name => level === 'all' || levels[results[name].group] === level);
-    names.sort((a, b) => {
-      const rank = signal => signal.no_basis || signal.value == null ? 2 : signal.group === 'D' && signal.value === true ? 0 : 1;
-      return rank(results[a]) - rank(results[b]) || a.localeCompare(b);
-    });
-    const selected = {...options, level}, fullResults = options.detail?.signals?.results || {};
-    const count = names.filter(name => results[name].group === 'D' && results[name].value === true && !results[name].no_basis).length;
-    const selector = [...Object.keys(labels), 'all'].map(item => `<button type="button" data-signal-level="${item}" aria-pressed="${item === level}" title="${labels[item] || 'All levels'}">${item === 'all' ? 'All' : item}</button>`).join('');
+    const results = report.results || {}, names = Object.keys(results);
+    const fullResults = options.detail?.signals?.results || {};
+    const flagged = names.filter(name => state(results[name]).kind === 'flagged').sort();
+    const unknownTags = names.filter(name => results[name].group === 'D' && state(results[name]).kind === 'no-basis').length;
+    const highlights = `<div class="signal-highlights"><div class="signal-highlights-heading"><h5>Flagged signals</h5><span>${flagged.length}</span></div>${flagged.length ? `<div class="signal-tags">${flagged.map(name => `<button type="button" class="signal-tag" data-signal-focus="${esc(name)}" aria-label="View ${esc(title(name))}"><span aria-hidden="true">!</span>${esc(title(name))}<span aria-hidden="true">↗</span></button>`).join('')}</div>` : '<p class="signal-empty">No flagged L4 signals.</p>'}${unknownTags ? `<p class="signal-coverage-note">${unknownTags} L4 ${unknownTags === 1 ? 'tag has' : 'tags have'} no basis.</p>` : ''}</div>`;
     const error = options.error ? `<p class="signal-empty" role="status">Could not load signal details: ${esc(options.error)} <button type="button" class="btn" data-signal-retry="${esc(options.retryId || '')}">Retry</button></p>` : options.loading ? '<p class="signal-empty" role="status">Loading signal details…</p>' : '';
+    const groups = Object.keys(labels).map(level => {
+      const groupNames = names.filter(name => levels[results[name].group] === level);
+      groupNames.sort((a, b) => {
+        const rank = signal => state(signal).kind === 'flagged' ? 0 : state(signal).kind === 'no-basis' ? 2 : 1;
+        return rank(results[a]) - rank(results[b]) || a.localeCompare(b);
+      });
+      const unavailable = groupNames.filter(name => state(results[name]).kind === 'no-basis').length;
+      const flags = groupNames.filter(name => state(results[name]).kind === 'flagged').length;
+      const counts = `${flags ? `<span class="signal-badge flagged">${flags} flagged</span>` : ''}${unavailable ? `<span class="signal-badge no-basis">${unavailable} no basis</span>` : ''}`;
+      return `<details class="signal-level ${level.toLowerCase()}" data-signal-level="${level}" data-signal-key="level:${level}"><summary><span class="signal-level-number">${level}</span><span class="signal-level-name">${labels[level]}<small>${groupNames.length} ${groupNames.length === 1 ? 'signal' : 'signals'}</small></span><span class="signal-level-status">${counts}</span></summary><div class="signal-level-body">${groupNames.map(name => row(name, results[name], fullResults[name], options)).join('') || `<p class="signal-empty">No ${level} signals were recorded for this trace.</p>`}</div></details>`;
+    }).join('');
     const coverage = options.detail?.source_coverage || {};
-    const metadata = `<details class="signal-config"><summary>Report details</summary><div>Config version <code>${esc(report.config_version || 'Unknown')}</code></div>${Object.keys(coverage).length ? `<h6>Source coverage</h6><pre>${esc(JSON.stringify(coverage, null, 2))}</pre>` : ''}</details>`;
-    return `<section class="signal-panel"><div class="signal-heading"><h5>Signals</h5><span>${names.length} shown · ${Object.keys(results).length} recorded</span></div><div class="signal-levels" role="group" aria-label="Signal level">${selector}</div><div class="signal-level-caption">${level === 'all' ? 'All levels' : `${level} ${labels[level] || ''}`}${level === 'L4' ? `<span>${count} flagged</span>` : ''}</div>${error}${names.map(name => row(name, results[name], fullResults[name], selected)).join('') || `<p class="signal-empty">${Object.keys(results).length ? `No ${esc(level === 'all' ? '' : level + ' ')}signals were recorded for this trace.` : 'No signals were recorded for this trace.'}</p>`}${metadata}</section>`;
+    const metadata = `<details class="signal-config" data-signal-key="config"><summary>Report details</summary><div>Config version <code>${esc(report.config_version || 'Unknown')}</code></div>${Object.keys(coverage).length ? `<h6>Source coverage</h6><pre>${esc(JSON.stringify(coverage, null, 2))}</pre>` : ''}</details>`;
+    return `<section class="signal-panel">${highlights}<details class="signal-browser" data-signal-key="browser"><summary><span><b>Signals</b><small>Explore all four levels</small></span><span class="signal-total">${names.length} recorded</span></summary><div class="signal-browser-body">${error}${!names.length ? '<p class="signal-empty">No signals were recorded for this trace.</p>' : ''}${groups}${metadata}</div></details></section>`;
+  }
+  function captureOpen(container) {
+    return [...container.querySelectorAll('details[data-signal-key][open]')].map(node => node.dataset.signalKey);
+  }
+  function restoreOpen(container, keys) {
+    const open = new Set(keys);
+    container.querySelectorAll('details[data-signal-key]').forEach(node => { node.open = open.has(node.dataset.signalKey); });
+  }
+  function bind(container) {
+    container.querySelectorAll('[data-signal-focus]').forEach(button => {
+      button.onclick = () => {
+        const row = [...container.querySelectorAll('.signal-row')].find(node => node.dataset.signalName === button.dataset.signalFocus);
+        if (!row) return;
+        for (let node = row; node && node !== container; node = node.parentElement) {
+          if (node.tagName === 'DETAILS') node.open = true;
+        }
+        row.querySelector('summary').focus({preventScroll: true});
+        row.scrollIntoView({block: 'nearest'});
+      };
+    });
   }
   function mount(container, options) {
     container.innerHTML = render(options);
-    container.querySelectorAll('[data-signal-level]').forEach(button => {
-      button.onclick = () => mount(container, {...options, level: button.dataset.signalLevel});
-    });
+    bind(container);
   }
   function mountSaved() {
     document.querySelectorAll('[data-saved-signals]').forEach(container => mount(container, JSON.parse(container.dataset.savedSignals)));
   }
-  window.EvaluatorqSignals = {render, mount, mountSaved, value};
+  window.EvaluatorqSignals = {render, mount, mountSaved, value, captureOpen, restoreOpen, bind};
   if (typeof document !== 'undefined') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountSaved);
     else mountSaved();

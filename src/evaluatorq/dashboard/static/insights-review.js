@@ -830,19 +830,14 @@ function renderDrawer() {
   const el = $('drawer');
   const selectedTrace = S.sel && S.sel.kind === 'trace' ? byId[S.sel.id] : null;
   const openSignalDetails = selectedTrace && el.dataset.signalTraceId === selectedTrace.id
-    ? [...el.querySelectorAll('.signal-row[open], .signal-config[open]')].map(node =>
-      node.classList.contains('signal-row') ? ['row', node.dataset.signalName] : ['config', ''])
+    ? window.EvaluatorqSignals.captureOpen(el)
     : [];
   if (selectedTrace && selectedTrace.has_signal_details) loadSignalDetails(selectedTrace);
   else if (activeSignalDetailRequest) cancelSignalDetails();
   el.innerHTML = S.sel ? (S.sel.kind === 'cluster' ? clusterPanel(C[S.sel.id]) : tracePanel(byId[S.sel.id])) : S.view === 'activity' ? (S.activityItem ? activityDetail() : activityWelcome()) : glance();
   el.dataset.signalTraceId = selectedTrace?.id || '';
-  for (const [kind, name] of openSignalDetails) {
-    const node = kind === 'config'
-      ? el.querySelector('.signal-config')
-      : [...el.querySelectorAll('.signal-row')].find(row => row.dataset.signalName === name);
-    if (node) node.open = true;
-  }
+  window.EvaluatorqSignals.restoreOpen(el, openSignalDetails);
+  window.EvaluatorqSignals.bind(el);
   el.querySelectorAll('[data-close-activity]').forEach(b => b.onclick = () => { S.activityItem = null; commit(); });
   el.querySelectorAll('[data-activity-pair]').forEach(b => b.onclick = () => activitySelect(b.dataset.kind, b.dataset.name));
   el.querySelectorAll('[data-close]').forEach(b => b.onclick = () => select(null));
@@ -855,9 +850,6 @@ function renderDrawer() {
   el.querySelectorAll('[data-act="cluster-traces"]').forEach(b => b.onclick = () => viewClusterTraces(C[S.sel.id]));
   el.querySelectorAll('[data-act="cluster-question"]').forEach(b => b.onclick = () => turnClusterIntoQuestion(C[S.sel.id]));
   el.querySelectorAll('[data-helpers]').forEach(b => b.onclick = () => { S.helpers = !S.helpers; renderDrawer(); });
-  el.querySelectorAll('[data-signal-level]').forEach(b => b.onclick = () => {
-    if (selectedTrace) { signalLevels.set(selectedTrace.id, b.dataset.signalLevel); renderDrawer(); }
-  });
   el.querySelectorAll('[data-signal-retry]').forEach(b => b.onclick = () => {
     const trace = byId[b.dataset.signalRetry];
     if (trace) { loadSignalDetails(trace, true); renderDrawer(); }
@@ -994,7 +986,6 @@ function safeOrqUrl(value) {
 function signalValue(value) {
   return window.EvaluatorqSignals.value(value);
 }
-const signalLevels = new Map();
 const signalDetailCache = new Map();
 const signalDetailFailures = new Map();
 let activeSignalDetailRequest = null;
@@ -1046,7 +1037,6 @@ function signalsPanel(t) {
   return window.EvaluatorqSignals.render({
     report: t.has_signals ? t.signals : null,
     detail: signalDetailsFor(t.id),
-    level: signalLevels.get(t.id) || 'L4',
     loading: signalDetailsLoading(t.id),
     error: signalDetailFailures.get(t.id),
     retryId: t.id,

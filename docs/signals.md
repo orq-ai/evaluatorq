@@ -84,7 +84,7 @@ Jev classification is an optional preparation step for tools whose roles are not
 
 The groups separate measurements by the kind of trajectory behavior they describe. Groups A–C return counts, ratios, durations, booleans, or per-tool breakdowns. Group D returns named tags whose fired rule clauses are recorded in `reason` and whose supporting steps and calls appear in `evidence`.
 
-The Insights dashboard displays these groups as **L1 Structure**, **L2 Tools**, **L3 Autonomy**, and **L4 Tags**, respectively, and shows L4 by default. Select another level or **All** to inspect the other measurements. Saved reports and Python group arguments use `A`, `B`, `C`, and `D`.
+To reach a saved report, open **Insights** in the dashboard, choose a run, and select a row in its **Traces** list; see [reviewing trace signals](insights.md#trace-signals). For traces with saved reports, the **Signals** section starts collapsed in the Insights sidebar and full trace page. Traces without a report show that signals were not measured. Expanding it reveals **L1 Structure**, **L2 Tools**, **L3 Autonomy**, and **L4 Tags** as separate accordion bars; expand any bar to inspect its group. Before opening the section, the page shows only flagged L4 tags as compact buttons that open the matching signal, or an explicit no-flags message. Each signal row can be expanded to show its primary value and outcome, with preconditions visible in the row; step or call evidence has its own collapsed foldout. L4 rows omit the technical attribute-name block. Saved reports and Python group arguments use `A`, `B`, `C`, and `D`.
 
 ### A — Structure
 

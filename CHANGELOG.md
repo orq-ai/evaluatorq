@@ -21,7 +21,7 @@ All notable changes to `evaluatorq` are documented here.
 
 - Determine L4 tags from sufficient recorded evidence even when other measurements are missing. Retry counts are zero when the configured matching rules admit no possible retry; missing error status remains unknown when a retry is possible.
 
-- Show L4 tags by default in Insights, with L1–L4 drill-down and visual signal states, precondition checks, and evidence.
+- Show flagged L4 tags in the initial Insights trace view, with the full Signals section collapsed until opened; provide separate expandable L1–L4 groups, signal rows with visible preconditions, and separately collapsed evidence.
 
 - Dataset trace documents now carry typed `DatasetRef` and `Outcome` metadata outside ATIF, support rows without span IDs or timestamps, and convert to evaluation datapoints with preserved provenance and ground truth. `check_trace_document()` checks source-measured counts, outcomes, and wrapper JSON round-trips.
 

@@ -112,7 +112,7 @@ def test_signal_detail_route_handles_missing_trace_run_and_old_report(tmp_path, 
     assert missing_key.status_code == 400
 
 
-def test_trace_detail_page_mounts_saved_signals_at_l4(tmp_path, monkeypatch) -> None:
+def test_trace_detail_page_mounts_saved_signals(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     run = _run()
     save_run(run, get_insights_runs_dir())
@@ -130,7 +130,6 @@ def test_trace_detail_page_mounts_saved_signals_at_l4(tmp_path, monkeypatch) -> 
             'signals': run.traces[0].signals.model_dump(mode='json'),
             'source_coverage': {'source': 'snapshot', 'partial': True},
         },
-        'level': 'L4',
     }
     assert '/static/insights-signals.css' in response.text
     assert '/static/insights-signals.js' in response.text
@@ -149,7 +148,6 @@ def test_trace_detail_page_mounts_missing_signals_as_null(tmp_path, monkeypatch)
     assert parser.options == {
         'report': None,
         'detail': {'signals': None, 'source_coverage': {'source': 'snapshot', 'partial': True}},
-        'level': 'L4',
     }
 
 

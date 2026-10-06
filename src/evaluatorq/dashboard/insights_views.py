@@ -617,7 +617,6 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
     signal_options = {
         'report': signal_report,
         'detail': {'signals': signal_report, 'source_coverage': trace.source_coverage},
-        'level': 'L4',
     }
     signal_html = (
         f'<div data-saved-signals="{esc(json.dumps(signal_options, ensure_ascii=False, separators=(",", ":")))}"></div>'
@@ -630,13 +629,13 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
         f'{" · span " + esc(trace.span_id) if trace.span_id else ""}'
         f'{" · " + esc(trace.agent_name) if trace.agent_name else ""}'
         f'{" · " + esc(trace.project) if trace.project else ""}</p>{orq_link}'
+        f'{signal_html}'
         '<section><h3>Summary</h3>'
         f'<p>{esc(summary.summary) if summary is not None else "No summary was saved for this trace."}</p>'
         f'{context_html}</section>'
         f'<section><h3>Labels</h3>{labels_html}</section>'
         f'<section><h3>Dimensions</h3>{dimensions_html}</section>'
         f'<section><h3>Tool use</h3>{tools_html}</section>'
-        f'{signal_html}'
         f'{errors_html}'
         '</div></div>'
     )
