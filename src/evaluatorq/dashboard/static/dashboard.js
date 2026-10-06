@@ -47,7 +47,15 @@
       // The page shipped without vega (shell.page adds it only when the initial
       // body has a chart); load it once, then embed this swap's charts.
       const detail = evt.detail;
-      loadVega().then(function () { embedSwappedCharts(scope, detail); });
+      loadVega().then(
+        function () { embedSwappedCharts(scope, detail); },
+        function (error) {
+          console.error('Vega failed to load', error);
+          scope.querySelectorAll('.vega-chart').forEach(function (el) {
+            el.textContent = 'Chart failed to load. Reload the page to retry.';
+          });
+        },
+      );
       return;
     }
     embedSwappedCharts(scope, evt.detail);

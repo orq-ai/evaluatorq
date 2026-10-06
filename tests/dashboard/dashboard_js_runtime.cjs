@@ -33,7 +33,7 @@ function classList() {
 
 function loadDashboard({
   elements = new Map(), query = () => null, queryAll = () => [], pathname = '/traces', dateClass = Date,
-  htmx = null,
+  htmx = null, logger = console,
 } = {}) {
   const body = Object.assign(emitter(), {
     children: [],
@@ -120,7 +120,7 @@ function loadDashboard({
     },
   };
   vm.runInNewContext(source, {
-    document, window, history, location: { hash: '' },
+    document, window, history, location: { hash: '' }, console: logger,
     FormData: class {}, Date: dateClass, CSS: { escape: value => value },
     Event: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
   });
@@ -784,4 +784,43 @@ test('a chart swapped into a page without vega loads the vega trio in order, the
   assert.equal(embeds.length, 1);
   assert.equal(embeds[0][0], chart);
   assert.equal(JSON.stringify(embeds[0][1]), '{"mark":"bar"}');
+});
+
+test('a vega script that fails to load marks the swapped chart as failed and the next swap retries', async () => {
+  const logged = [];
+  const app = loadDashboard({ logger: { error: (...args) => logged.push(args) } });
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const chart = { id: 'insights-crosstab', textContent: '' };
+  const island = { textContent: '{"mark":"bar"}', getAttribute: () => 'insights-crosstab' };
+  const scope = {
+    querySelector: selector => (selector === '.vega-chart' || selector === '#insights-crosstab' ? chart : null),
+    querySelectorAll: selector => (selector === '[data-vega-for]' ? [island] : selector === '.vega-chart' ? [chart] : []),
+  };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const unhandled = [];
+  const onUnhandled = reason => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+    await flush();
+    appended.at(-1).onload();
+    await flush();
+    assert.equal(appended.at(-1).src, '/static/vega-lite.min.js');
+    appended.at(-1).onerror(new Error('blocked'));
+    await flush();
+    await flush();
+
+    assert.equal(chart.textContent, 'Chart failed to load. Reload the page to retry.');
+    assert.equal(logged.length, 1);
+    assert.equal(logged[0][0], 'Vega failed to load');
+    assert.deepEqual(unhandled, []);
+
+    app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+    await flush();
+    assert.equal(appended.length, 3);
+    assert.equal(appended.at(-1).src, '/static/vega.min.js');
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
 });
