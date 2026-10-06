@@ -1,0 +1,62 @@
+/* Saved-signal component, shared by the review drawer and trace detail page. */
+.signal-panel { margin:18px 0; min-width:0; font-size:12px; line-height:1.5; color:var(--text-body); }
+.signal-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; }
+.signal-panel h5 { margin:0; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.08em; }
+.signal-heading>span,.signal-level-caption { color:var(--text-faint); font-size:11px; }
+.signal-levels { display:flex; gap:3px; padding:3px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-subtle); }
+.signal-levels button { flex:1; min-width:0; padding:5px 8px; border:0; border-radius:5px; background:transparent; color:var(--text-faint); font-family:inherit; font-size:11px; font-weight:600; line-height:1.5; cursor:pointer; }
+.signal-levels button[aria-pressed=true] { background:var(--surface-card); color:var(--text-body); box-shadow:0 1px 3px #0001; }
+.signal-levels button:focus-visible,.signal-row>summary:focus-visible { outline:2px solid var(--teal-600); outline-offset:2px; }
+.signal-level-caption { display:flex; justify-content:space-between; margin:7px 1px 12px; }
+.signal-empty { margin:8px 0; color:var(--text-faint); overflow-wrap:anywhere; }
+.signal-row { margin:7px 0; border:1px solid var(--border-subtle); border-radius:9px; background:var(--surface-card); min-width:0; }
+.signal-row.flagged { border-color:#e9bcb1; }
+.signal-row>summary { display:grid; grid-template-columns:16px minmax(0,1fr) auto 8px; align-items:center; gap:8px; padding:10px; cursor:pointer; list-style:none; color:var(--text-body); }
+.signal-row>summary::-webkit-details-marker { display:none; }
+.signal-row>summary::after { content:'›'; color:var(--text-faint); font-size:17px; transform:rotate(90deg); }
+.signal-row[open]>summary::after { transform:rotate(-90deg); }
+.signal-row>summary:hover { background:var(--surface-hover); border-radius:9px; }
+.signal-title { min-width:0; overflow-wrap:anywhere; font-size:12px; font-weight:600; line-height:1.35; }
+.signal-title small { display:block; margin-top:2px; color:var(--text-faint); font-size:10px; font-weight:500; }
+.signal-state-icon { display:grid; place-items:center; width:16px; height:16px; border-radius:50%; color:var(--text-faint); background:var(--surface-subtle); font-size:11px; font-weight:700; }
+.flagged>summary>.signal-state-icon { color:#a53b17; background:#fff0e8; }
+.clear>summary>.signal-state-icon { color:#176d58; background:#e6f4ef; }
+.signal-summary-meta { display:flex; align-items:center; justify-content:flex-end; gap:6px; min-width:0; }
+.signal-summary-value { max-width:70px; overflow-wrap:anywhere; font-weight:600; font-family:var(--mono); }
+.signal-badge { display:inline-block; padding:2px 7px; border-radius:999px; background:var(--surface-subtle); color:var(--text-faint); font-family:inherit; font-weight:500; font-size:10px; line-height:1.5; white-space:nowrap; }
+.signal-badge.flagged { background:#fff0e8; color:#a53b17; }
+.signal-badge.clear { background:#e6f4ef; color:#176d58; }
+.signal-badge.approximate { background:#fff7d6; color:#785b0b; }
+.signal-body { padding:0 11px 12px; min-width:0; overflow-wrap:anywhere; }
+.signal-code { display:block; margin:0 0 9px; color:var(--text-faint); font-size:10px; overflow-wrap:anywhere; }
+.signal-feedback { display:flex; gap:10px; align-items:flex-start; padding:10px; border-radius:7px; background:var(--surface-subtle); }
+.signal-feedback.flagged { background:#fff5ef; }
+.signal-feedback.clear { background:#eff8f4; }
+.signal-feedback.approximate { background:#fffbed; }
+.signal-feedback strong { display:block; font-size:11px; }
+.signal-feedback p { margin:3px 0 0; font-size:11px; color:var(--text-body); }
+.signal-result-value { font:600 15px/1.4 var(--mono); max-width:50%; overflow-wrap:anywhere; }
+.signal-result-icon { color:var(--text-faint); font-size:16px; }
+.signal-panel h6 { display:flex; align-items:center; gap:6px; margin:14px 0 7px; font-size:11px; font-weight:600; color:var(--text-body); }
+.signal-panel h6>span { color:var(--text-faint); font-size:10px; font-weight:500; }
+.signal-check-count { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--text-faint); font-size:10px; margin-bottom:8px; }
+.signal-check-count meter { width:90px; height:8px; accent-color:#176d58; }
+.signal-preconditions,.signal-evidence { list-style:none; margin:0; padding:0; }
+.signal-preconditions li { display:grid; grid-template-columns:18px minmax(0,1fr); gap:7px; padding:7px 0; border-bottom:1px solid var(--border-subtle); }
+.signal-preconditions li:last-child { border-bottom:0; }
+.signal-check-icon { width:17px; height:17px; text-align:center; border-radius:5px; background:#fff0e8; color:#a53b17; font-weight:700; }
+.signal-preconditions .met .signal-check-icon { background:#e6f4ef; color:#176d58; }
+.signal-preconditions .partial .signal-check-icon { background:#fff7d6; color:#785b0b; }
+.signal-check-title b { font-size:11px; font-weight:600; }
+.signal-check-title>span { display:block; color:var(--text-faint); font-size:10px; }
+.signal-preconditions p { margin:3px 0 0; color:var(--text-faint); font-size:11px; }
+.signal-evidence li { display:flex; align-items:flex-start; gap:7px; margin:6px 0; font-size:11px; }
+.signal-evidence li>div { min-width:0; overflow-wrap:anywhere; }
+.signal-evidence code,.signal-evidence li>div>span { display:block; color:var(--text-faint); font-size:10px; }
+.signal-evidence p { margin:3px 0; }
+.signal-step { flex:none; padding:2px 6px; border:1px solid var(--border-subtle); border-radius:5px; background:var(--surface-subtle); color:var(--text-body); font-size:10px; }
+.signal-rule { margin-top:10px; color:var(--text-faint); font-size:10px; }
+.signal-config { margin-top:12px; color:var(--text-faint); font-size:10px; }
+.signal-config summary { cursor:pointer; padding:5px 0; }
+.signal-config code,.signal-config pre { overflow-wrap:anywhere; white-space:pre-wrap; font:10px/1.5 var(--mono); }
+.signal-config>div { padding-top:5px; }

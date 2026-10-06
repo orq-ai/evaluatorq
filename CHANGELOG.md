@@ -19,6 +19,8 @@ All notable changes to `evaluatorq` are documented here.
 - **Trace finder planning and filtering now explain more of what happened.** Descriptive phrases such as `coding agents` become classifier dimensions instead of being treated as numeric-only questions, boolean selections accept `true` and `false` labels, model or provider filters can find model-level traces, and Within results names the filter and nearest loaded value when every row is dropped. Numeric-only plans with uncovered words show a warning that names the uncovered question text.
 ### Notable defaults
 
+- Show L4 tags by default in Insights, with L1–L4 drill-down and visual signal states, precondition checks, and evidence.
+
 - Dataset trace documents now carry typed `DatasetRef` and `Outcome` metadata outside ATIF, support rows without span IDs or timestamps, and convert to evaluation datapoints with preserved provenance and ground truth. `check_trace_document()` checks source-measured counts, outcomes, and wrapper JSON round-trips.
 
 - **`simulate()` and `generate_and_simulate()` now generate remediation recommendations by default (`recommendations=True`)**, matching `red_team()` and the CLI. That is one extra LLM pass per run over the results with a fixable failure. The returned `SimulationResult` list cannot carry them, so a call without `save=True` or `report_path=` generates them, discards them and logs a warning; pass `recommendations=False` to skip the call.

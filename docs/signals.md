@@ -84,6 +84,8 @@ Jev classification is an optional preparation step for tools whose roles are not
 
 The groups separate measurements by the kind of trajectory behavior they describe. Groups A–C return counts, ratios, durations, booleans, or per-tool breakdowns. Group D returns named tags whose fired rule clauses are recorded in `reason` and whose supporting steps and calls appear in `evidence`.
 
+The Insights dashboard displays these groups as **L1 Structure**, **L2 Tools**, **L3 Autonomy**, and **L4 Tags**, respectively, and shows L4 by default. Select another level or **All** to inspect the other measurements. Saved reports and Python group arguments use `A`, `B`, `C`, and `D`.
+
 ### A — Structure
 
 | Signal | Measures | Additional input needed |

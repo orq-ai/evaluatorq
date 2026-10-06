@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from math import isfinite
 from typing import TYPE_CHECKING
@@ -32,6 +33,9 @@ TAB_LABELS = {
     'priority': 'Priority matrix',
     'map': '3D Map',
 }
+
+_SIGNALS_STYLESHEET = '<link rel="stylesheet" href="/static/insights-signals.css">\n'
+_SIGNALS_SCRIPT = '<script src="/static/insights-signals.js" defer></script>\n'
 
 
 def _stage_name(manifest: RunManifest) -> str:
@@ -609,6 +613,15 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
     labels_html = f'<dl>{labels}</dl>' if labels else '<p>No labels were recorded.</p>'
     dimensions_html = f'<dl>{dimensions}</dl>' if dimensions else '<p>No dimension assignments were recorded.</p>'
     errors_html = f'<section><h3>Errors</h3><ul>{errors}</ul></section>' if errors else ''
+    signal_report = trace.signals.model_dump(mode='json') if trace.signals is not None else None
+    signal_options = {
+        'report': signal_report,
+        'detail': {'signals': signal_report, 'source_coverage': trace.source_coverage},
+        'level': 'L4',
+    }
+    signal_html = (
+        f'<div data-saved-signals="{esc(json.dumps(signal_options, ensure_ascii=False, separators=(",", ":")))}"></div>'
+    )
     body = (
         '<div class="insights-layout"><div class="insights-main insights-trace-detail">'
         '<div class="insights-detail-kicker">Trace analysis</div>'
@@ -623,11 +636,18 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
         f'<section><h3>Labels</h3>{labels_html}</section>'
         f'<section><h3>Dimensions</h3>{dimensions_html}</section>'
         f'<section><h3>Tool use</h3>{tools_html}</section>'
+        f'{signal_html}'
         f'{errors_html}'
         '</div></div>'
     )
     back = f'<a class="report-back" href="/insights/{quote(run.run_id, safe="")}/tab/traces">← Traces in this run</a>'
-    return page('Insights trace', body, active_nav='insights', back_html=back)
+    return page(
+        'Insights trace',
+        body,
+        active_nav='insights',
+        back_html=back,
+        head_html=f'{_SIGNALS_STYLESHEET}{_SIGNALS_SCRIPT}',
+    )
 
 
 def traces(
