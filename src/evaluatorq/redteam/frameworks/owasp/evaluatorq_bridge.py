@@ -22,20 +22,20 @@ from evaluatorq.common.jury import (
     attach_jury_raw_output,
     run_jury,
 )
-from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import resolve_orq_client
 from evaluatorq.common.output_adapters import output_error_text, output_to_messages
 from evaluatorq.common.tracing import set_span_attrs
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY, TokenUsage
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
+    PIPELINE_CONFIG,
     DeliveryMethod,
     EvaluatorConfig,
     EvaluatorqEvaluatorConfig,
     LLMCallConfig,
-    LLMConfig,
     RedTeamInput,
     StaticDataset,
+    evaluator_model_for,
     normalize_category,
 )
 from evaluatorq.redteam.delivery_method_registry import delivery_method_str
@@ -270,8 +270,8 @@ def create_owasp_evaluator(
     # Build the client + merged cfg ONCE here (not per datapoint). Creating them
     # inside scorer() would spin up a fresh AsyncOpenAI connection pool for every
     # datapoint in a batch, none explicitly closed. Mirrors OWASPEvaluator.__init__.
-    evaluator_model = evaluator_model or role_model('smart', task='redteam.evaluator')
-    resolved_cfg = cfg or LLMConfig().evaluator
+    evaluator_model = evaluator_model_for(evaluator_model, cfg)
+    resolved_cfg = cfg or PIPELINE_CONFIG.evaluator
     # max_retries=0: run_judge owns retry via with_retry, so the SDK's own budget would
     # stack on top of it. An injected client keeps the budget its owner chose.
     client = llm_client or resolved_cfg.client or create_async_llm_client(max_retries=0)

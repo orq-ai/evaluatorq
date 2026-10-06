@@ -14,16 +14,16 @@ from evaluatorq.common.jury import (
     run_jury,
 )
 from evaluatorq.common.jury import provider_family as provider_family
-from evaluatorq.common.model_roles import role_model
 from evaluatorq.contracts import EVAL_ERROR_RAW_OUTPUT_KEY
 from evaluatorq.redteam.backends.registry import create_async_llm_client
 from evaluatorq.redteam.contracts import (
+    PIPELINE_CONFIG,
     AttackEvaluationResult,
     EvaluatorConfig,
     LLMCallConfig,
-    LLMConfig,
     OutputMessage,
     Vulnerability,
+    evaluator_model_for,
 )
 from evaluatorq.redteam.frameworks.owasp.evaluators import get_evaluator_for_category, get_evaluator_for_vulnerability
 from evaluatorq.redteam.vulnerability_registry import resolve_category_safe
@@ -70,8 +70,8 @@ class OWASPEvaluator:
         family — same-family self-judging biases verdicts toward RESISTANT and
         under-counts vulnerabilities. Pass it only when the target model is known.
         """
-        evaluator_model = evaluator_model or role_model('smart', task='redteam.evaluator')
-        base_cfg = cfg or LLMConfig().evaluator
+        evaluator_model = evaluator_model_for(evaluator_model, cfg)
+        base_cfg = cfg or PIPELINE_CONFIG.evaluator
         # Fold constructor-level llm_kwargs into the cfg's extra_kwargs so they reach
         # run_judge (which forwards cfg.extra_kwargs). Without this, llm_kwargs threaded
         # via create_dynamic_evaluator would be silently dropped on the judge call.

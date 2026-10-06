@@ -1014,6 +1014,17 @@ class LLMConfig(BaseModel):
 PIPELINE_CONFIG = LLMConfig()
 
 
+def evaluator_model_for(model: str | None, cfg: LLMCallConfig | EvaluatorConfig | None) -> str:
+    """The primary judge model: *model*, else the one *cfg* names, else the ``redteam.evaluator`` task's model."""
+    if model:
+        return model
+    if isinstance(cfg, EvaluatorConfig):
+        return cfg.primary_model
+    if cfg is not None and 'model' in cfg.model_fields_set:
+        return cfg.model
+    return role_model('smart', task='redteam.evaluator')
+
+
 # ---------------------------------------------------------------------------
 # OWASP category names (self-contained, no external dependency)
 # ---------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -52,3 +53,61 @@ def test_jury_default_is_smart(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
     assert _resolve_panel(None, None) == ['env/smart']
+
+
+@pytest.mark.parametrize(
+    ('cfg_kwargs', 'expected'),
+    [
+        ({'evaluator': {'model': 'cfg/judge'}}, 'cfg/judge'),
+        ({'call': {'model': 'cfg/judge'}}, 'cfg/judge'),
+        ({'call': {'timeout_ms': 5}}, 'env/smart'),
+    ],
+)
+def test_owasp_evaluator_takes_the_judge_a_cfg_names(
+    monkeypatch: pytest.MonkeyPatch, cfg_kwargs: dict[str, dict[str, Any]], expected: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from evaluatorq.contracts import LLMCallConfig
+    from evaluatorq.redteam.adaptive.evaluator import OWASPEvaluator
+    from evaluatorq.redteam.contracts import EvaluatorConfig
+
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+    kind, fields = next(iter(cfg_kwargs.items()))
+    cfg = EvaluatorConfig(**fields) if kind == 'evaluator' else LLMCallConfig(**fields)
+
+    assert OWASPEvaluator(cfg=cfg, llm_client=AsyncMock()).panel[0] == expected
+
+
+@pytest.mark.asyncio
+async def test_create_owasp_evaluator_judges_with_the_cfg_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from evaluatorq import DataPoint
+    from evaluatorq.redteam.contracts import EvaluatorConfig
+    from evaluatorq.redteam.frameworks.owasp import evaluatorq_bridge
+
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+    asked: list[str] = []
+    monkeypatch.setattr(evaluatorq_bridge, 'get_evaluator_for_category', lambda _category, model: asked.append(model))
+
+    scorer = evaluatorq_bridge.create_owasp_evaluator(cfg=EvaluatorConfig(model='cfg/judge'), llm_client=AsyncMock())
+    await scorer['scorer']({'data': DataPoint(inputs={'category': 'ASI01', 'messages': []}), 'output': {'response': 'x'}})
+
+    assert asked == ['cfg/judge']
+
+
+def test_an_evaluator_without_cfg_keeps_the_pipeline_knobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import AsyncMock
+
+    from evaluatorq.redteam import contracts
+    from evaluatorq.redteam.adaptive import evaluator
+
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'env/smart')
+    tuned = contracts.PIPELINE_CONFIG.evaluator.model_copy(update={'timeout_ms': 1234})
+    monkeypatch.setattr(contracts.PIPELINE_CONFIG, 'evaluator', tuned)
+
+    built = evaluator.OWASPEvaluator(llm_client=AsyncMock())
+
+    assert built._call_cfg.timeout_ms == 1234
+    assert built.evaluator_model == 'env/smart'

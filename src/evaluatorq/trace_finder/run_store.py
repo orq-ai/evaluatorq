@@ -91,10 +91,12 @@ class RunStore:
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         close: Callable[[], Awaitable[None] | None] | None = None,
         explorer: ExplorerStore | None = None,
+        classifier_model: str | None = None,
     ) -> None:
         self._compiler = compiler
         self._close = close
         self.explorer = explorer
+        self._classifier_model = classifier_model
         self._closed = False
         self._population_loader = population_loader
         self._run_classifier = run_classifier
@@ -734,6 +736,7 @@ class RunStore:
             percent=current.completed / current.total * 100 if current.total else 0.0,
             elapsed=elapsed,
             rate=current.completed / elapsed if elapsed else 0.0,
+            classifier_model=self._classifier_model,
         )
         return _detach(view) if detach else view
 

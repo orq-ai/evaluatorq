@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from evaluatorq.common.cli_oauth import OAuthSession
+from evaluatorq.common.model_roles import BUILTIN
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.dashboard import app as app_module
 from evaluatorq.dashboard import model_choices
@@ -363,8 +364,8 @@ def test_page_labels_the_four_roles_and_says_what_each_runs(client: TestClient) 
 def test_an_empty_model_field_shows_the_builtin_default(client: TestClient) -> None:
     html = client.get('/settings').text
 
-    assert 'placeholder="openai/gpt-6-sol (default)"' in html
-    assert 'placeholder="openai/text-embedding-3-small (default)"' in html
+    assert f'placeholder="{BUILTIN["smart"]} (default)"' in html
+    assert f'placeholder="{BUILTIN["embedding"]} (default)"' in html
     assert ' required' not in html.split('id="fast_model-field"', 1)[1].split('</span>', 1)[0]
 
 
@@ -1618,7 +1619,7 @@ def test_model_field_offers_use_default_and_labels_an_empty_value(
     html = client.get('/settings/models', params={'field': 'smart_model', 'smart_model': ''}).text
 
     assert '<input type="hidden" name="smart_model" value="">' in html
-    assert 'openai/gpt-6-sol (default)</button>' in html
+    assert f'{BUILTIN["smart"]} (default)</button>' in html
     assert 'data-model="" aria-pressed="true">Use default</button>' in html
     assert html.index('Use default') < html.index('<span>openai</span>')
 

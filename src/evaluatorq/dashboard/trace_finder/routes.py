@@ -1174,7 +1174,7 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
                 explorer_oob = await _explorer_html(req, oob=True, poll=True, poll_sequence=poll_sequence)
         if not is_search(req) and store is not None and snapshot.state not in {'idle', 'awaiting_review'}:
             running = snapshot.state in {'compiling', 'classifying'}
-            status = run_status(snapshot, settings, has_explorer=explorer_view is not None)
+            status = run_status(snapshot, has_explorer=explorer_view is not None)
             return _html(status + explorer_oob, status_code=200 if running else 286)
         fragment_kwargs = _catalogue_kwargs(req.app, snapshot, explorer_view=explorer_view)
         if explorer_view is not None:

@@ -59,6 +59,7 @@ from evaluatorq.redteam.contracts import (
     Turn,
     TurnType,
     Vulnerability,
+    evaluator_model_for,
 )
 from evaluatorq.redteam.traces import TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs, with_redteam_span
@@ -730,7 +731,7 @@ def create_dynamic_evaluator(
     ``target_models`` (known direct-model targets only) drives the self-judge/family
     warning; ``strict_panel`` upgrades composition warnings to hard errors.
     """
-    evaluator_model = evaluator_model or role_model('smart', task='redteam.evaluator')
+    evaluator_model = evaluator_model_for(evaluator_model, cfg)
     owasp_evaluator = OWASPEvaluator(
         evaluator_model=evaluator_model,
         llm_client=llm_client,
