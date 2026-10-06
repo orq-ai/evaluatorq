@@ -95,7 +95,7 @@ def dashboard(
     ] = '127.0.0.1',
     port: Annotated[
         int,
-        typer.Option(help='Port for the dashboard server.'),
+        typer.Option('--port', '-p', help='Port for the dashboard server.'),
     ] = 8080,
     no_browser: Annotated[  # noqa: FBT002 — Typer exposes this as a named flag
         bool,

@@ -468,6 +468,7 @@ async def insights(  # noqa: C901
         summary_model=summary_model,
         classifier_model=classifier_model,
         embedding_model=embedding_model,
+        compiler_model=compiler_model,
         max_clusters=max_clusters,
         max_subclusters=max_subclusters,
         outlier_zscore=outlier_zscore,
@@ -508,6 +509,7 @@ async def insights(  # noqa: C901
         runs_dir=directory,
         planned_stages=[stage for stage, _ in plan],
         stage_labels=dict(plan),
+        parallelism=parallelism,
     )
     resolved_llm: AsyncOpenAI | None = None
     llm_owned = False

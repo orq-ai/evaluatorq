@@ -1,6 +1,6 @@
 """Tests for the input-source validation `eq sim simulate` performs before it runs anything.
 
-These four branches live in `_resolve_simulate_options` and every one of them
+These four branches live in `_validate_input_sources` and the `--input` loader, and every one of them
 raises `typer.BadParameter` before a target is resolved or a model is called,
 so no fixture beyond `CliRunner` and `tmp_path` is needed.
 """
@@ -15,6 +15,7 @@ from click.testing import Result
 from typer.testing import CliRunner
 
 from evaluatorq.simulation.cli import app
+from evaluatorq.simulation.types import SimulationDatapoint
 
 
 runner = CliRunner()
@@ -37,6 +38,27 @@ def _squeezed(text: str) -> str:
     return ''.join(_ANSI_RE.sub('', text).replace('│', '').split())
 
 
+def _datapoints_file(tmp_path: Path) -> Path:
+    datapoint = SimulationDatapoint.model_validate({
+        'id': 'dp-1',
+        'persona': {
+            'name': 'Impatient',
+            'patience': 0.2,
+            'assertiveness': 0.8,
+            'politeness': 0.4,
+            'technical_level': 0.3,
+            'communication_style': 'terse',
+            'background': 'Wants a refund',
+        },
+        'scenario': {'name': 'Refund', 'goal': 'Get a refund'},
+        'user_system_prompt': 'You are a customer.',
+        'first_message': 'Hi',
+    })
+    path = tmp_path / 'datapoints.jsonl'
+    path.write_text(datapoint.model_dump_json(), encoding='utf-8')
+    return path
+
+
 def _assert_rejected(result: Result, expected: str) -> None:
     assert result.exit_code == _BAD_PARAMETER_EXIT_CODE, result.output
     assert _squeezed(expected) in _squeezed(result.output)
@@ -49,8 +71,7 @@ def test_rejects_zero_input_sources() -> None:
 
 
 def test_rejects_two_input_sources(tmp_path: Path) -> None:
-    datapoints = tmp_path / 'datapoints.jsonl'
-    datapoints.write_text('', encoding='utf-8')
+    datapoints = _datapoints_file(tmp_path)
 
     result = runner.invoke(
         app,
@@ -59,14 +80,12 @@ def test_rejects_two_input_sources(tmp_path: Path) -> None:
 
     _assert_rejected(
         result,
-        'Provide exactly one of --input, --dataset-id, --experiment-id, or --from-run '
-        '(got: --input, --dataset-id).',
+        'Provide exactly one of --input, --dataset-id, --experiment-id, or --from-run (got: --input, --dataset-id).',
     )
 
 
 def test_rejects_experiment_run_id_without_experiment_id(tmp_path: Path) -> None:
-    datapoints = tmp_path / 'datapoints.jsonl'
-    datapoints.write_text('', encoding='utf-8')
+    datapoints = _datapoints_file(tmp_path)
 
     result = runner.invoke(
         app,

@@ -68,21 +68,25 @@ def _dashboard_js_version() -> str:
         return '0'
 
 
-def head_assets() -> tuple[Script, ...]:
+VEGA_SCRIPTS = ('/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js')
+
+
+def head_assets(*, charts: bool = False) -> tuple[Script, ...]:
     """Return FastHTML header elements for vendored JS assets.
 
     The ``/static/`` files are vendored under ``dashboard/static/`` and served
-    by the app; these Script tags wire them into every report page.
+    by the app; these Script tags wire them into every report page. The ~800KB
+    vega trio only ships with ``charts``: a chart that arrives later in an htmx
+    swap makes dashboard.js load it on demand.
     """
+    vega = tuple(Script(src=src) for src in VEGA_SCRIPTS) if charts else ()
     return (
         Script(src='/static/htmx.min.js'),
-        Script(src='/static/vega.min.js'),
-        Script(src='/static/vega-lite.min.js'),
-        Script(src='/static/vega-embed.min.js'),
+        # vega stays non-deferred: inline body scripts call vegaEmbed during parse.
+        *vega,
         # defer: dashboard.js runs at document.body-level (event delegation) — without
         # defer it executes during <head> parse when document.body is still null and
-        # throws, aborting all its handlers (incl. the sim-entity modal). vega stays
-        # non-deferred: inline body scripts call vegaEmbed during parse.
+        # throws, aborting all its handlers (incl. the sim-entity modal).
         Script(src=f'/static/dashboard.js?v={_dashboard_js_version()}', defer=True),
     )
 
@@ -753,13 +757,12 @@ MODEL_FIELDS = {
 }
 
 
-def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]]) -> str:
+def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, label: str) -> str:
     """A two-level model menu (provider, then model) with a Custom free-text entry.
 
     Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
     Without a catalogue the field stays a plain text box.
     """
-    label = MODEL_FIELDS[name]
     if not groups:
         return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
     known = any(value in ids for ids in groups.values())
@@ -937,7 +940,7 @@ def settings_body(
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
         control = (
             f'<span hx-get="/settings/models?field={name}&amp;{esc(profile_query)}" hx-trigger="load" '
-            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {})}</span>'
+            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {}, label=label)}</span>'
         )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
@@ -950,7 +953,7 @@ def settings_body(
     )
     field_rows.append(
         '<div class="config-row settings-field"><label class="config-key" for="ask_ai_mode">Ask AI on traces</label>'
-        f'<span class="config-val"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></div>'
+        f'<span class="config-val"><span class="settings-select"><select id="ask_ai_mode" name="ask_ai_mode">{mode_options}</select></span></span></div>'
     )
     saved_html = '<p class="settings-saved" role="status">Settings saved.</p>' if saved else ''
     if preview:

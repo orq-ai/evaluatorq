@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
 
 from evaluatorq.common.llm_client import resolve_results_base_url
 from evaluatorq.common.llm_limit import active_llm_parallelism, llm_concurrency_limit
-from evaluatorq.common.parallelism import resolve_datapoint_parallelism
+from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM, resolve_datapoint_parallelism
 from evaluatorq.common.recommendations import resolve_recommendations
 from evaluatorq.common.thread_context import _evaluatorq_run_scope, build_thread_id, evaluatorq_pipeline
 from evaluatorq.simulation._config import (
@@ -33,7 +33,7 @@ from evaluatorq.simulation._config import (
     sim_llm_config,
 )
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS
+from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
@@ -200,7 +200,7 @@ def _compose_sim_hooks(
     save: bool,
     run_id: str,
     run_name: str,
-    run_output: str | Path | None,
+    report_path: str | Path | None,
 ) -> tuple[SimulationHooks, ManifestWriter | None]:
     """Compose user hooks (+ manifest) once, at the outer entry point.
 
@@ -221,7 +221,7 @@ def _compose_sim_hooks(
         from evaluatorq.common.run_manifest import start_manifest
         from evaluatorq.simulation.utils.run_store import get_sim_runs_dir
 
-        manifest_runs_dir = Path(run_output).parent if run_output is not None else get_sim_runs_dir()
+        manifest_runs_dir = Path(report_path).parent if report_path is not None else get_sim_runs_dir()
         return start_manifest(
             run_id=run_id,
             surface='sim',
@@ -280,7 +280,7 @@ async def simulate(
     report: str | Path | None = None,
     report_path: str | Path | None = None,
     executive_summary: bool = True,
-    recommendations: bool | SimulationRecommendationConfig = False,
+    recommendations: bool | SimulationRecommendationConfig = True,
 ) -> list[SimulationResult]:
     """Run agent simulations through the evaluatorq() framework.
 
@@ -441,12 +441,13 @@ async def simulate(
             penalised) or to reweight the composite. See
             ``SimulationScoringConfig`` for what each field means.
         recommendations: Generate per-result remediation suggestions and store
-            them on the run — and in any saved file. Off by default because the
-            returned ``SimulationResult`` list has nowhere to carry them, so
-            they are only observable via ``save``/``report`` or the dashboard.
-            ``True`` uses ``SimulationRecommendationConfig()`` defaults, a
-            config instance tunes the trigger thresholds and prompt budgets.
-            Best-effort, like the summary: no-op without LLM creds.
+            them on the run — and in any saved file. On by default, matching
+            ``red_team()`` and the CLI. The returned ``SimulationResult`` list has
+            nowhere to carry them, so without ``save``/``report`` they are
+            generated and discarded with a warning; pass ``False`` to skip the
+            extra LLM call. ``True`` uses ``SimulationRecommendationConfig()``
+            defaults, a config instance tunes the trigger thresholds and prompt
+            budgets. Best-effort, like the summary: no-op without LLM creds.
 
     Usage:
 
@@ -490,39 +491,35 @@ async def simulate(
     asyncio.run(main())
     ```
     """
-    evaluation_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
-    evaluation_description = _resolve_keyword_alias(
+    run_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
+    experiment_description = _resolve_keyword_alias(
         old_name='evaluation_description',
         old_value=evaluation_description,
         new_name='experiment_description',
         new_value=experiment_description,
     )
-    orq_results_path = _resolve_keyword_alias(
+    orq_folder_path = _resolve_keyword_alias(
         old_name='orq_results_path',
         old_value=orq_results_path,
         new_name='orq_folder_path',
         new_value=orq_folder_path,
     )
-    exit_on_failure = _resolve_keyword_alias(
+    raise_on_execution_failure = _resolve_keyword_alias(
         old_name='exit_on_failure',
         old_value=exit_on_failure,
         new_name='raise_on_execution_failure',
         new_value=raise_on_execution_failure,
     )
-    if exit_on_failure is None:
-        exit_on_failure = True
-    report = _resolve_keyword_alias(
+    report_path = _resolve_keyword_alias(
         old_name='report',
         old_value=report,
         new_name='report_path',
         new_value=report_path,
     )
 
-    datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=10, caller='simulate'
-    )
+    datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='simulate')
     run = await _simulate_run(
-        evaluation_name=evaluation_name,
+        run_name=run_name,
         target=target,
         personas=personas,
         scenarios=scenarios,
@@ -548,11 +545,11 @@ async def simulate(
         hooks=hooks,
         generation_client=generation_client,
         upload_results=upload_results,
-        evaluation_description=evaluation_description,
-        orq_results_path=orq_results_path,
-        exit_on_failure=exit_on_failure,
+        experiment_description=experiment_description,
+        orq_folder_path=orq_folder_path,
+        raise_on_execution_failure=raise_on_execution_failure,
         save=save,
-        report=report,
+        report_path=report_path,
         executive_summary=executive_summary,
         recommendations=recommendations,
     )
@@ -561,7 +558,7 @@ async def simulate(
 
 async def _simulate_run(
     *,
-    evaluation_name: str = '',
+    run_name: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     personas: list[Persona] | None = None,
     scenarios: list[Scenario] | None = None,
@@ -575,7 +572,7 @@ async def _simulate_run(
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
-    datapoint_parallelism: int = 10,
+    datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
     target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
@@ -587,11 +584,11 @@ async def _simulate_run(
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
-    evaluation_description: str | None = None,
-    orq_results_path: str | None = None,
-    exit_on_failure: bool = True,
+    experiment_description: str | None = None,
+    orq_folder_path: str | None = None,
+    raise_on_execution_failure: bool | None = None,
     save: bool = False,
-    report: str | Path | None = None,
+    report_path: str | Path | None = None,
     executive_summary: bool = False,
     recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
@@ -608,6 +605,10 @@ async def _simulate_run(
 
     await init_tracing_if_needed()
 
+    run_name = run_name or ''
+    datapoint_parallelism = DEFAULT_DATAPOINT_PARALLELISM if datapoint_parallelism is None else datapoint_parallelism
+    raise_on_execution_failure = True if raise_on_execution_failure is None else raise_on_execution_failure
+
     # Mint the run id + manifest at the outer entry so the same id flows to the
     # manifest and to _simulate_core's experiment linking, and so the manifest
     # brackets the whole run (bare simulate has only the SIMULATE stage — no
@@ -620,7 +621,7 @@ async def _simulate_run(
         async with with_simulation_span(
             'Evaluatorq - Agent Simulation',
             {
-                'orq.simulation.evaluation_name': evaluation_name,
+                'orq.simulation.evaluation_name': run_name,
                 # max_turns is None until _simulate_core resolves it (an explicit
                 # value, else a replayed run's cap, else the default), and
                 # set_span_attrs drops None — so the resolved value is stamped
@@ -641,8 +642,8 @@ async def _simulate_run(
                     hooks,
                     save=save,
                     run_id=run_id,
-                    run_name=evaluation_name or 'sim',
-                    run_output=report,
+                    run_name=run_name or DEFAULT_RUN_NAME,
+                    report_path=report_path,
                 )
                 # Outer manifest guard (FIX 1): _simulate_core owns the terminal
                 # transition, but any failure between manifest creation and
@@ -651,7 +652,7 @@ async def _simulate_run(
                 # so this composes safely with _simulate_core's own finalization.
                 try:
                     config = SimulationConfig(
-                        evaluation_name=evaluation_name,
+                        run_name=run_name,
                         target=target,
                         personas=personas,
                         scenarios=scenarios,
@@ -675,11 +676,11 @@ async def _simulate_run(
                         judge=judge,
                         generation_client=generation_client,
                         upload_results=upload_results,
-                        evaluation_description=evaluation_description,
-                        orq_results_path=orq_results_path,
-                        exit_on_failure=exit_on_failure,
+                        experiment_description=experiment_description,
+                        orq_folder_path=orq_folder_path,
+                        raise_on_execution_failure=raise_on_execution_failure,
                         save=save,
-                        run_output=report,
+                        report_path=report_path,
                         executive_summary=executive_summary,
                         recommendations=resolve_recommendations(recommendations, SimulationRecommendationConfig),
                         hooks=composed_hooks,
@@ -744,7 +745,7 @@ async def generate_and_simulate(
     report: str | Path | None = None,
     report_path: str | Path | None = None,
     executive_summary: bool = True,
-    recommendations: bool | SimulationRecommendationConfig = False,
+    recommendations: bool | SimulationRecommendationConfig = True,
 ) -> list[SimulationResult]:
     """Generate personas/scenarios, then run simulations via evaluatorq().
 
@@ -839,10 +840,11 @@ async def generate_and_simulate(
     (the default) uses the shipped values. See ``SimulationScoringConfig``.
 
     ``recommendations``: Generate per-result remediation suggestions and store
-    them on the run. Off by default because the returned ``SimulationResult``
-    list has nowhere to carry them — they are observable via ``save``/``report``
-    or the dashboard. ``True`` for defaults, a ``SimulationRecommendationConfig``
-    to tune. Best-effort: no-op without LLM creds.
+    them on the run. On by default, matching ``red_team()`` and the CLI. The
+    returned ``SimulationResult`` list has nowhere to carry them, so without
+    ``save``/``report`` they are generated and discarded with a warning; pass
+    ``False`` to skip the extra LLM call. ``True`` for defaults, a
+    ``SimulationRecommendationConfig`` to tune. Best-effort: no-op without LLM creds.
 
     Usage:
 
@@ -871,38 +873,36 @@ async def generate_and_simulate(
     asyncio.run(main())
     ```
     """
-    evaluation_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
-    evaluation_description = _resolve_keyword_alias(
+    run_name = _resolve_run_name(evaluation_name=evaluation_name, run_name=run_name)
+    experiment_description = _resolve_keyword_alias(
         old_name='evaluation_description',
         old_value=evaluation_description,
         new_name='experiment_description',
         new_value=experiment_description,
     )
-    orq_results_path = _resolve_keyword_alias(
+    orq_folder_path = _resolve_keyword_alias(
         old_name='orq_results_path',
         old_value=orq_results_path,
         new_name='orq_folder_path',
         new_value=orq_folder_path,
     )
-    exit_on_failure = _resolve_keyword_alias(
+    raise_on_execution_failure = _resolve_keyword_alias(
         old_name='exit_on_failure',
         old_value=exit_on_failure,
         new_name='raise_on_execution_failure',
         new_value=raise_on_execution_failure,
     )
-    if exit_on_failure is None:
-        exit_on_failure = True
-    report = _resolve_keyword_alias(
+    report_path = _resolve_keyword_alias(
         old_name='report',
         old_value=report,
         new_name='report_path',
         new_value=report_path,
     )
     datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=10, caller='generate_and_simulate'
+        datapoint_parallelism, parallelism, caller='generate_and_simulate'
     )
     run = await _generate_and_simulate_run(
-        evaluation_name=evaluation_name,
+        run_name=run_name,
         agent_description=agent_description,
         target=target,
         memory_entity_id=memory_entity_id,
@@ -928,12 +928,12 @@ async def generate_and_simulate(
         hooks=hooks,
         generation_client=generation_client,
         upload_results=upload_results,
-        evaluation_description=evaluation_description,
-        orq_results_path=orq_results_path,
-        exit_on_failure=exit_on_failure,
+        experiment_description=experiment_description,
+        orq_folder_path=orq_folder_path,
+        raise_on_execution_failure=raise_on_execution_failure,
         emit_datapoints=emit_datapoints,
         save=save,
-        report=report,
+        report_path=report_path,
         executive_summary=executive_summary,
         recommendations=recommendations,
     )
@@ -1016,7 +1016,7 @@ async def _generate_datapoints_inner(
 
 async def _generate_and_simulate_run(
     *,
-    evaluation_name: str = '',
+    run_name: str | None = None,
     agent_description: str | None = None,
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None,
     memory_entity_id: str | None = None,
@@ -1030,7 +1030,7 @@ async def _generate_and_simulate_run(
     llm_config: LLMCallConfig | None = None,
     evaluator_names: list[str] | None = None,
     scoring: SimulationScoringConfig | None = None,
-    datapoint_parallelism: int = 10,
+    datapoint_parallelism: int | None = None,
     llm_parallelism: int | None = None,
     target_agent_timeout_ms: int = DEFAULT_TARGET_AGENT_TIMEOUT_MS,
     max_target_retries: int = DEFAULT_MAX_TARGET_RETRIES,
@@ -1042,12 +1042,12 @@ async def _generate_and_simulate_run(
     hooks: SimulationHooks | Sequence[SimulationHooks] | None = None,
     generation_client: AsyncOpenAI | None = None,
     upload_results: bool = True,
-    evaluation_description: str | None = None,
-    orq_results_path: str | None = None,
-    exit_on_failure: bool = True,
+    experiment_description: str | None = None,
+    orq_folder_path: str | None = None,
+    raise_on_execution_failure: bool | None = None,
     emit_datapoints: EmitDatapoints | None = None,
     save: bool = False,
-    report: str | Path | None = None,
+    report_path: str | Path | None = None,
     executive_summary: bool = False,
     recommendations: bool | SimulationRecommendationConfig = False,
 ) -> SimulationRun:
@@ -1065,6 +1065,10 @@ async def _generate_and_simulate_run(
 
     await init_tracing_if_needed()
 
+    run_name = run_name or ''
+    datapoint_parallelism = DEFAULT_DATAPOINT_PARALLELISM if datapoint_parallelism is None else datapoint_parallelism
+    raise_on_execution_failure = True if raise_on_execution_failure is None else raise_on_execution_failure
+
     # Mint the run id + manifest at the outer entry, BEFORE the generate phase,
     # gated on save (D3: the GENERATE stage must reach the manifest too). The SAME
     # composed hooks thread through both the generate phase and _simulate_core, so
@@ -1077,7 +1081,7 @@ async def _generate_and_simulate_run(
         async with with_simulation_span(
             'Evaluatorq - Agent Simulation',
             {
-                'orq.simulation.evaluation_name': evaluation_name,
+                'orq.simulation.evaluation_name': run_name,
                 'orq.simulation.mode': 'generate_and_simulate',
                 'orq.simulation.num_personas': num_personas,
                 'orq.simulation.num_scenarios': num_scenarios,
@@ -1098,8 +1102,8 @@ async def _generate_and_simulate_run(
                     hooks,
                     save=save,
                     run_id=run_id,
-                    run_name=evaluation_name or 'sim',
-                    run_output=report,
+                    run_name=run_name or DEFAULT_RUN_NAME,
+                    report_path=report_path,
                 )
                 # Outer manifest guard (FIX 1): the terminal manifest calls live in
                 # _simulate_core, but a failure in the GENERATE phase (before
@@ -1147,7 +1151,7 @@ async def _generate_and_simulate_run(
                             await await_maybe(composed_hooks.on_stage_end(SimStage.GENERATE, meta))
 
                         config = SimulationConfig(
-                            evaluation_name=evaluation_name,
+                            run_name=run_name,
                             target=target,
                             personas=None,
                             scenarios=None,
@@ -1169,11 +1173,11 @@ async def _generate_and_simulate_run(
                             generation_client=gen_client,
                             generation_token_usage=generation_usage,
                             upload_results=upload_results,
-                            evaluation_description=evaluation_description,
-                            orq_results_path=orq_results_path,
-                            exit_on_failure=exit_on_failure,
+                            experiment_description=experiment_description,
+                            orq_folder_path=orq_folder_path,
+                            raise_on_execution_failure=raise_on_execution_failure,
                             save=save,
-                            run_output=report,
+                            report_path=report_path,
                             executive_summary=executive_summary,
                             recommendations=resolve_recommendations(recommendations, SimulationRecommendationConfig),
                             hooks=composed_hooks,
@@ -1286,7 +1290,7 @@ async def generate(
                     save=False,
                     run_id='',
                     run_name='generate',
-                    run_output=None,
+                    report_path=None,
                 )
                 await await_maybe(gen_hooks.on_stage_start(SimStage.GENERATE, {}))
                 try:
@@ -1733,7 +1737,7 @@ def _resolve_run_settings(
         'model': config.model,
         'max_turns': max_turns,
         'datapoint_parallelism': config.datapoint_parallelism,
-        'evaluation_name': config.evaluation_name,
+        'evaluation_name': config.run_name,
         'evaluator_names': resolved_evaluator_names,
         'target': target_label,
     }
@@ -1819,7 +1823,7 @@ async def _execute_simulation(
         # collected by _stamp_evaluator_scores alongside the metadata stamp.
         await _notify_evaluator_complete(evaluator_events, resolved_hooks)
     except SimulationDroppedError as dropped:
-        # exit_on_failure aborted the run, but the rows that succeeded are real
+        # raise_on_execution_failure aborted the run, but the rows that succeeded are real
         # results — hand them to on_run_complete (via the finally) instead of [].
         primary_error = dropped
         results = dropped.partial_results
@@ -1889,7 +1893,7 @@ async def _publish_run(*, run: SimulationRun, config: SimulationConfig) -> None:
             run,
             config.recommendations,
             config.model,
-            persisted=config.save or config.run_output is not None,
+            persisted=config.save or config.report_path is not None,
             llm_config=config.llm_config,
         )
 
@@ -1927,9 +1931,9 @@ def _persist_run(
         # collision-exhaustion RuntimeError) must NOT discard a completed, paid-for
         # run. Log and still return the run — the saved file is a convenience.
         try:
-            if config.run_output is not None:
-                write_report(run, Path(config.run_output))
-                saved_path = Path(config.run_output)
+            if config.report_path is not None:
+                write_report(run, Path(config.report_path))
+                saved_path = Path(config.report_path)
             else:
                 saved_path = auto_save_run(run=run, run_name=run.run_name)
             _log_saved_run(saved_path)
@@ -1973,7 +1977,7 @@ async def _simulate_core(
     from evaluatorq.simulation.hooks import DefaultHooks, SimStage
     from evaluatorq.simulation.replay import load_simulation_replay
 
-    evaluation_name = config.evaluation_name
+    run_name = config.run_name
 
     target_callable, target_agent, target_kind_hint = _resolve_target(
         config.target,
@@ -2066,7 +2070,7 @@ async def _simulate_core(
             if agent_key and agent_key != 'agent':
                 agent_info = await fetch_agent_info(agent_key)
         run = build_simulation_run(
-            run_name=evaluation_name or 'sim',
+            run_name=run_name or DEFAULT_RUN_NAME,
             mode='simulate' if caller == 'simulate' else 'run',
             target_kind=target_kind,
             target=target_name,
@@ -2573,7 +2577,7 @@ def _adapt_simulation_scorer(
     async def scorer(params: ScorerParameter) -> EvaluationResult:  # noqa: RUF029  # scorer signature is async by evaluatorq contract
         # Both failure paths raise rather than returning a sentinel `0.0` —
         # evaluatorq's process_evaluator catches and records the error on
-        # the EvaluatorScore, so callers (and exit_on_failure) see a real
+        # the EvaluatorScore, so callers (and raise_on_execution_failure) see a real
         # failure instead of mistaking a degenerate score for a low result.
         data = params['data']
         sim_result = result_cache.get(id(data))
@@ -2782,7 +2786,7 @@ async def _simulate_via_evaluatorq(
     from evaluatorq.simulation.evaluators.scorers import failure_reason
     from evaluatorq.types import DataPoint
 
-    evaluation_name = config.evaluation_name
+    run_name = config.run_name
     model = config.model
     # _simulate_core resolves max_turns before calling here; the fallback only
     # covers a direct call that skipped it.
@@ -2792,9 +2796,9 @@ async def _simulate_via_evaluatorq(
     judge = config.judge
     generation_client = config.generation_client
     upload_results = config.upload_results
-    evaluation_description = config.evaluation_description
-    orq_results_path = config.orq_results_path
-    exit_on_failure = config.exit_on_failure
+    experiment_description = config.experiment_description
+    orq_folder_path = config.orq_folder_path
+    raise_on_execution_failure = config.raise_on_execution_failure
 
     resolved_evaluator_names = config.evaluator_names if config.evaluator_names is not None else DEFAULT_EVALUATOR_NAMES
     scorers = [(name, get_evaluator(name, config.scoring)) for name in resolved_evaluator_names]
@@ -2827,7 +2831,7 @@ async def _simulate_via_evaluatorq(
     evaluators = [_adapt_simulation_scorer(name, fn, result_cache) for name, fn in scorers]
 
     start = datetime.now(tz=timezone.utc)
-    run_name = evaluation_name or f'simulation-{start.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}'
+    resolved_run_name = run_name or f'simulation-{start.strftime("%Y%m%d-%H%M%S")}-{uuid.uuid4().hex[:8]}'
 
     # Resolve the Orq host once from the inference client so results upload to
     # the same server used for inference (RES-912); falls back to env.
@@ -2835,13 +2839,13 @@ async def _simulate_via_evaluatorq(
 
     try:
         eq_results = await evaluatorq(
-            run_name,
+            resolved_run_name,
             data=eq_datapoints,
             jobs=[job_fn],
             evaluators=evaluators,
             datapoint_parallelism=datapoint_parallelism,
-            description=evaluation_description,
-            path=orq_results_path,
+            description=experiment_description,
+            path=orq_folder_path,
             # Suppress the inner ProgressService spinner + results table: the
             # simulation drives its own RichHooks progress bar and summary, and
             # two concurrent rich.Live regions flicker against each other.
@@ -2878,7 +2882,7 @@ async def _simulate_via_evaluatorq(
     # and callers inspecting SimulationResult.metadata still find evaluator_scores.
     # on_evaluator_complete is fired by the caller (_simulate_core) from these
     # stamped scores, after results is assembled.
-    _stamp_evaluator_scores(eq_results, result_cache, evaluation_name, events_out=evaluator_events_out)
+    _stamp_evaluator_scores(eq_results, result_cache, run_name, events_out=evaluator_events_out)
 
     # Build the results from the successful rows BEFORE the missing-rows check,
     # so a SimulationDroppedError can still carry the partial results through to
@@ -2903,7 +2907,7 @@ async def _simulate_via_evaluatorq(
         if dead:
             parts.append(f'{len(dead)} ended in error or timeout (rows: {dead})')
         msg = f'{caller}(): {len(missing) + len(dead)} of {expected} simulation(s) failed — ' + '; '.join(parts)
-        if exit_on_failure:
+        if raise_on_execution_failure:
             raise SimulationDroppedError(msg, partial_results=results)
         logger.warning(msg)
 
@@ -2943,7 +2947,7 @@ async def _notify_evaluator_complete(
 def _stamp_evaluator_scores(
     eq_results: list[DataPointResult],
     result_cache: dict[int, SimulationResult],
-    evaluation_name: str,
+    run_name: str,
     events_out: list[tuple[SimulationResult, EvaluatorScore]] | None = None,
 ) -> None:
     """Walk the evaluatorq result and stamp each evaluator score onto the
@@ -3053,5 +3057,5 @@ def _stamp_evaluator_scores(
                         type(scores_dict).__name__,
                         score.evaluator_name,
                     )
-        if evaluation_name:
-            sim_result.metadata['evaluation_name'] = evaluation_name
+        if run_name:
+            sim_result.metadata['evaluation_name'] = run_name

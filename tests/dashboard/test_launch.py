@@ -347,6 +347,17 @@ def test_dashboard_browser_flag_reaches_launcher(extra_args: list[str], expected
     assert mock_serve.call_args.kwargs['open_browser'] is expected_open
 
 
+@pytest.mark.parametrize('flag', ['--port', '-p'])
+def test_dashboard_port_flag_reaches_launcher(flag: str) -> None:
+    from evaluatorq.cli import app
+
+    with patch('evaluatorq.dashboard.launch.serve') as mock_serve:
+        result = CliRunner().invoke(app, ['dashboard', flag, '8125', '--no-browser'])
+
+    assert result.exit_code == 0, result.output
+    assert mock_serve.call_args.kwargs['port'] == 8125
+
+
 # ---------------------------------------------------------------------------
 # serve() wiring (uvicorn.run patched — do NOT actually start a server)
 # ---------------------------------------------------------------------------

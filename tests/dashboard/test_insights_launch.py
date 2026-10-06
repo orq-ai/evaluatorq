@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import html
+import json
 import os
 import re
 from datetime import datetime, timedelta
@@ -110,6 +112,7 @@ def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
     assert manifest.status == 'running'
     assert manifest.planned_stages == ['population', 'label', 'summary', 'dimension:intent', 'dimension:failure', 'priority', 'write']
     assert manifest.stage_labels['label'] == 'Match and classify traces'
+    assert manifest.parallelism == spec.parallelism
     command = spawn.call_args.args[0]
     assert command[1] == '-c'
     assert 'runpy.run_module' in command[2]
@@ -1526,7 +1529,6 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
         labels=[],
         coding_labels=['task_type', 'verified'],
         dimensions=['intent'],
-        coding_analysis=True,
     )
 
     export_path.unlink()
@@ -1564,7 +1566,7 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     async def fake_insights(*_args, **kwargs):
         from types import SimpleNamespace
 
-        assert kwargs['coding_analysis'] is True
+        assert kwargs['coding_labels'] == ['task_type', 'verified']
         return SimpleNamespace(status='completed')
 
     monkeypatch.setattr(insights_worker, 'effective_settings', lambda: DashboardSettings.model_validate({}))
@@ -1600,10 +1602,8 @@ def test_finder_worker_uses_validated_snapshot_after_export_is_replaced(
     assert consumed == ['approved-trace']
     assert snapshot_replacement == [replacement_export]
     assert consumed_source == [export_path]
-    assert forwarded_specs[0].coding_analysis is True
     assert forwarded[0]['_source_name'] == 'my-export.json'
     assert forwarded_specs[0].coding_labels == ['task_type', 'verified']
-    assert 'coding_analysis' not in forwarded[0]
     assert not payload.finder_export_snapshot.exists()
     assert not reference.exists()
     assert not worker_state_path(tmp_path / 'runs', payload.run_id).exists()
@@ -1974,13 +1974,28 @@ def test_reloaded_selected_profile_is_used_and_named_when_orq_rejects_it(
 
 
 def test_facet_auth_error_names_oauth_credential() -> None:
-    from evaluatorq.dashboard.insights_views import facet_options
+    from evaluatorq.dashboard.insights_run_form import facet_options
 
     html = facet_options(None, FacetSelection(), profile_name='CLI OAuth', credential_rejected=True)
 
     assert 'CLI OAuth sign-in' in html
     assert 'orq auth login' in html
     assert 'key for profile' not in html
+
+
+def test_facet_options_renders_removable_chips_for_selected_values() -> None:
+    from evaluatorq.dashboard.insights_run_form import facet_options
+
+    html = facet_options(
+        FacetCatalogue(agent_name=('a', 'b'), value_counts={'agent_name': {'a': 7, 'b': 2}}),
+        FacetSelection(agent_name=frozenset({'a'})),
+    )
+
+    selected = html[html.index('class="insights-selected-facets"') :]
+    assert 'data-chip-name="facet_agent_name" data-finder-value="a"' in selected
+    assert 'value="a" checked><span>a</span><span class="facet-n"' in html
+    assert '>7</span>' in html
+    assert 'hx-get="/find/facets' not in html
 
 
 def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -2217,4 +2232,38 @@ def test_running_and_completed_pages_show_manifest_stages(monkeypatch: pytest.Mo
     assert completed.status_code == 200
     assert 'Load recent traces' in completed.text
     assert 'Cluster and map intent' in completed.text
-    assert 'skipped' in completed.text
+    # insights-review.js marks planned stages without a record as skipped.
+    match = re.search(r'data-run-progress="([^"]*)"', completed.text)
+    assert match is not None
+    progress = json.loads(html.unescape(match.group(1)))
+    assert progress['status'] == 'completed'
+    assert [stage['name'] for stage in progress['stages']] == ['population', 'summary']
+    assert progress['planned_stages'] == ['population', 'summary', 'dimension:intent', 'write']
+
+
+def test_chosen_models_reach_insights_and_blank_ones_keep_the_pipeline_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    seen: dict[str, object] = {}
+
+    async def fake_insights(population: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return type('Run', (), {'status': 'completed'})()
+
+    settings = DashboardSettings.model_validate({'orq_auth_method': 'environment'})
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: settings)
+    monkeypatch.setattr(insights_worker, 'resolve_dashboard_auth', lambda _settings: DashboardAuth('environment', 'k', 'https://my.orq.ai'))
+    monkeypatch.setattr(insights_worker, 'build_auth_clients', lambda *_a, **_k: (object(), type('C', (), {'close': AsyncMock()})()))
+    monkeypatch.setattr(insights_worker, 'close_orq_client', AsyncMock())
+    monkeypatch.setattr(insights_worker, 'insights', fake_insights)
+    spec = InsightsLaunchSpec(summary_model=' acme/summary ', embedding_model='acme/embed', classifier_model='  ')
+    payload = InsightsLaunchPayload(run_id='r', run_name='n', runs_dir=tmp_path, spec=spec)
+
+    assert asyncio.run(insights_worker._run_with_selected_auth(payload, InsightsPopulation())) is True
+
+    assert seen['summary_model'] == 'acme/summary'
+    assert seen['embedding_model'] == 'acme/embed'
+    assert 'classifier_model' not in seen
+    assert 'compiler_model' not in seen

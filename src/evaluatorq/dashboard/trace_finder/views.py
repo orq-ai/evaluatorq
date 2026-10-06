@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.apply_ui import drawer as drawer_shell
+from evaluatorq.dashboard.facet_picker import render_facet_chips, render_facet_menu, window_count_note
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_finder import explorer_views
@@ -16,7 +17,7 @@ from evaluatorq.dashboard.trace_links import single_trace_url, trace_link_button
 from evaluatorq.trace_finder import classification_legend
 from evaluatorq.trace_finder.columns import fmt_cost, fmt_duration, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.export import export_filename
-from evaluatorq.trace_finder.models import FACET_NAMES, NUMERIC_FACET_NAMES
+from evaluatorq.trace_finder.models import FACET_NAMES
 from evaluatorq.trace_finder.span_status import is_error_span, span_status_text
 from evaluatorq.trace_finder.trajectory import KIND_LABELS, Kind, Segment, segments
 
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
         TraceRow,
     )
     from evaluatorq.trace_finder.explorer import ExplorerView
+    from evaluatorq.trace_finder.models import NumericFilters
 
 
 SAMPLES = (
@@ -53,20 +55,6 @@ COMMAND_EXAMPLES = (
 SCOPE_HELP_WITHIN = 'Within results reads every loaded trace, including rows outside the current tab or page.'
 SCOPE_HELP_NEW = 'New search searches the chosen time range up to the Rows limit, then loads the matches.'
 ASK_AI_COST_NOTE = 'Each question is answered by an AI model, so it takes a few seconds and costs a little.'
-FACET_LABELS = (
-    ('project', 'project'),
-    ('agent_name', 'agent'),
-    ('model', 'model'),
-    ('provider', 'provider'),
-    ('status', 'status'),
-    ('product', 'product'),
-    ('trace_type', 'trace type'),
-    ('tool_name', 'tool'),
-    ('tokens', 'total tokens'),
-    ('duration_ms', 'duration'),
-)
-if {name for name, _ in FACET_LABELS} != {*FACET_NAMES, *NUMERIC_FACET_NAMES}:
-    raise RuntimeError('FACET_LABELS must mirror FACET_NAMES and NUMERIC_FACET_NAMES')
 
 
 def icon_search() -> str:
@@ -130,8 +118,10 @@ def traces_command_strip(
     disabled = '' if api_available else ' disabled'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     chips = ''.join(
-        f'<button type="button" data-finder-example="{esc(sample)}">{esc(sample)}</button>'
-        for sample in COMMAND_EXAMPLES
+        f'<button type="button" data-finder-example="{esc(sample)}" title="{esc(sample)}">{esc(label)}</button>'
+        for sample, label in zip(
+            COMMAND_EXAMPLES, ('Frustrated customers?', 'Refund requests?', 'Unhelpful replies?'), strict=True
+        )
     )
     auto_scope_attr = ' data-auto-scope="pending"' if auto_scope_pending else ''
     return (
@@ -140,9 +130,9 @@ def traces_command_strip(
         '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls, #explorer-load-form" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
-        f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question, e.g. {esc(COMMAND_EXAMPLES[0])}" '
-        f'data-finder-placeholders="{esc(json.dumps(COMMAND_EXAMPLES))}" required{disabled}>'
-        f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="{esc(mode)}">'
+        f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question about your traces…" required{disabled}>'
+        f'{esc(query)}</textarea><div class="finder-command-examples" aria-label="Example questions">{chips}</div></div>'
+        f'<input type="hidden" name="mode" value="{esc(mode)}">'
         '<span class="finder-scope-label" id="finder-scope-label">Search in</span>'
         f'<div id="finder-scope" class="finder-seg" role="radiogroup" aria-labelledby="finder-scope-label"'
         f'{auto_scope_attr}>'
@@ -153,7 +143,6 @@ def traces_command_strip(
         '</form>'
         f'<p class="finder-command-help"><span class="scope-within">{esc(SCOPE_HELP_WITHIN)}</span>'
         f'<span class="scope-new">{esc(SCOPE_HELP_NEW)}</span> {esc(ASK_AI_COST_NOTE)}</p>'
-        f'<div class="finder-command-examples"><span>Try</span>{chips}</div>'
         f'{error_html}</section>'
     )
 
@@ -183,100 +172,36 @@ def _loaded_tallies(rows: Sequence[TraceRow]) -> dict[str, dict[str, tuple[str, 
     return tallies
 
 
-def _facet_values(catalogue: FacetCatalogue | None, name: str) -> tuple[str, ...]:
-    if catalogue is None or name in NUMERIC_FACET_NAMES:
-        return ()
-    return tuple(getattr(catalogue, name, ()))
-
-
 def facet_menu(
     catalogue: FacetCatalogue | None = None,
     *,
-    numeric: object | None = None,
+    numeric: NumericFilters | None = None,
     open_: bool = False,
     form_id: str = 'finder-query-form',
     selection: FacetSelection | None = None,
     pending: bool = False,
     loaded_rows: Sequence[TraceRow] | None = None,
-    include_numeric: bool = True,
+    row_scoped: bool = False,
+    window_days: int | None = None,
 ) -> str:
-    """Two-level filter menu: a category list, and a value popout the client opens per category.
+    """The Traces and Trace search filter menu, with its ``/find/facets`` loader.
 
     ``pending`` renders the menu without values and has it fetch them itself as soon as it lands
-    on the page, so a page render never waits on the Orq facet call.
+    on the page, so a page render never waits on the Orq facet call. ``row_scoped`` marks the
+    ``/traces`` menu, which refreshes its values whenever it opens.
 
-    ``loaded_rows`` adds a count next to each value, tallied from the rows already on the page (no
-    extra Orq call), so a count is of loaded traces, not of everything Orq holds. Insights uses
-    ``include_numeric=False`` because its population accepts categorical facets only.
+    ``loaded_rows`` counts each value in the rows already on the page (no extra Orq call), so a count
+    is of loaded traces. Without rows, the counts are Orq's for the catalogue's ``window_days``.
     """
-    tallies = _loaded_tallies(loaded_rows) if loaded_rows is not None else {}
-    items: list[str] = []
-    subs: list[str] = []
-    for name, label in FACET_LABELS:
-        numeric_facet = name in NUMERIC_FACET_NAMES
-        if numeric_facet and not include_numeric:
-            continue
-        selected_values = getattr(selection, name, frozenset()) if selection is not None else frozenset()
-        values = tuple(dict.fromkeys((*_facet_values(catalogue, name), *sorted(selected_values))))
-        if numeric_facet:
-            minimum = getattr(numeric, f'{name}_min', None) if numeric is not None else None
-            maximum = getattr(numeric, f'{name}_max', None) if numeric is not None else None
-            count = sum(bound is not None for bound in (minimum, maximum))
-            body = (
-                f'<label><span>≥</span><input form="{form_id}" name="{esc(name)}_min" type="number" min="0" '
-                f'placeholder="min" value="{esc(str(minimum)) if minimum is not None else ""}"></label>'
-                f'<label><span>≤</span><input form="{form_id}" name="{esc(name)}_max" type="number" min="0" '
-                f'placeholder="max" value="{esc(str(maximum)) if maximum is not None else ""}"></label>'
-            )
-        else:
-            count = len(selected_values)
-            tally = tallies.get(name)
-            counts = {key: count for key, (_, count) in tally.items()} if tally is not None else None
-            if tally is not None and counts is not None:
-                # Catalogue values first, then values only the loaded rows carry (the catalogue may be
-                # unavailable); most common first, and sorted() is stable so ties keep catalogue order.
-                known = {value.casefold() for value in values}
-                values = (*values, *(shown for key, (shown, _) in tally.items() if key not in known))
-                by_count = counts
-                values = tuple(sorted(values, key=lambda v: -by_count.get(v.casefold(), 0)))
-            options = ''.join(
-                f'<label><input form="{form_id}" type="checkbox" name="facet_{esc(name)}" value="{esc(value)}"{(" checked" if value in selected_values else "")}><span>{esc(value)}</span>'
-                + (
-                    f'<span class="facet-n" title="Loaded traces">{counts.get(value.casefold(), 0):,}</span>'
-                    if counts is not None
-                    else ''
-                )
-                + '</label>'
-                for value in values
-            )
-            if options:
-                overflow = (
-                    '<p class="facet-note">More values exist in Orq; showing the returned values ranked by frequency.</p>'
-                    if catalogue is not None and name in catalogue.truncated_facets
-                    else ''
-                )
-                loaded_note = (
-                    f'<p class="facet-scope">Counts are of the {len(loaded_rows):,} rows currently loaded, so they change as you filter.</p>'
-                    if tally is not None and loaded_rows is not None
-                    else ''
-                )
-                body = (
-                    f'{loaded_note}<input class="facet-search" type="search" placeholder="Search values" aria-label="Search {esc(label)} values" autocomplete="off">'
-                    f'<div class="facet-values">{options}</div>'
-                    '<p class="facet-no-results" hidden>No matching values in this list.</p>'
-                    f'{overflow}'
-                )
-            else:
-                body = '<p class="finder-empty">No values in this window.</p>'
-        count_html = f'<span class="count">{count}</span>' if count else ''
-        items.append(
-            f'<button type="button" class="facet-item" data-facet="{esc(name)}" aria-haspopup="true" '
-            f'aria-expanded="false"><span>{esc(label)}</span>{count_html}<span class="chev" aria-hidden="true">&rsaquo;</span></button>'
-        )
-        subs.append(
-            f'<div class="facet-sub" data-facet-sub="{esc(name)}" hidden><div class="hd">{esc(label)}</div>{body}</div>'
-        )
-    row_scoped = form_id == 'explorer-load-form'
+    counts: dict[str, dict[str, int]] | None = None
+    count_note = count_title = ''
+    if loaded_rows is not None:
+        counts = {facet: dict(tally.values()) for facet, tally in _loaded_tallies(loaded_rows).items()}
+        count_note = f'Counts are of the {len(loaded_rows):,} rows currently loaded, so they change as you filter.'
+        count_title = 'Loaded traces'
+    elif catalogue is not None:
+        counts = catalogue.value_counts
+        count_note = window_count_note(window_days)
     if pending or row_scoped:
         # The /traces facet menu already has counts from its loaded rows. Keep the
         # background catalogue refresh quiet there instead of implying those counts
@@ -284,10 +209,11 @@ def facet_menu(
         note = '' if row_scoped and loaded_rows is not None else '<p class="finder-empty">Loading facet values…</p>'
         counts_param = '&counts=loaded' if loaded_rows is not None or row_scoped else ''
         triggers = 'load, refreshFacets' if pending else 'refreshFacets'
-        loader = (
+        attrs = (
+            f'{" data-refresh-on-open" if row_scoped else ""}'
             f' hx-get="/find/facets?form_id={form_id}{counts_param}" hx-trigger="{triggers}" '
             'hx-include="#finder-controls" hx-swap="outerHTML" hx-indicator=".finder-facet-loading" '
-            'hx-sync="#finder-controls:replace"'
+            f'hx-sync="#finder-controls:replace"{" data-pending" if pending else ""}'
         )
     else:
         note = (
@@ -297,74 +223,19 @@ def facet_menu(
             if catalogue is None
             else ''
         )
-        loader = ''
-    return (
-        f'<div class="finder-facets{" open" if open_ else ""}{" pending" if pending else ""}"{" data-refresh-on-open" if row_scoped else ""}{loader}><div class="facet-list">{"".join(items)}{note}</div>'
-        f'{"".join(subs)}</div>'
+        attrs = ''
+    return render_facet_menu(
+        catalogue,
+        form_id=form_id,
+        selection=selection,
+        numeric=numeric,
+        counts=counts,
+        count_note=count_note,
+        count_title=count_title,
+        list_note_html=note,
+        container_attrs=attrs,
+        open_=open_,
     )
-
-
-def _facet_chips(
-    selection: FacetSelection,
-    numeric: object | None = None,
-    *,
-    removable: bool = False,
-    generated: FacetSelection | None = None,
-) -> str:
-    """Render one chip per active filter value. Editable chips open the already-rendered menu at their category."""
-
-    def chip(
-        facet: str,
-        label: str,
-        value_html: str,
-        remove_name: str,
-        remove_value: str | None,
-        aria: str,
-        *,
-        ai: bool = False,
-    ) -> str:
-        ai_class = ' ai' if ai else ''
-        badge = '<b class="ai-badge">AI</b>' if ai else ''
-        if not removable:
-            return f'<span class="chip{ai_class}"><b>{esc(label)}</b>{badge}<span class="v">{value_html}</span></span>'
-        value_attr = f' data-finder-value="{esc(remove_value)}"' if remove_value is not None else ''
-        return (
-            f'<span class="chip is-editable{ai_class}" data-chip-name="{esc(remove_name)}"{value_attr}>'
-            f'<button type="button" class="chip-open" data-chip-open="{esc(facet)}" aria-label="Edit {aria}">'
-            f'<b>{esc(label)}</b>{badge}<span class="v">{value_html}</span></button>'
-            f'<button type="button" class="finder-chip-remove" data-finder-remove="{esc(remove_name)}"{value_attr} '
-            f'aria-label="Remove {aria}">✕</button></span>'
-        )
-
-    chips: list[str] = []
-    for name, label in FACET_LABELS:
-        if name in NUMERIC_FACET_NAMES:
-            continue
-        chips.extend(
-            chip(
-                name,
-                label,
-                esc(value),
-                f'facet_{name}',
-                value,
-                f'{esc(label)} {esc(value)}',
-                ai=bool(generated and value in getattr(generated, name)),
-            )
-            for value in sorted(getattr(selection, name, frozenset()))
-        )
-    for name, label, operator in (
-        ('tokens_min', 'total tokens', '≥'),
-        ('tokens_max', 'total tokens', '≤'),
-        ('duration_ms_min', 'duration', '≥'),
-        ('duration_ms_max', 'duration', '≤'),
-    ):
-        value = getattr(numeric, name, None) if numeric is not None else None
-        if value is None:
-            continue
-        facet = name.rsplit('_', 1)[0]
-        formatted = f'{operator} {value:,}'
-        chips.append(chip(facet, label, formatted, name, None, f'{label} {formatted}'))
-    return ''.join(chips)
 
 
 def controls(
@@ -448,9 +319,9 @@ def controls(
     )
     return (
         '<div class="finder-controls" id="finder-controls">'
-        f'{hidden_facets}{scope_html}{_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"}, generated=generated_only)}'
+        f'{hidden_facets}{scope_html}{render_facet_chips(facets, numeric, removable=snapshot.state not in {"compiling", "classifying"}, generated=generated_only)}'
         f'<span class="addwrap"><button class="add" type="button" aria-haspopup="true">+ Filter</button>'
-        f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending, loaded_rows=explorer_view.rows if explorer_view is not None else None)}'
+        f'{facet_menu(catalogue, numeric=carried_numeric, form_id=form_id, selection=carried_facets, pending=pending, loaded_rows=explorer_view.rows if explorer_view is not None else None, row_scoped=explorer_view is not None, window_days=window_days)}'
         '<span class="finder-facet-loading" role="status">Loading filters…</span></span><span class="spacer"></span>'
         f'<input {keep["window_days"]} type="hidden" form="{form_id}" name="window_days" value="{values["window_days"]}">'
         f'<input id="finder-limit-query" type="hidden" form="{form_id}" name="limit" value="{values["limit"]}">'
@@ -1072,8 +943,8 @@ def body(
             'Apply filters only</button></div>'
         )
     if snapshot.state == 'idle':
-        unavailable = field(snapshot, api_available=False) if not api_available else ''
-        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}{unavailable}'
+        # The dot field is Trace search's canvas; Traces shows the auth error banner instead.
+        return f'{indicator}{controls(snapshot, settings, catalogue, pending=pending, explorer_facets=explorer_facets, explorer_numeric=explorer_numeric, explorer_view=explorer_view)}'
     controls_html = controls(
         snapshot,
         settings,

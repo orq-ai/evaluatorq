@@ -144,6 +144,7 @@ plugins:
           - coding-agent-targets.md: Run Claude Code, Codex CLI or OpenCode as the system under test, directly or through orq launch.
           - dashboard.md: Browse red team and simulation reports in a local web dashboard.
           - trace-finder.md: Find semantic matches in recent Orq traces with a classify model.
+          - fetching-traces.md: Fetch recorded Orq traces into your own code with fetch_traces(), and handle per-trace import failures.
           - guides/agent-simulation.md: Multi-turn, persona-driven conversation testing with an LLM judge.
           - guides/simulation-in-evaluatorq.md: Run a simulation as an evaluatorq job with wrap_simulation_agent(), and score the transcript with your own evaluators.
           - guides/agent-simulation-output.md: The SimulationResult and SimulationRun output models, where they are written, and how to read them.
@@ -286,6 +287,7 @@ nav:
       - Coding Agents: coding-agent-targets.md
       - Dashboard: dashboard.md
       - Trace Finder: trace-finder.md
+      - Fetching Traces: fetching-traces.md
       - Agent Simulation:
           - Overview: guides/agent-simulation.md
           - In an evaluatorq Run: guides/simulation-in-evaluatorq.md

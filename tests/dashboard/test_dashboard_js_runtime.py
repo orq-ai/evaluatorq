@@ -29,9 +29,28 @@ def test_drawer_closing_class_has_exit_animation() -> None:
     assert any('sim-drawer-out' in tinycss2.serialize(declaration.value) for declaration in declarations)
 
 
-def test_insights_review_facet_filters() -> None:
-    script = Path(__file__).with_name('insights_review_filters.cjs')
-    result = subprocess.run(['node', str(script)], capture_output=True, text=True, check=False, timeout=15)
+def test_insights_run_form_controller() -> None:
+    import json
+    from dataclasses import replace
+
+    from evaluatorq.dashboard.insights_run_form import RunFormValues, render_run_form, render_run_page
+
+    values = RunFormValues.defaults()
+    fixtures = {
+        'form': render_run_form(values, csrf='token'),
+        'rejected': render_run_page(
+            replace(values, source='query'), csrf='token', error='Enter a question to find matching traces.'
+        ),
+    }
+    script = Path(__file__).with_name('insights_run_form.cjs')
+    result = subprocess.run(
+        ['node', str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+        input=json.dumps(fixtures),
+    )
     assert result.returncode == 0, result.stdout + result.stderr
 
 

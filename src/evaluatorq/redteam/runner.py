@@ -1462,9 +1462,7 @@ async def red_team(
     asyncio.run(main())
     ```
     """
-    datapoint_parallelism = resolve_datapoint_parallelism(
-        datapoint_parallelism, parallelism, default=10, caller='red_team'
-    )
+    datapoint_parallelism = resolve_datapoint_parallelism(datapoint_parallelism, parallelism, caller='red_team')
 
     # True -> defaults, False -> off, instance -> as given. One resolution here so the
     # generation site downstream only has to check for None.

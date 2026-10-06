@@ -49,12 +49,31 @@ def test_from_run_is_forwarded_as_previous_run(monkeypatch) -> None:
         )
 
     assert result.exit_code == 0, _output(result)
-    assert impl.call_args.kwargs['previous_run'] == 'latest'
+    assert impl.call_args.args[0].previous_run == 'latest'
 
 
 def test_input_and_from_run_are_mutually_exclusive(tmp_path: Path) -> None:
+    from evaluatorq.simulation.types import SimulationDatapoint
+
     dp = tmp_path / 'dp.jsonl'
-    dp.write_text('', encoding='utf-8')
+    dp.write_text(
+        SimulationDatapoint.model_validate({
+            'id': 'dp-1',
+            'persona': {
+                'name': 'P',
+                'patience': 0.5,
+                'assertiveness': 0.5,
+                'politeness': 0.5,
+                'technical_level': 0.5,
+                'communication_style': 'terse',
+                'background': 'b',
+            },
+            'scenario': {'name': 'S', 'goal': 'g'},
+            'user_system_prompt': 'You are a customer.',
+            'first_message': 'Hi',
+        }).model_dump_json(),
+        encoding='utf-8',
+    )
 
     result = runner.invoke(
         app,

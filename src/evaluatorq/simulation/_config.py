@@ -7,12 +7,11 @@ the public ``simulate()`` / ``generate_and_simulate()`` / ``generate()``
 signatures are unaffected by this type; it exists purely to reduce the
 parameter-threading boilerplate between the internal layers.
 
-Field names here are the canonical INTERNAL names, which intentionally diverge
-from the public keyword names at the one seam where they're built
-(``_simulate_run`` / ``_generate_and_simulate_run``):
+Field names here are the public keyword names of ``simulate()`` /
+``generate_and_simulate()``, except where noted at the one seam where they're
+built (``_simulate_run`` / ``_generate_and_simulate_run``):
 
 * ``model`` (was the public ``sim_model``)
-* ``run_output`` (was the public ``report``)
 
 Never call ``model_dump`` / serialize this model — several fields hold
 callables, an ``AsyncOpenAI`` client, an ``AgentTarget`` instance, and hook
@@ -36,6 +35,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # static typing) — pydantic resolves annotations at class-creation time even
 # with `from __future__ import annotations`, so they must be real, importable
 # names in this module's namespace and can't live behind `TYPE_CHECKING`.
+from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.contracts import DEFAULT_TARGET_TIMEOUT_MS, AgentTarget, LLMCallConfig, TokenUsage
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.hooks import SimulationHooks  # noqa: TC001
@@ -43,7 +43,7 @@ from evaluatorq.simulation.reports.recommendations import SimulationRecommendati
 from evaluatorq.simulation.types import DEFAULT_MODEL, Message, Persona, Scenario, SimulationDatapoint
 
 # Named because every `simulate` overload repeats them; as literals they drifted one
-# signature at a time.
+# signature at a time. DEFAULT_DATAPOINT_PARALLELISM is shared with red team, so it lives in common.
 DEFAULT_TARGET_AGENT_TIMEOUT_MS = DEFAULT_TARGET_TIMEOUT_MS
 DEFAULT_MAX_TARGET_RETRIES = 2
 DEFAULT_MAX_TOOL_RESULT_CHARS = 500
@@ -60,7 +60,7 @@ class SimulationConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True, extra='forbid')
 
     # --- Run identity / target resolution inputs -------------------------
-    evaluation_name: str = ''
+    run_name: str = ''
     target: str | Callable[[list[Message]], str | Awaitable[str]] | AgentTarget | None = None
     personas: list[Persona] | None = None
     scenarios: list[Scenario] | None = None
@@ -103,7 +103,7 @@ class SimulationConfig(BaseModel):
         """Resolved simulation model, derived from ``llm_config`` — no second field to keep in step."""
         return self.llm_config.model
 
-    datapoint_parallelism: int = 10
+    datapoint_parallelism: int = DEFAULT_DATAPOINT_PARALLELISM
     target_agent_timeout_ms: int = Field(default=DEFAULT_TARGET_AGENT_TIMEOUT_MS, gt=0)
     """Per-call timeout for the target under test, threaded into
     ``SimulationRunner``. Mirrors red team's equivalent knob — a slow
@@ -148,11 +148,11 @@ class SimulationConfig(BaseModel):
     GENERATE stage (``None`` for `simulate`, which never generates), folded into
     ``SimulationRun.token_usage_total`` by ``_simulate_core``."""
     upload_results: bool = True
-    evaluation_description: str | None = None
-    orq_results_path: str | None = None
-    exit_on_failure: bool = True
+    experiment_description: str | None = None
+    orq_folder_path: str | None = None
+    raise_on_execution_failure: bool = True
     save: bool = False
-    run_output: str | Path | None = None
+    report_path: str | Path | None = None
     recommendations: SimulationRecommendationConfig | None = None
     """Generate remediation suggestions in-core (before save), mirroring red teaming's
     ``recommendations=`` on ``red_team``. ``None`` means off. The public

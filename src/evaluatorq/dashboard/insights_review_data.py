@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
@@ -12,7 +11,7 @@ from evaluatorq.dashboard.insights_review_projection import review_xy, review_xy
 from evaluatorq.dashboard.insights_views import _trace_href
 from evaluatorq.dashboard.trace_links import trace_span_url
 from evaluatorq.insights.models import label_key, real_assistant_errors
-from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
+from evaluatorq.insights.presets import CODING_LABELS
 from evaluatorq.insights.transcript import SHELL_TOOLS
 
 if TYPE_CHECKING:
@@ -178,46 +177,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
     total_usage = sum_structured_usage(list(run.cost_by_stage.values()))
     cost = total_usage.total_cost if total_usage is not None else None
     population = dict(run.population)
-    saved_path = population.get('snapshot_path') or population.get('finder_export')
-    source = (
-        'snapshot'
-        if population.get('mode') == 'snapshot' or population.get('snapshot_path')
-        else 'finder'
-        if population.get('mode') == 'finder' or population.get('finder_export')
-        else 'query'
-        if population.get('mode') == 'query' or population.get('query')
-        else 'recent'
-    )
-    coding_names = {spec.name for spec in CODING_LABELS}
-    configured_coding = list(run.config.coding_labels)
-    if run.config.coding_analysis and not configured_coding:
-        configured_coding = list(CODING_LABELS[1:])
-    configured_names = {spec.name for spec in run.config.labels}
-    known_preset_names = set(LABEL_PRESETS)
-    custom_specs = [
-        spec.model_dump(mode='json')
-        for spec in run.config.labels
-        if spec.name not in known_preset_names and spec.name not in coding_names
-    ]
-    file_backed = source in ('finder', 'snapshot')
-    path_available = bool(saved_path and Path(str(saved_path)).expanduser().is_file())
     return {
-        'rerun': {
-            'name': run.run_name,
-            'source': source,
-            'query': population.get('query') or '',
-            'window_days': population.get('window_days', 7),
-            'limit': population.get('limit', 500),
-            'facets': population.get('facets', {}),
-            'numeric': population.get('numeric', {}),
-            'labels': [name for name in LABEL_PRESETS if name in configured_names],
-            'coding_labels': [spec.name for spec in configured_coding],
-            'custom_labels': custom_specs,
-            'dimensions': list(run.config.dimensions),
-            'source_path': str(saved_path) if file_backed and path_available else None,
-            'source_name': population.get('source_name'),
-            'fresh_selection_required': file_backed and not path_available,
-        },
         'run': {
             'id': run.run_id,
             'name': run.run_name,
