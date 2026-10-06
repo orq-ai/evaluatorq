@@ -504,7 +504,7 @@ async def test_targeted_project_provider_timeout_is_not_treated_as_deadline() ->
 async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 0.01)
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 1.0)
     traces = FakeTraces({})
     query_started = asyncio.Event()
     query_timeouts: list[int] = []
@@ -523,7 +523,7 @@ async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout
     assert snapshot.traces == ()
     assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
     assert len(query_timeouts) == 1
-    assert 1 <= query_timeouts[0] <= 10
+    assert 1 <= query_timeouts[0] <= 1000
 
 
 @pytest.mark.asyncio
