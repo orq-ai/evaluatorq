@@ -5,20 +5,35 @@ from typing import Any
 
 import pytest
 
+from pydantic import ValidationError
+
 from evaluatorq.common.trace_document import (
+    DatasetRef,
+    LabelSource,
+    Outcome,
     TraceDocument,
     TraceMetadata,
+    TrajectoryCounts,
+    check_trace_document,
     ensure_trace_document,
     prompt_messages,
     trace_document_with_signals,
+    trajectory_counts,
 )
-from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifTrajectory
+from evaluatorq.formats.atif import (
+    AtifAgent,
+    AtifObservation,
+    AtifObservationResult,
+    AtifStep,
+    AtifToolCall,
+    AtifTrajectory,
+)
 from evaluatorq.signals import SignalReport, compute_signals
 from evaluatorq.trace_finder.models import TraceRecord
 
 
 def test_trace_metadata_mirrors_trace_record_fields() -> None:
-    assert set(TraceMetadata.model_fields) - {'signals'} == set(TraceRecord.model_fields) - {'messages'}
+    assert set(TraceMetadata.model_fields) - {'signals', 'dataset', 'outcome'} == set(TraceRecord.model_fields) - {'messages'}
 
 
 def _trace(*messages: dict[str, Any]) -> TraceRecord:
@@ -327,3 +342,189 @@ def test_prompt_renderer_uses_native_call_and_observation_ids() -> None:
     rendered = prompt_messages(changed)
     assert rendered[0]['tool_calls'][0]['id'] == 'after'
     assert rendered[1]['tool_call_id'] == 'after'
+
+
+_SWE_ROW = DatasetRef(name='nebius/SWE-agent-trajectories', revision='68195a1450865274106246d0d0296a1d6807b88e', split='train', row_id='7')
+_RESOLVED = Outcome(passed=True, score=1.0, source='programmatic', definition='SWE-bench issue resolved by the agent patch')
+
+
+def _agent_trajectory(*, subagent: AtifTrajectory | None = None, trajectory_id: str | None = None) -> AtifTrajectory:
+    return AtifTrajectory(
+        trajectory_id=trajectory_id,
+        agent=AtifAgent(name='swe-agent', version='unknown'),
+        steps=[
+            AtifStep(step_id=1, source='user', message='fix the bug'),
+            AtifStep(
+                step_id=2,
+                source='agent',
+                message='',
+                reasoning_content='look at the file first',
+                tool_calls=[AtifToolCall(tool_call_id='c1', function_name='bash', arguments={'cmd': 'cat a.py'})],
+                observation=AtifObservation(results=[AtifObservationResult(source_call_id='c1', content='print(1)')]),
+            ),
+        ],
+        subagent_trajectories=[subagent] if subagent else None,
+    )
+
+
+def test_dataset_row_needs_no_span_or_timestamp() -> None:
+    metadata = TraceMetadata(trace_id='swe-agent:django__django-1:7', dataset=_SWE_ROW, outcome=_RESOLVED)
+
+    assert metadata.span_id is None
+    assert metadata.timestamp is None
+
+
+def test_trace_without_dataset_still_needs_span_and_timestamp() -> None:
+    with pytest.raises(ValidationError, match='needs span_id and timestamp'):
+        TraceMetadata(trace_id='trace-1')
+
+
+@pytest.mark.parametrize(
+    ('span_id', 'timestamp'),
+    [
+        (None, datetime(2026, 10, 5, tzinfo=timezone.utc)),
+        ('span-1', None),
+    ],
+)
+def test_orq_trace_requires_span_id_and_timestamp_independently(
+    span_id: str | None,
+    timestamp: datetime | None,
+) -> None:
+    with pytest.raises(ValidationError, match='needs span_id and timestamp'):
+        TraceMetadata(trace_id='trace-1', span_id=span_id, timestamp=timestamp)
+
+
+def test_dataset_timestamp_must_be_timezone_aware() -> None:
+    with pytest.raises(ValidationError, match='timestamp must include a timezone offset'):
+        TraceMetadata(
+            trace_id='row-7',
+            timestamp=datetime(2026, 10, 5),
+            dataset=_SWE_ROW,
+            outcome=_RESOLVED,
+        )
+
+
+def test_dataset_row_without_outcome_is_rejected() -> None:
+    with pytest.raises(ValidationError, match='needs an outcome'):
+        TraceMetadata(trace_id='row-7', dataset=_SWE_ROW)
+
+
+@pytest.mark.parametrize(('passed', 'source'), [(None, 'programmatic'), (True, 'none')])
+def test_outcome_unlabelled_must_be_explicit(passed: bool | None, source: LabelSource) -> None:
+    with pytest.raises(ValidationError, match="exactly when source is 'none'"):
+        Outcome(passed=passed, source=source, definition='x')
+
+
+def test_unlabelled_dataset_row_is_valid() -> None:
+    outcome = Outcome(passed=None, source='none', definition='Orq traces carry no ground truth')
+
+    assert TraceMetadata(trace_id='row-1', dataset=_SWE_ROW, outcome=outcome).outcome == outcome
+
+
+def test_to_datapoint_carries_trajectory_and_outcome() -> None:
+    document = TraceDocument(
+        metadata=TraceMetadata(trace_id='row-7', dataset=_SWE_ROW, outcome=_RESOLVED),
+        trajectory=_agent_trajectory(),
+    )
+
+    datapoint = document.to_datapoint()
+
+    assert AtifTrajectory.model_validate(datapoint.inputs['trajectory']) == document.trajectory
+    assert datapoint.inputs['dataset'] == {
+        'name': 'nebius/SWE-agent-trajectories',
+        'revision': '68195a1450865274106246d0d0296a1d6807b88e',
+        'split': 'train',
+        'row_id': '7',
+    }
+    assert datapoint.expected_output == {
+        'passed': True,
+        'score': 1.0,
+        'source': 'programmatic',
+        'definition': 'SWE-bench issue resolved by the agent patch',
+    }
+
+
+def test_to_datapoint_without_outcome_has_no_expected_output() -> None:
+    document = ensure_trace_document(_trace({'role': 'user', 'content': 'hi'}))
+
+    assert document.to_datapoint().expected_output is None
+
+
+def test_trajectory_counts_include_subagents() -> None:
+    trajectory = _agent_trajectory(subagent=_agent_trajectory(trajectory_id='sub-1'))
+    counts = trajectory_counts(trajectory)
+
+    assert counts == TrajectoryCounts(tool_calls=2, tool_results=2, reasoning_steps=2)
+
+
+def test_check_trace_document_preserves_json_and_source_measured_content() -> None:
+    document = TraceDocument(
+        metadata=TraceMetadata(trace_id='row-7', dataset=_SWE_ROW, outcome=_RESOLVED),
+        trajectory=_agent_trajectory(subagent=_agent_trajectory(trajectory_id='sub-1')),
+    )
+    expected_counts = TrajectoryCounts(tool_calls=2, tool_results=2, reasoning_steps=2)
+
+    check_trace_document(document, expected_counts=expected_counts, expected_outcome=_RESOLVED)
+    restored = TraceDocument.model_validate_json(document.model_dump_json())
+
+    assert restored == document
+    assert restored.metadata.dataset == _SWE_ROW
+    assert restored.metadata.outcome == _RESOLVED
+    assert restored.trajectory.steps[1].tool_calls == document.trajectory.steps[1].tool_calls
+    assert restored.trajectory.steps[1].observation == document.trajectory.steps[1].observation
+    assert restored.trajectory.steps[1].reasoning_content == document.trajectory.steps[1].reasoning_content
+    assert restored.trajectory.subagent_trajectories == document.trajectory.subagent_trajectories
+
+
+@pytest.mark.parametrize('lost_field', ['tool_call', 'tool_result', 'reasoning'])
+def test_check_trace_document_rejects_lost_trajectory_content(lost_field: str) -> None:
+    document = TraceDocument(
+        metadata=TraceMetadata(trace_id='row-7', dataset=_SWE_ROW, outcome=_RESOLVED),
+        trajectory=_agent_trajectory(),
+    )
+    agent_step = document.trajectory.steps[1]
+    updates: dict[str, Any]
+    if lost_field == 'tool_call':
+        updates = {'tool_calls': None}
+    elif lost_field == 'tool_result':
+        assert agent_step.observation is not None
+        updates = {'observation': agent_step.observation.model_copy(update={'results': []})}
+    else:
+        updates = {'reasoning_content': None}
+    changed = document.model_copy(
+        update={
+            'trajectory': document.trajectory.model_copy(
+                update={'steps': [document.trajectory.steps[0], agent_step.model_copy(update=updates)]}
+            )
+        }
+    )
+
+    with pytest.raises(ValueError, match='trajectory counts differ'):
+        check_trace_document(
+            changed,
+            expected_counts=TrajectoryCounts(tool_calls=1, tool_results=1, reasoning_steps=1),
+            expected_outcome=_RESOLVED,
+        )
+
+
+def test_check_trace_document_rejects_lost_outcome() -> None:
+    document = TraceDocument(
+        metadata=TraceMetadata(trace_id='row-7', dataset=_SWE_ROW, outcome=_RESOLVED),
+        trajectory=_agent_trajectory(),
+    )
+    changed_outcome = Outcome(
+        passed=False,
+        score=0.0,
+        source='programmatic',
+        definition='SWE-bench issue resolved by the agent patch',
+    )
+    changed = document.model_copy(
+        update={'metadata': document.metadata.model_copy(update={'outcome': changed_outcome})}
+    )
+
+    with pytest.raises(ValueError, match='outcome differs'):
+        check_trace_document(
+            changed,
+            expected_counts=TrajectoryCounts(tool_calls=1, tool_results=1, reasoning_steps=1),
+            expected_outcome=_RESOLVED,
+        )

@@ -408,7 +408,7 @@ def _find_cluster(run: InsightsRun, cluster_id: str) -> tuple[str, Cluster] | No
 
 
 def _trace_href(run: InsightsRun, trace: TraceInsight) -> str:
-    locator = urlencode({'trace_id': trace.trace_id, 'span_id': trace.span_id})
+    locator = urlencode({'trace_id': trace.trace_id, 'span_id': trace.span_id or ''})
     return f'/insights/{quote(run.run_id, safe="")}/trace?{locator}'
 
 
@@ -531,7 +531,7 @@ def _label_value_name(run: InsightsRun, label_name: str, value: str) -> str:
 def _trace_row(run: InsightsRun, trace: TraceInsight) -> str:
     cells = [
         f'<td class="id">{_trace_id_link(run, trace)}</td>',
-        f'<td>{esc(trace.timestamp.strftime("%Y-%m-%d %H:%M"))}</td>',
+        f'<td>{esc(trace.timestamp.strftime("%Y-%m-%d %H:%M") if trace.timestamp else "Time unavailable")}</td>',
     ]
     for name in run.config.dimensions:
         assignment = trace.assignments.get(name)
@@ -613,8 +613,8 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
         '<div class="insights-layout"><div class="insights-main insights-trace-detail">'
         '<div class="insights-detail-kicker">Trace analysis</div>'
         f'<h2><code>{esc(trace.trace_id)}</code></h2>'
-        f'<p class="insights-muted">{esc(trace.timestamp.isoformat(timespec="minutes"))}'
-        f' · span {esc(trace.span_id)}'
+        f'<p class="insights-muted">{esc(trace.timestamp.isoformat(timespec="minutes") if trace.timestamp else "Time unavailable")}'
+        f'{" · span " + esc(trace.span_id) if trace.span_id else ""}'
         f'{" · " + esc(trace.agent_name) if trace.agent_name else ""}'
         f'{" · " + esc(trace.project) if trace.project else ""}</p>{orq_link}'
         '<section><h3>Summary</h3>'

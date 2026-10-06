@@ -24,7 +24,6 @@ context.stats = () => ({n: 1, errShare: null, errN: 0, summN: 1, doneShare: 1, r
 context.MIN_N = 5; context.PD = null; context.OUTL = context.LBY.outcome; context.FRUSL = null; context.TASKL = null;
 context.isOn = () => false;
 context.clusterOf = () => { throw new Error('dimensionless traces must not be grouped'); };
-context.fmtDate = () => '30 Sep';
 context.esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[char]));
 context.chip = () => 'Done'; context.outcomeHtml = () => 'Done'; context.frusHtml = () => '—'; context.FLAG_DEFS = [];
 context.frus = () => null; context.flagCell = () => '—';
@@ -35,6 +34,25 @@ context.categoryColumns = values => values; context.withOther = values => values
 context.visible = () => context.T; context.compareEligible = () => true; context.pct = (a, b) => b ? Math.round(a / b * 100) : 0;
 context.esc = context.esc; context.human = value => value; context.commit = () => {};
 vm.createContext(context);
+const datesStart = source.indexOf('const reviewDate = value => {');
+const datesEnd = source.indexOf('const costLabel =', datesStart);
+assert.ok(datesStart >= 0 && datesEnd > datesStart, 'review date formatting helpers are present');
+vm.runInContext(source.slice(datesStart, datesEnd), context);
+const validDate = '2026-09-30T10:00:00Z';
+assert.equal(vm.runInContext('fmtDate(null)', context), 'Time unavailable');
+assert.equal(vm.runInContext("fmtDate('')", context), 'Time unavailable');
+assert.equal(vm.runInContext("fmtDate('not a timestamp')", context), 'Time unavailable');
+assert.equal(vm.runInContext('fmtTime(null)', context), 'Time unavailable');
+assert.equal(vm.runInContext("fmtTime('')", context), 'Time unavailable');
+assert.equal(vm.runInContext("fmtTime('not a timestamp')", context), 'Time unavailable');
+assert.equal(
+  vm.runInContext(`fmtDate('${validDate}')`, context),
+  new Date(validDate).toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}),
+);
+assert.equal(
+  vm.runInContext(`fmtTime('${validDate}')`, context),
+  new Date(validDate).toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}),
+);
 
 function extract(startMarker, endMarker) {
   const start = source.indexOf(startMarker), end = source.indexOf(endMarker, start);
@@ -58,6 +76,10 @@ context.renderTraces();
 assert.match(tlist.innerHTML, /Not grouped/);
 assert.match(tlist.innerHTML, /Fix the build/);
 assert.doesNotMatch(tlist.innerHTML, /undefined theme/);
+context.T[0].ts = null;
+context.renderTraces();
+assert.match(tlist.innerHTML, /Time unavailable/);
+assert.doesNotMatch(tlist.innerHTML, /1 Jan/);
 context.renderCompare();
 assert.match(canvas.innerHTML, /How all traces break down/);
 assert.match(canvas.innerHTML, /All traces/);

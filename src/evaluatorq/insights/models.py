@@ -11,6 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.trace_document import (  # noqa: TC001 — Pydantic needs the runtime model types.
+    DatasetRef,
+    Outcome,
+)
 from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.signals.config import SignalsConfig  # noqa: TC001 — Pydantic field type.
@@ -188,8 +192,10 @@ class TraceInsight(BaseModel):
     """One trace's full result: labels, summary, cluster assignments and 3D coordinates per dimension, and any per-stage errors."""
 
     trace_id: str
-    span_id: str
-    timestamp: datetime
+    span_id: str | None = None
+    timestamp: datetime | None = None
+    dataset: DatasetRef | None = None
+    outcome: Outcome | None = None
     agent_name: str = ''
     project: str = ''
     labels: dict[str, LabelAnswer] = {}

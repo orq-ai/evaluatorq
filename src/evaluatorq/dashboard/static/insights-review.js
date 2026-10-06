@@ -52,8 +52,21 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const NA = '<span class="na" title="Not measured for these traces">—</span>';
 const fmtShare = v => v == null ? NA : Math.round(v * 100) + '%';
 const hasErr = t => (t.errors || []).length > 0;
-const fmtDate = s => new Date(s).toLocaleDateString('en-GB', {day: 'numeric', month: 'short'});
-const fmtTime = s => new Date(s).toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+const reviewDate = value => {
+  if (value == null || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+const fmtDate = value => {
+  const date = reviewDate(value);
+  return date ? date.toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}) : 'Time unavailable';
+};
+const fmtTime = value => {
+  const date = reviewDate(value);
+  return date
+    ? date.toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'})
+    : 'Time unavailable';
+};
 const costLabel = run => run.cost == null ? 'Cost unavailable' : run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(3)}` : `$${run.cost.toFixed(3)}`;
 const $ = id => document.getElementById(id);
 const FRAMP = ['#1f8f82', '#6aae9f', '#c9a13f', '#e0682f', '#c23a1c'];   // teal (calm) to red (angry)

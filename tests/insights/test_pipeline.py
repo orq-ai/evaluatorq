@@ -9,8 +9,9 @@ from typing import Any, cast
 
 import pytest
 
-from evaluatorq.common.trace_document import ensure_trace_document
+from evaluatorq.common.trace_document import DatasetRef, Outcome, TraceDocument, TraceMetadata, ensure_trace_document
 from evaluatorq.contracts import Usage
+from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifTrajectory
 from evaluatorq.insights import pipeline
 from evaluatorq.insights.models import (
     Cluster,
@@ -216,6 +217,39 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
     assert manifest.stage_labels['dimension:intent'] == 'Cluster and map intent'
     assert manifest.parallelism == 100
     assert run.cost_by_stage == {}
+
+
+@pytest.mark.asyncio
+async def test_pipeline_preserves_dataset_identity_and_outcome_for_trace_without_orq_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_clients(monkeypatch)
+    dataset = DatasetRef(name='org/bench', revision='abc123', split='test', row_id='row-7')
+    outcome = Outcome(passed=True, score=1.0, source='programmatic', definition='The task completed successfully.')
+    trace = TraceDocument(
+        metadata=TraceMetadata(trace_id='row-7', dataset=dataset, outcome=outcome),
+        trajectory=AtifTrajectory(
+            trajectory_id='row-7',
+            agent=AtifAgent(name='benchmark-agent', version='unknown'),
+            steps=[AtifStep(step_id=1, source='user', message='do the task')],
+        ),
+    )
+
+    async def resolve(*args, **kwargs):
+        return _resolved([trace])
+
+    monkeypatch.setattr(pipeline, 'resolve_population', resolve)
+    monkeypatch.setattr(pipeline, 'label_traces', _label([trace]))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize([trace]))
+
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    saved = load_run(next(tmp_path.glob('insights_*.json')))
+    assert saved.traces[0].span_id is None
+    assert saved.traces[0].timestamp is None
+    assert saved.traces[0].dataset == dataset
+    assert saved.traces[0].outcome == outcome
 
 
 @pytest.mark.asyncio

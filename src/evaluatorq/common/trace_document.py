@@ -32,6 +32,7 @@ from evaluatorq.signals.models import (
     SignalReport,  # noqa: TC001 -- Pydantic resolves this annotated model field at runtime.
 )
 from evaluatorq.signals.preconditions import TRUNCATED_EXTRA_KEY
+from evaluatorq.types import DataPoint
 
 if TYPE_CHECKING:
     from evaluatorq.trace_finder.models import TraceRecord
@@ -40,16 +41,53 @@ _EXTRA_PREFIX = 'evaluatorq.insights.'
 _ROLE_SOURCE = {'system': 'system', 'developer': 'system', 'user': 'user'}
 _TRAJECTORY_ID_NAMESPACE = 'https://evaluatorq.orq.ai/trace-document/v1/'
 
+LabelSource = Literal['programmatic', 'human', 'judge', 'none']
+
+
+class DatasetRef(BaseModel):
+    """The frozen dataset row a trace document was loaded from."""
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    name: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    split: str | None = None
+    row_id: str = Field(min_length=1)
+
+
+class Outcome(BaseModel):
+    """Ground truth for one trajectory: the result, what it means in its dataset, and where it came from.
+
+    `passed` is `None` exactly when `source` is `'none'`, so an unlabelled row has to say so.
+    """
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    passed: bool | None
+    score: float | None = None
+    source: LabelSource
+    definition: str = Field(min_length=1)
+
+    @model_validator(mode='after')
+    def _unlabelled_is_explicit(self) -> Outcome:
+        if (self.passed is None) != (self.source == 'none'):
+            raise ValueError("passed must be None exactly when source is 'none'")
+        return self
+
 
 class TraceMetadata(BaseModel):
-    """Trace identity and source metadata, kept outside the ATIF conversation."""
+    """Trace identity and source metadata, kept outside the ATIF conversation.
+
+    An Orq trace needs `span_id` and `timestamp`. A dataset row sets `dataset` and `outcome` instead and may
+    leave both unset, because benchmark rows rarely record them.
+    """
 
     model_config = ConfigDict(frozen=True, extra='allow')
 
     schema_version: Literal[1] = 1
     trace_id: str = Field(min_length=1)
-    span_id: str = Field(min_length=1)
-    timestamp: datetime
+    span_id: str | None = Field(default=None, min_length=1)
+    timestamp: datetime | None = None
     project: str = ''
     model: str = ''
     provider: str = ''
@@ -64,18 +102,22 @@ class TraceMetadata(BaseModel):
     duration_ms: int | None = Field(default=None, ge=0)
     capture_metadata: dict[str, Any] = Field(default_factory=dict)
     signals: SignalReport | None = None
+    dataset: DatasetRef | None = None
+    outcome: Outcome | None = None
 
     @field_validator('timestamp')
     @classmethod
-    def _timezone_aware(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
+    def _timezone_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
             raise ValueError('timestamp must include a timezone offset')
         return value
 
     @model_validator(mode='after')
     def _identifiers_present(self) -> TraceMetadata:
-        if not self.trace_id or not self.span_id:
-            raise ValueError('trace_id and span_id must be non-empty')
+        if self.dataset is None and (not self.span_id or self.timestamp is None):
+            raise ValueError('a trace without a dataset needs span_id and timestamp')
+        if self.dataset is not None and self.outcome is None:
+            raise ValueError("a dataset row needs an outcome; use source='none' when it is unlabelled")
         return self
 
 
@@ -97,12 +139,72 @@ class TraceDocument(BaseModel):
         """Safe provenance and span-coverage summary for persisted review data."""
         return _source_coverage_projection(self.metadata.capture_metadata)
 
+    def to_datapoint(self) -> DataPoint:
+        """Return an evaluatorq `DataPoint` with the trajectory as input and the outcome as expected output."""
+        outcome = self.metadata.outcome
+        inputs = {'trajectory': self.trajectory.model_dump(mode='json', exclude_none=True)}
+        if self.metadata.dataset is not None:
+            inputs['dataset'] = self.metadata.dataset.model_dump(mode='json')
+        return DataPoint(
+            inputs=inputs,
+            expected_output=outcome.model_dump(mode='json') if outcome else None,
+        )
+
     def __getattr__(self, name: str) -> Any:
         """Forward legacy metadata field reads while keeping their storage nested."""
         metadata = self.__dict__.get('metadata')
         if metadata is not None and name in type(metadata).model_fields:
             return getattr(metadata, name)
         raise AttributeError(name)
+
+
+class TrajectoryCounts(BaseModel):
+    """What a dataset parser measured on its source row, compared against the converted trajectory."""
+
+    model_config = ConfigDict(frozen=True, extra='forbid')
+
+    tool_calls: int = Field(ge=0)
+    tool_results: int = Field(ge=0)
+    reasoning_steps: int = Field(ge=0)
+
+
+def trajectory_counts(trajectory: AtifTrajectory) -> TrajectoryCounts:
+    """Count tool calls, tool results and steps with reasoning, embedded subagents included.
+
+    A dataset parser's test asserts this equals the counts it measured on the raw row, so a call, result or
+    reasoning block dropped during conversion fails the test.
+    """
+    calls = results = reasoning = 0
+    for step in trajectory.steps:
+        calls += len(step.tool_calls or ())
+        results += len(step.observation.results) if step.observation else 0
+        reasoning += bool(step.reasoning_content)
+    for sub in trajectory.subagent_trajectories or ():
+        nested = trajectory_counts(trajectory=sub)
+        calls += nested.tool_calls
+        results += nested.tool_results
+        reasoning += nested.reasoning_steps
+    return TrajectoryCounts(tool_calls=calls, tool_results=results, reasoning_steps=reasoning)
+
+
+def check_trace_document(
+    document: TraceDocument,
+    *,
+    expected_counts: TrajectoryCounts,
+    expected_outcome: Outcome,
+) -> None:
+    """Check source-measured trajectory counts, outcome, and lossless wrapper JSON round-trip."""
+    actual_counts = trajectory_counts(trajectory=document.trajectory)
+    if actual_counts != expected_counts:
+        raise ValueError(f'trajectory counts differ: expected {expected_counts}, got {actual_counts}')
+    if document.metadata.outcome != expected_outcome:
+        raise ValueError(
+            f'trace document outcome differs: expected {expected_outcome}, got {document.metadata.outcome}'
+        )
+
+    restored = TraceDocument.model_validate_json(document.model_dump_json())
+    if restored != document:
+        raise ValueError('trace document changed during JSON round-trip')
 
 
 def ensure_trace_document(value: TraceDocument | TraceRecord) -> TraceDocument:

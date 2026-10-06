@@ -599,11 +599,12 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             status_code = 422
         else:
             trace_id = req.query_params.get('trace_id')
-            span_id = req.query_params.get('span_id')
-            if not trace_id or not span_id:
+            span_id = req.query_params.get('span_id') if 'span_id' in req.query_params else None
+            if not trace_id or span_id is None:
                 payload = {'error': 'trace_id and span_id are required'}
                 status_code = 400
             else:
+                span_id = span_id or None
                 detail = build_signal_detail_payload(resolved[1], trace_id, span_id)
                 if detail is None:
                     payload = {'error': 'Trace not found in this Insights run'}
@@ -662,7 +663,9 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if resolved is None or not isinstance(resolved[1], InsightsRun):
             return _html('<p class="insights-empty">Insights run not found.</p>', 404)
         trace_id = req.query_params.get('trace_id')
-        span_id = req.query_params.get('span_id')
+        span_id = req.query_params.get('span_id') if 'span_id' in req.query_params else None
+        if span_id == '':
+            span_id = None
         trace = next(
             (item for item in resolved[1].traces if item.trace_id == trace_id and item.span_id == span_id),
             None,

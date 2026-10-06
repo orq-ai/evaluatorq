@@ -584,6 +584,8 @@ async def insights(  # noqa: C901
                     trace_id=trace.trace_id,
                     span_id=trace.span_id,
                     timestamp=trace.timestamp,
+                    dataset=trace.metadata.dataset,
+                    outcome=trace.metadata.outcome,
                     agent_name=trace.agent_name or '',
                     project=trace.project or '',
                     tool_stats=tool_stats(trace),

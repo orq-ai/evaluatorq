@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
 from evaluatorq.common.structured_output import sum_structured_usage
-from evaluatorq.dashboard.insights_review_projection import review_xy, review_xy_state
+from evaluatorq.dashboard.insights_review_projection import review_trace_key, review_xy, review_xy_state
 from evaluatorq.dashboard.insights_views import _trace_href
 from evaluatorq.dashboard.trace_links import trace_span_url
 from evaluatorq.insights.models import label_key, real_assistant_errors
@@ -16,11 +16,6 @@ from evaluatorq.insights.transcript import SHELL_TOOLS
 
 if TYPE_CHECKING:
     from evaluatorq.insights.models import InsightsRun, TraceInsight
-
-
-def review_trace_key(trace: TraceInsight) -> str:
-    """Return a stable per-span key; trace IDs alone can repeat across spans."""
-    return f'{trace.trace_id}:{trace.span_id}'
 
 
 def _signal_summary(trace: TraceInsight) -> dict[str, object] | None:
@@ -44,7 +39,7 @@ def _signal_summary(trace: TraceInsight) -> dict[str, object] | None:
     }
 
 
-def build_signal_detail_payload(run: InsightsRun, trace_id: str, span_id: str) -> dict[str, object] | None:
+def build_signal_detail_payload(run: InsightsRun, trace_id: str, span_id: str | None) -> dict[str, object] | None:
     """Return one saved trace's full signal report and coverage, or None when the key is not in this run."""
     trace = next((item for item in run.traces if item.trace_id == trace_id and item.span_id == span_id), None)
     if trace is None:
@@ -144,7 +139,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'signals': signal_summary,
             'signal_detail_url': (
                 f'/insights/{quote(run.run_id, safe="")}/trace-signals.json?'
-                f'{urlencode({"trace_id": trace.trace_id, "span_id": trace.span_id})}'
+                f'{urlencode({"trace_id": trace.trace_id, "span_id": trace.span_id or ""})}'
                 if signal_summary is not None
                 else None
             ),

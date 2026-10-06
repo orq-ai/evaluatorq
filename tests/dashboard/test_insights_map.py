@@ -8,11 +8,12 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from html import unescape
+import sys
 from datetime import datetime, timezone
+from html import unescape
 from pathlib import Path
-from types import SimpleNamespace
-from typing import cast
+from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from starlette.testclient import TestClient
@@ -194,6 +195,61 @@ def test_review_projection_payload_uses_full_trace_keys_and_keeps_3d_endpoint(tm
     _write_run(tmp_path, run)
     legacy = TestClient(build_app()).get('/insights/map-run/map.json?dimension=intent').json()
     assert {'x', 'y', 'z'} <= set(legacy['points'][0])
+
+
+def test_review_projection_payload_matches_keys_for_dataset_rows(monkeypatch):
+    from evaluatorq.dashboard import insights_review_data
+
+    class _Array:
+        def __init__(self, values: Any) -> None:
+            self.values = values
+
+        @property
+        def shape(self) -> tuple[int, int]:
+            return (len(self.values), len(self.values[0]) if self.values else 0)
+
+        def __iter__(self):
+            return iter(self.values)
+
+        def __len__(self) -> int:
+            return len(self.values)
+
+    numpy = ModuleType('numpy')
+
+    def _asarray(values: Any, **_kwargs: Any) -> _Array:
+        return _Array(values)
+
+    def _isfinite(_values: _Array) -> SimpleNamespace:
+        return SimpleNamespace(all=lambda: True)
+
+    numpy.asarray = _asarray  # type: ignore[attr-defined]
+    numpy.isfinite = _isfinite  # type: ignore[attr-defined]
+
+    class _Umap:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def fit_transform(self, rows: _Array) -> list[tuple[float, float]]:
+            return [(float(index), float(index + 1)) for index in range(len(rows))]
+
+    umap = ModuleType('umap')
+    umap.UMAP = _Umap  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, 'numpy', numpy)
+    monkeypatch.setitem(sys.modules, 'umap', umap)
+
+    run = _map_run()
+    run.run_id = 'dataset-map-run'
+    for trace in run.traces:
+        trace.span_id = None
+
+    payload = insights_review_data.build_review_payload(run)
+    traces = cast('list[dict[str, object]]', payload['traces'])
+
+    assert len(traces) == 10
+    assert all(cast('dict[str, object]', trace['xy'])['intent'] for trace in traces)
+    assert [cast('dict[str, list[float]]', trace['xy'])['intent'] for trace in traces] == [
+        [float(index), float(index + 1)] for index in range(10)
+    ]
 
 
 def test_review_url_back_navigation_resets_omitted_map_and_compare_options():

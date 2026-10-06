@@ -132,7 +132,7 @@ Every trace also records how often it called each tool, shell program, and skill
 
 A **trace signal** is a deterministic measurement of recorded structure, tool use, or autonomy, with evidence and checks for missing data. Insights computes the complete signal report for every selected trace before labeling and summarizing it. A failed labeling or summary request does not discard that report. Signals are not added to the classifier or summary prompts.
 
-Inside the pipeline, a `TraceDocument` holds `metadata: TraceMetadata` and `trajectory: AtifTrajectory`. The conversation lives in the ATIF trajectory; the complete typed signal report lives in `metadata.signals`. Existing message snapshots are converted at the source boundary. Conversion cannot recover information that the source never recorded.
+Inside the pipeline, a `TraceDocument` holds `metadata: TraceMetadata` and `trajectory: AtifTrajectory`. The conversation lives in the ATIF trajectory; the complete typed signal report lives in `metadata.signals`. Existing message snapshots are converted at the source boundary. Conversion cannot recover information that the source never recorded. For benchmark datasets, the same wrapper carries typed dataset provenance and ground truth outside the trajectory; see [Wrap a dataset trajectory](formats.md#wrap-a-dataset-trajectory) for a runnable example and parser checks.
 
 Message-only snapshots support message and tool-call counts, argument repetition, and result sizes. The measurements below need additional recorded fields; absent fields produce **No basis** under the default signal settings.
 
