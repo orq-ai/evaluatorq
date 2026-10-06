@@ -31,7 +31,6 @@ def test_drawer_closing_class_has_exit_animation() -> None:
 
 def test_insights_run_form_controller() -> None:
     import json
-    import os
     from dataclasses import replace
 
     from evaluatorq.dashboard.insights_run_form import RunFormValues, render_run_form, render_run_page
@@ -50,6 +49,6 @@ def test_insights_run_form_controller() -> None:
         text=True,
         check=False,
         timeout=30,
-        env={**os.environ, 'INSIGHTS_RUN_FORM_FIXTURES': json.dumps(fixtures)},
+        input=json.dumps(fixtures),
     )
     assert result.returncode == 0, result.stdout + result.stderr
