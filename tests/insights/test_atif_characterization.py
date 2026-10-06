@@ -82,7 +82,7 @@ def _fixtures() -> tuple[TraceRecord, TraceRecord]:
 
 @pytest.mark.parametrize('use_atif', [False, True], ids=['legacy-source', 'canonical-document'])
 def test_current_classifier_payloads_match_pre_migration_snapshots(use_atif: bool) -> None:
-    expected = json.loads(FIXTURE.read_text())
+    expected = json.loads(FIXTURE.read_text(encoding='utf-8'))
     trace, long_trace = (ensure_trace_document(trace) if use_atif else trace for trace in _fixtures())
     full_long = tool_activity_chunks(long_trace, budget=10**6)[0]
 
