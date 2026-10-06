@@ -89,6 +89,12 @@ Bootstrap context and its usage are recorded separately, do not consume `max_tur
     credentials or an agent that can send messages, move money, modify data, or
     run commands unless those side effects are isolated and intentional.
 
+### See a run first
+
+The [deliberately vulnerable support agent](https://github.com/orq-ai/evaluatorq/tree/main/examples/redteam/vulnerable_support_agent) is a sandbox target built to fail. In the recording below, `openai/gpt-4o-mini` is attacked and judged by `openai/gpt-5.4-mini`; the run flags 2 of 3 goal-hijacking attacks as vulnerable and 0 of 3 prompt-injection attacks.
+
+![A red team run against a deliberately vulnerable support agent: stage progress through goal hijacking and prompt injection, ending on a summary that flags 2 of 3 goal-hijacking attacks as vulnerable (67% attack success) and 0 of 3 prompt-injection attacks as vulnerable.](../assets/redteam-demo.gif)
+
 ### Fastest first run
 
 If you prefer the CLI, start with a small static run against a test agent. Static mode uses the built-in attack dataset, so it is a predictable way to verify your setup before exploring dynamic or hybrid runs.
