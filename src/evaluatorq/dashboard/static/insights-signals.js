@@ -89,7 +89,7 @@
     });
     const browser = ui.foldout({
       key: 'browser', className: 'signal-browser', data: {'signal-key': 'browser'},
-      summaryHtml: `<span><b>Signals</b><small>Explore all four levels</small></span><span class="signal-total">${names.length} recorded</span>`,
+      summaryHtml: `<span>All signals</span><span class="signal-total">${names.length} recorded</span>`,
       bodyHtml: `<div class="signal-browser-body">${error}${!names.length ? '<p class="signal-empty">No signals were recorded for this trace.</p>' : ''}${groups}${metadata}</div>`,
     });
     return `<section class="signal-panel eq-components">${highlights}${browser}</section>`;
