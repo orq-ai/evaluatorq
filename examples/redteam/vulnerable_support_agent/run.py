@@ -39,7 +39,14 @@ try:
 except OSError:
     os.environ.setdefault("COLUMNS", "220")
 
-from evaluatorq.redteam import LLMCallConfig, LLMConfig, RedTeamReport, RichHooks, red_team  # noqa: E402
+from evaluatorq.redteam import (  # noqa: E402
+    EvaluatorConfig,
+    LLMCallConfig,
+    LLMConfig,
+    RedTeamReport,
+    RichHooks,
+    red_team,
+)
 
 from agents.secure import Rex  # noqa: E402
 from agents.vulnerable import Ava  # noqa: E402
@@ -95,8 +102,6 @@ async def main(target: str) -> None:
 
     attacker_instructions = (DEMO_DIR / "attacker_instructions.txt").read_text()
 
-    model = LLMCallConfig(model=MODEL)
-
     start = time.time()
     report = await red_team(
         target=TARGETS[target](),
@@ -107,7 +112,7 @@ async def main(target: str) -> None:
         max_static_datapoints=0,
         attacker_instructions=attacker_instructions,
         datapoint_parallelism=6,
-        llm_config=LLMConfig(attacker=model, evaluator=model),
+        llm_config=LLMConfig(attacker=LLMCallConfig(model=MODEL), evaluator=EvaluatorConfig(model=MODEL)),
         recommendations=True,
         hooks=RichHooks(skip_confirm=True),
         verbosity=0,
@@ -119,11 +124,11 @@ async def main(target: str) -> None:
     RESULTS_DIR.mkdir(exist_ok=True)
     out = _reserve_result_path(target)
     out.write_text(json.dumps(report.model_dump(), indent=2, default=str))
-    print(f"-> {out}")
+    print(f"-> {out.relative_to(DEMO_DIR)}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description="Red-team the deliberately vulnerable support agent demo.")
     parser.add_argument(
         "--target",
         choices=sorted(TARGETS),
