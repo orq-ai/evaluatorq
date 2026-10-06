@@ -1824,6 +1824,25 @@ class JuryHealth(BaseModel):
         default=0, ge=0, description='Samples where at least one judge cleanly abstained'
     )
 
+    def issue_summary(self) -> str:
+        """One-line issue clause for a report, or ``clean`` when nothing went wrong.
+
+        ``replacements_used`` counts replacement *judges*; the other five fields count *samples*.
+        They are listed as separate clauses so a judge count is never folded into an '(of N samples)'
+        total, which would misread it as a sample count (the bug the P1 review flagged).
+        """
+        issues = [
+            (self.samples_with_judge_failure, 'judge-fail'),
+            (self.ties, 'tie'),
+            (self.inconclusive, 'inconclusive'),
+            (self.samples_with_repetition_failure, 'rep-fail'),
+            (self.samples_with_abstention, 'abstained'),
+        ]
+        parts = [f'{count} {label}' for count, label in issues if count]
+        if self.replacements_used:
+            parts.append(f'{self.replacements_used} replacement judge(s)')
+        return ', '.join(parts) if parts else 'clean'
+
 
 class ReportSummary(BaseModel):
     """Aggregate summary statistics for a report."""

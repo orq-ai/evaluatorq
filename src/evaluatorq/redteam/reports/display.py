@@ -90,19 +90,10 @@ def _build_stats_table(report: RedTeamReport, summary: ReportSummary) -> Table:
     # Panel-of-judges health (RES-1649) — only present for multi-judge runs.
     health = summary.jury_health
     if health is not None:
-        issues = [
-            (health.samples_with_judge_failure, 'judge-fail'),
-            (health.replacements_used, 'replaced'),
-            (health.ties, 'tie'),
-            (health.inconclusive, 'inconclusive'),
-            (health.samples_with_repetition_failure, 'rep-fail'),
-            (health.samples_with_abstention, 'abstained'),
-        ]
-        parts = [f'{count} {label}' for count, label in issues if count]
-        if parts:
-            value = Text(f'{", ".join(parts)} (of {health.samples} samples)', style='yellow')
-        else:
-            value = Text(f'clean ({health.samples} samples)', style='green')
+        clause = health.issue_summary()
+        value = Text(
+            f'{clause}; {health.samples} multi-judge samples', style='green' if clause == 'clean' else 'yellow'
+        )
         stats.add_row('Jury Health', value)
 
     # Datapoint breakdown (hybrid runs)

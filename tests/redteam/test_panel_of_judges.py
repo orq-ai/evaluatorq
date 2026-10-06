@@ -888,6 +888,40 @@ class TestJuryHealthAggregator:
         assert health.samples_with_repetition_failure == 1
         assert health.samples_with_abstention == 1
 
+    def test_counts_inconclusive_samples(self):
+        # A dedicated inconclusive sample, so the inconclusive count is actually exercised:
+        # delete `inconclusive += 1` from _compute_jury_health and this fails.
+        from types import SimpleNamespace
+
+        from evaluatorq.redteam.contracts import JuryResult, JuryVote
+        from evaluatorq.redteam.reports.converters import _compute_jury_health
+
+        inconclusive = JuryResult(
+            judges_configured=2,
+            judges_succeeded=0,
+            judges_failed=0,
+            inconclusive=True,
+            votes=[
+                JuryVote(model='m0', success=True, abstained=True, value=None),
+                JuryVote(model='m1', success=True, abstained=True, value=None),
+            ],
+        )
+        results: list[Any] = [SimpleNamespace(evaluation=SimpleNamespace(jury=inconclusive))]
+        health = _compute_jury_health(results)
+        assert health is not None
+        assert health.inconclusive == 1
+
+    def test_issue_summary_separates_replacements_from_sample_counts(self):
+        # replacements_used counts judges; the rest count samples. They must not be folded together.
+        from evaluatorq.redteam.contracts import JuryHealth
+
+        h = JuryHealth(samples=5, samples_with_judge_failure=2, ties=1, replacements_used=3)
+        clause = h.issue_summary()
+        assert '2 judge-fail' in clause
+        assert '1 tie' in clause
+        assert '3 replacement judge(s)' in clause
+        assert JuryHealth(samples=3).issue_summary() == 'clean'
+
 
 class TestConfigLevelMinSuccessfulValidation:
     """F1: LLMConfig validates min_successful_judges against the DE-DUPED panel,
