@@ -175,11 +175,11 @@ def test_conversation_view_per_call_lists_each_call_with_truncated_output() -> N
     view = conversation_view(trace, tools='per_call', tool_output_chars=40)
     lines = view.splitlines()
 
-    assert lines[2] == '  [tool] Bash [completed]: uv run pytest -q ⏎ echo done'
+    assert lines[2] == '  [tool] Bash: uv run pytest -q ⏎ echo done'
     assert lines[3].startswith('    → HEAD')
     assert lines[3].endswith('TAIL')
     assert '[... 468 chars ...]' in lines[3]
-    assert lines[4] == '  [tool] Read [completed]: {"file_path": "src/a.py"}'
+    assert lines[4] == '  [tool] Read: {"file_path": "src/a.py"}'
     assert lines[5] == '    → line one ⏎ line two'
     assert lines[6] == '  [tool] Read [pending]: {"file_path": "src/b.py"}'
     assert lines[7] == 'ASSISTANT: Done.'
@@ -197,7 +197,7 @@ def test_conversation_view_per_call_marks_errors_and_keeps_risky_commands_whole(
         '  [tool] Bash [error]: cd repo && uv run pytest tests/test_parser.py -q\n    → Error: 1 failed, 3 passed'
         in view
     )
-    assert '  [tool] Bash [completed]: git push --force origin main\n    → forced update' in view
+    assert '  [tool] Bash: git push --force origin main\n    → forced update' in view
     assert 'injected context' not in view
 
 

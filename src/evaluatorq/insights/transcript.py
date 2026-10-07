@@ -214,7 +214,7 @@ def conversation_view(
 
     `tools='collapsed'` turns a run of tool calls into one `[tools]` line with
     repeats counted, and drops tool outputs. `tools='per_call'` gives each call
-    its own `[tool] name [status]: input` line, input cut like
+    its own `[tool] name: input` line (status shown only when not completed), input cut like
     `tool_activity_chunks`. Tool result bodies can hold credentials or user data,
     so they are left out unless `tool_output_chars` is above 0, in which case
     each result is shown under its call with its start and end kept within
@@ -340,7 +340,9 @@ def _per_call_line(call: dict[str, Any], results: dict[Any, dict[str, Any]], out
     call_id = call.get('id')
     result = results.get(call_id)
     paired = (result,) if result else ()
-    line = f'  [tool] {_call_name(call)} [{_tool_call_status(call_id, paired)}]: {_call_input(call)}'
+    status = _tool_call_status(call_id, paired)
+    flag = '' if status == 'completed' else f' [{status}]'  # completed is the common case; only flag the rest
+    line = f'  [tool] {_call_name(call)}{flag}: {_call_input(call)}'
     output = tool_result_to_text(result.get('content')).strip() if result and output_chars > 0 else ''
     if output:
         half = max(output_chars // 2, 1)
