@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -124,6 +125,20 @@ async def test_one_failed_batch_does_not_lose_the_others() -> None:
 
     assert await redact_texts([first, second], orq=orq.client) == [first, None]
 
+
+@pytest.mark.asyncio
+async def test_a_reply_without_redacted_text_withholds_only_its_batch(caplog: pytest.LogCaptureFixture) -> None:
+    first = 'a' * 30_000
+    second = 'b' * 30_000
+
+    class _Pii:
+        async def redact_async(self, *, text: str, **_: Any) -> object:
+            return object() if text == second else SimpleNamespace(redacted_text=text, mappings={})
+
+    orq = SimpleNamespace(pii=_Pii())
+
+    assert await redact_texts([first, second], orq=orq) == [first, None]  # ty: ignore[invalid-argument-type]
+    assert 'instead of redacted text' in caplog.text
 
 @pytest.mark.asyncio
 async def test_cut_redacts_before_cutting_so_a_secret_across_the_cut_leaves_no_fragment() -> None:

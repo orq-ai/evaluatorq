@@ -194,7 +194,7 @@ async def _redact_batch(orq: Orq | None, batch: list[str], semaphore: asyncio.Se
         # The exception text is left out: an API error body can quote the request it rejected.
         status = getattr(exc, 'status_code', None)
         return _withheld(batch, f'{type(exc).__name__}{f" (HTTP {status})" if status else ""}')
-    text = response.redacted_text
+    text = getattr(response, 'redacted_text', None)
     if not isinstance(text, str):
         return _withheld(batch, f'the reply carried {type(text).__name__} instead of redacted text')
     parts = text.split(SEPARATOR) if len(batch) > 1 else [text]
