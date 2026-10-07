@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
@@ -207,23 +208,34 @@ def cleanup_uploaded_source(runs_dir: Path, path: Path) -> None:
         return
 
 
-async def receive_upload(upload: UploadFile, kind: UploadKind) -> bytes:
-    """Read an UploadFile in bounded chunks, rejecting content above the cap."""
+def detect_upload_kind(contents: bytes) -> UploadKind:
+    """Classify an upload by its top-level JSON keys, never by a client-supplied label."""
+    try:
+        document = json.loads(contents)
+    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueError
+        raise ValueError('This file is not valid JSON.') from exc
+    if isinstance(document, dict):
+        if 'matched_trace_ids' in document:
+            return 'finder'
+        if 'traces' in document:
+            return 'snapshot'
+    raise ValueError('This file is neither a Finder export nor a trace snapshot.')
+
+
+async def receive_upload(upload: UploadFile) -> tuple[UploadKind, bytes]:
+    """Read an UploadFile in bounded chunks, detect its kind from content, and validate it."""
     read = upload.read
     chunks = bytearray()
-    limit = MAX_FINDER_EXPORT_BYTES if kind == 'finder' else MAX_INSIGHTS_UPLOAD_BYTES
     while True:
-        chunk = await read(min(1024 * 1024, limit + 1 - len(chunks)))
+        chunk = await read(min(1024 * 1024, MAX_INSIGHTS_UPLOAD_BYTES + 1 - len(chunks)))
         if not chunk:
             break
         chunks.extend(chunk)
-        if len(chunks) > limit:
-            message = (
-                'Finder export exceeds the 10 MiB size limit.'
-                if kind == 'finder'
-                else 'Upload exceeds the 100 MB size limit.'
-            )
-            raise OverflowError(message)
+        if len(chunks) > MAX_INSIGHTS_UPLOAD_BYTES:
+            raise OverflowError('Upload exceeds the 100 MB size limit.')
     contents = bytes(chunks)
+    kind = detect_upload_kind(contents)
+    if kind == 'finder' and len(contents) > MAX_FINDER_EXPORT_BYTES:
+        raise OverflowError(f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.')
     validate_upload(contents, kind)
-    return contents
+    return kind, contents

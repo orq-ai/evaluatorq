@@ -199,18 +199,16 @@ Open **Insights → New run**, or click **+ New run** or **Re-run** on a run pag
 
 The step bar shows `1 · Traces`, `2 · Analysis` and `3 · Review`. **Continue** validates the current step, and **Start run** appears on the last. The same bar carries a one-line estimate of traces, cost and time that updates as you change the form.
 
-**1 · Traces.** Choose a source:
+**1 · Traces.** Choose where the traces come from:
 
-| Source | Population | Window, limit and filters |
+| Tab | Population | Window, limit and filters |
 |---|---|---|
-| Recent | Recent traces from Orq | Apply |
-| Question | Traces from the window that the classifier says match your question | Apply |
-| Finder export | The traces in a Trace Finder JSON export | Do not apply; the file defines the population |
-| Local file | A trace snapshot with embedded messages | Do not apply; the file defines the population |
+| Orq traces | Traces from Orq. Leave **Question** blank for every trace in the window, or fill it in and the classifier keeps only the traces that match | Apply: last N days, up to N traces (default 200) and filters |
+| Trace file | The traces in an uploaded file: a Trace Finder JSON export or a local trace snapshot | Do not apply; the file defines the population |
 
-For the two file sources, click **Browse…** and choose a file. There is no path field: the dashboard stores the upload under a random name and keeps the original file name for the run. The dashboard accepts Finder exports up to 10 MiB and snapshots up to 100 MiB. A larger file does not upload; run it from the terminal with `eq insights --from-finder PATH` or `eq insights --from-snapshot PATH`. For a snapshot, the form reports the measured truncation before you start.
+On **Trace file**, click **Browse…** and choose one file. There is no path field and no file-type choice: the dashboard stores the upload under a random name, keeps the original file name for the run, and reads the content to decide what it is. A file with `matched_trace_ids` is a Finder export (up to 10 MiB); a file with `traces` is a snapshot (up to 100 MiB). A larger file does not upload; run it from the terminal with `eq insights --from-finder PATH` or `eq insights --from-snapshot PATH`. A file with neither key is rejected. For a snapshot, the form reports the measured truncation before you start.
 
-For Recent and Question, **+ Filter** opens the same filter menu as Traces and Trace search, and each chosen value appears as a removable chip. Every value shows how many traces in the selected window carry it, and values are ordered from most to least frequent. Multiple values within one facet match any of them; different facets must all match, and the filters apply before the trace limit. The menu loads from Orq for the selected window. If Orq rejects the credential or cannot be reached, the form says so and keeps your chosen filters; fix the credential in **Settings → Authentication** and click **Retry**.
+On **Orq traces**, **+ Filter** opens the same filter menu as Traces and Trace search, and each chosen value appears as a removable chip. Every value shows how many traces in the selected window carry it, and values are ordered from most to least frequent. Multiple values within one facet match any of them; different facets must all match, and the filters apply before the trace limit. The menu loads from Orq for the selected window. If Orq rejects the credential or cannot be reached, the form says so and keeps your chosen filters; fix the credential in **Settings → Authentication** and click **Retry**.
 
 **2 · Analysis.** A **Preset** ticks a starting selection that you can then change. The presets are **Find failures** (group by failure and intent; ask about assistant mistakes and frustration), **Understand intents** (group by intent), and **Coding agent** (group by intent and failure; ask about frustration; ask the task type, outcome, unfixed error and risky action coding questions). The rest of the step is:
 
@@ -227,7 +225,7 @@ Without **Assistant mistakes**, the run estimates the error share from the summa
 | Summary model | The per-trace summary | The `summary_model` default of `InsightsConfig` |
 | Classifier model | Label questions; must serve `/classify` | The classifier model from Settings |
 | Embedding model | Embeddings of the summaries | The `embedding_model` default of `InsightsConfig` |
-| Question compiler | Compiling a Question source into a population filter; shown only for that source | The compiler model from Settings |
+| Question compiler | Compiling your question into a population filter; shown only when the **Question** field is filled | The compiler model from Settings |
 
 The run uses the models you pick and records them in its config, so **Re-run** prefills them. Starting a run is rejected when the Orq catalogue says the classifier cannot serve `/classify` or the embedding model is not an embedding model. When the catalogue is unavailable, the pickers become text boxes, a typed id is accepted, and a warning is logged. A blank field falls back to the default.
 
@@ -237,11 +235,11 @@ The run uses the models you pick and records them in its config, so **Re-run** p
 
 The estimate is a ceiling computed before any request is made. It states a basis beside every number, and it shows `unknown` with the reason instead of a number it cannot ground.
 
-- **Traces.** A Finder export or snapshot gives an exact count, read from the file. Recent and Question give `up to N`: the smallest of the trace limit and the Orq count for your filters. With no filters it uses the workspace's status counts. With several facets it takes the smallest of the per-facet sums, because a trace must match them all. If Orq truncated a facet's values, or you filter by a project id Orq cannot count, the bound falls back to the trace limit and says why. If the file's count cannot be read, the count is `unknown`.
+- **Traces.** A trace file gives an exact count, read from the file. Orq traces give `up to N`: the smallest of the trace limit and the Orq count for your filters. With no filters it uses the workspace's status counts. With several facets it takes the smallest of the per-facet sums, because a trace must match them all. If Orq truncated a facet's values, or you filter by a project id Orq cannot count, the bound falls back to the trace limit and says why. If the file's count cannot be read, the count is `unknown`.
 - **Cost.** Per stage, traces multiplied by tokens per trace multiplied by the stage model's price in the Orq catalogue. The token figures are caps, not measurements: the classifier and summary read at most the conversation view cap of 75,000 characters at three characters per token, a classify answer is four tokens, the summary writes up to its `max_tokens`, and an embedding is as long as the summary cap. A stage whose model has no price shows `unknown` and is left out of the total, which then reads `(priced stages only)`.
 - **Time.** Median per-trace seconds for each stage from your earlier Insights runs, scaled to the parallelism you chose when those runs recorded theirs. It reads `estimated after your first run` until a completed run exists, and `(timed stages only)` when some stages have no earlier timing. The figure is rough.
 
-A Question source labels every trace in range, but only the matching traces reach the summary and embedding stages. Those stages therefore show a range from zero to every trace, and the total shows `$low to $high`. The review step also lists the stages with their traces, cost, time and basis, names what is unknown, and states what the estimate leaves out: trace selection (question compiling and filter choice), and cluster naming and merging.
+An Orq traces run with a question labels every trace in range, but only the matching traces reach the summary and embedding stages. Those stages therefore show a range from zero to every trace, and the total shows `$low to $high`. The review step also lists the stages with their traces, cost, time and basis, names what is unknown, and states what the estimate leaves out: trace selection (question compiling and filter choice), and cluster naming and merging.
 
 Choosing coding questions adds one more classify call per trace, shown as its own row. It is an upper bound, because the call runs only for traces the gate identifies as coding agents, and it is timed at the whole label stage.
 
@@ -251,7 +249,7 @@ A raw array of session objects is not a snapshot; convert it to `Snapshot` JSON 
 
 ### Local trace file format
 
-A local trace file contains a `traces` array. Each trace needs an ID, a span ID, a timestamp with a timezone, a non-empty `messages` array, and the metadata fields shown below. Empty strings mean the source did not provide a value; do not fill unknown model or provider names by guessing. Save this example as `traces.json`, start `eq dashboard`, choose **Local file** in the new-run form, click **Browse…** and choose the file. The dashboard validates the file before starting the run.
+A local trace file contains a `traces` array. Each trace needs an ID, a span ID, a timestamp with a timezone, a non-empty `messages` array, and the metadata fields shown below. Empty strings mean the source did not provide a value; do not fill unknown model or provider names by guessing. Save this example as `traces.json`, start `eq dashboard`, choose the **Trace file** tab in the new-run form, click **Browse…** and choose the file. The dashboard validates the file before starting the run.
 
 ```json
 {
@@ -276,7 +274,7 @@ A local trace file contains a `traces` array. Each trace needs an ID, a span ID,
 }
 ```
 
-When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject an empty snapshot. A Finder export cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
+When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject an empty snapshot. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
 
 The summary model receives the compact conversation view, capped at 75,000 characters, plus the analysis prompt. The run form preview and saved population coverage describe a separate Finder projection capped at 50,000 UTF-8 bytes; those counts do not measure the summary prompt. For a local trace file, the run form reports projection truncation before you start the run. For live traces or a Finder export, the completed run reports it after loading. These counts show whole-message omissions and source and projected byte totals. Split long sessions into shorter traces when more of the conversation needs to influence the analysis.
 

@@ -874,7 +874,7 @@ class InsightsLaunchSpec(BaseModel):
     # Original name of an uploaded source file; the stored upload has a random name.
     source_name: str = Field(default='', max_length=255)
     window_days: int = Field(default=7, ge=1, le=90)
-    limit: int = Field(default=100, ge=1, le=5000)
+    limit: int = Field(default=200, ge=1, le=5000)
     facets: FacetSelection = FacetSelection()
     parallelism: int = Field(default=20, ge=1, le=200)
     labels: list[Preset] = Field(default_factory=list, max_length=len(LABEL_PRESETS))

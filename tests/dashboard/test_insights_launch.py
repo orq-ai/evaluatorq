@@ -658,7 +658,7 @@ def test_dashboard_starts_local_snapshot_run_without_trace_lookup(tmp_path: Path
     path.write_text(Snapshot(traces=(make_trace('local'),)).model_dump_json(), encoding='utf-8')
     client = TestClient(build_app())
     page = client.get('/insights/new')
-    assert 'Local trace file' in page.text
+    assert 'Trace file' in page.text
     token = re.search(r'name="csrf" value="([^"]+)"', page.text)
     assert token is not None
 

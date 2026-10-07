@@ -458,13 +458,6 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             rejected = request_rejected(req, form)
             if rejected:
                 return Response(json.dumps({'error': rejected}), status_code=403, media_type='application/json')
-            kind = str(form.get('kind', ''))
-            if kind not in ('finder', 'snapshot'):
-                return Response(
-                    json.dumps({'error': 'Choose a Finder export or trace snapshot.'}),
-                    status_code=422,
-                    media_type='application/json',
-                )
             upload = form.get('file')
             if upload is None or not hasattr(upload, 'read') or not getattr(upload, 'filename', ''):
                 return Response(
@@ -473,7 +466,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                     media_type='application/json',
                 )
             try:
-                contents = await receive_upload(upload, kind)
+                kind, contents = await receive_upload(upload)
                 path = await asyncio.to_thread(store_upload, get_insights_runs_dir(), contents, kind)
             except OverflowError as exc:
                 return Response(json.dumps({'error': str(exc)}), status_code=413, media_type='application/json')

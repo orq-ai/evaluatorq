@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, get_args
+from typing import TYPE_CHECKING, Literal, cast, get_args
 from urllib.parse import urlencode
 
 from pydantic import ValidationError
@@ -96,12 +96,37 @@ _DIMENSION_TEXT: MappingProxyType[DimensionName, tuple[str, str]] = MappingProxy
     'sentiment': ('Sentiment', 'how users felt'),
 })
 
-_SOURCES: tuple[tuple[Source, str, str], ...] = (
-    ('recent', 'Recent traces', 'Analyze a recent window.'),
-    ('query', 'Search by question', 'Include only traces that match a question.'),
-    ('finder', 'Finder export', 'Use a saved set of Finder matches.'),
-    ('snapshot', 'Local trace file', 'Analyze a saved trace snapshot.'),
+_ICON_OPEN = (
+    '<svg class="irf-tab-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
 )
+
+# The form offers two tabs; each maps onto the launch spec's four-valued `Source` in `RunFormValues.from_form`.
+_SOURCES: tuple[tuple[str, str, str, str], ...] = (
+    (
+        'orq',
+        'Orq traces',
+        'Analyze traces from your Orq workspace, optionally narrowed by a question.',
+        (
+            f'{_ICON_OPEN}<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/>'
+            '<path d="M3 12a9 3 0 0 0 18 0"/></svg>'
+        ),
+    ),
+    (
+        'file',
+        'Trace file',
+        'A Finder export or a local trace file (JSON).',
+        (
+            f'{_ICON_OPEN}<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>'
+            '<path d="M14 2v6h6"/></svg>'
+        ),
+    ),
+)
+
+
+def _form_tab(source: str) -> str:
+    """The tab a launch source belongs to: `orq` for the Orq-backed sources, `file` for the file-backed ones."""
+    return 'file' if source in ('finder', 'snapshot', 'file') else 'orq'
 
 
 def _check_registries() -> None:
@@ -178,7 +203,7 @@ def _custom_labels(raw: str) -> tuple[LabelSpec, ...]:
 def _saved_source(population: Mapping[str, object]) -> Source:
     if population.get('mode') == 'snapshot' or population.get('snapshot_path'):
         return 'snapshot'
-    if population.get('mode') == 'finder' or population.get('finder_export'):
+    if population.get('mode') in ('finder', 'export') or population.get('finder_export'):
         return 'finder'
     if population.get('mode') == 'query' or population.get('query'):
         return 'query'
@@ -219,7 +244,7 @@ class RunFormValues:
     source: Source = 'recent'
     query: str = ''
     window_days: int = 7
-    limit: int = 100
+    limit: int = 200
     facets: FacetSelection = field(default_factory=FacetSelection)
     dimensions: tuple[DimensionName, ...] = ()
     labels: tuple[str, ...] = ()
@@ -273,7 +298,7 @@ class RunFormValues:
             source=source,
             query=str(population.get('query') or ''),
             window_days=int(population.get('window_days', 7)),
-            limit=int(population.get('limit', 500)),
+            limit=int(population.get('limit', 200)),
             facets=FacetSelection.model_validate(population.get('facets') or {}),
             dimensions=tuple(run.config.dimensions),
             labels=tuple(name for name in LABEL_PRESETS if name in configured),
@@ -298,11 +323,22 @@ class RunFormValues:
     def from_form(cls, form: Mapping[str, object]) -> RunFormValues:
         """Parse the form fields from `FormData` or query parameters; raises `ValueError` on malformed numbers or JSON."""
         mount: Mount = 'dialog' if form.get('mount') == 'dialog' else 'page'
+        query = str(form.get('query') or '')
+        finder_export = str(form.get('finder_export') or '')
+        requested = str(form.get('source') or 'orq')
+        source: Source
+        if requested == 'orq':
+            source = 'query' if query.strip() else 'recent'
+        elif requested == 'file':
+            source = 'finder' if finder_export.strip() else 'snapshot'
+        else:
+            # A legacy four-valued source (old links, rerun); an unknown one falls through to the launch spec's own error.
+            source = cast('Source', requested)
         return cls(
-            source=str(form.get('source') or 'recent'),
-            query=str(form.get('query') or ''),
+            source=source,
+            query=query,
             window_days=_whole_number(form, 'window_days', 7, 'Window'),
-            limit=_whole_number(form, 'limit', 100, 'Trace limit'),
+            limit=_whole_number(form, 'limit', 200, 'Trace limit'),
             facets=FacetSelection.model_validate({name: _getlist(form, f'facet_{name}') for name in FACET_NAMES}),
             dimensions=tuple(_getlist(form, 'dimensions')),
             labels=tuple(_getlist(form, 'labels')),
@@ -310,7 +346,7 @@ class RunFormValues:
             custom_labels=_custom_labels(str(form.get('custom_labels_json') or '[]')),
             name=str(form.get('name') or ''),
             parallelism=_whole_number(form, 'parallelism', 20, 'Parallel requests'),
-            finder_export=str(form.get('finder_export') or ''),
+            finder_export=finder_export,
             snapshot_path=str(form.get('snapshot_path') or ''),
             source_name=str(form.get('source_name') or ''),
             preset=str(form.get('preset') or '') or None,
@@ -447,20 +483,23 @@ def _preset_buttons(values: RunFormValues) -> str:
     )
 
 
-def _file_source(kind: Literal['finder', 'snapshot'], values: RunFormValues) -> str:
-    chosen = values.finder_export if kind == 'finder' else values.snapshot_path
-    shown = values.source_name if values.source == kind and chosen else ''
+def _file_source(values: RunFormValues) -> str:
+    chosen = values.finder_export or values.snapshot_path
+    shown = values.source_name if chosen else ''
     shown = shown or (Path(chosen).name if chosen else '')
-    title = 'Finder export' if kind == 'finder' else 'Trace snapshot'
-    hint = 'Choose a Finder export JSON file.' if kind == 'finder' else 'Choose a trace snapshot JSON file.'
-    status = f'Selected {title.lower()} is ready.' if chosen else hint
+    if values.finder_export:
+        status = 'Finder export is ready.'
+    elif values.snapshot_path:
+        status = 'Trace snapshot is ready.'
+    else:
+        status = 'A Finder export or a local trace file (JSON).'
     return (
-        f'<div class="irf-field" data-source="{kind}"><span class="irf-label">{title}</span>'
-        f'<div class="irf-file"><input type="text" readonly data-file-name="{kind}" aria-label="Selected {esc(title.lower())}" '
+        '<div class="irf-field" data-source="file"><span class="irf-label">Trace file</span>'
+        '<div class="irf-file"><input type="text" readonly data-file-name aria-label="Selected trace file" '
         f'placeholder="No file chosen" value="{esc(shown)}">'
-        f'<button type="button" class="irf-btn" data-browse="{kind}">Browse…</button>'
-        f'<input type="file" accept="application/json,.json" data-file="{kind}" hidden></div>'
-        f'<p class="irf-hint" role="status" data-file-status="{kind}">{esc(status)}</p></div>'
+        '<button type="button" class="irf-btn" data-browse>Browse…</button>'
+        '<input type="file" accept="application/json,.json" data-file hidden></div>'
+        f'<p class="irf-hint" role="status" data-file-status>{esc(status)}</p></div>'
     )
 
 
@@ -471,24 +510,26 @@ def _facet_picker(values: RunFormValues) -> str:
 
 
 def _step_one(values: RunFormValues) -> str:
+    tab = _form_tab(values.source)
     sources = ''.join(
         f'<label title="{esc(hint)}"><input type="radio" name="source" value="{source}"'
-        f'{" checked" if values.source == source else ""}><span>{esc(title)}</span></label>'
-        for source, title, hint in _SOURCES
+        f'{" checked" if tab == source else ""}><span>{icon}{esc(title)}</span></label>'
+        for source, title, hint, icon in _SOURCES
     )
     return (
         '<section class="irf-step" data-step="1"><h3>Which traces?</h3>'
         f'<div class="seg" role="radiogroup" aria-label="Where the traces come from">{sources}</div>'
-        '<label class="irf-field" data-source="query"><span class="irf-label">Question</span>'
+        '<label class="irf-field" data-source="orq"><span class="irf-label">Question <i>(optional)</i></span>'
         '<textarea name="query" rows="3" maxlength="500" placeholder="Which conversations are about refunds?">'
         f'{esc(values.query)}</textarea>'
-        '<span class="irf-hint">The classifier reads each trace in the window and keeps only the ones that match.</span></label>'
-        f'{_file_source("finder", values)}{_file_source("snapshot", values)}'
-        '<div id="insights-snapshot-preview" data-source="snapshot" aria-live="polite"></div>'
-        '<div class="irf-row" data-source="recent query">'
+        '<span class="irf-hint">The classifier reads each trace in the window and keeps only the ones that match. '
+        'Leave it blank to analyze every trace in the window.</span></label>'
+        f'{_file_source(values)}'
+        '<div id="insights-snapshot-preview" data-source="file" aria-live="polite"></div>'
+        '<div class="irf-row" data-source="orq">'
         f'<label>Last <input name="window_days" type="number" min="1" max="90" value="{values.window_days}"> days, up to</label>'
         f'<label><input name="limit" type="number" min="1" max="5000" value="{values.limit}"> traces</label></div>'
-        '<div class="irf-facets" data-source="recent query"><span class="irf-label">Only traces with</span>'
+        '<div class="irf-facets" data-source="orq"><span class="irf-label">Only traces with</span>'
         f'<div id="insights-facet-options" aria-live="polite">{_facet_picker(values)}</div></div>'
         '</section>'
     )
@@ -568,8 +609,8 @@ def _model_pickers(values: RunFormValues) -> str:
     for name, (_, label) in INSIGHTS_MODEL_FIELDS.items():
         value = getattr(values, name)
         fallback = model_control(name, value, {}, label=label)
-        scope = ' data-source="query"' if name == 'compiler_model' else ''
-        hidden = ' hidden' if name == 'compiler_model' and values.source != 'query' else ''
+        scope = ' data-compiler-model' if name == 'compiler_model' else ''
+        hidden = ' hidden' if name == 'compiler_model' and not values.query.strip() else ''
         rows.append(
             f'<div class="irf-field"{scope}{hidden}><label class="irf-label" for="{name}">{esc(label)}</label>'
             f'<span hx-get="/insights/models?{esc(urlencode({"field": name, name: value}))}" hx-trigger="load" '

@@ -62,18 +62,28 @@ async function main() {
   {
     const app = boot(baseHandlers());
     await tick();
-    app.form.querySelector('input[name="source"][value="query"]').click();
-    assert.equal(app.form.querySelector('[data-source="query"]').hidden, false, 'the question field shows for that source');
+    const question = app.form.querySelector('textarea[name="query"]');
+    const compiler = app.form.querySelector('[data-compiler-model]');
+    assert.equal(app.form.querySelector('[data-source="orq"]').hidden, false, 'the Orq fields show on the first tab');
+    assert.equal(compiler.hidden, true, 'the compiler picker is hidden while the question is blank');
+    question.value = 'refunds';
+    question.dispatchEvent({type: 'input', bubbles: true, target: question});
+    assert.equal(compiler.hidden, false, 'the compiler picker shows once there is a question');
+    question.value = '';
+    question.dispatchEvent({type: 'input', bubbles: true, target: question});
+    assert.equal(compiler.hidden, true);
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    assert.deepEqual(visibleStep(app.form), ['2'], 'a blank question is allowed: it analyzes every trace in the window');
+    app.form.querySelector('[data-irf-back]').click();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    assert.equal(app.form.querySelector('[data-source="orq"]').hidden, true, 'the Orq fields hide on the file tab');
+    assert.equal(app.form.querySelector('[data-source="file"]').hidden, false);
     app.form.querySelector('[data-irf-next]').click();
     await tick();
     const error = app.form.querySelector('#insights-run-error');
-    assert.equal(error.textContent, 'Enter a question to find matching traces.');
-    assert.equal(error.hidden, false);
-    assert.deepEqual(visibleStep(app.form), ['1'], 'Continue is blocked on an empty question');
-    app.form.querySelector('textarea[name="query"]').value = 'refunds';
-    app.form.querySelector('[data-irf-next]').click();
-    await tick();
-    assert.deepEqual(visibleStep(app.form), ['2']);
+    assert.equal(error.textContent, 'Browse to choose a trace file first.');
+    assert.deepEqual(visibleStep(app.form), ['1'], 'Continue is blocked until a file is chosen');
   }
 
   {
@@ -165,16 +175,37 @@ async function main() {
       '/insights/uploads': () => response(JSON.stringify({kind: 'finder', path: '/runs/.uploads/finder-1.json'}), {status: 201}),
     });
     await tick();
-    const input = app.form.querySelector('input[data-file="finder"]');
+    const input = app.form.querySelector('input[data-file]');
     input.files = [new File(['{}'], 'export.json', {type: 'application/json'})];
     input.dispatchEvent({type: 'change', bubbles: true, target: input});
     await tick();
     await tick();
     assert.equal(app.form.querySelector('input[name="finder_export"]').value, '/runs/.uploads/finder-1.json');
-    assert.equal(app.form.querySelector('[data-file-name="finder"]').value, 'export.json');
+    assert.equal(app.form.querySelector('input[name="snapshot_path"]').value, '', 'the other hidden path is cleared');
+    assert.equal(app.form.querySelector('[data-file-name]').value, 'export.json');
+    assert.equal(app.form.querySelector('[data-file-status]').textContent, 'Finder export is ready.');
     const upload = app.calls.find(call => call.url === '/insights/uploads');
     assert.equal(upload.options.body.get('csrf'), 'token', "the upload carries the form's own token");
-    assert.equal(upload.options.body.get('kind'), 'finder');
+    assert.equal(upload.options.body.get('kind'), null, 'the browser no longer says what kind of file it is sending');
+  }
+
+  {
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/uploads': () => response(JSON.stringify({kind: 'snapshot', path: '/tmp/snap.json'}), {status: 201}),
+      '/insights/snapshot-preview': () => response('<p>3 traces</p>'),
+    });
+    await tick();
+    app.form.querySelector('input[name="finder_export"]').value = '/old/finder.json';
+    const input = app.form.querySelector('input[data-file]');
+    input.files = [new File(['{}'], 'snap.json', {type: 'application/json'})];
+    input.dispatchEvent({type: 'change', bubbles: true, target: input});
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="snapshot_path"]').value, '/tmp/snap.json');
+    assert.equal(app.form.querySelector('input[name="finder_export"]').value, '', 'the finder path is cleared');
+    assert.equal(app.form.querySelector('[data-file-status]').textContent, 'Trace snapshot is ready.');
+    assert.ok(app.calls.some(call => call.url === '/insights/snapshot-preview'), 'a snapshot is measured');
   }
 
   {

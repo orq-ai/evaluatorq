@@ -8,9 +8,9 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -45,9 +45,6 @@ from evaluatorq.trace_finder.export import (
     RunExport,
 )
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _AUTH = DashboardAuth('environment', 'key', 'https://my.orq.ai')
 
@@ -87,8 +84,13 @@ def test_defaults_render_three_steps_with_every_offered_choice() -> None:
     html = render_run_form(RunFormValues.defaults(), csrf='t')
 
     assert html.count('data-step="') == 3
-    for source in ('recent', 'query', 'finder', 'snapshot'):
+    for source in ('orq', 'file'):
         assert f'name="source" value="{source}"' in html
+    for retired in ('recent', 'query', 'finder', 'snapshot'):
+        assert f'name="source" value="{retired}"' not in html
+    assert 'name="source" value="orq" checked' in html
+    assert 'Question <i>(optional)</i>' in html
+    assert 'class="irf-tab-icon"' in html and 'aria-hidden="true"' in html
     assert 'Presets' in html
     for preset in RUN_PRESETS:
         assert f'data-preset="{preset.id}"' in html
@@ -103,7 +105,8 @@ def test_defaults_render_three_steps_with_every_offered_choice() -> None:
     assert 'name="csrf" value="t"' in html
     assert 'data-mount="page"' in html
     assert 'name="finder_export" value=""' in html and 'name="snapshot_path" value=""' in html
-    assert 'Choose a Finder export JSON file.' in html and 'Choose a trace snapshot JSON file.' in html
+    assert 'A Finder export or a local trace file (JSON).' in html
+    assert html.count('type="file"') == 1
 
 
 def test_customer_satisfaction_says_the_priority_matrix_needs_it() -> None:
@@ -473,13 +476,13 @@ def test_start_launches_the_spec_built_from_the_submitted_values(monkeypatch: py
 
 def test_review_step_loads_a_picker_per_model_and_the_compiler_only_for_question() -> None:
     recent = render_run_form(RunFormValues.defaults(), csrf='t')
-    question = render_run_form(replace(RunFormValues.defaults(), source='query'), csrf='t')
+    question = render_run_form(replace(RunFormValues.defaults(), source='query', query='refunds'), csrf='t')
 
     for field in ('summary_model', 'classifier_model', 'embedding_model'):
         assert f'hx-get="/insights/models?field={field}&amp;{field}=' in recent
         assert 'hx-trigger="load"' in recent
-    assert re.search(r'<div class="irf-field" data-source="query" hidden><label[^>]*>Question compiler', recent)
-    assert re.search(r'<div class="irf-field" data-source="query"><label[^>]*>Question compiler', question)
+    assert re.search(r'<div class="irf-field" data-compiler-model hidden><label[^>]*>Question compiler', recent)
+    assert re.search(r'<div class="irf-field" data-compiler-model><label[^>]*>Question compiler', question)
     assert 'hx-get="/insights/models?field=compiler_model&amp;compiler_model=' in question
     assert set(INSIGHTS_MODEL_FIELDS) == {'summary_model', 'classifier_model', 'embedding_model', 'compiler_model'}
 
@@ -636,3 +639,56 @@ def test_start_accepts_unchecked_models_and_warns_when_the_catalogue_is_unavaila
     assert response.status_code == 303
     assert launch.call_args.args[0].classifier_model == 'acme/typed'
     assert any('classifier_model' in m and 'embedding_model' in m for m in messages)
+
+
+def test_orq_tab_maps_to_recent_when_blank_and_query_when_asked() -> None:
+    assert RunFormValues.from_form({'source': 'orq', 'query': '   '}).source == 'recent'
+    asked = RunFormValues.from_form({'source': 'orq', 'query': 'refunds'})
+    assert (asked.source, asked.query) == ('query', 'refunds')
+    InsightsLaunchSpec.model_validate(RunFormValues.from_form({'source': 'orq', 'dimensions': 'intent'}).launch_fields())
+
+
+def test_file_tab_maps_by_which_hidden_path_is_filled() -> None:
+    assert RunFormValues.from_form({'source': 'file', 'finder_export': 'f.json'}).source == 'finder'
+    assert RunFormValues.from_form({'source': 'file', 'snapshot_path': 's.json'}).source == 'snapshot'
+
+
+@pytest.mark.parametrize('legacy', ['recent', 'query', 'finder', 'snapshot'])
+def test_legacy_source_values_are_still_accepted(legacy: str) -> None:
+    assert RunFormValues.from_form({'source': legacy}).source == legacy
+
+
+def test_a_missing_source_is_the_orq_tab_and_limit_defaults_to_200() -> None:
+    values = RunFormValues.from_form({})
+    assert (values.source, values.limit) == ('recent', 200)
+    assert RunFormValues().limit == 200
+    assert InsightsLaunchSpec().limit == 200
+
+
+@pytest.mark.parametrize(
+    ('population', 'source', 'checked_tab'),
+    [
+        ({'mode': 'filter'}, 'recent', 'orq'),
+        ({'mode': 'query', 'query': 'refunds'}, 'query', 'orq'),
+        ({'mode': 'export'}, 'finder', 'file'),
+        ({'mode': 'snapshot'}, 'snapshot', 'file'),
+    ],
+)
+def test_rerun_of_each_stored_mode_opens_the_right_tab(
+    tmp_path: Path, population: dict[str, object], source: str, checked_tab: str
+) -> None:
+    values = RunFormValues.from_run(_saved_run(population), tmp_path)
+
+    assert values.source == source
+    assert values.limit == 200
+    html = render_run_form(values, csrf='t')
+    assert f'name="source" value="{checked_tab}" checked' in html
+    if source == 'query':
+        assert 'refunds</textarea>' in html
+
+
+def test_review_page_labels_the_stored_population_modes() -> None:
+    script = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/insights-review.js').read_text(encoding='utf-8')
+
+    for mode, label in (('filter', 'Recent traces'), ('export', 'Finder export'), ('query', 'Search by question')):
+        assert f"{mode}: '{label}'" in script

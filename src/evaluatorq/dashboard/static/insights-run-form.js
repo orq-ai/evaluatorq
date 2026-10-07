@@ -2,7 +2,6 @@
 (function (global) {
   'use strict';
 
-  const POPULATION_SOURCES = ['recent', 'query'];
   const REFRESH_DELAY_MS = 400;
   const NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
   const contexts = new WeakMap();
@@ -21,7 +20,7 @@
 
   function activeSource(form) {
     const checked = form.querySelector('input[name="source"]:checked');
-    return checked ? checked.value : 'recent';
+    return checked ? checked.value : 'orq';
   }
 
   function inRange(input, min, max) {
@@ -50,11 +49,11 @@
       const type = element.type;
       if (element.disabled || type === 'file' || type === 'button' || type === 'submit') return;
       if ((type === 'checkbox' || type === 'radio') && !element.checked) return;
-      if (element.name.indexOf('facet_') === 0 && POPULATION_SOURCES.indexOf(active) < 0) return;
+      if (element.name.indexOf('facet_') === 0 && active !== 'orq') return;
       pairs.push([element.name, element.value]);
     });
-    const chosen = form.querySelector('[data-file-name="' + active + '"]');
-    pairs.push(['source_name', chosen ? chosen.value : '']);
+    const chosen = form.querySelector('[data-file-name]');
+    pairs.push(['source_name', active === 'file' && chosen ? chosen.value : '']);
     return pairs;
   }
 
@@ -69,6 +68,12 @@
     ctx.form.querySelectorAll('[data-source]').forEach(function (element) {
       element.hidden = words(element.dataset.source).indexOf(active) < 0;
     });
+    updateCompilerModel(ctx);
+  }
+
+  function updateCompilerModel(ctx) {
+    const picker = ctx.form.querySelector('[data-compiler-model]');
+    if (picker) picker.hidden = activeSource(ctx.form) !== 'orq' || !field(ctx.form, 'query').value.trim();
   }
 
   function showStep(ctx, step, keepError) {
@@ -95,10 +100,10 @@
     const form = ctx.form;
     const active = activeSource(form);
     if (step === 1) {
-      if (active === 'query' && !field(form, 'query').value.trim()) return 'Enter a question to find matching traces.';
-      if (active === 'finder' && !field(form, 'finder_export').value.trim()) return 'Browse to choose a Finder export first.';
-      if (active === 'snapshot' && !field(form, 'snapshot_path').value.trim()) return 'Browse to choose a trace snapshot file first.';
-      if (POPULATION_SOURCES.indexOf(active) >= 0) {
+      if (active === 'file' && !field(form, 'finder_export').value.trim() && !field(form, 'snapshot_path').value.trim()) {
+        return 'Browse to choose a trace file first.';
+      }
+      if (active === 'orq') {
         if (!inRange(field(form, 'window_days'), 1, 90) || !inRange(field(form, 'limit'), 1, 5000)) return 'Enter a valid window and trace limit.';
         if (form.querySelector('#insights-facet-options').getAttribute('aria-busy') === 'true') return 'Wait for the filter values to load.';
       }
@@ -151,7 +156,7 @@
 
   async function refreshFacets(ctx, retry) {
     const form = ctx.form;
-    if (POPULATION_SOURCES.indexOf(activeSource(form)) < 0) return;
+    if (activeSource(form) !== 'orq') return;
     if (!inRange(field(form, 'window_days'), 1, 90)) return;
     const key = facetKey(form);
     if (!retry && key === ctx.facetKey) return;
@@ -337,28 +342,27 @@
 
   async function upload(ctx, input) {
     const form = ctx.form;
-    const kind = input.dataset.file;
     const file = input.files && input.files[0];
     if (!file) return;
-    const status = form.querySelector('[data-file-status="' + kind + '"]');
+    const status = form.querySelector('[data-file-status]');
     status.textContent = 'Uploading…';
     try {
       const body = new FormData();
       body.set('csrf', field(form, 'csrf').value);
-      body.set('kind', kind);
       body.set('file', file);
       const response = await fetch('/insights/uploads', {method: 'POST', body: body});
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Upload failed.');
-      field(form, kind === 'finder' ? 'finder_export' : 'snapshot_path').value = result.path;
-      form.querySelector('[data-file-name="' + kind + '"]').value = file.name;
-      status.textContent = kind === 'finder' ? 'Finder export is ready.' : 'Trace snapshot is ready.';
+      const finder = result.kind === 'finder';
+      field(form, 'finder_export').value = finder ? result.path : '';
+      field(form, 'snapshot_path').value = finder ? '' : result.path;
+      form.querySelector('[data-file-name]').value = file.name;
+      status.textContent = finder ? 'Finder export is ready.' : 'Trace snapshot is ready.';
       showError(ctx, '');
       scheduleRefresh(ctx);
-      if (kind === 'snapshot') {
-        ctx.measuredPath = null;
-        await measureSnapshot(ctx);
-      }
+      ctx.measuredPath = null;
+      if (finder) form.querySelector('#insights-snapshot-preview').textContent = '';
+      else await measureSnapshot(ctx);
     } catch (failure) {
       status.textContent = failure.message || 'Upload failed.';
     } finally {
@@ -372,7 +376,7 @@
       showError(ctx, message);
       return;
     }
-    if (ctx.step === 1 && activeSource(ctx.form) === 'snapshot') {
+    if (ctx.step === 1 && activeSource(ctx.form) === 'file' && field(ctx.form, 'snapshot_path').value.trim()) {
       const next = ctx.form.querySelector('[data-irf-next]');
       next.disabled = true;
       const measured = await measureSnapshot(ctx);
@@ -424,7 +428,7 @@
     if (hit('[data-irf-next]')) goNext(ctx);
     else if (hit('[data-irf-back]')) showStep(ctx, Math.max(1, ctx.step - 1));
     else if ((element = hit('[data-preset]'))) applyPreset(ctx, element);
-    else if ((element = hit('[data-browse]'))) ctx.form.querySelector('input[data-file="' + element.dataset.browse + '"]').click();
+    else if ((element = hit('[data-browse]'))) ctx.form.querySelector('input[data-file]').click();
     else if (hit('[data-cq-open]')) {
       const e = editor(ctx);
       e.box.hidden = false;
@@ -447,6 +451,7 @@
       return;
     }
     if (affectsEstimate(target)) scheduleRefresh(ctx);
+    if (target.name === 'query') updateCompilerModel(ctx);
     if (target.name === 'source') {
       showError(ctx, '');
       updateSource(ctx);
@@ -486,7 +491,10 @@
     contexts.set(form, ctx);
     form.addEventListener('click', function (event) { onClick(ctx, event); });
     form.addEventListener('change', function (event) { onChange(ctx, event); });
-    form.addEventListener('input', function (event) { if (affectsEstimate(event.target)) scheduleRefresh(ctx); });
+    form.addEventListener('input', function (event) {
+      if (event.target.name === 'query') updateCompilerModel(ctx);
+      if (affectsEstimate(event.target)) scheduleRefresh(ctx);
+    });
     form.addEventListener('keydown', function (event) { onKeydown(ctx, event); });
     form.addEventListener('facets:closed', function () { refreshFacets(ctx); });
     form.addEventListener('submit', function (event) {

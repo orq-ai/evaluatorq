@@ -3380,6 +3380,7 @@ _INSIGHTS_CSS = """
 .insights-run-form .seg label { position:relative; flex:1; min-width:0; }
 .insights-run-form .seg input { position:absolute; opacity:0; pointer-events:none; }
 .insights-run-form .seg span { display:block; padding:6px clamp(3px,1vw,12px); border-radius:7px; color:var(--text-muted); font-size:clamp(10.5px,1.7vw,12px); font-weight:500; text-align:center; white-space:nowrap; cursor:pointer; }
+.insights-run-form .seg .irf-tab-icon { display:inline-block; width:14px; height:14px; margin:-2px 6px 0 0; vertical-align:middle; }
 .insights-run-form .seg label:has(input:checked) span { background:var(--surface-card); color:var(--text-strong); box-shadow:0 1px 2px rgba(0,0,0,.08); }
 .insights-run-form .seg label:has(:focus-visible) span { outline:2px solid var(--teal-600); outline-offset:2px; }
 .insights-run-form .irf-field { display:block; margin-top:14px; }

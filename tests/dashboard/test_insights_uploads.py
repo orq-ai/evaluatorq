@@ -29,7 +29,7 @@ def test_upload_validates_and_stores_finder_export_under_runs_dir(tmp_path: Path
 
     response = client.post(
         '/insights/uploads',
-        data={'csrf': _token(client), 'kind': 'finder'},
+        data={'csrf': _token(client)},
         files={'file': ('export.json', _run_export(['trace-1']).model_dump_json(), 'application/json')},
     )
 
@@ -50,22 +50,12 @@ def test_upload_rejects_bad_csrf_type_and_invalid_content(tmp_path: Path, monkey
     assert (
         client.post('/insights/uploads', data={'kind': 'snapshot'}, files={'file': ('x.json', '{}')}).status_code == 403
     )
-    assert (
-        client.post(
-            '/insights/uploads', data={'csrf': token, 'kind': 'other'}, files={'file': ('x.json', '{}')}
-        ).status_code
-        == 422
-    )
-    invalid = client.post(
-        '/insights/uploads', data={'csrf': token, 'kind': 'finder'}, files={'file': ('x.json', '{"traces": []}')}
-    )
-    assert invalid.status_code == 422
-    wrong_kind = client.post(
-        '/insights/uploads',
-        data={'csrf': token, 'kind': 'snapshot'},
-        files={'file': ('export.json', _run_export(['trace-1']).model_dump_json(), 'application/json')},
-    )
-    assert wrong_kind.status_code == 422
+    for body in ('{}', '[1]', 'not json', '{"traces": []}'):
+        rejected = client.post('/insights/uploads', data={'csrf': token}, files={'file': ('x.json', body)})
+        assert rejected.status_code == 422, body
+    assert 'neither a Finder export nor a trace snapshot' in client.post(
+        '/insights/uploads', data={'csrf': token}, files={'file': ('x.json', '{}')}
+    ).json()['error']
     assert not list((tmp_path / 'insights-runs' / '.uploads').glob('*'))
 
 
@@ -78,7 +68,7 @@ def test_upload_rejects_oversized_files_before_storing(tmp_path: Path, monkeypat
     body = b' ' * (MAX_INSIGHTS_UPLOAD_BYTES + 1)
 
     response = client.post(
-        '/insights/uploads', data={'csrf': token, 'kind': 'snapshot'}, files={'file': ('large.json', body)}
+        '/insights/uploads', data={'csrf': token}, files={'file': ('large.json', body)}
     )
 
     assert response.status_code == 413
@@ -97,7 +87,7 @@ def test_finder_upload_rejects_10_mib_plus_one_while_snapshot_keeps_100_mib_limi
     export += b' ' * (MAX_FINDER_EXPORT_BYTES + 1 - len(export))
 
     response = client.post(
-        '/insights/uploads', data={'csrf': token, 'kind': 'finder'}, files={'file': ('large.json', export)}
+        '/insights/uploads', data={'csrf': token}, files={'file': ('large.json', export)}
     )
 
     assert response.status_code == 413
@@ -108,6 +98,36 @@ def test_finder_upload_rejects_10_mib_plus_one_while_snapshot_keeps_100_mib_limi
     snapshot += b' ' * (MAX_FINDER_EXPORT_BYTES + 1 - len(snapshot))
     stored = store_upload(tmp_path, snapshot, 'snapshot')
     assert stored.read_bytes() == snapshot
+
+
+def test_upload_detects_kind_from_content_and_ignores_client_kind(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    token = _token(client)
+    export = _run_export(['trace-1']).model_dump_json()
+    snapshot = Snapshot(traces=(make_trace('trace-1'),)).model_dump_json()
+
+    for label, body, expected in (
+        (None, export, 'finder'),
+        (None, snapshot, 'snapshot'),
+        ('snapshot', export, 'finder'),
+        ('finder', snapshot, 'snapshot'),
+        ('bogus', export, 'finder'),
+    ):
+        data = {'csrf': token} if label is None else {'csrf': token, 'kind': label}
+        response = client.post('/insights/uploads', data=data, files={'file': ('f.json', body)})
+        assert response.status_code == 201, (label, response.text)
+        assert response.json()['kind'] == expected
+        assert Path(response.json()['path']).name.startswith(f'{expected}-')
+
+
+def test_upload_rejects_empty_snapshot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    empty = Snapshot(traces=()).model_dump_json()
+    response = client.post('/insights/uploads', data={'csrf': _token(client)}, files={'file': ('f.json', empty)})
+    assert response.status_code == 422
+    assert not list((tmp_path / 'insights-runs' / '.uploads').glob('*'))
 
 
 @pytest.mark.anyio
