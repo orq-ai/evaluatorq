@@ -43,6 +43,16 @@ def _reset_cli_model_flags(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_local_session_roots(tmp_path_factory, monkeypatch):
+    """Point every local-session root at an empty temp directory, so no test reads a developer's real sessions."""
+    base = tmp_path_factory.mktemp("session-roots")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(base / "claude"))
+    monkeypatch.setenv("CODEX_HOME", str(base / "codex"))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(base / "omp-agent"))
+    monkeypatch.setattr("evaluatorq.local_sessions.roots.claude_desktop_dir", lambda: base / "claude-desktop")
+
+
+@pytest.fixture(autouse=True)
 def _hide_ambient_credentials(request, monkeypatch):
     """Unset real API keys so unit tests cannot reach a live service.
 
