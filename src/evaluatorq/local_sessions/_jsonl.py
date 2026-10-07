@@ -58,8 +58,9 @@ def read_head(path: Path, *, max_bytes: int) -> list[dict[str, Any]]:
         return []
     cut = len(data) == max_bytes
     lines = data.split(b'\n')
-    if cut or not data.endswith(b'\n'):
-        # The last element is a cut-off line, or an unterminated in-progress write; only complete lines count.
+    if cut:
+        # The last element is a cut-off line. Without a cut, an unterminated last line is kept when it parses and
+        # silently ignored when it does not (an in-progress write).
         lines.pop()
     if cut and not lines:
         raise SessionLoadError(f'{path}: first record exceeds {max_bytes} bytes')

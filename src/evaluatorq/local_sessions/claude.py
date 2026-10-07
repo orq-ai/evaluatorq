@@ -39,9 +39,13 @@ def _prompt_text(record: dict[str, Any]) -> str | None:
     content = _content_blocks(record)
     if isinstance(content, str):
         return content or None
-    if isinstance(content, list) and any(
-        isinstance(block, dict) and block.get('type') == 'text' and isinstance(block.get('text'), str)
-        for block in content
+    if (
+        isinstance(content, list)
+        and not any(isinstance(b, dict) and b.get('type') == 'tool_result' for b in content)
+        and any(
+            isinstance(block, dict) and block.get('type') == 'text' and isinstance(block.get('text'), str)
+            for block in content
+        )
     ):
         return items.blocks_text([
             block for block in content if isinstance(block, dict) and block.get('type') != 'tool_result'
@@ -211,7 +215,11 @@ def _active_branch(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
             chosen = on_path[0] if on_path else max(branches, key=last_position.__getitem__)
             kids = [kid for kid in kids if kid == chosen or not has_prompt[kid]]
         walk.extend(kids)
-    return [record for record in records if record.get('uuid') in kept]
+    return [
+        record
+        for position, record in enumerate(records)
+        if index.get(record.get('uuid')) == position and record['uuid'] in kept
+    ]
 
 
 def _map_records(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str, int | None]:

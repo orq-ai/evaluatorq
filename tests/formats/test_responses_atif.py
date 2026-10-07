@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from loguru import logger
 from openai.types.responses import Response, ResponseError
 
 from evaluatorq.formats.atif import AtifTrajectory
@@ -814,11 +815,7 @@ def test_custom_tool_result_round_trips_with_its_call() -> None:
     assert traj.to_responses().items[-2:] == [call, result]
 
 
-
-
 def test_invalid_item_warning_does_not_leak_item_text() -> None:
-    from loguru import logger
-
     seen: list[str] = []
     sink = logger.add(lambda message: seen.append(str(message)), level='WARNING')
     try:

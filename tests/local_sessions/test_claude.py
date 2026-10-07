@@ -158,24 +158,96 @@ def test_parallel_tool_calls_keep_every_result(claude_projects: Path) -> None:
     assert sorted(str(call) for call in step_observations) == ['t1', 't2']
 
 
+def _rewind_records(*, leaf: str | None) -> list[dict[str, Any]]:
+    records = [
+        _user('u1', None, 0, 'first question'),
+        _assistant('a1', 'u1', 1, [{'type': 'text', 'text': 'answer'}], mid='m1'),
+        _user('u2', 'a1', 2, 'EARLIER prompt'),
+        _assistant('a2', 'u2', 3, [{'type': 'text', 'text': 'earlier reply'}], mid='m2'),
+        _user('u3', 'a1', 4, 'LATER prompt'),
+        _assistant('a3', 'u3', 5, [{'type': 'text', 'text': 'later reply'}], mid='m3'),
+    ]
+    if leaf is not None:
+        records.append({'type': 'last-prompt', 'leafUuid': leaf})
+    return records
+
+
 def test_rewound_branch_is_dropped(claude_projects: Path) -> None:
-    path = write_jsonl(
-        claude_projects / '-p' / 'rw.jsonl',
-        [
-            _user('u1', None, 0, 'first question'),
-            _assistant('a1', 'u1', 1, [{'type': 'text', 'text': 'answer'}], mid='m1'),
-            _user('u2', 'a1', 2, 'ABANDONED prompt'),
-            _assistant('a2', 'u2', 3, [{'type': 'text', 'text': 'abandoned reply'}], mid='m2'),
-            _user('u3', 'a1', 4, 'KEPT prompt'),
-            _assistant('a3', 'u3', 5, [{'type': 'text', 'text': 'kept reply'}], mid='m3'),
-            {'type': 'last-prompt', 'leafUuid': 'a3'},
-        ],
-    )
+    path = write_jsonl(claude_projects / '-p' / 'rw.jsonl', _rewind_records(leaf='a3'))
     text = _text_of(READER.parse(path).items)
     assert 'first question' in text
-    assert 'KEPT prompt' in text
-    assert 'ABANDONED' not in text
-    assert 'abandoned reply' not in text
+    assert 'LATER prompt' in text
+    assert 'EARLIER' not in text
+    assert 'earlier reply' not in text
+
+
+def test_leaf_in_earlier_branch_keeps_that_branch(claude_projects: Path) -> None:
+    path = write_jsonl(claude_projects / '-p' / 'rw2.jsonl', _rewind_records(leaf='a2'))
+    text = _text_of(READER.parse(path).items)
+    assert 'EARLIER prompt' in text
+    assert 'LATER' not in text
+
+
+def test_without_last_prompt_the_last_uuid_is_the_head(claude_projects: Path) -> None:
+    path = write_jsonl(claude_projects / '-p' / 'rw3.jsonl', _rewind_records(leaf=None))
+    text = _text_of(READER.parse(path).items)
+    assert 'LATER prompt' in text
+    assert 'EARLIER' not in text
+
+
+def test_tool_result_with_text_block_is_not_a_prompt(claude_projects: Path) -> None:
+    path = write_jsonl(
+        claude_projects / '-p' / 'tr.jsonl',
+        [
+            _user('u1', None, 0, 'two things'),
+            _assistant('a1', 'u1', 1, [{'type': 'tool_use', 'id': 't1', 'name': 'Bash', 'input': {}}], mid='m1'),
+            _assistant('a2', 'a1', 1, [{'type': 'tool_use', 'id': 't2', 'name': 'Bash', 'input': {}}], mid='m1'),
+            _user(
+                'r1',
+                'a1',
+                2,
+                [{'type': 'tool_result', 'tool_use_id': 't1', 'content': 'out-a'}, {'type': 'text', 'text': 'note'}],
+            ),
+            _tool_result('r2', 'a2', 2, 't2', 'out-b'),
+            _assistant('a3', 'r2', 3, [{'type': 'text', 'text': 'both done'}], mid='m2'),
+            _user('u2', 'a3', 4, 'next prompt'),
+            _assistant('a4', 'u2', 5, [{'type': 'text', 'text': 'next reply'}], mid='m3'),
+        ],
+    )
+    parsed = READER.parse(path)
+    outputs = {item['call_id'] for item in parsed.items if item['type'] == 'function_call_output'}
+    assert outputs == {'t1', 't2'}
+    assert 'next reply' in _text_of(parsed.items)
+
+
+def test_repeated_uuids_emit_once(claude_projects: Path) -> None:
+    first = _assistant('a1', 'u1', 1, [{'type': 'text', 'text': 'streamed'}], mid='m1')
+    path = write_jsonl(
+        claude_projects / '-p' / 'dup.jsonl',
+        [
+            _user('u1', None, 0, 'hi'),
+            first,
+            first,
+            _assistant('a2', 'a1', 2, [{'type': 'text', 'text': 'end'}], mid='m2'),
+        ],
+    )
+    texts = [item for item in READER.parse(path).items if item['role'] == 'assistant']
+    assert len(texts) == 2
+
+
+def test_short_unterminated_session_still_summarizes(claude_projects: Path) -> None:
+    path = write_jsonl(
+        claude_projects / '-p' / 'live.jsonl', [_user('u1', None, 0, 'still writing')], trailing_newline=False
+    )
+    summary = READER.summarize(path)
+    assert summary is not None
+    assert summary.first_prompt == 'still writing'
+    broken = write_jsonl(
+        claude_projects / '-p' / 'live2.jsonl',
+        [_user('u1', None, 0, 'hello'), '{"type": "assi'],
+        trailing_newline=False,
+    )
+    assert READER.summarize(broken) is not None
 
 
 def test_compaction_keeps_pre_and_post_turns(claude_projects: Path) -> None:
