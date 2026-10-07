@@ -36,6 +36,8 @@
 .signal-row { margin:0; border:0; border-top:1px solid var(--border-subtle); background:transparent; min-width:0; }
 .signal-row>summary { display:grid; grid-template-columns:18px minmax(0,1fr) auto 12px; align-items:center; gap:8px; padding:12px 4px; cursor:pointer; list-style:none; color:var(--text-body); border-radius:4px; }
 .signal-row>summary:hover { background:var(--signal-tint); }
+.signal-row.flagged>summary:hover,.signal-row.flagged .signal-evidence-section>summary:hover { background:var(--red-50); }
+.signal-row.flagged .signal-evidence-section>summary:hover { color:var(--red-700); }
 .signal-row[open]>summary .signal-title { color:var(--text-strong); }
 .signal-title { min-width:0; overflow-wrap:anywhere; font-size:13px; font-weight:600; line-height:1.4; }
 .signal-state-icon { display:grid; place-items:center; width:18px; height:18px; border-radius:50%; color:var(--signal-accent); background:var(--signal-tint); font-size:12px; font-weight:600; }

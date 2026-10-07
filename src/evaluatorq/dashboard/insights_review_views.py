@@ -13,10 +13,9 @@ if TYPE_CHECKING:
 
 from evaluatorq.dashboard.insights_run_form import run_form_script_tag
 from evaluatorq.dashboard.shell import page
-from evaluatorq.dashboard.ui_components import component_assets
+from evaluatorq.dashboard.ui_components import component_assets, stylesheet_asset
 
 _REVIEW_STYLESHEET = '<link rel="stylesheet" href="/static/insights-review.css">\n'
-_SIGNALS_STYLESHEET = '<link rel="stylesheet" href="/static/insights-signals.css">\n'
 _SIGNALS_SCRIPT = '<script src="/static/insights-signals.js" defer></script>\n'
 _REVIEW_SCRIPT = '<script src="/static/insights-review.js" defer></script>\n'
 
@@ -57,5 +56,5 @@ def review_page(run: InsightsRun, manifest: RunManifest | None = None) -> str:
         active_nav='insights',
         body_class='eq-insights-review',
         topbar=False,
-        head_html=f'{component_assets()}{_REVIEW_STYLESHEET}{_SIGNALS_STYLESHEET}{run_form_script_tag()}\n{_SIGNALS_SCRIPT}{_REVIEW_SCRIPT}',
+        head_html=f'{component_assets()}{_REVIEW_STYLESHEET}{stylesheet_asset(filename="insights-signals.css")}{run_form_script_tag()}\n{_SIGNALS_SCRIPT}{_REVIEW_SCRIPT}',
     )
