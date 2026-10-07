@@ -127,16 +127,16 @@ def sessions_cmd(
     end_at = _day(end, flag='--to', offset_days=1) if end else None
     if start_at is not None and end_at is not None and start_at >= end_at:
         raise _fail('--from must not be after --to')
-    result = search_sessions(
-        SessionQuery(
-            sources=sources,
-            start=start_at,
-            end=end_at,
-            project_dir=str(project_dir) if project_dir is not None else None,
-            text=text or None,
-            limit=limit,
-        )
+    query = SessionQuery(
+        sources=sources,
+        start=start_at,
+        end=end_at,
+        project_dir=str(project_dir) if project_dir is not None else None,
+        text=text or None,
+        limit=limit,
     )
+    result = search_sessions(query)
+
     if json_output:
         echo_json([session.model_dump(mode='json') for session in result.sessions])
     else:
@@ -147,5 +147,14 @@ def sessions_cmd(
             f'{SEARCH_DEADLINE_SECONDS:g}s limit; narrow --from/--to or --text to see the rest.',
             err=True,
         )
+        if export is not None:
+            typer.echo('The export is partial: it holds only the sessions found before the search stopped.', err=True)
+    if len(result.sessions) == query.limit:
+        more = (
+            f'raise --limit (up to {MAX_SELECTED_SESSIONS}) to see more.'
+            if query.limit < MAX_SELECTED_SESSIONS
+            else 'narrow --from/--to or --text to see more.'
+        )
+        typer.echo(f'Listed the newest {query.limit} sessions; {more}', err=True)
     if export is not None:
         _export(result.sessions, export)

@@ -5,6 +5,7 @@
   const REFRESH_DELAY_MS = 400;
   const NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
   const MAX_SESSIONS = 1000;
+  const FILE_HINT = 'A Finder export or a local trace file (JSON).';
   const contexts = new WeakMap();
 
   function esc(text) {
@@ -79,6 +80,22 @@
     const element = ctx.form.querySelector('#insights-run-error');
     element.textContent = message || '';
     element.hidden = !message;
+  }
+
+  // One trace_file field serves the Trace file and Local sessions tabs; clear it when the active tab does not own it.
+  function reconcileTraceFileOwner(ctx) {
+    const active = activeSource(ctx.form);
+    if (active !== 'file' && active !== 'sessions') return;
+    if (!field(ctx.form, 'trace_file').value.trim() || ctx.traceFileOwner === active) return;
+    if (ctx.snapshotAbort) ctx.snapshotAbort.abort();
+    clearTraceFile(ctx.form);
+    ctx.traceFileOwner = null;
+    ctx.measuredPath = null;
+    ctx.form.querySelector('#insights-snapshot-preview').textContent = '';
+    ctx.form.querySelector('[data-file-name="file"]').value = '';
+    ctx.form.querySelector('[data-file-name="sessions"]').value = '';
+    ctx.form.querySelector('[data-file-status]').textContent = FILE_HINT;
+    if (active === 'sessions') ctx.sessionsDirty = true;
   }
 
   function updateSource(ctx) {
@@ -251,7 +268,8 @@
         return false;
       }
       setTraceFile(form, result.path, 'snapshot');
-      form.querySelector('[data-file-name="sessions"]').value = result.n_sessions + ' local sessions';
+      form.querySelector('[data-file-name="sessions"]').value = result.n_sessions + (result.n_sessions === 1 ? ' local session' : ' local sessions');
+      ctx.traceFileOwner = 'sessions';
       ctx.sessionsDirty = false;
       ctx.measuredPath = null;
       const failed = result.failed || [];
@@ -490,6 +508,7 @@
       if (!response.ok) throw new Error(result.error || 'Upload failed.');
       const finder = result.kind === 'finder';
       setTraceFile(form, result.path, result.kind);
+      ctx.traceFileOwner = 'file';
       form.querySelector('[data-file-name="file"]').value = file.name;
       status.textContent = finder ? 'Finder export is ready.' : 'Trace snapshot is ready.';
       showError(ctx, '');
@@ -597,6 +616,7 @@
     if (affectsEstimate(target)) scheduleRefresh(ctx);
     if (target.name === 'source') {
       showError(ctx, '');
+      reconcileTraceFileOwner(ctx);
       updateSource(ctx);
       refreshFacets(ctx);
     } else if (target.name === 'window_days') {
@@ -637,7 +657,7 @@
     if (contexts.has(form)) return contexts.get(form);
     const ctx = {
       form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null,
-      sessionsAbort: null, sessionsDirty: false, selectionToken: 0,
+      sessionsAbort: null, sessionsDirty: false, selectionToken: 0, traceFileOwner: null,
       planSequence: 0, compactSequence: 0, refreshTimer: null,
     };
     contexts.set(form, ctx);
@@ -655,6 +675,8 @@
     });
     if (global.htmx && typeof global.htmx.process === 'function') global.htmx.process(form);
     form.classList.add('irf-ready');
+    const mountedSource = activeSource(form);
+    if (field(form, 'trace_file').value.trim() && (mountedSource === 'file' || mountedSource === 'sessions')) ctx.traceFileOwner = mountedSource;
     defaultSessionDates(form);
     showStep(ctx, step || 1, keepError);
     refreshFacets(ctx);

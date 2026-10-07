@@ -143,6 +143,39 @@ def test_date_bounds_use_the_browser_offset(client: TestClient, token: str) -> N
     assert 'No local sessions match these filters.' in nothing_late.text
 
 
+def test_project_directory_filter_expands_the_home_directory(
+    client: TestClient, token: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('USERPROFILE', str(tmp_path))
+    seen: list[Any] = []
+
+    def fake_search(query: Any, *, cancelled: Any = None) -> SessionSearchResult:
+        seen.append(query)
+        return SessionSearchResult(sessions=(), scanned_files=0, candidate_files=0, complete=True)
+
+    monkeypatch.setattr(insights_routes, 'search_sessions', fake_search)
+
+    response = _search(client, token, session_project_dir='~/code/repo')
+
+    assert response.status_code == 200
+    assert seen[0].project_dir == str(tmp_path / 'code' / 'repo')
+
+
+def test_relative_project_directory_is_refused_without_searching(
+    client: TestClient, token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_search(*args: Any, **kwargs: Any) -> SessionSearchResult:
+        raise AssertionError('a relative project directory must not reach the search')
+
+    monkeypatch.setattr(insights_routes, 'search_sessions', fail_search)
+
+    response = _search(client, token, session_project_dir='code/repo')
+
+    assert response.status_code == 422
+    assert 'Enter an absolute project directory, such as ~/code/repo.' in response.text
+
+
 def test_empty_states_tell_missing_folders_from_no_matches(client: TestClient, token: str) -> None:
     missing = _search(client, token)
     assert 'No Claude Code, Claude desktop, Codex or omp session folders were found on this computer.' in missing.text
@@ -299,6 +332,6 @@ def test_plan_before_sessions_are_frozen_asks_for_a_selection(client: TestClient
     compact = client.get('/insights/new/plan', params={'source': 'sessions', 'dimensions': 'intent', 'compact': '1'})
     full = client.get('/insights/new/plan', params={'source': 'sessions', 'dimensions': 'intent'})
 
-    assert 'Estimate unavailable: Select local sessions and press Next.' in compact.text
+    assert 'Estimate unavailable: Select local sessions and press Continue.' in compact.text
     assert full.status_code == 422
-    assert 'Select local sessions and press Next.' in full.text
+    assert 'Select local sessions and press Continue.' in full.text

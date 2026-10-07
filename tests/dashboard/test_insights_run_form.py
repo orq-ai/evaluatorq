@@ -739,6 +739,20 @@ def test_sessions_source_launches_as_a_snapshot() -> None:
     assert 'data-sessions-search' in html and 'id="insights-sessions"' in html
 
 
+def test_a_frozen_sessions_file_is_not_reported_as_the_selected_trace_snapshot() -> None:
+    path = '/runs/.uploads/snapshot-1.json'
+    sessions = render_run_form(
+        replace(RunFormValues.defaults(), source='sessions', trace_file=path, source_name='2 local sessions'), csrf='t'
+    )
+    snapshot = render_run_form(replace(RunFormValues.defaults(), source='snapshot', trace_file=path), csrf='t')
+
+    assert 'Trace snapshot is ready.' not in sessions
+    assert 'Using the sessions selected earlier (2 local sessions)' in sessions
+    assert 'name="source" value="sessions" checked' in sessions
+    assert 'data-kind="snapshot"' in sessions
+    assert 'Trace snapshot is ready.' in snapshot
+
+
 def test_plan_for_a_snapshot_states_what_is_sent_and_to_which_models(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

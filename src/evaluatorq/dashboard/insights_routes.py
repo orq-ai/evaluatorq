@@ -429,11 +429,17 @@ def _session_query(form: Any) -> SessionQuery:
             raise ValueError('From and To must be dates like 2026-10-07.') from None
         if start is not None and end is not None and start >= end:
             raise ValueError('From must be on or before To.')
+    project_dir = str(form.get('session_project_dir') or '').strip() or None
+    if project_dir is not None:
+        expanded = Path(project_dir).expanduser()
+        if not expanded.is_absolute():
+            raise ValueError('Enter an absolute project directory, such as ~/code/repo.')
+        project_dir = str(expanded)
     return SessionQuery(
         sources=sources,
         start=start,
         end=end,
-        project_dir=str(form.get('session_project_dir') or '').strip() or None,
+        project_dir=project_dir,
         text=str(form.get('session_text') or '').strip() or None,
         limit=MAX_SELECTED_SESSIONS,
     )
@@ -508,7 +514,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             source, spec, stages = await asyncio.to_thread(validated)
         except (ValidationError, ValueError, TypeError) as exc:
             if req.query_params.get('source') == 'sessions' and not req.query_params.get('trace_file'):
-                message = 'Select local sessions and press Next.'
+                message = 'Select local sessions and press Continue.'
             else:
                 message = _validation_message(exc)
             if compact:

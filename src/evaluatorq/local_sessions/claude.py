@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import tool_result_to_text
-from evaluatorq.formats._shared import parse_iso
 from evaluatorq.local_sessions import _jsonl, items
 from evaluatorq.local_sessions.models import (
     ParsedSession,
@@ -114,8 +113,8 @@ class _ClaudeReader:
                     :_TEXT_CHARS
                 ],
                 project_dir=_first(head, 'cwd'),
-                started_at=parse_iso(started) if started else mtime,
-                updated_at=parse_iso(updated) if updated else mtime,
+                started_at=_jsonl.timestamp_or(started, mtime),
+                updated_at=_jsonl.timestamp_or(updated, mtime),
                 size_bytes=stat.st_size,
                 first_prompt=first_prompt.strip()[:_TEXT_CHARS],
                 agent_version=_first(head, 'version'),

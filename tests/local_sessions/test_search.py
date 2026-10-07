@@ -244,14 +244,13 @@ def test_cancelled_stops_scan(claude_projects: Path) -> None:
     assert result.sessions == ()
 
 
-def test_unparsable_timestamp_is_skipped_with_warning(claude_projects: Path, warnings: list[str]) -> None:
+def test_unparsable_timestamp_falls_back_to_the_file_time(claude_projects: Path) -> None:
     _claude(claude_projects, 'good')
     bad = _claude(claude_projects, 'bad')
     text = bad.read_text(encoding='utf-8').replace(_utc(1).isoformat(), 'not-a-time')
     bad.write_text(text, encoding='utf-8')
     result = search_sessions(SessionQuery())
-    assert _ids(result) == {'good'}
-    assert any(str(bad) in message for message in warnings)
+    assert _ids(result) == {'good', 'bad'}
 
 
 def test_summary_cache_avoids_second_summarize(claude_projects: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -110,3 +110,29 @@ def test_cut_short_note(monkeypatch: pytest.MonkeyPatch) -> None:
     result = _run()
     assert result.exit_code == 0
     assert 'Searched 3 of 9 session files before the 20s limit' in result.stderr
+
+
+def test_limit_note_when_the_list_is_full(claude_projects: Path, tmp_path: Path) -> None:
+    _claude(claude_projects, 'c1')
+    _claude(claude_projects, 'c2')
+    table = _run('--limit', '2')
+    as_json = _run('--limit', '2', '--json')
+    exported = _run('--limit', '2', '--export', str(tmp_path / 'snap.json'))
+    roomy = _run('--limit', '3')
+    note = 'Listed the newest 2 sessions; raise --limit (up to 1000) to see more.'
+    assert note in table.stderr
+    assert note in as_json.stderr
+    assert len(json.loads(as_json.stdout)) == 2, 'the note goes to stderr, stdout stays JSON'
+    assert note in exported.stderr
+    assert 'Listed the newest' not in roomy.stderr
+
+
+def test_cut_short_export_says_it_is_partial(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        sessions_cli,
+        'search_sessions',
+        lambda _query: SessionSearchResult(sessions=(), scanned_files=3, candidate_files=9, complete=False),
+    )
+    result = _run('--export', str(tmp_path / 'snap.json'))
+    assert 'The export is partial' in result.stderr
+    assert 'The export is partial' not in _run().stderr

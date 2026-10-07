@@ -127,8 +127,9 @@ def _format_size(n_bytes: int) -> str:
 
 def describe_local_send(*, n_traces: int, n_bytes: int, file_name: str, models: Mapping[str, str]) -> str:
     """State what a local-snapshot run sends to which models; `models` maps summary/classifier/embedding to ids."""
+    noun = 'trace' if n_traces == 1 else 'traces'
     return (
-        f'Sending {n_traces:,} traces ({_format_size(n_bytes)}) from {file_name} to models: '
+        f'Sending {n_traces:,} {noun} ({_format_size(n_bytes)}) from {file_name} to models: '
         f'summary {models["summary"]}, classifier {models["classifier"]}, embedding {models["embedding"]}.'
     )
 

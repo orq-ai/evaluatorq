@@ -250,6 +250,21 @@ def test_short_unterminated_session_still_summarizes(claude_projects: Path) -> N
     assert READER.summarize(broken) is not None
 
 
+def test_malformed_or_offset_less_timestamps_fall_back_to_the_file_time(claude_projects: Path) -> None:
+    path = write_jsonl(
+        claude_projects / '-p' / 'ts.jsonl',
+        [
+            _user('u1', None, 0, 'hello', timestamp='not a timestamp'),
+            _assistant('a1', 'u1', 1, [{'type': 'text', 'text': 'ok'}], mid='m1', timestamp='2026-10-01T10:01:00'),
+        ],
+    )
+    summary = READER.summarize(path)
+    assert summary is not None
+    assert summary.first_prompt == 'hello'
+    assert summary.started_at.tzinfo is not None
+    assert summary.updated_at.tzinfo is not None
+
+
 def test_compaction_keeps_pre_and_post_turns(claude_projects: Path) -> None:
     path = write_jsonl(
         claude_projects / '-p' / 'c.jsonl',
