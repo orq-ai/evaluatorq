@@ -118,7 +118,7 @@ def _question(subject: _Subject, descriptions: dict[str, str], *, shell: bool) -
         )
     state = {'tool_name': name}
     if name in descriptions:
-        state['tool_description'] = descriptions[name][:_DESCRIPTION_CHARS]
+        state['tool_description'] = scrub_known_secrets(descriptions[name])[:_DESCRIPTION_CHARS]
     state['arguments'] = text
     return ClassifyQuestion(kind='choice', instructions=_TOOL_INSTRUCTIONS, criteria=_DOOR_CRITERIA, state=state)
 

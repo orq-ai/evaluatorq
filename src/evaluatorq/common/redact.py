@@ -108,6 +108,15 @@ _RULES: tuple[_Rule, ...] = (
     ),
     # A JWT anywhere, including custom headers.
     _Rule(re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), _mask('JWT')),
+    # The credential after an HTTP auth scheme: `Bearer x`, `Basic x`, `Authorization: Token x`. The value must hold a
+    # digit, so prose such as `Bearer token expired` is left alone.
+    _Rule(
+        re.compile(
+            rf'(\b(?:Bearer|Basic|Authorization:\s*Token)\s+){_PLACEHOLDED}(?=[^\s\'"]*\d)([A-Za-z0-9._~+/=-]{{8,}})',
+            re.IGNORECASE,
+        ),
+        _mask_group('SECRET', 2),
+    ),
     # `mysql -u root -pSECRET`: the password is glued to the flag.
     _Rule(
         re.compile(r'(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n|;&]*?\s-p)([^\s\'"]+)'), _mask_group('PASSWORD', 2)
@@ -115,7 +124,7 @@ _RULES: tuple[_Rule, ...] = (
     # `--password=x`, `--token x`, `-p x` style flags.
     _Rule(
         re.compile(
-            r'(?<=\s)--?(?:password|passwd|pass|pwd|secret|token|api[-_]?key|auth[-_]?token)(?:=|\s+)'
+            r'(?<!\S)--?(?:password|passwd|pass|pwd|secret|token|api[-_]?key|auth[-_]?token)(?:=|\s+)'
             rf'{_PLACEHOLDED}([^\s\'"]+)',
             re.IGNORECASE,
         ),

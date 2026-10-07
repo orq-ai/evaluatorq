@@ -29,6 +29,9 @@ LEAKS = [
     ('known-prefix', 'export TOK=ghp_' + 'a1B2c3D4e5' * 3, 'a1B2c3D4e5'),
     ('secret-assignment', 'API_TOKEN=gXeRk29vLq0Pz8Wd', 'gXeRk29vLq0Pz8Wd'),
     ('high-entropy', 'deploy --key Zq8Rk2LxV7mN4pT9wYb3HcD5', 'Zq8Rk2LxV7mN4pT9wYb3HcD5'),
+    ('flag-at-start', '--password hunter2', 'hunter2'),
+    ('bearer', 'curl -H "Authorization: Bearer abcdefghijklmnop123456" https://api', 'abcdefghijklmnop123456'),
+    ('basic', 'Authorization: Basic dXNlcjpwYXNzd29yZDEy', 'dXNlcjpwYXNzd29yZDEy'),
 ]
 
 
@@ -64,6 +67,7 @@ def test_scrub_is_idempotent() -> None:
         'git checkout feature/RES-412-redact',
         'FAILED tests/test_a.py::test_x - AssertionError: assert 1 == 2\n=== 1 failed, 214 passed in 12.34s ===',
         'docker pull acme/api@sha256:' + HEX_64,
+        'ERROR: Bearer token expired, please log in again',
     ],
 )
 def test_scrub_leaves_secret_free_commands_unchanged(text: str) -> None:

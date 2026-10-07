@@ -187,14 +187,22 @@ async def test_response_local_tool_definitions_supply_the_description(monkeypatc
         user(),
         agent(
             calls=[call('deploy', {'env': 'prod'}, 'a')],
-            extra={'evaluatorq.responses_tools': [{'name': 'deploy', 'description': 'Deploy to production.'}]},
+            extra={
+                'evaluatorq.responses_tools': [
+                    {'name': 'deploy', 'description': 'Deploy to production with API_TOKEN=gXeRk29vLq0Pz8Wd'}
+                ]
+            },
         ),
     ])
 
     results = await classify_tool_doors(trajectory, client=_CLIENT)
 
     assert seen == [
-        {'tool_name': 'deploy', 'tool_description': 'Deploy to production.', 'arguments': '{"env": "prod"}'}
+        {
+            'tool_name': 'deploy',
+            'tool_description': 'Deploy to production with API_TOKEN=<SECRET>',
+            'arguments': '{"env": "prod"}',
+        }
     ]
     assert results['one_way_call_count'].value == 1
 
