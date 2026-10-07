@@ -204,9 +204,10 @@ UNFIXED_ERROR = LabelSpec(
     name='unfixed_error',
     kind='noul',
     instructions=(
-        'Decide from the tool calls, their status, and for shell calls the start and end of the output plus the '
-        'failure markers found in it, whether the coding agent left an error unfixed that hurt the result. A '
-        'failed command the agent then corrected does not count.'
+        'Decide from the tool calls, their status, and for shell calls the failure markers found in the output plus '
+        'its start and end, with secrets and personal data replaced by placeholders such as <API_KEY>, whether the '
+        'coding agent left an error unfixed that hurt the result. A failed command the agent then corrected does '
+        'not count.'
     ),
     criteria={
         'true': 'a command, test or edit failed or produced a wrong result and the agent never corrected it',

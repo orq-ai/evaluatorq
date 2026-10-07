@@ -12,7 +12,10 @@ Three views, each for one `/classify` call:
   questions that need to see what a command did; a long trace is split into
   several chunks rather than losing more than 30% of its middle.
 
-Nothing here calls a model.
+Nothing here calls a model or any other service. A shell output excerpt is shown only when the caller
+passes it already redacted (`labeling.redacted_shell_outputs` produces it with the Orq PII endpoint); without one the
+view keeps the call's status, diagnostic category and failure markers, which are fixed labels computed from the output
+locally, and no output text.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
     from evaluatorq.trace_finder.models import TraceRecord
 
@@ -47,11 +50,8 @@ MAX_CUT_SHARE = 0.3
 RISKY_COMMAND_CHARS = 300
 # Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
 SHELL_OUTPUT_CHARS = 300
-# Credential-shaped text masked in the shell excerpt; the classifier never needs the value.
-_CREDENTIAL = re.compile(
-    r'\b(?:sk|pk|rk|ghp|gho|ghs|xox[abprs])[-_][A-Za-z0-9_-]{8,}'
-    r'|(?i:(bearer\s+|(?:token|secret|password|api[_-]?key|credential)s?\s*[=:]\s*))\S+'
-)
+# A text longer than its two kept ends plus this many characters is cut; a text within that is kept whole.
+CUT_SLACK = 40
 USER_TURN_CHARS = 8_000
 
 SKILL_TOOL = 'Skill'
@@ -232,21 +232,30 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
     return _fit(lines, budget, keep_opening_users=True)
 
 
-def tool_activity_chunks(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUDGET) -> list[str]:
+def tool_activity_chunks(
+    trace: TraceRecord | TraceDocument,
+    budget: int = VIEW_BUDGET,
+    *,
+    redacted_outputs: Mapping[Any, str | None] | None = None,
+) -> list[str]:
     """Render every tool call with its input and status, with user turns for context.
 
     Used for the questions that need to see what a command did: whether an error
     stayed unfixed, and whether an action was risky. Assistant prose is left out,
     and each tool result body is replaced by its diagnostic category; a shell
-    call also keeps the start and end of its output and the failure markers
-    found in all of it.
+    call also keeps the failure markers found in all of its output, and the start and end of that output
+    when `redacted_outputs` holds it.
+
+    `redacted_outputs` maps a shell call's id to its output excerpt, already redacted in full before any
+    cut (see `shell_outputs` and `labeling.redacted_shell_outputs`). A call with no entry, or an entry of `None`
+    (redaction failed), shows no `output:` text: the raw output is never rendered.
     A view that fits after cutting at most `MAX_CUT_SHARE` of it from the middle is
     one chunk; a longer one is split into consecutive chunks of at most `budget`
     characters, each starting with the opening user turns, for the caller to ask
     separately and merge.
     """
     messages = prompt_messages(trace)
-    results = {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
+    results = _results(messages)
     lines: list[str] = []
     for message in messages:
         role = message.get('role')
@@ -255,7 +264,9 @@ def tool_activity_chunks(trace: TraceRecord | TraceDocument, budget: int = VIEW_
             if text:
                 lines.append(f'USER: {_head_tail(text, 400, 200)}')
         elif role == 'assistant':
-            lines.extend(_activity_line(call, results) for call in message.get('tool_calls') or [])
+            lines.extend(
+                _activity_line(call, results, redacted_outputs or {}) for call in message.get('tool_calls') or []
+            )
     if not any(line.startswith('CALL') for line in lines):
         return ['No tool calls.']
     if sum(len(line) + 1 for line in lines) * (1 - MAX_CUT_SHARE) <= budget:
@@ -284,7 +295,29 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
     ]
 
 
-def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> str:
+def shell_outputs(trace: TraceRecord | TraceDocument) -> dict[Any, str]:
+    """Each shell call's output text, by call id, for the calls that have a result; for the caller to redact."""
+    results = _results(prompt_messages(trace))
+    outputs: dict[Any, str] = {}
+    for _, call in _tool_calls(trace):
+        result = results.get(call.get('id'))
+        if result and _call_name(call) in SHELL_TOOLS:
+            outputs[call.get('id')] = tool_result_to_text(result.get('content')).strip()
+    return outputs
+
+
+def join_cut(head: str, tail: str, omitted: int) -> str:
+    """Join the two kept ends of a cut text around a count of the characters left out."""
+    return f'{head} [... {omitted} chars ...] {tail}'
+
+
+def _results(messages: list[dict[str, Any]]) -> dict[Any, dict[str, Any]]:
+    return {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
+
+
+def _activity_line(
+    call: dict[str, Any], results: dict[Any, dict[str, Any]], redacted_outputs: Mapping[Any, str | None]
+) -> str:
     name, arguments = _call_name(call), _call_arguments(call)
     if name in SHELL_TOOLS:
         command = _shell_command(arguments)
@@ -306,11 +339,9 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
         markers = [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
         if markers:
             evidence.append(f'output shows: {", ".join(markers)}')
-        half = SHELL_OUTPUT_CHARS // 2
-        excerpt = _CREDENTIAL.sub(
-            lambda match: (match.group(1) or '') + '[redacted]', _head_tail(text.strip(), half, half)
-        )
-        evidence.append(f'output: {excerpt}'.replace('\n', ' ⏎ '))
+        excerpt = redacted_outputs.get(call_id)
+        if excerpt is not None:
+            evidence.append(f'output: {excerpt}'.replace('\n', ' ⏎ '))
     return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
 
 
@@ -436,6 +467,6 @@ def _user_text(message: dict[str, Any]) -> str:
 
 
 def _head_tail(text: str, head: int, tail: int) -> str:
-    if len(text) <= head + tail + 40:
+    if len(text) <= head + tail + CUT_SLACK:
         return text
-    return f'{text[:head]} [... {len(text) - head - tail} chars ...] {text[-tail:]}'
+    return join_cut(text[:head], text[-tail:], len(text) - head - tail)

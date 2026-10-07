@@ -19,11 +19,13 @@ from evaluatorq.common.judge import (
     ClassifyResponse,
     JudgeError,
 )
+from evaluatorq.common import redact
 from evaluatorq.contracts import LLMCallConfig, Usage
 from evaluatorq.insights.labeling import MATCH_KEY, label_traces
 from evaluatorq.insights.models import LabelAnswer, LabelSpec
 from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord, ValueSelection
+from tests.common.fake_orq import FakeOrq
 
 
 def make_trace(trace_id: str) -> TraceRecord:
@@ -469,6 +471,107 @@ async def test_coding_agent_gets_coding_labels_in_conversation_and_tool_calls(mo
     assert outcome.answers['task_type'].value == 'bugfix'
     assert outcome.answers['risky_action'].value == 'none'
     assert outcome.error is None
+
+
+_SECRET = 'sk-live-0123456789abcdef'
+
+
+def _shell_trace(trace_id: str) -> TraceRecord:
+    return make_trace(trace_id).model_copy(
+        update={
+            'messages': (
+                {'role': 'user', 'content': 'Deploy it.'},
+                {
+                    'role': 'assistant',
+                    'tool_calls': [
+                        {'id': 'c1', 'type': 'function', 'function': {'name': 'Bash', 'arguments': '{"command": "make"}'}}
+                    ],
+                },
+                {'role': 'tool', 'tool_call_id': 'c1', 'content': f'Exit code 1\nAPI_KEY={_SECRET}\n2 failed'},
+            )
+        }
+    )
+
+
+def _tool_activity_states(calls: list[ClassifyRequest]) -> list[str]:
+    return [str(request.state) for request in calls if 'unfixed_error' in request.questions]
+
+
+@pytest.mark.asyncio
+async def test_shell_output_reaches_the_tool_activity_question_only_after_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    orq = FakeOrq()
+
+    await label_traces(
+        [_shell_trace('t')], labels=[], compiled=None, client=_client(), model='jev', coding=True, orq=orq.client
+    )
+
+    [state] = _tool_activity_states(calls)
+    assert 'output: Exit code 1 ⏎ API_KEY=<API_KEY_1> ⏎ 2 failed' in state
+    assert _SECRET not in state
+    assert 'output shows: nonzero_exit' in state
+
+
+@pytest.mark.asyncio
+async def test_unredacted_shell_output_is_left_out_of_the_tool_activity_question(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+
+    # The injected client does not route through Orq, so no Orq client can be derived for redaction.
+    [outcome] = await label_traces(
+        [_shell_trace('t')], labels=[], compiled=None, client=_client(), model='jev', coding=True
+    )
+
+    [state] = _tool_activity_states(calls)
+    assert 'output:' not in state
+    assert _SECRET not in state
+    assert 'output shows: nonzero_exit' in state  # fixed labels computed locally still reach the classifier
+    assert 'PII redaction is unavailable' in caplog.text
+    assert outcome.answers['unfixed_error'].error is None
+
+
+@pytest.mark.asyncio
+async def test_one_orq_client_is_derived_for_the_whole_pass_and_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    built: list[tuple[str, str]] = []
+    closed: list[object] = []
+    derived = FakeOrq()
+
+    def resolve(api_key: str, base_url: str) -> FakeOrq:
+        built.append((api_key, base_url))
+        return derived
+
+    async def close(client: object) -> None:
+        closed.append(client)
+
+    monkeypatch.setattr(redact, 'resolve_orq_client', resolve)
+    monkeypatch.setattr(redact, 'close_orq_client', close)
+    client: Any = SimpleNamespace(base_url='https://my.orq.ai/v3/router', api_key='router-key')
+
+    await label_traces(
+        [_shell_trace('a'), _shell_trace('b')], labels=[], compiled=None, client=client, model='jev', coding=True
+    )
+
+    assert built == [('router-key', 'https://my.orq.ai')]
+    assert closed == [derived]
+    assert all(_SECRET not in state for state in _tool_activity_states(calls))
 
 
 @pytest.mark.asyncio

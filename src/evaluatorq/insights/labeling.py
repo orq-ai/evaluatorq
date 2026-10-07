@@ -11,8 +11,9 @@ this call path (`run_classify` already disarms the client's own retries).
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -24,17 +25,27 @@ from evaluatorq.common.judge import (
     JudgeError,
     run_classify,
 )
+from evaluatorq.common.redact import redact_cut, redaction_client
 from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.insights.models import LabelAnswer, LabelSpec
 from evaluatorq.insights.presets import CODING_AGENT, CODING_CONVERSATION_LABELS, CODING_TOOL_LABELS
-from evaluatorq.insights.transcript import conversation_view, tool_activity_chunks, tool_inventory
+from evaluatorq.insights.transcript import (
+    CUT_SLACK,
+    SHELL_OUTPUT_CHARS,
+    conversation_view,
+    join_cut,
+    shell_outputs,
+    tool_activity_chunks,
+    tool_inventory,
+)
 from evaluatorq.trace_finder.classifier import matches_selection
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from openai import AsyncOpenAI
+    from orq_ai_sdk import Orq
 
     from evaluatorq.common.trace_document import TraceDocument
     from evaluatorq.insights.usage import UsageLedger
@@ -276,6 +287,22 @@ def _population_match(
     return all(matches) if len(matches) == len(compiled) else None
 
 
+async def redacted_shell_outputs(trace: TraceRecord | TraceDocument, *, orq: Orq | None) -> dict[Any, str | None]:
+    """Each shell call's output excerpt for `tool_activity_chunks`, redacted with the Orq PII endpoint, by call id.
+
+    The output is redacted before it is cut to its start and end, so a secret across the cut leaves no fragment (see
+    `common.redact.redact_cut`). A call whose output could not be redacted maps to `None`, which the view renders as no
+    output text; the failure is logged by `redact_cut`.
+    """
+    outputs = shell_outputs(trace)
+    if not outputs:
+        return {}
+    excerpts = await redact_cut(
+        list(outputs.values()), keep=SHELL_OUTPUT_CHARS // 2, join=join_cut, slack=CUT_SLACK, orq=orq
+    )
+    return dict(zip(outputs, excerpts, strict=True))
+
+
 async def _label_one(
     trace: TraceRecord | TraceDocument,
     *,
@@ -285,6 +312,7 @@ async def _label_one(
     model: str,
     cfg: LLMCallConfig,
     semaphore: asyncio.Semaphore,
+    orq: Orq | None = None,
     usage: UsageLedger | None = None,
     coding: bool = False,
     coding_labels: Sequence[LabelSpec] | None = None,
@@ -294,8 +322,10 @@ async def _label_one(
     With `coding` on, a first call asks `CODING_AGENT` over the trace's tool
     inventory. When it answers yes, the conversation call also asks the coding
     conversation labels, and a third call asks the coding tool labels over the
-    tool activity (inputs, statuses, outputs). A coding check that fails leaves
-    the coding labels unasked and says so in a warning; it never guesses yes.
+    tool activity (inputs, statuses, outputs). Shell outputs reach that view only
+    after `orq` redacted them; with no `orq` the view carries no output text. A
+    coding check that fails leaves the coding labels unasked and says so in a
+    warning; it never guesses yes.
     """
     answers: dict[str, LabelAnswer] = {}
     selected_coding = (
@@ -361,7 +391,9 @@ async def _label_one(
     async def tool_call() -> dict[str, LabelAnswer]:
         if not is_coding or not tool_coding:
             return {}
-        chunks = tool_activity_chunks(trace)
+        async with semaphore:
+            redacted = await redacted_shell_outputs(trace, orq=orq)
+        chunks = tool_activity_chunks(trace, redacted_outputs=redacted)
         asked = await asyncio.gather(
             *(
                 _ask(
@@ -411,6 +443,7 @@ async def label_traces(
     model: str,
     parallelism: int = 100,
     cfg: LLMCallConfig | None = None,
+    orq: Orq | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     usage: UsageLedger | None = None,
     coding: bool = False,
@@ -422,7 +455,9 @@ async def label_traces(
     every label's question plus (when `compiled` is given) the population-match
     question in a single request, and skip that call when neither is present.
     With `coding` on, each trace also gets the coding-agent check and, when it
-    answers yes, the coding labels (see `_label_one`). A
+    answers yes, the coding labels (see `_label_one`); the shell outputs those
+    labels read are redacted first with `orq`, or with an Orq client built from
+    `client` when `orq` is not given and `client` routes through Orq. A
     per-trace failure never raises — it comes back as a `LabelOutcome` with
     `error` set and every answer failed, per the "per-trace failures never
     fail a run" house rule.
@@ -434,6 +469,7 @@ async def label_traces(
     total = len(traces)
     completed = 0
     completed_lock = asyncio.Lock()
+    resolved_orq = orq
 
     async def run_one(trace: TraceRecord | TraceDocument) -> LabelOutcome:
         nonlocal completed
@@ -446,6 +482,7 @@ async def label_traces(
                 model=model,
                 cfg=resolved_cfg,
                 semaphore=semaphore,
+                orq=resolved_orq,
                 usage=usage,
                 coding=coding,
                 coding_labels=coding_labels,
@@ -481,5 +518,8 @@ async def label_traces(
             next_index += 1
             results[index] = await run_one(traces[index])
 
-    await asyncio.gather(*(worker() for _ in range(min(parallelism, total))))
+    async with AsyncExitStack() as stack:
+        if resolved_orq is None and coding:
+            resolved_orq = await stack.enter_async_context(redaction_client(client))
+        await asyncio.gather(*(worker() for _ in range(min(parallelism, total))))
     return [outcome for outcome in results if outcome is not None]
