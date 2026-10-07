@@ -144,7 +144,7 @@ class TraceDocument(BaseModel):
     def to_datapoint(self) -> DataPoint:
         """Return an evaluatorq `DataPoint` with the trajectory as input and the outcome as expected output."""
         outcome = self.metadata.outcome
-        inputs = {'trajectory': self.trajectory.model_dump(mode='json', exclude_none=True)}
+        inputs = {'trajectory': self.trajectory.to_json_dict()}
         if self.metadata.dataset is not None:
             inputs['dataset'] = self.metadata.dataset.model_dump(mode='json')
         return DataPoint(
@@ -273,7 +273,7 @@ def prompt_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any
     ordered: list[tuple[int, dict[str, Any]]] = []
     for step in doc.trajectory.steps:
         extra = step.extra or {}
-        order = int(extra.get(f'{_EXTRA_PREFIX}source_order', step.step_id - 1))
+        order = _source_order(extra.get(f'{_EXTRA_PREFIX}source_order'), step.step_id - 1)
         if extra.get(f'{_EXTRA_PREFIX}hidden'):
             pass
         else:
@@ -295,7 +295,7 @@ def prompt_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any
             result_extra = result.extra or {}
             if result_extra.get(f'{_EXTRA_PREFIX}hidden'):
                 continue
-            result_order = int(result_extra.get(f'{_EXTRA_PREFIX}source_order', order))
+            result_order = _source_order(result_extra.get(f'{_EXTRA_PREFIX}source_order'), order)
             result_message = dict(result_extra.get(f'{_EXTRA_PREFIX}message_fields') or {})
             result_message['role'] = result_extra.get(f'{_EXTRA_PREFIX}source_role', 'tool')
             if f'{_EXTRA_PREFIX}content_override' in result_extra:
@@ -395,7 +395,7 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
         prior = [
             candidate
             for candidate in candidates
-            if int((candidate.extra or {}).get(f'{_EXTRA_PREFIX}source_order', -1)) < order
+            if _source_order((candidate.extra or {}).get(f'{_EXTRA_PREFIX}source_order'), candidate.step_id - 1) < order
             and not any(
                 result.source_call_id == call_id
                 for result in (candidate.observation.results if candidate.observation else [])
@@ -491,7 +491,8 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
                 results[paired_index] = result.model_copy(update={'extra': result_extra})
             replacement = owner.model_copy(update={'observation': AtifObservation(results=results)})
             steps[owner.step_id - 1] = replacement
-            call_steps[call_id] = [replacement if candidate is owner else candidate for candidate in owners]
+            for key, values in call_steps.items():
+                call_steps[key] = [replacement if candidate is owner else candidate for candidate in values]
 
     # Synthetic owners participate in canonical step order too. Sort only
     # after signal enrichment, which indexes the original step list.
@@ -500,11 +501,14 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
 
     identity = json.dumps([metadata.trace_id, metadata.span_id], ensure_ascii=False, separators=(',', ':'))
     trajectory_id = str(uuid5(NAMESPACE_URL, f'{_TRAJECTORY_ID_NAMESPACE}{identity}'))
-    return AtifTrajectory(
+    trajectory = AtifTrajectory(
         trajectory_id=trajectory_id,
         agent=AtifAgent(name=metadata.agent_name or 'unknown', version='unknown', model_name=metadata.model),
         steps=steps or [AtifStep(step_id=1, source='system', message='', extra={f'{_EXTRA_PREFIX}hidden': True})],
     )
+    if trajectory.has_audio() and trajectory.schema_version != 'ATIF-v1.8':
+        trajectory = trajectory.model_copy(update={'schema_version': 'ATIF-v1.8'})
+    return trajectory
 
 
 def _atif_message(content: Any, extra: dict[str, Any], prefix: str) -> str | list[AtifContentPart]:
@@ -701,7 +705,11 @@ def _infer_image_media_type(path: str) -> str | None:
         header = path[5:].split(',', 1)[0]
         media_type = header.split(';', 1)[0].lower()
     else:
-        suffix = urlsplit(path).path.rsplit('.', 1)[-1].lower() if '.' in urlsplit(path).path else ''
+        try:
+            url_path = urlsplit(path).path
+        except ValueError:
+            return None
+        suffix = url_path.rsplit('.', 1)[-1].lower() if '.' in url_path else ''
         media_type = {
             'jpg': 'image/jpeg',
             'jpeg': 'image/jpeg',
@@ -766,6 +774,11 @@ def _atif_audio(part: Mapping[str, Any]) -> tuple[AtifContentPart | None, dict[s
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _source_order(value: Any, fallback: int) -> int:
+    """Read trusted integer ordering metadata, falling back for malformed provenance."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else fallback
 
 
 def _atif_call(raw: Any, *, fallback_id: str) -> AtifToolCall | None:

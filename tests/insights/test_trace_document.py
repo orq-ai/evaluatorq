@@ -22,6 +22,8 @@ from evaluatorq.common.trace_document import (
 )
 from evaluatorq.formats.atif import (
     AtifAgent,
+    AtifAudioSource,
+    AtifContentPart,
     AtifObservation,
     AtifObservationResult,
     AtifStep,
@@ -180,6 +182,67 @@ def test_orphan_result_owner_uses_source_order() -> None:
     assert document.trajectory.steps[2].observation.results[0].source_call_id == 'after-call'
 
 
+@pytest.mark.parametrize('bad_order', [True, -1, 'invalid'])
+def test_prompt_renderer_falls_back_for_invalid_source_order(bad_order: Any) -> None:
+    document = TraceDocument(
+        metadata=TraceMetadata(
+            trace_id='external',
+            span_id='external-span',
+            timestamp=datetime(2026, 10, 5, tzinfo=timezone.utc),
+        ),
+        trajectory=AtifTrajectory(
+            trajectory_id='external',
+            agent=AtifAgent(name='agent', version='1'),
+            steps=[
+                AtifStep(
+                    step_id=1,
+                    source='user',
+                    message='first',
+                    extra={'evaluatorq.insights.source_order': bad_order},
+                    observation=AtifObservation(results=[AtifObservationResult(
+                        content='orphan',
+                        extra={'evaluatorq.insights.source_order': bad_order},
+                    )]),
+                ),
+                AtifStep(step_id=2, source='agent', message='second'),
+            ],
+        ),
+    )
+
+    assert prompt_messages(document) == [
+        {'role': 'user', 'content': 'first'},
+        {'role': 'tool', 'content': 'orphan'},
+        {'role': 'assistant', 'content': 'second'},
+    ]
+
+
+def test_signal_span_enrichment_accumulates_for_calls_on_same_step() -> None:
+    trace = _trace(
+        {'role': 'assistant', 'tool_calls': [
+            {'id': 'call-a', 'type': 'function', 'function': {'name': 'first', 'arguments': '{}'}},
+            {'id': 'call-b', 'type': 'function', 'function': {'name': 'second', 'arguments': '{}'}},
+        ]},
+        {'role': 'tool', 'tool_call_id': 'call-a', 'content': 'first result'},
+        {'role': 'tool', 'tool_call_id': 'call-b', 'content': 'second result'},
+    ).model_copy(update={'capture_metadata': {'signal_tool_spans': {
+        'call-a': {'start_timestamp': '2026-10-05T00:00:01Z'},
+        'call-b': {'start_timestamp': '2026-10-05T00:00:02Z'},
+    }}})
+
+    document = ensure_trace_document(trace)
+    observation = document.trajectory.steps[0].observation
+    assert observation is not None
+    enriched = {}
+    for result in observation.results:
+        assert result.source_call_id is not None
+        assert result.extra is not None
+        enriched[result.source_call_id] = result.extra['start_timestamp']
+    assert enriched == {
+        'call-a': '2026-10-05T00:00:01Z',
+        'call-b': '2026-10-05T00:00:02Z',
+    }
+
+
 def test_reused_call_id_result_pairs_with_nearest_preceding_call() -> None:
     trace = _trace(
         {'role': 'assistant', 'tool_calls': [{'id': 'same', 'function': {'name': 'first', 'arguments': '{}'}}]},
@@ -287,8 +350,9 @@ def test_image_data_uri_infers_jpeg_without_changing_prompt_shape() -> None:
     assert prompt_messages(document)[0]['content'] == [image_part]
 
 
-def test_unknown_image_url_stays_raw_instead_of_assuming_png() -> None:
-    image_part = {'type': 'input_image', 'image_url': 'https://example.test/image?token=secret'}
+@pytest.mark.parametrize('url', ['https://example.test/image?token=secret', 'https://[invalid'])
+def test_unknown_or_malformed_image_url_stays_raw(url: str) -> None:
+    image_part = {'type': 'input_image', 'image_url': url}
     document = ensure_trace_document(_trace({'role': 'user', 'content': [image_part]}))
 
     message = document.trajectory.steps[0].message
@@ -309,6 +373,37 @@ def test_input_audio_is_stored_as_atif_audio_and_roundtrips_exactly() -> None:
     assert part.source.media_type == 'audio/wav'
     assert part.source.path == 'data:audio/wav;base64,c291bmQ='
     assert prompt_messages(document)[0]['content'] == [audio_part]
+    serialized_trajectory = document.model_dump(mode='json')['trajectory']
+    restored = AtifTrajectory.from_json(serialized_trajectory)
+    assert restored.schema_version == 'ATIF-v1.8'
+    assert restored == document.trajectory
+
+
+def test_native_audio_datapoint_uses_atif_audio_version() -> None:
+    document = TraceDocument(
+        metadata=TraceMetadata(
+            trace_id='native-audio',
+            span_id='native-audio-span',
+            timestamp=datetime(2026, 10, 5, tzinfo=timezone.utc),
+        ),
+        trajectory=AtifTrajectory(
+            trajectory_id='native-audio',
+            agent=AtifAgent(name='agent', version='1'),
+            steps=[AtifStep(
+                step_id=1,
+                source='user',
+                message=[AtifContentPart(
+                    type='audio',
+                    source=AtifAudioSource(media_type='audio/wav', path='clip.wav'),
+                )],
+            )],
+        ),
+    )
+
+    datapoint = document.to_datapoint()
+    restored = AtifTrajectory.from_json(datapoint.inputs['trajectory'])
+    assert restored.schema_version == 'ATIF-v1.8'
+    assert restored.has_audio()
 
 
 @pytest.mark.parametrize(

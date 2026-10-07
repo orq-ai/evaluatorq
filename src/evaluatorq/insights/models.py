@@ -323,6 +323,19 @@ class InsightsRun(BaseModel):
     cost_by_stage: dict[str, Usage | None] = {}
 
     @model_validator(mode='after')
+    def _trace_identities_are_unique(self) -> Self:
+        identities: set[tuple[str, str | None]] = set()
+        for trace in self.traces:
+            identity = (trace.trace_id, trace.span_id or None)
+            if identity in identities:
+                raise ValueError(
+                    'traces must have unique (trace_id, span_id) pairs; '
+                    f'duplicate trace_id={trace.trace_id!r}, span_id={trace.span_id!r}'
+                )
+            identities.add(identity)
+        return self
+
+    @model_validator(mode='after')
     def _label_values_match_specs(self) -> Self:
         kinds = {spec.name: spec.kind for spec in self.config.labels}
         if self.config.coding_analysis or self.config.coding_labels:

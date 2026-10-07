@@ -69,6 +69,10 @@ def walk_items(
 def is_output_item(item: dict[str, Any]) -> bool:
     """Whether a model call produced this supported item, including custom and MCP tool calls."""
     kind = item_type(item)
+    if kind == 'function_call':
+        call_id = item.get('call_id')
+        if not isinstance(call_id, str) or not call_id:
+            return False
     return kind in _RESTORABLE_OUTPUT_TYPES or (kind == 'message' and item.get('role') == 'assistant')
 
 

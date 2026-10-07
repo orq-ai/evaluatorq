@@ -53,7 +53,7 @@ const NA = '<span class="na" title="Not measured for these traces">—</span>';
 const fmtShare = v => v == null ? NA : Math.round(v * 100) + '%';
 const hasErr = t => (t.errors || []).length > 0;
 const reviewDate = value => {
-  if (value == null || value === '') return null;
+  if (value === null || value === undefined || value === '') return null;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 };

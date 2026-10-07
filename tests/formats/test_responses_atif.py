@@ -628,6 +628,32 @@ def test_builtin_tool_call_roundtrips_and_is_reported_as_unmapped_activity() -> 
     assert 'file_search_call' in (signal.no_basis or '')
 
 
+def test_function_call_without_valid_call_id_is_preserved_and_invalidates_tool_coverage() -> None:
+    from evaluatorq.signals import compute_signals
+
+    assistant = {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'done'}]}
+    invalid_call = {'type': 'function_call', 'name': 'lookup', 'arguments': '{}'}
+    trajectory = ResponsesConversation(items=[assistant, invalid_call]).to_atif()
+    step = trajectory.steps[0]
+    assert step.tool_calls is None
+    assert step.extra is not None
+    assert step.extra['evaluatorq.responses_output_items'] == [invalid_call]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'lookup' in (signal.no_basis or '')
+    assert trajectory.to_responses().items == [assistant, invalid_call]
+
+
+def test_function_call_with_non_string_call_id_is_unmapped() -> None:
+    invalid_call = {'type': 'function_call', 'call_id': 42, 'name': 'lookup', 'arguments': '{}'}
+    trajectory = ResponsesConversation(items=[invalid_call]).to_atif()
+    step = trajectory.steps[0]
+    assert step.tool_calls is None
+    assert step.extra is not None
+    assert step.extra['evaluatorq.responses_output_items'] == [invalid_call]
+    assert trajectory.to_responses().items == [invalid_call]
+
+
 def test_future_tool_call_roundtrips_as_raw_activity() -> None:
     from evaluatorq.signals import compute_signals
 

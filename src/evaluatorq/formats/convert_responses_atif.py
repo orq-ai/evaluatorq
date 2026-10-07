@@ -154,7 +154,11 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         if isinstance(item.get('call_id'), str) and item['call_id']:
             current_agent(index).calls.append(item)
         else:
-            logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
+            logger.warning(
+                'Responses function_call {!r} has no valid call_id; preserving it as unmapped activity.',
+                item.get('name'),
+            )
+            current_agent(index).unmapped_outputs.append(item)
 
     def custom_call(index: int, item: dict[str, Any]) -> None:
         if isinstance(item.get('call_id'), str) and item['call_id']:

@@ -292,11 +292,18 @@ def has_unmapped_tool_activity(walked: list[WalkedStep]) -> list[str]:
         items = (entry.step.extra or {}).get(_RESPONSES_OUTPUT_ITEMS_KEY)
         if not isinstance(items, list):
             continue
+        represented_call_ids = {
+            call.tool_call_id for call in entry.step.tool_calls or [] if isinstance(call.tool_call_id, str)
+        }
         for item in items:
             if not isinstance(item, dict):
                 continue
             kind = item.get('type')
-            unsupported_call = isinstance(kind, str) and kind.endswith('_call') and kind != 'function_call'
+            if kind == 'function_call':
+                call_id = item.get('call_id')
+                unsupported_call = not isinstance(call_id, str) or not call_id or call_id not in represented_call_ids
+            else:
+                unsupported_call = isinstance(kind, str) and kind.endswith('_call')
             unsupported_output = (
                 isinstance(kind, str) and kind.endswith('_call_output') and kind != 'function_call_output'
             )

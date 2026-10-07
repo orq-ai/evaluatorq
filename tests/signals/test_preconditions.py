@@ -35,6 +35,15 @@ def test_source_tool_coverage_finds_calls_preserved_outside_atif_tool_calls() ->
     assert 'lookup' in coverage.detail and 'remote' in coverage.detail
 
 
+def test_source_tool_coverage_matches_function_calls_by_source_id() -> None:
+    extra = {'evaluatorq.responses_output_items': [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'},
+    ]}
+    recs = context(traj([agent(calls=[call('lookup', call_id='c')], extra=extra)]))
+    coverage = pre.source_tool_coverage(recs)
+    assert coverage.met is True
+
+
 def test_source_tool_coverage_finds_unsupported_output_without_raw_call_item() -> None:
     extra = {'evaluatorq.responses_output_items': [
         {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'done'},
