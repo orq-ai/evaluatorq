@@ -114,10 +114,8 @@ class _CodexReader:
                     and payload.get('role') == 'user'
                     and not _is_injected(text := _message_text(payload))
                 ),
-                None,
+                '',
             )
-            if first_prompt is None:
-                return None
             tail = _jsonl.read_tail(path, max_bytes=_TAIL_BYTES)
             stat = path.stat()
             mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
@@ -212,6 +210,15 @@ def _map_item(payload: dict[str, Any], out: list[dict[str, Any]], skipped_types:
         )
         if text:
             out.append(items.reasoning(text))
+    elif kind == 'agent_message':
+        content = payload.get('content')
+        text = items.blocks_text(
+            [b for b in content if isinstance(b, dict) and b.get('type') == 'input_text']
+            if isinstance(content, list)
+            else []
+        )
+        if text:
+            out.append(items.system_text(items.trim(f'Message from subagent {payload.get("author")}:\n{text}')))
     elif kind == 'function_call' and isinstance(call_id, str) and isinstance(name, str):
         out.append(items.function_call(call_id=call_id, name=name, arguments=payload.get('arguments')))
     elif kind == 'custom_tool_call' and isinstance(call_id, str) and isinstance(name, str):

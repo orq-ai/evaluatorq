@@ -121,9 +121,50 @@ def test_injected_context_is_not_the_first_prompt(codex_home: Path) -> None:
     assert [item['content'][0]['text'] for item in parsed.items] == ['real question']
 
 
-def test_no_real_prompt_is_not_a_session(codex_home: Path) -> None:
+def test_main_session_without_a_prompt_in_the_head_is_listed(codex_home: Path) -> None:
     path = _rollout(codex_home, records=[_meta(), _message(1, 'user', '<environment_context>x</environment_context>')])
-    assert READER.summarize(path) is None
+    summary = READER.summarize(path)
+    assert summary is not None
+    assert summary.first_prompt == ''
+    with pytest.raises(SessionLoadError):
+        READER.parse(path)
+
+
+def test_agent_message_becomes_system_step_without_warning(codex_home: Path) -> None:
+    path = _rollout(
+        codex_home,
+        records=[
+            _meta(),
+            _message(1, 'user', 'delegate'),
+            _item(
+                2,
+                type='agent_message',
+                author='/root/reviewer',
+                recipient='/root',
+                content=[
+                    {'type': 'input_text', 'text': 'found two bugs'},
+                    {'type': 'encrypted_content', 'encrypted_content': 'zzz'},
+                ],
+                id='m1',
+                internal_chat_message_metadata_passthrough={},
+            ),
+            _item(3, type='agent_message', author='/root/empty', recipient='/root', content=[]),
+            _message(4, 'assistant', 'thanks'),
+        ],
+    )
+    messages: list[str] = []
+    sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
+    try:
+        parsed = READER.parse(path)
+    finally:
+        logger.remove(sink)
+    assert not any('agent_message' in message for message in messages)
+    system = [item for item in parsed.items if item.get('role') == 'system']
+    assert len(system) == 1
+    assert system[0]['content'][0]['text'] == 'Message from subagent /root/reviewer:\nfound two bugs'
+    assert 'zzz' not in str(parsed.items)
+    document = session_document(parsed)
+    assert any(step.source == 'system' and 'found two bugs' in str(step.message) for step in document.trajectory.steps)
 
 
 def test_custom_tool_call_becomes_tool_call_with_observation(codex_home: Path) -> None:
