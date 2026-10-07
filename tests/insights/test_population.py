@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.common.trace_document import TraceDocument
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document
 from evaluatorq.insights import population as population_module
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.population import PopulationError, resolve_population
@@ -55,6 +55,52 @@ def make_trace(trace_id: str) -> TraceRecord:
 
 def _client() -> Any:
     return object()
+
+
+def make_document(trace_id: str) -> TraceDocument:
+    """A session-style ATIF document that is not a `TraceRecord`."""
+    return ensure_trace_document(make_trace(trace_id))
+
+
+@pytest.mark.asyncio
+async def test_local_snapshot_resolves_records_and_session_documents(tmp_path: Path) -> None:
+    path = tmp_path / 'traces.json'
+    path.write_text(
+        Snapshot(traces=(make_trace('record-1'),), documents=(make_document('session-1'),)).model_dump_json(),
+        encoding='utf-8',
+    )
+    resolved = await resolve_population(
+        InsightsPopulation.from_snapshot(path),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+    assert [trace.metadata.trace_id for trace in resolved.traces] == ['record-1', 'session-1']
+    assert resolved.echo['mode'] == 'snapshot'
+    assert resolved.echo['snapshot_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert resolved.n_scanned == 2
+
+
+def test_preview_snapshot_counts_documents(tmp_path: Path) -> None:
+    path = tmp_path / 'traces.json'
+    path.write_text(Snapshot(traces=(), documents=(make_document('session-1'),)).model_dump_json(), encoding='utf-8')
+    assert population_module.preview_snapshot(str(path))['n_traces'] == 1
+
+
+def test_describe_local_send_names_count_size_file_and_models() -> None:
+    text = population_module.describe_local_send(
+        n_traces=3,
+        n_bytes=1536,
+        file_name='s.json',
+        models={'summary': 'a/s', 'classifier': 'a/c', 'embedding': 'a/e'},
+    )
+    assert text == 'Sending 3 traces (1.5 KB) from s.json to models: summary a/s, classifier a/c, embedding a/e.'
+    big = population_module.describe_local_send(
+        n_traces=1, n_bytes=3 * 1024 * 1024, file_name='s.json', models={'summary': 'a', 'classifier': 'b', 'embedding': 'c'}
+    )
+    assert '(3.0 MB)' in big
+
 
 
 def _orq() -> Any:

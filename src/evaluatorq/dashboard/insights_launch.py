@@ -934,7 +934,7 @@ class InsightsLaunchSpec(BaseModel):
                 snapshot = Snapshot.model_validate_json(path.read_text(encoding='utf-8'))
         except (OSError, ValueError) as exc:
             raise ValueError(f'Could not read a valid local trace snapshot: {exc}') from exc
-        if not snapshot.traces:
+        if snapshot.is_empty:
             raise ValueError('The local trace snapshot contains no traces.')
 
     @model_validator(mode='after')

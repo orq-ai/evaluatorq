@@ -103,6 +103,32 @@ def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result.output.count('Model input projection:') == 1
 
 
+def test_snapshot_run_discloses_what_is_sent_to_which_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any
+) -> None:
+    from tests.insights.test_population import make_document
+
+    path = tmp_path / 'sessions.json'
+    path.write_text(Snapshot(traces=(), documents=(make_document('s1'),)).model_dump_json(), encoding='utf-8')
+    roles = {'insights.summary': 'p/summary', 'insights.labels': 'p/classifier', 'insights.embedding': 'p/embed'}
+    monkeypatch.setattr(cli_module, 'role_model', lambda _role, *, task: roles[task])
+    monkeypatch.setattr(cli_module, 'insights', AsyncMock(return_value=minimal_run))
+
+    result = CliRunner().invoke(
+        _app(), ['insights', '--from-snapshot', str(path), '--dimension', 'intent', '--classifier-model', 'x/mine']
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        f'Sending 1 traces ({path.stat().st_size / 1024:.1f} KB) from sessions.json to models: '
+        'summary p/summary, classifier x/mine, embedding p/embed.'
+    ) in result.output
+
+    preview = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
+    assert preview.exit_code == 0, preview.output
+    assert 'Sending' not in preview.output
+
+
 def test_snapshot_cli_rejects_empty_and_conflicting_sources(tmp_path: Path) -> None:
     empty_path = tmp_path / 'empty.json'
     empty_path.write_text(Snapshot(traces=()).model_dump_json(), encoding='utf-8')

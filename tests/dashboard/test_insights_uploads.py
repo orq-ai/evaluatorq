@@ -16,6 +16,16 @@ from evaluatorq.trace_finder.models import Snapshot
 from tests.insights.test_population import _run_export, make_trace
 
 
+def test_validate_upload_accepts_documents_only_snapshot_and_rejects_empty() -> None:
+    from evaluatorq.dashboard.insights_uploads import validate_upload
+    from tests.insights.test_population import make_document
+
+    documents_only = Snapshot(traces=(), documents=(make_document('s1'),)).model_dump_json().encode()
+    assert validate_upload(documents_only) == 'snapshot'
+    with pytest.raises(ValueError, match='contains no traces'):
+        validate_upload(Snapshot(traces=(), documents=()).model_dump_json().encode())
+
+
 def _token(client: TestClient) -> str:
     page = client.get('/insights/new')
     match = re.search(r'name="csrf" value="([^"]+)"', page.text)

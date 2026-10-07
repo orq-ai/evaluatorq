@@ -13,7 +13,7 @@ Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
   and keep only the traces whose ids are in `matched_trace_ids`. No compile, no match
   question — the export already pins the matched population.
 - **Local snapshot path** (`pop.snapshot_path` set): validate a `Snapshot` JSON and
-  use its embedded trace messages directly. No Orq trace fetch or match question.
+  use its embedded trace messages and ATIF session documents directly. No Orq trace fetch or match question.
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
   compile, no match question.
 
@@ -52,7 +52,7 @@ from evaluatorq.trace_finder.projection import MAX_TOKEN_BUDGET, project_trace, 
 from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from openai import AsyncOpenAI
     from orq_ai_sdk import Orq
@@ -113,12 +113,32 @@ def describe_projection_coverage(coverage: dict[str, Any]) -> str:
     )
 
 
+def snapshot_documents(snapshot: Snapshot) -> list[TraceDocument]:
+    """Every trace of a snapshot as a `TraceDocument`: its trace records first, then its ATIF documents."""
+    return [*(ensure_trace_document(trace) for trace in snapshot.traces), *snapshot.documents]
+
+
+def _format_size(n_bytes: int) -> str:
+    """Render a byte count with one decimal in KB or MB."""
+    if n_bytes >= 1024 * 1024:
+        return f'{n_bytes / (1024 * 1024):.1f} MB'
+    return f'{n_bytes / 1024:.1f} KB'
+
+
+def describe_local_send(*, n_traces: int, n_bytes: int, file_name: str, models: Mapping[str, str]) -> str:
+    """State what a local-snapshot run sends to which models; `models` maps summary/classifier/embedding to ids."""
+    return (
+        f'Sending {n_traces:,} traces ({_format_size(n_bytes)}) from {file_name} to models: '
+        f'summary {models["summary"]}, classifier {models["classifier"]}, embedding {models["embedding"]}.'
+    )
+
+
 def preview_snapshot(raw_path: str) -> dict[str, int]:
     """Return the same projection counts the run will compute for a local file."""
     path = Path(raw_path).expanduser()
     try:
         snapshot = Snapshot.model_validate_json(path.read_bytes())
-        return projection_coverage(snapshot.traces)
+        return projection_coverage(snapshot_documents(snapshot))
     except (OSError, KeyError, TypeError, ValueError) as error:
         raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
 
@@ -131,7 +151,7 @@ def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
         snapshot = Snapshot.model_validate_json(raw)
     except (OSError, ValueError) as error:
         raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
-    traces = [ensure_trace_document(trace) for trace in snapshot.traces]
+    traces = snapshot_documents(snapshot)
     return ResolvedPopulation(
         traces=traces,
         compiled=None,

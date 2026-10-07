@@ -19,6 +19,7 @@ from rich.table import Table
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, resolve_orq_client
 from evaluatorq.trace_finder.cli import _facets, resolve_cli_profile
 from evaluatorq.trace_finder.export import RunExport
@@ -27,7 +28,7 @@ from evaluatorq.trace_finder.settings import effective_settings
 
 from . import presets
 from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec
-from .population import PopulationError, describe_projection_coverage, preview_snapshot
+from .population import PopulationError, describe_local_send, describe_projection_coverage, preview_snapshot
 
 _DIMENSIONS: tuple[DimensionName, ...] = ('intent', 'failure', 'sentiment')
 
@@ -129,7 +130,7 @@ def _validate_population_source(
         raise typer.Exit(code=2)
 
 
-def _print_snapshot_preview(path: Path) -> None:
+def _print_snapshot_preview(path: Path) -> dict[str, int]:
     try:
         coverage = preview_snapshot(str(path))
     except PopulationError as exc:
@@ -139,6 +140,34 @@ def _print_snapshot_preview(path: Path) -> None:
         emit_error('local trace snapshot contains no traces')
         raise typer.Exit(code=2)
     Console(file=sys.stdout).print(f'Model input projection: {describe_projection_coverage(coverage)}')
+    return coverage
+
+
+def _print_local_send(
+    path: Path | None,
+    *,
+    n_traces: int,
+    summary_model: str | None,
+    classifier_model: str | None,
+    embedding_model: str | None,
+) -> None:
+    """For a local-snapshot run, state what is sent to which models; explicit options win, else the role defaults."""
+    if path is None:
+        return
+    Console(file=sys.stdout).print(
+        describe_local_send(
+            n_traces=n_traces,
+            n_bytes=path.expanduser().stat().st_size,
+            file_name=path.name,
+            models={
+                'summary': summary_model or role_model('smart', task='insights.summary'),
+                'classifier': classifier_model or role_model('classifier', task='insights.labels'),
+                'embedding': embedding_model or role_model('embedding', task='insights.embedding'),
+            },
+        ),
+        markup=False,
+        highlight=False,
+    )
 
 
 def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_shown: bool = False) -> None:
@@ -204,7 +233,10 @@ def insights_cmd(
     ] = None,
     from_snapshot: Annotated[
         Path | None,
-        typer.Option('--from-snapshot', help='Use traces and messages from a local snapshot JSON file.'),
+        typer.Option(
+            '--from-snapshot',
+            help='Use traces and messages from a local snapshot JSON file, including `eq sessions --export` files.',
+        ),
     ] = None,
     preview_input: Annotated[  # noqa: FBT002
         bool,
@@ -314,11 +346,12 @@ def insights_cmd(
         ),
         preview_input=preview_input,
     )
+    snapshot_traces = 0
     if query is not None and not query.strip():
         emit_error('--query must not be empty')
         raise typer.Exit(code=2)
     if from_snapshot is not None:
-        _print_snapshot_preview(from_snapshot)
+        snapshot_traces = _print_snapshot_preview(from_snapshot)['n_traces']
         if preview_input:
             return
     raw_dimensions = tuple(dimension or _DIMENSIONS)
@@ -388,6 +421,13 @@ def insights_cmd(
         nonlocal run_path
         run_path = path
 
+    _print_local_send(
+        from_snapshot,
+        n_traces=snapshot_traces,
+        summary_model=summary_model,
+        classifier_model=classifier_model,
+        embedding_model=embedding_model,
+    )
     try:
         run = asyncio.run(
             _run_insights_with_profile(

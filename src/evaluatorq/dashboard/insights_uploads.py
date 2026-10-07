@@ -127,7 +127,7 @@ def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKi
     try:
         if kind == 'finder':
             RunExport.model_validate_json(contents)
-        elif not Snapshot.model_validate_json(contents).traces:
+        elif Snapshot.model_validate_json(contents).is_empty:
             raise ValueError('The trace snapshot contains no traces.')
     except ValidationError as exc:
         raise ValueError(f'Upload is not a valid {kind} JSON file.') from exc
