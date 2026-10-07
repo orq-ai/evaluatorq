@@ -246,23 +246,40 @@ def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_without_th
 
 
 @pytest.mark.parametrize(
-    'content',
+    ('tool', 'content'),
     [
-        'Exit code 1\nnpm ERR! missing script',  # Claude Code Bash
-        'Script failed\nWall time 0.4 seconds\nOutput:\n',  # Codex exec
-        '{"chunk_id":"a1","exit_code":2,"output":"boom"}',  # Codex nested exec_command
+        ('Bash', 'Exit code 1\nnpm ERR! missing script'),  # Claude Code
+        ('bash', 'Exit code 1\nnpm ERR! missing script'),  # pi, omp
+        ('exec_command', '{"chunk_id":"a1","exit_code":2,"output":"boom"}'),  # Codex
+        ('orq_shell', '{"stdout":"","stderr":"boom","outcome":{"type":"exit","exit_code":2}}'),  # orq agents
     ],
 )
-def test_nonzero_exit_is_recognised_in_each_harness_format(content: str) -> None:
+def test_nonzero_exit_is_recognised_in_each_harness_format(tool: str, content: str) -> None:
     trace = _trace(
         {'role': 'user', 'content': 'Build it.'},
-        {'role': 'assistant', 'tool_calls': [_call('c1', 'Bash', {'command': 'make'})]},
+        {'role': 'assistant', 'tool_calls': [_call('c1', tool, {'command': 'make'})]},
         {'role': 'tool', 'tool_call_id': 'c1', 'content': content},
     )
 
     [view] = tool_activity_chunks(trace)
 
     assert 'output shows: nonzero_exit' in view
+
+
+def test_codex_exec_script_is_read_as_a_shell_call() -> None:
+    script = 'const r = await tools.exec_command({cmd:"git push --force origin main","workdir":"/repo"}); text(r);'
+    trace = _trace(
+        {'role': 'user', 'content': 'Ship it.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'exec', script)]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'Script failed\nOutput:\nrejected'},
+    )
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'CALL exec [' in view
+    assert ': git push --force origin main' in view
+    assert 'output shows: nonzero_exit' in view
+    assert 'output: Script failed' in view
 
 
 def test_failure_markers_only_apply_to_shell_calls() -> None:

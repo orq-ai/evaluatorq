@@ -54,7 +54,19 @@ _CREDENTIAL = re.compile(
 USER_TURN_CHARS = 8_000
 
 SKILL_TOOL = 'Skill'
-SHELL_TOOLS = frozenset({'Bash', 'bash', 'shell', 'exec_command', 'run_shell_command'})
+# Claude Code, pi and omp call their shell tool `Bash` or `bash`; orq agents call it `orq_shell`.
+# Codex `exec` takes a JavaScript script that calls `tools.exec_command({cmd: ...})`.
+SHELL_TOOLS = frozenset({
+    'Bash',
+    'bash',
+    'shell',
+    'exec',
+    'exec_command',
+    'functions.exec_command',
+    'shell_command',
+    'run_shell_command',
+    'orq_shell',
+})
 # Failure markers searched in the full shell output, including the part the
 # excerpt drops. A command can fail inside a call whose status is `completed`,
 # so the status alone misses it. Claude Code starts a failed Bash result with
@@ -81,7 +93,7 @@ OUTPUT_MARKERS = (
 )
 _REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 _SKILL_ARG = re.compile(r'"skill"\s*:\s*"([^"]+)"')
-_STRING_FIELD = re.compile(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)')
+_STRING_FIELD = re.compile(r'"?(\w+)"?\s*:\s*"((?:[^"\\]|\\.)*)')  # keys unquoted in a Codex exec script
 # Wrappers that hide the real program: `uv run pytest` is pytest, `rtk git` is git.
 _WRAPPERS: dict[str, str | None] = {
     'uv': 'run',
