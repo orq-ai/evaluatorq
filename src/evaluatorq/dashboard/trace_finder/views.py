@@ -975,10 +975,10 @@ def body(
             f'<label>CLI (Windows PowerShell)</label><pre><code>eq insights --from-finder {esc(powershell_filename)}</code></pre>'
             f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
         )
-    return f'{controls_html}{run_status(snapshot, settings, has_explorer=explorer_view is not None)}{analyze}'
+    return f'{controls_html}{run_status(snapshot, has_explorer=explorer_view is not None)}{analyze}'
 
 
-def run_status(snapshot: RunSnapshot, settings: DashboardSettings, *, has_explorer: bool) -> str:
+def run_status(snapshot: RunSnapshot, *, has_explorer: bool) -> str:
     """The part of a run's body that changes while it runs; the 1s poll swaps only this, never the controls."""
     details = (
         task_panel(snapshot.dimensions, editable=False)
@@ -991,7 +991,7 @@ def run_status(snapshot: RunSnapshot, settings: DashboardSettings, *, has_explor
     show_only_url = '/find/rows?quick_view=matches' if has_explorer else None
     return (
         f'<div id="{RUN_STATUS_ID}">{indicator}'
-        f'{progress(snapshot, classifier_model=settings.classifier_model, show_only_url=show_only_url)}{details}</div>'
+        f'{progress(snapshot, classifier_model=snapshot.classifier_model, show_only_url=show_only_url)}{details}</div>'
     )
 
 

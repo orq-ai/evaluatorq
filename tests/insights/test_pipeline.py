@@ -9,7 +9,9 @@ from typing import Any, cast
 
 import pytest
 
+from evaluatorq.common.trace_document import DatasetRef, Outcome, TraceDocument, TraceMetadata, ensure_trace_document
 from evaluatorq.contracts import Usage
+from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifTrajectory
 from evaluatorq.insights import pipeline
 from evaluatorq.insights.models import (
     Cluster,
@@ -23,6 +25,7 @@ from evaluatorq.insights.models import (
     TraceSummary,
 )
 from evaluatorq.insights.population import ResolvedPopulation
+from evaluatorq.insights.store import load_run
 from evaluatorq.trace_finder.models import Snapshot, TraceRecord
 
 
@@ -74,6 +77,73 @@ async def test_local_snapshot_pipeline_does_not_resolve_orq_client(
     assert run.status == 'completed'
     assert run.population['mode'] == 'snapshot'
     assert run.population['n_scanned'] == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_capture_sidecars_are_excluded_from_saved_review_coverage(
+    tmp_path: Path,
+) -> None:
+    sentinel = 'SOURCE_BODY_SENTINEL'
+    trace = _trace(0).model_copy(update={
+        'capture_metadata': {
+            'source': 'snapshot',
+            'incomplete_reason': 'partial source capture',
+            'raw_transcript': {'messages': [{'content': sentinel}]},
+            'unknown_provenance': sentinel,
+            'signal_span_coverage': {
+                'selected_span_id': 'span-0',
+                'selected_span_found': True,
+                'scoped_span_count': 3,
+                'matched_tool_span_count': 1,
+                'matched_call_ids': ['call-1'],
+                'missing_call_ids': ['call-missing'],
+                'responses_items_captured': 2,
+                'selected_data_correlated': True,
+                'selected_detail_captured': False,
+                'enrichment_errors': ['span-2: TimeoutError'],
+                'raw_payload': {'content': sentinel},
+            },
+        }
+    })
+    snapshot_path = tmp_path / 'snapshot.json'
+    snapshot_path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
+
+    run = await pipeline.insights(
+        InsightsPopulation.from_snapshot(snapshot_path),
+        dimensions=(),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+    )
+    saved_path = next((tmp_path / 'runs').glob('insights_*.json'))
+    saved_text = saved_path.read_text(encoding='utf-8')
+    restored = load_run(saved_path)
+
+    assert sentinel not in saved_text
+    assert restored.traces[0].source_coverage == {
+        'source': 'snapshot',
+        'incomplete_reason': 'partial source capture',
+        'signal_span_coverage': {
+            'selected_span_id': 'span-0',
+            'selected_span_found': True,
+            'scoped_span_count': 3,
+            'matched_tool_span_count': 1,
+            'matched_call_ids': ['call-1'],
+            'missing_call_ids': ['call-missing'],
+            'responses_items_captured': 2,
+            'selected_data_correlated': True,
+            'selected_detail_captured': False,
+            'enrichment_errors': ['span-2: TimeoutError'],
+        },
+    }
+    assert restored.traces[0].signals is not None
+    assert restored.traces[0].signals.results['user_message_count'].value == 1
+
+    from evaluatorq.dashboard.insights_review_data import build_signal_detail_payload
+
+    detail = build_signal_detail_payload(restored, trace.trace_id, trace.span_id)
+    assert detail is not None
+    assert detail['source_coverage'] == restored.traces[0].source_coverage
+    assert sentinel not in json.dumps(detail)
 
 
 def _patch_clients(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -150,13 +220,46 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_pipeline_preserves_dataset_identity_and_outcome_for_trace_without_orq_metadata(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _patch_clients(monkeypatch)
+    dataset = DatasetRef(name='org/bench', revision='abc123', split='test', row_id='row-7')
+    outcome = Outcome(passed=True, score=1.0, source='programmatic', definition='The task completed successfully.')
+    trace = TraceDocument(
+        metadata=TraceMetadata(trace_id='row-7', dataset=dataset, outcome=outcome),
+        trajectory=AtifTrajectory(
+            trajectory_id='row-7',
+            agent=AtifAgent(name='benchmark-agent', version='unknown'),
+            steps=[AtifStep(step_id=1, source='user', message='do the task')],
+        ),
+    )
+
+    async def resolve(*args, **kwargs):
+        return _resolved([trace])
+
+    monkeypatch.setattr(pipeline, 'resolve_population', resolve)
+    monkeypatch.setattr(pipeline, 'label_traces', _label([trace]))
+    monkeypatch.setattr(pipeline, 'summarize_traces', _summarize([trace]))
+
+    run = await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path)
+
+    assert run.status == 'completed'
+    saved = load_run(next(tmp_path.glob('insights_*.json')))
+    assert saved.traces[0].span_id is None
+    assert saved.traces[0].timestamp is None
+    assert saved.traces[0].dataset == dataset
+    assert saved.traces[0].outcome == outcome
+
+
+@pytest.mark.asyncio
 async def test_finder_missing_traces_are_visible_in_run_warnings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_clients(monkeypatch)
     traces = [_trace(1)]
 
     async def resolve(*args, **kwargs):
         return ResolvedPopulation(
-            traces=traces,
+            traces=[ensure_trace_document(trace) for trace in traces],
             compiled=None,
             echo={'mode': 'export', 'n_matched_ids': 4, 'n_missing_export_ids': 3},
             n_scanned=1,
@@ -181,7 +284,7 @@ async def test_dashboard_finder_snapshot_records_origin_and_snapshot_identity(
 
     async def resolve(*args, **kwargs):
         return ResolvedPopulation(
-            traces=traces,
+            traces=[ensure_trace_document(trace) for trace in traces],
             compiled=None,
             echo={'mode': 'export', 'finder_export': str(tmp_path / 'private-snapshot.json')},
             n_scanned=1,
@@ -320,6 +423,12 @@ async def test_summary_failure_is_per_trace(monkeypatch: pytest.MonkeyPatch, tmp
     assert run.status == 'completed'
     assert run.counts['n_failed_traces'] == 1
     assert run.counts['per_stage_failed'] == 2
+    assert all(trace.signals is not None for trace in run.traces)
+    signal_report = run.traces[0].signals
+    assert signal_report is not None
+    assert signal_report.results['user_message_count'].value == 1
+    assert run.config.signals is not None
+    assert run.config.signals.tag_thresholds is not None
     assert run.traces[0].errors['summary'] == 'summary failed'
 
 
@@ -541,7 +650,7 @@ async def test_local_projection_omission_is_visible_in_saved_run(monkeypatch: py
 
     async def local_population(*args, **kwargs):
         return ResolvedPopulation(
-            traces=traces,
+            traces=[ensure_trace_document(trace) for trace in traces],
             compiled=None,
             echo={'mode': 'snapshot', 'n_projection_truncated': 1, 'n_source_messages': 2, 'n_omitted_messages': 1},
             n_scanned=1,

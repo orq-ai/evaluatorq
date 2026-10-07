@@ -22,6 +22,7 @@ from evaluatorq.common.jury import (
 )
 from evaluatorq.common.llm_client import client_routes_through_orq, resolve_llm_client
 from evaluatorq.common.model_catalogue import is_known_classify_model, supports_classify
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.output_adapters import (
     inputs_to_messages,
     output_error_text,
@@ -29,13 +30,13 @@ from evaluatorq.common.output_adapters import (
     output_to_text,
 )
 from evaluatorq.common.template_engine import extract_template_paths, resolve_template_path
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, JuryResult, LLMCallConfig
+from evaluatorq.contracts import DEFAULT_SMART_MODEL, JuryResult, LLMCallConfig
 from evaluatorq.jury_presets import get_preset
 from evaluatorq.pairwise import PairwiseComparison, run_pairwise
 from evaluatorq.types import DataPoint, EvaluationResult, Evaluator, Output, ScorerParameter
 
-DEFAULT_JUDGE_MODEL = DEFAULT_PIPELINE_MODEL
-"""Judge model when the caller names neither ``model=`` nor ``judges=``."""
+DEFAULT_JUDGE_MODEL = DEFAULT_SMART_MODEL
+"""Built-in judge model. At runtime a call naming neither ``model=`` nor ``judges=`` uses ``role_model('smart')``, which flags, env and settings can change."""
 
 DEFAULT_JURY_MAX_TOKENS = 8000
 
@@ -613,7 +614,7 @@ def _resolve_panel(judges: list[str] | None, model: str | None) -> list[str]:
         if not model.strip():
             raise ValueError('`model` must be a non-empty judge model identifier.')
         return [model]
-    return [DEFAULT_JUDGE_MODEL]
+    return [role_model('smart')]
 
 
 def _resolve_and_validate_panel(

@@ -52,8 +52,21 @@ const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 const NA = '<span class="na" title="Not measured for these traces">—</span>';
 const fmtShare = v => v == null ? NA : Math.round(v * 100) + '%';
 const hasErr = t => (t.errors || []).length > 0;
-const fmtDate = s => new Date(s).toLocaleDateString('en-GB', {day: 'numeric', month: 'short'});
-const fmtTime = s => new Date(s).toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'});
+const reviewDate = value => {
+  if (value === null || value === undefined || value === '') return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+const fmtDate = value => {
+  const date = reviewDate(value);
+  return date ? date.toLocaleDateString('en-GB', {day: 'numeric', month: 'short'}) : 'Time unavailable';
+};
+const fmtTime = value => {
+  const date = reviewDate(value);
+  return date
+    ? date.toLocaleString('en-GB', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'})
+    : 'Time unavailable';
+};
 const costLabel = run => run.cost == null ? 'Cost unavailable' : run.cost_is_partial ? `Partial cost: $${run.cost.toFixed(3)}` : `$${run.cost.toFixed(3)}`;
 const $ = id => document.getElementById(id);
 const FRAMP = ['#1f8f82', '#6aae9f', '#c9a13f', '#e0682f', '#c23a1c'];   // teal (calm) to red (angry)
@@ -815,7 +828,16 @@ function select(kind, id) {
 }
 function renderDrawer() {
   const el = $('drawer');
+  const selectedTrace = S.sel && S.sel.kind === 'trace' ? byId[S.sel.id] : null;
+  const openSignalDetails = selectedTrace && el.dataset.signalTraceId === selectedTrace.id
+    ? window.EvaluatorqSignals.captureOpen(el)
+    : [];
+  if (selectedTrace && selectedTrace.has_signal_details) loadSignalDetails(selectedTrace);
+  else if (activeSignalDetailRequest) cancelSignalDetails();
   el.innerHTML = S.sel ? (S.sel.kind === 'cluster' ? clusterPanel(C[S.sel.id]) : tracePanel(byId[S.sel.id])) : S.view === 'activity' ? (S.activityItem ? activityDetail() : activityWelcome()) : glance();
+  el.dataset.signalTraceId = selectedTrace?.id || '';
+  window.EvaluatorqSignals.restoreOpen(el, openSignalDetails);
+  window.EvaluatorqSignals.bind(el);
   el.querySelectorAll('[data-close-activity]').forEach(b => b.onclick = () => { S.activityItem = null; commit(); });
   el.querySelectorAll('[data-activity-pair]').forEach(b => b.onclick = () => activitySelect(b.dataset.kind, b.dataset.name));
   el.querySelectorAll('[data-close]').forEach(b => b.onclick = () => select(null));
@@ -828,6 +850,10 @@ function renderDrawer() {
   el.querySelectorAll('[data-act="cluster-traces"]').forEach(b => b.onclick = () => viewClusterTraces(C[S.sel.id]));
   el.querySelectorAll('[data-act="cluster-question"]').forEach(b => b.onclick = () => turnClusterIntoQuestion(C[S.sel.id]));
   el.querySelectorAll('[data-helpers]').forEach(b => b.onclick = () => { S.helpers = !S.helpers; renderDrawer(); });
+  el.querySelectorAll('[data-signal-retry]').forEach(b => b.onclick = () => {
+    const trace = byId[b.dataset.signalRetry];
+    if (trace) { loadSignalDetails(trace, true); renderDrawer(); }
+  });
   bindMock(el);
 }
 function labelBlock(l, ts) {
@@ -957,17 +983,77 @@ function safeOrqUrl(value) {
     return url.protocol === 'https:' ? url.href : '';
   } catch (_) { return ''; }
 }
+function signalValue(value) {
+  return window.EvaluatorqSignals.value(value);
+}
+const signalDetailCache = new Map();
+const signalDetailFailures = new Map();
+let activeSignalDetailRequest = null;
+function cacheSignalDetails(traceId, detail) {
+  signalDetailCache.delete(traceId);
+  signalDetailCache.set(traceId, detail);
+  while (signalDetailCache.size > 20) signalDetailCache.delete(signalDetailCache.keys().next().value);
+  signalDetailFailures.delete(traceId);
+}
+function signalDetailsFor(traceId) {
+  return signalDetailCache.get(traceId) || null;
+}
+function signalDetailsLoading(traceId) {
+  return Boolean(activeSignalDetailRequest && activeSignalDetailRequest.traceId === traceId);
+}
+function cancelSignalDetails() {
+  if (!activeSignalDetailRequest) return;
+  activeSignalDetailRequest.controller.abort();
+  activeSignalDetailRequest = null;
+}
+function loadSignalDetails(trace, retry = false) {
+  if (!trace || !trace.has_signal_details || !trace.signal_detail_url) return;
+  if (signalDetailCache.has(trace.id) || signalDetailsLoading(trace.id)) return;
+  if (signalDetailFailures.has(trace.id) && !retry) return;
+  if (activeSignalDetailRequest) cancelSignalDetails();
+  if (retry) signalDetailFailures.delete(trace.id);
+  const request = {traceId: trace.id, controller: new AbortController()};
+  activeSignalDetailRequest = request;
+  fetch(trace.signal_detail_url, {
+    headers: {'Accept': 'application/json'},
+    signal: request.controller.signal,
+  }).then(async response => {
+    if (!response.ok) throw new Error(response.status === 404 ? 'Saved signal details were not found.' : `Request failed (${response.status}).`);
+    const detail = await response.json();
+    if (detail.trace_id !== trace.trace_id || detail.span_id !== trace.span_id) throw new Error('Signal details did not match this trace.');
+    if (!request.controller.signal.aborted) cacheSignalDetails(trace.id, detail);
+  }).catch(error => {
+    if (!request.controller.signal.aborted) {
+      signalDetailFailures.delete(trace.id);
+      signalDetailFailures.set(trace.id, error.message || 'Could not load signal details.');
+      while (signalDetailFailures.size > 20) signalDetailFailures.delete(signalDetailFailures.keys().next().value);
+    }
+  }).finally(() => {
+    if (activeSignalDetailRequest === request) activeSignalDetailRequest = null;
+    if (S.sel && S.sel.kind === 'trace' && S.sel.id === trace.id) renderDrawer();
+  });
+}
+function signalsPanel(t) {
+  return window.EvaluatorqSignals.render({
+    report: t.has_signals ? t.signals : null,
+    detail: signalDetailsFor(t.id),
+    loading: signalDetailsLoading(t.id),
+    error: signalDetailFailures.get(t.id),
+    retryId: t.id,
+  });
+}
 function tracePanel(t) {
   const traceUrl = safeTraceUrl(t.trace_url);
   const orqUrl = safeOrqUrl(t.orq_url);
   const traceLink = orqUrl
     ? `<a class="linkbtn" href="${esc(orqUrl)}" target="_blank" rel="noopener noreferrer" style="float:right;font-size:12px">Open in Orq ↗</a>`
-    : traceUrl ? `<a class="linkbtn" href="${esc(traceUrl)}" style="float:right;font-size:12px">Open full trace ↗</a>` : '';
+    : traceUrl ? `<a class="btn sm trace-open" href="${esc(traceUrl)}">Open full trace</a>` : '';
   return `<div class="inner">${S.sel.prev ? `<button class="back" data-backto="${esc(S.sel.prev.id)}">← ${esc(C[S.sel.prev.id].name.slice(0, 34))}</button>` : `<button class="back" data-close>✕ Close</button>`}${traceLink}
     <div class="tid">${esc(t.id.slice(0, 12))}… · ${fmtTime(t.ts)} · ${esc(t.agent)}</div>
     <h2>${esc(t.topic || 'Trace')}</h2><p>${esc(t.summary || 'No summary for this trace.')}</p>
     ${t.request ? `<h5>What the user asked</h5><div class="quote">${esc(t.request)}</div>` : ''}
     ${hasErr(t) ? `<h5>Assistant mistakes · ${t.errors.length}</h5><ul class="errs">${t.errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
+    ${signalsPanel(t)}
     <h5>Coding work</h5>
     <div class="stats" style="margin-top:0"><div class="stat"><div class="l">Task</div><div class="v" style="font-size:13px">${chip('task_type', t)}</div></div><div class="stat"><div class="l">Outcome</div><div class="v" style="font-size:13px">${outcomeHtml(t)}</div></div>
       <div class="stat"><div class="l">Verified</div><div class="v" style="font-size:13px">${chip('verified', t)}</div></div><div class="stat"><div class="l">Frustration</div><div class="v">${frusHtml(frus(t))}</div></div>

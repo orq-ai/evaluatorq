@@ -17,8 +17,10 @@ from loguru import logger
 
 from evaluatorq import __version__
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
+from evaluatorq.common.trace_document import ensure_trace_document, trace_document_with_signals
 from evaluatorq.insights.cache import InsightsCache
 from evaluatorq.insights.describe import ClusterName, describe_clusters, describe_top_level
 from evaluatorq.insights.embed import embed_texts
@@ -44,7 +46,7 @@ from evaluatorq.insights.store import get_insights_runs_dir, save_run
 from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.insights.transcript import tool_stats
 from evaluatorq.insights.usage import UsageLedger
-from evaluatorq.trace_finder.settings import effective_settings
+from evaluatorq.signals import SignalsConfig, compute_signals
 
 MIN_CLUSTER_SIZE = 5
 LOW_CONFIDENCE = 0.6
@@ -407,15 +409,16 @@ async def insights(  # noqa: C901
     max_clusters: int = 15,
     max_subclusters: int = 15,
     outlier_zscore: float | None = None,
-    summary_model: str = 'openai/gpt-6-luna',
+    summary_model: str | None = None,
     classifier_model: str | None = None,
     compiler_model: str | None = None,
-    embedding_model: str = 'openai/text-embedding-3-small',
+    embedding_model: str | None = None,
     priority_dimension: DimensionName = 'intent',
     parallelism: int = 100,
     cache: bool = True,
     coding_analysis: bool = False,
     coding_labels: Sequence[str] | None = None,
+    signals_config: SignalsConfig | None = None,
     run_name: str | None = None,
     runs_dir: Path | None = None,
     _run_id: str | None = None,
@@ -443,6 +446,8 @@ async def insights(  # noqa: C901
             raise ValueError(f'unknown Insights coding label(s): {", ".join(sorted(unknown))}')
         selected_coding = [coding_by_name[name] for name in coding_labels]
     coding_enabled = coding_analysis or (coding_labels is not None and bool(selected_coding))
+    signal_settings = signals_config or SignalsConfig()
+    signal_settings = signal_settings.model_copy(update={'tag_thresholds': signal_settings.resolved_tag_thresholds()})
     for limit_name, limit_value in (
         ('max_clusters', max_clusters),
         ('max_subclusters', max_subclusters),
@@ -450,9 +455,13 @@ async def insights(  # noqa: C901
     ):
         if limit_value < 1:
             raise ValueError(f'{limit_name} must be positive')
-    settings = effective_settings()
-    compiler_model = compiler_model or settings.compiler_model
-    classifier_model = classifier_model or settings.classifier_model
+    compiler_model = compiler_model or role_model('fast', task='finder.compiler')
+    # An explicit classifier_model covers both stages; otherwise population search
+    # follows finder.classifier and labelling follows insights.labels.
+    finder_classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
+    classifier_model = classifier_model or role_model('classifier', task='insights.labels')
+    summary_model = summary_model or role_model('smart', task='insights.summary')
+    embedding_model = embedding_model or role_model('embedding', task='insights.embedding')
     run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()
@@ -472,6 +481,7 @@ async def insights(  # noqa: C901
         cache=cache,
         coding_analysis=coding_analysis,
         coding_labels=selected_coding,
+        signals=signal_settings,
     )
     run = InsightsRun(
         evaluatorq_version=__version__,
@@ -545,14 +555,23 @@ async def insights(  # noqa: C901
                 orq=resolved_orq,
                 client=resolved_llm,
                 compiler_model=compiler_model,
-                classifier_model=classifier_model,
+                classifier_model=finder_classifier_model,
             )
+            measured = []
+            for source_trace in resolved.traces:
+                document = ensure_trace_document(source_trace)
+                report = await asyncio.to_thread(compute_signals, document.trajectory, config=signal_settings)
+                measured.append(trace_document_with_signals(document, report))
+            resolved.traces = measured
             run.population = {
                 **resolved.echo,
                 'n_scanned': resolved.n_scanned,
                 'n_matched': len(resolved.traces) if not resolved.compiled else 0,
                 'n_failed_match': 0,
             }
+            if population.query is not None:
+                # finder.classifier picked this query's generated filters; config holds only the labels model.
+                run.population['finder_classifier_model'] = finder_classifier_model
             if _finder_export_source is not None and population.finder_export is not None:
                 run.population['finder_export'] = str(_finder_export_source)
                 if _finder_export_sha256 is not None:
@@ -572,9 +591,13 @@ async def insights(  # noqa: C901
                     trace_id=trace.trace_id,
                     span_id=trace.span_id,
                     timestamp=trace.timestamp,
+                    dataset=trace.metadata.dataset,
+                    outcome=trace.metadata.outcome,
                     agent_name=trace.agent_name or '',
                     project=trace.project or '',
                     tool_stats=tool_stats(trace),
+                    signals=trace.metadata.signals,
+                    source_coverage=trace.source_coverage,
                 )
                 for trace in resolved.traces
             ]

@@ -1,0 +1,102 @@
+"""Pre-migration snapshots of classifier-facing trace renderings."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from evaluatorq.common.trace_document import ensure_trace_document
+from evaluatorq.insights.summarize import _build_prompt
+from evaluatorq.insights.transcript import conversation_view, tool_activity_chunks, tool_inventory
+from evaluatorq.trace_finder.models import TraceRecord
+from evaluatorq.trace_finder.projection import project_trace
+
+FIXTURE = Path(__file__).parent / 'fixtures' / 'atif_characterization_expected.json'
+
+
+def _call(call_id: str, name: str, arguments: str) -> dict[str, Any]:
+    return {'id': call_id, 'type': 'function', 'function': {'name': name, 'arguments': arguments}}
+
+
+def _trace(messages: list[dict[str, Any]], trace_id: str = 'atif-characterization') -> TraceRecord:
+    return TraceRecord(
+        schema_version=1,
+        trace_id=trace_id,
+        span_id='span-1',
+        timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
+        messages=tuple(messages),
+        project='default',
+        model='claude',
+        provider='anthropic',
+        status='completed',
+        product='agent',
+        trace_type='conversation',
+    )
+
+
+def _fixtures() -> tuple[TraceRecord, TraceRecord]:
+    trace = _trace([
+        {'role': 'user', 'content': 'Inspect the deployment. <system-reminder>secret reminder</system-reminder>'},
+        {
+            'role': 'assistant',
+            'content': 'I will inspect both services.',
+            'tool_calls': [
+                _call('a', 'Bash', '{"command":"uv run pytest tests/test_api.py -q"}'),
+                _call('b', 'Lookup', '{"query":"tenant 7"}'),
+                _call('c', 'Edit', '{"file_path":"src/api.py","bad":'),
+                _call('d', 'Read', '{"file_path":"orphan.py"}'),
+            ],
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'a',
+            'content': 'Error: timed out',
+            'trace_finder_metadata': {'tool_result': {'status': 'failed'}},
+        },
+        {
+            'role': 'tool',
+            'tool_call_id': 'b',
+            'content': 'credential=sk-live-secret-value; customer private payload',
+            'status': 'completed',
+        },
+        {'role': 'tool', 'tool_call_id': 'orphan', 'content': 'Error: permission denied'},
+        {'role': 'assistant', 'content': 'x' * 350 + ' middle assistant details ' + 'y' * 350},
+        {'role': 'user', 'content': 'Second request.'},
+        {'role': 'assistant', 'tool_calls': [_call('e', 'Bash', '{"command":"git push --force origin main"}')]},
+        {'role': 'tool', 'tool_call_id': 'e', 'content': 'Error: permission denied; token=sk-live-secret-value'},
+    ])
+
+    long_messages: list[dict[str, Any]] = [{'role': 'user', 'content': 'THE ORIGINAL TASK'}]
+    for index in range(12):
+        call_id = f'l{index}'
+        long_messages.extend([
+            {'role': 'assistant', 'tool_calls': [_call(call_id, 'Read', json.dumps({'file_path': f'path/{index}.py', 'note': 'n' * 35}))]},
+            {'role': 'tool', 'tool_call_id': call_id, 'content': 'x' * 120},
+        ])
+    return trace, _trace(long_messages, trace_id='long')
+
+
+@pytest.mark.parametrize('use_atif', [False, True], ids=['legacy-source', 'canonical-document'])
+def test_current_classifier_payloads_match_pre_migration_snapshots(use_atif: bool) -> None:
+    expected = json.loads(FIXTURE.read_text(encoding='utf-8'))
+    trace, long_trace = (ensure_trace_document(trace) if use_atif else trace for trace in _fixtures())
+    full_long = tool_activity_chunks(long_trace, budget=10**6)[0]
+
+    actual = {
+        'conversation_view': conversation_view(trace),
+        'tool_inventory': tool_inventory(trace),
+        'tool_activity_chunks': tool_activity_chunks(trace),
+        'tool_activity_cut': tool_activity_chunks(long_trace, budget=int(len(full_long) * 0.85)),
+        'tool_activity_chunks_small_budget': tool_activity_chunks(long_trace, budget=450),
+        'summary_prompt': _build_prompt(trace),
+        'finder_classifier_state': project_trace(trace).serialized,
+    }
+
+    assert actual == expected
+    serialized = json.dumps(actual, ensure_ascii=False)
+    assert 'sk-live-secret-value' not in serialized
+    assert 'secret reminder' not in actual['conversation_view']

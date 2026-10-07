@@ -653,6 +653,7 @@ class JudgeAgent(BaseAgent):
     # Function tools plus reasoning_effort in one request, which chat completions answers
     # with a 400 on models like gpt-5.4-mini. Not a preference the caller can hold.
     REQUIRED_API: ClassVar[Literal['chat_completions', 'responses']] = 'responses'
+    MODEL_TASK: ClassVar[str] = 'sim.judge'
 
     def __init__(
         self,

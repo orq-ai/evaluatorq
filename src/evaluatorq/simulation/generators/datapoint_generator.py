@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from itertools import starmap
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from evaluatorq.common.llm_limit import active_llm_parallelism
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
@@ -19,13 +19,14 @@ from evaluatorq.simulation.generators.first_message_generator import (
 from evaluatorq.simulation.generators.persona_generator import PersonaGenerator
 from evaluatorq.simulation.generators.scenario_generator import ScenarioGenerator
 from evaluatorq.simulation.quality.message_perturbation import apply_random_perturbation
-from evaluatorq.simulation.types import (
-    DEFAULT_MODEL,
-    Persona,
-    Scenario,
-    SimulationDatapoint,
-)
 from evaluatorq.simulation.utils.prompt_builders import generate_datapoint
+
+if TYPE_CHECKING:
+    from evaluatorq.simulation.types import (
+        Persona,
+        Scenario,
+        SimulationDatapoint,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +42,15 @@ class DatapointGenerator:
     def __init__(
         self,
         *,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         config: LLMCallConfig | None = None,
         orq_api_key: str | None = None,
     ) -> None:
-        from evaluatorq.simulation._config import resolve_sim_llm_config
+        from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
 
-        self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
+        self._config = sim_role_config(
+            resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__), 'sim.generator'
+        )
         self._model = self._config.model
 
         from evaluatorq.openresponses.client import build_simulation_client

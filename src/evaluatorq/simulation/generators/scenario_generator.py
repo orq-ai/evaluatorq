@@ -13,7 +13,6 @@ from evaluatorq.common.structured_output import token_budget_for_items
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation._usage import UsageTracking
 from evaluatorq.simulation.types import (
-    DEFAULT_MODEL,
     Criterion,
     Scenario,
     StartingEmotion,
@@ -195,7 +194,7 @@ class ScenarioGenerator(UsageTracking):
     def __init__(
         self,
         *,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         client: AsyncOpenAI | None = None,
         api_key: str | None = None,
         config: LLMCallConfig | None = None,
@@ -205,9 +204,11 @@ class ScenarioGenerator(UsageTracking):
         both set the model, ``config.model`` wins and the contradiction is
         logged — same rule, same warning, as the public entry points.
         """
-        from evaluatorq.simulation._config import resolve_sim_llm_config
+        from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
 
-        self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
+        self._config = sim_role_config(
+            resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__), 'sim.generator'
+        )
         self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client
 

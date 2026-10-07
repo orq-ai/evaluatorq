@@ -36,6 +36,8 @@ _PROVIDER_PREFIXES: tuple[tuple[str, str], ...] = (
     ('deepseek', 'deepseek'),
     ('qwen', 'alibaba'),
 )
+_RESPONSES_TOOLS_KEY = 'evaluatorq.responses_tools'
+_RESPONSES_OUTPUT_ITEMS_KEY = 'evaluatorq.responses_output_items'
 
 
 @dataclass(frozen=True)
@@ -253,14 +255,62 @@ def tool_times(result: AtifObservationResult) -> tuple[float | None, float | Non
 
 def tool_schemas(trajectory: AtifTrajectory) -> dict[str, dict[str, Any]]:
     """Tool name to its definition, from `agent.tool_definitions` (OpenAI-style `function` wrapper or flat)."""
+    return _tool_schemas(trajectory.agent.tool_definitions or [])
+
+
+def call_tool_schemas(record: CallRecord, root: AtifTrajectory) -> dict[str, dict[str, Any]]:
+    """Schemas active for one call, preferring the exact Responses response that emitted it.
+
+    A present response-local list is authoritative, including an empty list. ATIF tool definitions remain the
+    fallback for trajectories without response-local metadata.
+    """
+    extra = record.step.step.extra or {}
+    response_tools = extra.get(_RESPONSES_TOOLS_KEY)
+    if isinstance(response_tools, list):
+        return _tool_schemas(response_tools)
+    own = tool_schemas(record.step.trajectory)
+    return {**tool_schemas(root), **own}
+
+
+def _tool_schemas(definitions: list[Any]) -> dict[str, dict[str, Any]]:
     schemas: dict[str, dict[str, Any]] = {}
-    for definition in trajectory.agent.tool_definitions or []:
+    for definition in definitions:
+        if not isinstance(definition, dict):
+            continue
         wrapped = definition.get('function')
-        body: dict[str, Any] = wrapped if isinstance(wrapped, dict) else definition
+        body = wrapped if isinstance(wrapped, dict) else definition
         name = body.get('name')
         if isinstance(name, str):
             schemas[name] = body
     return schemas
+
+
+def has_unmapped_tool_activity(walked: list[WalkedStep]) -> list[str]:
+    """Describe Responses tool calls kept outside ATIF `tool_calls` because their semantics are unsupported."""
+    activity: list[str] = []
+    for entry in walked:
+        items = (entry.step.extra or {}).get(_RESPONSES_OUTPUT_ITEMS_KEY)
+        if not isinstance(items, list):
+            continue
+        represented_call_ids = {
+            call.tool_call_id for call in entry.step.tool_calls or [] if isinstance(call.tool_call_id, str)
+        }
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get('type')
+            if kind == 'function_call':
+                call_id = item.get('call_id')
+                unsupported_call = not isinstance(call_id, str) or not call_id or call_id not in represented_call_ids
+            else:
+                unsupported_call = isinstance(kind, str) and kind.endswith('_call')
+            unsupported_output = (
+                isinstance(kind, str) and kind.endswith('_call_output') and kind != 'function_call_output'
+            )
+            if unsupported_call or unsupported_output:
+                label = item.get('name') or item.get('server_label') or kind
+                activity.append(f'{label} @step {entry.step.step_id}')
+    return activity
 
 
 @dataclass(frozen=True)

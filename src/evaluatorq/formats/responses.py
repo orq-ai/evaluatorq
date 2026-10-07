@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args, get_origin
 
 from loguru import logger
 from openai.types.responses import Response, ResponseInputItem, ResponseOutputItem
@@ -13,14 +14,56 @@ from evaluatorq.formats._shared import atif_tool_arguments, json_arguments_text
 from evaluatorq.openresponses.otel_messages import RESPONSES_ITEM_TYPES
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-
     from evaluatorq.formats.atif import AtifTrajectory
     from evaluatorq.formats.chat import ChatConversation
     from evaluatorq.formats.otel import OtelTrace
 
-_KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message', 'compaction'}
-_MODEL_OUTPUT_TYPES = frozenset({'reasoning', 'function_call', 'custom_tool_call', 'mcp_call'})
+
+def _literal_string_values(annotation: Any) -> set[str]:
+    """Read string values from a Literal annotation, allowing Annotated and union wrappers."""
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is Annotated:
+        return _literal_string_values(args[0]) if args else set()
+    if origin is Literal:
+        return {value for value in args if isinstance(value, str)}
+    if args:
+        return set().union(*(_literal_string_values(arg) for arg in args))
+    return set()
+
+
+def _sdk_output_item_types(output_item_type: Any) -> frozenset[str]:
+    """Discover output item discriminators exposed by this OpenAI SDK, skipping unknown union members."""
+    item_types: set[str] = set()
+    pending = [output_item_type]
+    while pending:
+        member = pending.pop()
+        origin = get_origin(member)
+        args = get_args(member)
+        if origin is Annotated:
+            if args:
+                pending.append(args[0])
+            continue
+        if args:
+            pending.extend(args)
+            continue
+        model_fields = getattr(member, 'model_fields', None)
+        if not isinstance(model_fields, Mapping):
+            continue
+        type_field = model_fields.get('type')
+        annotation = getattr(type_field, 'annotation', None)
+        item_types.update(_literal_string_values(annotation))
+    return frozenset(item_types)
+
+
+# Keep output recognition aligned with the installed OpenAI SDK. An SDK union
+# member we cannot inspect stays on the raw preservation path. Result items
+# ending in `_output` are transcript inputs, not model-response boundaries;
+# compaction has its own system-step mapping and is excluded from model outputs.
+_SDK_OUTPUT_TYPES = _sdk_output_item_types(ResponseOutputItem)
+_RESPONSE_RESULT_ITEM_TYPES = frozenset(kind for kind in _SDK_OUTPUT_TYPES if kind.endswith('_output'))
+_RESTORABLE_OUTPUT_TYPES = _SDK_OUTPUT_TYPES - _RESPONSE_RESULT_ITEM_TYPES - {'compaction'}
+_KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | _SDK_OUTPUT_TYPES | {'message', 'compaction'}
 _INPUT_ITEM: TypeAdapter[ResponseInputItem] = TypeAdapter(ResponseInputItem)
 _OUTPUT_ITEM: TypeAdapter[ResponseOutputItem] = TypeAdapter(ResponseOutputItem)
 
@@ -47,7 +90,25 @@ def walk_items(
 def is_output_item(item: dict[str, Any]) -> bool:
     """Whether a model call produced this supported item, including custom and MCP tool calls."""
     kind = item_type(item)
-    return kind in _MODEL_OUTPUT_TYPES or (kind == 'message' and item.get('role') == 'assistant')
+    if kind == 'function_call':
+        call_id = item.get('call_id')
+        if not isinstance(call_id, str) or not call_id:
+            return False
+    return (isinstance(kind, str) and kind in _RESTORABLE_OUTPUT_TYPES and kind != 'message') or (
+        kind == 'message' and item.get('role') == 'assistant'
+    )
+
+
+def is_sdk_output_item(item: dict[str, Any]) -> bool:
+    """Whether the installed SDK has a typed output model for this item discriminator."""
+    kind = item_type(item)
+    return isinstance(kind, str) and kind in _SDK_OUTPUT_TYPES
+
+
+def is_raw_tool_call(item: dict[str, Any]) -> bool:
+    """Whether an opaque/future call item should be preserved outside the SDK output union."""
+    kind = item_type(item)
+    return isinstance(kind, str) and kind.endswith('_call') and not is_output_item(item)
 
 
 def output_item(item: dict[str, Any]) -> ResponseOutputItem:
@@ -158,7 +219,7 @@ class ResponsesConversation(BaseModel):
             item.type
             for response in responses
             for item in response.output
-            if item.type not in _MODEL_OUTPUT_TYPES and not (item.type == 'message' and item.role == 'assistant')
+            if item.type not in _RESTORABLE_OUTPUT_TYPES and not (item.type == 'message' and item.role == 'assistant')
         })
         if unsupported:
             msg = f'Response.output item types {unsupported} are not supported by ResponsesConversation.responses'

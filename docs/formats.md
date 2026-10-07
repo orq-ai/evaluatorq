@@ -39,6 +39,74 @@ Chat and Responses also convert directly to each other. Every other pair compose
 
 `to_atif()` and `to_otel()` on a non-ATIF source take `agent_name` and `agent_version`, which fill `AtifTrajectory.agent`. `OtelTrace.to_atif()` falls back to the `gen_ai.agent.name` and `gen_ai.agent.version` attributes of the root `invoke_agent` span when you leave them unset. Both default to `'unknown'` otherwise. `ChatConversation.to_atif()` and `ResponsesConversation.to_atif()` also take `session_id`; left unset, it is a hash of the conversation, so the same input always gets the same id.
 
+## Wrap a dataset trajectory
+
+A **dataset trace document** is a Pydantic `TraceDocument` containing an ATIF trajectory and separate dataset metadata. Use it when a benchmark row has ground truth, the known result of the run, that you need to compare with an evaluator's prediction. Dataset-specific loading, parsing, revision pinning, and freeze manifests stay in the consuming project; evaluatorq supplies the shared models and preservation check.
+
+`metadata.dataset` identifies the dataset name, pinned revision, optional split, and row ID. Choose a row ID unique within that revision and include it in `trace_id`; a task ID alone can repeat across runs. `metadata.outcome` holds `passed`, an optional raw `score`, the result's `source` (`programmatic`, `human`, `judge`, or `none`), and its `definition`. A programmatic reward and a human annotation are different sources of ground truth; the definition says what passing means for this dataset. None of these fields is written into the ATIF trajectory.
+
+This in-memory fixture wraps one parsed row and turns it into an evaluatorq `DataPoint`, the input row a job evaluates. It makes no source or model requests.
+
+```python
+from evaluatorq.formats.atif import (
+    AtifAgent, AtifObservation, AtifObservationResult,
+    AtifStep, AtifToolCall, AtifTrajectory,
+)
+from evaluatorq.insights import (
+    DatasetRef, Outcome, TraceDocument, TraceMetadata,
+    TrajectoryCounts, check_trace_document,
+)
+
+# In your parser, read these expectations from the raw dataset row.
+expected_counts = TrajectoryCounts(tool_calls=1, tool_results=1, reasoning_steps=1)
+expected_outcome = Outcome(
+    passed=True, score=1.0, source="programmatic",
+    definition="The fixture's repair test passed",
+)
+trajectory = AtifTrajectory(
+    agent=AtifAgent(name="fixture-agent", version="1"),
+    steps=[
+        AtifStep(step_id=1, source="user", message="Repair the fixture"),
+        AtifStep(
+            step_id=2, source="agent", message="The repair passed",
+            reasoning_content="Run the test to check the repair",
+            tool_calls=[AtifToolCall(
+                tool_call_id="call-1", function_name="test", arguments={},
+            )],
+            observation=AtifObservation(results=[AtifObservationResult(
+                source_call_id="call-1", content="passed",
+            )]),
+        ),
+    ],
+)
+document = TraceDocument(
+    metadata=TraceMetadata(
+        trace_id="fixture:row-1",
+        dataset=DatasetRef(
+            name="example/repair", revision="fixture-v1", split="test", row_id="row-1",
+        ),
+        outcome=expected_outcome,
+    ),
+    trajectory=trajectory,
+)
+check_trace_document(
+    document=document, expected_counts=expected_counts, expected_outcome=expected_outcome,
+)
+datapoint = document.to_datapoint()
+assert datapoint.inputs["dataset"]["row_id"] == "row-1"
+assert AtifTrajectory.model_validate(datapoint.inputs["trajectory"]) == trajectory
+assert datapoint.expected_output == expected_outcome.model_dump(mode="json")
+print(datapoint.expected_output["passed"])
+```
+
+`to_datapoint()` puts the serialized trajectory in `inputs["trajectory"]`, dataset provenance in `inputs["dataset"]` when present, and the serialized outcome in `expected_output`. Your job reads the trajectory input; your evaluator can compare its prediction with the outcome. A non-dataset document without an outcome has `expected_output=None`.
+
+A dataset row without `outcome` raises a Pydantic validation error. An unlabelled dataset must explicitly use `Outcome(passed=None, source="none", definition="No ground truth available")`; `passed=None` with any other source also fails validation. Keep a raw reward in `score` when converting it into pass/fail.
+
+Benchmark rows can omit `span_id` and `timestamp`. Documents without a dataset still require both, and every supplied timestamp must include a timezone offset. A dataset document is a Python input contract; the dashboard's [local trace file](insights.md#local-trace-file-format) still expects the existing message-based snapshot schema.
+
+In each dataset parser's tests, compute `expected_counts` and `expected_outcome` independently from the raw row and call `check_trace_document()`. It rejects changed tool-call, tool-result, or reasoning-step counts (including embedded subagents), a changed outcome, and a wrapper that changes during JSON serialization. Counts do not prove that call IDs, arguments, result text, reasoning text, or order survived: assert those against the raw row too. The check cannot recover information already lost by a parser.
+
 ## Add trajectory tags to an evaluation
 
 `signal_evaluators()` turns trajectory tags into evaluatorq scorers. Use it when your output is ATIF, chat, Responses, OTel, or a chat message list and you want deterministic structural tags without an LLM judge. These tags describe execution patterns, not answer quality.

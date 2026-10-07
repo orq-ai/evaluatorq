@@ -71,6 +71,90 @@ def test_response_output_holds_the_output_items_of_each_step() -> None:
     assert [[o.type for o in r.output] for r in back.responses] == [['reasoning', 'function_call'], ['message']]
 
 
+def test_sdk_output_type_outside_legacy_allowlist_keeps_response_boundary_and_roundtrip() -> None:
+    mcp_tools = {'type': 'mcp_list_tools', 'id': 'mt_1', 'server_label': 'remote', 'tools': []}
+    call = {'type': 'function_call', 'call_id': 'c1', 'name': 'lookup', 'arguments': '{}'}
+    call_result = {'type': 'function_call_output', 'call_id': 'c1', 'output': 'found'}
+    first_usage = {
+        'input_tokens': 3,
+        'output_tokens': 2,
+        'total_tokens': 5,
+        'input_tokens_details': {'cached_tokens': 1},
+        'output_tokens_details': {'reasoning_tokens': 0},
+    }
+    second_usage = {
+        'input_tokens': 7,
+        'output_tokens': 4,
+        'total_tokens': 11,
+        'input_tokens_details': {'cached_tokens': 2},
+        'output_tokens_details': {'reasoning_tokens': 1},
+    }
+    responses = [
+        Response.model_validate({
+            **_response('gpt-first', first_usage).model_dump(mode='json'),
+            'id': 'resp_first',
+            'output': [mcp_tools],
+        }),
+        Response.model_validate({
+            **_response('gpt-second', second_usage).model_dump(mode='json'),
+            'id': 'resp_second',
+            'output': [call],
+        }),
+    ]
+
+    conversation = ResponsesConversation(items=[mcp_tools, call, call_result], responses=responses)
+    trajectory = conversation.to_atif()
+    assert len(trajectory.steps) == 2
+    first, second = trajectory.steps
+    assert first.extra is not None
+    assert first.extra['evaluatorq.responses_output_items'] == [mcp_tools]
+    assert first.extra['response_id'] == 'resp_first'
+    assert first.model_name == 'gpt-first'
+    assert first.metrics is not None
+    assert first.metrics.prompt_tokens == 3
+    assert second.extra is not None
+    assert second.extra['response_id'] == 'resp_second'
+    assert second.model_name == 'gpt-second'
+    assert second.metrics is not None
+    assert second.metrics.prompt_tokens == 7
+    assert second.tool_calls is not None and second.tool_calls[0].tool_call_id == 'c1'
+
+    back = trajectory.to_responses()
+    assert back.items == [mcp_tools, call, call_result]
+    assert back.responses is not None
+    assert [[item.type for item in response.output] for response in back.responses] == [
+        ['mcp_list_tools'],
+        ['function_call'],
+    ]
+    assert [response.id for response in back.responses] == ['resp_first', 'resp_second']
+    assert [response.usage.input_tokens for response in back.responses if response.usage is not None] == [3, 7]
+
+
+def test_response_tool_definitions_are_kept_with_their_response() -> None:
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'lookup', 'arguments': '{"a": 1}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'one'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'lookup', 'arguments': '{"b": 1}'},
+    ]
+    first_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['a']}}]
+    second_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['b']}}]
+    conv = ResponsesConversation(items=items, responses=[
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'output': [items[0]], 'tools': first_tools}),
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'id': 'resp_2', 'output': [items[2]], 'tools': second_tools}),
+    ])
+
+    trajectory = conv.to_atif()
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_tools'] == first_tools
+    assert trajectory.steps[1].extra is not None
+    assert trajectory.steps[1].extra['evaluatorq.responses_tools'] == second_tools
+    back = trajectory.to_responses()
+    assert back.responses is not None
+    assert [response.model_dump(mode='json', exclude_none=True)['tools'] for response in back.responses] == [
+        first_tools, second_tools
+    ]
+
+
 def test_response_output_that_disagrees_with_items_is_rejected() -> None:
     conv = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', None), _response('gpt-y', None)])
     assert conv.responses is not None
@@ -587,6 +671,137 @@ def test_custom_and_mcp_calls_belong_to_response_and_agent_step() -> None:
     assert step.extra is not None and step.extra['evaluatorq.responses_output_items'] == [custom, mcp]
     back = conv.to_atif().to_responses()
     assert back.items[1:] == [custom, mcp]
+
+
+def test_builtin_tool_call_roundtrips_and_is_reported_as_unmapped_activity() -> None:
+    from evaluatorq.signals import compute_signals
+
+    item = {'type': 'file_search_call', 'id': 'fs_1', 'queries': ['find'], 'status': 'completed'}
+    trajectory = ResponsesConversation(items=[item]).to_atif()
+
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_output_items'] == [item]
+    assert trajectory.to_responses().items == [item]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'file_search_call' in (signal.no_basis or '')
+
+
+def test_function_call_without_valid_call_id_is_preserved_and_invalidates_tool_coverage() -> None:
+    from evaluatorq.signals import compute_signals
+
+    assistant = {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'done'}]}
+    invalid_call = {'type': 'function_call', 'name': 'lookup', 'arguments': '{}'}
+    trajectory = ResponsesConversation(items=[assistant, invalid_call]).to_atif()
+    step = trajectory.steps[0]
+    assert step.tool_calls is None
+    assert step.extra is not None
+    assert step.extra['evaluatorq.responses_output_items'] == [invalid_call]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'lookup' in (signal.no_basis or '')
+    assert trajectory.to_responses().items == [assistant, invalid_call]
+
+
+def test_function_call_with_non_string_call_id_is_unmapped() -> None:
+    invalid_call = {'type': 'function_call', 'call_id': 42, 'name': 'lookup', 'arguments': '{}'}
+    trajectory = ResponsesConversation(items=[invalid_call]).to_atif()
+    step = trajectory.steps[0]
+    assert step.tool_calls is None
+    assert step.extra is not None
+    assert step.extra['evaluatorq.responses_output_items'] == [invalid_call]
+    assert trajectory.to_responses().items == [invalid_call]
+
+
+def test_sdk_output_type_probe_reads_known_current_or_minimum_union_members() -> None:
+    from openai.types.responses import ResponseOutputItem
+
+    from evaluatorq.formats.responses import _sdk_output_item_types
+
+    output_types = _sdk_output_item_types(ResponseOutputItem)
+    assert {'function_call', 'message'} <= output_types
+
+
+def test_sdk_output_type_probe_skips_non_model_union_members_and_wrappers() -> None:
+    from types import SimpleNamespace
+    from typing import Annotated, Literal, Union
+
+    from evaluatorq.formats.responses import _sdk_output_item_types
+
+    model_member = type(
+        'FakeOutputItem',
+        (),
+        {'model_fields': {'type': SimpleNamespace(annotation=Literal['known_call'])}},
+    )
+    bad_fields_member = type('BadFieldsOutputItem', (), {'model_fields': []})
+    missing_type_member = type('MissingTypeOutputItem', (), {'model_fields': {}})
+    wrapped_union = Annotated[
+        Union[model_member, str, bad_fields_member, missing_type_member],
+        'sdk-union-wrapper',
+    ]
+
+    assert _sdk_output_item_types(wrapped_union) == frozenset({'known_call'})
+    assert _sdk_output_item_types(Annotated[Union[str, bytes], 'opaque-wrapper']) == frozenset()
+
+
+def test_future_tool_call_roundtrips_as_raw_activity() -> None:
+    from evaluatorq.signals import compute_signals
+
+    item = {'type': 'foo_call', 'call_id': 'future-1', 'name': 'future_tool', 'payload': {'x': 1}}
+    trajectory = ResponsesConversation(items=[item]).to_atif()
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_output_items'] == [item]
+    assert trajectory.to_responses().items == [item]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'future_tool' in (signal.no_basis or '')
+
+
+def test_sdk_unsupported_tool_call_roundtrips_without_response_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.formats import responses as responses_format
+
+    item = {'type': 'local_shell_call', 'call_id': 'shell-1', 'name': 'run', 'action': {'command': 'pwd'}}
+    monkeypatch.setattr(responses_format, '_RESTORABLE_OUTPUT_TYPES', frozenset())
+    trajectory = ResponsesConversation(items=[item]).to_atif()
+    back = trajectory.to_responses()
+    assert back.items == [item]
+    assert back.responses is None
+
+
+def test_raw_tool_call_before_typed_response_keeps_the_typed_turn_boundary() -> None:
+    from evaluatorq.signals import compute_signals
+
+    raw = {'type': 'foo_call', 'call_id': 'future-1', 'name': 'future_tool'}
+    call = {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'}
+    conversation = ResponsesConversation(items=[raw, call], responses=[
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'output': [call]})
+    ])
+    trajectory = conversation.to_atif()
+    assert len(trajectory.steps) == 2
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_output_items'] == [raw]
+    assert trajectory.steps[1].tool_calls is not None
+    assert trajectory.steps[1].model_name == 'gpt-x'
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'unrepresented' in (signal.no_basis or '')
+    back = trajectory.to_responses()
+    assert back.items == [raw, call]
+    assert back.responses is not None and len(back.responses) == 1
+
+
+def test_invalid_response_tool_definition_warns_and_is_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    item = {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'}
+    conversation = ResponsesConversation(items=[item], responses=[
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'output': [item]})
+    ])
+    trajectory = conversation.to_atif()
+    assert trajectory.steps[0].extra is not None
+    trajectory.steps[0].extra['evaluatorq.responses_tools'] = [{}]
+    back = trajectory.to_responses()
+    assert back.responses is not None
+    assert back.responses[0].tools == []
+    assert 'Dropping invalid Responses tool definition' in caplog.text
 
 
 def test_custom_tool_result_round_trips_with_its_call() -> None:

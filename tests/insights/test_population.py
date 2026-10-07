@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import hashlib
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from evaluatorq.common.trace_document import TraceDocument
 from evaluatorq.insights import population as population_module
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.population import PopulationError, resolve_population
@@ -67,6 +67,7 @@ class FakeSource:
     calls: list[dict[str, Any]] = []
     snapshot: Snapshot = Snapshot(traces=())
     closed = False
+    enrichment_calls: list[tuple[TraceRecord, ...]] = []
 
     def __init__(self, orq: Any) -> None:
         del orq
@@ -91,6 +92,10 @@ class FakeSource:
         })
         return FakeSource.snapshot
 
+    async def enrich_selected_signal_spans(self, records: tuple[TraceRecord, ...]) -> tuple[TraceRecord, ...]:
+        FakeSource.enrichment_calls.append(records)
+        return records
+
     def close(self) -> None:
         FakeSource.closed = True
 
@@ -100,6 +105,7 @@ def _reset_fake_source() -> None:
     FakeSource.calls = []
     FakeSource.snapshot = Snapshot(traces=())
     FakeSource.closed = False
+    FakeSource.enrichment_calls = []
 
 
 @pytest.mark.asyncio
@@ -136,6 +142,8 @@ async def test_filter_only_path_loads_directly_with_no_compile(monkeypatch: pyte
     assert resolved.compiled is None
     assert [t.trace_id for t in resolved.traces] == ['t1', 't2']
     assert resolved.n_scanned == 2
+    assert all(isinstance(trace, TraceDocument) for trace in resolved.traces)
+    assert FakeSource.enrichment_calls == [traces]
     assert resolved.echo['mode'] == 'filter'
     assert FakeSource.calls[0]['facets'].agent_name == frozenset({'support-bot'})
     assert FakeSource.closed is True
@@ -159,6 +167,7 @@ async def test_local_snapshot_uses_messages_without_orq(monkeypatch: pytest.Monk
     )
 
     assert [trace.trace_id for trace in resolved.traces] == ['local-1']
+    assert isinstance(resolved.traces[0], TraceDocument)
     assert resolved.traces[0].messages[0]['content'] == 'hello'
     assert resolved.echo['mode'] == 'snapshot'
     assert resolved.echo['snapshot_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -205,6 +214,21 @@ async def test_live_population_reports_the_same_projection_coverage(monkeypatch:
     assert resolved.echo['mode'] == 'filter'
     assert resolved.echo['n_projection_truncated'] == 1
     assert resolved.echo['n_omitted_messages'] == 1
+
+
+@pytest.mark.asyncio
+async def test_live_population_rejects_duplicate_trace_ids_before_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(
+        traces=(make_trace('duplicate'), make_trace('duplicate').model_copy(update={'span_id': 'another-span'}))
+    )
+
+    with pytest.raises(PopulationError, match='select one span per trace'):
+        await resolve_population(
+            InsightsPopulation(), orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+        )
+
+    assert FakeSource.closed
 
 
 @pytest.mark.asyncio

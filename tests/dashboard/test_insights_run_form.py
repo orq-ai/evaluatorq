@@ -17,6 +17,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from evaluatorq.common.model_catalogue import ModelInfo
+from evaluatorq.common.model_roles import BUILTIN
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.auth import DashboardAuth
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, get_finder_exports_dir
@@ -483,15 +484,16 @@ def test_review_step_loads_a_picker_per_model_and_the_compiler_only_for_question
     assert set(INSIGHTS_MODEL_FIELDS) == {'summary_model', 'classifier_model', 'embedding_model', 'compiler_model'}
 
 
-def test_model_defaults_come_from_the_config_and_the_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_model_defaults_come_from_the_model_roles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(tmp_path / 'none.json'))
+    monkeypatch.setenv('EVALUATORQ_SMART_MODEL', 'acme/smart-9')
     monkeypatch.setenv('EVALUATORQ_CLASSIFIER_MODEL', 'acme/classifier-9')
     monkeypatch.setenv('EVALUATORQ_COMPILER_MODEL', 'acme/compiler-9')
 
     values = RunFormValues.defaults()
 
-    assert values.summary_model == InsightsConfig.model_fields['summary_model'].default
-    assert values.embedding_model == InsightsConfig.model_fields['embedding_model'].default
+    assert values.summary_model == 'acme/smart-9'
+    assert values.embedding_model == BUILTIN['embedding']
     assert (values.classifier_model, values.compiler_model) == ('acme/classifier-9', 'acme/compiler-9')
     assert values.launch_fields()['classifier_model'] == 'acme/classifier-9'
 

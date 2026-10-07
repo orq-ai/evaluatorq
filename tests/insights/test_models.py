@@ -78,6 +78,59 @@ def test_run_round_trips_json(minimal_run: InsightsRun) -> None:
     assert InsightsRun.model_validate_json(minimal_run.model_dump_json()) == minimal_run
 
 
+@pytest.mark.parametrize(
+    'span_ids',
+    [('span-1', 'span-1'), (None, None), ('', None)],
+)
+def test_run_rejects_duplicate_trace_identity(
+    minimal_run: InsightsRun, span_ids: tuple[str | None, str | None]
+) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    for trace, span_id in zip(payload['traces'], span_ids, strict=True):
+        trace['trace_id'] = 'trace-1'
+        trace['span_id'] = span_id
+
+    with pytest.raises(ValidationError, match=r'unique \(trace_id, span_id\) pairs'):
+        InsightsRun.model_validate(payload)
+
+
+def test_run_identity_allows_same_trace_with_different_spans(minimal_run: InsightsRun) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    for trace in payload['traces']:
+        trace['trace_id'] = 'same-trace'
+
+    loaded = InsightsRun.model_validate(payload)
+
+    assert [trace.span_id for trace in loaded.traces] == ['span-1', 'span-2']
+
+
+def test_run_identity_allows_distinct_unspanned_trace_ids(minimal_run: InsightsRun) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    payload['traces'][0].update(trace_id='dataset-row-1', span_id=None)
+    payload['traces'][1].update(trace_id='dataset-row-2', span_id=None)
+
+    loaded = InsightsRun.model_validate(payload)
+
+    assert [(trace.trace_id, trace.span_id) for trace in loaded.traces] == [
+        ('dataset-row-1', None),
+        ('dataset-row-2', None),
+    ]
+
+
+def test_run_rejects_duplicate_unspanned_identity_even_for_different_dataset_rows(minimal_run: InsightsRun) -> None:
+    payload = minimal_run.model_dump(mode='json')
+    for index, trace in enumerate(payload['traces']):
+        trace.update(
+            trace_id='reused-id',
+            span_id=None,
+            dataset={'name': 'org/bench', 'revision': 'rev-1', 'split': 'test', 'row_id': f'row-{index}'},
+            outcome={'passed': None, 'source': 'none', 'definition': 'No labelled outcome.'},
+        )
+
+    with pytest.raises(ValidationError, match=r'unique \(trace_id, span_id\) pairs'):
+        InsightsRun.model_validate(payload)
+
+
 @pytest.mark.parametrize('instructions', ['', 'x' * 2001])
 def test_saved_run_loads_legacy_label_instruction_lengths(minimal_run: InsightsRun, instructions: str) -> None:
     payload = minimal_run.model_dump(mode='json')

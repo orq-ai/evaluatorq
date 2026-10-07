@@ -12,8 +12,6 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
-
 SETTINGS_PATH_ENV = 'EVALUATORQ_DASHBOARD_SETTINGS'
 MIN_WINDOW_DAYS = 1
 MAX_WINDOW_DAYS = 90
@@ -22,6 +20,10 @@ MAX_LIMIT = 5000
 DEFAULT_LIMIT = 500
 MIN_PARALLELISM = 1
 MAX_PARALLELISM = 200
+# Pre-roles settings files saved these as plain fields, defaults included.
+_LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_model'})
+_LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
+_LEGACY_CLASSIFIER_MODEL = 'typesafe/jev-latest'
 
 
 class DashboardSettings(BaseModel):
@@ -29,9 +31,11 @@ class DashboardSettings(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
-    compiler_model: str = DEFAULT_PIPELINE_MODEL
-    classifier_model: str = 'typesafe/jev-latest'
-    apply_model: str = DEFAULT_PIPELINE_MODEL
+    fast_model: str | None = None
+    smart_model: str | None = None
+    classifier_model: str | None = None
+    embedding_model: str | None = None
+    model_overrides: dict[str, str] = Field(default_factory=dict)
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
@@ -69,6 +73,33 @@ class DashboardSettings(BaseModel):
             return {**value, 'orq_auth_method': 'cli_profile'}
         return value
 
+    @model_validator(mode='before')
+    @classmethod
+    def migrate_legacy_models(cls, value: object) -> object:
+        """Fold the pre-roles model fields into role fields and task overrides.
+
+        A legacy value equal to its old default is dropped so the old default is
+        not frozen into the file; any other value becomes a task override.
+        """
+
+        if not isinstance(value, dict) or not _LEGACY_MODEL_KEYS & value.keys():
+            return value
+        migrated = dict(value)
+        raw_overrides = migrated.get('model_overrides')
+        overrides = dict(raw_overrides) if isinstance(raw_overrides, dict) else {}
+        for legacy_key, task in (('compiler_model', 'finder.compiler'), ('apply_model', 'apply')):
+            legacy = migrated.pop(legacy_key, None)
+            if isinstance(legacy, str) and legacy.strip() and legacy.strip() != _LEGACY_DEFAULT_MODEL:
+                existing = overrides.get(task)
+                if not (isinstance(existing, str) and existing.strip()):
+                    overrides[task] = legacy.strip()
+        if overrides:
+            migrated['model_overrides'] = overrides
+        classifier = migrated.get('classifier_model')
+        if isinstance(classifier, str) and classifier.strip() == _LEGACY_CLASSIFIER_MODEL:
+            migrated['classifier_model'] = None
+        return migrated
+
     @field_validator(
         'orq_profile',
         'orq_profile_host',
@@ -87,17 +118,30 @@ class DashboardSettings(BaseModel):
             return value.strip() or None
         return value
 
-    @field_validator('compiler_model', 'classifier_model', 'apply_model', mode='before')
+    @field_validator('fast_model', 'smart_model', 'classifier_model', 'embedding_model', mode='before')
     @classmethod
     def strip_model_identifier(cls, value: object) -> object:
-        """Reject blank model identifiers after removing surrounding space."""
+        """Strip surrounding space; a blank role model means use the default."""
 
         if isinstance(value, str):
-            stripped = value.strip()
-            if not stripped:
-                raise ValueError('model identifier must not be blank')
-            return stripped
+            return value.strip() or None
         return value
+
+    @field_validator('model_overrides', mode='after')
+    @classmethod
+    def drop_unknown_overrides(cls, value: dict[str, str]) -> dict[str, str]:
+        """Drop overrides for unknown tasks and blank models with a warning instead of rejecting all settings."""
+        from evaluatorq.common.model_roles import TASKS
+
+        kept: dict[str, str] = {}
+        for task, model in value.items():
+            if task not in TASKS:
+                logger.warning('Dropping model override for unknown task {!r} from dashboard settings', task)
+            elif model.strip():
+                kept[task] = model.strip()
+            else:
+                logger.warning('Dropping blank model override for task {!r} from dashboard settings', task)
+        return kept
 
 
 def _default_settings() -> DashboardSettings:
@@ -170,10 +214,10 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     Explicit *overrides* (typically CLI flags) beat environment variables,
     which beat the saved file, which beats model defaults. ``None`` values in
     *overrides* are ignored so callers can pass optional flags directly.
-    Environment model variables are ``EVALUATORQ_APPLY_MODEL``,
-    ``EVALUATORQ_COMPILER_MODEL``, and ``EVALUATORQ_CLASSIFIER_MODEL``. Finder limit
-    variables are ``EVALUATORQ_FINDER_WINDOW_DAYS``, ``EVALUATORQ_FINDER_LIMIT``,
-    and ``EVALUATORQ_FINDER_PARALLELISM``; invalid integer or out-of-range values
+    Models are not resolved here: ``evaluatorq.common.model_roles.role_model``
+    owns their precedence. Finder limit variables are
+    ``EVALUATORQ_FINDER_WINDOW_DAYS``, ``EVALUATORQ_FINDER_LIMIT``, and
+    ``EVALUATORQ_FINDER_PARALLELISM``; invalid integer or out-of-range values
     are ignored with a warning.
     """
     values = load_settings().model_dump()
@@ -181,14 +225,6 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     # now uses the selected credential's full scope; callers can still override
     # these fields explicitly for a single invocation.
     values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
-    for field, env_name in (
-        ('apply_model', 'EVALUATORQ_APPLY_MODEL'),
-        ('compiler_model', 'EVALUATORQ_COMPILER_MODEL'),
-        ('classifier_model', 'EVALUATORQ_CLASSIFIER_MODEL'),
-    ):
-        env_value = os.environ.get(env_name, '').strip()
-        if env_value:
-            values[field] = env_value
     for field, env_name, minimum, maximum in (
         ('window_days', 'EVALUATORQ_FINDER_WINDOW_DAYS', MIN_WINDOW_DAYS, MAX_WINDOW_DAYS),
         ('limit', 'EVALUATORQ_FINDER_LIMIT', MIN_LIMIT, MAX_LIMIT),

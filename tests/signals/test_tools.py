@@ -91,6 +91,58 @@ def test_schema_violation_and_missing_schema_jsonschema_basis():
     assert no_schema.value is None
 
 
+def test_response_local_schema_is_selected_at_each_tool_call():
+    from openai.types.responses import Response
+
+    from evaluatorq.formats.responses import ResponsesConversation
+
+    items = [
+        {'type': 'function_call', 'call_id': 'a', 'name': 'lookup', 'arguments': '{"wrong": 1}'},
+        {'type': 'function_call_output', 'call_id': 'a', 'output': 'one'},
+        {'type': 'function_call', 'call_id': 'b', 'name': 'lookup', 'arguments': '{"b": 1}'},
+    ]
+    first_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['a']}}]
+    second_tools = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object', 'required': ['b']}}]
+    base = {
+        'created_at': 1, 'model': 'gpt-x', 'object': 'response', 'parallel_tool_calls': False,
+        'tool_choice': 'auto', 'status': 'completed', 'usage': None,
+    }
+    conversation = ResponsesConversation(items=items, responses=[
+        Response.model_validate({**base, 'id': 'resp_a', 'output': [items[0]], 'tools': first_tools}),
+        Response.model_validate({**base, 'id': 'resp_b', 'output': [items[2]], 'tools': second_tools}),
+    ])
+    trajectory = conversation.to_atif()
+
+    signal = _values(trajectory, 'invalid_schema_tool_call_count')['invalid_schema_tool_call_count']
+    assert signal.value == 1
+    assert [item.call_id for item in signal.evidence] == ['a']
+
+
+def test_unmapped_responses_tool_activity_invalidates_only_tool_dependent_signals():
+    from evaluatorq.formats.responses import ResponsesConversation
+
+    trajectory = ResponsesConversation(items=[
+        {'type': 'custom_tool_call', 'call_id': 'custom-1', 'name': 'lookup', 'input': 'query'},
+        {'type': 'custom_tool_call_output', 'call_id': 'custom-1', 'output': 'answer'},
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'finished'}]},
+    ]).to_atif()
+    values = _values(
+        trajectory,
+        'tool_call_count',
+        'llm_call_count',
+        'max_autonomous_steps',
+        'terminal_answer_present',
+        'tool_churn',
+    )
+
+    assert values['tool_call_count'].value is None
+    assert values['tool_call_count'].preconditions[-1].name == 'source tool activity represented'
+    assert values['llm_call_count'].value == 2
+    assert values['max_autonomous_steps'].value is None
+    assert values['terminal_answer_present'].value is None
+    assert values['tool_churn'].value is None
+
+
 def test_schema_validation_reports_no_basis_without_optional_dependency(monkeypatch):
     import builtins
 
@@ -124,8 +176,7 @@ def test_unusable_tool_schema_has_no_basis():
     report = _values(trajectory, 'invalid_schema_tool_call_count')['invalid_schema_tool_call_count']
     assert report.value is None
     assert 'unusable tool schema' in (report.no_basis or '')
-    assert report.preconditions[-1].name == 'tool schemas valid'
-    assert report.preconditions[-1].met is False
+    assert any(pc.name == 'tool schemas valid' and pc.met is False for pc in report.preconditions)
 
 
 def test_command_family_runs_and_oscillation():
@@ -199,6 +250,68 @@ def test_alternate_retry_definition_and_window():
     assert wide['tool_retry_count'].evidence[0].reason == ''
     assert wide['tool_succeeded_after_retry_count'].value == 1
     assert narrow['tool_retry_count'].value == 0
+
+
+def test_retry_counts_are_zero_without_matching_calls_even_when_statuses_are_missing():
+    names = ['lookup_user', 'get_order', 'search_flights', 'think', 'calculate', 'update_booking']
+    trajectory = traj([
+        agent(calls=[call(name, {}, f'call-{index}')], results=[bare('ordinary result')])
+        for index, name in enumerate(names)
+    ])
+    configs = [
+        SignalsConfig(),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=1),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=4),
+    ]
+
+    for config in configs:
+        values = _values(
+            trajectory, 'tool_retry_count', 'tool_succeeded_after_retry_count', config=config
+        )
+        for name in ('tool_retry_count', 'tool_succeeded_after_retry_count'):
+            assert values[name].value == 0
+            assert values[name].no_basis is None
+            status = next(pc for pc in values[name].preconditions if pc.name == 'explicit error status')
+            assert status.met is True
+            assert status.required is False
+            assert 'no calls match an earlier call' in status.detail
+
+
+def test_retry_candidate_with_unknown_status_remains_no_basis_for_each_definition():
+    trajectory = traj([
+        agent(calls=[call('fetch', {'q': 1}, 'first')], results=[bare('response')]),
+        agent(calls=[call('fetch', {'q': 1}, 'second')], results=[bare('response')]),
+    ])
+    configs = [
+        SignalsConfig(),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=1),
+        SignalsConfig(retry_definition='same_tool_args_within_n', retry_window=3),
+    ]
+
+    for config in configs:
+        values = _values(
+            trajectory, 'tool_retry_count', 'tool_succeeded_after_retry_count', config=config
+        )
+        for name in ('tool_retry_count', 'tool_succeeded_after_retry_count'):
+            assert values[name].value is None
+            assert values[name].no_basis is not None
+            assert 'explicit error status' in values[name].no_basis
+
+
+def test_retry_candidate_without_a_result_remains_no_basis():
+    trajectory = traj([
+        agent(calls=[call('fetch', {'q': 1}, 'first')]),
+        agent(calls=[call('fetch', {'q': 1}, 'second')], results=[ok('response')]),
+    ])
+
+    values = _values(trajectory, 'tool_retry_count', 'tool_succeeded_after_retry_count')
+
+    assert values['tool_retry_count'].value is None
+    assert values['tool_retry_count'].no_basis is not None
+    assert 'retry candidate results' in values['tool_retry_count'].no_basis
+    assert values['tool_succeeded_after_retry_count'].value is None
+    assert values['tool_succeeded_after_retry_count'].no_basis is not None
+    assert 'retry candidate results' in values['tool_succeeded_after_retry_count'].no_basis
 
 
 def test_exact_canonicalisation_preserves_argument_key_order():

@@ -722,6 +722,33 @@ test('Apply filters rejects nonexistent local time before the hx-post can submit
   assert.deepEqual(reports, [fromTime.id]);
 }));
 
+test('Use default clears the model and shows the built-in default on the picker button', () => {
+  const hidden = { value: 'openai/gpt-5.6-luna', dispatched: [], dispatchEvent(event) { this.dispatched.push(event); } };
+  const button = {
+    textContent: 'openai/gpt-5.6-luna',
+    focus() {},
+    getAttribute: name => name === 'data-default' ? 'openai/gpt-6-luna (default)' : null,
+  };
+  const classes = new Set();
+  const useDefault = {
+    classList: { contains: name => name === 'model-option', toggle(name, on) { on ? classes.add(name) : classes.delete(name); } },
+    setAttribute() {},
+    hasAttribute: () => false,
+    getAttribute: name => name === 'data-model' ? '' : null,
+    closest: selector => selector === '.facet-sub' ? null : selector === '.model-pick' ? pick : selector === '.model-pick .model-option' ? useDefault : null,
+  };
+  const pick = {
+    querySelector: selector => selector === 'input[type="hidden"]' ? hidden : selector === '.model-pick-btn' ? button : null,
+    querySelectorAll: selector => selector === '.model-option' ? [useDefault] : [],
+  };
+  const app = loadDashboard();
+  app.documentEvents.emit('click', { target: useDefault, preventDefault() {}, stopPropagation() {} });
+  app.body.emit('click', { target: useDefault, preventDefault() {}, stopPropagation() {} });
+  assert.equal(hidden.value, '');
+  assert.equal(button.textContent, 'openai/gpt-6-luna (default)');
+  assert.equal(hidden.dispatched.length, 1);
+});
+
 test('Picking a model from a list tells the form the hidden value changed', () => {
   const app = loadDashboard();
   const events = [];

@@ -23,7 +23,7 @@ from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import generate_structured, usage_from_exception
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.insights.cache import prompt_hash
-from evaluatorq.insights.models import TraceSummary
+from evaluatorq.insights.models import TraceSummary, ensure_unique_trace_ids
 from evaluatorq.insights.transcript import conversation_view
 
 if TYPE_CHECKING:
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.trace_document import TraceDocument
     from evaluatorq.insights.cache import InsightsCache
     from evaluatorq.insights.usage import UsageLedger
     from evaluatorq.trace_finder.models import TraceRecord
@@ -88,13 +89,13 @@ Be specific and domain-aware. Avoid generic phrasing like "the user asked a ques
 Now produce the structured analysis. Remember: the "task" and "request" fields describe what the END-USER above wanted from the assistant — not what this prompt asked you to do."""
 
 
-def _build_prompt(trace: TraceRecord) -> str:
+def _build_prompt(trace: TraceRecord | TraceDocument) -> str:
     conversation = delimit(conversation_view(trace), tag='conversation')
     return render_template(SUMMARY_PROMPT, {'conversation': conversation})
 
 
 async def _summarize_one(
-    trace: TraceRecord,
+    trace: TraceRecord | TraceDocument,
     *,
     client: AsyncOpenAI,
     model: str,
@@ -104,7 +105,10 @@ async def _summarize_one(
 ) -> tuple[str, TraceSummary | str]:
     prompt = _build_prompt(trace)
     key = prompt_hash(prompt)
-    cached = await asyncio.to_thread(cache.get_summary, trace.trace_id, trace.span_id, model, key)
+    # InsightsCache has a NOT NULL span_id key. Dataset rows may not have one;
+    # keep that absence in TraceDocument and use the empty value only for cache I/O.
+    span_id = trace.span_id or ''
+    cached = await asyncio.to_thread(cache.get_summary, trace.trace_id, span_id, model, key)
     if cached is not None:
         return trace.trace_id, cached
 
@@ -134,12 +138,12 @@ async def _summarize_one(
         logger.warning('Insights summary for trace {} produced unparseable model output', trace.trace_id)
         return trace.trace_id, 'summary: unparseable model output'
 
-    await asyncio.to_thread(cache.put_summary, trace.trace_id, trace.span_id, model, key, result.parsed)
+    await asyncio.to_thread(cache.put_summary, trace.trace_id, span_id, model, key, result.parsed)
     return trace.trace_id, result.parsed
 
 
 async def summarize_traces(
-    traces: Sequence[TraceRecord],
+    traces: Sequence[TraceRecord | TraceDocument],
     *,
     client: AsyncOpenAI,
     model: str,
@@ -156,6 +160,7 @@ async def summarize_traces(
     than raised — per-trace failures never fail the run (the caller records it
     on `TraceInsight.errors['summary']`).
     """
+    ensure_unique_trace_ids(traces)
     if parallelism <= 0:
         raise ValueError('parallelism must be greater than zero')
     semaphore = asyncio.Semaphore(parallelism)

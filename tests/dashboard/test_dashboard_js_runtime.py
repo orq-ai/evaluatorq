@@ -43,15 +43,20 @@ def test_insights_run_form_controller() -> None:
         ),
     }
     script = Path(__file__).with_name('insights_run_form.cjs')
-    # Fixtures go in on stdin, not an env var: on Linux a single env string is
-    # capped at 128KB (MAX_ARG_STRLEN) and the rendered markup exceeds it, which
-    # fails exec("node") with E2BIG. stdin has no such cap; macOS/Windows did not.
+    # Fixtures go in on stdin; insights_run_form.cjs explains why.
     result = subprocess.run(
         ['node', str(script)],
+        input=json.dumps(fixtures),
         capture_output=True,
         text=True,
         check=False,
         timeout=30,
-        input=json.dumps(fixtures),
+
     )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_insights_review_signal_details() -> None:
+    script = Path(__file__).with_name('insights_review_signals.cjs')
+    result = subprocess.run(['node', str(script)], capture_output=True, text=True, check=False, timeout=15)
     assert result.returncode == 0, result.stdout + result.stderr
