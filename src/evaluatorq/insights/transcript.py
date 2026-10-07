@@ -7,11 +7,14 @@ Three views, each for one `/classify` call:
   to one line each and tool outputs are dropped. The opening user turns are
   never cut; an over-budget trace loses its middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
-- `tool_activity_chunks`: every tool call with its input, status and an output
-  excerpt, for the questions that need to see what a command did; a long trace
-  is split into several chunks rather than losing more than 30% of its middle.
+- `tool_activity_chunks`: every tool call with its input and status, the start
+  and end of each shell output, and fixed labels for failures found in it, for the
+  questions that need to see what a command did; a long trace is split into
+  several chunks rather than losing more than 30% of its middle.
 
-Nothing here calls a model.
+Nothing here calls a model or any other service. A shell output excerpt is scrubbed of credentials with
+`common.redact.scrub_known_secrets` over the whole output before it is cut to its start and end, so a secret across
+the cut leaves no fragment.
 """
 
 from __future__ import annotations
@@ -25,8 +28,10 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, prompt_messages
-from evaluatorq.contracts import content_to_text
+from evaluatorq.contracts import content_to_text, tool_result_to_text
+from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
@@ -43,13 +48,41 @@ OPENING_SHARE = 0.4
 # Cut at most this share of a tool-activity view from the middle; longer views are split into chunks.
 MAX_CUT_SHARE = 0.3
 RISKY_COMMAND_CHARS = 300
+# Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
+SHELL_OUTPUT_CHARS = 300
+# A text longer than its two kept ends plus this many characters is cut; a text within that is kept whole.
+CUT_SLACK = 40
 USER_TURN_CHARS = 8_000
 
 SKILL_TOOL = 'Skill'
-SHELL_TOOLS = frozenset({'Bash', 'bash', 'shell', 'exec_command', 'run_shell_command'})
+SHELL_TOOLS = SHELL_TOOL_NAMES
+# Failure markers searched in the full shell output, including the part the
+# excerpt drops. A command can fail inside a call whose status is `completed`,
+# so the status alone misses it. Claude Code starts a failed Bash result with
+# `Exit code N`; Codex `exec` starts with `Script failed` and nests `"exit_code":N`.
+# Substring heuristics: `cat` of a test file can match too, so the
+# classifier treats a label as a hint. Upgrade to exit-code fields if traces carry them.
+OUTPUT_MARKERS = (
+    (
+        'nonzero_exit',
+        re.compile(
+            r'exit(?:ed with)? (?:code|status)[: ]+[1-9]|"exit_code":\s*[1-9]|^Script failed',
+            re.IGNORECASE | re.MULTILINE,
+        ),
+    ),
+    (
+        'tests_failed',
+        re.compile(r'\b[1-9]\d* (?:failed|failing|errors?)\b|^FAILED |tests? failed', re.IGNORECASE | re.MULTILINE),
+    ),
+    ('exception', re.compile(r'Traceback \(most recent call last\)|^panic:|Unhandled exception', re.MULTILINE)),
+    (
+        'build_failed',
+        re.compile(r'\bSyntaxError\b|error\[E\d+\]|error TS\d+|build failed|compilation failed', re.IGNORECASE),
+    ),
+)
 _REMINDER = re.compile(r'<system-reminder>.*?</system-reminder>', re.DOTALL)
 _SKILL_ARG = re.compile(r'"skill"\s*:\s*"([^"]+)"')
-_STRING_FIELD = re.compile(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)')
+_STRING_FIELD = re.compile(r'"?(\w+)"?\s*:\s*"((?:[^"\\]|\\.)*)')  # keys unquoted in a Codex exec script
 # Wrappers that hide the real program: `uv run pytest` is pytest, `rtk git` is git.
 _WRAPPERS: dict[str, str | None] = {
     'uv': 'run',
@@ -71,8 +104,9 @@ _STATE_BUILTINS = frozenset({'cd', 'source', '.', 'export', 'set', 'unset', 'pus
 _BLOCK_OPENERS = frozenset({'for', 'while', 'until', 'if', 'case', 'select'})
 _BLOCK_WORDS = frozenset({'do', 'then', 'else', 'elif', '{', '(', '!'})
 _BLOCK_CLOSERS = frozenset({'done', 'fi', 'esac', '}', ')'})
-# Commands shown in full in every view: they change shared state or delete data, so a
-# classifier judging risk needs the whole line, not `git push`.
+# Commands kept verbatim instead of collapsed to their program name: they change shared
+# state or delete data, so a classifier judging risk needs the line, not `git push`. They
+# are still cut to RISKY_COMMAND_CHARS, the same limit as any other tool input.
 _RISKY = re.compile(
     r'\bgit\s+(push|reset|clean|rebase|branch\s+-D|checkout\s+--|restore|stash|tag\s+-d|filter-branch)\b'
     r'|\brm\s|\bgh\s+(pr\s+(merge|close|edit|comment|create|review)|release|repo\s+(delete|edit)|issue\s+(close|delete)|api\b)'
@@ -169,7 +203,8 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
     start and end), minus injected `<system-reminder>` blocks;
     assistant text keeps its first and last `ASSISTANT_EDGE` characters, and a
     run of tool calls becomes one `[tools]` line with repeats counted. Tool
-    outputs are dropped. A risky shell command is shown in full.
+    outputs are dropped. A risky shell command is kept verbatim rather than
+    collapsed to its program name, up to `RISKY_COMMAND_CHARS` characters.
     """
     lines: list[str] = []
     pending: list[str] = []
@@ -197,18 +232,24 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
     return _fit(lines, budget, keep_opening_users=True)
 
 
-def tool_activity_chunks(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUDGET) -> list[str]:
-    """Render every tool call with its input, status and output excerpt, with user turns for context.
+def tool_activity_chunks(
+    trace: TraceRecord | TraceDocument,
+    budget: int = VIEW_BUDGET,
+) -> list[str]:
+    """Render every tool call with its input and status, with user turns for context.
 
     Used for the questions that need to see what a command did: whether an error
-    stayed unfixed, and whether an action was risky. Assistant prose is left out.
+    stayed unfixed, and whether an action was risky. Assistant prose is left out,
+    and each tool result body is replaced by its diagnostic category; a shell
+    call also keeps the failure markers found in all of its output, and the start and end of that output. The output
+    is scrubbed with `scrub_known_secrets` in full before it is cut, so the raw output is never rendered.
     A view that fits after cutting at most `MAX_CUT_SHARE` of it from the middle is
     one chunk; a longer one is split into consecutive chunks of at most `budget`
     characters, each starting with the opening user turns, for the caller to ask
     separately and merge.
     """
     messages = prompt_messages(trace)
-    results = {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
+    results = _results(messages)
     lines: list[str] = []
     for message in messages:
         role = message.get('role')
@@ -246,6 +287,15 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
     ]
 
 
+def join_cut(head: str, tail: str, omitted: int) -> str:
+    """Join the two kept ends of a cut text around a count of the characters left out."""
+    return f'{head} [... {omitted} chars ...] {tail}'
+
+
+def _results(messages: list[dict[str, Any]]) -> dict[Any, dict[str, Any]]:
+    return {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
+
+
 def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> str:
     name, arguments = _call_name(call), _call_arguments(call)
     if name in SHELL_TOOLS:
@@ -258,11 +308,20 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
     result = results.get(call_id)
     paired = (result,) if result else ()
     status = _tool_call_status(call_id, paired)
-    # Tool result bodies can contain credentials or user data. Keep only the
-    # fixed diagnostic category already used by the trace projection layer.
+    # Result bodies are cut to keep a long trace inside one classifier call.
+    # Non-shell results keep only the diagnostic category; shell output decides
+    # whether a command worked, so it keeps an excerpt and its failure markers.
     category = _tool_result_category(call_id, paired)
-    evidence = f'diagnostic: {category}' if category is not None else 'result body omitted'
-    return f'CALL {name} [{status}]: {call_input}\n  → {evidence}'
+    evidence = [f'diagnostic: {category}'] if category is not None else []
+    if result and name in SHELL_TOOLS:
+        text = tool_result_to_text(result.get('content'))
+        markers = [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
+        if markers:
+            evidence.append(f'output shows: {", ".join(markers)}')
+        excerpt = _head_tail(scrub_known_secrets(text.strip()), SHELL_OUTPUT_CHARS // 2, SHELL_OUTPUT_CHARS // 2)
+        if excerpt:
+            evidence.append(f'output: {excerpt}'.replace('\n', ' ⏎ '))
+    return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
 
 
 def _fit(lines: list[str], budget: int, *, keep_opening_users: bool) -> str:
@@ -387,6 +446,6 @@ def _user_text(message: dict[str, Any]) -> str:
 
 
 def _head_tail(text: str, head: int, tail: int) -> str:
-    if len(text) <= head + tail + 40:
+    if len(text) <= head + tail + CUT_SLACK:
         return text
-    return f'{text[:head]} [... {len(text) - head - tail} chars ...] {text[-tail:]}'
+    return join_cut(text[:head], text[-tail:], len(text) - head - tail)

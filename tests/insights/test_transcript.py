@@ -97,7 +97,11 @@ def test_tool_stats_count_tools_skills_and_commands_from_messages() -> None:
 def test_tool_stats_read_a_skill_from_arguments_cut_mid_string() -> None:
     trace = _trace(
         {'role': 'user', 'content': 'go'},
-        {'role': 'assistant', 'content': '', 'tool_calls': [_call('c1', 'Skill', '{"skill": "hate", "args": "a very lo')]},
+        {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [_call('c1', 'Skill', '{"skill": "hate", "args": "a very lo')],
+        },
     )
 
     assert tool_stats(trace).skills == {'hate': 1}
@@ -131,7 +135,9 @@ def test_conversation_view_keeps_the_opening_request_and_cuts_the_middle() -> No
 
 def test_conversation_view_keeps_a_long_opening_request_over_budget() -> None:
     request = 'please ' * 500
-    view = conversation_view(_trace({'role': 'user', 'content': request}, {'role': 'assistant', 'content': 'ok'}), budget=1_000)
+    view = conversation_view(
+        _trace({'role': 'user', 'content': request}, {'role': 'assistant', 'content': 'ok'}), budget=1_000
+    )
 
     assert view.startswith('USER: please please')
 
@@ -142,7 +148,8 @@ def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None
     assert 'CALL Bash [error]: cd repo && uv run pytest tests/test_parser.py -q' in view
     assert '→ diagnostic: provider_error' in view
     assert 'CALL Bash [completed]: git push --force origin main' in view
-    assert 'forced update' not in view
+    assert 'output: Error: 1 failed, 3 passed' in view  # shell output keeps an excerpt
+    assert 'output: forced update' in view
     assert 'Looking at the parser' not in view  # assistant prose is left out
 
 
@@ -184,7 +191,11 @@ def test_tool_inventory_lists_tools_commands_and_skills() -> None:
 def _busy_trace(calls: int) -> TraceRecord:
     messages: list[dict[str, Any]] = [{'role': 'user', 'content': 'THE ORIGINAL TASK'}]
     for index in range(calls):
-        messages.append({'role': 'assistant', 'content': '', 'tool_calls': [_call(f'c{index}', 'Read', {'file_path': f'f{index}.py'})]})
+        messages.append({
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [_call(f'c{index}', 'Read', {'file_path': f'f{index}.py'})],
+        })
         messages.append({'role': 'tool', 'tool_call_id': f'c{index}', 'content': 'x' * 200})
     return _trace(*messages)
 
@@ -208,3 +219,98 @@ def test_tool_activity_splits_a_long_trace_into_chunks_that_each_keep_the_task()
     assert all(chunk.startswith('USER: THE ORIGINAL TASK') and len(chunk) <= full // 3 for chunk in chunks)
     assert f'[part 1 of {len(chunks)} ' in chunks[0]
     assert sum(chunk.count('CALL Read') for chunk in chunks) == 40
+
+
+def _failing_pytest_trace(output: str) -> TraceRecord:
+    return _trace(
+        {'role': 'user', 'content': 'Fix the parser.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'Bash', {'command': 'uv run pytest -q'})]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'status': 'success', 'content': output},
+        {'role': 'assistant', 'tool_calls': [_call('c2', 'Bash', {'command': 'uv run pytest -q'})]},
+        {'role': 'tool', 'tool_call_id': 'c2', 'status': 'success', 'content': '7 passed, 0 failed'},
+    )
+
+
+def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_with_a_scrubbed_excerpt() -> None:
+    secret = 'sk-live-super-secret-token'
+    trace = _failing_pytest_trace(
+        f'FAILED tests/test_parser.py::test_empty\n{"." * 400}\nTOKEN={secret}\n{"." * 400}\n2 failed, 5 passed'
+    )
+    [view] = tool_activity_chunks(trace)
+
+    assert 'output shows: tests_failed' in view
+    assert view.count('output shows') == 1  # '0 failed' is not a failure
+    assert 'output: FAILED tests/test_parser.py::test_empty' in view  # start of the output
+    assert '2 failed, 5 passed' in view  # end of the output
+    assert secret not in view  # the middle is cut
+    assert 'output: 7 passed, 0 failed' in view
+
+
+@pytest.mark.parametrize('cut', ['start', 'end'])
+@pytest.mark.parametrize('padding', [100, 12_000], ids=['whole', 'two-windows'])
+def test_a_secret_across_the_excerpt_cut_leaves_no_fragment_in_the_view(cut: str, padding: int) -> None:
+    """The output is scrubbed in full before it is cut, so no head or tail of a credential survives the cut."""
+    secret = 'ghp_' + 'aB3dE5gH7j' * 3
+    middle = 'm' * (2 * padding)
+    if cut == 'start':  # characters 130-170, across the 150th
+        output = 'a' * 129 + ' ' + secret + ' ' + middle + ' end'
+    else:  # ends 121 characters before the end, across the 150th from the end
+        output = 'start ' + middle + ' ' + secret + ' ' + 'z' * 120
+    trace = _failing_pytest_trace(output)
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'output: ' in view
+    for size in (4, 8, 12):
+        assert secret[:size] not in view
+        assert secret[-size:] not in view
+
+
+@pytest.mark.parametrize(
+    ('tool', 'content'),
+    [
+        ('Bash', 'Exit code 1\nnpm ERR! missing script'),  # Claude Code
+        ('bash', 'Exit code 1\nnpm ERR! missing script'),  # pi, omp
+        ('exec_command', '{"chunk_id":"a1","exit_code":2,"output":"boom"}'),  # Codex
+        ('orq_shell', '{"stdout":"","stderr":"boom","outcome":{"type":"exit","exit_code":2}}'),  # orq agents
+    ],
+)
+def test_nonzero_exit_is_recognised_in_each_harness_format(tool: str, content: str) -> None:
+    trace = _trace(
+        {'role': 'user', 'content': 'Build it.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', tool, {'command': 'make'})]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': content},
+    )
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'output shows: nonzero_exit' in view
+
+
+def test_codex_exec_script_is_read_as_a_shell_call() -> None:
+    script = 'const r = await tools.exec_command({cmd:"git push --force origin main","workdir":"/repo"}); text(r);'
+    trace = _trace(
+        {'role': 'user', 'content': 'Ship it.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'exec', script)]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'Script failed\nOutput:\nrejected'},
+    )
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'CALL exec [' in view
+    assert ': git push --force origin main' in view
+    assert 'output shows: nonzero_exit' in view
+    assert 'output: Script failed' in view
+
+
+def test_failure_markers_only_apply_to_shell_calls() -> None:
+    trace = _trace(
+        {'role': 'user', 'content': 'Read the log.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'Read', {'path': 'log.txt'})]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'status': 'success', 'content': 'Traceback (most recent call last):'},
+    )
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'output shows' not in view
+    assert 'result body omitted' in view

@@ -14,7 +14,7 @@ from evaluatorq.signals.config import ClassifierConfig, default_tool_roles
 
 def test_defaults_carry_the_research_tool_roles() -> None:
     roles = SignalsConfig().tool_roles
-    assert roles['Bash'] == 'bash'
+    assert {roles[n] for n in ('Bash', 'bash', 'exec', 'exec_command', 'orq_shell', 'run_shell_command')} == {'bash'}
     assert roles['WebFetch'] == 'webview'
     assert roles['Skill'] == 'skill'
     assert {roles[n] for n in ('Agent', 'Task', 'call_sub_agent')} == {'subagent'}

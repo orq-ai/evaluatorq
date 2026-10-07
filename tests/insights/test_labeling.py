@@ -84,7 +84,9 @@ async def test_label_retries_http_520_but_records_each_attempt(monkeypatch: pyte
     async def no_wait(*_: Any) -> None:
         return None
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -123,7 +125,9 @@ async def test_label_retries_http_520_but_records_each_attempt(monkeypatch: pyte
 async def test_label_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         nonlocal calls
         calls += 1
         return ClassifyOutcome(
@@ -154,14 +158,18 @@ async def test_label_does_not_retry_http_400(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_all_labels_answered_and_matched(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         assert MATCH_KEY in request.questions
         assert 'sentiment' in request.questions
         return ClassifyOutcome(
             response=ClassifyResponse(
                 answers={
                     MATCH_KEY: ClassifyAnswer(type='choice', choice='billing', confidence=0.8),
-                    'sentiment': ClassifyAnswer(type='choice', choice='positive', confidence=0.9, probabilities={'positive': 0.9}),
+                    'sentiment': ClassifyAnswer(
+                        type='choice', choice='positive', confidence=0.9, probabilities={'positive': 0.9}
+                    ),
                 }
             )
         )
@@ -191,7 +199,9 @@ async def test_all_labels_answered_and_matched(monkeypatch: pytest.MonkeyPatch) 
 async def test_multiple_population_dimensions_must_all_match(monkeypatch: pytest.MonkeyPatch) -> None:
     second = INTENT_MATCH.model_copy(update={'name': 'customer sentiment'})
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         assert set(request.questions) == {'__match_0__', '__match_1__'}
         return ClassifyOutcome(
             response=ClassifyResponse(
@@ -204,8 +214,11 @@ async def test_multiple_population_dimensions_must_all_match(monkeypatch: pytest
 
     monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
     outcomes = await label_traces(
-        [make_trace('t1')], labels=[], compiled=(INTENT_MATCH, second),
-        client=_client(), model='typesafe/jev-latest',
+        [make_trace('t1')],
+        labels=[],
+        compiled=(INTENT_MATCH, second),
+        client=_client(),
+        model='typesafe/jev-latest',
     )
 
     assert outcomes[0].matched is False
@@ -214,7 +227,9 @@ async def test_multiple_population_dimensions_must_all_match(monkeypatch: pytest
 
 @pytest.mark.asyncio
 async def test_missing_label_answer_fails_only_that_label(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         return ClassifyOutcome(
             response=ClassifyResponse(
                 answers={
@@ -244,7 +259,9 @@ async def test_missing_label_answer_fails_only_that_label(monkeypatch: pytest.Mo
 
 @pytest.mark.asyncio
 async def test_outcome_failure_fails_every_answer_and_clears_match(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         return ClassifyOutcome(error_kind=JudgeError.API_STATUS, error_message='500 from router')
 
     monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
@@ -269,7 +286,9 @@ async def test_outcome_failure_fails_every_answer_and_clears_match(monkeypatch: 
 async def test_no_labels_and_no_compiled_query_skips_the_call(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         nonlocal calls
         calls += 1
         raise AssertionError('run_classify must not be called')
@@ -298,7 +317,9 @@ async def test_concurrency_never_exceeds_parallelism(monkeypatch: pytest.MonkeyP
     max_in_flight = 0
     lock = asyncio.Lock()
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         nonlocal in_flight, max_in_flight
         async with lock:
             in_flight += 1
@@ -330,7 +351,9 @@ async def test_concurrency_never_exceeds_parallelism(monkeypatch: pytest.MonkeyP
 @pytest.mark.parametrize('parallelism', [0, -1])
 async def test_parallelism_must_be_positive(parallelism: int) -> None:
     with pytest.raises(ValueError, match='parallelism must be greater than zero'):
-        await label_traces([], labels=[], compiled=None, client=_client(), model='typesafe/jev-latest', parallelism=parallelism)
+        await label_traces(
+            [], labels=[], compiled=None, client=_client(), model='typesafe/jev-latest', parallelism=parallelism
+        )
 
 
 @pytest.mark.asyncio
@@ -344,9 +367,11 @@ async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monke
             raise ValueError('malformed trace')
         return original_view(trace)
 
-    monkeypatch.setattr(labeling_module, "conversation_view", sometimes_fail)
+    monkeypatch.setattr(labeling_module, 'conversation_view', sometimes_fail)
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         return ClassifyOutcome(
             response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')})
         )
@@ -371,7 +396,9 @@ async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monke
 
 @pytest.mark.asyncio
 async def test_noul_label_keeps_bool_value_and_raw_probability(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         return ClassifyOutcome(
             response=ClassifyResponse(
                 answers={'made_errors': ClassifyAnswer(type='noul', noul=0.82, confidence=0.6)},
@@ -398,7 +425,9 @@ async def test_noul_label_keeps_bool_value_and_raw_probability(monkeypatch: pyte
 
 @pytest.mark.asyncio
 async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         return ClassifyOutcome(
             response=ClassifyResponse(
                 # 'choice' answer for a 'noul' question: unreadable, not missing.
@@ -431,7 +460,9 @@ async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypat
 def _coding_fake(detect: ClassifyOutcome, calls: list[ClassifyRequest]) -> Any:
     """A `/classify` fake answering the coding check with `detect` and every other question with a fixed answer."""
 
-    async def fake_run_classify(*, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
         calls.append(request)
         if 'coding_agent' in request.questions:
             return detect
@@ -469,6 +500,51 @@ async def test_coding_agent_gets_coding_labels_in_conversation_and_tool_calls(mo
     assert outcome.answers['task_type'].value == 'bugfix'
     assert outcome.answers['risky_action'].value == 'none'
     assert outcome.error is None
+
+
+_SECRET = 'sk-live-0123456789abcdef'
+
+
+def _shell_trace(trace_id: str) -> TraceRecord:
+    return make_trace(trace_id).model_copy(
+        update={
+            'messages': (
+                {'role': 'user', 'content': 'Deploy it.'},
+                {
+                    'role': 'assistant',
+                    'tool_calls': [
+                        {
+                            'id': 'c1',
+                            'type': 'function',
+                            'function': {'name': 'Bash', 'arguments': '{"command": "make"}'},
+                        }
+                    ],
+                },
+                {'role': 'tool', 'tool_call_id': 'c1', 'content': f'Exit code 1\nAPI_KEY={_SECRET}\n2 failed'},
+            )
+        }
+    )
+
+
+def _tool_activity_states(calls: list[ClassifyRequest]) -> list[str]:
+    return [str(request.state) for request in calls if 'unfixed_error' in request.questions]
+
+
+@pytest.mark.asyncio
+async def test_shell_output_reaches_the_tool_activity_question_only_after_scrubbing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evaluatorq.insights import labeling as labeling_module
+
+    calls: list[ClassifyRequest] = []
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
+    await label_traces([_shell_trace('t')], labels=[], compiled=None, client=_client(), model='jev', coding=True)
+
+    [state] = _tool_activity_states(calls)
+    assert 'output: Exit code 1 ⏎ API_KEY=<API_KEY> ⏎ 2 failed' in state
+    assert _SECRET not in state
+    assert 'output shows: nonzero_exit' in state
 
 
 @pytest.mark.asyncio
@@ -582,7 +658,10 @@ def _choice(value: str | None, confidence: float = 0.8, error: str | None = None
 def test_merge_chunks_any_finding_wins_for_risky_action() -> None:
     from evaluatorq.insights.labeling import _merge_chunks
 
-    assert _merge_chunks('risky_action', [_choice('none'), _choice('deleted', 0.6), _choice('none', 0.9)]).value == 'deleted'
+    assert (
+        _merge_chunks('risky_action', [_choice('none'), _choice('deleted', 0.6), _choice('none', 0.9)]).value
+        == 'deleted'
+    )
     assert _merge_chunks('risky_action', [_choice('none', 0.6), _choice('none', 0.9)]).confidence == 0.9
     # A failed chunk may have held the finding, so with no finding elsewhere the label fails.
     assert _merge_chunks('risky_action', [_choice('none'), _choice(None, error='boom')]).error == 'boom'
