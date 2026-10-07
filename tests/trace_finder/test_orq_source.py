@@ -505,25 +505,40 @@ async def test_targeted_deadline_cancels_slow_query_and_passes_remaining_timeout
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr('evaluatorq.trace_finder.orq_source.TARGET_RELOAD_PAGE_BUDGET_SECONDS', 1.0)
+    # Advance only the source's clock; asyncio still enforces real cancellation.
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.time', SimpleNamespace(monotonic=lambda: clock.now))
     traces = FakeTraces({})
+    client = FakeOrq(traces)
     query_started = asyncio.Event()
+    query_cancelled = asyncio.Event()
     query_timeouts: list[int] = []
+
+    async def projects_with_elapsed_budget(**kwargs: Any) -> Any:
+        result = await FakeProjects().list_async(**kwargs)
+        clock.now = 0.75
+        return result
 
     async def slow_query(**kwargs: Any) -> Any:
         query_started.set()
         query_timeouts.append(kwargs['timeout_ms'])
-        await asyncio.sleep(60)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            query_cancelled.set()
+            raise
 
+    cast('Any', client.projects).list_async = projects_with_elapsed_budget
     cast('Any', traces).query_async = slow_query
-    snapshot = await make_source(FakeOrq(traces)).load_async(
+    snapshot = await make_source(client).load_async(
         START, END, 1, facets=FacetSelection(), numeric=NumericFilters(), target_trace_ids={'stale'}
     )
 
     assert query_started.is_set()
+    assert query_cancelled.is_set()
     assert snapshot.traces == ()
     assert snapshot.capture_metadata['incomplete_reason'] == 'target_deadline'
-    assert len(query_timeouts) == 1
-    assert 1 <= query_timeouts[0] <= 1000
+    assert query_timeouts == [250]
 
 
 @pytest.mark.asyncio

@@ -42,7 +42,6 @@ from evaluatorq.redteam.adaptive.strategy_planner import (
 )
 from evaluatorq.redteam.backends.registry import create_async_llm_client, resolve_backend
 from evaluatorq.redteam.contracts import (
-    DEFAULT_PIPELINE_MODEL,
     PIPELINE_CONFIG,
     AttackOutput,
     AttackStrategy,
@@ -59,6 +58,8 @@ from evaluatorq.redteam.contracts import (
     Turn,
     TurnType,
     Vulnerability,
+    attacker_model_for,
+    evaluator_model_for,
 )
 from evaluatorq.redteam.traces import TRACE_SEED_MESSAGES_KEY, TRACE_START_FROM_KEY, TraceStart, parse_trace_seed
 from evaluatorq.redteam.tracing import annotate_current_span, set_jury_span_attrs, with_redteam_span
@@ -155,7 +156,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
     generate_additional_strategies: bool = True,
     generated_strategy_count: int = 2,
     llm_client: AsyncOpenAI | None = None,
-    attack_model: str = DEFAULT_PIPELINE_MODEL,
+    attack_model: str | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
@@ -182,6 +183,7 @@ async def generate_dynamic_datapoints_for_vulnerabilities(
         per-vulnerability counts of all/applicable/generated/filtered strategies.
         The metadata keys are vulnerability ID strings (e.g. 'goal_hijacking').
     """
+    attack_model = attacker_model_for(attack_model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     all_vuln_strategies, filtering_metadata_by_vuln, _agent_capabilities = await plan_strategies_for_vulnerabilities(
         agent_context=agent_context,
@@ -234,7 +236,7 @@ async def generate_dynamic_datapoints(
     generate_additional_strategies: bool = True,
     generated_strategy_count: int = 2,
     llm_client: AsyncOpenAI | None = None,
-    attack_model: str = DEFAULT_PIPELINE_MODEL,
+    attack_model: str | None = None,
     attacker_instructions: str | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     pipeline_config: LLMConfig | None = None,
@@ -264,6 +266,7 @@ async def generate_dynamic_datapoints(
         Tuple of (datapoints, filtering_metadata) where filtering_metadata contains
         per-category counts of all/applicable/generated/filtered strategies.
     """
+    attack_model = attacker_model_for(attack_model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     # Try resolving all categories to vulnerabilities for the primary path
     try:
@@ -409,7 +412,7 @@ def create_dynamic_redteam_job(
     *,
     agent_key: str,
     agent_context: AgentContext,
-    red_team_model: str = DEFAULT_PIPELINE_MODEL,
+    red_team_model: str | None = None,
     max_turns: int = 5,
     backend: Backend | None = None,
     attack_llm_client: AsyncOpenAI | None = None,
@@ -441,6 +444,7 @@ def create_dynamic_redteam_job(
         max_turns: Maximum turns for multi-turn attacks
         backend: Backend for creating targets and mapping errors. Defaults to ORQ.
     """
+    red_team_model = attacker_model_for(red_team_model, pipeline_config)
     cfg = pipeline_config or PIPELINE_CONFIG
     resolved_backend: Backend = backend if backend is not None else resolve_backend('orq', pipeline_config=cfg)
     safe_agent_key = _safe_agent_key(agent_key)
@@ -704,7 +708,7 @@ def _append_jury_summary(explanation: str, jury: JuryResult | None) -> str:
 
 
 def create_dynamic_evaluator(
-    evaluator_model: str = DEFAULT_PIPELINE_MODEL,
+    evaluator_model: str | None = None,
     llm_client: AsyncOpenAI | None = None,
     llm_kwargs: dict[str, Any] | None = None,
     cfg: LLMCallConfig | EvaluatorConfig | None = None,
@@ -727,6 +731,7 @@ def create_dynamic_evaluator(
     ``target_models`` (known direct-model targets only) drives the self-judge/family
     warning; ``strict_panel`` upgrades composition warnings to hard errors.
     """
+    evaluator_model = evaluator_model_for(evaluator_model, cfg)
     owasp_evaluator = OWASPEvaluator(
         evaluator_model=evaluator_model,
         llm_client=llm_client,

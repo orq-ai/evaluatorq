@@ -275,22 +275,12 @@ test('trace shortcuts respect editable targets, modifiers, modal state, and rout
   assert.equal(focuses, 1);
 });
 
-test('finder placeholders rotate on the interval and stop after dismissal', () => {
-  const query = {
-    dataset: { finderPlaceholders: '["First example", "Second example"]' },
-    value: '',
-    placeholder: '',
-  };
-  const app = loadDashboard({ queryAll: () => [query] });
-
-  assert.equal(app.intervals.size, 1);
-  const [{ callback, delay }] = app.intervals.values();
-  assert.equal(delay, 4000);
-  callback();
-  assert.equal(query.placeholder, 'Second example');
-  query.dataset.finderPlaceholderDismissed = 'true';
-  callback();
-  assert.equal(query.placeholder, 'Second example');
+test('finder placeholder stays fixed when focusing the question', () => {
+  const query = { placeholder: 'Ask a question about your traces…' };
+  const app = loadDashboard();
+  app.body.emit('focusin', { target: { closest: () => query } });
+  assert.equal(query.placeholder, 'Ask a question about your traces…');
+  assert.equal(app.intervals.size, 0);
 });
 
 test('trace Ask AI submits custom bounds and endpoint timezone offsets', () => {
@@ -732,6 +722,33 @@ test('Apply filters rejects nonexistent local time before the hx-post can submit
   assert.deepEqual(reports, [fromTime.id]);
 }));
 
+test('Use default clears the model and shows the built-in default on the picker button', () => {
+  const hidden = { value: 'openai/gpt-5.6-luna', dispatched: [], dispatchEvent(event) { this.dispatched.push(event); } };
+  const button = {
+    textContent: 'openai/gpt-5.6-luna',
+    focus() {},
+    getAttribute: name => name === 'data-default' ? 'openai/gpt-6-luna (default)' : null,
+  };
+  const classes = new Set();
+  const useDefault = {
+    classList: { contains: name => name === 'model-option', toggle(name, on) { on ? classes.add(name) : classes.delete(name); } },
+    setAttribute() {},
+    hasAttribute: () => false,
+    getAttribute: name => name === 'data-model' ? '' : null,
+    closest: selector => selector === '.facet-sub' ? null : selector === '.model-pick' ? pick : selector === '.model-pick .model-option' ? useDefault : null,
+  };
+  const pick = {
+    querySelector: selector => selector === 'input[type="hidden"]' ? hidden : selector === '.model-pick-btn' ? button : null,
+    querySelectorAll: selector => selector === '.model-option' ? [useDefault] : [],
+  };
+  const app = loadDashboard();
+  app.documentEvents.emit('click', { target: useDefault, preventDefault() {}, stopPropagation() {} });
+  app.body.emit('click', { target: useDefault, preventDefault() {}, stopPropagation() {} });
+  assert.equal(hidden.value, '');
+  assert.equal(button.textContent, 'openai/gpt-6-luna (default)');
+  assert.equal(hidden.dispatched.length, 1);
+});
+
 test('Picking a model from a list tells the form the hidden value changed', () => {
   const app = loadDashboard();
   const events = [];
@@ -823,4 +840,51 @@ test('a vega script that fails to load marks the swapped chart as failed and the
   } finally {
     process.off('unhandledRejection', onUnhandled);
   }
+});
+
+test('two chart swaps into one target while vega loads fetch vega once and embed only the latest swap', async () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const chart = { id: 'insights-crosstab' };
+  let spec = '{"mark":"bar"}';
+  const island = { get textContent() { return spec; }, getAttribute: () => 'insights-crosstab' };
+  const scope = {
+    querySelector: selector => (selector === '.vega-chart' || selector === '#insights-crosstab' ? chart : null),
+    querySelectorAll: selector => (selector === '[data-vega-for]' ? [island] : []),
+  };
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  const embeds = [];
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  spec = '{"mark":"line"}';
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+  for (const src of ['/static/vega.min.js', '/static/vega-lite.min.js', '/static/vega-embed.min.js']) {
+    await flush();
+    assert.equal(appended.at(-1).src, src);
+    if (src.endsWith('vega-embed.min.js')) {
+      app.window.vegaEmbed = (el, embedded) => { embeds.push(JSON.stringify(embedded)); return Promise.resolve({}); };
+    }
+    appended.at(-1).onload();
+  }
+  await flush();
+
+  assert.equal(appended.length, 3);
+  assert.deepEqual(embeds, ['{"mark":"line"}']);
+});
+
+test('a swap without a chart draws its insights maps and never loads vega', () => {
+  const app = loadDashboard();
+  const appended = [];
+  app.document.head = { appendChild(script) { appended.push(script); } };
+  const queried = [];
+  const scope = {
+    querySelector: () => null,
+    querySelectorAll: selector => { queried.push(selector); return []; },
+  };
+
+  app.body.emit('htmx:afterSwap', { detail: { target: scope } });
+
+  assert.deepEqual(queried, ['.insights-map-chart']);
+  assert.deepEqual(appended, []);
 });

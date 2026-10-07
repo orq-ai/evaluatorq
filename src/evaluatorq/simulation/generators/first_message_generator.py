@@ -10,6 +10,8 @@ if TYPE_CHECKING:
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletionMessageParam
 
+    from evaluatorq.simulation.types import Persona, Scenario
+
 from evaluatorq.common.llm_call import execute_response
 from evaluatorq.common.responses import first_responses_refusal, responses_stop_reason
 from evaluatorq.common.retry import _is_retryable_error, with_retry
@@ -17,7 +19,6 @@ from evaluatorq.common.structured_output import warn_unread_config_fields
 from evaluatorq.common.tracing import record_llm_input
 from evaluatorq.contracts import LLMCallConfig  # noqa: TC001
 from evaluatorq.simulation.tracing import with_llm_span
-from evaluatorq.simulation.types import DEFAULT_MODEL, Persona, Scenario
 from evaluatorq.simulation.utils.prompt_builders import (
     build_persona_system_prompt,
     build_scenario_user_context,
@@ -111,7 +112,7 @@ class FirstMessageGenerator:
     def __init__(
         self,
         *,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         client: AsyncOpenAI | None = None,
         api_key: str | None = None,
         config: LLMCallConfig | None = None,
@@ -121,9 +122,11 @@ class FirstMessageGenerator:
         both set the model, ``config.model`` wins and the contradiction is
         logged — same rule, same warning, as the public entry points.
         """
-        from evaluatorq.simulation._config import resolve_sim_llm_config
+        from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
 
-        self._config = resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__)
+        self._config = sim_role_config(
+            resolve_sim_llm_config(model=model, llm_config=config, caller=type(self).__name__), 'sim.generator'
+        )
         warn_unread_config_fields(self._config, _READ_CONFIG_FIELDS, caller=type(self).__name__)
         self._model = self._config.model
         from evaluatorq.openresponses.client import build_simulation_client

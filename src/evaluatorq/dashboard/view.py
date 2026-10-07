@@ -25,11 +25,12 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import starmap
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlencode
 
 from fasthtml.common import Script
 
+from evaluatorq.common.model_roles import BUILTIN, ROLE_ENV, TASKS, role_model, role_source, task_override
 from evaluatorq.common.reports import cost_coverage as _cost_coverage
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from evaluatorq.common.cli_oauth import OAuthSession
+    from evaluatorq.common.model_roles import Role
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
 
@@ -750,27 +752,57 @@ def report_actions(rid: str) -> str:
     return f'<a class="btn-secondary" href="/r/{esc(rid)}/export.html">{_DOWNLOAD_ICON} Export</a>'
 
 
+# Settings field -> (label, what the role runs). The role is the field name without ``_model``.
 MODEL_FIELDS = {
-    'compiler_model': 'Compiler model',
-    'classifier_model': 'Classifier model',
-    'apply_model': 'Apply-recommendations model',
+    'fast_model': ('Fast model', 'Trace search, simulated users'),
+    'smart_model': ('Smart model', 'Attack generation, judges, Insights summaries, apply-recommendations'),
+    'classifier_model': ('Classifier model', 'Ask AI, Insights labels, signals'),
+    'embedding_model': ('Embedding model', 'Insights maps'),
 }
 
 
-def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, label: str) -> str:
+def model_field_role(name: str) -> Role:
+    """The model role a settings field configures."""
+    return cast('Role', name.removesuffix('_model'))
+
+
+def model_field_source(name: str) -> tuple[str, str]:
+    """The model and note for a field whose value a flag or env var sets, else ``('', '')``."""
+    role = model_field_role(name)
+    source = role_source(role)
+    if source == 'flag':
+        return role_model(role), f'Set by --{role}-model'
+    if source == 'env':
+        return role_model(role), f'Set by {ROLE_ENV[role]}'
+    return '', ''
+
+
+def model_control(
+    name: str, value: str, groups: Mapping[str, Sequence[str]], *, label: str, note: str = '', default: str = ''
+) -> str:
     """A two-level model menu (provider, then model) with a Custom free-text entry.
 
     Reuses the Trace search filter menu's markup, so its hover, search and styling apply.
-    Without a catalogue the field stays a plain text box.
+    Without a catalogue the field stays a plain text box. ``note`` (why, or where the value came from)
+    follows either form. With ``default`` (a role's built-in model) an empty value means that default,
+    which the field names, and the menu offers "Use default"; without it a value is required.
     """
+    default = f'{default} (default)' if default else ''
+    note_html = f'<span class="settings-auth-hint">{esc(note)}</span>' if note else ''
     if not groups:
-        return f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" required>'
-    known = any(value in ids for ids in groups.values())
-    items: list[str] = []
+        hint = f'placeholder="{esc(default)}"' if default else 'required'
+        box = f'<input id="{esc(name)}" name="{esc(name)}" type="text" value="{esc(value)}" {hint}>'
+        return f'{box}{note_html}'
+    known = not value or any(value in ids for ids in groups.values())
+    use_default = (
+        f'<button type="button" class="model-option{" is-selected" if not value else ""}" data-model=""'
+        f' aria-pressed="{"false" if value else "true"}">Use default</button>'
+    )
+    items: list[str] = [use_default] if default else []
     subs: list[str] = []
     for index, (provider, ids) in enumerate((*groups.items(), ('Custom…', ()))):
         key = f'{name}-{index}'
-        chosen = value in ids if ids else not known
+        chosen = value in ids if ids else bool(value) and not known
         items.append(
             f'<button type="button" class="facet-item" data-facet="{esc(key)}" aria-haspopup="true" aria-expanded="false">'
             f'<span>{esc(provider)}</span>{"<span class=count>✓</span>" if chosen else ""}'
@@ -797,8 +829,15 @@ def model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *,
         )
     return (
         f'<span class="model-pick"><input type="hidden" name="{esc(name)}" value="{esc(value)}">'
-        f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false">{esc(value) or "Choose a model"}</button>'
-        f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>'
+        f'<button type="button" id="{esc(name)}" class="model-pick-btn" data-default="{esc(default)}" aria-haspopup="true" aria-expanded="false">{esc(value or default or "Choose a model")}</button>'
+        f'<div class="finder-facets"><div class="facet-list">{"".join(items)}</div>{"".join(subs)}</div></span>{note_html}'
+    )
+
+
+def settings_model_control(name: str, value: str, groups: Mapping[str, Sequence[str]], *, note: str = '') -> str:
+    """``model_control`` for a Settings role field: its label, and its role's built-in as the default."""
+    return model_control(
+        name, value, groups, label=MODEL_FIELDS[name][0], note=note, default=BUILTIN[model_field_role(name)]
     )
 
 
@@ -909,6 +948,21 @@ def profile_field(chosen: str, profiles: Sequence[Any], *, describedby: str = ''
     )
 
 
+# The auth controls whose change re-fetches each model list; the model inputs themselves are left out so a pick never loops.
+MODEL_FIELD_TRIGGER = (
+    "load, change[['orq_auth_method','orq_profile','orq_oauth_server'].includes(target.name)] "
+    'from:closest form delay:10ms'
+)
+
+
+def _model_field_include(name: str) -> str:
+    """Selectors for the inputs a model-list fetch needs; never the whole form, which holds the CSRF token."""
+    return (
+        f'#{name}-field input[name={name}], input[name=orq_auth_method]:checked, '
+        'input[name=orq_profile], input[name=orq_oauth_server]'
+    )
+
+
 def settings_body(
     config: list[tuple[str, str | list[str]]],
     settings: Any | None = None,
@@ -929,22 +983,31 @@ def settings_body(
         value = settings.get(name, '') if isinstance(settings, Mapping) else getattr(settings, name, '')
         return '' if value is None else str(value)
 
-    profile_params = {
-        'profile': setting_value('orq_profile'),
-        'auth_method': setting_value('orq_auth_method') or 'environment',
-    }
-    profile_query = urlencode(profile_params)
     field_rows: list[str] = []
-    for name, label in MODEL_FIELDS.items():
+    for name, (label, hint) in MODEL_FIELDS.items():
         error = errors.get(name)
         error_html = f'<span class="settings-error">{esc(error)}</span>' if error else ''
+        pinned, note = model_field_source(name)
         control = (
-            f'<span hx-get="/settings/models?field={name}&amp;{esc(profile_query)}" hx-trigger="load" '
-            f'hx-include="find input" hx-swap="outerHTML">{model_control(name, setting_value(name), {}, label=label)}</span>'
+            f'<span class="settings-model-field" id="{esc(name)}-field" hx-get="/settings/models?field={esc(name)}" '
+            f'hx-trigger="{esc(MODEL_FIELD_TRIGGER)}" hx-include="{esc(_model_field_include(name))}" '
+            f'hx-swap="innerHTML">{settings_model_control(name, pinned or setting_value(name), {}, note=note)}</span>'
         )
         field_rows.append(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
-            f'<span class="config-val">{control}{error_html}</span></div>'
+            f'<span class="config-val">{control}{error_html}<span class="settings-auth-hint">{esc(hint)}</span></span></div>'
+        )
+    # The effective per-task pins (flag, legacy env, settings file), not just the file's, so a shadowed
+    # file value never shows and an active flag or env var does.
+    pinned_tasks = [(task, found) for task in TASKS if (found := task_override(task))]
+    if pinned_tasks:
+        lines = ''.join(
+            f'<span class="config-val-item">{esc(task)} → {esc(model)} ({esc(label)})</span>'
+            for task, (model, label) in pinned_tasks
+        )
+        field_rows.append(
+            '<div class="config-row"><span class="config-key">Task overrides</span>'
+            f'<span class="config-val">{lines}<span class="settings-auth-hint">Set with --model-override or in the settings file.</span></span></div>'
         )
     mode = setting_value('ask_ai_mode') or 'immediate'
     mode_options = ''.join(

@@ -45,11 +45,21 @@
     if (!scope.querySelector('.vega-chart')) return;
     if (!window.vegaEmbed) {
       // The page shipped without vega (shell.page adds it only when the initial
-      // body has a chart); load it once, then embed this swap's charts.
+      // body has a chart); load it once, then embed this swap's charts. A later
+      // swap into the same target while vega loads replaces this one's DOM, so
+      // only the latest swap per target embeds (an older one would draw its
+      // stale spec into the newer chart and leak the first view).
       const detail = evt.detail;
+      pendingVegaSwaps.set(scope, detail);
       loadVega().then(
-        function () { embedSwappedCharts(scope, detail); },
+        function () {
+          if (pendingVegaSwaps.get(scope) !== detail) return;
+          pendingVegaSwaps.delete(scope);
+          embedSwappedCharts(scope, detail);
+        },
         function (error) {
+          if (pendingVegaSwaps.get(scope) !== detail) return;
+          pendingVegaSwaps.delete(scope);
           console.error('Vega failed to load', error);
           scope.querySelectorAll('.vega-chart').forEach(function (el) {
             el.textContent = 'Chart failed to load. Reload the page to retry.';
@@ -61,6 +71,7 @@
     embedSwappedCharts(scope, evt.detail);
   });
 
+  const pendingVegaSwaps = new WeakMap();
   let vegaLoading = null;
   function loadVega() {
     if (!vegaLoading) {
@@ -382,28 +393,35 @@
     }
   });
 
-  // Delegated so the finder handlers survive HTMX fragment swaps.
-  document.body.addEventListener('focusin', function (evt) {
-    const query = evt.target.closest('.finder-command-textarea[data-finder-placeholders]');
-    if (!query) return;
-    query.dataset.finderPlaceholderDismissed = 'true';
-    query.placeholder = '';
-  });
-  window.setInterval(function () {
-    document.querySelectorAll('.finder-command-textarea[data-finder-placeholders]').forEach(function (query) {
-      if (query.dataset.finderPlaceholderDismissed === 'true' || query.value || document.activeElement === query) return;
-      try {
-        const placeholders = JSON.parse(query.dataset.finderPlaceholders || '[]');
-        if (!Array.isArray(placeholders) || placeholders.length < 2) return;
-        const index = (Number(query.dataset.finderPlaceholderIndex || 0) + 1) % placeholders.length;
-        query.dataset.finderPlaceholderIndex = String(index);
-        query.placeholder = placeholders[index];
-      } catch (_error) {
-        query.dataset.finderPlaceholderDismissed = 'true';
-      }
+  // Keep only complete example buttons in the question field, including after resizing.
+  function fitFinderExamples(row) {
+    if (!row.getClientRects().length) return;
+    const buttons = Array.from(row.querySelectorAll('button'));
+    buttons.forEach(function (button) { button.hidden = false; });
+    const right = row.getBoundingClientRect().right;
+    let full = false;
+    buttons.forEach(function (button) {
+      if (button.getBoundingClientRect().right > right) full = true;
+      button.hidden = full;
     });
-  }, 4000);
+  }
+  const finderExamplesObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(function (entries) {
+    entries.forEach(function (entry) { fitFinderExamples(entry.target); });
+  });
+  function initFinderExamples() {
+    document.querySelectorAll('.finder-command-examples').forEach(function (row) {
+      fitFinderExamples(row);
+      if (finderExamplesObserver) finderExamplesObserver.observe(row);
+    });
+  }
+  document.addEventListener('DOMContentLoaded', initFinderExamples);
+  document.body.addEventListener('htmx:afterSettle', function () {
+    if (finderExamplesObserver) finderExamplesObserver.disconnect();
+    initFinderExamples();
+  });
+  if (document.fonts) document.fonts.ready.then(initFinderExamples);
 
+  // Delegated so the finder handlers survive HTMX fragment swaps.
   document.body.addEventListener('click', function (evt) {
     const example = evt.target.closest('[data-finder-example]');
     if (example) {
@@ -413,6 +431,13 @@
         query.focus();
         query.dispatchEvent(new Event('input', { bubbles: true }));
       }
+      return;
+    }
+
+    const questionField = evt.target.closest('.finder-command-query .col');
+    if (questionField) {
+      const query = questionField.querySelector('.finder-command-textarea');
+      if (query) query.focus();
       return;
     }
 
@@ -596,11 +621,12 @@
 
   function pickModel(from, model) {
     const pick = from.closest('.model-pick');
-    pick.querySelector('input[type="hidden"]').value = model;
-    pick.querySelector('input[type="hidden"]').dispatchEvent(new Event('change', { bubbles: true }));
+    const hidden = pick.querySelector('input[type="hidden"]');
+    const changed = hidden.value !== model;
+    hidden.value = model;
     const button = pick.querySelector('.model-pick-btn');
     if (from.hasAttribute('data-rich')) button.innerHTML = from.innerHTML;
-    else button.textContent = model || 'Choose a model';
+    else button.textContent = model || button.getAttribute('data-default') || 'Choose a model';
     pick.querySelectorAll('.model-option').forEach(function (other) {
       other.classList.toggle('is-selected', other === from);
       other.setAttribute('aria-pressed', other === from ? 'true' : 'false');
@@ -610,6 +636,7 @@
     const owner = sub && pick.querySelector('.facet-item[data-facet="' + sub.getAttribute('data-facet-sub') + '"]');
     if (owner && model) owner.querySelector('.chev').insertAdjacentHTML('beforebegin', '<span class="count">✓</span>');
     if (from.classList.contains('model-option')) closeModelMenu(pick);
+    if (changed) hidden.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   document.body.addEventListener('input', function (evt) {

@@ -12,6 +12,7 @@ evaluatorq dashboard /path/to/run.json
 
 from __future__ import annotations
 
+import os
 from pathlib import Path  # noqa: TC003
 from typing import Annotated
 
@@ -20,6 +21,14 @@ import typer
 from evaluatorq.common import cli_width  # noqa: F401  — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_help import CONTEXT_SETTINGS
+from evaluatorq.common.model_roles import (
+    BUILTIN,
+    TASKS,
+    add_cli_models,
+    export_cli_models,
+    parse_overrides,
+    set_cli_models,
+)
 
 # ---------------------------------------------------------------------------
 # Top-level application
@@ -54,6 +63,27 @@ def _version_callback(value: bool) -> None:  # noqa: FBT001
         raise typer.Exit
 
 
+def _apply_model_flags(
+    *,
+    replace: bool = False,
+    fast: str | None,
+    smart: str | None,
+    classifier: str | None,
+    embedding: str | None,
+    overrides: list[str] | None,
+) -> None:
+    """Record the global model flags for this process and for child processes."""
+    try:
+        parsed = parse_overrides(overrides or [])
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint='--model-override') from exc
+    roles = {'fast': fast, 'smart': smart, 'classifier': classifier, 'embedding': embedding}
+    # The root callback replaces state left by an earlier in-process invocation; a subcommand adds to the root's.
+    (set_cli_models if replace else add_cli_models)(roles, parsed)  # ty: ignore[invalid-argument-type]
+    # Subprocesses (the dashboard's Insights worker) inherit os.environ, not this state.
+    export_cli_models()
+
+
 @app.callback(invoke_without_command=True)
 def _main(
     ctx: typer.Context,
@@ -61,8 +91,40 @@ def _main(
         bool,
         typer.Option('--version', help='Show version and exit.', callback=_version_callback, is_eager=True),
     ] = False,
+    fast_model: Annotated[
+        str | None,
+        typer.Option('--fast-model', help=f'Model for cheap, high-volume steps. Default: {BUILTIN["fast"]}.'),
+    ] = None,
+    smart_model: Annotated[
+        str | None,
+        typer.Option('--smart-model', help=f'Model for attacks, judges and summaries. Default: {BUILTIN["smart"]}.'),
+    ] = None,
+    classifier_model: Annotated[
+        str | None,
+        typer.Option('--classifier-model', help=f'Model for trace classification. Default: {BUILTIN["classifier"]}.'),
+    ] = None,
+    embedding_model: Annotated[
+        str | None,
+        typer.Option('--embedding-model', help=f'Model for Insights embeddings. Default: {BUILTIN["embedding"]}.'),
+    ] = None,
+    model_override: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--model-override',
+            metavar='TASK=MODEL',
+            help=f'Pin one task to a model, e.g. apply=openai/gpt-6-luna. Repeatable. Tasks: {", ".join(TASKS)}.',
+        ),
+    ] = None,
 ) -> None:
     """Evaluation framework for AI systems."""
+    _apply_model_flags(
+        replace=True,
+        fast=fast_model,
+        smart=smart_model,
+        classifier=classifier_model,
+        embedding=embedding_model,
+        overrides=model_override,
+    )
     # Bare `eq` (no subcommand) prints help and exits — replaces the unreliable
     # no_args_is_help path (see the app definition above).
     if ctx.invoked_subcommand is None:
@@ -95,7 +157,7 @@ def dashboard(
     ] = '127.0.0.1',
     port: Annotated[
         int,
-        typer.Option(help='Port for the dashboard server.'),
+        typer.Option('--port', '-p', help='Port for the dashboard server.'),
     ] = 8080,
     no_browser: Annotated[  # noqa: FBT002 — Typer exposes this as a named flag
         bool,
@@ -103,11 +165,15 @@ def dashboard(
     ] = False,
     compiler_model: Annotated[
         str | None,
-        typer.Option('--compiler-model', help='Finder compiler model override.'),
+        typer.Option('--compiler-model', help='Finder compiler model (a finder.compiler override).'),
     ] = None,
     classifier_model: Annotated[
         str | None,
-        typer.Option('--classifier-model', help='Finder classifier model override.'),
+        typer.Option(
+            '--classifier-model',
+            help='Sets the classifier model role (every classifier task), as the global --classifier-model. '
+            'A root --model-override for a classifier task wins over it.',
+        ),
     ] = None,
     window_days: Annotated[
         int | None,
@@ -135,14 +201,17 @@ def dashboard(
     resolves.  The direct URL for that report is printed so you can open it
     immediately instead of landing on the index listing.
     """
-    import os
-
     from evaluatorq.dashboard.launch import serve
     from evaluatorq.dashboard.library import report_id
 
+    _apply_model_flags(
+        fast=None,
+        smart=None,
+        classifier=classifier_model,
+        embedding=None,
+        overrides=[f'finder.compiler={compiler_model}'] if compiler_model else None,
+    )
     for value, env_name in (
-        (compiler_model, 'EVALUATORQ_COMPILER_MODEL'),
-        (classifier_model, 'EVALUATORQ_CLASSIFIER_MODEL'),
         (window_days, 'EVALUATORQ_FINDER_WINDOW_DAYS'),
         (limit, 'EVALUATORQ_FINDER_LIMIT'),
         (parallelism, 'EVALUATORQ_FINDER_PARALLELISM'),

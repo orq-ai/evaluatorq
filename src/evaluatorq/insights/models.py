@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.trace_document import (  # noqa: TC001 — Pydantic needs the runtime model types.
     DatasetRef,
     Outcome,
@@ -270,10 +271,10 @@ class InsightsConfig(BaseModel):
 
     labels: list[LabelSpec]
     dimensions: list[DimensionName]
-    summary_model: str = 'openai/gpt-6-luna'
-    classifier_model: str = 'typesafe/jev-latest'
+    summary_model: str = Field(default_factory=lambda: role_model('smart', task='insights.summary'))
+    classifier_model: str = Field(default_factory=lambda: role_model('classifier', task='insights.labels'))
     compiler_model: str | None = None
-    embedding_model: str = 'openai/text-embedding-3-small'
+    embedding_model: str = Field(default_factory=lambda: role_model('embedding', task='insights.embedding'))
     max_clusters: int = Field(default=15, ge=1)
     max_subclusters: int = Field(default=15, ge=1)
     outlier_zscore: FiniteFloat | None = Field(default=None, ge=0)

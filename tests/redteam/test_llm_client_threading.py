@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import AsyncOpenAI
 
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL, TextOutputItem
+from evaluatorq.common.model_roles import role_model
+from evaluatorq.contracts import TextOutputItem
 
 
 def _make_report():
@@ -185,7 +186,7 @@ class TestCreateDynamicEvaluatorLlmClient:
         custom_client = MagicMock(spec=AsyncOpenAI)
         create_dynamic_evaluator(llm_client=custom_client)
         mock_cls.assert_called_once_with(
-            evaluator_model=DEFAULT_PIPELINE_MODEL,
+            evaluator_model=role_model('smart', task='redteam.evaluator'),
             llm_client=custom_client,
             llm_kwargs=None,
             cfg=None,
@@ -203,7 +204,7 @@ class TestCreateDynamicEvaluatorLlmClient:
 
         create_dynamic_evaluator()
         mock_cls.assert_called_once_with(
-            evaluator_model=DEFAULT_PIPELINE_MODEL,
+            evaluator_model=role_model('smart', task='redteam.evaluator'),
             llm_client=None,
             llm_kwargs=None,
             cfg=None,

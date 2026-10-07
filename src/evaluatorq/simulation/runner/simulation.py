@@ -26,7 +26,6 @@ from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
 from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
 from evaluatorq.simulation.types import (
-    DEFAULT_MODEL,
     CriteriaMeta,
     CriterionVerdict,
     Judgment,
@@ -651,7 +650,7 @@ class SimulationRunner:
         *,
         target_agent: AgentTarget | None = None,
         target: Callable[[list[Message]], str | Awaitable[str] | Awaitable[AgentResponse]] | None = None,
-        model: str = DEFAULT_MODEL,
+        model: str | None = None,
         max_turns: int = 10,
         target_agent_timeout_ms: int = DEFAULT_TARGET_TIMEOUT_MS,
         max_target_retries: int = 2,
@@ -670,7 +669,7 @@ class SimulationRunner:
             raise ValueError(f'max_target_retries must be >= 0, got {max_target_retries}')
         if max_tool_result_chars < 1:
             raise ValueError(f'max_tool_result_chars must be >= 1, got {max_tool_result_chars}')
-        if not model.strip():
+        if model is not None and not model.strip():
             raise ValueError('model must be a non-empty string')
 
         # Validate injected agents early to fail fast
@@ -716,12 +715,13 @@ class SimulationRunner:
         self._max_target_retries = max_target_retries
         self._max_tool_result_chars = max_tool_result_chars
         # Never the target under test: that one is configured where it is constructed.
-        from evaluatorq.simulation._config import resolve_sim_llm_config
+        from evaluatorq.simulation._config import resolve_sim_llm_config, sim_role_config
 
+        # A non-None `model` is folded in as explicit, so it reaches the judge too.
         self._llm_config = resolve_sim_llm_config(model=model, llm_config=llm_config, caller='SimulationRunner')
-        self._model = self._llm_config.model
+        self._model = sim_role_config(self._llm_config, 'sim.user').model
         self.model = self._model
-        """Resolved user-simulator / judge model. NEVER the target's — see `_new_conversation_target`."""
+        """Resolved user-simulator model. NEVER the target's — see `_new_conversation_target`."""
         self._max_turns = max_turns
         self._shared_client: AsyncOpenAI | None = llm_client
         self._client_owned: bool = False
@@ -730,10 +730,8 @@ class SimulationRunner:
         self._injected_judge = cast('JudgeAgent | None', judge)
         # Warned once here, not per datapoint: an injected agent arrives built and llm_config cannot reach it.
         injected = [name for name, agent in (('user_simulator', user_simulator), ('judge', judge)) if agent is not None]
-        # From the caller's own arguments, not the resolved config: `resolve_sim_llm_config`
-        # always sets `model`, so reading it back cannot tell a chosen model from the default.
         carried = (llm_config.model_fields_set if llm_config is not None else set()) - {'client'}
-        if model != DEFAULT_MODEL:
+        if model is not None:
             carried = carried | {'model'}
         if injected and carried:
             logger.warning(

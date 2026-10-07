@@ -43,12 +43,12 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.reports import esc
-from evaluatorq.contracts import DEFAULT_PIPELINE_MODEL
+from evaluatorq.contracts import DEFAULT_SMART_MODEL
 from evaluatorq.dashboard.security import _CSRF_TOKEN as _SECURITY_CSRF_TOKEN
 from evaluatorq.dashboard.security import CSRF_FIELD as _SECURITY_CSRF_FIELD
 from evaluatorq.dashboard.security import csrf_field, request_rejected
-from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -95,17 +95,12 @@ def _credential_identity(auth: Any, settings: Any) -> str:
     return auth_identity(auth, settings)
 
 
-# Model for the instruction-merge call. It used to default to its own literal,
-# on the reasoning that rewriting production agent instructions warrants a
-# stronger model than scoring does; it now falls back to the shared default and
-# keeps EVALUATORQ_APPLY_MODEL (Settings page) as the way to raise it again.
-APPLY_MODEL_ENV = 'EVALUATORQ_APPLY_MODEL'
-DEFAULT_APPLY_MODEL = DEFAULT_PIPELINE_MODEL
+DEFAULT_APPLY_MODEL = DEFAULT_SMART_MODEL
 
 
 def apply_model() -> str:
     """The model used to merge recommendations into agent instructions."""
-    return effective_settings().apply_model
+    return role_model('smart', task='apply')
 
 
 # ---------------------------------------------------------------------------
@@ -459,9 +454,7 @@ def _build_clients(auth: Any, settings: Any | None = None) -> tuple[Any, Any, st
     """(orq_client, llm_client, model) for the apply flow, or raise ValueError.
 
     The call config (temperature, retries) follows the red-team pipeline's
-    evaluator role; the MODEL is the dashboard's apply-model setting
-    (``EVALUATORQ_APPLY_MODEL``, default ``openai/gpt-5.6-luna``), shown on the
-    Settings page.
+    evaluator role; the MODEL is the ``apply`` task's smart-role model.
     """
     if auth.method != 'cli_oauth' and not auth.api_key:
         raise ValueError('ORQ_API_KEY is not set; the dashboard cannot reach the Orq API to apply recommendations.')

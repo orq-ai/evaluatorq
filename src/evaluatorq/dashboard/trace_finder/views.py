@@ -118,8 +118,10 @@ def traces_command_strip(
     disabled = '' if api_available else ' disabled'
     error_html = f'<div class="finder-form-error" role="alert">{esc(error)}</div>' if error else ''
     chips = ''.join(
-        f'<button type="button" data-finder-example="{esc(sample)}">{esc(sample)}</button>'
-        for sample in COMMAND_EXAMPLES
+        f'<button type="button" data-finder-example="{esc(sample)}" title="{esc(sample)}">{esc(label)}</button>'
+        for sample, label in zip(
+            COMMAND_EXAMPLES, ('Frustrated customers?', 'Refund requests?', 'Unhelpful replies?'), strict=True
+        )
     )
     auto_scope_attr = ' data-auto-scope="pending"' if auto_scope_pending else ''
     return (
@@ -128,9 +130,9 @@ def traces_command_strip(
         '<form id="finder-query-form" class="finder-query finder-command-query" hx-post="/find/run" hx-target="#finder-body" '
         'hx-swap="innerHTML" hx-include="#finder-controls, #explorer-load-form" hx-disabled-elt="find button">'
         f'{csrf_field()}<span class="finder-ai-icon" aria-hidden="true">✦</span><span class="finder-ai-label">Ask AI</span>'
-        f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question, e.g. {esc(COMMAND_EXAMPLES[0])}" '
-        f'data-finder-placeholders="{esc(json.dumps(COMMAND_EXAMPLES))}" required{disabled}>'
-        f'{esc(query)}</textarea></div><input type="hidden" name="mode" value="{esc(mode)}">'
+        f'<div class="col"><textarea class="finder-command-textarea" name="query" aria-label="Ask AI a question about your traces" rows="1" placeholder="Ask a question about your traces…" required{disabled}>'
+        f'{esc(query)}</textarea><div class="finder-command-examples" aria-label="Example questions">{chips}</div></div>'
+        f'<input type="hidden" name="mode" value="{esc(mode)}">'
         '<span class="finder-scope-label" id="finder-scope-label">Search in</span>'
         f'<div id="finder-scope" class="finder-seg" role="radiogroup" aria-labelledby="finder-scope-label"'
         f'{auto_scope_attr}>'
@@ -141,7 +143,6 @@ def traces_command_strip(
         '</form>'
         f'<p class="finder-command-help"><span class="scope-within">{esc(SCOPE_HELP_WITHIN)}</span>'
         f'<span class="scope-new">{esc(SCOPE_HELP_NEW)}</span> {esc(ASK_AI_COST_NOTE)}</p>'
-        f'<div class="finder-command-examples"><span>Try</span>{chips}</div>'
         f'{error_html}</section>'
     )
 
@@ -974,10 +975,10 @@ def body(
             f'<label>CLI (Windows PowerShell)</label><pre><code>eq insights --from-finder {esc(powershell_filename)}</code></pre>'
             f'<label>Python</label><pre><code>{esc(python)}</code></pre></section>'
         )
-    return f'{controls_html}{run_status(snapshot, settings, has_explorer=explorer_view is not None)}{analyze}'
+    return f'{controls_html}{run_status(snapshot, has_explorer=explorer_view is not None)}{analyze}'
 
 
-def run_status(snapshot: RunSnapshot, settings: DashboardSettings, *, has_explorer: bool) -> str:
+def run_status(snapshot: RunSnapshot, *, has_explorer: bool) -> str:
     """The part of a run's body that changes while it runs; the 1s poll swaps only this, never the controls."""
     details = (
         task_panel(snapshot.dimensions, editable=False)
@@ -990,7 +991,7 @@ def run_status(snapshot: RunSnapshot, settings: DashboardSettings, *, has_explor
     show_only_url = '/find/rows?quick_view=matches' if has_explorer else None
     return (
         f'<div id="{RUN_STATUS_ID}">{indicator}'
-        f'{progress(snapshot, classifier_model=settings.classifier_model, show_only_url=show_only_url)}{details}</div>'
+        f'{progress(snapshot, classifier_model=snapshot.classifier_model, show_only_url=show_only_url)}{details}</div>'
     )
 
 

@@ -466,7 +466,7 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
     from evaluatorq.dashboard import launch
 
     names = (
-        'EVALUATORQ_COMPILER_MODEL',
+        'EVALUATORQ_MODEL_OVERRIDES',
         'EVALUATORQ_CLASSIFIER_MODEL',
         'EVALUATORQ_FINDER_WINDOW_DAYS',
         'EVALUATORQ_FINDER_LIMIT',
@@ -496,8 +496,11 @@ def test_dashboard_flags_are_handed_to_reload_worker_environment(monkeypatch: An
         )
 
         assert result.exit_code == 0, result.output
-        assert os.environ['EVALUATORQ_COMPILER_MODEL'] == 'compiler/model'
-        assert os.environ['EVALUATORQ_CLASSIFIER_MODEL'] == 'classifier/model'
+        assert json.loads(os.environ['EVALUATORQ_MODEL_OVERRIDES']) == {
+            'roles': {'classifier': 'classifier/model'},
+            'overrides': {'finder.compiler': 'compiler/model'},
+        }
+        assert 'EVALUATORQ_COMPILER_MODEL' not in os.environ
         assert os.environ['EVALUATORQ_FINDER_WINDOW_DAYS'] == '14'
         assert os.environ['EVALUATORQ_FINDER_LIMIT'] == '5000'
         assert os.environ['EVALUATORQ_FINDER_PARALLELISM'] == '12'

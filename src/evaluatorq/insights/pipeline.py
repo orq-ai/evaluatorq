@@ -17,6 +17,7 @@ from loguru import logger
 
 from evaluatorq import __version__
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.run_manifest import start_manifest
 from evaluatorq.common.trace_document import ensure_trace_document, trace_document_with_signals
@@ -46,7 +47,6 @@ from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.insights.transcript import tool_stats
 from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.signals import SignalsConfig, compute_signals
-from evaluatorq.trace_finder.settings import effective_settings
 
 MIN_CLUSTER_SIZE = 5
 LOW_CONFIDENCE = 0.6
@@ -409,10 +409,10 @@ async def insights(  # noqa: C901
     max_clusters: int = 15,
     max_subclusters: int = 15,
     outlier_zscore: float | None = None,
-    summary_model: str = 'openai/gpt-6-luna',
+    summary_model: str | None = None,
     classifier_model: str | None = None,
     compiler_model: str | None = None,
-    embedding_model: str = 'openai/text-embedding-3-small',
+    embedding_model: str | None = None,
     priority_dimension: DimensionName = 'intent',
     parallelism: int = 100,
     cache: bool = True,
@@ -455,9 +455,13 @@ async def insights(  # noqa: C901
     ):
         if limit_value < 1:
             raise ValueError(f'{limit_name} must be positive')
-    settings = effective_settings()
-    compiler_model = compiler_model or settings.compiler_model
-    classifier_model = classifier_model or settings.classifier_model
+    compiler_model = compiler_model or role_model('fast', task='finder.compiler')
+    # An explicit classifier_model covers both stages; otherwise population search
+    # follows finder.classifier and labelling follows insights.labels.
+    finder_classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
+    classifier_model = classifier_model or role_model('classifier', task='insights.labels')
+    summary_model = summary_model or role_model('smart', task='insights.summary')
+    embedding_model = embedding_model or role_model('embedding', task='insights.embedding')
     run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()
@@ -551,7 +555,7 @@ async def insights(  # noqa: C901
                 orq=resolved_orq,
                 client=resolved_llm,
                 compiler_model=compiler_model,
-                classifier_model=classifier_model,
+                classifier_model=finder_classifier_model,
             )
             measured = []
             for source_trace in resolved.traces:
@@ -565,6 +569,9 @@ async def insights(  # noqa: C901
                 'n_matched': len(resolved.traces) if not resolved.compiled else 0,
                 'n_failed_match': 0,
             }
+            if population.query is not None:
+                # finder.classifier picked this query's generated filters; config holds only the labels model.
+                run.population['finder_classifier_model'] = finder_classifier_model
             if _finder_export_source is not None and population.finder_export is not None:
                 run.population['finder_export'] = str(_finder_export_source)
                 if _finder_export_sha256 is not None:

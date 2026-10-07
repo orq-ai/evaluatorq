@@ -1174,9 +1174,10 @@ async def _attempt(
 
 
 # Classify/prompt mismatches already warned about, keyed by model and direction. The same
-# judge runs once per datapoint and `DEFAULT_PIPELINE_MODEL` is classify-capable, so without
-# this every attack evaluation in a red-team run logs a line the caller cannot act on from
-# `red_team()`. Same reasoning as `_classify_fallback_warned` in `model_catalogue`.
+# judge runs once per datapoint and the default judge model is not classify-capable (a custom
+# classify-capable one would hit this too), so without this every attack evaluation in a
+# red-team run logs a line the caller cannot act on from `red_team()`. Same reasoning as
+# `_classify_fallback_warned` in `model_catalogue`.
 _classify_mismatch_warned: set[tuple[str, str]] = set()
 
 

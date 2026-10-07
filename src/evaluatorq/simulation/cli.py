@@ -56,6 +56,7 @@ from evaluatorq.common.cli_help import CONTEXT_SETTINGS, MODEL_OPTION_NOTE
 from evaluatorq.common.cli_json import echo_json
 from evaluatorq.common.cli_tty import shell_path, should_skip_confirm
 from evaluatorq.common.llm_limit import DEFAULT_LLM_PARALLELISM, check_llm_parallelism_option, llm_concurrency_limit
+from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.parallelism import DEFAULT_DATAPOINT_PARALLELISM
 from evaluatorq.common.run_manifest import read_manifest
 from evaluatorq.contracts import LLMCallConfig
@@ -64,7 +65,7 @@ from evaluatorq.simulation.run_config import (
     GenerateAndSimulateCliConfig,
     SimulateCliConfig,
 )
-from evaluatorq.simulation.types import DEFAULT_MAX_TURNS, DEFAULT_MODEL, DEFAULT_RUN_NAME
+from evaluatorq.simulation.types import DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import get_sim_runs_dir as _get_sim_runs_dir
 from evaluatorq.simulation.utils.run_store import sanitise_run_name as _sanitise_run_name
 from evaluatorq.simulation.utils.run_store import write_report as _write_report
@@ -327,6 +328,16 @@ def _provider_label() -> str:
     if os.environ.get('OPENAI_API_KEY'):
         return 'OpenAI-compatible'
     return 'unresolved provider'
+
+
+def _sim_llm_config(sim_model: str | None) -> LLMCallConfig:
+    """An unset ``--sim-model`` leaves the model unset so each role resolves its own."""
+    return LLMCallConfig(model=sim_model) if sim_model else LLMCallConfig()
+
+
+def _generation_model(sim_model: str | None) -> str:
+    """The model for generation, recommendations and summaries: the flag, else the fast role."""
+    return sim_model or role_model('fast', task='sim.generator')
 
 
 def _echo_using(model: str) -> None:
@@ -652,7 +663,9 @@ def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:
 def _sim_model(cfg: BaseModel) -> str:
     """The model every simulation-side LLM call uses, for display."""
     llm_config: LLMCallConfig | None = getattr(cfg, 'llm_config', None)
-    return llm_config.model if llm_config is not None else DEFAULT_MODEL
+    if llm_config is not None and 'model' in llm_config.model_fields_set:
+        return llm_config.model
+    return role_model('fast', task='sim.user')
 
 
 @app.command()
@@ -895,7 +908,7 @@ def simulate(
         str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for the user-simulator, the judge, the recommendations pass and the executive summary. Defaults to {DEFAULT_MODEL}. {MODEL_OPTION_NOTE}',
+            help=f'Model for the user-simulator, the judge, the recommendations pass and the executive summary. Default: the fast model role, and the smart model role for the judge. {MODEL_OPTION_NOTE}',
         ),
     ] = None,
     max_turns: Annotated[
@@ -1136,7 +1149,8 @@ def run(
             '--sim-model',
             help=(
                 'Model for the user-simulator, the judge, persona/scenario/first-message '
-                f'generation, the recommendations pass and the executive summary. Defaults to {DEFAULT_MODEL}. '
+                'generation, the recommendations pass and the executive summary. Default: the fast model role, '
+                'and the smart model role for the judge. '
                 f'{MODEL_OPTION_NOTE}'
             ),
         ),
@@ -1419,12 +1433,13 @@ def generate(
         ),
     ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for persona/scenario/first-message generation. {MODEL_OPTION_NOTE}',
+            help=f'Model for persona/scenario/first-message generation. Default: the fast model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     num_personas: Annotated[
         int,
         typer.Option('--num-personas', min=1, help='Number of personas to generate.'),
@@ -1521,7 +1536,7 @@ def generate(
         _echo_generate_plan(
             console=log_console,
             source=source,
-            model=sim_model,
+            model=_generation_model(sim_model),
             num_personas=num_personas,
             num_scenarios=num_scenarios,
             output=datapoints_path,
@@ -1628,12 +1643,16 @@ def from_traces(
         ),
     ] = None,
     sim_model: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--sim-model',
-            help=f'Model for persona/scenario inference and extension generation. {MODEL_OPTION_NOTE}',
+            help=(
+                'Model for persona/scenario inference and extension generation. '
+                f'Default: the fast model role. {MODEL_OPTION_NOTE}'
+            ),
+            show_default=False,
         ),
-    ] = DEFAULT_MODEL,
+    ] = None,
     replay_first_message: Annotated[  # noqa: FBT002
         bool,
         typer.Option(
@@ -1791,7 +1810,7 @@ def from_traces(
 async def _generate_impl(
     *,
     agent_description: str,
-    sim_model: str,
+    sim_model: str | None,
     num_personas: int,
     num_scenarios: int,
     hooks: Any = None,
@@ -1805,7 +1824,7 @@ async def _generate_impl(
         agent_description=agent_description,
         num_personas=num_personas,
         num_scenarios=num_scenarios,
-        llm_config=LLMCallConfig(model=sim_model),
+        llm_config=_sim_llm_config(sim_model),
         hooks=hooks,
         persona_seeds=persona_seeds,
         scenario_seeds=scenario_seeds,
@@ -1869,9 +1888,13 @@ def export(
         ),
     ] = False,
     sim_model: Annotated[
-        str,
-        typer.Option('--sim-model', help=f'Model for --recommendations generation. {MODEL_OPTION_NOTE}'),
-    ] = DEFAULT_MODEL,
+        str | None,
+        typer.Option(
+            '--sim-model',
+            help=f'Model for --recommendations generation. Default: the fast model role. {MODEL_OPTION_NOTE}',
+            show_default=False,
+        ),
+    ] = None,
     target: Annotated[
         str,
         typer.Option('--target-label', help='Target name shown in md/html report headers.'),
@@ -1907,7 +1930,7 @@ def export(
 
     recs = stored_recs or None
     if recommendations and not recs:
-        recs = _maybe_generate_recommendations(results, sim_model)
+        recs = _maybe_generate_recommendations(results, _generation_model(sim_model))
     elif recs:
         typer.echo(f'Using {len(recs)} stored remediation suggestion(s) from the input run.', err=True)
 

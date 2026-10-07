@@ -43,6 +43,7 @@ from loguru import logger
 
 from evaluatorq.common.env_config import env_float
 from evaluatorq.common.llm_client import orq_base_url, resolve_results_base_url
+from evaluatorq.contracts import DEFAULT_CLASSIFIER_MODEL
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
@@ -148,7 +149,7 @@ _CATALOGUE_TIMEOUT_S = env_float('EVALUATORQ_CATALOGUE_TIMEOUT_S', 30.0, min_val
 # empty or its fetch failed. Seating a judge is a construction-time decision, so
 # without this a catalogue outage would quietly demote a classify judge to a chat
 # call the model cannot serve. Exact ids only — no ``typesafe/`` prefix matching.
-KNOWN_CLASSIFY_MODELS = frozenset({'typesafe/jev-latest'})
+KNOWN_CLASSIFY_MODELS = frozenset({DEFAULT_CLASSIFIER_MODEL})
 # Models already warned about falling back to KNOWN_CLASSIFY_MODELS: the same judge
 # is constructed once per datapoint, and one line per run is the useful volume.
 _classify_fallback_warned: set[str] = set()

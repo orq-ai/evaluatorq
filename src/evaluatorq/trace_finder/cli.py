@@ -17,6 +17,7 @@ from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
+from evaluatorq.common.model_roles import BUILTIN, add_cli_models
 from evaluatorq.common.orq_client import (
     DEFAULT_ORQ_BASE_URL,
     OrqProfile,
@@ -266,14 +267,14 @@ def find(
         str | None,
         typer.Option(
             '--compiler-model',
-            help='Model that compiles the search question via the Orq router. Default: openai/gpt-5.6-luna. Requires Orq credentials.',
+            help=f'Model that compiles the search question via the Orq router. Default: {BUILTIN["fast"]}. Requires Orq credentials.',
         ),
     ] = None,
     classifier_model: Annotated[
         str | None,
         typer.Option(
             '--classifier-model',
-            help='Model that classifies each trace via the Orq router. Default: typesafe/jev-latest. Requires Orq credentials.',
+            help=f'Model that classifies each trace via the Orq router (sets the finder.classifier task only, not the classifier role). Default: {BUILTIN["classifier"]}. Requires Orq credentials.',
         ),
     ] = None,
     json_path: Annotated[Path | None, typer.Option('--json', help='Write the completed run export to PATH.')] = None,
@@ -307,9 +308,15 @@ def find(
         'window_days': window_days,
         'limit': limit,
         'parallelism': parallelism,
-        'compiler_model': compiler_model,
-        'classifier_model': classifier_model,
     })
+    # Added on top of the root flags, which `set_cli_models` would discard.
+    add_cli_models(
+        overrides={
+            task: model
+            for task, model in (('finder.compiler', compiler_model), ('finder.classifier', classifier_model))
+            if model
+        }
+    )
     orq = None
     try:
         saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
