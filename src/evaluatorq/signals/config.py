@@ -25,12 +25,17 @@ DEFAULT_EMPTY_VALUES: frozenset[str] = frozenset({'', '[]', '{}', 'null'})
 SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({'Agent', 'Task', 'call_sub_agent'})
 """Tool names that spawn a subagent: Claude Code (Agent, Task) and orq agents (call_sub_agent)."""
 SHELL_TOOL_NAMES: frozenset[str] = frozenset({
-    'Bash',
-    'bash',
-    'exec_command',
-    'functions.exec_command',
-    'shell_command',
+    'Bash',  # Claude Code
+    'bash',  # pi, omp
+    'shell',  # Responses API shell tool
+    'exec',  # Codex: a JavaScript script calling tools.exec_command({cmd: ...})
+    'exec_command',  # Codex
+    'functions.exec_command',  # Codex
+    'shell_command',  # Codex
+    'run_shell_command',  # Gemini CLI
+    'orq_shell',  # orq agents
 })
+"""Tool names that run a shell command. The one list both signals and insights read."""
 WEBFETCH_TOOL_NAMES: frozenset[str] = frozenset({'WebFetch', 'web_fetch', 'WebView', 'webview'})
 SKILL_TOOL_NAMES: frozenset[str] = frozenset({'Skill'})
 """Tools that load a skill by name. Claude Code's `Skill` takes `{"skill": "<name>"}`."""

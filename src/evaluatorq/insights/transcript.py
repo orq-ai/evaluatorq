@@ -28,6 +28,7 @@ from pydantic import BaseModel
 
 from evaluatorq.common.trace_document import TraceDocument, prompt_messages
 from evaluatorq.contracts import content_to_text, tool_result_to_text
+from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
@@ -54,19 +55,7 @@ _CREDENTIAL = re.compile(
 USER_TURN_CHARS = 8_000
 
 SKILL_TOOL = 'Skill'
-# Claude Code, pi and omp call their shell tool `Bash` or `bash`; orq agents call it `orq_shell`.
-# Codex `exec` takes a JavaScript script that calls `tools.exec_command({cmd: ...})`.
-SHELL_TOOLS = frozenset({
-    'Bash',
-    'bash',
-    'shell',
-    'exec',
-    'exec_command',
-    'functions.exec_command',
-    'shell_command',
-    'run_shell_command',
-    'orq_shell',
-})
+SHELL_TOOLS = SHELL_TOOL_NAMES
 # Failure markers searched in the full shell output, including the part the
 # excerpt drops. A command can fail inside a call whose status is `completed`,
 # so the status alone misses it. Claude Code starts a failed Bash result with
