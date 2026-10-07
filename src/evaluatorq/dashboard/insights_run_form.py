@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, get_args
@@ -558,7 +557,7 @@ assert set(_SESSION_SOURCE_TITLES) == set(SESSION_SOURCES)  # noqa: S101 — imp
 
 def _sessions_source(values: RunFormValues) -> str:
     """The Local sessions picker: filters, a Search button, and the results the controller fills in."""
-    today = datetime.now(timezone.utc).date()
+    # The dates stay empty here: the controller fills them from the browser's local date, which the server cannot know.
     boxes = ''.join(
         f'<label><input type="checkbox" name="session_source" value="{source}" checked> {esc(title)}</label>'
         for source, title in _SESSION_SOURCE_TITLES.items()
@@ -569,8 +568,8 @@ def _sessions_source(values: RunFormValues) -> str:
         '<div class="irf-field" data-source="sessions"><span class="irf-label">Local sessions</span>'
         f'<div class="irf-row">{boxes}</div>'
         '<div class="irf-row">'
-        f'<label>From <input type="date" name="session_from" value="{today - timedelta(days=6)}"></label>'
-        f'<label>To <input type="date" name="session_to" value="{today}"></label></div>'
+        '<label>From <input type="date" name="session_from"></label>'
+        '<label>To <input type="date" name="session_to"></label></div>'
         '<label class="irf-field"><span class="irf-label">Project directory</span>'
         '<input type="text" name="session_project_dir" placeholder="/path/to/project"></label>'
         '<label class="irf-field"><span class="irf-label">Contains text</span>'

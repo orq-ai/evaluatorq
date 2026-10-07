@@ -190,6 +190,7 @@
     if (count) count.textContent = picked + ' selected';
     const all = form.querySelector('[data-sessions-all]');
     if (all) all.checked = rows.length > 0 && picked === rows.length;
+    ctx.selectionToken += 1;
     ctx.sessionsDirty = true;
     ctx.measuredPath = null;
     clearTraceFile(form);
@@ -230,29 +231,54 @@
 
   async function freezeSessions(ctx) {
     const form = ctx.form;
+    const token = ctx.selectionToken;
+    const generic = 'Could not prepare the selected sessions.';
     const body = new URLSearchParams({csrf: field(form, 'csrf').value});
     checkedValues(form, 'session').forEach(function (value) { body.append('session', value); });
     sessionsStatus(ctx, 'Preparing the selected sessions…');
     try {
       const response = await fetch('/insights/sessions/snapshot', {method: 'POST', body: body});
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Could not prepare the selected sessions.');
+      let result = {};
+      try {
+        result = await response.json();
+      } catch (failure) {
+        result = {};
+      }
+      if (!response.ok || !result.path) throw new Error(result.error || generic);
+      if (token !== ctx.selectionToken) {
+        sessionsStatus(ctx, '');
+        showError(ctx, 'The selection changed while it was being prepared. Press Continue again.');
+        return false;
+      }
       setTraceFile(form, result.path, 'snapshot');
       form.querySelector('[data-file-name="sessions"]').value = result.n_sessions + ' local sessions';
       ctx.sessionsDirty = false;
       ctx.measuredPath = null;
       const failed = result.failed || [];
       sessionsStatus(ctx, failed.length
-        ? failed.length + ' selected session' + (failed.length === 1 ? ' was' : 's were') + ' left out because '
-          + (failed.length === 1 ? 'it' : 'they') + ' could not be read: '
-          + failed.map(function (item) { return item.path + ' (' + item.error + ')'; }).join(', ')
+        ? failed.length + ' selected session' + (failed.length === 1 ? ' was' : 's were') + ' left out: '
+          + failed.map(function (item) { return item.error; }).join('; ')
         : '');
       return true;
     } catch (failure) {
       sessionsStatus(ctx, '');
-      showError(ctx, failure.message || 'Could not prepare the selected sessions.');
+      showError(ctx, failure.message || generic);
       return false;
     }
+  }
+
+  function localDate(daysAgo) {
+    const when = new Date();
+    when.setDate(when.getDate() - daysAgo);
+    const pad = function (n) { return String(n).padStart(2, '0'); };
+    return when.getFullYear() + '-' + pad(when.getMonth() + 1) + '-' + pad(when.getDate());
+  }
+
+  function defaultSessionDates(form) {
+    const from = field(form, 'session_from');
+    const to = field(form, 'session_to');
+    if (!from.value) from.value = localDate(6);
+    if (!to.value) to.value = localDate(0);
   }
 
   function facetKey(form) {
@@ -611,7 +637,7 @@
     if (contexts.has(form)) return contexts.get(form);
     const ctx = {
       form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null,
-      sessionsAbort: null, sessionsDirty: false,
+      sessionsAbort: null, sessionsDirty: false, selectionToken: 0,
       planSequence: 0, compactSequence: 0, refreshTimer: null,
     };
     contexts.set(form, ctx);
@@ -629,6 +655,7 @@
     });
     if (global.htmx && typeof global.htmx.process === 'function') global.htmx.process(form);
     form.classList.add('irf-ready');
+    defaultSessionDates(form);
     showStep(ctx, step || 1, keepError);
     refreshFacets(ctx);
     if (ctx.step !== 3) loadCompact(ctx);

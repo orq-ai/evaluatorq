@@ -352,7 +352,8 @@ def test_snapshot_reports_broken_ref_and_loads_rest(claude_projects: Path, warni
     broken = SessionRef(source='claude-code', path=claude_projects / '-work-proj' / 'gone.jsonl')
     snapshot, failed = build_session_snapshot([SessionRef(source='claude-code', path=good), broken])
     assert len(snapshot.documents) == 1
-    assert failed == [(broken, 'SessionLoadError')]
+    assert [ref for ref, _ in failed] == [broken]
+    assert 'not a file' in failed[0][1]
     assert not snapshot.is_empty
 
 
@@ -394,7 +395,9 @@ def test_snapshot_reports_summarize_oserror_and_loads_rest(
     refs = [SessionRef(source='claude-code', path=flaky), SessionRef(source='claude-code', path=good)]
     snapshot, failed = build_session_snapshot(refs)
     assert len(snapshot.documents) == 1
-    assert failed == [(refs[0], 'SessionLoadError')]
+    assert [ref for ref, _ in failed] == [refs[0]]
+    assert 'OSError' in failed[0][1]
+    assert 'gone' not in failed[0][1]
 
 
 def test_ascii_needle_mixed_case_matches_through_bytes_path(claude_projects: Path) -> None:

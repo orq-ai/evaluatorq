@@ -316,7 +316,11 @@ def _document_end(document: TraceDocument) -> datetime:
 
 
 def build_session_snapshot(refs: Sequence[SessionRef]) -> tuple[Snapshot, list[tuple[SessionRef, str]]]:
-    """Freeze the selected sessions into a snapshot; also return `(ref, exception type)` for each that failed."""
+    """Freeze the selected sessions into a snapshot; also return `(ref, reason)` for each that failed.
+
+    The reason is the `SessionLoadError` text, which the readers build from the file path plus a reason or an
+    exception type name, never from session content.
+    """
     if len(refs) > MAX_SELECTED_SESSIONS:
         raise SessionLoadError(f'at most {MAX_SELECTED_SESSIONS} sessions can be selected, got {len(refs)}')
     by_id: dict[str, TraceDocument] = {}
@@ -326,7 +330,7 @@ def build_session_snapshot(refs: Sequence[SessionRef]) -> tuple[Snapshot, list[t
         try:
             document = load_session_document(ref)
         except SessionLoadError as exc:
-            failed.append((ref, type(exc).__name__))
+            failed.append((ref, str(exc)))
             logger.warning('Skipping local session {}: {}', ref.path, type(exc).__name__)
             continue
         trace_id = document.metadata.trace_id

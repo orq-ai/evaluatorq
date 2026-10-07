@@ -28,8 +28,8 @@ def _fresh_summary_cache() -> None:
     clear_summary_cache()
 
 
-def _utc(day: int) -> datetime:
-    return datetime(2026, 10, day, 10, tzinfo=timezone.utc)
+def _utc(day: int, hour: int = 10) -> datetime:
+    return datetime(2026, 10, day, hour, tzinfo=timezone.utc)
 
 
 def _claude(sid: str, *, text: str = 'hello there', day: int = 1) -> Path:
@@ -61,9 +61,9 @@ def _claude(sid: str, *, text: str = 'hello there', day: int = 1) -> Path:
     return path
 
 
-def _codex(sid: str, *, text: str = 'codex prompt', day: int = 2) -> Path:
+def _codex(sid: str, *, text: str = 'codex prompt', day: int = 2, hour: int = 10) -> Path:
     home = Path(os.environ['CODEX_HOME'])
-    ts = _utc(day).isoformat()
+    ts = _utc(day, hour).isoformat()
     path = write_jsonl(
         home / 'sessions' / '2026' / '10' / f'{day:02d}' / f'rollout-2026-10-{day:02d}T10-00-00-{sid}.jsonl',
         [
@@ -75,7 +75,7 @@ def _codex(sid: str, *, text: str = 'codex prompt', day: int = 2) -> Path:
             },
         ],
     )
-    os.utime(path, (_utc(day).timestamp(), _utc(day).timestamp()))
+    os.utime(path, (_utc(day, hour).timestamp(), _utc(day, hour).timestamp()))
     return path
 
 
@@ -244,7 +244,7 @@ def test_an_oversized_snapshot_is_refused_with_its_size(
     assert not (get_insights_runs_dir() / '.uploads').exists() or not list((get_insights_runs_dir() / '.uploads').iterdir())
 
 
-def test_a_broken_session_is_reported_by_type_only(client: TestClient, token: str) -> None:
+def test_a_broken_session_is_reported_with_its_reason_but_no_content(client: TestClient, token: str) -> None:
     good = _codex('x1')
     broken = write_jsonl(
         Path(os.environ['CODEX_HOME']) / 'sessions' / '2026' / '10' / '02' / 'rollout-2026-10-02T10-00-00-broken.jsonl',
@@ -258,5 +258,47 @@ def test_a_broken_session_is_reported_by_type_only(client: TestClient, token: st
     assert response.status_code == 201
     body = response.json()
     assert body['n_sessions'] == 1
-    assert body['failed'] == [{'path': str(broken), 'error': 'SessionLoadError'}]
+    assert [item['path'] for item in body['failed']] == [str(broken)]
+    reason = body['failed'][0]['error']
+    assert str(broken) in reason
+    assert 'not a main session' in reason or 'unreadable session' in reason
     assert 'secret user words' not in json.dumps(body)
+
+
+def test_a_ref_outside_the_session_folders_is_reported_with_its_reason(client: TestClient, token: str) -> None:
+    good = _codex('x1')
+
+    response = client.post(
+        '/insights/sessions/snapshot', data={'csrf': token, 'session': [_ref('codex', good), 'codex:/etc/hosts']}
+    )
+
+    assert response.status_code == 201
+    assert 'not a main session file inside the codex session folders' in response.json()['failed'][0]['error']
+
+
+def test_date_bounds_are_local_midnights_in_the_browser_offset(client: TestClient, token: str) -> None:
+    _codex('late', day=3, hour=2)
+
+    utc_day = _search(client, token, session_from='2026-10-02', session_to='2026-10-02', tz_offset='0')
+    west_day = _search(client, token, session_from='2026-10-02', session_to='2026-10-02', tz_offset='300')
+
+    assert 'No local sessions match these filters.' in utc_day.text
+    assert west_day.text.count('name="session"') == 1, '02:00Z on the 3rd is still the 2nd at UTC-5'
+
+
+def test_a_session_title_is_escaped(client: TestClient, token: str) -> None:
+    _claude('c1', text='<script>alert(1)</script>')
+
+    response = _search(client, token)
+
+    assert '<script>alert(1)' not in response.text
+    assert '&lt;script&gt;alert(1)' in response.text
+
+
+def test_plan_before_sessions_are_frozen_asks_for_a_selection(client: TestClient) -> None:
+    compact = client.get('/insights/new/plan', params={'source': 'sessions', 'dimensions': 'intent', 'compact': '1'})
+    full = client.get('/insights/new/plan', params={'source': 'sessions', 'dimensions': 'intent'})
+
+    assert 'Estimate unavailable: Select local sessions and press Next.' in compact.text
+    assert full.status_code == 422
+    assert 'Select local sessions and press Next.' in full.text

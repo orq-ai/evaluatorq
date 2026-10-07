@@ -507,7 +507,10 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         try:
             source, spec, stages = await asyncio.to_thread(validated)
         except (ValidationError, ValueError, TypeError) as exc:
-            message = _validation_message(exc)
+            if req.query_params.get('source') == 'sessions' and not req.query_params.get('trace_file'):
+                message = 'Select local sessions and press Next.'
+            else:
+                message = _validation_message(exc)
             if compact:
                 return _html(render_estimate_unavailable(message))
             return _html(f'<p class="insights-error" role="alert">{esc(message)}</p>', 422)

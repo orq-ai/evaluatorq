@@ -385,6 +385,74 @@ async function main() {
     assert.equal(app.form.querySelector('input[name="trace_file"]').value, '', 'changing a selection drops the frozen snapshot');
     assert.equal(app.form.querySelector('[data-sessions-selected]').textContent, '1 selected');
   }
+
+  {
+    const app = boot(baseHandlers());
+    await tick();
+    const from = app.form.querySelector('input[name="session_from"]').value;
+    const to = app.form.querySelector('input[name="session_to"]').value;
+    assert.match(from, /^\d{4}-\d{2}-\d{2}$/, 'the dates are filled in the browser');
+    assert.match(to, /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal((Date.parse(to) - Date.parse(from)) / 86400000, 6, 'six days ago through today');
+  }
+
+  {
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    let posts = 0;
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': () => response(fixtures.sessions),
+      '/insights/snapshot-preview': () => response('<p>fits</p>'),
+      '/insights/sessions/snapshot': async () => {
+        posts += 1;
+        if (posts === 1) await gate;
+        return response(JSON.stringify({path: '/runs/.uploads/snapshot-' + posts + '.json', n_sessions: 1, bytes: 1, failed: []}), {status: 201});
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('[data-sessions-search]').click();
+    await tick();
+    await tick();
+    app.form.querySelector('[data-sessions-all]').click();
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    app.form.querySelectorAll('input[name="session"]')[0].click();
+    release();
+    await tick();
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '', 'a stale freeze result is discarded');
+    assert.deepEqual(visibleStep(app.form), ['1'], 'the form stays on step 1');
+    assert.match(app.form.querySelector('#insights-run-error').textContent, /selection changed/);
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    await tick();
+    await tick();
+    assert.equal(posts, 2, 'the next Continue freezes the new selection again');
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/runs/.uploads/snapshot-2.json');
+    assert.deepEqual(visibleStep(app.form), ['2']);
+  }
+
+  {
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': () => response(fixtures.sessions),
+      '/insights/sessions/snapshot': () => response('<html>Bad gateway</html>', {status: 502}),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('[data-sessions-search]').click();
+    await tick();
+    await tick();
+    app.form.querySelector('[data-sessions-all]').click();
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('#insights-run-error').textContent, 'Could not prepare the selected sessions.');
+    assert.deepEqual(visibleStep(app.form), ['1']);
+  }
 }
 
 main().catch(error => {

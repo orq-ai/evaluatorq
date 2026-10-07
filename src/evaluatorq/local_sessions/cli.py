@@ -86,8 +86,8 @@ def _export(sessions: tuple[SessionSummary, ...], target: Path) -> None:
         handle.write(snapshot.model_dump_json())
     target.chmod(0o600)
     typer.echo(f'Wrote {len(snapshot.documents)} sessions to {target}', err=True)
-    for ref, error_type in failed:
-        typer.echo(f'Skipped {ref.path}: {error_type}', err=True)
+    for _ref, reason in failed:
+        typer.echo(f'Skipped {reason}', err=True)
 
 
 def sessions_cmd(
