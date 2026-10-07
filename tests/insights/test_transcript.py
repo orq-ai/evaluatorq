@@ -97,7 +97,11 @@ def test_tool_stats_count_tools_skills_and_commands_from_messages() -> None:
 def test_tool_stats_read_a_skill_from_arguments_cut_mid_string() -> None:
     trace = _trace(
         {'role': 'user', 'content': 'go'},
-        {'role': 'assistant', 'content': '', 'tool_calls': [_call('c1', 'Skill', '{"skill": "hate", "args": "a very lo')]},
+        {
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [_call('c1', 'Skill', '{"skill": "hate", "args": "a very lo')],
+        },
     )
 
     assert tool_stats(trace).skills == {'hate': 1}
@@ -131,7 +135,9 @@ def test_conversation_view_keeps_the_opening_request_and_cuts_the_middle() -> No
 
 def test_conversation_view_keeps_a_long_opening_request_over_budget() -> None:
     request = 'please ' * 500
-    view = conversation_view(_trace({'role': 'user', 'content': request}, {'role': 'assistant', 'content': 'ok'}), budget=1_000)
+    view = conversation_view(
+        _trace({'role': 'user', 'content': request}, {'role': 'assistant', 'content': 'ok'}), budget=1_000
+    )
 
     assert view.startswith('USER: please please')
 
@@ -142,7 +148,7 @@ def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None
     assert 'CALL Bash [error]: cd repo && uv run pytest tests/test_parser.py -q' in view
     assert '→ diagnostic: provider_error' in view
     assert 'CALL Bash [completed]: git push --force origin main' in view
-    assert 'forced update' not in view
+    assert 'output: ' in view  # shell output keeps an excerpt
     assert 'Looking at the parser' not in view  # assistant prose is left out
 
 
@@ -184,7 +190,11 @@ def test_tool_inventory_lists_tools_commands_and_skills() -> None:
 def _busy_trace(calls: int) -> TraceRecord:
     messages: list[dict[str, Any]] = [{'role': 'user', 'content': 'THE ORIGINAL TASK'}]
     for index in range(calls):
-        messages.append({'role': 'assistant', 'content': '', 'tool_calls': [_call(f'c{index}', 'Read', {'file_path': f'f{index}.py'})]})
+        messages.append({
+            'role': 'assistant',
+            'content': '',
+            'tool_calls': [_call(f'c{index}', 'Read', {'file_path': f'f{index}.py'})],
+        })
         messages.append({'role': 'tool', 'tool_call_id': f'c{index}', 'content': 'x' * 200})
     return _trace(*messages)
 
@@ -219,7 +229,7 @@ def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_without_th
             'role': 'tool',
             'tool_call_id': 'c1',
             'status': 'success',
-            'content': f'FAILED tests/test_parser.py::test_empty\n2 failed, 5 passed\nTOKEN={secret}\nexit code: 1',
+            'content': f'FAILED tests/test_parser.py::test_empty\n{"." * 400}\nTOKEN={secret}\n{"." * 400}\n2 failed, 5 passed',
         },
         {'role': 'assistant', 'tool_calls': [_call('c2', 'Bash', {'command': 'uv run pytest -q'})]},
         {'role': 'tool', 'tool_call_id': 'c2', 'status': 'success', 'content': '7 passed, 0 failed'},
@@ -227,10 +237,32 @@ def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_without_th
 
     [view] = tool_activity_chunks(trace)
 
-    assert 'output shows: nonzero_exit, tests_failed' in view
+    assert 'output shows: tests_failed' in view
     assert view.count('output shows') == 1  # '0 failed' is not a failure
-    assert secret not in view
-    assert 'test_parser.py::test_empty' not in view
+    assert 'output: FAILED tests/test_parser.py::test_empty' in view  # start of the output
+    assert '2 failed, 5 passed' in view  # end of the output
+    assert secret not in view  # the middle is cut
+    assert 'output: 7 passed, 0 failed' in view
+
+
+@pytest.mark.parametrize(
+    'content',
+    [
+        'Exit code 1\nnpm ERR! missing script',  # Claude Code Bash
+        'Script failed\nWall time 0.4 seconds\nOutput:\n',  # Codex exec
+        '{"chunk_id":"a1","exit_code":2,"output":"boom"}',  # Codex nested exec_command
+    ],
+)
+def test_nonzero_exit_is_recognised_in_each_harness_format(content: str) -> None:
+    trace = _trace(
+        {'role': 'user', 'content': 'Build it.'},
+        {'role': 'assistant', 'tool_calls': [_call('c1', 'Bash', {'command': 'make'})]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': content},
+    )
+
+    [view] = tool_activity_chunks(trace)
+
+    assert 'output shows: nonzero_exit' in view
 
 
 def test_failure_markers_only_apply_to_shell_calls() -> None:

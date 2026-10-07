@@ -7,8 +7,8 @@ Three views, each for one `/classify` call:
   to one line each and tool outputs are dropped. The opening user turns are
   never cut; an over-budget trace loses its middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
-- `tool_activity_chunks`: every tool call with its input, status, and fixed
-  labels for what its output showed (never the output itself), for the
+- `tool_activity_chunks`: every tool call with its input and status, the start
+  and end of each shell output, and fixed labels for failures found in it, for the
   questions that need to see what a command did; a long trace is split into
   several chunks rather than losing more than 30% of its middle.
 
@@ -44,19 +44,30 @@ OPENING_SHARE = 0.4
 # Cut at most this share of a tool-activity view from the middle; longer views are split into chunks.
 MAX_CUT_SHARE = 0.3
 RISKY_COMMAND_CHARS = 300
+# Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
+SHELL_OUTPUT_CHARS = 300
+# Credential-shaped text masked in the shell excerpt; the classifier never needs the value.
+_CREDENTIAL = re.compile(
+    r'\b(?:sk|pk|rk|ghp|gho|ghs|xox[abprs])[-_][A-Za-z0-9_-]{8,}'
+    r'|(?i:(bearer\s+|(?:token|secret|password|api[_-]?key|credential)s?\s*[=:]\s*))\S+'
+)
 USER_TURN_CHARS = 8_000
 
 SKILL_TOOL = 'Skill'
 SHELL_TOOLS = frozenset({'Bash', 'bash', 'shell', 'exec_command', 'run_shell_command'})
-# Failure markers searched in shell output. A command can fail inside a call
-# whose status is `completed` (a non-zero exit code or failing tests in the
-# output), so the status alone misses it. Only the label leaves this module.
+# Failure markers searched in the full shell output, including the part the
+# excerpt drops. A command can fail inside a call whose status is `completed`,
+# so the status alone misses it. Claude Code starts a failed Bash result with
+# `Exit code N`; Codex `exec` starts with `Script failed` and nests `"exit_code":N`.
 # Substring heuristics: `cat` of a test file can match too, so the
 # classifier treats a label as a hint. Upgrade to exit-code fields if traces carry them.
 OUTPUT_MARKERS = (
     (
         'nonzero_exit',
-        re.compile(r'exit(?:ed with)? (?:code|status)[: ]+[1-9]|process exited with code [1-9]', re.IGNORECASE),
+        re.compile(
+            r'exit(?:ed with)? (?:code|status)[: ]+[1-9]|"exit_code":\s*[1-9]|^Script failed',
+            re.IGNORECASE | re.MULTILINE,
+        ),
     ),
     (
         'tests_failed',
@@ -225,8 +236,9 @@ def tool_activity_chunks(trace: TraceRecord | TraceDocument, budget: int = VIEW_
 
     Used for the questions that need to see what a command did: whether an error
     stayed unfixed, and whether an action was risky. Assistant prose is left out,
-    and each tool result body is replaced by its diagnostic category or, for a
-    shell call, by the failure markers found in its output.
+    and each tool result body is replaced by its diagnostic category; a shell
+    call also keeps the start and end of its output and the failure markers
+    found in all of it.
     A view that fits after cutting at most `MAX_CUT_SHARE` of it from the middle is
     one chunk; a longer one is split into consecutive chunks of at most `budget`
     characters, each starting with the opening user turns, for the caller to ask
@@ -283,23 +295,22 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
     result = results.get(call_id)
     paired = (result,) if result else ()
     status = _tool_call_status(call_id, paired)
-    # Tool result bodies can contain credentials or user data. Keep only the
-    # fixed diagnostic category already used by the trace projection layer, or
-    # fixed failure-marker labels for a shell call's output.
+    # Result bodies are cut to keep a long trace inside one classifier call.
+    # Non-shell results keep only the diagnostic category; shell output decides
+    # whether a command worked, so it keeps an excerpt and its failure markers.
     category = _tool_result_category(call_id, paired)
-    markers = _output_markers(result) if result and name in SHELL_TOOLS else []
-    if category is not None:
-        evidence = f'diagnostic: {category}'
-    elif markers:
-        evidence = f'output shows: {", ".join(markers)}'
-    else:
-        evidence = 'result body omitted'
-    return f'CALL {name} [{status}]: {call_input}\n  → {evidence}'
-
-
-def _output_markers(result: dict[str, Any]) -> list[str]:
-    text = tool_result_to_text(result.get('content'))
-    return [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
+    evidence = [f'diagnostic: {category}'] if category is not None else []
+    if result and name in SHELL_TOOLS:
+        text = tool_result_to_text(result.get('content'))
+        markers = [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
+        if markers:
+            evidence.append(f'output shows: {", ".join(markers)}')
+        half = SHELL_OUTPUT_CHARS // 2
+        excerpt = _CREDENTIAL.sub(
+            lambda match: (match.group(1) or '') + '[redacted]', _head_tail(text.strip(), half, half)
+        )
+        evidence.append(f'output: {excerpt}'.replace('\n', ' ⏎ '))
+    return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
 
 
 def _fit(lines: list[str], budget: int, *, keep_opening_users: bool) -> str:
