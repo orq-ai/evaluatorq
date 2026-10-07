@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.formats._shared import parse_iso
 from evaluatorq.local_sessions.models import SessionLoadError
 
 if TYPE_CHECKING:
@@ -83,3 +85,14 @@ def read_tail(path: Path, *, max_bytes: int) -> list[dict[str, Any]]:
 def warn_skipped(path: Path, skipped: int) -> None:
     if skipped > 0:
         logger.warning('Skipped {} malformed lines in {}', skipped, path)
+
+
+def timestamp_or(value: object, default: datetime) -> datetime:
+    """An aware datetime from an ISO string; the default for a missing or malformed value."""
+    if not isinstance(value, str) or not value:
+        return default
+    try:
+        parsed = parse_iso(value)
+    except ValueError:
+        return default
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
