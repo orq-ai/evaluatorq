@@ -172,6 +172,21 @@ def test_project_matches_prefix_symlink_and_worktree(tmp_path: Path) -> None:
     assert not project_matches(str(gone), str(base))
 
 
+def test_project_matches_from_inside_a_linked_worktree_finds_siblings(tmp_path: Path) -> None:
+    repo = tmp_path / 'repo'
+    (repo / '.git').mkdir(parents=True)
+    here, sibling = tmp_path / 'wt-here', tmp_path / 'wt-sibling'
+    for name, worktree in (('here', here), ('sibling', sibling)):
+        worktree.mkdir()
+        (worktree / '.git').write_text(f'gitdir: {repo}/.git/worktrees/{name}\n', encoding='utf-8')
+
+    assert project_matches(str(sibling), str(here))
+    assert project_matches(str(repo / 'src'), str(here))
+    unrelated = tmp_path / 'unrelated'
+    unrelated.mkdir()
+    assert not project_matches(str(unrelated), str(here))
+
+
 def test_project_filter_in_search(claude_projects: Path) -> None:
     _claude(claude_projects, 'p1', cwd='/work/proj')
     _claude(claude_projects, 'p2', cwd='/work/proj2')

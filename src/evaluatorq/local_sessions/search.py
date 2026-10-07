@@ -94,10 +94,17 @@ def _worktree_main_repo(directory: str) -> str | None:
 
 
 def project_matches(project_dir: str, base: str) -> bool:
-    """True when `project_dir` equals or lies under `base`, or is a linked git worktree of a repo that does."""
+    """True when `project_dir` equals or lies under `base`, or is a linked git worktree of a repo that does.
+
+    A `base` that is itself a linked worktree stands for its main repository, so
+    `--project-dir .` run inside a worktree also finds the sibling worktrees.
+    """
     if not project_dir or not base:
         return False
     base_path = _real(base)
+    base_repo = _worktree_main_repo(str(base_path))
+    if base_repo is not None:
+        base_path = _real(base_repo)
     directory = _real(project_dir)
     if directory.is_relative_to(base_path):
         return True
