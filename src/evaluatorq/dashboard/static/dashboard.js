@@ -1696,15 +1696,16 @@
     drawerScrollTo(root, index);
   }
   document.body.addEventListener('htmx:afterSwap', function (evt) {
-    if (evt.detail.target && evt.detail.target.id === 'finder-drawer') {
-      const on = evt.detail.target.querySelector('.fd-msg.on');
-      if (on) drawerScrollTo(evt.detail.target, on.getAttribute('data-msg'));
+    const swapped = evt.detail.target;
+    if (swapped && (swapped.id === 'finder-drawer' || swapped.matches('.fd-traces'))) {
+      const on = swapped.querySelector('.fd-msg.on');
+      if (on) drawerScrollTo(swapped, on.getAttribute('data-msg'));
     }
   });
   document.addEventListener('click', function (evt) {
     const mini = evt.target.closest('.fd-mini i[data-mini-msg]');
     const summary = evt.target.closest('.fd-msg > summary');
-    const root = document.getElementById('finder-drawer');
+    const root = evt.target.closest('#finder-drawer, .fd-traces');
     if (!root || (!mini && !summary)) return;
     if (mini) {
       drawerSelect(root, mini.getAttribute('data-mini-msg'));
