@@ -10,7 +10,7 @@ from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.insights_review_views import review_page
 from evaluatorq.insights.models import InsightsConfig, InsightsRun, TraceInsight
 from evaluatorq.insights.store import get_insights_runs_dir, save_run
-from evaluatorq.signals.models import Evidence, SignalReport, SignalResult
+from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult
 
 
 class _SavedSignalsMountParser(HTMLParser):
@@ -34,7 +34,8 @@ def _run(*, with_signals: bool = True) -> InsightsRun:
                 name='tool_call_count',
                 group='A',
                 value=1,
-                evidence=[Evidence(step_id=2, call_id='call-1')],
+                evidence=[Evidence(step_id=2, call_id='call-1', reason='<unsafe>& evidence')],
+                preconditions=[Precondition(name='source_data', met=False, detail='<missing & incomplete>')],
             )
         },
     )
@@ -124,13 +125,31 @@ def test_trace_detail_page_mounts_saved_signals(tmp_path, monkeypatch) -> None:
 
     assert response.status_code == 200
     assert '<div data-saved-signals=' in response.text
-    assert parser.options == {
-        'report': run.traces[0].signals.model_dump(mode='json'),
-        'detail': {
-            'signals': run.traces[0].signals.model_dump(mode='json'),
-            'source_coverage': {'source': 'snapshot', 'partial': True},
+    assert parser.options is not None
+    summary = parser.options['report']
+    detail = parser.options['detail']
+    full_report = run.traces[0].signals.model_dump(mode='json')
+    assert summary == {
+        'config_version': 'signals-v3',
+        'results': {
+            'tool_call_count': {
+                'name': 'tool_call_count',
+                'group': 'A',
+                'value': 1,
+                'approximate': False,
+                'no_basis': None,
+                'reason': None,
+                'rule_version': None,
+            }
         },
     }
+    assert detail == {
+        'signals': full_report,
+        'source_coverage': {'source': 'snapshot', 'partial': True},
+    }
+    assert response.text.count('unsafe') == 1
+    assert '&lt;unsafe&gt;&amp; evidence' in response.text
+    assert '&lt;missing &amp; incomplete&gt;' in response.text
     assert '/static/ui-components.css' in response.text
     assert response.text.index('/static/ui-components.js') < response.text.index('/static/insights-signals.js')
     assert '/static/insights-signals.css' in response.text

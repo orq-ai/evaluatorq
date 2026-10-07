@@ -8,35 +8,14 @@ from urllib.parse import quote, urlencode
 
 from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.insights_review_projection import review_trace_key, review_xy, review_xy_state
-from evaluatorq.dashboard.insights_views import _trace_href
+from evaluatorq.dashboard.insights_views import _signal_summary, _trace_href
 from evaluatorq.dashboard.trace_links import trace_span_url
 from evaluatorq.insights.models import label_key, real_assistant_errors
 from evaluatorq.insights.presets import CODING_LABELS
 from evaluatorq.insights.transcript import SHELL_TOOLS
 
 if TYPE_CHECKING:
-    from evaluatorq.insights.models import InsightsRun, TraceInsight
-
-
-def _signal_summary(trace: TraceInsight) -> dict[str, object] | None:
-    report = getattr(trace, 'signals', None)
-    if report is None:
-        return None
-    return {
-        'config_version': report.config_version,
-        'results': {
-            name: {
-                'name': item.name,
-                'group': item.group,
-                'value': item.value,
-                'approximate': item.approximate,
-                'no_basis': item.no_basis,
-                'reason': item.reason,
-                'rule_version': item.rule_version,
-            }
-            for name, item in report.results.items()
-        },
-    }
+    from evaluatorq.insights.models import InsightsRun
 
 
 def build_signal_detail_payload(run: InsightsRun, trace_id: str, span_id: str | None) -> dict[str, object] | None:

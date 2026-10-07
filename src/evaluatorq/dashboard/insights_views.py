@@ -185,6 +185,27 @@ def _elapsed(start: datetime, end: datetime | None) -> str:
     return f'{seconds // 60}m {seconds % 60:02d}s' if seconds >= 60 else f'{seconds}s'
 
 
+def _signal_summary(trace: TraceInsight) -> dict[str, object] | None:
+    report = getattr(trace, 'signals', None)
+    if report is None:
+        return None
+    return {
+        'config_version': report.config_version,
+        'results': {
+            name: {
+                'name': item.name,
+                'group': item.group,
+                'value': item.value,
+                'approximate': item.approximate,
+                'no_basis': item.no_basis,
+                'reason': item.reason,
+                'rule_version': item.rule_version,
+            }
+            for name, item in report.results.items()
+        },
+    }
+
+
 def _chip(label: str, value: object) -> str:
     if value in (None, '', [], {}, ()):
         return ''
@@ -613,7 +634,7 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
     errors_html = f'<section><h3>Errors</h3><ul>{errors}</ul></section>' if errors else ''
     signal_report = trace.signals.model_dump(mode='json') if trace.signals is not None else None
     signal_options = {
-        'report': signal_report,
+        'report': _signal_summary(trace),
         'detail': {'signals': signal_report, 'source_coverage': trace.source_coverage},
     }
     signal_html = (
