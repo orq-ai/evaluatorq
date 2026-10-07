@@ -35,7 +35,7 @@
       ? `<dl class="signal-value-entries">${Object.entries(signal.value).map(([key, item]) => `<div><dt>${esc(key)}</dt><dd>${esc(value(item))}</dd></div>`).join('')}</dl>` : '';
     const resultValue = signal.no_basis || signal.value == null ? status.label
       : typeof signal.value === 'object' ? `${Object.keys(signal.value).length} entries` : displayValue;
-    const result = ui.resultFeedback({
+    const result = status.kind === 'flagged' ? '' : ui.resultFeedback({
       value: resultValue, outcome: status.label,
       tone: {measured: 'info', flagged: 'negative', clear: 'positive', approximate: 'warning', 'no-basis': 'neutral'}[status.kind],
       numeric: status.kind === 'measured' || status.kind === 'approximate',

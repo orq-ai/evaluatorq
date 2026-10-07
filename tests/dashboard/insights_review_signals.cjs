@@ -72,6 +72,7 @@ for (const level of ['L1', 'L2', 'L3', 'L4']) {
   assert.equal(section.hasAttribute('open'), false, `${level} starts folded`);
 }
 const toolLoopRow = dom.querySelector('details[data-signal-key="row:tool_loop"]');
+assert.equal(toolLoopRow.querySelector('.eq-result'), null, 'flagged tags use their header status instead of a duplicate result card');
 const toolLoopLevel = dom.querySelector('details[data-signal-key="level:L4"]');
 assert.equal(toolLoopRow.closest('details.signal-level'), toolLoopLevel);
 for (const row of toolLoopLevel.querySelectorAll('.signal-row')) {
@@ -123,6 +124,7 @@ assert.match(missingPanel, /Signals were not measured for this trace/);
 const unsafeName = 'bad_<img src=x onerror=alert(1)>';
 const unsafePanel = component.render({report: {results: {
   [unsafeName]: {group: 'D', value: true, reason: '<script>alert("signal")</script>'},
+  unsafe_reason: {group: 'B', value: 0, reason: '<script>alert("signal")</script>'},
 }}});
 assert.ok(unsafePanel.includes('data-signal-name="bad_&lt;img src=x onerror=alert(1)&gt;"'));
 assert.ok(unsafePanel.includes('&lt;script&gt;alert(&quot;signal&quot;)&lt;/script&gt;'));

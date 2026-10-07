@@ -14,7 +14,7 @@ from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
-from evaluatorq.dashboard.ui_components import component_assets, stylesheet_asset
+from evaluatorq.dashboard.ui_components import component_assets, script_asset, stylesheet_asset
 from evaluatorq.insights.models import label_key, label_order
 from evaluatorq.insights.population import describe_projection_coverage
 
@@ -34,8 +34,6 @@ TAB_LABELS = {
     'priority': 'Priority matrix',
     'map': '3D Map',
 }
-
-_SIGNALS_SCRIPT = '<script src="/static/insights-signals.js" defer></script>\n'
 
 
 def _stage_name(manifest: RunManifest) -> str:
@@ -645,7 +643,7 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
         body,
         active_nav='insights',
         back_html=back,
-        head_html=f'{component_assets()}{stylesheet_asset(filename="insights-signals.css")}{_SIGNALS_SCRIPT}',
+        head_html=f'{component_assets()}{stylesheet_asset(filename="insights-signals.css")}{script_asset(filename="insights-signals.js")}',
     )
 
 
