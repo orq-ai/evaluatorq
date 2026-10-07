@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -215,6 +214,21 @@ async def test_live_population_reports_the_same_projection_coverage(monkeypatch:
     assert resolved.echo['mode'] == 'filter'
     assert resolved.echo['n_projection_truncated'] == 1
     assert resolved.echo['n_omitted_messages'] == 1
+
+
+@pytest.mark.asyncio
+async def test_live_population_rejects_duplicate_trace_ids_before_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    FakeSource.snapshot = Snapshot(
+        traces=(make_trace('duplicate'), make_trace('duplicate').model_copy(update={'span_id': 'another-span'}))
+    )
+
+    with pytest.raises(PopulationError, match='select one span per trace'):
+        await resolve_population(
+            InsightsPopulation(), orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+        )
+
+    assert FakeSource.closed
 
 
 @pytest.mark.asyncio

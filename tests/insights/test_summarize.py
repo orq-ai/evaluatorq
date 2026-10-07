@@ -122,6 +122,21 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
 
 
 @pytest.mark.asyncio
+async def test_summarize_rejects_duplicate_trace_ids_before_cache_or_model_work(
+    monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
+) -> None:
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError('duplicate trace IDs must be rejected before cache or model work')
+
+    monkeypatch.setattr(cache, 'get_summary', forbidden)
+    monkeypatch.setattr(summarize_module, 'generate_structured', forbidden)
+    traces = [make_trace('duplicate'), make_trace('duplicate').model_copy(update={'span_id': 'another-span'})]
+
+    with pytest.raises(ValueError, match='select one span per trace'):
+        await summarize_traces(traces, client=fake_client(), model='m', cache=cache)
+
+
+@pytest.mark.asyncio
 async def test_cache_reads_and_writes_leave_event_loop_responsive(
     monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
 ) -> None:

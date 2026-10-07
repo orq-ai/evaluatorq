@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, cast, get_args, get_origin
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast, get_args, get_origin
 
 from loguru import logger
 from openai.types.responses import Response, ResponseInputItem, ResponseOutputItem
@@ -13,8 +14,6 @@ from evaluatorq.formats._shared import atif_tool_arguments, json_arguments_text
 from evaluatorq.openresponses.otel_messages import RESPONSES_ITEM_TYPES
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-
     from evaluatorq.formats.atif import AtifTrajectory
     from evaluatorq.formats.chat import ChatConversation
     from evaluatorq.formats.otel import OtelTrace
@@ -35,13 +34,48 @@ _MODEL_OUTPUT_TYPES = frozenset({
     'shell_call',
     'apply_patch_call',
 })
-# Keep the recognized set aligned with the installed OpenAI SDK.  The package
-# supports SDK releases whose output union predates some of these item types.
-_OUTPUT_UNION = get_args(ResponseOutputItem)[0] if get_origin(ResponseOutputItem) is Annotated else ResponseOutputItem
-_OUTPUT_MODELS = get_args(_OUTPUT_UNION) or (_OUTPUT_UNION,)
-_SDK_OUTPUT_TYPES = frozenset(
-    item_type for item_model in _OUTPUT_MODELS for item_type in get_args(item_model.model_fields['type'].annotation)
-)
+
+
+def _literal_string_values(annotation: Any) -> set[str]:
+    """Read string values from a Literal annotation, allowing Annotated and union wrappers."""
+    origin = get_origin(annotation)
+    args = get_args(annotation)
+    if origin is Annotated:
+        return _literal_string_values(args[0]) if args else set()
+    if origin is Literal:
+        return {value for value in args if isinstance(value, str)}
+    if args:
+        return set().union(*(_literal_string_values(arg) for arg in args))
+    return set()
+
+
+def _sdk_output_item_types(output_item_type: Any) -> frozenset[str]:
+    """Discover output item discriminators exposed by this OpenAI SDK, skipping unknown union members."""
+    item_types: set[str] = set()
+    pending = [output_item_type]
+    while pending:
+        member = pending.pop()
+        origin = get_origin(member)
+        args = get_args(member)
+        if origin is Annotated:
+            if args:
+                pending.append(args[0])
+            continue
+        if args:
+            pending.extend(args)
+            continue
+        model_fields = getattr(member, 'model_fields', None)
+        if not isinstance(model_fields, Mapping):
+            continue
+        type_field = model_fields.get('type')
+        annotation = getattr(type_field, 'annotation', None)
+        item_types.update(_literal_string_values(annotation))
+    return frozenset(item_types)
+
+
+# Keep the recognized set aligned with the installed OpenAI SDK. An SDK union
+# member we cannot inspect stays on the raw preservation path.
+_SDK_OUTPUT_TYPES = _sdk_output_item_types(ResponseOutputItem)
 _RESTORABLE_OUTPUT_TYPES = _MODEL_OUTPUT_TYPES & _SDK_OUTPUT_TYPES
 _INPUT_ITEM: TypeAdapter[ResponseInputItem] = TypeAdapter(ResponseInputItem)
 _OUTPUT_ITEM: TypeAdapter[ResponseOutputItem] = TypeAdapter(ResponseOutputItem)

@@ -129,6 +129,56 @@ def test_signal_attachment_checks_atif_trajectory_id() -> None:
         )
 
 
+def test_multimessage_response_metadata_is_distributed_without_double_counting() -> None:
+    source_messages = [
+        {'role': 'assistant', 'content': 'alpha', 'tool_calls': [
+            {'id': 'call-a', 'type': 'function', 'function': {'name': 'first', 'arguments': '{}'}},
+        ]},
+        {'role': 'assistant', 'content': 'beta', 'tool_calls': [
+            {'id': 'call-b', 'type': 'function', 'function': {'name': 'second', 'arguments': '{}'}},
+        ]},
+        {'role': 'tool', 'tool_call_id': 'call-a', 'content': 'first result'},
+        {'role': 'tool', 'tool_call_id': 'call-b', 'content': 'second result'},
+    ]
+    started_at = '2026-10-05T00:00:00+00:00'
+    ended_at = '2026-10-05T00:00:02+00:00'
+    raw_output = {
+        '0': [{'type': 'message', 'id': 'message-a'}],
+        '1': [{'type': 'message', 'id': 'message-b'}],
+    }
+    document = ensure_trace_document(
+        _trace(*source_messages).model_copy(update={'capture_metadata': {
+            'signal_selected_span': {
+                'step_orders': [0, 1],
+                'step_order': None,
+                'output_items_by_order': raw_output,
+                'metrics': {'prompt_tokens': 40, 'completion_tokens': 12},
+                'started_at': started_at,
+                'start_timestamp': datetime.fromisoformat(started_at).timestamp(),
+                'end_timestamp': datetime.fromisoformat(ended_at).timestamp(),
+                'tool_definitions': [{'type': 'function', 'name': 'lookup'}],
+                'tool_definitions_present': True,
+            },
+        }}),
+    )
+
+    first, second = document.trajectory.steps
+    assert prompt_messages(document) == source_messages
+    assert first.metrics is not None
+    assert (first.metrics.prompt_tokens, first.metrics.completion_tokens) == (40, 12)
+    assert second.metrics is None
+    assert (first.llm_call_count, second.llm_call_count) == (1, 0)
+    assert first.timestamp == started_at
+    assert second.timestamp is None
+    assert first.extra is not None and first.extra['invocation']['start_timestamp']
+    assert second.extra is not None and 'invocation' not in second.extra
+    assert first.extra['evaluatorq.responses_tools'] == second.extra['evaluatorq.responses_tools']
+    assert first.extra['evaluatorq.responses_output_items'] == raw_output['0']
+    assert second.extra['evaluatorq.responses_output_items'] == raw_output['1']
+    call_counts = compute_signals(document.trajectory, only=['llm_call_count'])
+    assert call_counts.results['llm_call_count'].value == 1
+
+
 def test_prompt_renderer_reads_native_atif_message_content() -> None:
     document = ensure_trace_document(_trace({'role': 'user', 'content': 'before'}))
     changed = document.model_copy(

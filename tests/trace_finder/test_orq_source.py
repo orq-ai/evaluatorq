@@ -221,6 +221,33 @@ def test_selected_response_text_correlation_matches_responses_normalization() ->
     assert selected['end_timestamp'] == end.timestamp()
 
 
+def test_selected_response_associates_multiple_assistant_message_orders() -> None:
+    response_items = [
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'alpha'}]},
+        {'type': 'function_call', 'id': 'fc-1', 'call_id': 'call-1', 'name': 'lookup', 'arguments': '{}'},
+        {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'beta'}]},
+    ]
+    messages = [
+        {'role': 'assistant', 'content': 'alpha', 'tool_calls': [
+            {'id': 'call-1', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{}'}},
+        ]},
+        {'role': 'assistant', 'content': 'beta'},
+    ]
+
+    selected = _selected_span_signal_data(
+        {'attributes': {'openresponses.response': json.dumps({
+            'output': response_items,
+            'usage': {'input_tokens': 40, 'output_tokens': 12},
+        })}},
+        messages,
+    )
+
+    assert selected['step_order'] is None
+    assert selected['step_orders'] == [0, 1]
+    assert selected['metrics'] == {'prompt_tokens': 40, 'completion_tokens': 12}
+    assert set(selected['output_items_by_order']) == {'0', '1'}
+
+
 @pytest.mark.asyncio
 async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_into_atif() -> None:
     source_messages = [

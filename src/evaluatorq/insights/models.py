@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
@@ -23,11 +23,30 @@ from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic f
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from evaluatorq.trace_finder.export import RunExport
 
 DimensionName = Literal['intent', 'failure', 'sentiment']
 BoundedRatio = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
+
+class _TraceIdentity(Protocol):
+    @property
+    def trace_id(self) -> str: ...
+
+
+def ensure_unique_trace_ids(traces: Iterable[_TraceIdentity]) -> None:
+    """Reject duplicate IDs where downstream analysis stores results by trace ID."""
+    seen: set[str] = set()
+    for trace in traces:
+        if trace.trace_id in seen:
+            raise ValueError(
+                'trace_id values must be unique for analysis; select one span per trace or use distinct '
+                f'dataset-row trace IDs (duplicate trace_id={trace.trace_id!r})'
+            )
+        seen.add(trace.trace_id)
 
 
 class LabelSpec(BaseModel):
@@ -324,6 +343,9 @@ class InsightsRun(BaseModel):
 
     @model_validator(mode='after')
     def _trace_identities_are_unique(self) -> Self:
+        if self.schema_version == 1:
+            return self
+
         identities: set[tuple[str, str | None]] = set()
         for trace in self.traces:
             identity = (trace.trace_id, trace.span_id or None)

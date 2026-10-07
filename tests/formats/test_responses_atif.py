@@ -654,6 +654,37 @@ def test_function_call_with_non_string_call_id_is_unmapped() -> None:
     assert trajectory.to_responses().items == [invalid_call]
 
 
+def test_sdk_output_type_probe_reads_known_current_or_minimum_union_members() -> None:
+    from openai.types.responses import ResponseOutputItem
+
+    from evaluatorq.formats.responses import _sdk_output_item_types
+
+    output_types = _sdk_output_item_types(ResponseOutputItem)
+    assert {'function_call', 'message'} <= output_types
+
+
+def test_sdk_output_type_probe_skips_non_model_union_members_and_wrappers() -> None:
+    from types import SimpleNamespace
+    from typing import Annotated, Literal, Union
+
+    from evaluatorq.formats.responses import _sdk_output_item_types
+
+    model_member = type(
+        'FakeOutputItem',
+        (),
+        {'model_fields': {'type': SimpleNamespace(annotation=Literal['known_call'])}},
+    )
+    bad_fields_member = type('BadFieldsOutputItem', (), {'model_fields': []})
+    missing_type_member = type('MissingTypeOutputItem', (), {'model_fields': {}})
+    wrapped_union = Annotated[
+        Union[model_member, str, bad_fields_member, missing_type_member],
+        'sdk-union-wrapper',
+    ]
+
+    assert _sdk_output_item_types(wrapped_union) == frozenset({'known_call'})
+    assert _sdk_output_item_types(Annotated[Union[str, bytes], 'opaque-wrapper']) == frozenset()
+
+
 def test_future_tool_call_roundtrips_as_raw_activity() -> None:
     from evaluatorq.signals import compute_signals
 

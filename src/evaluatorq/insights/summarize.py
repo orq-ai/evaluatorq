@@ -23,7 +23,7 @@ from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import generate_structured, usage_from_exception
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.insights.cache import prompt_hash
-from evaluatorq.insights.models import TraceSummary
+from evaluatorq.insights.models import TraceSummary, ensure_unique_trace_ids
 from evaluatorq.insights.transcript import conversation_view
 
 if TYPE_CHECKING:
@@ -160,6 +160,7 @@ async def summarize_traces(
     than raised — per-trace failures never fail the run (the caller records it
     on `TraceInsight.errors['summary']`).
     """
+    ensure_unique_trace_ids(traces)
     if parallelism <= 0:
         raise ValueError('parallelism must be greater than zero')
     semaphore = asyncio.Semaphore(parallelism)

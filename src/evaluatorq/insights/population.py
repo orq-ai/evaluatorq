@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document
+from evaluatorq.insights.models import ensure_unique_trace_ids
 from evaluatorq.trace_finder.compiler import compile_query
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
@@ -201,7 +202,12 @@ async def _load_traces(
         raise PopulationError(
             f'reloading Finder export traces was incomplete: {snapshot.capture_metadata["incomplete_reason"]}'
         )
-    return tuple(ensure_trace_document(trace) for trace in traces)
+    documents = tuple(ensure_trace_document(trace) for trace in traces)
+    try:
+        ensure_unique_trace_ids(documents)
+    except ValueError as error:
+        raise PopulationError(str(error)) from error
+    return documents
 
 
 async def _select_generated_filters(
@@ -408,6 +414,10 @@ async def resolve_population(
         if orq is None:
             raise PopulationError('a filter population requires an Orq client')
         resolved = await _resolve_from_filters(pop, orq=orq)
+    try:
+        ensure_unique_trace_ids(resolved.traces)
+    except ValueError as error:
+        raise PopulationError(str(error)) from error
     try:
         resolved.echo.update(projection_coverage(resolved.traces))
     except (KeyError, TypeError, ValueError) as error:

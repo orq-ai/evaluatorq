@@ -956,7 +956,7 @@ class OrqTraceSource:
                     'matched_tool_span_count': len(matching),
                     'matched_call_ids': sorted(statuses),
                     'missing_call_ids': sorted(call_ids - set(statuses)),
-                    'selected_data_correlated': bool(selected_data.get('step_order') is not None),
+                    'selected_data_correlated': bool(selected_data.get('step_orders')),
                     'responses_items_captured': sum(
                         len(items)
                         for items in _mapping(selected_data.get('output_items_by_order')).values()
@@ -965,9 +965,9 @@ class OrqTraceSource:
                     'selected_detail_captured': selected_detail_captured,
                     'enrichment_errors': enrichment_errors,
                 }
-                if selected_data.get('output_item_count') and selected_data.get('step_order') is None:
+                if selected_data.get('output_item_count') and not selected_data.get('step_orders'):
                     logger.warning(
-                        'selected trace {} response items could not be correlated to one transcript step',
+                        'selected trace {} response items could not be correlated to transcript assistant steps',
                         record.trace_id,
                     )
                 capture_metadata = {
@@ -1669,7 +1669,8 @@ def _selected_span_signal_data(span: Any, messages: Sequence[dict[str, Any]]) ->
                 for key in ('id', 'call_id', 'type', 'name', 'status', 'error_type', 'finish_reason')
                 if key in item
             })
-    selected_order = next(iter(matched_orders)) if len(matched_orders) == 1 else None
+    selected_orders = sorted(matched_orders)
+    selected_order = selected_orders[0] if len(selected_orders) == 1 else None
     input_details = _mapping(usage.get('input_tokens_details') or usage.get('prompt_tokens_details'))
     metrics = {
         key: value
@@ -1683,6 +1684,7 @@ def _selected_span_signal_data(span: Any, messages: Sequence[dict[str, Any]]) ->
     }
     result: dict[str, Any] = {
         'step_order': selected_order,
+        'step_orders': selected_orders,
         'output_items_by_order': item_sidecars,
         'unmapped_output_items': unmapped_items,
         'output_item_count': len(items),

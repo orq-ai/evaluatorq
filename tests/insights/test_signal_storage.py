@@ -62,6 +62,23 @@ def test_old_run_has_unmeasured_signals_and_no_invented_configuration(minimal_ru
     assert all(trace.source_coverage == {} for trace in restored.traces)
 
 
+def test_old_run_with_duplicate_trace_identity_remains_readable(minimal_run, tmp_path) -> None:
+    raw = minimal_run.model_dump(mode='json')
+    raw['schema_version'] = 1
+    raw['traces'][1]['trace_id'] = raw['traces'][0]['trace_id']
+    raw['traces'][1]['span_id'] = raw['traces'][0]['span_id']
+    path = tmp_path / 'old-duplicate-identities.json'
+    path.write_text(json.dumps(raw))
+
+    restored = load_run(path)
+
+    assert restored.schema_version == 1
+    assert [(trace.trace_id, trace.span_id) for trace in restored.traces] == [
+        ('trace-1', 'span-1'),
+        ('trace-1', 'span-1'),
+    ]
+
+
 def test_unknown_run_schema_is_rejected(minimal_run) -> None:
     raw = minimal_run.model_dump(mode='json')
     raw['schema_version'] = 99

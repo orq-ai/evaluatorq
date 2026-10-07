@@ -317,7 +317,21 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
         messages = []
     steps: list[AtifStep] = []
     selected_span_data = _mapping(metadata.capture_metadata.get('signal_selected_span'))
-    selected_order = selected_span_data.get('step_order')
+    raw_orders = selected_span_data.get('step_orders')
+    selected_orders = (
+        {order for order in raw_orders if isinstance(order, int) and not isinstance(order, bool) and order >= 0}
+        if isinstance(raw_orders, list)
+        else set()
+    )
+    legacy_order = selected_span_data.get('step_order')
+    if (
+        not selected_orders
+        and isinstance(legacy_order, int)
+        and not isinstance(legacy_order, bool)
+        and legacy_order >= 0
+    ):
+        selected_orders.add(legacy_order)
+    representative_order = min(selected_orders) if selected_orders else None
     response_items_by_order = _mapping(selected_span_data.get('output_items_by_order'))
     call_steps: dict[str, list[AtifStep]] = {}
     unattached_results: list[tuple[int, dict[str, Any]]] = []
@@ -349,22 +363,23 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
             for index, call in enumerate(item.get('tool_calls') or [])
         ]
         calls = [call for call in calls if call is not None]
-        if order == selected_order:
+        if order in selected_orders:
             raw_items = response_items_by_order.get(str(order))
             if isinstance(raw_items, list) and raw_items:
                 extra['evaluatorq.responses_output_items'] = raw_items
             definitions = selected_span_data.get('tool_definitions')
             if selected_span_data.get('tool_definitions_present') and isinstance(definitions, list):
                 extra['evaluatorq.responses_tools'] = definitions
-        metrics = selected_span_data.get('metrics') if order == selected_order else None
+        is_representative = order == representative_order
+        metrics = selected_span_data.get('metrics') if is_representative else None
         step = AtifStep(
             step_id=len(steps) + 1,
             source=source,
             message=atif_message,
             tool_calls=calls or None,
-            timestamp=selected_span_data.get('started_at') if order == selected_order else None,
+            timestamp=selected_span_data.get('started_at') if is_representative else None,
             metrics=AtifMetrics.model_validate(metrics) if isinstance(metrics, Mapping) and metrics else None,
-            llm_call_count=1 if order == selected_order else None,
+            llm_call_count=(1 if is_representative else 0) if order in selected_orders else None,
             extra=(
                 {
                     **(extra or {}),
@@ -374,7 +389,7 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
                         if selected_span_data.get(key) is not None
                     },
                 }
-                if order == selected_order
+                if is_representative
                 and (
                     selected_span_data.get('start_timestamp') is not None
                     or selected_span_data.get('end_timestamp') is not None
