@@ -23,7 +23,7 @@ from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic f
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from evaluatorq.trace_finder.export import RunExport
 
@@ -35,6 +35,11 @@ FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 class _TraceIdentity(Protocol):
     @property
     def trace_id(self) -> str: ...
+
+
+def reads_snapshot(population: Mapping[str, object]) -> bool:
+    """Whether a saved population echo describes a run read from a local snapshot file."""
+    return population.get('mode') == 'snapshot' or bool(population.get('snapshot_path'))
 
 
 def ensure_unique_trace_ids(traces: Iterable[_TraceIdentity]) -> None:

@@ -15,11 +15,11 @@ from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import RedirectResponse, Response
 
-from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
+from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.reports import esc
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
-from evaluatorq.dashboard.auth import auth_identity
+from evaluatorq.dashboard.auth import auth_identity, build_orq_client
 from evaluatorq.dashboard.insights_estimate_views import (
     render_compact_estimate,
     render_estimate,
@@ -324,15 +324,8 @@ async def _load_catalogue(
     orq = None
     credential_rejected = False
     try:
-        if auth.method == 'cli_oauth':
-            from evaluatorq.common.cli_oauth import build_cli_oauth_clients
-
-            settings = app.state.finder_settings
-            orq, _ = build_cli_oauth_clients(
-                server_url=auth.base_url, workspace=settings.orq_workspace, project=settings.orq_project_id
-            )
-        else:
-            orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
+        settings = app.state.finder_settings
+        orq = build_orq_client(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
         catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
     except Exception as exc:  # noqa: BLE001 — provider errors render a visible unavailable state
         credential_rejected = _is_unauthorized(exc)

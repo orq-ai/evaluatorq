@@ -108,3 +108,13 @@ def build_auth_clients(
     ).client
     orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
     return orq, llm
+
+
+def build_orq_client(auth: DashboardAuth, *, workspace: str | None = None, project: str | None = None) -> Any:
+    """Build only the Orq client for a resolved dashboard credential."""
+
+    if auth.method == 'cli_oauth':
+        from evaluatorq.common.cli_oauth import build_cli_oauth_clients
+
+        return build_cli_oauth_clients(server_url=auth.base_url, workspace=workspace, project=project)[0]
+    return resolve_orq_client(auth.api_key, base_url=auth.base_url)

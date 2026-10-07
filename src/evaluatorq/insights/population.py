@@ -123,14 +123,20 @@ def preview_snapshot(raw_path: str) -> dict[str, int]:
         raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
 
 
+def read_snapshot(path: Path) -> tuple[Snapshot, str]:
+    """Read and validate a local snapshot, returning it with the sha256 of its bytes."""
+    try:
+        raw = path.read_bytes()
+        snapshot = Snapshot.model_validate_json(raw)
+    except (OSError, ValueError) as error:
+        raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
+    return snapshot, hashlib.sha256(raw).hexdigest()
+
+
 def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
     """Read a complete local snapshot; this path makes no Orq or model calls."""
     assert pop.snapshot_path is not None  # noqa: S101 - guarded by the caller's dispatch
-    try:
-        raw = pop.snapshot_path.read_bytes()
-        snapshot = Snapshot.model_validate_json(raw)
-    except (OSError, ValueError) as error:
-        raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
+    snapshot, digest = read_snapshot(pop.snapshot_path)
     traces = [ensure_trace_document(trace) for trace in snapshot.traces]
     return ResolvedPopulation(
         traces=traces,
@@ -138,7 +144,7 @@ def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
         echo={
             'mode': 'snapshot',
             'snapshot_path': str(pop.snapshot_path),
-            'snapshot_sha256': hashlib.sha256(raw).hexdigest(),
+            'snapshot_sha256': digest,
             'limit': len(traces),
         },
         n_scanned=len(traces),
