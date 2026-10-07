@@ -324,8 +324,12 @@ async def _load_catalogue(
     orq = None
     credential_rejected = False
     try:
-        settings = app.state.finder_settings
-        orq = build_orq_client(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
+        settings = app.state.finder_settings if auth.method == 'cli_oauth' else None
+        orq = build_orq_client(
+            auth,
+            workspace=settings.orq_workspace if settings else None,
+            project=settings.orq_project_id if settings else None,
+        )
         catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
     except Exception as exc:  # noqa: BLE001 — provider errors render a visible unavailable state
         credential_rejected = _is_unauthorized(exc)

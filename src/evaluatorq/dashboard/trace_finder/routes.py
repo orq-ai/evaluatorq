@@ -27,7 +27,7 @@ from evaluatorq.common.orq_client import (
     resolve_orq_client,
 )
 from evaluatorq.common.run_store_dir import get_store_dir
-from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients, build_orq_client, resolve_dashboard_auth
+from evaluatorq.dashboard.auth import DashboardAuth, build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.insights_launch import (
     FINDER_EXPORT_REFERENCE_DIR,
     read_private_finder_reference,
@@ -480,7 +480,7 @@ async def _load_catalogue(app: Any, window_days: int | None = None) -> FacetCata
         if auth.method == 'cli_oauth':
             orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
         else:
-            orq = build_orq_client(auth)
+            orq = resolve_orq_client(auth.api_key, base_url=auth.base_url)
         catalogue = await load_facet_catalogue(
             orq,
             start=now - timedelta(days=window),
