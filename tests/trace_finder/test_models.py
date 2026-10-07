@@ -221,3 +221,22 @@ def test_compiled_query_rejects_non_empty_classifier_state() -> None:
         )
 
     assert error.value.errors()[0]['loc'] == ('task', 'state')
+
+
+def test_snapshot_documents_round_trip_and_is_empty(tmp_path) -> None:
+    from evaluatorq.local_sessions import session_document
+    from evaluatorq.local_sessions.claude import READER
+
+    path = tmp_path / 'sess.jsonl'
+    path.write_text(
+        '{"type":"user","uuid":"u1","parentUuid":null,"sessionId":"s","cwd":"/w","version":"1",'
+        '"timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"hi"}}\n',
+        encoding='utf-8',
+    )
+    document = session_document(READER.parse(path))
+    snapshot = Snapshot(traces=(), documents=(document,))
+    assert not snapshot.is_empty
+    assert Snapshot(traces=()).is_empty
+    restored = Snapshot.model_validate_json(snapshot.model_dump_json())
+    assert restored.documents[0].trajectory == document.trajectory
+    assert restored == snapshot

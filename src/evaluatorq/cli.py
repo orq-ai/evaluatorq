@@ -268,6 +268,7 @@ def _register_subapps(app: typer.Typer) -> None:
     """
     from evaluatorq.backends.coding_agent_cli import app as coding_agent_app
     from evaluatorq.insights.cli import insights_cmd
+    from evaluatorq.local_sessions.cli import sessions_cmd
     from evaluatorq.redteam.cli import app as redteam_app
     from evaluatorq.simulation.cli import app as sim_app
     from evaluatorq.trace_finder.cli import _FIND_EPILOG, find
@@ -281,6 +282,7 @@ def _register_subapps(app: typer.Typer) -> None:
         epilog=_FIND_EPILOG,
     )(find)
     app.command('insights', help='Discover and label patterns in Orq or local traces.')(insights_cmd)
+    app.command('sessions', help='Search local Claude Code, Claude desktop, Codex and omp sessions.')(sessions_cmd)
 
 
 def main() -> None:

@@ -21,6 +21,7 @@ from pydantic import (
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion, ClassifyResponse  # noqa: TC001
+from evaluatorq.common.trace_document import TraceDocument  # noqa: TC001 - pydantic field type
 
 FacetName = Literal['project', 'model', 'provider', 'status', 'product', 'trace_type', 'agent_name', 'tool_name']
 FACET_NAMES: tuple[FacetName, ...] = (
@@ -123,7 +124,12 @@ class Snapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     traces: tuple[TraceRecord, ...]
+    documents: tuple[TraceDocument, ...] = ()
     capture_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.traces and not self.documents
 
 
 class FacetSelection(BaseModel):

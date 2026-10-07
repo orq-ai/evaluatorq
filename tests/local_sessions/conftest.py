@@ -9,10 +9,15 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from evaluatorq.local_sessions import roots
+from evaluatorq.local_sessions import clear_summary_cache, roots
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+
+@pytest.fixture(autouse=True)
+def _fresh_summary_cache() -> None:
+    clear_summary_cache()
 
 
 def write_jsonl(path: Path, records: Iterable[dict[str, Any] | str], *, trailing_newline: bool = True) -> Path:

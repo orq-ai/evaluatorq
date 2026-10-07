@@ -21,6 +21,14 @@ from evaluatorq.local_sessions.models import (
 )
 from evaluatorq.local_sessions.readers import READERS, SessionReader
 from evaluatorq.local_sessions.roots import session_roots
+from evaluatorq.local_sessions.search import (
+    build_session_snapshot,
+    clear_summary_cache,
+    load_session_document,
+    project_matches,
+    resolve_session_ref,
+    search_sessions,
+)
 
 __all__ = [
     'FAMILY_OF',
@@ -39,6 +47,12 @@ __all__ = [
     'SessionSearchResult',
     'SessionSource',
     'SessionSummary',
+    'build_session_snapshot',
+    'clear_summary_cache',
+    'load_session_document',
+    'project_matches',
+    'resolve_session_ref',
+    'search_sessions',
     'session_document',
     'session_roots',
 ]
