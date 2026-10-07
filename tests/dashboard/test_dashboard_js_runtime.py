@@ -32,15 +32,40 @@ def test_drawer_closing_class_has_exit_animation() -> None:
 def test_insights_run_form_controller() -> None:
     import json
     from dataclasses import replace
+    from datetime import datetime, timezone
 
     from evaluatorq.dashboard.insights_run_form import RunFormValues, render_run_form, render_run_page
+    from evaluatorq.dashboard.insights_sessions_views import render_session_results
+    from evaluatorq.local_sessions import SessionSearchResult, SessionSummary
 
+    def summary(source: str, path: str) -> SessionSummary:
+        when = datetime(2026, 10, 2, 10, tzinfo=timezone.utc)
+        return SessionSummary.model_validate({
+            'source': source,
+            'path': path,
+            'session_id': path,
+            'title': 'A session',
+            'started_at': when,
+            'updated_at': when,
+            'size_bytes': 2048,
+        })
+
+    sessions = SessionSearchResult(
+        sessions=(
+            summary('claude-code', '/home/me/.claude/projects/p/a.jsonl'),
+            summary('codex', '/home/me/.codex/sessions/2026/10/02/b.jsonl'),
+        ),
+        scanned_files=2,
+        candidate_files=2,
+        complete=True,
+    )
     values = RunFormValues.defaults()
     fixtures = {
         'form': render_run_form(values, csrf='token'),
         'rejected': render_run_page(
             replace(values, source='snapshot'), csrf='token', error='Browse to choose a trace file first.'
         ),
+        'sessions': render_session_results(sessions, selected=frozenset(), roots_found=True),
     }
     script = Path(__file__).with_name('insights_run_form.cjs')
     # Fixtures go in on stdin; insights_run_form.cjs explains why.

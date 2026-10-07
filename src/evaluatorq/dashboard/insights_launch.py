@@ -42,24 +42,28 @@ from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import FacetSelection, Snapshot
 
 Source = Literal['recent', 'query', 'finder', 'snapshot']
+FormSource = Source | Literal['sessions']
+"""A source the run form offers: a launch `Source`, or `sessions`, which the form freezes into a `snapshot`."""
 
 
 class SourceInfo(NamedTuple):
-    """How one launch `Source` shows up: its run form tab, its stored `population.mode`, and its label."""
+    """How one form source shows up: its run form tab, its stored `population.mode`, and its label."""
 
-    tab: Literal['orq', 'file']
+    tab: Literal['orq', 'file', 'sessions']
     mode: str
     label: str
 
 
-SOURCES: MappingProxyType[Source, SourceInfo] = MappingProxyType({
+SOURCES: MappingProxyType[FormSource, SourceInfo] = MappingProxyType({
     'recent': SourceInfo('orq', 'filter', 'Orq traces'),
     'query': SourceInfo('orq', 'query', 'Orq traces matching a question'),
     'finder': SourceInfo('file', 'export', 'Trace file (Finder export)'),
     'snapshot': SourceInfo('file', 'snapshot', 'Trace file'),
+    'sessions': SourceInfo('sessions', 'snapshot', 'Local sessions'),
 })
+# A sessions run launches as a snapshot run, so a stored `snapshot` mode reads back as the `snapshot` source.
 SOURCE_BY_MODE: MappingProxyType[str, Source] = MappingProxyType({
-    info.mode: source for source, info in SOURCES.items()
+    info.mode: source for source, info in SOURCES.items() if source != 'sessions'
 })
 Preset = str
 _CODING_PRESETS = {spec.name: spec for spec in CODING_LABELS[1:]}

@@ -4,6 +4,7 @@
 
   const REFRESH_DELAY_MS = 400;
   const NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
+  const MAX_SESSIONS = 1000;
   const contexts = new WeakMap();
 
   function esc(text) {
@@ -42,6 +43,10 @@
     return String(text || '').split(' ').filter(Boolean);
   }
 
+  function isSessionField(name) {
+    return name === 'session' || name === 'selected' || name.indexOf('session_') === 0;
+  }
+
   function formPairs(form) {
     const active = activeSource(form);
     const pairs = [];
@@ -50,11 +55,24 @@
       if (element.disabled || type === 'file' || type === 'button' || type === 'submit') return;
       if ((type === 'checkbox' || type === 'radio') && !element.checked) return;
       if (element.name.indexOf('facet_') === 0 && active !== 'orq') return;
+      // The frozen trace_file carries the selection; sending every row would overflow a GET request line.
+      if (isSessionField(element.name)) return;
       pairs.push([element.name, element.value]);
     });
-    const chosen = form.querySelector('[data-file-name]');
-    pairs.push(['source_name', active === 'file' && chosen ? chosen.value : '']);
+    const chosen = form.querySelector('[data-file-name="' + active + '"]');
+    pairs.push(['source_name', chosen ? chosen.value : '']);
     return pairs;
+  }
+
+  // One hidden trace_file field holds the chosen upload; data-kind is the kind the server read from its contents.
+  function setTraceFile(form, path, kind) {
+    const traceFile = field(form, 'trace_file');
+    traceFile.value = path;
+    traceFile.dataset.kind = kind;
+  }
+
+  function clearTraceFile(form) {
+    setTraceFile(form, '', '');
   }
 
   function showError(ctx, message) {
@@ -103,6 +121,11 @@
       if (active === 'file' && !field(form, 'trace_file').value.trim()) {
         return 'Browse to choose a trace file first.';
       }
+      if (active === 'sessions') {
+        const picked = checkedValues(form, 'session').length;
+        if (!picked && !field(form, 'trace_file').value.trim()) return 'Select at least one session.';
+        if (picked > MAX_SESSIONS) return 'Select at most ' + MAX_SESSIONS + ' sessions.';
+      }
       if (active === 'orq') {
         if (!inRange(field(form, 'window_days'), 1, 90) || !inRange(field(form, 'limit'), 1, 5000)) return 'Enter a valid window and trace limit.';
         if (form.querySelector('#insights-facet-options').getAttribute('aria-busy') === 'true') return 'Wait for the filter values to load.';
@@ -145,6 +168,90 @@
       return false;
     } finally {
       if (ctx.snapshotAbort === abort) ctx.snapshotAbort = null;
+    }
+  }
+
+  function localiseTimes(root) {
+    root.querySelectorAll('time[data-utc]').forEach(function (element) {
+      const when = new Date(element.getAttribute('data-utc') + 'Z');
+      if (!Number.isNaN(when.getTime())) element.textContent = when.toLocaleString();
+    });
+  }
+
+  function sessionsStatus(ctx, message) {
+    ctx.form.querySelector('[data-sessions-status]').textContent = message;
+  }
+
+  function selectionChanged(ctx) {
+    const form = ctx.form;
+    const rows = Array.from(form.querySelectorAll('input[name="session"]'));
+    const picked = rows.filter(function (input) { return input.checked; }).length;
+    const count = form.querySelector('[data-sessions-selected]');
+    if (count) count.textContent = picked + ' selected';
+    const all = form.querySelector('[data-sessions-all]');
+    if (all) all.checked = rows.length > 0 && picked === rows.length;
+    ctx.sessionsDirty = true;
+    ctx.measuredPath = null;
+    clearTraceFile(form);
+    form.querySelector('#insights-snapshot-preview').textContent = '';
+  }
+
+  async function searchSessions(ctx) {
+    const form = ctx.form;
+    const host = form.querySelector('#insights-sessions');
+    if (ctx.sessionsAbort) ctx.sessionsAbort.abort();
+    const abort = new AbortController();
+    ctx.sessionsAbort = abort;
+    const body = new URLSearchParams({csrf: field(form, 'csrf').value, tz_offset: String(new Date().getTimezoneOffset())});
+    ['session_from', 'session_to', 'session_project_dir', 'session_text'].forEach(function (name) {
+      body.set(name, field(form, name).value);
+    });
+    checkedValues(form, 'session_source').forEach(function (value) { body.append('session_source', value); });
+    checkedValues(form, 'session').forEach(function (value) { body.append('selected', value); });
+    host.setAttribute('aria-busy', 'true');
+    sessionsStatus(ctx, 'Searching local sessions…');
+    try {
+      const response = await fetch('/insights/sessions/search', {method: 'POST', body: body, signal: abort.signal});
+      const markup = await response.text();
+      if (ctx.sessionsAbort !== abort) return;
+      host.innerHTML = markup;
+      localiseTimes(host);
+      sessionsStatus(ctx, '');
+      selectionChanged(ctx);
+    } catch (failure) {
+      if (failure.name !== 'AbortError' && ctx.sessionsAbort === abort) sessionsStatus(ctx, 'Could not search local sessions.');
+    } finally {
+      if (ctx.sessionsAbort === abort) {
+        ctx.sessionsAbort = null;
+        host.setAttribute('aria-busy', 'false');
+      }
+    }
+  }
+
+  async function freezeSessions(ctx) {
+    const form = ctx.form;
+    const body = new URLSearchParams({csrf: field(form, 'csrf').value});
+    checkedValues(form, 'session').forEach(function (value) { body.append('session', value); });
+    sessionsStatus(ctx, 'Preparing the selected sessions…');
+    try {
+      const response = await fetch('/insights/sessions/snapshot', {method: 'POST', body: body});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Could not prepare the selected sessions.');
+      setTraceFile(form, result.path, 'snapshot');
+      form.querySelector('[data-file-name="sessions"]').value = result.n_sessions + ' local sessions';
+      ctx.sessionsDirty = false;
+      ctx.measuredPath = null;
+      const failed = result.failed || [];
+      sessionsStatus(ctx, failed.length
+        ? failed.length + ' selected session' + (failed.length === 1 ? ' was' : 's were') + ' left out because '
+          + (failed.length === 1 ? 'it' : 'they') + ' could not be read: '
+          + failed.map(function (item) { return item.path + ' (' + item.error + ')'; }).join(', ')
+        : '');
+      return true;
+    } catch (failure) {
+      sessionsStatus(ctx, '');
+      showError(ctx, failure.message || 'Could not prepare the selected sessions.');
+      return false;
     }
   }
 
@@ -356,10 +463,8 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Upload failed.');
       const finder = result.kind === 'finder';
-      const traceFile = field(form, 'trace_file');
-      traceFile.value = result.path;
-      traceFile.dataset.kind = result.kind;
-      form.querySelector('[data-file-name]').value = file.name;
+      setTraceFile(form, result.path, result.kind);
+      form.querySelector('[data-file-name="file"]').value = file.name;
       status.textContent = finder ? 'Finder export is ready.' : 'Trace snapshot is ready.';
       showError(ctx, '');
       scheduleRefresh(ctx);
@@ -379,14 +484,23 @@
       showError(ctx, message);
       return;
     }
-    if (ctx.step === 1 && activeSource(ctx.form) === 'file' && field(ctx.form, 'trace_file').dataset.kind === 'snapshot') {
+    const active = activeSource(ctx.form);
+    const snapshotFile = active === 'file' && field(ctx.form, 'trace_file').dataset.kind === 'snapshot';
+    if (ctx.step === 1 && (snapshotFile || active === 'sessions')) {
       const next = ctx.form.querySelector('[data-irf-next]');
       next.disabled = true;
-      const measured = await measureSnapshot(ctx);
-      next.disabled = false;
-      if (!measured) {
-        showError(ctx, 'Could not measure this trace file. Browse to choose a valid snapshot.');
-        return;
+      try {
+        if (active === 'sessions' && (ctx.sessionsDirty || !field(ctx.form, 'trace_file').value.trim())) {
+          if (!(await freezeSessions(ctx))) return;
+        }
+        if (!(await measureSnapshot(ctx))) {
+          showError(ctx, active === 'sessions'
+            ? 'Could not measure the selected sessions. Search again and reselect them.'
+            : 'Could not measure this trace file. Browse to choose a valid snapshot.');
+          return;
+        }
+      } finally {
+        next.disabled = false;
       }
     }
     showStep(ctx, ctx.step + 1);
@@ -441,10 +555,11 @@
     else if ((element = hit('[data-cq-remove]'))) {
       renderCustom(ctx, customLabels(ctx.form).filter(function (spec) { return spec.name !== element.dataset.cqRemove; }));
     } else if (hit('[data-retry-facets]')) refreshFacets(ctx, true);
+    else if (hit('[data-sessions-search]')) searchSessions(ctx);
   }
 
   function affectsEstimate(target) {
-    return !target.matches('[data-cq], input[data-file], input[type="search"]');
+    return !target.matches('[data-cq], input[data-file], input[type="search"], input[name="session"], input[name^="session_"], [data-sessions-all]');
   }
 
   function onChange(ctx, event) {
@@ -460,6 +575,11 @@
       refreshFacets(ctx);
     } else if (target.name === 'window_days') {
       refreshFacets(ctx);
+    } else if (target.matches('[data-sessions-all]')) {
+      ctx.form.querySelectorAll('input[name="session"]').forEach(function (input) { input.checked = target.checked; });
+      selectionChanged(ctx);
+    } else if (target.name === 'session') {
+      selectionChanged(ctx);
     } else if (target.name === 'dimensions' || target.name === 'labels' || target.name === 'coding_labels') {
       markPreset(ctx, '');
       updateMistakeHint(ctx);
@@ -480,6 +600,9 @@
       addCustomQuestion(ctx);
     } else if (target.matches('input[type="search"]')) {
       event.preventDefault();
+    } else if (target.matches('input[name^="session_"]')) {
+      event.preventDefault();
+      searchSessions(ctx);
     }
   }
 
@@ -488,6 +611,7 @@
     if (contexts.has(form)) return contexts.get(form);
     const ctx = {
       form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null,
+      sessionsAbort: null, sessionsDirty: false,
       planSequence: 0, compactSequence: 0, refreshTimer: null,
     };
     contexts.set(form, ctx);

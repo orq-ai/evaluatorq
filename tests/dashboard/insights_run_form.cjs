@@ -305,6 +305,86 @@ async function main() {
     await tick();
     assert.equal(planCalls().filter(call => !call.url.includes('compact=1')).length, 1, 'a model change reloads the full estimate');
   }
+
+  {
+    const SESSION_A = 'claude-code:/home/me/.claude/projects/p/a.jsonl';
+    const SESSION_B = 'codex:/home/me/.codex/sessions/2026/10/02/b.jsonl';
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': () => response(fixtures.sessions),
+      '/insights/sessions/snapshot': () => response(
+        JSON.stringify({path: '/runs/.uploads/snapshot-7.json', n_sessions: 2, bytes: 1234, failed: []}), {status: 201}),
+      '/insights/snapshot-preview': () => response('<p>2 of 2 traces fit.</p>'),
+      '/insights/runs': () => response('', {status: 200, redirected: true, url: '/insights/run-2'}),
+    });
+    await tick();
+    const rows = () => app.form.querySelectorAll('input[name="session"]');
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    assert.equal(app.form.querySelector('[data-source="sessions"]').hidden, false, 'the picker shows for that source');
+    assert.equal(app.form.querySelector('[data-source="orq"]').hidden, true);
+    assert.equal(app.form.querySelector('[data-source="file"]').hidden, true);
+
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    assert.equal(app.form.querySelector('#insights-run-error').textContent, 'Select at least one session.');
+    assert.deepEqual(visibleStep(app.form), ['1']);
+
+    app.form.querySelector('input[name="session_text"]').value = 'refund';
+    app.form.querySelector('[data-sessions-search]').click();
+    await tick();
+    await tick();
+    const search = app.calls.find(call => call.url === '/insights/sessions/search');
+    assert.equal(search.options.method, 'POST');
+    assert.equal(search.options.body.get('csrf'), 'token', 'the search carries the form token');
+    assert.equal(search.options.body.get('tz_offset'), String(new Date().getTimezoneOffset()));
+    assert.equal(search.options.body.get('session_text'), 'refund');
+    assert.deepEqual(search.options.body.getAll('session_source').sort(), ['claude-code', 'claude-desktop', 'codex', 'omp']);
+    assert.deepEqual(search.options.body.getAll('selected'), []);
+    assert.equal(rows().length, 2, 'the results replace the list');
+    assert.equal(app.form.querySelector('#insights-sessions').getAttribute('aria-busy'), 'false');
+
+    app.form.querySelector('[data-sessions-all]').click();
+    assert.deepEqual(checked(app.form, 'session').sort(), [SESSION_A, SESSION_B].sort(), 'select-all checks every row');
+    assert.equal(app.form.querySelector('[data-sessions-selected]').textContent, '2 selected');
+
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    await tick();
+    await tick();
+    const snapshot = app.calls.find(call => call.url === '/insights/sessions/snapshot');
+    assert.equal(snapshot.options.body.get('csrf'), 'token');
+    assert.deepEqual(snapshot.options.body.getAll('session').sort(), [SESSION_A, SESSION_B].sort());
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/runs/.uploads/snapshot-7.json');
+    assert.equal(app.form.querySelector('input[name="trace_file"]').dataset.kind, 'snapshot');
+    assert.equal(app.form.querySelector('[data-file-name="sessions"]').value, '2 local sessions');
+    assert.deepEqual(visibleStep(app.form), ['2'], 'the frozen selection moves on to the next step');
+
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    await tick();
+    assert.deepEqual(visibleStep(app.form), ['3']);
+    const limited = url => [...new URLSearchParams(url.split('?')[1]).keys()].filter(key => /^(session|selected)/.test(key));
+    const planCalls = app.calls.filter(call => call.url.startsWith('/insights/new/plan'));
+    assert.ok(planCalls.length > 0);
+    planCalls.forEach(call => assert.deepEqual(limited(call.url), [], 'the plan request carries no session fields'));
+    const lastPlan = new URLSearchParams(planCalls[planCalls.length - 1].url.split('?')[1]);
+    assert.equal(lastPlan.get('trace_file'), '/runs/.uploads/snapshot-7.json');
+    assert.equal(lastPlan.get('source'), 'sessions');
+
+    app.form.querySelector('[data-irf-start]').click();
+    await tick();
+    await tick();
+    const start = app.calls.find(call => call.url === '/insights/runs');
+    assert.deepEqual([...start.options.body.keys()].filter(key => /^(session|selected)/.test(key)), [], 'the run request carries no session fields');
+    assert.equal(start.options.body.get('source_name'), '2 local sessions');
+    assert.equal(start.options.body.get('trace_file'), '/runs/.uploads/snapshot-7.json');
+
+    app.form.querySelector('[data-irf-back]').click();
+    app.form.querySelector('[data-irf-back]').click();
+    rows()[0].click();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '', 'changing a selection drops the frozen snapshot');
+    assert.equal(app.form.querySelector('[data-sessions-selected]').textContent, '1 selected');
+  }
 }
 
 main().catch(error => {

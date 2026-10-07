@@ -3395,6 +3395,15 @@ _INSIGHTS_CSS = """
 .insights-run-form .irf-row input { width:84px; font-variant-numeric:tabular-nums; }
 .insights-run-form .irf-file { display:flex; gap:8px; }
 .insights-run-form .irf-file input[type="text"] { flex:1; min-width:0; }
+.insights-run-form .irf-row input[type="date"] { width:auto; }
+.insights-run-form .irf-row input[type="checkbox"] { width:auto; }
+.insights-run-form #insights-sessions[aria-busy="true"] { opacity:.58; }
+.insights-run-form .irf-sessions-scroll { max-height:340px; overflow:auto; margin-top:8px; border:1px solid var(--border-subtle); border-radius:8px; }
+.insights-run-form .irf-sessions-table { width:100%; border-collapse:collapse; font-size:11.5px; }
+.insights-run-form .irf-sessions-table th, .insights-run-form .irf-sessions-table td { padding:5px 8px; border-bottom:1px solid var(--border-subtle); text-align:left; vertical-align:top; }
+.insights-run-form .irf-sessions-table th { position:sticky; top:0; background:var(--surface-card); }
+.insights-run-form .irf-sessions-title { max-width:320px; overflow-wrap:anywhere; }
+.insights-run-form .irf-sessions-project { overflow-wrap:anywhere; }
 .insights-run-form .irf-facets { margin-top:18px; }
 .insights-run-form #insights-snapshot-preview { margin-top:10px; }
 .insights-run-form #insights-facet-options { position:relative; min-width:0; }
