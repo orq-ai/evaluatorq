@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
 from datetime import datetime, timezone
 from functools import lru_cache
 from operator import itemgetter
@@ -33,14 +35,14 @@ from evaluatorq.local_sessions.roots import session_roots
 from evaluatorq.trace_finder.models import Snapshot
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     from evaluatorq.common.trace_document import TraceDocument
     from evaluatorq.local_sessions.models import ParsedSession, SessionFamily
     from evaluatorq.local_sessions.readers import SessionReader
 
 _CACHE_MAX_ENTRIES = 50_000
-_CHUNK_CHARS = 1024 * 1024
+_CHUNK_SIZE = 1024 * 1024
 
 _CacheKey = tuple[str, int, int]
 _summary_cache: OrderedDict[_CacheKey, SessionSummary | None] = OrderedDict()
@@ -103,25 +105,65 @@ def project_matches(project_dir: str, base: str) -> bool:
     return repo is not None and _real(repo).is_relative_to(base_path)
 
 
-def _needles(text: str) -> tuple[str, ...]:
-    variants = {
-        text.lower(),
-        json.dumps(text, ensure_ascii=False)[1:-1].lower(),
-        json.dumps(text)[1:-1].lower(),
-    }
-    return tuple(variants)
+_Prefilter = Callable[[Path, Callable[[], bool]], bool | None]
 
 
-def _file_may_contain(path: Path, needles: tuple[str, ...]) -> bool:
+def _ascii_prefilter(text: str) -> _Prefilter:
+    """Raw-bytes scan: `bytes.lower` folds ASCII only, which is all an ASCII needle contains."""
+    lowered = text.lower()
+    needles = tuple({lowered.encode(), json.dumps(lowered)[1:-1].encode()})
     overlap = max(len(needle) for needle in needles) - 1
-    carry = ''
-    with path.open(encoding='utf-8', errors='replace') as handle:
-        while chunk := handle.read(_CHUNK_CHARS):
-            window = carry + chunk.lower()
-            if any(needle in window for needle in needles):
-                return True
-            carry = window[-overlap:] if overlap > 0 else ''
-    return False
+
+    def scan(path: Path, stop: Callable[[], bool]) -> bool | None:
+        carry = b''
+        with path.open('rb') as raw:
+            while chunk := raw.read(_CHUNK_SIZE):
+                if stop():
+                    return None
+                window = carry + chunk.lower()
+                if any(needle in window for needle in needles):
+                    return True
+                carry = window[-overlap:] if overlap > 0 else b''
+        return False
+
+    return scan
+
+
+def _char_alternatives(char: str) -> list[str]:
+    """Every spelling of `char` that a JSON line can hold, in either case."""
+    forms = {char, char.lower(), char.upper()}
+    spellings = {form for form in forms if len(form) == 1}
+    spellings |= {json.dumps(form)[1:-1] for form in spellings}
+    spellings |= {json.dumps(form, ensure_ascii=False)[1:-1] for form in spellings}
+    return sorted(spellings, key=len, reverse=True)
+
+
+def _unicode_prefilter(text: str) -> _Prefilter:
+    """Per-character alternation (literal or JSON-escaped, any case), so non-ASCII case never causes a miss."""
+    groups = [_char_alternatives(char) for char in text.lower()]
+    pattern = re.compile(
+        ''.join(f'(?:{"|".join(re.escape(alternative) for alternative in group)})' for group in groups),
+        re.IGNORECASE,
+    )
+    overlap = sum(len(group[0]) for group in groups) - 1
+
+    def scan(path: Path, stop: Callable[[], bool]) -> bool | None:
+        carry = ''
+        with path.open(encoding='utf-8', errors='replace') as handle:
+            while chunk := handle.read(_CHUNK_SIZE):
+                if stop():
+                    return None
+                window = carry + chunk
+                if pattern.search(window):
+                    return True
+                carry = window[-overlap:] if overlap > 0 else ''
+        return False
+
+    return scan
+
+
+def _prefilter(text: str) -> _Prefilter:
+    return _ascii_prefilter(text) if text.isascii() else _unicode_prefilter(text)
 
 
 def _message_texts(parsed: ParsedSession) -> list[str]:
@@ -155,14 +197,8 @@ def _summary_for(reader: SessionReader, path: Path, key: _CacheKey) -> SessionSu
     return summary
 
 
-def search_sessions(
-    query: SessionQuery,
-    *,
-    deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
-    cancelled: Callable[[], bool] | None = None,
-) -> SessionSearchResult:
-    """Scan session files newest first, stopping at `query.limit` matches, the deadline, or a cancel."""
-    deadline = time.monotonic() + deadline_seconds
+def _collect_candidates(query: SessionQuery) -> list[tuple[float, _CacheKey, Path, SessionReader]]:
+    """Session files of the requested families, newest first, skipping files untouched since `query.start`."""
     families: list[SessionFamily] = [
         family for family in SESSION_FAMILIES if any(FAMILY_OF[source] == family for source in query.sources)
     ]
@@ -181,8 +217,25 @@ def search_sessions(
                     continue
                 candidates.append((stat.st_mtime, (str(path), stat.st_mtime_ns, stat.st_size), path, reader))
     candidates.sort(key=itemgetter(0), reverse=True)
+    return candidates
 
-    needles = _needles(query.text) if query.text else None
+
+def search_sessions(
+    query: SessionQuery,
+    *,
+    deadline_seconds: float = SEARCH_DEADLINE_SECONDS,
+    cancelled: Callable[[], bool] | None = None,
+) -> SessionSearchResult:
+    """Scan session files newest first, stopping at `query.limit` matches, the deadline, or a cancel."""
+    deadline = time.monotonic() + deadline_seconds
+    _worktree_main_repo.cache_clear()
+
+    def stopped() -> bool:
+        return time.monotonic() >= deadline or (cancelled is not None and cancelled())
+
+    candidates = _collect_candidates(query)
+
+    prefilter = _prefilter(query.text) if query.text else None
     lowered = query.text.lower() if query.text else ''
     matches: list[SessionSummary] = []
     scanned = 0
@@ -190,7 +243,7 @@ def search_sessions(
     for _mtime, key, path, reader in candidates:
         if len(matches) >= query.limit:
             break
-        if time.monotonic() >= deadline or (cancelled is not None and cancelled()):
+        if stopped():
             complete = False
             logger.warning('Session search stopped after {} of {} files', scanned, len(candidates))
             break
@@ -201,8 +254,14 @@ def search_sessions(
                 continue
             if query.project_dir and not project_matches(summary.project_dir, query.project_dir):
                 continue
-            if needles is not None and not (_file_may_contain(path, needles) and _confirm_text(reader, path, lowered)):
-                continue
+            if prefilter is not None:
+                may_contain = prefilter(path, stopped)
+                if may_contain is None:
+                    complete = False
+                    logger.warning('Session search stopped after {} of {} files', scanned - 1, len(candidates))
+                    break
+                if not may_contain or not _confirm_text(reader, path, lowered):
+                    continue
         except (SessionLoadError, OSError, ValueError) as exc:
             logger.warning('Skipping session file {}: {}', path, type(exc).__name__)
             continue
@@ -213,29 +272,37 @@ def search_sessions(
     )
 
 
-def resolve_session_ref(ref: SessionRef) -> SessionSummary:
-    """Accept a ref only when it is a main session file inside a session root of its own source family."""
-    path = Path(os.path.realpath(ref.path))
-    reader = READERS[FAMILY_OF[ref.source]]
-    for root in session_roots(FAMILY_OF[ref.source]):
-        real_root = Path(os.path.realpath(root))
-        if path.is_relative_to(real_root) and reader.is_session_path(path, real_root):
-            break
-    else:
-        raise SessionLoadError(f'{ref.path}: not a main session file inside the {ref.source} session folders')
-    if not path.is_file():
-        raise SessionLoadError(f'{ref.path}: not a file')
-    summary = reader.summarize(path)
+def _resolve(ref: SessionRef) -> tuple[Path, SessionSummary]:
+    try:
+        path = Path(os.path.realpath(ref.path))
+        reader = READERS[FAMILY_OF[ref.source]]
+        for root in session_roots(FAMILY_OF[ref.source]):
+            real_root = Path(os.path.realpath(root))
+            if path.is_relative_to(real_root) and reader.is_session_path(path, real_root):
+                break
+        else:
+            raise SessionLoadError(f'{ref.path}: not a main session file inside the {ref.source} session folders')
+        if not path.is_file():
+            raise SessionLoadError(f'{ref.path}: not a file')
+        summary = reader.summarize(path)
+    except SessionLoadError:
+        raise
+    except (OSError, ValueError) as exc:
+        raise SessionLoadError(f'{ref.path}: {type(exc).__name__}') from exc
     if summary is None:
         raise SessionLoadError(f'{ref.path}: not a main session')
     if summary.source != ref.source:
         raise SessionLoadError(f'{ref.path}: source mismatch, the file is a {summary.source} session')
-    return summary
+    return path, summary
+
+
+def resolve_session_ref(ref: SessionRef) -> SessionSummary:
+    """Accept a ref only when it is a main session file inside a session root of its own source family."""
+    return _resolve(ref)[1]
 
 
 def load_session_document(ref: SessionRef) -> TraceDocument:
-    resolve_session_ref(ref)
-    path = Path(os.path.realpath(ref.path))
+    path, _summary = _resolve(ref)
     try:
         return session_document(READERS[FAMILY_OF[ref.source]].parse(path))
     except SessionLoadError:

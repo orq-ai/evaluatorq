@@ -370,3 +370,65 @@ def test_snapshot_rejects_too_many(claude_projects: Path) -> None:
 
 def test_registry_has_every_family() -> None:
     assert set(READERS) == {'claude', 'codex', 'omp'}
+
+
+def test_resolve_nul_byte_path_raises_session_load_error(claude_projects: Path) -> None:
+    ref = SessionRef.model_construct(source='claude-code', path=claude_projects / 'a\x00b.jsonl')
+    with pytest.raises(SessionLoadError):
+        resolve_session_ref(ref)
+
+
+def test_snapshot_reports_summarize_oserror_and_loads_rest(
+    claude_projects: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    good = _claude(claude_projects, 'good')
+    flaky = _claude(claude_projects, 'flaky')
+    original = CLAUDE.summarize
+
+    def summarize(path: Path) -> Any:
+        if path.name == 'flaky.jsonl':
+            raise OSError('gone')
+        return original(path)
+
+    monkeypatch.setattr(CLAUDE, 'summarize', summarize)
+    refs = [SessionRef(source='claude-code', path=flaky), SessionRef(source='claude-code', path=good)]
+    snapshot, failed = build_session_snapshot(refs)
+    assert len(snapshot.documents) == 1
+    assert failed == [(refs[0], 'SessionLoadError')]
+
+
+def test_ascii_needle_mixed_case_matches_through_bytes_path(claude_projects: Path) -> None:
+    _claude(claude_projects, 'm', text='Please Fix The ParSer')
+    assert _ids(search_sessions(SessionQuery(text='fix the PARSER'))) == {'m'}
+
+
+def test_non_ascii_uppercase_needle_matches(claude_projects: Path) -> None:
+    _claude(claude_projects, 'u', text='CAFÉ time')
+    assert _ids(search_sessions(SessionQuery(text='café'))) == {'u'}
+    assert _ids(search_sessions(SessionQuery(text='CAFÉ'))) == {'u'}
+
+
+@pytest.mark.parametrize('needle', ['boundaryneedle', 'boundaryneedle é'])
+def test_needle_spanning_chunk_boundary_is_found(
+    claude_projects: Path, monkeypatch: pytest.MonkeyPatch, needle: str
+) -> None:
+    monkeypatch.setattr('evaluatorq.local_sessions.search._CHUNK_SIZE', 16)
+    _claude(claude_projects, 'b', text=f'padding padding {needle} tail')
+    assert _ids(search_sessions(SessionQuery(text=needle))) == {'b'}
+
+
+def test_cancel_during_multi_chunk_file_stops_search(
+    claude_projects: Path, monkeypatch: pytest.MonkeyPatch, warnings: list[str]
+) -> None:
+    monkeypatch.setattr('evaluatorq.local_sessions.search._CHUNK_SIZE', 16)
+    _claude(claude_projects, 'big', text='x' * 400)
+    calls = {'n': 0}
+
+    def cancelled() -> bool:
+        calls['n'] += 1
+        return calls['n'] > 3
+
+    result = search_sessions(SessionQuery(text='neverpresent'), cancelled=cancelled)
+    assert result.complete is False
+    assert result.sessions == ()
+    assert any('Session search stopped' in message for message in warnings)
