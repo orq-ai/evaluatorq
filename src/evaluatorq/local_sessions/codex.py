@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -75,6 +76,18 @@ def _output_text(output: object) -> str:
     if isinstance(output, str):
         return output
     return '' if output is None else tool_result_to_text(output)
+
+
+_SCRIPT_FAILED = 'Script failed'
+_EXIT_CODE_LINE = re.compile(r'^Exit code: (\d+)\r?$', re.MULTILINE)
+_EXIT_CODE_WINDOW = 600
+
+
+def _failed(text: str) -> bool:
+    """Codex marks a failed call in the output text: a first line `Script failed`, or a non-zero `Exit code: N` near the top."""
+    if text.split('\n', 1)[0].strip() == _SCRIPT_FAILED:
+        return True
+    return any(int(code) != 0 for code in _EXIT_CODE_LINE.findall(text[:_EXIT_CODE_WINDOW]))
 
 
 class _CodexReader:
@@ -223,6 +236,7 @@ def _map_item(payload: dict[str, Any], out: list[dict[str, Any]], skipped_types:
     elif kind == 'custom_tool_call' and isinstance(call_id, str) and isinstance(name, str):
         out.append(items.function_call(call_id=call_id, name=name, arguments={'input': payload.get('input')}))
     elif kind in ('function_call_output', 'custom_tool_call_output') and isinstance(call_id, str):
-        out.append(items.function_call_output(call_id=call_id, output=_output_text(payload.get('output'))))
+        text = _output_text(payload.get('output'))
+        out.append(items.function_call_output(call_id=call_id, output=text, is_error=_failed(text)))
     else:
         skipped_types[kind if isinstance(kind, str) else 'unknown'] += 1

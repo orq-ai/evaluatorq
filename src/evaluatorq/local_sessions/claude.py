@@ -269,7 +269,11 @@ def _map_user(record: dict[str, Any], content: object, out: list[dict[str, Any]]
                     if isinstance(raw, (str, list))
                     else ('' if raw is None else tool_result_to_text(raw))
                 )
-                out.append(items.function_call_output(call_id=block['tool_use_id'], output=text))
+                out.append(
+                    items.function_call_output(
+                        call_id=block['tool_use_id'], output=text, is_error=block.get('is_error') is True
+                    )
+                )
     if record.get('isMeta'):
         return
     text = (

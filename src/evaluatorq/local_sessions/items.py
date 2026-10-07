@@ -78,8 +78,13 @@ def function_call(*, call_id: str, name: str, arguments: object) -> dict[str, An
     return {'type': 'function_call', 'call_id': call_id, 'name': name, 'arguments': raw}
 
 
-def function_call_output(*, call_id: str, output: str) -> dict[str, Any]:
-    return {'type': 'function_call_output', 'call_id': call_id, 'output': trim(output)}
+def function_call_output(*, call_id: str, output: str, is_error: bool = False) -> dict[str, Any]:
+    # `Error: ` is what the transcript's tool-status check recognizes; it goes on before trimming so it survives.
+    return {
+        'type': 'function_call_output',
+        'call_id': call_id,
+        'output': trim(f'Error: {output}' if is_error else output),
+    }
 
 
 def compaction_summary(summary: str) -> dict[str, Any]:

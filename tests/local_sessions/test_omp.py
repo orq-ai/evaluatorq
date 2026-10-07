@@ -182,7 +182,7 @@ def test_provider_prefixes_the_model(omp_sessions: Path) -> None:
     assert READER.parse(path).model == 'openai/gpt-x'
 
 
-def test_errored_tool_result_is_prefixed(omp_sessions: Path) -> None:
+def test_errored_tool_result_is_prefixed_for_the_transcript(omp_sessions: Path) -> None:
     path = _session(
         omp_sessions,
         [
@@ -207,7 +207,7 @@ def test_errored_tool_result_is_prefixed(omp_sessions: Path) -> None:
         ],
     )
     outputs = [item['output'] for item in READER.parse(path).items if item['type'] == 'function_call_output']
-    assert outputs == ['[error] boom']
+    assert outputs == ['Error: boom']
 
 
 def test_bash_execution_respects_exclude_from_context(omp_sessions: Path) -> None:

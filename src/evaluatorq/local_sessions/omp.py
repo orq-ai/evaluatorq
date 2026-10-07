@@ -203,9 +203,7 @@ def _map_message(message: dict[str, Any], out: list[dict[str, Any]], skipped_typ
         if isinstance(call_id, str):
             text = items.blocks_text(content)
             out.append(
-                items.function_call_output(
-                    call_id=call_id, output=f'[error] {text}' if message.get('isError') is True else text
-                )
+                items.function_call_output(call_id=call_id, output=text, is_error=message.get('isError') is True)
             )
     elif role == 'bashExecution':
         if message.get('excludeFromContext') is not True:
