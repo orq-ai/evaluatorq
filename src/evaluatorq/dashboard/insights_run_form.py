@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, cast, get_args
+from typing import TYPE_CHECKING, Literal, get_args
 from urllib.parse import urlencode
 
 from pydantic import ValidationError
@@ -15,10 +15,16 @@ from pydantic import ValidationError
 from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.facet_picker import render_facet_chips, render_facet_menu, window_count_note
-from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, Source, get_finder_exports_dir
+from evaluatorq.dashboard.insights_launch import (
+    DEFAULT_TRACE_LIMIT,
+    DEFAULT_WINDOW_DAYS,
+    InsightsLaunchSpec,
+    Source,
+    get_finder_exports_dir,
+)
 from evaluatorq.dashboard.insights_uploads import is_uploaded_source
 from evaluatorq.dashboard.insights_views import _back_to_runs
-from evaluatorq.dashboard.shell import page
+from evaluatorq.dashboard.shell import icon, page
 from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.models import DimensionName, LabelSpec
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
@@ -96,37 +102,35 @@ _DIMENSION_TEXT: MappingProxyType[DimensionName, tuple[str, str]] = MappingProxy
     'sentiment': ('Sentiment', 'how users felt'),
 })
 
-_ICON_OPEN = (
-    '<svg class="irf-tab-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-)
-
-# The form offers two tabs; each maps onto the launch spec's four-valued `Source` in `RunFormValues.from_form`.
-_SOURCES: tuple[tuple[str, str, str, str], ...] = (
+FormTab = Literal['orq', 'file']
+_FILE_HINT = 'A Finder export or a local trace file (JSON).'
+# Each tab maps onto the launch spec's four-valued `Source` in `RunFormValues.from_form`.
+_SOURCES: tuple[tuple[FormTab, str, str, str], ...] = (
     (
         'orq',
         'Orq traces',
         'Analyze traces from your Orq workspace, optionally narrowed by a question.',
-        (
-            f'{_ICON_OPEN}<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/>'
-            '<path d="M3 12a9 3 0 0 0 18 0"/></svg>'
+        icon(
+            '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+            cls='irf-tab-icon',
+            size=14,
         ),
     ),
     (
         'file',
         'Trace file',
-        'A Finder export or a local trace file (JSON).',
-        (
-            f'{_ICON_OPEN}<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>'
-            '<path d="M14 2v6h6"/></svg>'
+        _FILE_HINT,
+        icon(
+            '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/>',
+            cls='irf-tab-icon',
+            size=14,
         ),
     ),
 )
 
 
-def _form_tab(source: str) -> str:
-    """The tab a launch source belongs to: `orq` for the Orq-backed sources, `file` for the file-backed ones."""
-    return 'file' if source in ('finder', 'snapshot', 'file') else 'orq'
+def _form_tab(source: Source) -> FormTab:
+    return 'file' if source in ('finder', 'snapshot') else 'orq'
 
 
 def _check_registries() -> None:
@@ -243,8 +247,8 @@ class RunFormValues:
 
     source: Source = 'recent'
     query: str = ''
-    window_days: int = 7
-    limit: int = 200
+    window_days: int = DEFAULT_WINDOW_DAYS
+    limit: int = DEFAULT_TRACE_LIMIT
     facets: FacetSelection = field(default_factory=FacetSelection)
     dimensions: tuple[DimensionName, ...] = ()
     labels: tuple[str, ...] = ()
@@ -268,8 +272,8 @@ class RunFormValues:
         """The first preset applied to Recent traces: 7 days, 200 traces."""
         preset = RUN_PRESETS[0]
         return cls(
-            window_days=7,
-            limit=200,
+            window_days=DEFAULT_WINDOW_DAYS,
+            limit=DEFAULT_TRACE_LIMIT,
             dimensions=preset.dimensions,
             labels=preset.labels,
             coding_labels=preset.coding_labels,
@@ -297,8 +301,8 @@ class RunFormValues:
         return cls(
             source=source,
             query=str(population.get('query') or ''),
-            window_days=int(population.get('window_days', 7)),
-            limit=int(population.get('limit', 200)),
+            window_days=int(population.get('window_days', DEFAULT_WINDOW_DAYS)),
+            limit=int(population.get('limit', DEFAULT_TRACE_LIMIT)),
             facets=FacetSelection.model_validate(population.get('facets') or {}),
             dimensions=tuple(run.config.dimensions),
             labels=tuple(name for name in LABEL_PRESETS if name in configured),
@@ -323,23 +327,29 @@ class RunFormValues:
     def from_form(cls, form: Mapping[str, object]) -> RunFormValues:
         """Parse the form fields from `FormData` or query parameters; raises `ValueError` on malformed numbers or JSON."""
         mount: Mount = 'dialog' if form.get('mount') == 'dialog' else 'page'
-        query = str(form.get('query') or '')
-        finder_export = str(form.get('finder_export') or '')
-        requested = str(form.get('source') or 'orq')
-        source: Source
-        if requested == 'orq':
-            source = 'query' if query.strip() else 'recent'
-        elif requested == 'file':
-            source = 'finder' if finder_export.strip() else 'snapshot'
-        else:
-            # A legacy four-valued source (old links, rerun); an unknown one falls through to the launch spec's own error.
-            source = cast('Source', requested)
+        tab = form.get('source') or 'orq'
+        if tab not in ('orq', 'file'):
+            raise ValueError('Choose Orq traces or Trace file.')
+        # Fields of the tab that is not chosen are still in the submitted form; drop them so they are never saved.
+        orq = tab == 'orq'
+        query = str(form.get('query') or '').strip() if orq else ''
+        finder_export = '' if orq else str(form.get('finder_export') or '')
+        snapshot_path = '' if orq else str(form.get('snapshot_path') or '')
+        source: Source = (
+            ('query' if query.strip() else 'recent') if orq else ('finder' if finder_export else 'snapshot')
+        )
+        defaults = _model_defaults()
+        models = {name: str(form.get(name) or '').strip() or default for name, default in defaults.items()}
+        if source != 'query':
+            models['compiler_model'] = defaults['compiler_model']
         return cls(
             source=source,
             query=query,
-            window_days=_whole_number(form, 'window_days', 7, 'Window'),
-            limit=_whole_number(form, 'limit', 200, 'Trace limit'),
-            facets=FacetSelection.model_validate({name: _getlist(form, f'facet_{name}') for name in FACET_NAMES}),
+            window_days=_whole_number(form, 'window_days', DEFAULT_WINDOW_DAYS, 'Window'),
+            limit=_whole_number(form, 'limit', DEFAULT_TRACE_LIMIT, 'Trace limit'),
+            facets=FacetSelection.model_validate({
+                name: _getlist(form, f'facet_{name}') if orq else [] for name in FACET_NAMES
+            }),
             dimensions=tuple(_getlist(form, 'dimensions')),
             labels=tuple(_getlist(form, 'labels')),
             coding_labels=tuple(_getlist(form, 'coding_labels')),
@@ -347,11 +357,11 @@ class RunFormValues:
             name=str(form.get('name') or ''),
             parallelism=_whole_number(form, 'parallelism', 20, 'Parallel requests'),
             finder_export=finder_export,
-            snapshot_path=str(form.get('snapshot_path') or ''),
+            snapshot_path=snapshot_path,
             source_name=str(form.get('source_name') or ''),
             preset=str(form.get('preset') or '') or None,
             mount=mount,
-            **{name: str(form.get(name) or '').strip() or default for name, default in _model_defaults().items()},
+            **models,
         )
 
     def launch_fields(self) -> dict[str, object]:
@@ -492,7 +502,7 @@ def _file_source(values: RunFormValues) -> str:
     elif values.snapshot_path:
         status = 'Trace snapshot is ready.'
     else:
-        status = 'A Finder export or a local trace file (JSON).'
+        status = _FILE_HINT
     return (
         '<div class="irf-field" data-source="file"><span class="irf-label">Trace file</span>'
         '<div class="irf-file"><input type="text" readonly data-file-name aria-label="Selected trace file" '
@@ -691,12 +701,12 @@ def _source_summary(spec: InsightsLaunchSpec) -> str:
     filtered = sum(len(getattr(spec.facets, name)) for name in FACET_NAMES)
     filters = f', {filtered} filter value{"" if filtered == 1 else "s"}' if filtered else ''
     if spec.source == 'query':
-        return f'Traces matching “{spec.query.strip()}” from the last {days}, up to {spec.limit}{filters}'
+        return f'Orq traces matching “{spec.query.strip()}” from the last {days}, up to {spec.limit}{filters}'
     if spec.source == 'finder':
-        return f'Finder export {spec.source_name or Path(spec.finder_export).name}'
+        return f'Trace file {spec.source_name or Path(spec.finder_export).name} (Finder export)'
     if spec.source == 'snapshot':
-        return f'Local trace file {spec.source_name or Path(spec.snapshot_path).name}'
-    return f'Recent traces from the last {days}, up to {spec.limit}{filters}'
+        return f'Trace file {spec.source_name or Path(spec.snapshot_path).name}'
+    return f'Orq traces from the last {days}, up to {spec.limit}{filters}'
 
 
 def render_plan(spec: InsightsLaunchSpec, stages: list[tuple[str, str]]) -> str:

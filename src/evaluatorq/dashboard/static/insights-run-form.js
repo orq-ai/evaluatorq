@@ -451,7 +451,6 @@
       return;
     }
     if (affectsEstimate(target)) scheduleRefresh(ctx);
-    if (target.name === 'query') updateCompilerModel(ctx);
     if (target.name === 'source') {
       showError(ctx, '');
       updateSource(ctx);

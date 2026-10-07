@@ -247,7 +247,7 @@ def header(run: InsightsRun) -> str:
     facets = facets if isinstance(facets, dict) else {}
     numeric = population.get('numeric', {})
     numeric = numeric if isinstance(numeric, dict) else {}
-    chips = [_chip('source', 'local snapshot' if population.get('mode') == 'snapshot' else None), _chip('query', query)]
+    chips = [_chip('source', 'trace file' if population.get('mode') == 'snapshot' else None), _chip('query', query)]
     for name, values in facets.items():
         if isinstance(values, (list, tuple, set, frozenset)):
             chips.extend(_chip(name, value) for value in values)

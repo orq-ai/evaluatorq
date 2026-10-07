@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -56,6 +57,10 @@ def cleanup_expired_uploads(runs_dir: Path, *, now: float | None = None) -> int:
     return removed
 
 
+class UploadTooLargeError(ValueError):
+    """An upload body over its kind's size limit; the route answers 413 instead of 422."""
+
+
 class UploadRequestTooLargeError(Exception):
     """Raised as multipart request bytes exceed the bounded parser allowance."""
 
@@ -89,29 +94,48 @@ def _ensure_private_directory(path: Path) -> None:
     path.chmod(0o700)
 
 
-def validate_upload(contents: bytes, kind: UploadKind) -> None:
-    """Validate bounded UTF-8 JSON using the canonical Finder and snapshot loaders."""
-    limit = MAX_FINDER_EXPORT_BYTES if kind == 'finder' else MAX_INSIGHTS_UPLOAD_BYTES
-    if len(contents) > limit:
-        raise ValueError(
-            f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
-            if kind == 'finder'
-            else 'Upload exceeds the 100 MB size limit.'
-        )
+def upload_size_error(kind: UploadKind, size: int) -> str | None:
+    """The size-limit message for an upload of `kind`, or `None` when it fits."""
+    if kind == 'finder' and size > MAX_FINDER_EXPORT_BYTES:
+        return f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
+    if size > MAX_INSIGHTS_UPLOAD_BYTES:
+        return 'Upload exceeds the 100 MB size limit.'
+    return None
+
+
+def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKind:
+    """Parse an upload once, classify it by its top-level keys unless `kind` is given, and validate it.
+
+    Raises `UploadTooLargeError` above the kind's size limit and `ValueError` for any other invalid upload.
+    """
+    try:
+        document = json.loads(contents)
+    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueError
+        raise ValueError('This file is not valid JSON.') from exc
+    if kind is None:
+        keys = set(document) if isinstance(document, dict) else set()
+        if 'matched_trace_ids' in keys:  # a Finder export also carries `traces`, so this key decides
+            kind = 'finder'
+        elif 'traces' in keys:
+            kind = 'snapshot'
+        else:
+            raise ValueError('This file is neither a Finder export nor a trace snapshot.')
+    too_large = upload_size_error(kind, len(contents))
+    if too_large:
+        raise UploadTooLargeError(too_large)
+    del document  # validate in JSON mode, the way the worker and launch path read the stored file
     try:
         if kind == 'finder':
             RunExport.model_validate_json(contents)
-        else:
-            snapshot = Snapshot.model_validate_json(contents)
-            if not snapshot.traces:
-                raise ValueError('The trace snapshot contains no traces.')
-    except (ValidationError, UnicodeDecodeError) as exc:
+        elif not Snapshot.model_validate_json(contents).traces:
+            raise ValueError('The trace snapshot contains no traces.')
+    except ValidationError as exc:
         raise ValueError(f'Upload is not a valid {kind} JSON file.') from exc
+    return kind
 
 
 def store_upload(runs_dir: Path, contents: bytes, kind: UploadKind) -> Path:
-    """Validate and atomically store an upload with a route-owned random name."""
-    validate_upload(contents, kind)
+    """Atomically store an upload that `validate_upload` accepted, under a route-owned random name."""
     directory = uploads_dir(runs_dir)
     _ensure_private_directory(directory)
     path = directory / f'{kind}-{uuid.uuid4().hex}.json'
@@ -208,22 +232,8 @@ def cleanup_uploaded_source(runs_dir: Path, path: Path) -> None:
         return
 
 
-def detect_upload_kind(contents: bytes) -> UploadKind:
-    """Classify an upload by its top-level JSON keys, never by a client-supplied label."""
-    try:
-        document = json.loads(contents)
-    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueError
-        raise ValueError('This file is not valid JSON.') from exc
-    if isinstance(document, dict):
-        if 'matched_trace_ids' in document:
-            return 'finder'
-        if 'traces' in document:
-            return 'snapshot'
-    raise ValueError('This file is neither a Finder export nor a trace snapshot.')
-
-
 async def receive_upload(upload: UploadFile) -> tuple[UploadKind, bytes]:
-    """Read an UploadFile in bounded chunks, detect its kind from content, and validate it."""
+    """Read an UploadFile in bounded chunks, then classify and validate it off the event loop."""
     read = upload.read
     chunks = bytearray()
     while True:
@@ -232,10 +242,6 @@ async def receive_upload(upload: UploadFile) -> tuple[UploadKind, bytes]:
             break
         chunks.extend(chunk)
         if len(chunks) > MAX_INSIGHTS_UPLOAD_BYTES:
-            raise OverflowError('Upload exceeds the 100 MB size limit.')
+            raise UploadTooLargeError('Upload exceeds the 100 MB size limit.')
     contents = bytes(chunks)
-    kind = detect_upload_kind(contents)
-    if kind == 'finder' and len(contents) > MAX_FINDER_EXPORT_BYTES:
-        raise OverflowError(f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.')
-    validate_upload(contents, kind)
-    return kind, contents
+    return await asyncio.to_thread(validate_upload, contents), contents

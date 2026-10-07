@@ -159,7 +159,7 @@ def test_from_form_reads_query_parameters_and_form_data_the_same_way() -> None:
     from starlette.datastructures import FormData, QueryParams
 
     pairs = [
-        ('source', 'query'),
+        ('source', 'orq'),
         ('query', 'refunds'),
         ('window_days', '3'),
         ('limit', '40'),
@@ -194,9 +194,10 @@ def test_rejected_start_rerenders_what_the_user_entered(monkeypatch: pytest.Monk
     client = TestClient(build_app())
     data = {
         'csrf': _token(client),
-        'source': 'query',
-        'query': '',
+        'source': 'orq',
+        'query': 'refunds',
         'window_days': '21',
+        'limit': '0',
         'facet_agent_name': 'support-bot',
         'dimensions': 'intent',
         'custom_labels_json': json.dumps([{'name': 'needs_follow_up', 'kind': 'noul', 'instructions': 'Follow up?'}]),
@@ -207,14 +208,14 @@ def test_rejected_start_rerenders_what_the_user_entered(monkeypatch: pytest.Monk
 
     assert page.status_code == fragment.status_code == 422
     for response in (page, fragment):
-        assert 'Enter a question' in response.text
+        assert 'greater than or equal to 1' in response.text
         assert 'name="window_days" type="number" min="1" max="90" value="21"' in response.text
         assert 'data-chip-name="facet_agent_name" data-finder-value="support-bot"' in response.text
         assert 'needs_follow_up' in response.text
     assert '<html' in page.text
     assert '<html' not in fragment.text
     assert 'data-mount="dialog"' in fragment.text
-    assert client.post('/insights/runs', data={'source': 'recent', 'mount': 'dialog'}).status_code == 403
+    assert client.post('/insights/runs', data={'source': 'orq', 'mount': 'dialog'}).status_code == 403
 
 
 def test_new_run_dialog_is_a_fragment_with_its_own_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -251,7 +252,7 @@ def test_new_run_with_rerun_prefills_from_the_saved_run(monkeypatch: pytest.Monk
 def test_plan_route_returns_the_stage_titles_the_launch_uses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     client = TestClient(build_app())
-    query = {'source': 'query', 'query': 'refunds', 'labels': 'made_errors', 'dimensions': 'intent'}
+    query = {'source': 'orq', 'query': 'refunds', 'labels': 'made_errors', 'dimensions': 'intent'}
 
     response = client.get('/insights/new/plan', params=query)
     expected = InsightsLaunchSpec(source='query', query='refunds', labels=['made_errors'], dimensions=['intent']).stages()
@@ -260,7 +261,7 @@ def test_plan_route_returns_the_stage_titles_the_launch_uses(monkeypatch: pytest
     for _, title in expected:
         assert title in response.text
     filtered = client.get(
-        '/insights/new/plan', params={'source': 'recent', 'facet_agent_name': 'support-bot', 'dimensions': 'intent'}
+        '/insights/new/plan', params={'source': 'orq', 'facet_agent_name': 'support-bot', 'dimensions': 'intent'}
     )
     assert 'Filter recent traces' in filtered.text
 
@@ -269,11 +270,11 @@ def test_plan_route_reports_the_validation_message(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     client = TestClient(build_app())
 
-    response = client.get('/insights/new/plan', params={'source': 'query', 'query': '', 'dimensions': 'intent'})
+    response = client.get('/insights/new/plan', params={'source': 'file', 'dimensions': 'intent'})
 
     assert response.status_code == 422
     assert 'role="alert"' in response.text
-    assert 'Enter a question' in response.text
+    assert 'Browse to choose a trace file first' in response.text
 
 @pytest.fixture(autouse=True)
 def _no_orq_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,7 +289,7 @@ def _no_orq_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 _COUNTS = FacetCatalogue(value_counts={'status': {'completed': 90, 'error': 30}})
-_PLAN_QUERY = {'source': 'recent', 'limit': '100', 'labels': 'made_errors', 'dimensions': 'intent'}
+_PLAN_QUERY = {'source': 'orq', 'limit': '100', 'labels': 'made_errors', 'dimensions': 'intent'}
 
 
 def _patch_estimate_inputs(monkeypatch: pytest.MonkeyPatch, *, price: ModelInfo | None) -> list[str]:
@@ -393,10 +394,10 @@ def test_compact_plan_reports_an_incomplete_form_without_an_error_status(
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     client = TestClient(build_app())
 
-    response = client.get('/insights/new/plan', params={'source': 'query', 'query': '', 'dimensions': 'intent', 'compact': '1'})
+    response = client.get('/insights/new/plan', params={'source': 'file', 'dimensions': 'intent', 'compact': '1'})
 
     assert response.status_code == 200
-    assert 'Enter a question' in response.text
+    assert 'Browse to choose a trace file first' in response.text
 
 
 def test_a_finder_export_gives_an_exact_trace_count(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -409,7 +410,7 @@ def test_a_finder_export_gives_an_exact_trace_count(monkeypatch: pytest.MonkeyPa
     client = TestClient(build_app())
 
     response = client.get(
-        '/insights/new/plan', params={**_PLAN_QUERY, 'source': 'finder', 'finder_export': str(export), 'compact': '1'}
+        '/insights/new/plan', params={**_PLAN_QUERY, 'source': 'file', 'finder_export': str(export), 'compact': '1'}
     )
 
     assert response.status_code == 200
@@ -456,7 +457,7 @@ def test_start_launches_the_spec_built_from_the_submitted_values(monkeypatch: py
             '/insights/runs',
             data={
                 'csrf': _token(client),
-                'source': 'recent',
+                'source': 'orq',
                 'window_days': '5',
                 'limit': '30',
                 'facet_status': 'error',
@@ -573,7 +574,7 @@ def test_models_route_falls_back_to_a_text_input_without_a_catalogue(monkeypatch
 def _post_models(client: TestClient, **models: str) -> object:
     return client.post(
         '/insights/runs',
-        data={'csrf': _token(client), 'source': 'recent', 'labels': 'made_errors', 'dimensions': 'intent', **models},
+        data={'csrf': _token(client), 'source': 'orq', 'labels': 'made_errors', 'dimensions': 'intent', **models},
         follow_redirects=False,
     )
 
@@ -653,9 +654,24 @@ def test_file_tab_maps_by_which_hidden_path_is_filled() -> None:
     assert RunFormValues.from_form({'source': 'file', 'snapshot_path': 's.json'}).source == 'snapshot'
 
 
-@pytest.mark.parametrize('legacy', ['recent', 'query', 'finder', 'snapshot'])
-def test_legacy_source_values_are_still_accepted(legacy: str) -> None:
-    assert RunFormValues.from_form({'source': legacy}).source == legacy
+@pytest.mark.parametrize('stale', ['recent', 'query', 'finder', 'snapshot', 'bogus'])
+def test_only_the_two_tabs_are_accepted(stale: str) -> None:
+    with pytest.raises(ValueError, match='Choose Orq traces or Trace file'):
+        RunFormValues.from_form({'source': stale})
+
+
+def test_fields_of_the_other_tab_are_dropped() -> None:
+    on_file = RunFormValues.from_form({
+        'source': 'file',
+        'snapshot_path': 's.json',
+        'query': 'refunds',
+        'facet_agent_name': 'support-bot',
+        'compiler_model': 'acme/compiler',
+    })
+    assert (on_file.query, set(on_file.facets.agent_name)) == ('', set())
+    assert on_file.compiler_model != 'acme/compiler'
+    on_orq = RunFormValues.from_form({'source': 'orq', 'finder_export': 'f.json', 'snapshot_path': 's.json'})
+    assert (on_orq.source, on_orq.finder_export, on_orq.snapshot_path) == ('recent', '', '')
 
 
 def test_a_missing_source_is_the_orq_tab_and_limit_defaults_to_200() -> None:
@@ -685,10 +701,3 @@ def test_rerun_of_each_stored_mode_opens_the_right_tab(
     assert f'name="source" value="{checked_tab}" checked' in html
     if source == 'query':
         assert 'refunds</textarea>' in html
-
-
-def test_review_page_labels_the_stored_population_modes() -> None:
-    script = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/insights-review.js').read_text(encoding='utf-8')
-
-    for mode, label in (('filter', 'Recent traces'), ('export', 'Finder export'), ('query', 'Search by question')):
-        assert f"{mode}: '{label}'" in script

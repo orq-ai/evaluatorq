@@ -39,7 +39,7 @@ def test_insights_run_form_controller() -> None:
     fixtures = {
         'form': render_run_form(values, csrf='token'),
         'rejected': render_run_page(
-            replace(values, source='query'), csrf='token', error='Enter a question to find matching traces.'
+            replace(values, source='snapshot'), csrf='token', error='Browse to choose a trace file first.'
         ),
     }
     script = Path(__file__).with_name('insights_run_form.cjs')

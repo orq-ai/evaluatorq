@@ -228,7 +228,7 @@ async function main() {
     assert.deepEqual(visibleStep(replaced), ['3'], 'the user stays on the step they were on');
     const error = replaced.querySelector('#insights-run-error');
     assert.equal(error.hidden, false);
-    assert.match(error.textContent, /Enter a question/);
+    assert.match(error.textContent, /Browse to choose a trace file first/);
     assert.ok(replaced.classList.contains('irf-ready'), 'the replacement is mounted');
     assert.equal(app.processed.includes(replaced), true);
     const post = app.calls.find(call => call.url === '/insights/runs');

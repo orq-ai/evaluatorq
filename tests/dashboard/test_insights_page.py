@@ -80,7 +80,7 @@ def test_insights_header_hides_untracked_cost(minimal_run) -> None:
 def test_local_snapshot_run_does_not_offer_orq_trace_links(minimal_run: InsightsRun) -> None:
     run = minimal_run.model_copy(update={'population': {'mode': 'snapshot', 'limit': 2}})
 
-    assert 'local snapshot' in header(run)
+    assert 'trace file' in header(run)
     assert 'Open in Orq' not in cluster_detail(run, 'base-1')
     table = traces(run)
     assert '<th>Orq</th>' not in table
@@ -183,7 +183,7 @@ def test_launch_route_passes_selected_coding_and_custom_labels(monkeypatch):
     custom = {'name': 'custom_question', 'kind': 'noul', 'instructions': 'Did the agent answer?'}
     data = {
         'csrf': token.group(1),
-        'source': 'recent',
+        'source': 'orq',
         'dimensions': 'intent',
         'coding_labels': [CODING_LABELS[1].name],
         'custom_labels_json': json.dumps([custom]),

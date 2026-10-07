@@ -27,7 +27,12 @@ from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
 from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
-from evaluatorq.dashboard.insights_uploads import MAX_FINDER_EXPORT_BYTES, is_uploaded_source, read_uploaded_source
+from evaluatorq.dashboard.insights_uploads import (
+    MAX_FINDER_EXPORT_BYTES,
+    is_uploaded_source,
+    read_uploaded_source,
+    upload_size_error,
+)
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.insights.progress import stage_plan
@@ -45,6 +50,8 @@ FINDER_EXPORT_REFERENCE_DIR = '.finder-export-leases'
 INSIGHTS_WORKER_STATE_DIR = '.insights-workers'
 INSIGHTS_WORKER_STALE_SECONDS = 90
 INSIGHTS_WORKER_HEARTBEAT_SECONDS = 10
+DEFAULT_WINDOW_DAYS = 7
+DEFAULT_TRACE_LIMIT = 200
 
 
 def _default_dimensions() -> list[DimensionName]:
@@ -873,8 +880,8 @@ class InsightsLaunchSpec(BaseModel):
     snapshot_path: str = Field(default='', max_length=4096)
     # Original name of an uploaded source file; the stored upload has a random name.
     source_name: str = Field(default='', max_length=255)
-    window_days: int = Field(default=7, ge=1, le=90)
-    limit: int = Field(default=200, ge=1, le=5000)
+    window_days: int = Field(default=DEFAULT_WINDOW_DAYS, ge=1, le=90)
+    limit: int = Field(default=DEFAULT_TRACE_LIMIT, ge=1, le=5000)
     facets: FacetSelection = FacetSelection()
     parallelism: int = Field(default=20, ge=1, le=200)
     labels: list[Preset] = Field(default_factory=list, max_length=len(LABEL_PRESETS))
@@ -897,7 +904,7 @@ class InsightsLaunchSpec(BaseModel):
         if self.facets != FacetSelection():
             raise ValueError('A local trace file already fixes the trace population; remove the facet filters.')
         if not self.snapshot_path.strip():
-            raise ValueError('Enter the path to a local trace snapshot.')
+            raise ValueError('Browse to choose a trace file first.')
         path = Path(self.snapshot_path).expanduser()
         try:
             if is_uploaded_source(get_insights_runs_dir(), path):
@@ -932,10 +939,9 @@ class InsightsLaunchSpec(BaseModel):
                     raw = read_uploaded_source(get_insights_runs_dir(), path, 'finder')
                 else:
                     raw = _read_approved_finder_export(root, path)
-                if len(raw) > MAX_FINDER_EXPORT_BYTES:
-                    raise ValueError(
-                        f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
-                    )
+                too_large = upload_size_error('finder', len(raw))
+                if too_large:
+                    raise ValueError(too_large)
                 RunExport.model_validate_json(raw)
                 self._finder_export_snapshot = raw.decode('utf-8')
             except (OSError, ValueError) as exc:

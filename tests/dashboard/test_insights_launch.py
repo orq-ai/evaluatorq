@@ -630,7 +630,7 @@ def test_wizard_validates_source_before_launch() -> None:
         InsightsLaunchSpec(labels=[], dimensions=[])
     with pytest.raises(ValidationError, match='Finder export already fixes'):
         InsightsLaunchSpec(source='finder', facets=FacetSelection(status=frozenset({'error'})))
-    with pytest.raises(ValidationError, match='Enter the path to a local trace snapshot'):
+    with pytest.raises(ValidationError, match='Browse to choose a trace file first'):
         InsightsLaunchSpec(source='snapshot')
 
 
@@ -668,7 +668,7 @@ def test_dashboard_starts_local_snapshot_run_without_trace_lookup(tmp_path: Path
     ):
         response = client.post(
             '/insights/runs',
-            data={'csrf': token.group(1), 'source': 'snapshot', 'snapshot_path': str(path), 'dimensions': 'intent'},
+            data={'csrf': token.group(1), 'source': 'file', 'snapshot_path': str(path), 'dimensions': 'intent'},
             follow_redirects=False,
         )
 
@@ -1893,7 +1893,7 @@ def test_selected_profile_controls_facets_and_worker_credentials(
         assert client.get('/insights/facets?window_days=7').status_code == 200
         response = client.post(
             '/insights/runs',
-            data={'csrf': token.group(1), 'source': 'recent', 'dimensions': 'intent'},
+            data={'csrf': token.group(1), 'source': 'orq', 'dimensions': 'intent'},
             follow_redirects=False,
         )
 
@@ -1924,7 +1924,7 @@ def test_missing_selected_profile_never_uses_environment(monkeypatch: pytest.Mon
         facets = client.get('/insights/facets?window_days=7')
         start = client.post(
             '/insights/runs',
-            data={'csrf': token.group(1), 'source': 'recent', 'dimensions': 'intent'},
+            data={'csrf': token.group(1), 'source': 'orq', 'dimensions': 'intent'},
             follow_redirects=False,
         )
 
@@ -2184,14 +2184,14 @@ def test_new_run_form_rejects_bad_input_and_launches_valid_request(monkeypatch: 
     assert token is not None
 
     with patch('evaluatorq.dashboard.insights_routes.launch_insights', return_value='launched-id') as launch:
-        invalid = client.post('/insights/runs', data={'csrf': token.group(1), 'source': 'query', 'dimensions': 'intent'})
+        invalid = client.post('/insights/runs', data={'csrf': token.group(1), 'source': 'file', 'dimensions': 'intent'})
         assert invalid.status_code == 422
-        assert 'Enter a question' in invalid.text
-        forbidden = client.post('/insights/runs', data={'source': 'recent', 'dimensions': 'intent'})
+        assert 'Browse to choose a trace file first' in invalid.text
+        forbidden = client.post('/insights/runs', data={'source': 'orq', 'dimensions': 'intent'})
         assert forbidden.status_code == 403
         valid = client.post(
             '/insights/runs',
-            data={'csrf': token.group(1), 'source': 'recent', 'dimensions': 'intent', 'limit': '5', 'facet_status': 'error'},
+            data={'csrf': token.group(1), 'source': 'orq', 'dimensions': 'intent', 'limit': '5', 'facet_status': 'error'},
             follow_redirects=False,
         )
 

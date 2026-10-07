@@ -33,6 +33,15 @@ def build_signal_detail_payload(run: InsightsRun, trace_id: str, span_id: str | 
     }
 
 
+# Stored `population.mode` values, named the way the run form's "Which traces?" tabs name them.
+SOURCE_LABELS = {
+    'filter': 'Orq traces',
+    'query': 'Orq traces matching a question',
+    'export': 'Trace file (Finder export)',
+    'snapshot': 'Trace file',
+}
+
+
 def _timestamp(value: datetime | None) -> str | None:
     if value is None:
         return None
@@ -158,6 +167,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'created': _timestamp(run.created_at),
             'status': run.status,
             'population': population,
+            'source_label': SOURCE_LABELS.get(str(population.get('mode')), str(population.get('mode') or '')),
             'cost': cost,
             'cost_is_partial': total_usage.cost_is_partial if total_usage is not None else None,
             'cost_by_stage': {

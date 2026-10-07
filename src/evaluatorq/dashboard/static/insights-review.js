@@ -302,8 +302,7 @@ function renderHeader() {
     ? `${stageLabel || 'Run'}${activeStage?.completed != null && activeStage?.total != null ? ` · ${activeStage.completed}/${activeStage.total}` : ''}`
     : stageRows.length ? `${stageDone} of ${stageRows.length} stages` : '';
   $('title').textContent = r.name;
-  const src = {snapshot: 'Local snapshot', export: 'Finder export', query: 'Search by question', filter: 'Recent traces'}[p.mode] || p.mode;
-  $('status').innerHTML = `<span class="dot">${esc(cap(r.status || "unknown"))}</span><span class="sep">·</span><span class="num">${N}</span> traces<span class="sep">·</span>${esc(src)}
+  $('status').innerHTML = `<span class="dot">${esc(cap(r.status || "unknown"))}</span><span class="sep">·</span><span class="num">${N}</span> traces<span class="sep">·</span>${esc(r.source_label)}
     <span class="sep">·</span>${esc([...new Set(T.map(t => t.agent))].join(', '))}<span class="sep">·</span>${fmtTime(r.created)}<span class="sep">·</span><span class="num">${esc(costLabel(r))}</span>
     ${r.stage_failures && r.stage_failures.length ? `<span class="chip-warn" title="${esc(r.stage_failures.map(f => f.stage + ': ' + f.message).join('\n'))}">${r.stage_failures.length} failed stages</span>` : ''}
     ${r.warnings && r.warnings.length ? `<span class="chip-warn" title="${esc(r.warnings.join('\n'))}">${r.warnings.length} warnings</span>` : ''}

@@ -38,6 +38,7 @@ from evaluatorq.dashboard.insights_run_form import (
 )
 from evaluatorq.dashboard.insights_uploads import (
     UploadRequestTooLargeError,
+    UploadTooLargeError,
     cleanup_expired_uploads,
     limit_request_body,
     receive_upload,
@@ -468,7 +469,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             try:
                 kind, contents = await receive_upload(upload)
                 path = await asyncio.to_thread(store_upload, get_insights_runs_dir(), contents, kind)
-            except OverflowError as exc:
+            except UploadTooLargeError as exc:
                 return Response(json.dumps({'error': str(exc)}), status_code=413, media_type='application/json')
             except (OSError, ValueError) as exc:
                 return Response(json.dumps({'error': str(exc)}), status_code=422, media_type='application/json')
