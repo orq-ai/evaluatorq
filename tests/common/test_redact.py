@@ -1,179 +1,73 @@
-"""`common.redact`: batching, fail-closed behaviour, the cut-after-redaction bound and the Orq client derivation."""
+"""`common.redact`: the local credential scrub and placeholder normalization."""
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from typing import Any
-
 import pytest
 
-from evaluatorq.common import redact as redact_module
-from evaluatorq.common.redact import (
-    BATCH_CHARS,
-    EDGE_WINDOW,
-    SEPARATOR,
-    normalize_placeholders,
-    redact_cut,
-    redact_texts,
-    redaction_client,
+from evaluatorq.common.redact import normalize_placeholders, scrub_known_secrets
+
+PRIVATE_KEY = (
+    '-----BEGIN RSA PRIVATE KEY-----\n'
+    + '\n'.join('MIIEowIBAAKCAQEA' + 'x7Qz9' * 9 + 'Qw' for _ in range(3))
+    + '\n-----END RSA PRIVATE KEY-----'
 )
-
-from .fake_orq import FakeOrq
-
-SECRET = 'sk-live-0123456789abcdef'
-
-
-def _join(head: str, tail: str, omitted: int) -> str:
-    return f'{head}|{omitted}|{tail}'
-
-
-@pytest.mark.asyncio
-async def test_redacts_each_text_and_keeps_input_order() -> None:
-    orq = FakeOrq()
-
-    redacted = await redact_texts(['curl -H "x: sk-abcdefgh12"', 'git status', 'echo hi'], orq=orq.client)
-
-    assert redacted == ['curl -H "x: <API_KEY_1>"', 'git status', 'echo hi']
-
-
-@pytest.mark.asyncio
-async def test_texts_share_one_request_and_duplicates_are_sent_once() -> None:
-    orq = FakeOrq()
-
-    redacted = await redact_texts(['a', 'b', 'a', 'c'], orq=orq.client)
-
-    assert redacted == ['a', 'b', 'a', 'c']
-    assert orq.requests == [SEPARATOR.join(['a', 'b', 'c'])]
+HEX_64 = '692d8f1c3a5b7e9d0f2a4c6e8b1d3f5a7c9e0b2d4f6a8c1e3b5d7f9a0c2e4b6d'
+LEAKS = [
+    ('pem', f'cat > k <<EOF\n{PRIVATE_KEY}\nEOF', 'x7Qz9x7Qz9'),
+    ('mysql', 'mysql -u root -pS3cr3tPw -h db prod', 'S3cr3tPw'),
+    ('password-flag', 'psql --host=db --password=pTp0Zk81mQ -c "select 1"', 'pTp0Zk81mQ'),
+    ('pgpassword', '+ PGPASSWORD=pLYQr8Tn2Wv9\n+ psql -h db', 'pLYQr8Tn2Wv9'),
+    ('pypi', 'twine upload -u __token__ -p pypi-' + 'AgEIcHlwaS5vcmc' * 5 + ' dist/*', 'AgEIcHlwaS5vcmc'),
+    ('hex', f'python sign.py {HEX_64} payload.json', HEX_64[:16]),
+    ('url-userinfo', 'git clone https://bot:hunter2hunter2@github.com/acme/x.git', 'hunter2hunter2'),
+    ('slack-webhook', 'curl https://hooks.slack.com/services/TG84K60BE/BGIPLOUXOKY/lRg4Zq9Xw2 -d x', 'lRg4Zq9Xw2'),
+    (
+        'jwt',
+        "curl -H 'X-Auth: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhb'",
+        'dBjftJeZ4CVP',
+    ),
+    ('known-prefix', 'export TOK=ghp_' + 'a1B2c3D4e5' * 3, 'a1B2c3D4e5'),
+    ('secret-assignment', 'API_TOKEN=gXeRk29vLq0Pz8Wd', 'gXeRk29vLq0Pz8Wd'),
+    ('high-entropy', 'deploy --key Zq8Rk2LxV7mN4pT9wYb3HcD5', 'Zq8Rk2LxV7mN4pT9wYb3HcD5'),
+]
 
 
-@pytest.mark.asyncio
-async def test_blank_texts_are_not_sent() -> None:
-    orq = FakeOrq()
-
-    assert await redact_texts(['', '  \n'], orq=orq.client) == ['', '  \n']
-    assert orq.requests == []
+@pytest.mark.parametrize(('_name', 'text', 'secret'), LEAKS, ids=[leak[0] for leak in LEAKS])
+def test_scrub_known_secrets_removes_each_credential_shape(_name: str, text: str, secret: str) -> None:
+    assert secret not in scrub_known_secrets(text)
 
 
-@pytest.mark.asyncio
-async def test_batches_stay_within_the_character_cap_and_a_giant_text_travels_alone() -> None:
-    orq = FakeOrq()
-    medium = [f'{index} ' + 'x' * 20_000 for index in range(5)]
-    giant = 'g' * (BATCH_CHARS + 1)
-
-    redacted = await redact_texts([*medium, giant], orq=orq.client)
-
-    assert redacted == [*medium, giant]
-    assert all(len(request) <= BATCH_CHARS for request in orq.requests if request != giant)
-    assert giant in orq.requests
-    assert len(orq.requests) == 4  # two medium texts per request, the fifth alone, the giant alone
+def test_scrub_keeps_the_label_and_uses_unnumbered_placeholders() -> None:
+    assert scrub_known_secrets('psql --password=pTp0Zk81mQ db') == 'psql --password=<PASSWORD> db'
+    assert scrub_known_secrets('PGPASSWORD=pLYQr8Tn2Wv9 psql') == 'PGPASSWORD=<SECRET> psql'
+    assert scrub_known_secrets(PRIVATE_KEY) == '<PRIVATE_KEY>'
+    assert normalize_placeholders(scrub_known_secrets('x AKIAABCDEFGHIJKLMNOP')) == 'x <API_KEY>'
 
 
-@pytest.mark.asyncio
-async def test_a_text_holding_the_separator_cannot_break_its_neighbours() -> None:
-    orq = FakeOrq()
-    hostile = f'before{SEPARATOR}after {SECRET}'
-
-    redacted = await redact_texts(['safe', hostile], orq=orq.client)
-
-    assert redacted == ['safe', f'before{SEPARATOR}after <API_KEY_1>']
-    assert SEPARATOR.join(['safe', hostile]) not in orq.requests
+def test_scrub_is_idempotent() -> None:
+    once = scrub_known_secrets('psql --password=pTp0Zk81mQ\nPGPASSWORD=abcdef12 x\n' + PRIVATE_KEY)
+    assert scrub_known_secrets(once) == once
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ('orq', 'cause'),
+    'text',
     [
-        (FakeOrq(error=RuntimeError('boom')), 'RuntimeError'),
-        (FakeOrq(reply='one part only'), 'split into 1 parts, expected 2'),
-        (FakeOrq(reply=None.__class__), 'instead of redacted text'),
+        'git push --force origin main',
+        'rm -rf build/',
+        'kubectl delete deployment api -n prod',
+        'terraform destroy -auto-approve',
+        'terraform destroy -target=aws_db_instance.main',
+        'aws s3 rm s3://acme-prod-backups/2026/ --recursive',
+        'dd if=/dev/zero of=/dev/nvme1n1 bs=1M',
+        'docker login --password-stdin ghcr.io',
+        'export MAX_TOKENS=4096 GITHUB_SHA=0123456789abcdef0123456789abcdef01234567',
+        'git checkout feature/RES-412-redact',
+        'FAILED tests/test_a.py::test_x - AssertionError: assert 1 == 2\n=== 1 failed, 214 passed in 12.34s ===',
+        'docker pull acme/api@sha256:' + HEX_64,
     ],
-    ids=['exception', 'mismatched-split', 'not-a-string'],
 )
-async def test_a_failed_batch_returns_none_never_the_raw_text(
-    orq: FakeOrq, cause: str, caplog: pytest.LogCaptureFixture
-) -> None:
-    redacted = await redact_texts([f'one {SECRET}', 'two'], orq=orq.client)
-
-    assert redacted == [None, None]
-    assert cause in caplog.text
-    assert SECRET not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_an_api_error_body_is_not_logged(caplog: pytest.LogCaptureFixture) -> None:
-    class ApiError(Exception):
-        status_code = 413
-
-    orq = FakeOrq(error=ApiError(f'rejected: {SECRET}'))
-
-    assert await redact_texts([SECRET], orq=orq.client) == [None]
-    assert 'ApiError (HTTP 413)' in caplog.text
-    assert SECRET not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_without_an_orq_client_every_text_is_withheld_with_a_warning(caplog: pytest.LogCaptureFixture) -> None:
-    assert await redact_texts(['a', 'b', ' '], orq=None) == [None, None, ' ']
-    assert 'PII redaction is unavailable' in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_one_failed_batch_does_not_lose_the_others() -> None:
-    first = 'a' * 30_000
-    second = 'b' * 30_000
-    orq = FakeOrq(error=RuntimeError('boom'), error_when=lambda text: text == second)
-
-    assert await redact_texts([first, second], orq=orq.client) == [first, None]
-
-
-@pytest.mark.asyncio
-async def test_a_reply_without_redacted_text_withholds_only_its_batch(caplog: pytest.LogCaptureFixture) -> None:
-    first = 'a' * 30_000
-    second = 'b' * 30_000
-
-    class _Pii:
-        async def redact_async(self, *, text: str, **_: Any) -> object:
-            return object() if text == second else SimpleNamespace(redacted_text=text, mappings={})
-
-    orq = SimpleNamespace(pii=_Pii())
-
-    assert await redact_texts([first, second], orq=orq) == [first, None]  # ty: ignore[invalid-argument-type]
-    assert 'instead of redacted text' in caplog.text
-
-@pytest.mark.asyncio
-async def test_cut_redacts_before_cutting_so_a_secret_across_the_cut_leaves_no_fragment() -> None:
-    orq = FakeOrq()
-    text = 'a' * 140 + SECRET + ' ' + 'b' * 400 + SECRET + ' ' + 'c' * 140
-
-    [cut] = await redact_cut([text], keep=150, join=_join, orq=orq.client)
-
-    assert cut is not None
-    assert SECRET[-10:] not in cut
-    assert SECRET[:10] not in cut
-    assert cut.startswith('a' * 140 + '<API_KEY_')
-
-
-@pytest.mark.asyncio
-async def test_cut_of_a_very_long_text_redacts_only_its_two_ends() -> None:
-    orq = FakeOrq()
-    text = 'a' * 140 + SECRET + ' ' + 'm' * 40_000 + SECRET + ' ' + 'c' * 140
-
-    [cut] = await redact_cut([text], keep=150, join=_join, orq=orq.client)
-
-    assert cut is not None
-    assert len(orq.requests) == 1  # both ends travel in one batch
-    assert all(len(part) <= EDGE_WINDOW for part in orq.requests[0].split(SEPARATOR))
-    assert len(orq.requests[0].split(SEPARATOR)) == 2
-    assert SECRET[-10:] not in cut
-    assert f'|{len(text) - 300}|' in cut
-    assert cut.endswith(' ' + 'c' * 140)
-    assert cut.startswith('a' * 140 + '<API_KEY_')
-
-
-@pytest.mark.asyncio
-async def test_cut_keeps_a_short_text_whole_and_returns_none_for_a_failed_one() -> None:
-    assert await redact_cut(['short'], keep=150, join=_join, orq=FakeOrq().client) == ['short']
-    assert await redact_cut(['x' * 500], keep=150, join=_join, orq=None) == [None]
+def test_scrub_leaves_secret_free_commands_unchanged(text: str) -> None:
+    assert scrub_known_secrets(text) == text
 
 
 def test_normalize_placeholders_drops_the_numbering() -> None:
@@ -181,45 +75,3 @@ def test_normalize_placeholders_drops_the_numbering() -> None:
         '<UUID> and <EMAIL_ADDRESS> via <IP_ADDRESS>'
     )
     assert normalize_placeholders('a < b_2 > c <not_a_placeholder_1>') == 'a < b_2 > c <not_a_placeholder_1>'
-
-
-class _LlmClient:
-    def __init__(self, base_url: str, api_key: str | None) -> None:
-        self.base_url = base_url
-        self.api_key = api_key
-
-
-@pytest.mark.asyncio
-async def test_redaction_client_is_built_from_a_router_client_and_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    built: list[tuple[str, str]] = []
-    closed: list[object] = []
-    orq = object()
-
-    def resolve(api_key: str, base_url: str) -> object:
-        built.append((api_key, base_url))
-        return orq
-
-    async def close(client: object) -> None:
-        closed.append(client)
-
-    monkeypatch.setattr(redact_module, 'resolve_orq_client', resolve)
-    monkeypatch.setattr(redact_module, 'close_orq_client', close)
-
-    llm: Any = _LlmClient('https://staging.orq.ai/v3/router', 'key-1')
-    async with redaction_client(llm) as client:
-        assert client is orq
-        assert closed == []
-
-    assert built == [('key-1', 'https://staging.orq.ai')]
-    assert closed == [orq]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    'llm_client',
-    [None, _LlmClient('https://api.openai.com/v1', 'key-1'), _LlmClient('https://my.orq.ai/v3/router', None)],
-    ids=['none', 'not-orq', 'no-key'],
-)
-async def test_redaction_client_is_none_when_the_llm_client_has_no_orq_credentials(llm_client: Any) -> None:
-    async with redaction_client(llm_client) as client:
-        assert client is None

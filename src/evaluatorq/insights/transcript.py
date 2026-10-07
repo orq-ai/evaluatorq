@@ -12,10 +12,9 @@ Three views, each for one `/classify` call:
   questions that need to see what a command did; a long trace is split into
   several chunks rather than losing more than 30% of its middle.
 
-Nothing here calls a model or any other service. A shell output excerpt is shown only when the caller
-passes it already redacted (`labeling.redacted_shell_outputs` produces it with the Orq PII endpoint); without one the
-view keeps the call's status, diagnostic category and failure markers, which are fixed labels computed from the output
-locally, and no output text.
+Nothing here calls a model or any other service. A shell output excerpt is scrubbed of credentials with
+`common.redact.scrub_known_secrets` over the whole output before it is cut to its start and end, so a secret across
+the cut leaves no fragment.
 """
 
 from __future__ import annotations
@@ -29,13 +28,14 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, prompt_messages
 from evaluatorq.contracts import content_to_text, tool_result_to_text
 from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterator
 
     from evaluatorq.trace_finder.models import TraceRecord
 
@@ -235,20 +235,14 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
 def tool_activity_chunks(
     trace: TraceRecord | TraceDocument,
     budget: int = VIEW_BUDGET,
-    *,
-    redacted_outputs: Mapping[Any, str | None] | None = None,
 ) -> list[str]:
     """Render every tool call with its input and status, with user turns for context.
 
     Used for the questions that need to see what a command did: whether an error
     stayed unfixed, and whether an action was risky. Assistant prose is left out,
     and each tool result body is replaced by its diagnostic category; a shell
-    call also keeps the failure markers found in all of its output, and the start and end of that output
-    when `redacted_outputs` holds it.
-
-    `redacted_outputs` maps a shell call's id to its output excerpt, already redacted in full before any
-    cut (see `shell_outputs` and `labeling.redacted_shell_outputs`). A call with no entry, or an entry of `None`
-    (redaction failed), shows no `output:` text: the raw output is never rendered.
+    call also keeps the failure markers found in all of its output, and the start and end of that output. The output
+    is scrubbed with `scrub_known_secrets` in full before it is cut, so the raw output is never rendered.
     A view that fits after cutting at most `MAX_CUT_SHARE` of it from the middle is
     one chunk; a longer one is split into consecutive chunks of at most `budget`
     characters, each starting with the opening user turns, for the caller to ask
@@ -264,9 +258,7 @@ def tool_activity_chunks(
             if text:
                 lines.append(f'USER: {_head_tail(text, 400, 200)}')
         elif role == 'assistant':
-            lines.extend(
-                _activity_line(call, results, redacted_outputs or {}) for call in message.get('tool_calls') or []
-            )
+            lines.extend(_activity_line(call, results) for call in message.get('tool_calls') or [])
     if not any(line.startswith('CALL') for line in lines):
         return ['No tool calls.']
     if sum(len(line) + 1 for line in lines) * (1 - MAX_CUT_SHARE) <= budget:
@@ -295,17 +287,6 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
     ]
 
 
-def shell_outputs(trace: TraceRecord | TraceDocument) -> dict[Any, str]:
-    """Each shell call's output text, by call id, for the calls that have a result; for the caller to redact."""
-    results = _results(prompt_messages(trace))
-    outputs: dict[Any, str] = {}
-    for _, call in _tool_calls(trace):
-        result = results.get(call.get('id'))
-        if result and _call_name(call) in SHELL_TOOLS:
-            outputs[call.get('id')] = tool_result_to_text(result.get('content')).strip()
-    return outputs
-
-
 def join_cut(head: str, tail: str, omitted: int) -> str:
     """Join the two kept ends of a cut text around a count of the characters left out."""
     return f'{head} [... {omitted} chars ...] {tail}'
@@ -315,9 +296,7 @@ def _results(messages: list[dict[str, Any]]) -> dict[Any, dict[str, Any]]:
     return {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
 
 
-def _activity_line(
-    call: dict[str, Any], results: dict[Any, dict[str, Any]], redacted_outputs: Mapping[Any, str | None]
-) -> str:
+def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> str:
     name, arguments = _call_name(call), _call_arguments(call)
     if name in SHELL_TOOLS:
         command = _shell_command(arguments)
@@ -339,8 +318,8 @@ def _activity_line(
         markers = [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
         if markers:
             evidence.append(f'output shows: {", ".join(markers)}')
-        excerpt = redacted_outputs.get(call_id)
-        if excerpt is not None:
+        excerpt = _head_tail(scrub_known_secrets(text.strip()), SHELL_OUTPUT_CHARS // 2, SHELL_OUTPUT_CHARS // 2)
+        if excerpt:
             evidence.append(f'output: {excerpt}'.replace('\n', ' ⏎ '))
     return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
 

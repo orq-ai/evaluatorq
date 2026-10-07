@@ -1,49 +1,32 @@
-"""Redact untrusted trace text with the Orq PII endpoint before it reaches an external classifier.
+"""Scrub credentials from untrusted trace text before it reaches an external classifier.
 
-Shell commands, tool arguments and command output can carry API keys, tokens, passwords and personal data. A hand-rolled
-credential regex misses most of them, so every caller that sends such text to a model goes through `redact_texts`, which
-asks the Orq `POST /v2/pii/redact` endpoint and returns the text with placeholders such as `<API_KEY_1>` in place of the
-secrets.
+Shell commands, tool arguments and command output can carry API keys, tokens, passwords and private keys. Every caller
+that sends such text to a model goes through `scrub_known_secrets`, a local, offline pass of compiled patterns that
+replaces each credential with a placeholder such as `<API_KEY>`. Nothing leaves the process, so there is no failure
+mode: the function always returns text. `normalize_placeholders` drops placeholder numbering so texts that differ only
+in which secret they carry compare equal.
 
-The helpers fail closed. Text the endpoint could not redact comes back as `None`, never as the raw text, and the caller
-leaves it out of the request it was going to build. Every such failure logs a warning that names its cause.
-
-Retry is the SDK's own (`RetryConfig` on the request); there is no `with_retry` around it.
+The patterns were validated against a hand-built corpus of 38 secret types (114 items) and 44 secret-free commands;
+expect misses on unseen formats and some false positives on random-looking identifiers of 20+ characters.
 """
 
 from __future__ import annotations
 
-import asyncio
+import math
 import re
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
-
-from loguru import logger
-
-from evaluatorq.common.llm_client import client_routes_through_orq, resolve_results_base_url
-from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
+from collections import Counter
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Sequence
+    from collections.abc import Callable
 
-    from openai import AsyncOpenAI
-    from orq_ai_sdk import Orq
-
-# Several texts travel in one request, joined by this line. The redacted reply is split on it again, and a reply that
-# splits into another number of parts is treated as a failed redaction.
-SEPARATOR = '\n\u241e\u241e\u241e\n'
-# Characters per request. The endpoint takes about 15 s per million characters, so one request stays near a second.
-BATCH_CHARS = 50_000
-# Redaction requests in flight at once for one `redact_texts` call.
-_CONCURRENCY = 4
-_TIMEOUT_MS = 30_000
-# Characters kept from each end of a text too long to redact whole; see `redact_cut`.
-EDGE_WINDOW = 8_000
 _PLACEHOLDER = re.compile(r'<([A-Z][A-Z0-9_]*)_\d+>')
+# A value already replaced by an earlier rule; a later rule must not replace it again.
+_PLACEHOLDED = r'(?!<[A-Z_]+>)'
 
 
 def normalize_placeholders(text: str) -> str:
-    """Drop the numbering of redaction placeholders: `<UUID_3>` becomes `<UUID>`.
+    """Drop the numbering of placeholders: `<UUID_3>` becomes `<UUID>`.
 
     Two texts that differ only in which id, email, URL or key they carry normalize to the same string, so a caller can
     ask one question for all of them.
@@ -51,159 +34,118 @@ def normalize_placeholders(text: str) -> str:
     return _PLACEHOLDER.sub(r'<\1>', text)
 
 
-@asynccontextmanager
-async def redaction_client(client: AsyncOpenAI | None) -> AsyncIterator[Orq | None]:
-    """Yield an Orq client for redaction built from the LLM client's credentials, or `None` when it cannot be built.
+class _Rule(NamedTuple):
+    pattern: re.Pattern[str]
+    replace: Callable[[re.Match[str]], str]
 
-    The LLM client has to route through the Orq router: its API key and host then address the same Orq deployment that
-    serves `/v2/pii/redact`. A client that does not (direct OpenAI, none) yields `None`, and so does a missing SDK. The
-    Orq client is closed when the block exits.
 
-    Yields:
-        The Orq client, or `None` when none can be built from `client`.
+def _mask(label: str) -> Callable[[re.Match[str]], str]:
+    """Replace the whole match with `<LABEL>`."""
+    return lambda _match: f'<{label}>'
+
+
+def _mask_group(label: str, group: int = 1) -> Callable[[re.Match[str]], str]:
+    """Replace only capture group `group` with `<LABEL>`, keeping the label or flag in front of it."""
+
+    def replace(match: re.Match[str]) -> str:
+        offset = match.start()
+        return f'{match.string[offset : match.start(group)]}<{label}>{match.string[match.end(group) : match.end()]}'
+
+    return replace
+
+
+def _entropy_ok(token: str) -> bool:
+    """True when `token` looks like random key material rather than an identifier, path, SHA or branch name."""
+    token = token.strip('=')
+    if not token or re.fullmatch(r'[0-9a-f]+', token):  # hex: git SHAs, left to the long-hex rule
+        return False
+    if any(re.fullmatch(r'[a-z]{4,}', part) for part in re.split(r'[-_/.+]', token)):  # holds a plain word
+        return False
+    if len(token) / len(re.findall(r'[A-Z]+|[a-z]+|[0-9]+|[^A-Za-z0-9]+', token)) >= 2.5:  # long same-class runs
+        return False
+    if not (re.search(r'[A-Z]', token) and re.search(r'[a-z]', token) and re.search(r'[0-9]', token)):
+        return False
+    counts = Counter(token)
+    return -sum(n / len(token) * math.log2(n / len(token)) for n in counts.values()) >= 3.8
+
+
+def _mask_entropy(match: re.Match[str]) -> str:
+    """Mask a high-entropy token; in `NAME=value` only the value is judged and replaced."""
+    token = match.group(0)
+    name = token.rstrip('=').rpartition('=')[0]
+    prefix = token[: len(name) + 1] if name else ''
+    value = token[len(prefix) :]
+    return f'{prefix}<SECRET>' if len(value) >= 20 and _entropy_ok(value) else token
+
+
+# Order matters: structural rules first, the generic and entropy rules last. Each placeholder is unnumbered, which
+# `normalize_placeholders` leaves as is.
+_RULES: tuple[_Rule, ...] = (
+    # A PEM private key, through its END line or the end of the text when truncated.
+    _Rule(
+        re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)', re.DOTALL),
+        _mask('PRIVATE_KEY'),
+    ),
+    # Two or more base64 body lines with no header (a cut-off key), also with JSON-escaped newlines.
+    _Rule(
+        re.compile(r'(?:(?:^|\\n|\n)[A-Za-z0-9+/]{60,76}={0,2}(?=\\n|\n|$)){2,}', re.MULTILINE), _mask('PRIVATE_KEY')
+    ),
+    # user:password in a URL, up to the @.
+    _Rule(re.compile(r'(?<=://)[^\s/:@\'"]*:[^\s/@\'"]+(?=@)'), _mask('CREDENTIALS')),
+    # The secret path of a Slack webhook.
+    _Rule(
+        re.compile(r'https://hooks\.slack\.com/(?:services|workflows|triggers)/[A-Za-z0-9_/-]+'), _mask('WEBHOOK_URL')
+    ),
+    # Well-known token prefixes: AWS, GitHub, GitLab, Slack, Stripe, OpenAI/Anthropic, Hugging Face, npm, PyPI.
+    _Rule(
+        re.compile(
+            r'\b(?:(?:AKIA|ASIA)[A-Z0-9]{16}|gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{20,}'
+            r'|glpat-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|[rs]k_(?:live|test)_[A-Za-z0-9]{16,}'
+            r'|sk-(?:proj-|ant-[a-z0-9]+-)?[A-Za-z0-9_-]{16,}|hf_[A-Za-z0-9]{30,}|npm_[A-Za-z0-9]{36}'
+            r'|pypi-[A-Za-z0-9_-]{50,})'
+        ),
+        _mask('API_KEY'),
+    ),
+    # A JWT anywhere, including custom headers.
+    _Rule(re.compile(r'\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'), _mask('JWT')),
+    # `mysql -u root -pSECRET`: the password is glued to the flag.
+    _Rule(
+        re.compile(r'(\b(?:mysql|mysqldump|mysqladmin|mariadb)\b[^\n|;&]*?\s-p)([^\s\'"]+)'), _mask_group('PASSWORD', 2)
+    ),
+    # `--password=x`, `--token x`, `-p x` style flags.
+    _Rule(
+        re.compile(
+            r'(?<=\s)--?(?:password|passwd|pass|pwd|secret|token|api[-_]?key|auth[-_]?token)(?:=|\s+)'
+            rf'{_PLACEHOLDED}([^\s\'"]+)',
+            re.IGNORECASE,
+        ),
+        _mask_group('PASSWORD'),
+    ),
+    # `NAME=value` or `"name": "value"` where the name says secret: PGPASSWORD, API_TOKEN, AccountKey, cookies, ...
+    _Rule(
+        re.compile(
+            r'\b[A-Z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key'
+            r'|credentials?|accountkey|session(?:id)?|cookie|sid)[A-Z0-9_.-]*["\']?\s*[=:]\s*["\']?'
+            rf'{_PLACEHOLDED}([^\s"\',;\\]{{6,}})',
+            re.IGNORECASE,
+        ),
+        _mask_group('SECRET'),
+    ),
+    # An unlabeled 64+ hex blob; spares `sha256:<hex>` digests and 40-hex git SHAs.
+    _Rule(re.compile(r'(?<![:\w])[0-9a-fA-F]{64,}(?!\w)'), _mask('SECRET')),
+    # Any 20+ character token that looks random (mixed case and digits, high entropy, no plain words).
+    _Rule(re.compile(r'[A-Za-z0-9+/_=-]{20,}'), _mask_entropy),
+)
+
+
+def scrub_known_secrets(text: str) -> str:
+    """Replace credential shapes in `text` with placeholders such as `<API_KEY>`, `<PRIVATE_KEY>` or `<PASSWORD>`.
+
+    A local, offline pass for what the Orq endpoint is known to miss: PEM keys, `mysql -p<pw>`, `--password=`,
+    PGPASSWORD-style assignments, JWTs in custom headers, Slack webhooks, unlabeled hex blobs. It must run on the raw
+    text, before any placeholder-inserting redaction, whose placeholders would break the anchors these patterns need.
+    A flag or label in front of a value (`--password=`, `PGPASSWORD=`) is kept; only the value is replaced.
     """
-    api_key = getattr(client, 'api_key', None)
-    if not client_routes_through_orq(client) or not isinstance(api_key, str) or not api_key:
-        yield None
-        return
-    try:
-        orq = resolve_orq_client(api_key=api_key, base_url=resolve_results_base_url(client))
-    except (ImportError, ValueError) as exc:
-        logger.warning('Could not build an Orq client for PII redaction: {}', exc)
-        yield None
-        return
-    try:
-        yield orq
-    finally:
-        await close_orq_client(orq)
-
-
-async def redact_texts(texts: Sequence[str], *, orq: Orq | None) -> list[str | None]:
-    """Redact every text with the Orq PII endpoint; the result at index `i` is `texts[i]` redacted.
-
-    Texts are deduplicated and packed into requests of at most `BATCH_CHARS` characters (a text alone over that, or one
-    containing the separator, gets a request of its own), at most `_CONCURRENCY` in flight. A text that is empty or only
-    whitespace is returned as is. A text whose request failed (exception, non-200, a reply that does not split back
-    into the parts sent) comes back as `None`, and so does every text when `orq` is `None`; each failure logs a warning
-    naming its cause. Raw text is never returned in place of a redaction.
-
-    Retry is the SDK's: each request carries a `RetryConfig` for rate limits, 5xx and connection errors.
-    """
-    redacted: dict[str, str | None] = {}
-    pending: list[str] = []
-    for text in dict.fromkeys(texts):
-        if text.strip():
-            pending.append(text)
-        else:
-            redacted[text] = text
-    if pending and orq is None:
-        logger.warning(
-            'PII redaction is unavailable (no Orq client); withholding {} text(s) from the classifier', len(pending)
-        )
-        redacted.update(dict.fromkeys(pending))
-    elif pending:
-        semaphore = asyncio.Semaphore(_CONCURRENCY)
-        batches = _batches(pending)
-        replies = await asyncio.gather(*(_redact_batch(orq, batch, semaphore) for batch in batches))
-        for batch, reply in zip(batches, replies, strict=True):
-            redacted.update(zip(batch, reply if reply is not None else [None] * len(batch), strict=True))
-    return [redacted[text] for text in texts]
-
-
-async def redact_cut(
-    texts: Sequence[str],
-    *,
-    keep: int,
-    join: Callable[[str, str, int], str],
-    slack: int = 0,
-    orq: Orq | None,
-) -> list[str | None]:
-    """Redact each text, then cut it to its first and last `keep` characters; `None` where redaction failed.
-
-    A text of at most `2 * keep + slack` characters after redaction is returned whole. A longer one is cut with
-    `join(head, tail, omitted)`, where `omitted` counts the characters between them.
-
-    To bound the cost of a very long text, only its first and last `EDGE_WINDOW` characters are redacted, as two
-    separate parts, once the text is longer than twice that. The cut is taken from those redacted parts, so a secret
-    would have to be over `EDGE_WINDOW - keep` characters long to straddle the cut and leave a readable fragment.
-    """
-    if keep >= EDGE_WINDOW:
-        raise ValueError(f'keep must be below {EDGE_WINDOW}, got {keep}')
-    parts: list[str] = []
-    spans: list[tuple[int, int]] = []  # per text: index of its first part and how many parts it has
-    for text in texts:
-        windows = [text] if len(text) <= 2 * EDGE_WINDOW else [text[:EDGE_WINDOW], text[-EDGE_WINDOW:]]
-        spans.append((len(parts), len(windows)))
-        parts.extend(windows)
-    redacted = await redact_texts(parts, orq=orq)
-    cut: list[str | None] = []
-    for text, (start, count) in zip(texts, spans, strict=True):
-        pieces = redacted[start : start + count]
-        if any(piece is None for piece in pieces):
-            cut.append(None)
-        elif count == 1:
-            whole = pieces[0] or ''
-            cut.append(
-                whole if len(whole) <= 2 * keep + slack else join(whole[:keep], whole[-keep:], len(whole) - 2 * keep)
-            )
-        else:
-            head, tail = pieces[0] or '', pieces[1] or ''
-            cut.append(join(head[:keep], tail[-keep:], len(text) - 2 * keep))
-    return cut
-
-
-def _batches(texts: Sequence[str]) -> list[list[str]]:
-    """Group texts into requests of at most `BATCH_CHARS`; a text that cannot be split back out travels alone."""
-    batches: list[list[str]] = []
-    current: list[str] = []
-    used = 0
-    for text in texts:
-        if SEPARATOR in text or len(text) > BATCH_CHARS:
-            batches.append([text])
-            continue
-        if current and used + len(SEPARATOR) + len(text) > BATCH_CHARS:
-            batches.append(current)
-            current, used = [], 0
-        used += len(text) + (len(SEPARATOR) if current else 0)
-        current.append(text)
-    if current:
-        batches.append(current)
-    return batches
-
-
-def _retry_config() -> object:
-    from orq_ai_sdk.utils.retries import BackoffStrategy, RetryConfig
-
-    return RetryConfig(
-        strategy='backoff',
-        backoff=BackoffStrategy(initial_interval=500, max_interval=5_000, exponent=2, max_elapsed_time=60_000),
-        retry_connection_errors=True,
-    )
-
-
-async def _redact_batch(orq: Orq | None, batch: list[str], semaphore: asyncio.Semaphore) -> list[str] | None:
-    """One request for a batch; its parts redacted in order, or `None` (logged) when the request failed."""
-    if orq is None:
-        return None
-    try:
-        async with semaphore:
-            response = await orq.pii.redact_async(
-                text=SEPARATOR.join(batch), retries=_retry_config(), timeout_ms=_TIMEOUT_MS
-            )
-    except Exception as exc:  # noqa: BLE001 - one batch failing must not lose the others
-        # The exception text is left out: an API error body can quote the request it rejected.
-        status = getattr(exc, 'status_code', None)
-        return _withheld(batch, f'{type(exc).__name__}{f" (HTTP {status})" if status else ""}')
-    text = getattr(response, 'redacted_text', None)
-    if not isinstance(text, str):
-        return _withheld(batch, f'the reply carried {type(text).__name__} instead of redacted text')
-    parts = text.split(SEPARATOR) if len(batch) > 1 else [text]
-    if len(parts) != len(batch):
-        return _withheld(batch, f'the redacted text split into {len(parts)} parts, expected {len(batch)}')
-    return parts
-
-
-def _withheld(batch: list[str], cause: str) -> None:
-    logger.warning(
-        'PII redaction failed for a batch of {} text(s), withholding them from the classifier: {}', len(batch), cause
-    )
+    for rule in _RULES:
+        text = rule.pattern.sub(rule.replace, text)
+    return text

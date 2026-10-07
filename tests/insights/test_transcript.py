@@ -8,7 +8,6 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.insights.labeling import redacted_shell_outputs
 from evaluatorq.insights.transcript import (
     conversation_view,
     first_command,
@@ -18,7 +17,6 @@ from evaluatorq.insights.transcript import (
     tool_stats,
 )
 from evaluatorq.trace_finder.models import TraceRecord
-from tests.common.fake_orq import FakeOrq
 
 
 def _call(call_id: str, name: str, arguments: dict[str, Any] | str) -> dict[str, Any]:
@@ -144,11 +142,8 @@ def test_conversation_view_keeps_a_long_opening_request_over_budget() -> None:
     assert view.startswith('USER: please please')
 
 
-@pytest.mark.asyncio
-async def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:
-    redacted = await redacted_shell_outputs(CODING_TRACE, orq=FakeOrq().client)
-
-    [view] = tool_activity_chunks(CODING_TRACE, redacted_outputs=redacted)
+def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:
+    [view] = tool_activity_chunks(CODING_TRACE)
 
     assert 'CALL Bash [error]: cd repo && uv run pytest tests/test_parser.py -q' in view
     assert '→ diagnostic: provider_error' in view
@@ -156,19 +151,6 @@ async def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -
     assert 'output: Error: 1 failed, 3 passed' in view  # shell output keeps an excerpt
     assert 'output: forced update' in view
     assert 'Looking at the parser' not in view  # assistant prose is left out
-
-
-def test_tool_activity_view_without_redacted_outputs_renders_no_output_text() -> None:
-    views = [
-        *tool_activity_chunks(CODING_TRACE),
-        *tool_activity_chunks(CODING_TRACE, redacted_outputs={'c2': None, 'c4': None}),
-    ]
-
-    for view in views:
-        assert 'output:' not in view
-        assert 'Error: 1 failed' not in view
-        assert 'forced update' not in view
-        assert 'diagnostic: provider_error' in view  # fixed labels are computed locally and stay
 
 
 def test_tool_activity_omits_raw_result_bodies_but_keeps_diagnostic_category() -> None:
@@ -249,15 +231,12 @@ def _failing_pytest_trace(output: str) -> TraceRecord:
     )
 
 
-@pytest.mark.asyncio
-async def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_with_a_redacted_excerpt() -> None:
+def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_with_a_scrubbed_excerpt() -> None:
     secret = 'sk-live-super-secret-token'
     trace = _failing_pytest_trace(
         f'FAILED tests/test_parser.py::test_empty\n{"." * 400}\nTOKEN={secret}\n{"." * 400}\n2 failed, 5 passed'
     )
-    redacted = await redacted_shell_outputs(trace, orq=FakeOrq().client)
-
-    [view] = tool_activity_chunks(trace, redacted_outputs=redacted)
+    [view] = tool_activity_chunks(trace)
 
     assert 'output shows: tests_failed' in view
     assert view.count('output shows') == 1  # '0 failed' is not a failure
@@ -267,56 +246,24 @@ async def test_tool_activity_labels_a_failure_inside_a_completed_shell_call_with
     assert 'output: 7 passed, 0 failed' in view
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize('cut', ['start', 'end'])
 @pytest.mark.parametrize('padding', [100, 12_000], ids=['whole', 'two-windows'])
-async def test_a_secret_across_the_excerpt_cut_leaves_no_fragment_in_the_view(cut: str, padding: int) -> None:
-    """The output is redacted in full before it is cut, so no head or tail of a credential survives the cut."""
-    secret = 'sk-live-' + 'ABCDEFGH' * 4
+def test_a_secret_across_the_excerpt_cut_leaves_no_fragment_in_the_view(cut: str, padding: int) -> None:
+    """The output is scrubbed in full before it is cut, so no head or tail of a credential survives the cut."""
+    secret = 'ghp_' + 'aB3dE5gH7j' * 3
     middle = 'm' * (2 * padding)
     if cut == 'start':  # characters 130-170, across the 150th
-        output = 'a' * 130 + secret + ' ' + middle + ' end'
+        output = 'a' * 129 + ' ' + secret + ' ' + middle + ' end'
     else:  # ends 121 characters before the end, across the 150th from the end
         output = 'start ' + middle + ' ' + secret + ' ' + 'z' * 120
     trace = _failing_pytest_trace(output)
 
-    redacted = await redacted_shell_outputs(trace, orq=FakeOrq().client)
-    [view] = tool_activity_chunks(trace, redacted_outputs=redacted)
+    [view] = tool_activity_chunks(trace)
 
     assert 'output: ' in view
     for size in (4, 8, 12):
         assert secret[:size] not in view
         assert secret[-size:] not in view
-
-
-@pytest.mark.asyncio
-async def test_a_long_output_is_redacted_from_its_two_ends_only() -> None:
-    trace = _failing_pytest_trace('s' * 100 + ' ' + 'm' * 200_000 + ' ' + 'e' * 100)
-    orq = FakeOrq()
-
-    await redacted_shell_outputs(trace, orq=orq.client)
-
-    sent = sum(len(request) for request in orq.requests)
-    assert sent < 20_000
-
-
-@pytest.mark.asyncio
-async def test_unredactable_shell_output_renders_no_excerpt_but_keeps_the_failure_labels(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    secret = 'sk-live-super-secret-token'
-    trace = _failing_pytest_trace(f'Exit code 1\nTOKEN={secret}\n3 failed')
-
-    for orq in (FakeOrq(error=RuntimeError('down')).client, None):
-        redacted = await redacted_shell_outputs(trace, orq=orq)
-        [view] = tool_activity_chunks(trace, redacted_outputs=redacted)
-
-        assert redacted['c1'] is None
-        assert 'output shows: nonzero_exit, tests_failed' in view
-        assert 'output: Exit code' not in view
-        assert secret not in view
-        assert 'Exit code 1' not in view
-    assert 'PII redaction' in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -340,8 +287,7 @@ def test_nonzero_exit_is_recognised_in_each_harness_format(tool: str, content: s
     assert 'output shows: nonzero_exit' in view
 
 
-@pytest.mark.asyncio
-async def test_codex_exec_script_is_read_as_a_shell_call() -> None:
+def test_codex_exec_script_is_read_as_a_shell_call() -> None:
     script = 'const r = await tools.exec_command({cmd:"git push --force origin main","workdir":"/repo"}); text(r);'
     trace = _trace(
         {'role': 'user', 'content': 'Ship it.'},
@@ -349,9 +295,7 @@ async def test_codex_exec_script_is_read_as_a_shell_call() -> None:
         {'role': 'tool', 'tool_call_id': 'c1', 'content': 'Script failed\nOutput:\nrejected'},
     )
 
-    redacted = await redacted_shell_outputs(trace, orq=FakeOrq().client)
-
-    [view] = tool_activity_chunks(trace, redacted_outputs=redacted)
+    [view] = tool_activity_chunks(trace)
 
     assert 'CALL exec [' in view
     assert ': git push --force origin main' in view

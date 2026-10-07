@@ -2,10 +2,10 @@
 
 A one-way door cannot be undone (force push, publish, send a message); a two-way door changes state that can be
 undone (local edit, local commit); a benign call changes nothing. Only tools the run called are classified. Every
-call is classified per distinct redacted input: a shell tool by its command, any other tool, MCP tools included, by
-its arguments, with the tool description. The command or arguments pass through the Orq PII endpoint first, so no
-credential or personal data reaches Jev, and calls that differ only in an id, email, URL or key share one question.
-A call Jev could not classify, or whose text could not be redacted, is `unknown`, a class Jev is never offered.
+call is classified per distinct scrubbed input: a shell tool by its command, any other tool, MCP tools included, by
+its arguments, with the tool description. The command or arguments pass through a local secret scrub first
+(`common.redact.scrub_known_secrets`), so no credential reaches Jev, and calls that differ only in a key share one
+question. A call Jev could not classify is `unknown`, a class Jev is never offered.
 """
 
 from __future__ import annotations
@@ -13,14 +13,13 @@ from __future__ import annotations
 import asyncio
 import json
 import shlex
-from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Literal, cast
 
 from loguru import logger
 
 from evaluatorq.common.judge import ClassifyQuestion, run_judge
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.redact import normalize_placeholders, redact_cut, redaction_client
+from evaluatorq.common.redact import normalize_placeholders, scrub_known_secrets
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.signals.config import SignalsConfig
 from evaluatorq.signals.models import Evidence, SignalResult, result
@@ -29,7 +28,6 @@ from evaluatorq.signals.walk import CallRecord, SignalContext, call_tool_schemas
 
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
-    from orq_ai_sdk import Orq
 
     from evaluatorq.formats.atif import AtifTrajectory
 
@@ -66,7 +64,7 @@ _EVIDENCE_CHARS = 300
 _RETRIES = 3
 
 _Subject = tuple[str, str]
-"""(tool name, redacted command or arguments, placeholders unnumbered); one Jev question each."""
+"""(tool name, scrubbed command or arguments, placeholders unnumbered); one Jev question each."""
 
 
 def _call_text(record: CallRecord, *, shell: bool) -> str:
@@ -88,9 +86,12 @@ def _call_text(record: CallRecord, *, shell: bool) -> str:
     return json.dumps(args, sort_keys=True, default=str)
 
 
-def _join_clip(head: str, tail: str, omitted: int) -> str:
-    """Join the first and last characters of a long text, so a trailing `&& git push -f` survives."""
-    return f'{head}\n[... {omitted} characters omitted ...]\n{tail}'
+def _clip(text: str) -> str:
+    """Keep the first and last `_COMMAND_EDGE` characters of a long text, so a trailing `&& git push -f` survives."""
+    if len(text) <= 2 * _COMMAND_EDGE:
+        return text
+    omitted = len(text) - 2 * _COMMAND_EDGE
+    return f'{text[:_COMMAND_EDGE]}\n[... {omitted} characters omitted ...]\n{text[-_COMMAND_EDGE:]}'
 
 
 def _descriptions(trajectory: AtifTrajectory, records: list[CallRecord]) -> dict[str, str]:
@@ -155,7 +156,6 @@ async def classify_tool_doors(
     config: SignalsConfig | None = None,
     *,
     client: AsyncOpenAI | None = None,
-    orq: Orq | None = None,
 ) -> dict[str, SignalResult]:
     """Classify a run's tool calls as benign, two-way or one-way doors with Jev, and count them.
 
@@ -164,24 +164,20 @@ async def classify_tool_doors(
     definitions active for its call carry one (the first description seen for a name wins). Text longer than 4,000
     characters is cut to its first and last 2,000.
 
-    The text is redacted with the Orq PII endpoint before anything is sent to Jev or logged: secrets and personal
-    data become placeholders such as `<API_KEY_1>`. The numbering is then dropped, so calls that differ only in an id,
-    email, URL or key are one question. `orq` is the client for the endpoint; when it is not given, one is built from
-    the Orq credentials of the LLM client, which has to route through Orq. A call whose text could not be redacted is
-    not sent to Jev: it is `unknown`, and a warning names its tool. Only called tools are classified. Calls run
+    The text is scrubbed of credentials with `common.redact.scrub_known_secrets` (a local pass, no network) before
+    anything is sent to Jev or logged: secrets become placeholders such as `<API_KEY>`. Placeholder numbering is
+    dropped, so calls that differ only in a key are one question. Only called tools are classified. Calls run
     concurrently, bounded by the process-wide LLM limit when one is set.
 
     Retry is owned by `run_judge` (one layer): each classification is retried up to 3 times with exponential
     backoff on rate limits, 5xx and transport failures. A classification that still fails, abstains or answers
-    outside the labels is logged and becomes `unknown`, never benign. Redaction retries are the SDK's own.
+    outside the labels is logged and becomes `unknown`, never benign.
 
     Returns `one_way_call_count`, `two_way_call_count` and `unknown_call_count`. Each result's evidence names its
-    calls with `reason` set to the tool name and its redacted, clipped input (the tool name alone for a call that
-    could not be redacted) and `subgroup` to the class. When the run has tool activity the signals cannot read (a
+    calls with `reason` set to the tool name and its scrubbed, clipped input and `subgroup` to the class. When the run has tool activity the signals cannot read (a
     Responses call kept outside ATIF `tool_calls`), every count is no-basis, with the `source tool activity
     represented` precondition unmet, and Jev is not called: the counts would otherwise read zero for calls that were
-    made. The resolved LLM client is closed when this function creates it; an injected client, and an injected `orq`,
-    remain caller-owned.
+    made. The resolved LLM client is closed when this function creates it; an injected client remains caller-owned.
     """
     resolved_config = config or SignalsConfig()
     ctx = SignalContext.build(trajectory, resolved_config)
@@ -192,7 +188,7 @@ async def classify_tool_doors(
 
     verdicts: dict[int, tuple[str, Door]] = {}
     if records:
-        verdicts = await _classify_calls(trajectory, records, resolved_config, client, orq)
+        verdicts = await _classify_calls(trajectory, records, resolved_config, client)
 
     out: dict[str, SignalResult] = {}
     for name, door in zip(DOOR_SIGNAL_NAMES, _COUNTED, strict=True):
@@ -216,9 +212,8 @@ async def _classify_calls(
     records: list[CallRecord],
     config: SignalsConfig,
     client: AsyncOpenAI | None,
-    orq: Orq | None,
 ) -> dict[int, tuple[str, Door]]:
-    """Per call (by `seq`): its evidence reason and door; redaction and classification failures are `unknown`."""
+    """Per call (by `seq`): its evidence reason and door; classification failures are `unknown`."""
     resolved_client = None
     active_client = client
     if active_client is None:
@@ -229,57 +224,34 @@ async def _classify_calls(
             logger.warning('Door classification failed for {} calls: {}', len(records), exc)
             return {record.seq: (record.call.function_name, 'unknown') for record in records}
     try:
-        async with AsyncExitStack() as stack:
-            active_orq = orq if orq is not None else await stack.enter_async_context(redaction_client(active_client))
-            shell = {record.seq: config.tool_role(record.call.function_name) == 'bash' for record in records}
-            redacted = await redact_cut(
-                [_call_text(record, shell=shell[record.seq]) for record in records],
-                keep=_COMMAND_EDGE,
-                join=_join_clip,
-                orq=active_orq,
+        shell = {record.seq: config.tool_role(record.call.function_name) == 'bash' for record in records}
+        subjects: dict[int, _Subject] = {
+            record.seq: (
+                record.call.function_name,
+                normalize_placeholders(_clip(scrub_known_secrets(_call_text(record, shell=shell[record.seq])))),
             )
-            subjects: dict[int, _Subject | None] = {
-                record.seq: None if text is None else (record.call.function_name, normalize_placeholders(text))
-                for record, text in zip(records, redacted, strict=True)
-            }
-            _warn_unredacted(records, subjects)
-            descriptions = _descriptions(trajectory, records)
-            distinct = list(dict.fromkeys(subject for subject in subjects.values() if subject is not None))
-            by_subject = dict(
-                zip(
-                    distinct,
-                    await asyncio.gather(
-                        *(
-                            _classify(
-                                active_client,
-                                config.classifier.model,
-                                subject,
-                                _question(subject, descriptions, shell=config.tool_role(subject[0]) == 'bash'),
-                            )
-                            for subject in distinct
+            for record in records
+        }
+        descriptions = _descriptions(trajectory, records)
+        distinct = list(dict.fromkeys(subjects.values()))
+        by_subject = dict(
+            zip(
+                distinct,
+                await asyncio.gather(
+                    *(
+                        _classify(
+                            active_client,
+                            config.classifier.model,
+                            subject,
+                            _question(subject, descriptions, shell=config.tool_role(subject[0]) == 'bash'),
                         )
-                    ),
-                    strict=True,
-                )
+                        for subject in distinct
+                    )
+                ),
+                strict=True,
             )
+        )
     finally:
         if resolved_client is not None and resolved_client.owned:
             await resolved_client.client.close()
-    out: dict[int, tuple[str, Door]] = {}
-    for record in records:
-        subject = subjects[record.seq]
-        out[record.seq] = (
-            (record.call.function_name, 'unknown') if subject is None else (_label(subject), by_subject[subject])
-        )
-    return out
-
-
-def _warn_unredacted(records: list[CallRecord], subjects: dict[int, _Subject | None]) -> None:
-    """Warn once per tool that has calls withheld from Jev because their text could not be redacted."""
-    withheld: dict[str, int] = {}
-    for record in records:
-        if subjects[record.seq] is None:
-            name = record.call.function_name
-            withheld[name] = withheld.get(name, 0) + 1
-    for name, count in withheld.items():
-        logger.warning('Door classification skipped {} call(s) of {}: their input could not be redacted', count, name)
+    return {record.seq: (_label(subjects[record.seq]), by_subject[subjects[record.seq]]) for record in records}

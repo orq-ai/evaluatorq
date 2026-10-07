@@ -11,10 +11,9 @@ import pytest
 
 from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.insights.summarize import _build_prompt
-from evaluatorq.insights.transcript import conversation_view, shell_outputs, tool_activity_chunks, tool_inventory
+from evaluatorq.insights.transcript import conversation_view, tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.projection import project_trace
-from tests.common.fake_orq import redact
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'atif_characterization_expected.json'
 
@@ -75,7 +74,10 @@ def _fixtures() -> tuple[TraceRecord, TraceRecord]:
     for index in range(12):
         call_id = f'l{index}'
         long_messages.extend([
-            {'role': 'assistant', 'tool_calls': [_call(call_id, 'Read', json.dumps({'file_path': f'path/{index}.py', 'note': 'n' * 35}))]},
+            {
+                'role': 'assistant',
+                'tool_calls': [_call(call_id, 'Read', json.dumps({'file_path': f'path/{index}.py', 'note': 'n' * 35}))],
+            },
             {'role': 'tool', 'tool_call_id': call_id, 'content': 'x' * 120},
         ])
     return trace, _trace(long_messages, trace_id='long')
@@ -85,13 +87,12 @@ def _fixtures() -> tuple[TraceRecord, TraceRecord]:
 def test_current_classifier_payloads_match_pre_migration_snapshots(use_atif: bool) -> None:
     expected = json.loads(FIXTURE.read_text(encoding='utf-8'))
     trace, long_trace = (ensure_trace_document(trace) if use_atif else trace for trace in _fixtures())
-    redacted = {call_id: redact(output) for call_id, output in shell_outputs(trace).items()}
     full_long = tool_activity_chunks(long_trace, budget=10**6)[0]
 
     actual = {
         'conversation_view': conversation_view(trace),
         'tool_inventory': tool_inventory(trace),
-        'tool_activity_chunks': tool_activity_chunks(trace, redacted_outputs=redacted),
+        'tool_activity_chunks': tool_activity_chunks(trace),
         'tool_activity_cut': tool_activity_chunks(long_trace, budget=int(len(full_long) * 0.85)),
         'tool_activity_chunks_small_budget': tool_activity_chunks(long_trace, budget=450),
         'summary_prompt': _build_prompt(trace),
