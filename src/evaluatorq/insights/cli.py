@@ -150,6 +150,7 @@ def _print_local_send(
     summary_model: str | None,
     classifier_model: str | None,
     embedding_model: str | None,
+    preview: bool = False,
 ) -> None:
     """For a local-snapshot run, state what is sent to which models; explicit options win, else the role defaults."""
     if path is None:
@@ -164,6 +165,7 @@ def _print_local_send(
                 'classifier': classifier_model or role_model('classifier', task='insights.labels'),
                 'embedding': embedding_model or role_model('embedding', task='insights.embedding'),
             },
+            preview=preview,
         ),
         markup=False,
         highlight=False,
@@ -353,6 +355,14 @@ def insights_cmd(
     if from_snapshot is not None:
         snapshot_traces = _print_snapshot_preview(from_snapshot)['n_traces']
         if preview_input:
+            _print_local_send(
+                from_snapshot,
+                n_traces=snapshot_traces,
+                summary_model=summary_model,
+                classifier_model=classifier_model,
+                embedding_model=embedding_model,
+                preview=True,
+            )
             return
     raw_dimensions = tuple(dimension or _DIMENSIONS)
     invalid_dimensions = sorted(set(raw_dimensions) - set(_DIMENSIONS))

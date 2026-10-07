@@ -127,6 +127,10 @@ def test_snapshot_run_discloses_what_is_sent_to_which_models(
     preview = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
     assert preview.exit_code == 0, preview.output
     assert 'Sending' not in preview.output
+    assert 'A run would send 1 trace (' in preview.output
+    insights_mock = cli_module.insights
+    assert isinstance(insights_mock, AsyncMock)
+    assert insights_mock.await_count == 1
 
 
 def test_snapshot_cli_rejects_empty_and_conflicting_sources(tmp_path: Path) -> None:

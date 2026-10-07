@@ -147,6 +147,8 @@ eq sessions --from 2026-10-05 --to 2026-10-11 --limit 500 --export week.json
 
 The session list shows when and where each session ran, not how it went. Finding the sessions that went badly takes a model run: `eq insights --coding` labels each session's outcome, verification, unfixed errors and risky actions. The deterministic [trace signals](#trace-signals) saved with the run count tool errors and retries without a model, but they describe structure, not whether the work succeeded. `--json` prints the matches as a JSON array on stdout instead of the table.
 
+To get from a finished run to the sessions that went badly, open the run in `eq dashboard` under **Insights** and select the `outcome` value `not_done` or `partial`, or the `unfixed_error` value yes, in **Themes**; the trace list then holds only those sessions (see [Review a run](#review-a-run)). Each trace ID is `<source>:<session ID>`, built from the `source` and `session_id` fields that `eq sessions --json` prints next to each session's `path`.
+
 A selection holds at most 1000 sessions. Sessions that fail to load are reported on stderr and skipped; the export fails only when none loads. When two selected files share a session ID, the export keeps the one that ends later.
 
 Before the run starts, the CLI states where the sessions go:
@@ -157,18 +159,19 @@ Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-s
 
 The size is the snapshot file on disk, not the amount sent. The summary and classifier models read the compact view described in [What the classifier reads](#what-the-classifier-reads): your messages (each up to 8,000 characters), the first and last 300 characters of each assistant message, and one line per tool call with its input cut to 300 characters. Tool output bodies are never sent, only whether the call failed and a diagnostic category. The embedding model reads the summaries. There is no confirmation prompt and no redaction, so check the models named in that line before you run.
 
-To see how much the Finder projection would cut from each session without sending anything, run the preview. It needs no Orq credential. The 500,000-byte projection it measures is separate from the compact view a model reads, so the counts do not measure model input:
+To check what a run would send without sending anything, run the preview. It needs no Orq credential, and it ends with the same sentence worded as what a run would send. It also measures how much the Finder projection would cut from each session; that 500,000-byte projection is separate from the compact view a model reads, so its counts do not measure model input:
 
 ```bash
 eq insights --from-snapshot sessions.json --preview-input
 ```
 
 ```console
-2026-10-08 21:23:24.214 | WARNING  | evaluatorq.trace_finder.projection:project_trace:68 - trace claude-code:00000000-0000-0000-0000-0000005e5510 projection dropped 451 earlier message(s) (236418 bytes) to fit the 500000 byte budget
+2026-10-08 21:24:08.882 | WARNING  | evaluatorq.trace_finder.projection:project_trace:68 - trace claude-code:00000000-0000-0000-0000-0000005e5510 projection dropped 451 earlier message(s) (236418 bytes) to fit the 500000 byte budget
 Model input projection: 1 of 6 traces exceed the 500,000-byte budget. 451 of 1,420 whole messages omitted (31.8%). Serialized source: 738,531 bytes → projected input: 501,620 bytes.
+A run would send 6 traces (1017.5 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
 ```
 
-The WARNING line appears once per trace the projection cuts, and the second line totals the snapshot.
+The WARNING line appears once per trace the projection cuts, and the next line totals the snapshot.
 
 ### Analyze sessions from the dashboard
 
