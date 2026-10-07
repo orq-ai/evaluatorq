@@ -295,3 +295,33 @@ def test_long_custom_tool_input_gives_no_argument_warning(codex_home: Path) -> N
     assert not any('not a JSON object' in message for message in messages)
     calls = [call for step in document.trajectory.steps for call in step.tool_calls or []]
     assert calls[0].arguments['input'].endswith('[truncated 5000 chars]')
+
+
+def test_malformed_timestamps_fall_back_to_mtime(codex_home: Path) -> None:
+    meta = _meta()
+    meta['payload']['timestamp'] = 'not-a-date'
+    bad_tail = {**_message(2, 'assistant', 'done'), 'timestamp': 'garbage'}
+    path = _rollout(codex_home, records=[meta, _message(1, 'user', 'hi'), bad_tail])
+    summary = READER.summarize(path)
+    assert summary is not None
+    assert summary.started_at.tzinfo is not None
+    assert summary.updated_at.tzinfo is not None
+
+
+def test_unreadable_index_gives_empty_title(codex_home: Path) -> None:
+    (codex_home / 'session_index.jsonl').mkdir()
+    summary = READER.summarize(_rollout(codex_home))
+    assert summary is not None
+    assert summary.title == ''
+
+
+def test_parse_rejects_subagent_rollout(codex_home: Path) -> None:
+    path = _rollout(codex_home, records=[_meta(source={'subagent': {}}), _message(1, 'user', 'work')])
+    with pytest.raises(SessionLoadError):
+        READER.parse(path)
+
+
+def test_path_outside_root_is_not_a_session_path(codex_home: Path) -> None:
+    root = codex_home / 'sessions'
+    assert not READER.is_session_path(codex_home / 'elsewhere' / '2026' / '10' / '01' / NAME, root)
+    assert not READER.is_session_path(codex_home / 'elsewhere' / NAME, root)

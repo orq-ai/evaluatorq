@@ -7,6 +7,8 @@ from typing import Any
 
 from evaluatorq.local_sessions.models import MAX_TOOL_TEXT_CHARS
 
+_MARKER_ALLOWANCE = 100  # room for one `[truncated N chars]` marker and the JSON around a single trimmed value
+
 
 def trim(text: str) -> str:
     if len(text) <= MAX_TOOL_TEXT_CHARS:
@@ -71,6 +73,8 @@ def function_call(*, call_id: str, name: str, arguments: object) -> dict[str, An
             return {'type': 'function_call', 'call_id': call_id, 'name': name, 'arguments': trim(arguments)}
         arguments = parsed
     raw = json.dumps(_trim_leaves(arguments if arguments is not None else {}), ensure_ascii=False)
+    if len(raw) > MAX_TOOL_TEXT_CHARS + _MARKER_ALLOWANCE:
+        raw = json.dumps({'_truncated': trim(raw)}, ensure_ascii=False)
     return {'type': 'function_call', 'call_id': call_id, 'name': name, 'arguments': raw}
 
 

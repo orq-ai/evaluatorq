@@ -59,6 +59,16 @@ def _title(session_id: str) -> str:
         return ''
 
 
+def _timestamp_or(value: object, default: datetime) -> datetime:
+    if not isinstance(value, str) or not value:
+        return default
+    try:
+        parsed = parse_iso(value)
+    except ValueError:
+        return default
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
 def _payload(record: dict[str, Any]) -> dict[str, Any]:
     payload = record.get('payload')
     return payload if isinstance(payload, dict) else {}
@@ -132,15 +142,15 @@ class _CodexReader:
                 session_id=session_id,
                 title=_title(session_id)[:_TEXT_CHARS],
                 project_dir=meta['cwd'] if isinstance(meta.get('cwd'), str) else '',
-                started_at=parse_iso(started) if isinstance(started, str) and started else mtime,
-                updated_at=parse_iso(updated) if updated else mtime,
+                started_at=_timestamp_or(started, mtime),
+                updated_at=_timestamp_or(updated, mtime),
                 size_bytes=stat.st_size,
                 first_prompt=first_prompt.strip()[:_TEXT_CHARS],
                 agent_version=meta['cli_version'] if isinstance(meta.get('cli_version'), str) else '',
             )
+        except SessionLoadError:
+            raise
         except (OSError, ValueError) as exc:
-            if isinstance(exc, SessionLoadError):
-                raise
             raise SessionLoadError(f'{path}: unreadable session ({type(exc).__name__})') from exc
 
     def parse(self, path: Path) -> ParsedSession:

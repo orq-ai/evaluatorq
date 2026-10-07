@@ -62,3 +62,14 @@ def test_function_call_non_json_string_is_raw_trimmed() -> None:
     call = items.function_call(call_id='c', name='n', arguments='x' * 25_000)
     assert call['arguments'].endswith('[truncated 5000 chars]')
     assert call['arguments'].startswith('xxx')
+
+
+def test_function_call_total_arguments_are_capped_and_stay_valid_json() -> None:
+    call = items.function_call(
+        call_id='c', name='n', arguments={'a': 'x' * 15_000, 'b': 'y' * 15_000, 'c': 'z' * 15_000}
+    )
+    parsed = json.loads(call['arguments'])
+    assert list(parsed) == ['_truncated']
+    assert parsed['_truncated'].endswith(']')
+    assert '[truncated ' in parsed['_truncated']
+    assert len(parsed['_truncated']) < MAX_TOOL_TEXT_CHARS + 100
