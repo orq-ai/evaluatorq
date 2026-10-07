@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast, get_args, get_origin
 
 from loguru import logger
 from openai.types.responses import Response, ResponseInputItem, ResponseOutputItem
@@ -35,6 +35,14 @@ _MODEL_OUTPUT_TYPES = frozenset({
     'shell_call',
     'apply_patch_call',
 })
+# Keep the recognized set aligned with the installed OpenAI SDK.  The package
+# supports SDK releases whose output union predates some of these item types.
+_OUTPUT_UNION = get_args(ResponseOutputItem)[0] if get_origin(ResponseOutputItem) is Annotated else ResponseOutputItem
+_OUTPUT_MODELS = get_args(_OUTPUT_UNION) or (_OUTPUT_UNION,)
+_SDK_OUTPUT_TYPES = frozenset(
+    item_type for item_model in _OUTPUT_MODELS for item_type in get_args(item_model.model_fields['type'].annotation)
+)
+_RESTORABLE_OUTPUT_TYPES = _MODEL_OUTPUT_TYPES & _SDK_OUTPUT_TYPES
 _INPUT_ITEM: TypeAdapter[ResponseInputItem] = TypeAdapter(ResponseInputItem)
 _OUTPUT_ITEM: TypeAdapter[ResponseOutputItem] = TypeAdapter(ResponseOutputItem)
 
@@ -61,7 +69,13 @@ def walk_items(
 def is_output_item(item: dict[str, Any]) -> bool:
     """Whether a model call produced this supported item, including custom and MCP tool calls."""
     kind = item_type(item)
-    return kind in _MODEL_OUTPUT_TYPES or (kind == 'message' and item.get('role') == 'assistant')
+    return kind in _RESTORABLE_OUTPUT_TYPES or (kind == 'message' and item.get('role') == 'assistant')
+
+
+def is_raw_tool_call(item: dict[str, Any]) -> bool:
+    """Whether an opaque/future call item should be preserved outside the SDK output union."""
+    kind = item_type(item)
+    return isinstance(kind, str) and kind.endswith('_call') and not is_output_item(item)
 
 
 def output_item(item: dict[str, Any]) -> ResponseOutputItem:

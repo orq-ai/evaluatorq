@@ -628,6 +628,66 @@ def test_builtin_tool_call_roundtrips_and_is_reported_as_unmapped_activity() -> 
     assert 'file_search_call' in (signal.no_basis or '')
 
 
+def test_future_tool_call_roundtrips_as_raw_activity() -> None:
+    from evaluatorq.signals import compute_signals
+
+    item = {'type': 'foo_call', 'call_id': 'future-1', 'name': 'future_tool', 'payload': {'x': 1}}
+    trajectory = ResponsesConversation(items=[item]).to_atif()
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_output_items'] == [item]
+    assert trajectory.to_responses().items == [item]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'future_tool' in (signal.no_basis or '')
+
+
+def test_sdk_unsupported_tool_call_roundtrips_without_response_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.formats import responses as responses_format
+
+    item = {'type': 'local_shell_call', 'call_id': 'shell-1', 'name': 'run', 'action': {'command': 'pwd'}}
+    monkeypatch.setattr(responses_format, '_RESTORABLE_OUTPUT_TYPES', frozenset())
+    trajectory = ResponsesConversation(items=[item]).to_atif()
+    back = trajectory.to_responses()
+    assert back.items == [item]
+    assert back.responses is None
+
+
+def test_raw_tool_call_before_typed_response_keeps_the_typed_turn_boundary() -> None:
+    from evaluatorq.signals import compute_signals
+
+    raw = {'type': 'foo_call', 'call_id': 'future-1', 'name': 'future_tool'}
+    call = {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'}
+    conversation = ResponsesConversation(items=[raw, call], responses=[
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'output': [call]})
+    ])
+    trajectory = conversation.to_atif()
+    assert len(trajectory.steps) == 2
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_output_items'] == [raw]
+    assert trajectory.steps[1].tool_calls is not None
+    assert trajectory.steps[1].model_name == 'gpt-x'
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'unrepresented' in (signal.no_basis or '')
+    back = trajectory.to_responses()
+    assert back.items == [raw, call]
+    assert back.responses is not None and len(back.responses) == 1
+
+
+def test_invalid_response_tool_definition_warns_and_is_dropped(caplog: pytest.LogCaptureFixture) -> None:
+    item = {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'}
+    conversation = ResponsesConversation(items=[item], responses=[
+        Response.model_validate({**_response('gpt-x', None).model_dump(mode='json'), 'output': [item]})
+    ])
+    trajectory = conversation.to_atif()
+    assert trajectory.steps[0].extra is not None
+    trajectory.steps[0].extra['evaluatorq.responses_tools'] = [{}]
+    back = trajectory.to_responses()
+    assert back.responses is not None
+    assert back.responses[0].tools == []
+    assert 'Dropping invalid Responses tool definition' in caplog.text
+
+
 def test_custom_tool_result_round_trips_with_its_call() -> None:
     call = {'type': 'custom_tool_call', 'call_id': 'c2', 'name': 'search', 'input': 'query'}
     result = {'type': 'custom_tool_call_output', 'call_id': 'c2', 'output': '/tmp/result'}

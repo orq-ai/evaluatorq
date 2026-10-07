@@ -269,7 +269,7 @@ def call_tool_schemas(record: CallRecord, root: AtifTrajectory) -> dict[str, dic
     if isinstance(response_tools, list):
         return _tool_schemas(response_tools)
     own = tool_schemas(record.step.trajectory)
-    return own or tool_schemas(root)
+    return {**tool_schemas(root), **own}
 
 
 def _tool_schemas(definitions: list[Any]) -> dict[str, dict[str, Any]]:

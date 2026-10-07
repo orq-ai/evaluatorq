@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
+
 import pytest
 from pydantic import ValidationError
 
@@ -9,7 +13,7 @@ from evaluatorq.signals import registry
 from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult, result
 from evaluatorq.signals.registry import compute_signals
 
-from .conftest import agent, call, ok, traj, user
+from .conftest import agent, call, ok, spawned, traj, user
 
 
 def _fine(ctx):
@@ -40,6 +44,40 @@ def test_tool_activity_dependencies_are_registered_and_tags_inherit_them() -> No
         'output_heavy', 'inefficient_execution',
     }
     assert registry._TAG_TOOL_DEPENDENCIES <= set(registry.SIGNALS)
+
+
+def test_every_signal_that_reads_calls_requires_complete_source_coverage() -> None:
+    call_readers = set()
+    for name, (_, signal) in registry.SIGNALS.items():
+        tree = ast.parse(textwrap.dedent(inspect.getsource(signal)))
+        reads_calls = any(
+            isinstance(node, ast.Attribute)
+            and node.attr == 'calls'
+            and isinstance(node.value, ast.Name)
+            and node.value.id == 'ctx'
+            for node in ast.walk(tree)
+        )
+        if reads_calls:
+            call_readers.add(name)
+
+    assert call_readers <= registry.TOOL_ACTIVITY_DEPENDENT_SIGNALS
+
+
+def test_subagent_invocation_count_has_no_basis_when_source_tool_activity_is_unmapped() -> None:
+    child = traj([user('subtask'), agent('child answer')], trajectory_id='child')
+    root = traj(
+        [agent(
+            calls=[call('delegate', call_id='delegate-1')],
+            results=[spawned('child', call_id='delegate-1')],
+            extra={'evaluatorq.responses_output_items': [{'type': 'mcp_call', 'name': 'delegate'}]},
+        )],
+        subagents=[child],
+    )
+
+    report = compute_signals(root, only=['subagent_invocation_count'])
+
+    assert report.results['subagent_invocation_count'].value is None
+    assert 'unrepresented: delegate @step 1' in (report.results['subagent_invocation_count'].no_basis or '')
 
 
 def test_a_raising_signal_becomes_no_basis(monkeypatch: pytest.MonkeyPatch) -> None:

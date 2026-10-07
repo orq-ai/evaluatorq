@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 from loguru import logger
 from openai.types.responses import Response, ResponseError, ResponseOutputItem, ResponseStatus
 from openai.types.responses.response import IncompleteDetails
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from evaluatorq.contracts import (
     ContentPart,
@@ -57,6 +57,7 @@ from evaluatorq.formats.atif import (
 from evaluatorq.formats.responses import (
     ResponsesConversation,
     is_output_item,
+    is_raw_tool_call,
     output_item,
     response_starts,
     walk_items,
@@ -78,6 +79,7 @@ _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'i
     'image/webp': 'image/webp',
 }
 _RESPONSE_STATUSES: frozenset[str] = frozenset(get_args(ResponseStatus))
+_RESPONSE_TOOLS = TypeAdapter(Response.model_fields['tools'].annotation)
 _NO_STEPS = 'ResponsesConversation has no items; ATIF needs at least one step'
 # Response.metadata key listing the ATIF token counts that were unset (Responses usage has no null counts).
 UNSET_USAGE_KEY = 'atif_unset_usage'
@@ -649,7 +651,9 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
     unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
     if isinstance(unmapped, list):
-        outputs = [item for item in unmapped if isinstance(item, dict) and is_output_item(item)]
+        outputs = [
+            item for item in unmapped if isinstance(item, dict) and (is_output_item(item) or is_raw_tool_call(item))
+        ]
         if len(outputs) != len(unmapped):
             logger.warning('Step {} has malformed Responses output items; dropping them.', step.step_id)
         insertion = next(
@@ -743,9 +747,11 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
         _warn_foreign('status', step.step_id, status)
         status = None
     tools = extra.get(_RESPONSE_TOOLS_KEY, [])
-    if not isinstance(tools, list) or any(not isinstance(tool, dict) for tool in tools):
+    if not isinstance(tools, list):
         _warn_foreign(_RESPONSE_TOOLS_KEY, step.step_id, tools)
         tools = []
+    else:
+        tools = [valid for tool in tools if (valid := _response_tool(tool, step.step_id)) is not None]
     error_type, finish_reasons, failed = _step_outcome(step)
     derived = _outcome_fields(error_type, finish_reasons, failed=failed)
     error = _extra_model(extra, 'error', ResponseError, step.step_id) or derived['error']
@@ -772,6 +778,15 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
         'usage': usage,
         'metadata': metadata,
     })
+
+
+def _response_tool(tool: Any, step_id: int) -> Any | None:
+    """Validate an extra tool using the SDK's Response tools field schema."""
+    try:
+        return _RESPONSE_TOOLS.validate_python([tool])[0]
+    except (ValidationError, TypeError) as exc:
+        logger.warning('Dropping invalid Responses tool definition in step {}: {}', step_id, exc)
+        return None
 
 
 def _warn_foreign(key: str, step_id: int, value: object) -> None:

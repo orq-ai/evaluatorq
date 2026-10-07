@@ -6,11 +6,15 @@
   const ui = window.EvaluatorqComponents;
   if (!ui) throw new Error('Load ui-components.js before insights-signals.js.');
   const esc = ui.escapeHtml;
-  const value = item => item == null ? 'No value recorded' : typeof item === 'string' ? item : JSON.stringify(item);
+  const isMissing = item => item === null || item === undefined;
+  function value(item) {
+    if (isMissing(item)) return 'No value recorded';
+    return typeof item === 'string' ? item : JSON.stringify(item);
+  }
   const title = name => name.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
   function state(signal) {
     if (signal.no_basis) return {kind: 'no-basis', label: 'No basis', icon: '—'};
-    if (signal.value == null) return {kind: 'no-basis', label: 'No value', icon: '—'};
+    if (isMissing(signal.value)) return {kind: 'no-basis', label: 'No value', icon: '—'};
     if (signal.group === 'D' && signal.value === true) return {kind: 'flagged', label: 'Flagged', icon: '!'};
     if (signal.group === 'D' && signal.value === false) return {kind: 'clear', label: 'Clear', icon: '✓'};
     if (signal.approximate) return {kind: 'approximate', label: 'Approximate', icon: '≈'};
@@ -28,13 +32,15 @@
   }
   function row(name, signal, detail, options) {
     const status = state(signal);
-    const metric = signal.group !== 'D' && signal.value != null && !signal.no_basis
+    const metric = signal.group !== 'D' && !isMissing(signal.value) && !signal.no_basis
       ? `<span class="signal-summary-value">${esc(typeof signal.value === 'object' ? `${Object.keys(signal.value).length} entries` : value(signal.value))}</span>` : '';
     const displayValue = signal.group === 'D' && typeof signal.value === 'boolean' ? status.label : value(signal.value);
-    const breakdown = signal.value != null && typeof signal.value === 'object' && !signal.no_basis
+    const breakdown = !isMissing(signal.value) && typeof signal.value === 'object' && !signal.no_basis
       ? `<dl class="signal-value-entries">${Object.entries(signal.value).map(([key, item]) => `<div><dt>${esc(key)}</dt><dd>${esc(value(item))}</dd></div>`).join('')}</dl>` : '';
-    const resultValue = signal.no_basis || signal.value == null ? status.label
-      : typeof signal.value === 'object' ? `${Object.keys(signal.value).length} entries` : displayValue;
+    let resultValue = status.label;
+    if (!signal.no_basis && !isMissing(signal.value)) {
+      resultValue = typeof signal.value === 'object' ? `${Object.keys(signal.value).length} entries` : displayValue;
+    }
     const result = status.kind === 'flagged' ? '' : ui.resultFeedback({
       value: resultValue, outcome: status.label,
       tone: {measured: 'info', flagged: 'negative', clear: 'positive', approximate: 'warning', 'no-basis': 'neutral'}[status.kind],

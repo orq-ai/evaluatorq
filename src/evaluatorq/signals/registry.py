@@ -69,6 +69,7 @@ TOOL_ACTIVITY_DEPENDENT_SIGNALS = frozenset({
     'max_llm_tool_cycles',
     'terminal_answer_present',
     'human_interruption_count',
+    'subagent_invocation_count',
     'subagent_step_share',
     'parallel_tool_batch_count',
     'max_parallel_tool_calls',

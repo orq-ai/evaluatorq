@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime  # noqa: TC003 -- Pydantic resolves this annotated model field at runtime.
 from operator import itemgetter
 from typing import TYPE_CHECKING, Any, Literal, cast
+from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -19,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from evaluatorq.formats._shared import RAW_ARGUMENTS_EXTRA_KEY, atif_tool_arguments
 from evaluatorq.formats.atif import (
     AtifAgent,
+    AtifAudioSource,
     AtifContentPart,
     AtifImageSource,
     AtifMetrics,
@@ -491,6 +493,11 @@ def _trajectory_from_messages(metadata: TraceMetadata, messages: Any) -> AtifTra
             steps[owner.step_id - 1] = replacement
             call_steps[call_id] = [replacement if candidate is owner else candidate for candidate in owners]
 
+    # Synthetic owners participate in canonical step order too. Sort only
+    # after signal enrichment, which indexes the original step list.
+    steps.sort(key=lambda step: int((step.extra or {}).get(f'{_EXTRA_PREFIX}source_order', 2**63)))
+    steps = [step.model_copy(update={'step_id': index}) for index, step in enumerate(steps, start=1)]
+
     identity = json.dumps([metadata.trace_id, metadata.span_id], ensure_ascii=False, separators=(',', ':'))
     trajectory_id = str(uuid5(NAMESPACE_URL, f'{_TRAJECTORY_ID_NAMESPACE}{identity}'))
     return AtifTrajectory(
@@ -552,6 +559,14 @@ def _atif_content(
                 else:
                     parts.append(image)
                     layout.append(image_layout)
+            elif isinstance(part, Mapping) and part.get('type') in {'audio', 'input_audio'}:
+                audio, audio_layout = _atif_audio(part)
+                if audio is None:
+                    parts.append(AtifContentPart(type='text', text=''))
+                    layout.append({'raw': part})
+                else:
+                    parts.append(audio)
+                    layout.append(audio_layout)
             else:
                 parts.append(AtifContentPart(type='text', text=''))
                 layout.append({'raw': part})
@@ -584,10 +599,50 @@ def _render_part_list(content: Any, layout: Any = None) -> list[Any]:
         if shape.get('string'):
             rendered.append(part.text or '')
         elif part.type == 'image' and isinstance(part.source, AtifImageSource):
-            container = str(shape.get('container_key') or 'image_url')
-            url_key = str(shape.get('url_key') or 'url')
-            image_value = {**shape.get('container_fields', {}), url_key: part.source.path}
-            rendered.append({**shape.get('fields', {}), 'type': shape.get('type', 'image_url'), container: image_value})
+            if shape.get('direct'):
+                rendered.append({
+                    **shape.get('fields', {}),
+                    **({'type': shape['type']} if shape.get('type') is not None else {}),
+                    str(shape.get('url_key') or 'url'): part.source.path,
+                })
+            elif shape.get('string_container'):
+                rendered.append({
+                    **shape.get('fields', {}),
+                    'type': shape.get('type'),
+                    str(shape.get('container_key')): part.source.path,
+                })
+            else:
+                container = str(shape.get('container_key') or 'image_url')
+                url_key = str(shape.get('url_key') or 'url')
+                image_value = {**shape.get('container_fields', {}), url_key: part.source.path}
+                rendered.append({
+                    **shape.get('fields', {}),
+                    'type': shape.get('type', 'image_url'),
+                    container: image_value,
+                })
+        elif part.type == 'audio' and isinstance(part.source, AtifAudioSource):
+            audio_path = shape.get('raw_data', part.source.path)
+            if shape.get('direct'):
+                rendered.append({
+                    **shape.get('fields', {}),
+                    **({'type': shape['type']} if shape.get('type') is not None else {}),
+                    str(shape.get('url_key') or 'url'): audio_path,
+                })
+            elif shape.get('string_container'):
+                rendered.append({
+                    **shape.get('fields', {}),
+                    **({'type': shape['type']} if shape.get('type') is not None else {}),
+                    str(shape.get('container_key')): audio_path,
+                })
+            else:
+                rendered.append({
+                    **shape.get('fields', {}),
+                    **({'type': shape['type']} if shape.get('type') is not None else {}),
+                    str(shape.get('container_key') or 'input_audio'): {
+                        **shape.get('container_fields', {}),
+                        str(shape.get('url_key') or 'url'): audio_path,
+                    },
+                })
         else:
             rendered.append({
                 **shape.get('fields', {}),
@@ -601,6 +656,7 @@ def _atif_image(part: Mapping[str, Any]) -> tuple[AtifContentPart | None, dict[s
     raw_type = part.get('type')
     container_key = 'image_url' if 'image_url' in part else 'source' if 'source' in part else None
     source = part.get(container_key) if container_key else None
+    string_container = isinstance(source, str)
     if isinstance(source, Mapping):
         url_key = (
             'url' if isinstance(source.get('url'), str) else 'path' if isinstance(source.get('path'), str) else None
@@ -608,22 +664,104 @@ def _atif_image(part: Mapping[str, Any]) -> tuple[AtifContentPart | None, dict[s
         path = source.get(url_key) if url_key else None
         media_type = source.get('media_type') or source.get('mime_type')
         container_fields = {key: value for key, value in source.items() if key != url_key}
+    elif isinstance(source, str):
+        url_key = None
+        path = source
+        media_type = part.get('media_type') or part.get('mime_type')
+        container_fields = {}
     else:
         url_key = 'url' if isinstance(part.get('url'), str) else 'path' if isinstance(part.get('path'), str) else None
         path = part.get(url_key) if url_key else None
         media_type = part.get('media_type') or part.get('mime_type')
         container_fields = {}
+    if not isinstance(media_type, str):
+        media_type = _infer_image_media_type(path) if isinstance(path, str) else None
     if not isinstance(path, str) or media_type not in {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}:
         return None, {}
     source_model = AtifImageSource(media_type=media_type, path=path)
+    direct = container_key is None
+    excluded = {'type', container_key}
+    if direct:
+        excluded.add(url_key)
     layout = {
         'type': raw_type,
         'container_key': container_key,
         'url_key': url_key,
         'container_fields': container_fields,
-        'fields': {key: value for key, value in part.items() if key not in {'type', container_key}},
+        'fields': {key: value for key, value in part.items() if key not in excluded},
+        'direct': direct,
+        'string_container': string_container,
     }
     return AtifContentPart(type='image', source=source_model), layout
+
+
+def _infer_image_media_type(path: str) -> str | None:
+    """Infer only ATIF-supported image types from data URIs or URL/file suffixes."""
+    if path.startswith('data:'):
+        header = path[5:].split(',', 1)[0]
+        media_type = header.split(';', 1)[0].lower()
+    else:
+        suffix = urlsplit(path).path.rsplit('.', 1)[-1].lower() if '.' in urlsplit(path).path else ''
+        media_type = {
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'png': 'image/png',
+            'gif': 'image/gif',
+            'webp': 'image/webp',
+        }.get(suffix)
+    return media_type if media_type in {'image/jpeg', 'image/png', 'image/gif', 'image/webp'} else None
+
+
+def _atif_audio(part: Mapping[str, Any]) -> tuple[AtifContentPart | None, dict[str, Any]]:
+    """Convert URL/path audio parts to ATIF while retaining their prompt layout."""
+    container_key = next((key for key in ('input_audio', 'audio', 'source') if key in part), None)
+    source = part.get(container_key) if container_key else None
+    string_container = isinstance(source, str)
+    raw_data = None
+    if isinstance(source, Mapping):
+        path_key = next((key for key in ('url', 'path', 'data') if isinstance(source.get(key), str)), None)
+        path = source.get(path_key) if path_key else None
+        raw_type = source.get('media_type') or source.get('mime_type')
+        raw_type = raw_type or (f'audio/{source["format"]}' if isinstance(source.get('format'), str) else None)
+        extra_fields = {key: value for key, value in source.items() if key != path_key}
+        if path_key == 'data' and isinstance(path, str):
+            raw_data = path
+            try:
+                canonical_type = AtifAudioSource(media_type=raw_type, path='placeholder').media_type
+            except (ValueError, TypeError):
+                return None, {}
+            path = path if path.startswith('data:') else f'data:{canonical_type};base64,{path}'
+    elif isinstance(source, str):
+        path_key, path = 'url', source
+        raw_type = part.get('media_type') or part.get('mime_type')
+        extra_fields = {}
+    else:
+        path_key = 'url' if isinstance(part.get('url'), str) else 'path' if isinstance(part.get('path'), str) else None
+        path = part.get(path_key) if path_key else None
+        raw_type = part.get('media_type') or part.get('mime_type')
+        extra_fields = {}
+    if not isinstance(path, str) or not isinstance(raw_type, str):
+        return None, {}
+    try:
+        audio_source = AtifAudioSource(media_type=raw_type, path=path)
+    except (ValueError, TypeError):
+        return None, {}
+    direct = container_key is None
+    excluded = {'type', container_key}
+    if direct:
+        excluded.add(path_key)
+    layout = {
+        'type': part.get('type'),
+        'container_key': container_key or 'input_audio',
+        'url_key': path_key or 'url',
+        'container_fields': extra_fields,
+        'fields': {key: value for key, value in part.items() if key not in excluded},
+        'direct': direct,
+        'string_container': string_container,
+    }
+    if raw_data is not None:
+        layout['raw_data'] = raw_data
+    return AtifContentPart(type='audio', source=audio_source), layout
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

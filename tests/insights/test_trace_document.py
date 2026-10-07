@@ -155,6 +155,31 @@ def test_orphan_tool_result_is_stored_once_as_observation() -> None:
     }
 
 
+def test_orphan_result_owner_uses_source_order() -> None:
+    document = ensure_trace_document(_trace(
+        {'role': 'user', 'content': 'before'},
+        {'role': 'tool', 'tool_call_id': 'missing', 'content': 'orphan'},
+        {'role': 'assistant', 'content': 'after', 'tool_calls': [
+            {'id': 'after-call', 'type': 'function', 'function': {'name': 'run', 'arguments': '{}'}},
+        ]},
+        {'role': 'tool', 'tool_call_id': 'after-call', 'content': 'result'},
+    ))
+
+    assert prompt_messages(document) == [
+        {'role': 'user', 'content': 'before'},
+        {'role': 'tool', 'content': 'orphan', 'tool_call_id': 'missing'},
+        {'role': 'assistant', 'content': 'after', 'tool_calls': [
+            {'id': 'after-call', 'type': 'function', 'function': {'name': 'run', 'arguments': '{}'}},
+        ]},
+        {'role': 'tool', 'tool_call_id': 'after-call', 'content': 'result'},
+    ]
+    assert [step.step_id for step in document.trajectory.steps] == [1, 2, 3]
+    assert [step.source for step in document.trajectory.steps] == ['user', 'system', 'agent']
+    assert document.trajectory.steps[1].observation is not None
+    assert document.trajectory.steps[2].observation is not None
+    assert document.trajectory.steps[2].observation.results[0].source_call_id == 'after-call'
+
+
 def test_reused_call_id_result_pairs_with_nearest_preceding_call() -> None:
     trace = _trace(
         {'role': 'assistant', 'tool_calls': [{'id': 'same', 'function': {'name': 'first', 'arguments': '{}'}}]},
@@ -228,6 +253,79 @@ def test_text_from_mixed_multimodal_content_uses_native_atif_part() -> None:
     assert [part.text for part in step.message if part.type == 'text'] == ['before', 'after']
     assert step.message[1].type == 'image'
     assert prompt_messages(document)[0]['content'][0]['text'] == 'before'
+
+
+@pytest.mark.parametrize(
+    'image_part',
+    [
+        {'type': 'input_image', 'image_url': 'https://example.test/a.png'},
+        {'type': 'image', 'url': 'https://example.test/a.png', 'media_type': 'image/png'},
+        {'type': 'image', 'url': 'https://example.test/a.png', 'path': 'extra-path', 'media_type': 'image/png'},
+        {'type': 'input_image', 'source': {'path': 'asset.png', 'media_type': 'image/png'}},
+    ],
+)
+def test_image_parts_keep_native_content_and_exact_source_shape(image_part: dict[str, Any]) -> None:
+    document = ensure_trace_document(_trace({'role': 'user', 'content': [image_part]}))
+
+    message = document.trajectory.steps[0].message
+    assert isinstance(message, list)
+    part = message[0]
+    assert part.type == 'image'
+    assert prompt_messages(document)[0]['content'] == [image_part]
+
+
+def test_image_data_uri_infers_jpeg_without_changing_prompt_shape() -> None:
+    image_part = {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,/9j/2Q=='}
+    document = ensure_trace_document(_trace({'role': 'user', 'content': [image_part]}))
+
+    message = document.trajectory.steps[0].message
+    assert isinstance(message, list)
+    part = message[0]
+    assert part.type == 'image'
+    assert part.source is not None
+    assert part.source.media_type == 'image/jpeg'
+    assert prompt_messages(document)[0]['content'] == [image_part]
+
+
+def test_unknown_image_url_stays_raw_instead_of_assuming_png() -> None:
+    image_part = {'type': 'input_image', 'image_url': 'https://example.test/image?token=secret'}
+    document = ensure_trace_document(_trace({'role': 'user', 'content': [image_part]}))
+
+    message = document.trajectory.steps[0].message
+    assert isinstance(message, list)
+    assert message[0].type == 'text'
+    assert prompt_messages(document)[0]['content'] == [image_part]
+
+
+def test_input_audio_is_stored_as_atif_audio_and_roundtrips_exactly() -> None:
+    audio_part = {'type': 'input_audio', 'input_audio': {'data': 'c291bmQ=', 'format': 'wav'}}
+    document = ensure_trace_document(_trace({'role': 'user', 'content': [audio_part]}))
+
+    message = document.trajectory.steps[0].message
+    assert isinstance(message, list)
+    part = message[0]
+    assert part.type == 'audio'
+    assert part.source is not None
+    assert part.source.media_type == 'audio/wav'
+    assert part.source.path == 'data:audio/wav;base64,c291bmQ='
+    assert prompt_messages(document)[0]['content'] == [audio_part]
+
+
+@pytest.mark.parametrize(
+    'audio_part',
+    [
+        {'type': 'audio', 'source': {'path': 'clip.wav', 'media_type': 'audio/wav'}},
+        {'type': 'audio', 'source': 'https://example.test/clip.wav', 'media_type': 'audio/wav'},
+    ],
+)
+def test_audio_source_layouts_are_native_and_losslessly_rendered(audio_part: dict[str, Any]) -> None:
+    document = ensure_trace_document(_trace({'role': 'user', 'content': [audio_part]}))
+
+    message = document.trajectory.steps[0].message
+    assert isinstance(message, list)
+    part = message[0]
+    assert part.type == 'audio'
+    assert prompt_messages(document)[0]['content'] == [audio_part]
 
 
 @pytest.mark.parametrize('arguments', ['[]', '"scalar"', 'not json'])
