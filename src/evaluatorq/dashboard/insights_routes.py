@@ -26,7 +26,7 @@ from evaluatorq.dashboard.insights_estimate_views import (
     render_estimate_unavailable,
 )
 from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
-from evaluatorq.dashboard.insights_review_data import build_review_payload
+from evaluatorq.dashboard.insights_review_data import build_review_payload, build_signal_detail_payload
 from evaluatorq.dashboard.insights_review_views import review_page
 from evaluatorq.dashboard.insights_run_form import (
     INSIGHTS_MODEL_FIELDS,
@@ -586,6 +586,39 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             headers={'Cache-Control': 'no-store'},
         )
 
+    @app.get('/insights/{run_id}/trace-signals.json')
+    def insights_trace_signals(req: Request, run_id: str) -> Response:
+        """Read the saved signal details for one trace; this route never loads source data or calls a model."""
+        _, loaded, _ = _entries(get_insights_runs_dir())
+        resolved = _resolve(run_id, loaded)
+        if resolved is None:
+            payload: dict[str, object] = {'error': 'Insights run not found'}
+            status_code = 404
+        elif not isinstance(resolved[1], InsightsRun):
+            payload = {'error': f'Insights run is unreadable: {resolved[1]}'}
+            status_code = 422
+        else:
+            trace_id = req.query_params.get('trace_id')
+            span_id = req.query_params.get('span_id') if 'span_id' in req.query_params else None
+            if not trace_id or span_id is None:
+                payload = {'error': 'trace_id and span_id are required'}
+                status_code = 400
+            else:
+                span_id = span_id or None
+                detail = build_signal_detail_payload(resolved[1], trace_id, span_id)
+                if detail is None:
+                    payload = {'error': 'Trace not found in this Insights run'}
+                    status_code = 404
+                else:
+                    payload = detail
+                    status_code = 200
+        return Response(
+            json.dumps(payload, ensure_ascii=False, separators=(',', ':')),
+            status_code=status_code,
+            media_type='application/json',
+            headers={'Cache-Control': 'no-store'},
+        )
+
     @app.get('/insights/{run_id}/tab/{tab}')
     def insights_tab(req: Request, run_id: str, tab: str) -> Response:
         if tab not in TABS:
@@ -630,7 +663,9 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if resolved is None or not isinstance(resolved[1], InsightsRun):
             return _html('<p class="insights-empty">Insights run not found.</p>', 404)
         trace_id = req.query_params.get('trace_id')
-        span_id = req.query_params.get('span_id')
+        span_id = req.query_params.get('span_id') if 'span_id' in req.query_params else None
+        if span_id == '':
+            span_id = None
         trace = next(
             (item for item in resolved[1].traces if item.trace_id == trace_id and item.span_id == span_id),
             None,

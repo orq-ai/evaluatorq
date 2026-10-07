@@ -120,18 +120,28 @@ def _tag_signal(rule: TagRule) -> SignalFn:
 
         gates = rows[: len(rule.gate)]
         options = rows[len(rule.gate) :]
-        gates_available = all(hit is not None for _, _, _, hit in gates)
-        options_missing = any(hit is None for _, _, _, hit in options)
-        hits = sum(bool(hit) for _, _, _, hit in options)
-        gates_met = all(bool(hit) for _, _, _, hit in gates)
-        if not gates_available:
+        gate_hits = [hit for _, _, _, hit in gates]
+        option_hits = [hit for _, _, _, hit in options]
+        gates_met = all(hit is True for hit in gate_hits)
+        gates_failed = any(hit is False for hit in gate_hits)
+        gates_unknown = any(hit is None for hit in gate_hits)
+        hits = sum(hit is True for hit in option_hits)
+        possible_hits = hits + sum(hit is None for hit in option_hits)
+        if gates_failed:
+            # A required gate makes the tag impossible regardless of unknown alternatives.
+            fired = False
+        elif not options:
+            fired = None if gates_unknown else gates_met
+        elif possible_hits < rule.need:
+            # Even every unknown alternative firing cannot meet the minimum.
+            fired = False
+        elif gates_unknown:
+            # Enough alternatives may fire, but an unknown required gate may still block the tag.
             fired = None
-        elif options and hits >= rule.need:
-            fired = gates_met
-        elif options_missing:
-            fired = None
+        elif hits >= rule.need:
+            fired = True
         else:
-            fired = gates_met and hits >= (rule.need if options else 0)
+            fired = None
 
         available = sum(hit is not None for _, _, _, hit in rows)
         required_met = fired is not None

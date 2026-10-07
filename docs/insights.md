@@ -12,7 +12,7 @@ An Insights run keeps three different things separate. A **classifier** is the m
 | Labels | Fixed classifier questions | One answer per trace for each yes/no (`noul`), choice, or score question, with confidence and probabilities. |
 | Discovered dimensions | Text fields from a per-trace summary | Two-level clusters and saved 3D UMAP coordinates for traces in groups large enough to project. |
 
-The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary model writes these text fields from the trace's conversation, including assistant tool calls and fixed diagnostic categories for failed tool results. Tool result bodies are omitted from saved projections because they may contain credentials the projector cannot recognize. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
+The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary model writes these text fields from the compact conversation view described below, including assistant tool calls but excluding tool-result bodies. Tool result bodies are omitted from saved projections because they may contain credentials the projector cannot recognize. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
 
 The run writes its JSON result to `.evaluatorq/insights-runs/` and its manifest under `.evaluatorq/insights-runs/.manifests/`; `EVALUATORQ_DIR` changes the base directory. It does not store message bodies or embedding vectors in the run JSON.
 
@@ -128,6 +128,51 @@ The classifier does not read the summary. It reads a compact view of the convers
 
 Every trace also records how often it called each tool, shell program, and skill, counted from its messages. The trace detail page lists them under **Tool use**.
 
+## Trace signals
+
+A **trace signal** is a deterministic measurement of recorded structure, tool use, or autonomy, with evidence and checks for missing data. Insights computes the complete signal report for every selected trace before labeling and summarizing it. A failed labeling or summary request does not discard that report. Signals are not added to the classifier or summary prompts.
+
+Inside the pipeline, a `TraceDocument` holds `metadata: TraceMetadata` and `trajectory: AtifTrajectory`. The conversation lives in the ATIF trajectory; the complete typed signal report lives in `metadata.signals`. Existing message snapshots are converted at the source boundary. Conversion cannot recover information that the source never recorded. For benchmark datasets, the same wrapper carries typed dataset provenance and ground truth outside the trajectory; see [Wrap a dataset trajectory](formats.md#wrap-a-dataset-trajectory) for a runnable example and parser checks.
+
+Message-only snapshots support message and tool-call counts, argument repetition, and result sizes. The measurements below need additional recorded fields; absent fields produce **No basis** under the default signal settings.
+
+| Measurements | Missing input in a message-only snapshot |
+|---|---|
+| `total_input_tokens`, `total_output_tokens`, `total_tokens`, `cache_read_token_share`, `peak_context_tokens` | Per-model-call token usage, including cached tokens where required. |
+| `finish_reason_length_count` | Recorded model finish reasons. |
+| `tool_error_count`, `tool_error_rate` | Explicit error or success status on tool results. Content-based error detection can provide an estimate when enabled in `SignalsConfig`. |
+| `tool_retry_count`, `tool_succeeded_after_retry_count` | Explicit error or success status on tool results when a matching prior call exists. Content-based detection is optional when results are recorded. |
+| `invalid_schema_tool_call_count` | Tool definitions active when each call was made. |
+| `wall_time_ms`, `active_time_ms`, `llm_time_ms`, `tool_time_ms` | Recorded model and tool timestamps. Some measurements can be approximate when only model-step timestamps exist. |
+| `max_autonomous_duration_ms` | A timestamp on the root user step that starts each segment, plus timestamps on subsequent root agent activity. |
+
+Tags report **No basis** when missing measurements leave the rule's result undetermined. A known false mandatory condition makes a tag **Clear**, even when other measurements are missing; a tag is also Clear when too few conditions could still fire to satisfy its rule. With complete tool-call coverage, retry counts are zero when no recorded call can match a prior call under the configured retry definition, without needing error status. Otherwise missing error status remains unknown under the default settings. Known shell, web, skill, and subagent tools have built-in roles in `SignalsConfig.tool_roles`; add mappings for custom names to count them in those roles. Delegation measurements describe only subagent structure actually captured in ATIF. See the [signal reference](signals.md#signal-reference) for each measurement's inputs. A snapshot that carries richer capture metadata may support more measurements; its saved preconditions show the actual coverage.
+
+In the dashboard, open **Insights**, choose a saved run, and select a row in its **Traces** list. This opens the trace sidebar; choose **Open full trace** for its dedicated page.
+
+For a trace with a saved report, both the sidebar and full trace page show L4 tags that fired as prominent chips that open the matching signal; when no tags fired, they say so explicitly. The smaller **All signals** foldout starts collapsed below the chips. Expand **All signals** to reveal four independently expandable groups: **L4 Tags**, **L3 Autonomy**, **L2 Tools**, and **L1 Structure**, in that order. Each group starts collapsed and expands independently. Level headers have distinct backgrounds, signal rows are indented beneath them, and preconditions and evidence are inset within each signal. Open signal rows stay highlighted, and disclosure chevrons are aligned on the left. Each signal row expands to show its primary value and outcome, with precondition checks visible inside the opened row. Inside an expanded signal row, open **Evidence** for step or call references; this foldout starts collapsed. L4 rows show the tag outcome and supporting evidence without a technical attribute-name block. Flagged L4 rows keep their outcome in the row header and open directly to the preconditions, without a duplicate result card. **Flagged** means a tag fired, **Clear** means it did not fire, **Approximate** marks an estimate, and **No basis** means required data is missing. Older runs without a saved report show that signals were not measured. A measured zero is a real value. Unsupported custom or MCP tool activity makes affected tool measurements unavailable instead of displaying an incomplete count as zero. Inspecting the original conversation still requires its source.
+
+New runs use storage schema version 2 and save each trace's full `signals` report and `source_coverage` summary, plus the effective `config.signals` settings and resolved tag thresholds. The coverage summary retains known provenance, span counts, missing call IDs, and enrichment failures; arbitrary source payload sidecars are excluded. Version 1 runs remain readable and show their signals as unmeasured. Insights does not save a separate local ATIF document or conversation body, and opening a saved signal report makes no source or model requests.
+
+Read the saved reports from Python. This prints one line per saved trace; if there are no saved runs, it prints nothing.
+
+```python
+from evaluatorq.insights.models import InsightsRun
+from evaluatorq.insights.store import list_runs
+
+for path, run in list_runs():
+    if not isinstance(run, InsightsRun):
+        print(path.name, "Unreadable run:", run)
+        continue
+    for trace in run.traces:
+        if trace.signals is None:
+            print(trace.trace_id, trace.span_id, "Unmeasured")
+        else:
+            print(trace.trace_id, trace.span_id, trace.signals.values())
+```
+
+Pass `signals_config=SignalsConfig(...)` to `insights()` to set tool roles, retry windows, or tag thresholds. See [Signals](signals.md) for the available measurements and configuration. Insights does not classify tool roles automatically. Provide known roles through `SignalsConfig.tool_roles`, or prepare a config with `classify_tool_roles()` as described in Signals and pass that config as `signals_config`. Computing signals itself makes no model calls.
+
 ## Review a run
 
 The Insights review dashboard turns a saved run into four linked views: Themes, Activity, Map, and Compare. Use it to move from a pattern in the run to the traces that make up that pattern; use the trace detail page or Orq link to inspect the original conversation.
@@ -146,7 +191,7 @@ The dashboard uses the source selected under **Settings → Authentication** for
 
 **Compare** shows how the selected dimension's themes break down by assistant errors, a label, or another discovered dimension. Cells show their counts and denominators; selecting a cell applies both values as filters. Categories that do not fit are grouped as `Other`, which cannot identify an individual category to filter.
 
-Select a trace to open its saved summary, label answers, dimension assignments, activity counts, and errors. Select a cluster to inspect its members and examples. **View matching traces** selects that cluster's saved members in the review list. **Open in Orq** is available only when the run has a live Orq trace link. **Export** downloads the saved JSON; **Re-run** opens the launch sheet with available choices prefilled.
+Select a trace to open its saved summary, label answers, dimension assignments, activity counts, signal report, and errors. Select a cluster to inspect its members and examples. **View matching traces** selects that cluster's saved members in the review list. **Open in Orq** is available only when the run has a live Orq trace link. **Export** downloads the saved JSON; **Re-run** opens the launch sheet with available choices prefilled.
 
 ### Start a run in the dashboard
 
@@ -233,7 +278,7 @@ A local trace file contains a `traces` array. Each trace needs an ID, a span ID,
 
 When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject an empty snapshot. A Finder export cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
 
-Insights sends at most 50,000 projected UTF-8 bytes per trace to its summary model, plus the analysis prompt. The byte count conservatively bounds tokenizer tokens but does not measure them with the selected model's tokenizer. For a local trace file, the run form measures truncation before you start the run. For recent traces, a question, or a Finder export, the completed run page reports it after loading the traces from Orq. The report shows how many traces hit the budget, how many whole messages were omitted, and the source and projected byte totals. Tool-result excerpts are shortened separately, so the whole-message count does not describe every byte removed. Split sessions into meaningful shorter traces if the full conversation needs to influence the analysis.
+The summary model receives the compact conversation view, capped at 75,000 characters, plus the analysis prompt. The run form preview and saved population coverage describe a separate Finder projection capped at 50,000 UTF-8 bytes; those counts do not measure the summary prompt. For a local trace file, the run form reports projection truncation before you start the run. For live traces or a Finder export, the completed run reports it after loading. These counts show whole-message omissions and source and projected byte totals. Split long sessions into shorter traces when more of the conversation needs to influence the analysis.
 
 Each run has a state file under `.evaluatorq/insights-runs/.manifests/<run-id>.json` and a report in `.evaluatorq/insights-runs/`. The state file records the stage plan, current stage, outcomes, errors, and report path. The report's `evaluatorq_version` field records the evaluatorq version that produced it; reports saved before this field existed have `null`. The report's `population` block records the source: the filters and time window for a live selection, or the file path and a SHA-256 of its contents (`snapshot_sha256` or `finder_export_sha256`) for a file. A file uploaded in the dashboard is stored under a random name, so its original file name is kept in `source_name`. If a run fails before writing its report, it still appears in the dashboard with the failed stage and error. The worker log is under `.evaluatorq/insights-runs/.logs/<run-id>.log`.
 

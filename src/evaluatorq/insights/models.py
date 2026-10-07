@@ -5,23 +5,48 @@ from __future__ import annotations
 import re
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion
 from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.trace_document import (  # noqa: TC001 — Pydantic needs the runtime model types.
+    DatasetRef,
+    Outcome,
+)
 from evaluatorq.contracts import Usage  # noqa: TC001 — Pydantic needs the runtime model type.
 from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic needs the runtime model type.
+from evaluatorq.signals.config import SignalsConfig  # noqa: TC001 — Pydantic field type.
+from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic field type.
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from evaluatorq.trace_finder.export import RunExport
 
 DimensionName = Literal['intent', 'failure', 'sentiment']
 BoundedRatio = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
+
+class _TraceIdentity(Protocol):
+    @property
+    def trace_id(self) -> str: ...
+
+
+def ensure_unique_trace_ids(traces: Iterable[_TraceIdentity]) -> None:
+    """Reject duplicate IDs where downstream analysis stores results by trace ID."""
+    seen: set[str] = set()
+    for trace in traces:
+        if trace.trace_id in seen:
+            raise ValueError(
+                'trace_id values must be unique for analysis; select one span per trace or use distinct '
+                f'dataset-row trace IDs (duplicate trace_id={trace.trace_id!r})'
+            )
+        seen.add(trace.trace_id)
 
 
 class LabelSpec(BaseModel):
@@ -187,13 +212,17 @@ class TraceInsight(BaseModel):
     """One trace's full result: labels, summary, cluster assignments and 3D coordinates per dimension, and any per-stage errors."""
 
     trace_id: str
-    span_id: str
-    timestamp: datetime
+    span_id: str | None = None
+    timestamp: datetime | None = None
+    dataset: DatasetRef | None = None
+    outcome: Outcome | None = None
     agent_name: str = ''
     project: str = ''
     labels: dict[str, LabelAnswer] = {}
     summary: TraceSummary | None = None
     tool_stats: ToolStats | None = None
+    signals: SignalReport | None = None
+    source_coverage: dict[str, Any] = Field(default_factory=dict)
     assignments: dict[str, ClusterAssignment] = {}
     coords: dict[str, tuple[FiniteFloat, FiniteFloat, FiniteFloat]] = {}
     errors: dict[str, str] = {}
@@ -273,6 +302,7 @@ class InsightsConfig(BaseModel):
     cache: bool = True
     coding_analysis: bool = False
     coding_labels: list[LabelSpec] = Field(default_factory=list)
+    signals: SignalsConfig | None = None
 
     @model_validator(mode='after')
     def _selections_are_unique(self) -> Self:
@@ -292,7 +322,7 @@ class InsightsConfig(BaseModel):
 class InsightsRun(BaseModel):
     """The full, persisted result of one insights run — written as `insights_<timestamp>_<slug>.json`."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 2
     # None on runs saved before the stamp existed.
     evaluatorq_version: str | None = None
     run_id: str
@@ -310,6 +340,22 @@ class InsightsRun(BaseModel):
     counts: dict[str, int]
     warnings: list[str]
     cost_by_stage: dict[str, Usage | None] = {}
+
+    @model_validator(mode='after')
+    def _trace_identities_are_unique(self) -> Self:
+        if self.schema_version == 1:
+            return self
+
+        identities: set[tuple[str, str | None]] = set()
+        for trace in self.traces:
+            identity = (trace.trace_id, trace.span_id or None)
+            if identity in identities:
+                raise ValueError(
+                    'traces must have unique (trace_id, span_id) pairs; '
+                    f'duplicate trace_id={trace.trace_id!r}, span_id={trace.span_id!r}'
+                )
+            identities.add(identity)
+        return self
 
     @model_validator(mode='after')
     def _label_values_match_specs(self) -> Self:

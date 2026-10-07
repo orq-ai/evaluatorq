@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from math import isfinite
 from typing import TYPE_CHECKING
@@ -13,6 +14,7 @@ from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
+from evaluatorq.dashboard.ui_components import component_assets, script_asset, stylesheet_asset
 from evaluatorq.insights.models import label_key, label_order
 from evaluatorq.insights.population import describe_projection_coverage
 
@@ -181,6 +183,27 @@ def _elapsed(start: datetime, end: datetime | None) -> str:
     if seconds < 0:
         return ''
     return f'{seconds // 60}m {seconds % 60:02d}s' if seconds >= 60 else f'{seconds}s'
+
+
+def _signal_summary(trace: TraceInsight) -> dict[str, object] | None:
+    report = getattr(trace, 'signals', None)
+    if report is None:
+        return None
+    return {
+        'config_version': report.config_version,
+        'results': {
+            name: {
+                'name': item.name,
+                'group': item.group,
+                'value': item.value,
+                'approximate': item.approximate,
+                'no_basis': item.no_basis,
+                'reason': item.reason,
+                'rule_version': item.rule_version,
+            }
+            for name, item in report.results.items()
+        },
+    }
 
 
 def _chip(label: str, value: object) -> str:
@@ -408,7 +431,7 @@ def _find_cluster(run: InsightsRun, cluster_id: str) -> tuple[str, Cluster] | No
 
 
 def _trace_href(run: InsightsRun, trace: TraceInsight) -> str:
-    locator = urlencode({'trace_id': trace.trace_id, 'span_id': trace.span_id})
+    locator = urlencode({'trace_id': trace.trace_id, 'span_id': trace.span_id or ''})
     return f'/insights/{quote(run.run_id, safe="")}/trace?{locator}'
 
 
@@ -531,7 +554,7 @@ def _label_value_name(run: InsightsRun, label_name: str, value: str) -> str:
 def _trace_row(run: InsightsRun, trace: TraceInsight) -> str:
     cells = [
         f'<td class="id">{_trace_id_link(run, trace)}</td>',
-        f'<td>{esc(trace.timestamp.strftime("%Y-%m-%d %H:%M"))}</td>',
+        f'<td>{esc(trace.timestamp.strftime("%Y-%m-%d %H:%M") if trace.timestamp else "Time unavailable")}</td>',
     ]
     for name in run.config.dimensions:
         assignment = trace.assignments.get(name)
@@ -609,14 +632,23 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
     labels_html = f'<dl>{labels}</dl>' if labels else '<p>No labels were recorded.</p>'
     dimensions_html = f'<dl>{dimensions}</dl>' if dimensions else '<p>No dimension assignments were recorded.</p>'
     errors_html = f'<section><h3>Errors</h3><ul>{errors}</ul></section>' if errors else ''
+    signal_report = trace.signals.model_dump(mode='json') if trace.signals is not None else None
+    signal_options = {
+        'report': _signal_summary(trace),
+        'detail': {'signals': signal_report, 'source_coverage': trace.source_coverage},
+    }
+    signal_html = (
+        f'<div data-saved-signals="{esc(json.dumps(signal_options, ensure_ascii=False, separators=(",", ":")))}"></div>'
+    )
     body = (
         '<div class="insights-layout"><div class="insights-main insights-trace-detail">'
         '<div class="insights-detail-kicker">Trace analysis</div>'
         f'<h2><code>{esc(trace.trace_id)}</code></h2>'
-        f'<p class="insights-muted">{esc(trace.timestamp.isoformat(timespec="minutes"))}'
-        f' · span {esc(trace.span_id)}'
+        f'<p class="insights-muted">{esc(trace.timestamp.isoformat(timespec="minutes") if trace.timestamp else "Time unavailable")}'
+        f'{" · span " + esc(trace.span_id) if trace.span_id else ""}'
         f'{" · " + esc(trace.agent_name) if trace.agent_name else ""}'
         f'{" · " + esc(trace.project) if trace.project else ""}</p>{orq_link}'
+        f'{signal_html}'
         '<section><h3>Summary</h3>'
         f'<p>{esc(summary.summary) if summary is not None else "No summary was saved for this trace."}</p>'
         f'{context_html}</section>'
@@ -627,7 +659,13 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
         '</div></div>'
     )
     back = f'<a class="report-back" href="/insights/{quote(run.run_id, safe="")}/tab/traces">← Traces in this run</a>'
-    return page('Insights trace', body, active_nav='insights', back_html=back)
+    return page(
+        'Insights trace',
+        body,
+        active_nav='insights',
+        back_html=back,
+        head_html=f'{component_assets()}{stylesheet_asset(filename="insights-signals.css")}{script_asset(filename="insights-signals.js")}',
+    )
 
 
 def traces(

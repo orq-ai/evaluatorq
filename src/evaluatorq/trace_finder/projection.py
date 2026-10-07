@@ -5,13 +5,16 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq.contracts import tool_result_to_text
 
 from .models import TraceProjection, TraceRecord
+
+if TYPE_CHECKING:
+    from evaluatorq.common.trace_document import TraceDocument
 
 MAX_TOKEN_BUDGET = 50_000
 MAX_PROJECTED_TOOL_CALLS = 32
@@ -50,7 +53,7 @@ def estimate_tokens(serialized: str) -> int:
     return len(serialized.encode('utf-8'))
 
 
-def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> TraceProjection:
+def project_trace(trace: TraceRecord | TraceDocument, token_budget: int = MAX_TOKEN_BUDGET) -> TraceProjection:
     """Project one complete trace into a bounded classifier conversation state.
 
     The first user message is always kept (truncated if it alone exceeds the budget); the
@@ -91,7 +94,7 @@ def project_trace(trace: TraceRecord, token_budget: int = MAX_TOKEN_BUDGET) -> T
     )
 
 
-def _project_within(trace: TraceRecord, token_budget: int) -> TraceProjection:
+def _project_within(trace: TraceRecord | TraceDocument, token_budget: int) -> TraceProjection:
     if not 1 <= token_budget <= MAX_TOKEN_BUDGET:
         raise ValueError(f'token_budget must be between 1 and {MAX_TOKEN_BUDGET}')
 

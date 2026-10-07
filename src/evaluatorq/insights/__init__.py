@@ -9,6 +9,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from evaluatorq.common.trace_document import (
+    DatasetRef,
+    Outcome,
+    TraceDocument,
+    TraceMetadata,
+    TrajectoryCounts,
+    check_trace_document,
+    trajectory_counts,
+)
+
 from . import presets
 from .models import (
     Cluster,
@@ -33,6 +43,7 @@ if TYPE_CHECKING:
 __all__ = [
     'Cluster',
     'ClusterAssignment',
+    'DatasetRef',
     'DimensionName',
     'DimensionResult',
     'InsightsConfig',
@@ -41,13 +52,19 @@ __all__ = [
     'LabelAnswer',
     'LabelResult',
     'LabelSpec',
+    'Outcome',
     'PriorityPoint',
     'StageFailure',
+    'TraceDocument',
     'TraceInsight',
+    'TraceMetadata',
     'TraceSummary',
+    'TrajectoryCounts',
+    'check_trace_document',
     'insights',
     'insights_sync',
     'presets',
+    'trajectory_counts',
 ]
 
 _LAZY_PIPELINE_NAMES = frozenset({'insights', 'insights_sync'})  # noqa: RUF067  # lookup table backing __getattr__ below

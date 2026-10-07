@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from evaluatorq.common.trace_document import TraceDocument, prompt_messages
 from evaluatorq.contracts import content_to_text
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
@@ -92,7 +93,7 @@ class ToolStats(BaseModel):
     commands: dict[str, int] = {}
 
 
-def tool_stats(trace: TraceRecord) -> ToolStats:
+def tool_stats(trace: TraceRecord | TraceDocument) -> ToolStats:
     """Count every tool call by name, every skill the `Skill` tool loaded, and every shell call by its first command."""
     tools: Counter[str] = Counter()
     skills: Counter[str] = Counter()
@@ -145,7 +146,7 @@ def is_risky_command(command: str) -> bool:
     return bool(_RISKY.search(command))
 
 
-def tool_inventory(trace: TraceRecord) -> str:
+def tool_inventory(trace: TraceRecord | TraceDocument) -> str:
     """List the tools a trace used with call counts, and the shell programs it ran, one per line."""
     stats = tool_stats(trace)
     if not stats.tools and not stats.skills:
@@ -161,7 +162,7 @@ def tool_inventory(trace: TraceRecord) -> str:
     return '\n'.join(lines)
 
 
-def conversation_view(trace: TraceRecord, budget: int = VIEW_BUDGET) -> str:
+def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUDGET) -> str:
     """Render the conversation as plain text within `budget` characters.
 
     User turns are kept whole up to `USER_TURN_CHARS` (a pasted log keeps its
@@ -179,7 +180,7 @@ def conversation_view(trace: TraceRecord, budget: int = VIEW_BUDGET) -> str:
             lines.append('  [tools] ' + ', '.join(f'{name} x{n}' if n > 1 else name for name, n in runs.items()))
             pending.clear()
 
-    for message in trace.messages:
+    for message in prompt_messages(trace):
         role = message.get('role')
         if role == 'user':
             text = _user_text(message)
@@ -196,7 +197,7 @@ def conversation_view(trace: TraceRecord, budget: int = VIEW_BUDGET) -> str:
     return _fit(lines, budget, keep_opening_users=True)
 
 
-def tool_activity_chunks(trace: TraceRecord, budget: int = VIEW_BUDGET) -> list[str]:
+def tool_activity_chunks(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUDGET) -> list[str]:
     """Render every tool call with its input, status and output excerpt, with user turns for context.
 
     Used for the questions that need to see what a command did: whether an error
@@ -206,9 +207,10 @@ def tool_activity_chunks(trace: TraceRecord, budget: int = VIEW_BUDGET) -> list[
     characters, each starting with the opening user turns, for the caller to ask
     separately and merge.
     """
-    results = {message.get('tool_call_id'): message for message in trace.messages if message.get('role') == 'tool'}
+    messages = prompt_messages(trace)
+    results = {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
     lines: list[str] = []
-    for message in trace.messages:
+    for message in messages:
         role = message.get('role')
         if role == 'user':
             text = _user_text(message)
@@ -310,8 +312,8 @@ def _call_line(call: dict[str, Any]) -> str:
     return name
 
 
-def _tool_calls(trace: TraceRecord) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
-    for message in trace.messages:
+def _tool_calls(trace: TraceRecord | TraceDocument) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
+    for message in prompt_messages(trace):
         if message.get('role') != 'assistant':
             continue
         for call in message.get('tool_calls') or []:

@@ -105,6 +105,10 @@ def ingest_markdown() -> None:
 
 def _canonical_owner(module_name: str) -> str | None:
     """Return the longest API package that owns where a symbol is defined."""
+    # Shared trace models are implemented in common but publicly exported by
+    # Insights; the root package does not export or render them.
+    if module_name == "evaluatorq.common.trace_document":
+        return "evaluatorq.insights"
     cands = [p for p in API_PACKAGES if module_name == p or module_name.startswith(p + ".")]
     return max(cands, key=len) if cands else None
 

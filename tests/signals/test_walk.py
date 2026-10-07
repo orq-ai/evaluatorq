@@ -9,9 +9,17 @@ import pytest
 
 from evaluatorq.formats.atif import AtifTrajectory
 from evaluatorq.formats.otel import OtelTrace
-from evaluatorq.signals.walk import calls, finish_reasons, infer_provider, is_llm_step, llm_times, walk
+from evaluatorq.signals.walk import (
+    call_tool_schemas,
+    calls,
+    finish_reasons,
+    infer_provider,
+    is_llm_step,
+    llm_times,
+    walk,
+)
 
-from .conftest import agent, bare, call, compaction, copied, failed, ok, spawned, system, traj, user
+from .conftest import agent, bare, call, compaction, copied, failed, ok, spawned, traj, user
 
 FIXTURES = Path(__file__).parent.parent / 'formats' / 'fixtures'
 
@@ -141,6 +149,43 @@ def test_calls_pair_results_by_source_call_id_within_the_step() -> None:
 def test_calls_keep_the_first_result_for_a_call_id() -> None:
     root = traj([agent(calls=[call('A', call_id='a')], results=[ok('first', call_id='a'), ok('later', call_id='a')])])
     assert [r.result.content for r in calls(walk(root)) if r.result] == ['first']
+
+
+def test_call_tool_schemas_merge_legacy_root_and_child_definitions_with_child_precedence() -> None:
+    child = traj(
+        [agent(calls=[call('shared'), call('root_only')])],
+        trajectory_id='child',
+        tool_definitions=[{'name': 'shared', 'description': 'child'}, {'name': 'child_only'}],
+    )
+    root = traj(
+        [agent('root')],
+        subagents=[child],
+        tool_definitions=[{'name': 'shared', 'description': 'root'}, {'name': 'root_only'}],
+    )
+    child_call_records = [record for record in calls(walk(root)) if record.step.agent_path]
+
+    schemas = call_tool_schemas(child_call_records[0], root)
+
+    assert schemas == {
+        'shared': {'name': 'shared', 'description': 'child'},
+        'root_only': {'name': 'root_only'},
+        'child_only': {'name': 'child_only'},
+    }
+
+
+def test_response_local_tool_schemas_remain_authoritative_without_legacy_fallback() -> None:
+    child = traj(
+        [agent(
+            calls=[call('local_only')],
+            extra={'evaluatorq.responses_tools': [{'type': 'function', 'name': 'local_only'}]},
+        )],
+        trajectory_id='child',
+        tool_definitions=[{'name': 'legacy_child'}],
+    )
+    root = traj([agent('root')], subagents=[child], tool_definitions=[{'name': 'root_only'}])
+    child_call_record = next(record for record in calls(walk(root)) if record.step.agent_path)
+
+    assert call_tool_schemas(child_call_record, root) == {'local_only': {'type': 'function', 'name': 'local_only'}}
 
 
 @pytest.mark.parametrize(

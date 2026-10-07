@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 from loguru import logger
 from openai.types.responses import Response, ResponseError, ResponseOutputItem, ResponseStatus
 from openai.types.responses.response import IncompleteDetails
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from evaluatorq.contracts import (
     ContentPart,
@@ -57,6 +57,8 @@ from evaluatorq.formats.atif import (
 from evaluatorq.formats.responses import (
     ResponsesConversation,
     is_output_item,
+    is_raw_tool_call,
+    is_sdk_output_item,
     output_item,
     response_starts,
     walk_items,
@@ -70,6 +72,7 @@ _TEXT_PART_TYPES = frozenset({'input_text', 'output_text', 'text'})
 _UNMAPPED_OUTPUTS_KEY = 'evaluatorq.responses_output_items'
 _UNMAPPED_RESULTS_KEY = 'evaluatorq.responses_result_items'
 _RESULT_ORDER_KEY = 'evaluatorq.responses_result_order'
+_RESPONSE_TOOLS_KEY = 'evaluatorq.responses_tools'
 _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'image/webp']] = {
     'image/jpeg': 'image/jpeg',
     'image/png': 'image/png',
@@ -77,6 +80,7 @@ _IMAGE_MEDIA_TYPES: dict[str, Literal['image/jpeg', 'image/png', 'image/gif', 'i
     'image/webp': 'image/webp',
 }
 _RESPONSE_STATUSES: frozenset[str] = frozenset(get_args(ResponseStatus))
+_RESPONSE_TOOLS = TypeAdapter(Response.model_fields['tools'].annotation)
 _NO_STEPS = 'ResponsesConversation has no items; ATIF needs at least one step'
 # Response.metadata key listing the ATIF token counts that were unset (Responses usage has no null counts).
 UNSET_USAGE_KEY = 'atif_unset_usage'
@@ -151,13 +155,21 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         if isinstance(item.get('call_id'), str) and item['call_id']:
             current_agent(index).calls.append(item)
         else:
-            logger.warning('Responses function_call {!r} has no call_id; skipping it.', item.get('name'))
+            logger.warning(
+                'Responses function_call {!r} has no valid call_id; preserving it as unmapped activity.',
+                item.get('name'),
+            )
+            current_agent(index).unmapped_outputs.append(item)
 
     def custom_call(index: int, item: dict[str, Any]) -> None:
         if isinstance(item.get('call_id'), str) and item['call_id']:
             current_agent(index).unmapped_outputs.append(item)
         else:
             logger.warning('Responses custom_tool_call {!r} has no call_id; skipping it.', item.get('name'))
+
+    def unmapped_output(index: int, item: dict[str, Any]) -> None:
+        """Keep SDK output without a direct ATIF mapping available for roundtrip and coverage checks."""
+        current_agent(index).unmapped_outputs.append(item)
 
     handlers = {
         'message': message,
@@ -169,6 +181,10 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         'custom_tool_call_output': lambda _, item: _attach_custom_output(item, drafts),
         'compaction': lambda _, item: drafts.append(_Draft(source='system', item=item)),
     }
+    for item in items:
+        kind = item.get('type')
+        if isinstance(kind, str) and kind not in handlers and (is_sdk_output_item(item) or kind.endswith('_call')):
+            handlers[kind] = unmapped_output
     walk_items(items, handlers, 'ATIF')
     return drafts
 
@@ -328,6 +344,9 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
         placeholder = _is_placeholder(response)
         extra.update(_response_extra(response, placeholder=placeholder))
         if not placeholder:
+            response_tools = [tool.model_dump(mode='json', exclude_none=True) for tool in response.tools]
+            if response_tools:
+                extra[_RESPONSE_TOOLS_KEY] = response_tools
             fields = {
                 'model_name': response.model or None,
                 'timestamp': (
@@ -637,7 +656,11 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
     unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
     if isinstance(unmapped, list):
-        outputs = [item for item in unmapped if isinstance(item, dict) and is_output_item(item)]
+        outputs = [
+            item
+            for item in unmapped
+            if isinstance(item, dict) and (is_output_item(item) or is_raw_tool_call(item) or is_sdk_output_item(item))
+        ]
         if len(outputs) != len(unmapped):
             logger.warning('Step {} has malformed Responses output items; dropping them.', step.step_id)
         insertion = next(
@@ -730,6 +753,12 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
     if status is not None and not (isinstance(status, str) and status in _RESPONSE_STATUSES):
         _warn_foreign('status', step.step_id, status)
         status = None
+    tools = extra.get(_RESPONSE_TOOLS_KEY, [])
+    if not isinstance(tools, list):
+        _warn_foreign(_RESPONSE_TOOLS_KEY, step.step_id, tools)
+        tools = []
+    else:
+        tools = [valid for tool in tools if (valid := _response_tool(tool, step.step_id)) is not None]
     error_type, finish_reasons, failed = _step_outcome(step)
     derived = _outcome_fields(error_type, finish_reasons, failed=failed)
     error = _extra_model(extra, 'error', ResponseError, step.step_id) or derived['error']
@@ -749,13 +778,22 @@ def _response(step: AtifStep, seed: str, output: list[ResponseOutputItem]) -> Re
         'output': output,
         'parallel_tool_calls': False,
         'tool_choice': 'auto',
-        'tools': [],
+        'tools': tools,
         'status': status or derived['status'],
         'error': error,
         'incomplete_details': incomplete,
         'usage': usage,
         'metadata': metadata,
     })
+
+
+def _response_tool(tool: Any, step_id: int) -> Any | None:
+    """Validate an extra tool using the SDK's Response tools field schema."""
+    try:
+        return _RESPONSE_TOOLS.validate_python([tool])[0]
+    except (ValidationError, TypeError) as exc:
+        logger.warning('Dropping invalid Responses tool definition in step {}: {}', step_id, exc)
+        return None
 
 
 def _warn_foreign(key: str, step_id: int, value: object) -> None:

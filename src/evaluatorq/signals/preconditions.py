@@ -14,7 +14,9 @@ from evaluatorq.signals.walk import (
     CallRecord,
     SignalContext,
     WalkedStep,
+    call_tool_schemas,
     finish_reasons,
+    has_unmapped_tool_activity,
     infer_provider,
     is_llm_step,
     llm_times,
@@ -60,6 +62,17 @@ def has_tool_calls(ctx: SignalContext) -> Precondition:
     """At least one tool call (rates and ratios are undefined otherwise)."""
     calls = ctx.calls
     return Precondition(name='has tool calls', met=bool(calls), detail=f'{len(calls)} tool calls')
+
+
+def source_tool_coverage(ctx: SignalContext) -> Precondition:
+    """True only when every Responses tool invocation has semantics represented by an ATIF call."""
+    missing = has_unmapped_tool_activity(ctx.walked)
+    return Precondition(
+        name='source tool activity represented',
+        met=not missing,
+        detail='all source tool activity is represented' if not missing else f'unrepresented: {_listing(missing)}',
+        required=True,
+    )
 
 
 def has_tool_results(ctx: SignalContext) -> Precondition:
@@ -138,23 +151,21 @@ def result_content_available(ctx: SignalContext) -> Precondition:
 
 
 def tool_schemas_coverage(ctx: SignalContext) -> list[Precondition]:
-    """Tool schemas exist, and how many calls have one. A schema is active for the whole trajectory.
-
-    A call is covered by its own trajectory's `tool_definitions`, else the root's.
-    """
+    """Tool schemas exist, and how many calls have one active at the call's response or trajectory scope."""
     trajectory, calls = ctx.trajectory, ctx.calls
     root = tool_schemas(trajectory)
     own = {id(r.step.trajectory): tool_schemas(r.step.trajectory) for r in calls}
-    if not root and not any(own.values()):
+    active = {id(r): call_tool_schemas(r, trajectory) for r in calls}
+    if not root and not any(own.values()) and not any(active.values()):
         return [Precondition(name='tool schemas present', met=False, detail='the trajectory carries no tool schemas')]
-    known = set(root).union(*own.values())
+    known = set(root).union(*own.values(), *(schemas for schemas in active.values()))
     present = Precondition(name='tool schemas present', met=True, detail=f'schemas for {len(known)} tools')
     if not calls:
         return [present]
 
     def covered(record: CallRecord) -> bool:
         name = record.call.function_name
-        return name in own[id(record.step.trajectory)] or name in root
+        return name in active[id(record)]
 
     uncovered = [r for r in calls if not covered(r)]
     coverage = _coverage(

@@ -8,6 +8,8 @@ Use signals when you need repeatable measurements of an agent run's structure, t
 
 `compute_signals()` takes an `AtifTrajectory` and returns a `SignalReport`. Convert a trace's raw Orq span records to ATIF first with `OtelTrace.from_orq(...).to_atif()`. The raw span records are the `v3spans` list from Orq's trace endpoint; `evaluatorq.formats` converts records but does not fetch them.
 
+Responses conversion preserves each response's tool definitions on its originating ATIF step. Schema checks use those definitions for that step, including an explicitly empty list, so a later response's schema does not change how an earlier call is checked. Unsupported custom, MCP, or builtin tool activity remains recorded as source data; signals that depend on complete tool activity return `no_basis`, and independent signals remain available. [Trace Insights](insights.md#trace-signals) computes these reports automatically and saves them with its trace results.
+
 ```python
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -82,6 +84,8 @@ Jev classification is an optional preparation step for tools whose roles are not
 
 The groups separate measurements by the kind of trajectory behavior they describe. Groups A–C return counts, ratios, durations, booleans, or per-tool breakdowns. Group D returns named tags whose fired rule clauses are recorded in `reason` and whose supporting steps and calls appear in `evidence`.
 
+To reach a saved report, open **Insights** in the dashboard, choose a run, and select a row in its **Traces** list; see [reviewing trace signals](insights.md#trace-signals). For traces with saved reports, the **Signals** section starts collapsed in the Insights sidebar and full trace page. Traces without a report show that signals were not measured. Expanding it reveals **L1 Structure**, **L2 Tools**, **L3 Autonomy**, and **L4 Tags** as separate accordion bars; expand any bar to inspect its group. Before opening the section, the page shows only flagged L4 tags as compact buttons that open the matching signal, or an explicit no-flags message. Each signal row can be expanded to show its primary value and outcome, with preconditions visible in the row; step or call evidence has its own collapsed foldout. L4 rows omit the technical attribute-name block. Saved reports and Python group arguments use `A`, `B`, `C`, and `D`.
+
 ### A — Structure
 
 | Signal | Measures | Additional input needed |
@@ -116,8 +120,8 @@ The groups separate measurements by the kind of trajectory behavior they describ
 | `tool_error_count` | Tool results marked as errors. | Tool results with status or error metadata |
 | `tool_error_rate` | Error results divided by tool calls. | Tool results with status or error metadata |
 | `duplicate_tool_call_count` | Repeated calls with the same tool and canonical arguments. | Tool calls |
-| `tool_retry_count` | Calls that repeat a prior failed call under the configured retry definition. | Tool calls and error status |
-| `tool_succeeded_after_retry_count` | Retries that follow a failed call and then succeed. | Tool calls and error status |
+| `tool_retry_count` | Calls that repeat a prior failed call under the configured retry definition. | Tool calls; error status when a matching prior call exists |
+| `tool_succeeded_after_retry_count` | Retries that follow a failed call and then succeed. | Tool calls; error status when a matching prior call exists |
 | `invalid_schema_tool_call_count` | Calls that do not conform to a recorded tool definition. | Tool calls and tool definitions |
 | `consecutive_same_tool_max` | Longest run of calls to one tool. | Tool calls |
 | `consecutive_command_family_max` | Longest run of shell commands in one command family. | Tool calls classified as bash |
@@ -152,6 +156,8 @@ Autonomous step counts include delegated subagent work between root user message
 | `max_autonomous_duration_ms` | Longest root-agent segment duration between user messages. | Root user and agent steps with timing |
 
 ### D — Tags
+
+A tag is false when a mandatory condition is known to be false, or when the remaining unknown conditions cannot supply enough matches for its rule. It is true when its mandatory conditions and enough alternatives are known to match. Missing measurements produce **No basis** only when the result could still be either true or false.
 
 | Tag | Meaning |
 |---|---|

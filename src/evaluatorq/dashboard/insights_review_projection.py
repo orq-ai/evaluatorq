@@ -12,11 +12,16 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 if TYPE_CHECKING:
-    from evaluatorq.insights.models import InsightsRun
+    from evaluatorq.insights.models import InsightsRun, TraceInsight
 
 _CACHE_LIMIT = 32
 _PROJECTIONS: OrderedDict[str, dict[str, tuple[float, float]]] = OrderedDict()
 _CACHE_LOCK = RLock()
+
+
+def review_trace_key(trace: TraceInsight) -> str:
+    """Return the shared map and review-payload key for one trace span."""
+    return f'{trace.trace_id}:{trace.span_id or ""}'
 
 
 def _coordinates(run: InsightsRun, dimension: str, *, warn: bool = True) -> tuple[list[str], list[list[float]]]:
@@ -40,7 +45,7 @@ def _coordinates(run: InsightsRun, dimension: str, *, warn: bool = True) -> tupl
                     'Insights review map skipped invalid coordinates for {} in dimension {}', trace.trace_id, dimension
                 )
             continue
-        ids.append(f'{trace.trace_id}:{trace.span_id}')
+        ids.append(review_trace_key(trace))
         rows.append(row)
     return ids, rows
 

@@ -40,6 +40,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document
+from evaluatorq.insights.models import ensure_unique_trace_ids
 from evaluatorq.trace_finder.compiler import compile_query
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
@@ -68,13 +70,13 @@ class PopulationError(RuntimeError):
 class ResolvedPopulation:
     """The traces an insights run will label and cluster, plus provenance for the run JSON's `population` echo."""
 
-    traces: list[TraceRecord]
+    traces: list[TraceDocument]
     compiled: tuple[CompiledQuery, ...] | None
     echo: dict[str, Any]
     n_scanned: int
 
 
-def projection_coverage(traces: Sequence[TraceRecord]) -> dict[str, int]:
+def projection_coverage(traces: Sequence[TraceRecord | TraceDocument]) -> dict[str, int]:
     """Count budget omissions and source-to-projection bytes for loaded traces."""
     coverage = {
         'n_traces': len(traces),
@@ -129,7 +131,7 @@ def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
         snapshot = Snapshot.model_validate_json(raw)
     except (OSError, ValueError) as error:
         raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
-    traces = list(snapshot.traces)
+    traces = [ensure_trace_document(trace) for trace in snapshot.traces]
     return ResolvedPopulation(
         traces=traces,
         compiled=None,
@@ -173,7 +175,7 @@ async def _load_traces(
     facets: FacetSelection,
     numeric: NumericFilters,
     target_trace_ids: set[str] | None = None,
-) -> tuple[TraceRecord, ...]:
+) -> tuple[TraceDocument, ...]:
     """Load a population's traces through `OrqTraceSource`; any failure becomes a `PopulationError`."""
     source = OrqTraceSource(orq)
     try:
@@ -188,6 +190,7 @@ async def _load_traces(
                 numeric=numeric,
                 target_trace_ids=target_trace_ids,
             )
+        traces = await source.enrich_selected_signal_spans(snapshot.traces)
     except Exception as error:
         raise PopulationError(f'loading the trace population failed: {error}') from error
     finally:
@@ -199,7 +202,12 @@ async def _load_traces(
         raise PopulationError(
             f'reloading Finder export traces was incomplete: {snapshot.capture_metadata["incomplete_reason"]}'
         )
-    return snapshot.traces
+    documents = tuple(ensure_trace_document(trace) for trace in traces)
+    try:
+        ensure_unique_trace_ids(documents)
+    except ValueError as error:
+        raise PopulationError(str(error)) from error
+    return documents
 
 
 async def _select_generated_filters(
@@ -276,7 +284,12 @@ async def _resolve_from_query(
         'limit': pop.limit,
         'filter_selection_error': filter_error,
     }
-    return ResolvedPopulation(traces=list(traces), compiled=plan.dimensions, echo=echo, n_scanned=len(traces))
+    return ResolvedPopulation(
+        traces=[ensure_trace_document(trace) for trace in traces],
+        compiled=plan.dimensions,
+        echo=echo,
+        n_scanned=len(traces),
+    )
 
 
 async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> ResolvedPopulation:
@@ -320,14 +333,14 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
     )
 
     by_id = {trace.trace_id: trace for trace in traces}
-    resolved: list[TraceRecord] = []
+    resolved: list[TraceDocument] = []
     missing = 0
     for trace_id in export.matched_trace_ids:
         trace = by_id.get(trace_id)
         if trace is None:
             missing += 1
             continue
-        resolved.append(trace)
+        resolved.append(ensure_trace_document(trace))
     if missing:
         logger.warning(
             'Insights population from finder export {} could not find {} of {} matched traces in the reloaded window',
@@ -364,7 +377,9 @@ async def _resolve_from_filters(pop: InsightsPopulation, *, orq: Orq) -> Resolve
         'end': end.isoformat(),
         'limit': pop.limit,
     }
-    return ResolvedPopulation(traces=list(traces), compiled=None, echo=echo, n_scanned=len(traces))
+    return ResolvedPopulation(
+        traces=[ensure_trace_document(trace) for trace in traces], compiled=None, echo=echo, n_scanned=len(traces)
+    )
 
 
 async def resolve_population(
@@ -399,6 +414,10 @@ async def resolve_population(
         if orq is None:
             raise PopulationError('a filter population requires an Orq client')
         resolved = await _resolve_from_filters(pop, orq=orq)
+    try:
+        ensure_unique_trace_ids(resolved.traces)
+    except ValueError as error:
+        raise PopulationError(str(error)) from error
     try:
         resolved.echo.update(projection_coverage(resolved.traces))
     except (KeyError, TypeError, ValueError) as error:

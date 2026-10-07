@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 
     from openai import AsyncOpenAI
 
+    from evaluatorq.common.trace_document import TraceDocument
     from evaluatorq.insights.usage import UsageLedger
     from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord
 
@@ -55,7 +56,7 @@ _RETRYABLE_ERROR_KINDS = frozenset({JudgeError.TIMEOUT, JudgeError.API_CONNECTIO
 class LabelOutcome:
     """One trace's labels from a single `/classify` round trip, plus the optional population-match verdict."""
 
-    trace: TraceRecord
+    trace: TraceRecord | TraceDocument
     answers: dict[str, LabelAnswer]
     matched: bool | None
     error: str | None
@@ -166,7 +167,7 @@ async def _classify_with_retry(
 
 
 async def _ask(
-    trace: TraceRecord,
+    trace: TraceRecord | TraceDocument,
     state: str,
     specs: Sequence[LabelSpec],
     *,
@@ -217,7 +218,7 @@ def _merge_chunks(name: str, answers: list[LabelAnswer]) -> LabelAnswer:
 
 
 def _read_answers(
-    trace: TraceRecord, questions: dict[str, ClassifyQuestion], answers: dict[str, ClassifyAnswer]
+    trace: TraceRecord | TraceDocument, questions: dict[str, ClassifyQuestion], answers: dict[str, ClassifyAnswer]
 ) -> dict[str, LabelAnswer]:
     read: dict[str, LabelAnswer] = {}
     for name, question in questions.items():
@@ -245,7 +246,7 @@ def _read_answers(
 
 
 def _population_match(
-    trace: TraceRecord,
+    trace: TraceRecord | TraceDocument,
     questions: dict[str, ClassifyQuestion],
     raw: dict[str, ClassifyAnswer],
     keys: Sequence[str],
@@ -276,7 +277,7 @@ def _population_match(
 
 
 async def _label_one(
-    trace: TraceRecord,
+    trace: TraceRecord | TraceDocument,
     *,
     labels: Sequence[LabelSpec],
     compiled: Sequence[CompiledQuery] | None,
@@ -402,7 +403,7 @@ async def _label_one(
 
 
 async def label_traces(
-    traces: Sequence[TraceRecord],
+    traces: Sequence[TraceRecord | TraceDocument],
     *,
     labels: Sequence[LabelSpec],
     compiled: Sequence[CompiledQuery] | None,
@@ -434,7 +435,7 @@ async def label_traces(
     completed = 0
     completed_lock = asyncio.Lock()
 
-    async def run_one(trace: TraceRecord) -> LabelOutcome:
+    async def run_one(trace: TraceRecord | TraceDocument) -> LabelOutcome:
         nonlocal completed
         try:
             outcome = await _label_one(

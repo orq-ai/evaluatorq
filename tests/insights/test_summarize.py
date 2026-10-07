@@ -12,7 +12,9 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 from evaluatorq.common.structured_output import StructuredResult
+from evaluatorq.common.trace_document import DatasetRef, Outcome, TraceDocument, TraceMetadata
 from evaluatorq.contracts import Usage
+from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifTrajectory
 from evaluatorq.insights import summarize as summarize_module
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
@@ -47,6 +49,20 @@ def make_summary(summary_text: str = 'A user asked a question.') -> TraceSummary
         task='answer question',
         topic='refunds',
         sentiment_explanation='The user is calm.',
+    )
+
+
+def make_dataset_trace(trace_id: str, row_id: str, content: str) -> TraceDocument:
+    return TraceDocument(
+        metadata=TraceMetadata(
+            trace_id=trace_id,
+            dataset=DatasetRef(name='fixture', revision='rev-1', split='test', row_id=row_id),
+            outcome=Outcome(passed=None, source='none', definition='No ground truth supplied.'),
+        ),
+        trajectory=AtifTrajectory(
+            agent=AtifAgent(name='fixture-agent', version='1'),
+            steps=[AtifStep(step_id=1, source='user', message=content)],
+        ),
     )
 
 
@@ -103,6 +119,21 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
         'trace-1', 'span-trace-1', 'openai/gpt-6-luna', prompt_hash(captured_messages[0][0]['content'])
     )
     assert cached == summary
+
+
+@pytest.mark.asyncio
+async def test_summarize_rejects_duplicate_trace_ids_before_cache_or_model_work(
+    monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
+) -> None:
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError('duplicate trace IDs must be rejected before cache or model work')
+
+    monkeypatch.setattr(cache, 'get_summary', forbidden)
+    monkeypatch.setattr(summarize_module, 'generate_structured', forbidden)
+    traces = [make_trace('duplicate'), make_trace('duplicate').model_copy(update={'span_id': 'another-span'})]
+
+    with pytest.raises(ValueError, match='select one span per trace'):
+        await summarize_traces(traces, client=fake_client(), model='m', cache=cache)
 
 
 @pytest.mark.asyncio
@@ -213,6 +244,36 @@ async def test_summarize_traces_cache_hit_skips_the_call(monkeypatch: pytest.Mon
     assert result == {'trace-1': summary}
     assert calls == 0
     assert ledger.totals() == {}
+
+
+@pytest.mark.asyncio
+async def test_missing_span_dataset_trace_caches_without_colliding_with_other_row(
+    monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
+) -> None:
+    first = make_dataset_trace('dataset-row-1', '1', 'first row conversation')
+    other = make_dataset_trace('dataset-row-2', '2', 'different row conversation')
+    calls: list[str] = []
+
+    async def fake_generate_structured(client: Any, **kwargs: Any) -> StructuredResult[TraceSummary]:
+        prompt = kwargs['messages'][0]['content']
+        calls.append(prompt)
+        return StructuredResult(parsed=make_summary(f'Summary {len(calls)}.'), raw='')
+
+    monkeypatch.setattr(summarize_module, 'generate_structured', fake_generate_structured)
+
+    first_result = await summarize_traces([first], client=fake_client(), model='m', cache=cache)
+    other_result = await summarize_traces([other], client=fake_client(), model='m', cache=cache)
+    cached_result = await summarize_traces([first], client=fake_client(), model='m', cache=cache)
+
+    assert first.span_id is None
+    assert first.timestamp is None
+    assert first_result == {'dataset-row-1': make_summary('Summary 1.')}
+    assert other_result == {'dataset-row-2': make_summary('Summary 2.')}
+    assert cached_result == first_result
+    assert len(calls) == 2
+    assert calls[0] != calls[1]
+    assert cache.get_summary('dataset-row-1', '', 'm', prompt_hash(calls[0])) == first_result['dataset-row-1']
+    assert cache.get_summary('dataset-row-2', '', 'm', prompt_hash(calls[1])) == other_result['dataset-row-2']
 
 
 @pytest.mark.asyncio

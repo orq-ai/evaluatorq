@@ -53,3 +53,9 @@ def test_insights_run_form_controller() -> None:
 
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_insights_review_signal_details() -> None:
+    script = Path(__file__).with_name('insights_review_signals.cjs')
+    result = subprocess.run(['node', str(script)], capture_output=True, text=True, check=False, timeout=15)
+    assert result.returncode == 0, result.stdout + result.stderr

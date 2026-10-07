@@ -24,6 +24,37 @@ def test_call_and_result_checks() -> None:
     assert 'B @step 1' in matched.detail
 
 
+def test_source_tool_coverage_finds_calls_preserved_outside_atif_tool_calls() -> None:
+    extra = {'evaluatorq.responses_output_items': [
+        {'type': 'custom_tool_call', 'call_id': 'c', 'name': 'lookup'},
+        {'type': 'mcp_call', 'name': 'remote'},
+    ]}
+    recs = context(traj([agent(extra=extra)]))
+    coverage = pre.source_tool_coverage(recs)
+    assert coverage.met is False
+    assert 'lookup' in coverage.detail and 'remote' in coverage.detail
+
+
+def test_source_tool_coverage_matches_function_calls_by_source_id() -> None:
+    extra = {'evaluatorq.responses_output_items': [
+        {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'},
+    ]}
+    recs = context(traj([agent(calls=[call('lookup', call_id='c')], extra=extra)]))
+    coverage = pre.source_tool_coverage(recs)
+    assert coverage.met is True
+
+
+def test_source_tool_coverage_finds_unsupported_output_without_raw_call_item() -> None:
+    extra = {'evaluatorq.responses_output_items': [
+        {'type': 'custom_tool_call_output', 'call_id': 'c', 'output': 'done'},
+        {'type': 'function_call_output', 'call_id': 'standard', 'output': 'mapped'},
+    ]}
+    coverage = pre.source_tool_coverage(context(traj([agent(extra=extra)])))
+    assert coverage.met is False
+    assert 'custom_tool_call_output @step 1' in coverage.detail
+    assert 'function_call_output' not in coverage.detail
+
+
 def test_explicit_error_status_is_required_only_for_status_detection() -> None:
     recs = context(traj([agent(calls=[call('A')], results=[bare()])]))
     assert pre.explicit_error_status(context(recs.trajectory)).met is False
