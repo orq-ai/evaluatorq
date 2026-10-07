@@ -13,7 +13,6 @@
 .signal-tag>span:last-child { margin-left:2px; }
 .signal-tag:hover { background:var(--red-100); border-color:var(--red-700); }
 .signal-tag:active { background:var(--orange-100); }
-.signal-coverage-note { margin:7px 0 0; color:var(--text-muted); font-size:12px; }
 .signal-empty { margin:8px 0; color:var(--text-muted); overflow-wrap:anywhere; }
 .signal-highlights .signal-empty { margin:0; }
 .signal-browser { border:0; border-top:1px solid var(--border-subtle); border-radius:0; background:transparent; }

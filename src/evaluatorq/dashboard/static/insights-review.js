@@ -1040,7 +1040,6 @@ function signalsPanel(t) {
     loading: signalDetailsLoading(t.id),
     error: signalDetailFailures.get(t.id),
     retryId: t.id,
-    showCoverageNote: false,
   });
 }
 function tracePanel(t) {
