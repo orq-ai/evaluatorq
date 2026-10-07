@@ -5,7 +5,7 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Protocol
 
-from evaluatorq.local_sessions import claude
+from evaluatorq.local_sessions import claude, codex
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
@@ -30,4 +30,4 @@ class SessionReader(Protocol):
     def parse(self, path: Path) -> ParsedSession: ...
 
 
-READERS: Mapping[SessionFamily, SessionReader] = MappingProxyType({'claude': claude.READER})
+READERS: Mapping[SessionFamily, SessionReader] = MappingProxyType({'claude': claude.READER, 'codex': codex.READER})
