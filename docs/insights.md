@@ -122,6 +122,77 @@ The conversation labels are asked in the same classifier call as your selected l
 eq insights --from-snapshot claude-traces.json --label sentiment --label user_frustration --coding
 ```
 
+## Local coding-agent sessions
+
+Insights can analyse your own Claude Code, Claude desktop, Codex and omp sessions straight from the folders those tools write on your machine. Searching and exporting read local files only: no network call, no model call. Reach for it when you want to know what your coding agents did and where they struggled. It does not read sessions on another machine, and it does not analyse delegated work (see below).
+
+| Source | Default folders | Override |
+|---|---|---|
+| `claude-code` | `~/.claude/projects` | `CLAUDE_CONFIG_DIR` (replaces `~/.claude`) |
+| `claude-desktop` | Claude desktop's sessions in `~/.claude/projects`, plus Cowork sessions in macOS `~/Library/Application Support/Claude/local-agent-mode-sessions`, Windows `%APPDATA%/Claude/local-agent-mode-sessions` or Linux `~/.config/Claude/local-agent-mode-sessions` | `CLAUDE_CONFIG_DIR` for the first; none for the Cowork folder. Only the macOS Cowork path is verified |
+| `codex` | `~/.codex/sessions` and `~/.codex/archived_sessions` | `CODEX_HOME` (replaces `~/.codex`) |
+| `omp` | `~/.omp/agent/sessions` | `PI_CODING_AGENT_DIR` (replaces `~/.omp/agent`) |
+
+A folder that does not exist is skipped silently, so a wrong path or override shows up as missing sessions, not as an error.
+
+### Search sessions
+
+`eq sessions` lists sessions newest first. Every filter is optional and they combine:
+
+| Flag | Matches |
+|---|---|
+| `--source` | `claude-code`, `claude-desktop`, `codex` or `omp`; repeat the flag for several. Default: all four |
+| `--from`, `--to` | Sessions whose time span overlaps the window. Both are `YYYY-MM-DD` in local time, and `--to` includes that whole day |
+| `--project-dir` | Sessions run in that directory, below it, or in a linked git worktree of it. A deleted worktree and a Cowork VM path match only when written the same way as the session's own path |
+| `--text` | Case-insensitive text in user messages, assistant messages and reasoning summaries. Tool calls and tool output are not searched |
+| `--limit` | Maximum sessions, 1 to 1000. Default 50 |
+
+The search has a 20-second deadline. A full scan with no match over about 7.5 GB of sessions took about 10 seconds on an M-series Mac. When the deadline passes, the sessions found so far are listed and stderr says `Searched N of M session files before the 20s limit; narrow --from/--to or --text to see the rest.` The dashboard shows the same note. A cut-short search is incomplete without being an error, so narrow the window before you trust a short list.
+
+A Codex session with no human prompt in its first 256 KB is still listed, with an empty prompt column.
+
+### Subagents are not analysed
+
+Subagent and sidechain transcripts are excluded from search and cannot be selected: Codex subagent rollouts, Claude `subagents/` files and sidechains, and omp sessions nested under another session or carrying a `parentSession`. Work the main agent delegated is therefore not analysed. A Codex subagent's report back to the main agent still appears in the main session, as a system message.
+
+### Run Insights on sessions from the CLI
+
+`--export` freezes the listed sessions into a snapshot file, and `eq insights --from-snapshot` analyses it. This lists the sessions run in the current repository since 1 October, writes `sessions.json` readable only by you, then runs the coding-agent questions:
+
+```bash
+eq sessions --project-dir . --from 2026-10-01 --export sessions.json
+eq insights --from-snapshot sessions.json --coding
+```
+
+A selection holds at most 1000 sessions. Sessions that fail to load are reported on stderr and skipped; the export fails only when none loads. If two selected files share a session id, the one that ends later is kept.
+
+Before the run starts, the CLI states what leaves your machine:
+
+```console
+Sending 2 traces (954.6 KB) from sessions.json to models: summary <model>, classifier <model>, embedding <model>.
+```
+
+There is no confirmation prompt and no redaction: the sessions go to the models named in that line, through the Orq router. To measure what a model would read without sending anything, run the preview, which needs no Orq credential:
+
+```bash
+eq insights --from-snapshot sessions.json --preview-input
+```
+
+### Run Insights on sessions from the dashboard
+
+In **Insights → New run**, choose the **Local sessions** tab, the third next to **Orq traces** and **Trace file**. Tick the tools, set dates, a project directory or text, and press **Search**. Tick the sessions you want, or the header box for all of them, up to 1000. **Continue** freezes the selection into a snapshot in the dashboard's Insights folder. The **Review** step shows the same `Sending N traces (size) from <file> to models: …` sentence as the CLI. The snapshot copy is deleted after the run, like an uploaded file. A snapshot over the 100 MiB upload limit is rejected with a message to select fewer sessions. A newer search cancels the one still running.
+
+### What a session loses on the way in
+
+A session becomes one ATIF trajectory, the step-by-step format Insights stores each trace in. Some content does not survive:
+
+- Claude hook attachments and Codex encrypted reasoning are dropped.
+- Images become the text `[image]`.
+- Tool output, and each tool argument value, over 20,000 characters is cut with a `[truncated N chars]` marker.
+- omp extension state (`custom` records) and hidden notices are dropped. omp skill prompts and displayed background-job results are kept.
+
+The 20,000-character cut is a size guard applied while the file is read. It is not what a model reads. Each trace still goes through the 500,000-byte conversation projection described under [Local trace file format](#local-trace-file-format), which keeps the first user message and the newest messages and reports every omission in `--preview-input`. A long session therefore loses its middle even when no single tool output was trimmed.
+
 ## What the classifier reads
 
 The classifier does not read the summary. It reads a compact view of the conversation: every user message with injected `<system-reminder>` blocks removed, the start and end of each assistant message, and one line per group of tool calls. Tool outputs are left out. A tool call shows its file, path, or URL; a shell call shows its program, such as `pytest` or `git status`, and a risky shell command appears as written, cut to its first 300 characters like any other tool input. When a view is longer than 75,000 characters (about 25,000 tokens), Insights keeps the opening user messages and the end of the trace and cuts the middle.
@@ -205,6 +276,7 @@ The step bar shows `1 · Traces`, `2 · Analysis` and `3 · Review`. **Continue*
 |---|---|---|
 | Orq traces | Traces from Orq. Leave **Question** blank for every trace in the window, or fill it in and the classifier keeps only the traces that match | Apply: last N days, up to N traces (default 200) and filters |
 | Trace file | The traces in an uploaded file: a Trace Finder JSON export or a local trace snapshot | Do not apply; the file defines the population |
+| Local sessions | Claude Code, Claude desktop, Codex and omp sessions you select; see [Local coding-agent sessions](#local-coding-agent-sessions) | Do not apply; the selection defines the population |
 
 On **Trace file**, click **Browse…** and choose one file. There is no path field and no file-type choice: the dashboard stores the upload under a random name, keeps the original file name for the run, and reads the content to decide what it is. A file with `matched_trace_ids` is a Finder export (up to 10 MiB); a file with `traces` is a snapshot (up to 100 MiB). A larger file does not upload; run it from the terminal with `eq insights --from-finder PATH` or `eq insights --from-snapshot PATH`. A file with neither key is rejected. For a snapshot, the form reports the measured truncation before you start.
 
@@ -274,7 +346,9 @@ A local trace file contains a `traces` array. Each trace needs an ID, a span ID,
 }
 ```
 
-When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject an empty snapshot. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
+When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject a snapshot with neither `traces` nor `documents`. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
+
+A snapshot may also carry an optional `documents` array, which defaults to empty. Each entry is a trace document: a `metadata` object (trace ID, span ID, timestamp, project, model, status and the other fields shown for a trace) and a `trajectory`, one ATIF trajectory holding the steps, tool calls and observations. `eq sessions --export` writes this form, with `"traces": []` and one document per session; `traces` stays required, so a hand-written file with only `documents` needs `"traces": []`. A file may hold both, and a run analyses the `traces` first, then the `documents`. Trace IDs in `documents` should be unique, and the export keeps the later-ending session when two share an ID.
 
 The summary model receives the compact conversation view, capped at 75,000 characters, plus the analysis prompt. The run form preview and saved population coverage describe a separate Finder projection capped at 500,000 UTF-8 bytes; those counts do not measure the summary prompt. For a local trace file, the run form reports projection truncation before you start the run. For live traces or a Finder export, the completed run reports it after loading. These counts show whole-message omissions and source and projected byte totals. Split long sessions into shorter traces when more of the conversation needs to influence the analysis.
 

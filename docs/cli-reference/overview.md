@@ -18,6 +18,11 @@ Two command groups have their own pages:
 - **[Red Teaming](redteam.md)** — adversarial testing (`eq redteam`).
 - **[Simulation](simulation.md)** — multi-turn user simulation (`eq sim`; `sim` is shorthand).
 
+Trace analysis commands are documented in the [Trace Insights guide](../insights.md):
+
+- **`eq insights`** — cluster and label a population of traces ([Run from the CLI](../insights.md#run-from-the-cli)).
+- **`eq sessions`** — search local Claude Code, Claude desktop, Codex and omp sessions by date, project directory or text, and export them as a snapshot for `eq insights --from-snapshot` ([Local coding-agent sessions](../insights.md#local-coding-agent-sessions)). It reads local files only and makes no network call.
+
 ## Model flags
 
 Five options sit on `eq` itself, before the subcommand: `--fast-model`, `--smart-model`, `--classifier-model`, `--embedding-model` and a repeatable `--model-override TASK=MODEL`. They set a model role, or one task within a role, for every command in that invocation, so `eq --smart-model gpt-6-sol redteam run -t agent:my-agent` changes the attacker and every judge at once. A command's own flag, such as `--attack-model`, wins over them. The roles, the task list and the full precedence are in [Configuration › Models](../configuration.md#models).
