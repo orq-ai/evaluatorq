@@ -274,3 +274,24 @@ def test_unreadable_session_raises_load_error_without_content(codex_home: Path) 
     with pytest.raises(SessionLoadError) as caught:
         READER.summarize(missing)
     assert 'FileNotFoundError' in str(caught.value)
+
+
+def test_long_custom_tool_input_gives_no_argument_warning(codex_home: Path) -> None:
+    path = _rollout(
+        codex_home,
+        records=[
+            _meta(),
+            _message(1, 'user', 'patch it'),
+            _item(2, type='custom_tool_call', call_id='c1', name='exec', input='y' * 25_000),
+            _item(3, type='custom_tool_call_output', call_id='c1', output='ok'),
+        ],
+    )
+    messages: list[str] = []
+    sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
+    try:
+        document = session_document(READER.parse(path))
+    finally:
+        logger.remove(sink)
+    assert not any('not a JSON object' in message for message in messages)
+    calls = [call for step in document.trajectory.steps for call in step.tool_calls or []]
+    assert calls[0].arguments['input'].endswith('[truncated 5000 chars]')

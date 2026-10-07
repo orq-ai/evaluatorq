@@ -50,13 +50,28 @@ def reasoning(text: str) -> dict[str, Any]:
     return {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': text}]}
 
 
+def _trim_leaves(value: object) -> object:
+    if isinstance(value, str):
+        return trim(value)
+    if isinstance(value, dict):
+        return {key: _trim_leaves(inner) for key, inner in value.items()}
+    if isinstance(value, list):
+        return [_trim_leaves(inner) for inner in value]
+    return value
+
+
 def function_call(*, call_id: str, name: str, arguments: object) -> dict[str, Any]:
-    raw = (
-        arguments
-        if isinstance(arguments, str)
-        else json.dumps(arguments if arguments is not None else {}, ensure_ascii=False)
-    )
-    return {'type': 'function_call', 'call_id': call_id, 'name': name, 'arguments': trim(raw)}
+    """Arguments stay valid JSON after trimming: only string leaves are cut, never the serialised text."""
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments)
+        except ValueError:
+            parsed = None
+        if not isinstance(parsed, dict):
+            return {'type': 'function_call', 'call_id': call_id, 'name': name, 'arguments': trim(arguments)}
+        arguments = parsed
+    raw = json.dumps(_trim_leaves(arguments if arguments is not None else {}), ensure_ascii=False)
+    return {'type': 'function_call', 'call_id': call_id, 'name': name, 'arguments': raw}
 
 
 def function_call_output(*, call_id: str, output: str) -> dict[str, Any]:
