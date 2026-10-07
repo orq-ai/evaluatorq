@@ -43,6 +43,7 @@ def test_insights_run_form_controller() -> None:
         ),
     }
     script = Path(__file__).with_name('insights_run_form.cjs')
+    # Fixtures go in on stdin; insights_run_form.cjs explains why.
     result = subprocess.run(
         ['node', str(script)],
         input=json.dumps(fixtures),
