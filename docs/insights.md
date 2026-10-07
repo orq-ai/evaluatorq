@@ -124,74 +124,99 @@ eq insights --from-snapshot claude-traces.json --label sentiment --label user_fr
 
 ## Local coding-agent sessions
 
-Insights can analyse your own Claude Code, Claude desktop, Codex and omp sessions straight from the folders those tools write on your machine. Searching and exporting read local files only: no network call, no model call. Reach for it when you want to know what your coding agents did and where they struggled. It does not read sessions on another machine, and it does not analyse delegated work (see below).
+A **local session** is one conversation that Claude Code, Claude desktop, Codex or omp saved as a file on your computer. Insights can search those files and analyze the sessions you pick the same way it analyzes traces from Orq. It does not read sessions on another machine, and it does not analyze delegated work; see [Subagents are not analyzed](#subagents-are-not-analyzed).
 
-| Source | Default folders | Override |
-|---|---|---|
-| `claude-code` | `~/.claude/projects` | `CLAUDE_CONFIG_DIR` (replaces `~/.claude`) |
-| `claude-desktop` | Claude desktop's sessions in `~/.claude/projects`, plus Cowork sessions in macOS `~/Library/Application Support/Claude/local-agent-mode-sessions`, Windows `%APPDATA%/Claude/local-agent-mode-sessions` or Linux `~/.config/Claude/local-agent-mode-sessions` | `CLAUDE_CONFIG_DIR` for the first; none for the Cowork folder. Only the macOS Cowork path is verified |
-| `codex` | `~/.codex/sessions` and `~/.codex/archived_sessions` | `CODEX_HOME` (replaces `~/.codex`) |
-| `omp` | `~/.omp/agent/sessions` | `PI_CODING_AGENT_DIR` (replaces `~/.omp/agent`) |
+### Analyze sessions from the CLI
 
-A folder that does not exist is skipped silently, so a wrong path or override shows up as missing sessions, not as an error.
-
-### Search sessions
-
-`eq sessions` lists sessions newest first. Every filter is optional and they combine:
-
-| Flag | Matches |
-|---|---|
-| `--source` | `claude-code`, `claude-desktop`, `codex` or `omp`; repeat the flag for several. Default: all four |
-| `--from`, `--to` | Sessions whose time span overlaps the window. Both are `YYYY-MM-DD` in local time, and `--to` includes that whole day |
-| `--project-dir` | Sessions run in that directory, below it, or in a linked git worktree of it. A deleted worktree and a Cowork VM path match only when written the same way as the session's own path |
-| `--text` | Case-insensitive text in user messages, assistant messages and reasoning summaries. Tool calls and tool output are not searched |
-| `--limit` | Maximum sessions, 1 to 1000. Default 50 |
-
-The search has a 20-second deadline. A full scan with no match over about 7.5 GB of sessions took about 10 seconds on an M-series Mac. When the deadline passes, the sessions found so far are listed and stderr says `Searched N of M session files before the 20s limit; narrow --from/--to or --text to see the rest.` The dashboard shows the same note. A cut-short search is incomplete without being an error, so narrow the window before you trust a short list.
-
-A Codex session with no human prompt in its first 256 KB is still listed, with an empty prompt column.
-
-### Subagents are not analysed
-
-Subagent and sidechain transcripts are excluded from search and cannot be selected: Codex subagent rollouts, Claude `subagents/` files and sidechains, and omp sessions nested under another session or carrying a `parentSession`. Work the main agent delegated is therefore not analysed. A Codex subagent's report back to the main agent still appears in the main session, as a system message.
-
-### Run Insights on sessions from the CLI
-
-`--export` freezes the listed sessions into a snapshot file, and `eq insights --from-snapshot` analyses it. This lists the sessions run in the current repository since 1 October, writes `sessions.json` readable only by you, then runs the coding-agent questions:
+Two commands: `eq sessions` lists and exports, `eq insights --from-snapshot` analyzes. This exports the newest 500 sessions run in the current repository since 1 October, then runs the coding-agent questions on them:
 
 ```bash
-eq sessions --project-dir . --from 2026-10-01 --export sessions.json
+eq sessions --project-dir . --from 2026-10-01 --limit 500 --export sessions.json
 eq insights --from-snapshot sessions.json --coding
 ```
 
-A selection holds at most 1000 sessions. Sessions that fail to load are reported on stderr and skipped; the export fails only when none loads. If two selected files share a session id, the one that ends later is kept.
+`--export` freezes the sessions into a snapshot file readable only by you. Listing and exporting read local files only. `--coding` adds the coding-agent questions described in [Analyze coding agents](#analyze-coding-agents): task type, outcome, whether the agent verified its work, unfixed tool errors and risky actions.
 
-Before the run starts, the CLI states what leaves your machine:
+`--export` writes the sessions that were listed, and `--limit` defaults to 50. When the list is full, stderr says `Listed the newest 500 sessions; raise --limit (up to 1000) to see more.` Raise `--limit` or narrow the dates so the export holds the sessions you mean to analyze. If the 20-second search deadline cut the search short, stderr also says the export is partial.
 
-```console
-Sending 2 traces (954.6 KB) from sessions.json to models: summary <model>, classifier <model>, embedding <model>.
+To analyze one week, give both ends of it. `--from` starts at midnight local time on that day, `--to` includes the whole of that day, and a session is included when its time span overlaps the window:
+
+```bash
+eq sessions --from 2026-10-05 --to 2026-10-11 --limit 500 --export week.json
 ```
 
-There is no confirmation prompt and no redaction: the sessions go to the models named in that line, through the Orq router. To measure what a model would read without sending anything, run the preview, which needs no Orq credential:
+The session list shows when and where each session ran, not how it went. Finding the sessions that went badly takes a model run: `eq insights --coding` labels each session's outcome, verification, unfixed errors and risky actions. The deterministic [trace signals](#trace-signals) saved with the run count tool errors and retries without a model, but they describe structure, not whether the work succeeded. `--json` prints the matches as a JSON array on stdout instead of the table.
+
+A selection holds at most 1000 sessions. Sessions that fail to load are reported on stderr and skipped; the export fails only when none loads. When two selected files share a session ID, the export keeps the one that ends later.
+
+Before the run starts, the CLI states where the sessions go:
+
+```console
+Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
+```
+
+The size is the snapshot file on disk, not the amount sent. The summary and classifier models read the compact view described in [What the classifier reads](#what-the-classifier-reads): your messages (each up to 8,000 characters), the first and last 300 characters of each assistant message, and one line per tool call with its input cut to 300 characters. Tool output bodies are never sent, only whether the call failed and a diagnostic category. The embedding model reads the summaries. There is no confirmation prompt and no redaction, so check the models named in that line before you run.
+
+To see how much the Finder projection would cut from each session without sending anything, run the preview. It needs no Orq credential. The 500,000-byte projection it measures is separate from the compact view a model reads, so the counts do not measure model input:
 
 ```bash
 eq insights --from-snapshot sessions.json --preview-input
 ```
 
-### Run Insights on sessions from the dashboard
+```console
+2026-10-08 21:23:24.214 | WARNING  | evaluatorq.trace_finder.projection:project_trace:68 - trace claude-code:00000000-0000-0000-0000-0000005e5510 projection dropped 451 earlier message(s) (236418 bytes) to fit the 500000 byte budget
+Model input projection: 1 of 6 traces exceed the 500,000-byte budget. 451 of 1,420 whole messages omitted (31.8%). Serialized source: 738,531 bytes → projected input: 501,620 bytes.
+```
 
-In **Insights → New run**, choose the **Local sessions** tab, the third next to **Orq traces** and **Trace file**. Tick the tools, set dates, a project directory or text, and press **Search**. Tick the sessions you want, or the header box for all of them, up to 1000. **Continue** freezes the selection into a snapshot in the dashboard's Insights folder. The **Review** step shows the same `Sending N traces (size) from <file> to models: …` sentence as the CLI. The snapshot copy is deleted after the run, like an uploaded file. A snapshot over the 100 MiB upload limit is rejected with a message to select fewer sessions. A newer search cancels the one still running.
+The WARNING line appears once per trace the projection cuts, and the second line totals the snapshot.
+
+### Analyze sessions from the dashboard
+
+In **Insights → New run**, choose the **Local sessions** tab, the third next to **Orq traces** and **Trace file**. Tick the tools, then set the dates, a project directory (an absolute path, or one starting with `~`) or text, and press **Search**. The dates start as the last seven days, so widen them to see older sessions. Tick the sessions you want, or the header box for all of them, up to 1000, and press **Continue**. That freezes the selection into a snapshot in the dashboard's Insights folder. The **Review** step shows the same `Sending N traces` sentence as the CLI. A snapshot over the 100 MiB upload limit is rejected with a message to select fewer sessions.
+
+When the 20-second deadline passes, the results say `Searched N of M session files before the 20-second limit. Narrow the dates or text to see the rest.`
+
+### Search sessions
+
+`eq sessions` lists sessions newest first. Every filter is optional and they combine.
+
+| Source | Default folders | Override |
+|---|---|---|
+| `claude-code` | `~/.claude/projects` | `CLAUDE_CONFIG_DIR` (replaces `~/.claude`) |
+| `claude-desktop` | Claude desktop's code sessions in `~/.claude/projects`, and Cowork sessions in the folder named below | `CLAUDE_CONFIG_DIR` for the first; none for the Cowork folder |
+| `codex` | `~/.codex/sessions` and `~/.codex/archived_sessions` | `CODEX_HOME` (replaces `~/.codex`) |
+| `omp` | `~/.omp/agent/sessions` | `PI_CODING_AGENT_DIR` (replaces `~/.omp/agent`) |
+
+Cowork is Claude desktop's agent mode, which runs sessions in a virtual machine. Insights reads its sessions from `~/Library/Application Support/Claude/local-agent-mode-sessions` on macOS, `%APPDATA%/Claude/local-agent-mode-sessions` on Windows and `~/.config/Claude/local-agent-mode-sessions` on Linux. Only the macOS path has been checked against a real install. A missing folder is skipped silently.
+
+| Flag | Matches |
+|---|---|
+| `--source` | `claude-code`, `claude-desktop`, `codex` or `omp`; repeat the flag for several. Default: all four |
+| `--from`, `--to` | Sessions whose time span overlaps the window. Both are `YYYY-MM-DD` in local time, and `--to` includes that whole day |
+| `--project-dir` | Sessions run in that directory, below it, or in a linked git worktree of it, so `--project-dir .` also finds sessions from sibling worktrees of the same repository. A deleted worktree and a Cowork VM path match only when written the same way as the session's own path |
+| `--text` | Case-insensitive text in any message, including system notices and Claude's thinking. Tool calls and tool output are not searched |
+| `--limit` | Maximum sessions, 1 to 1000. Default 50 |
+| `--json` | Print the matches as a JSON array on stdout instead of the table |
+| `--export` | Write the listed sessions as a snapshot file |
+
+The search stops at 20 seconds. The sessions found so far are listed, and stderr says `Searched N of M session files before the 20s limit; narrow --from/--to or --text to see the rest.` A short list after that note may be incomplete.
+
+A session is listed only if a user prompt appears in the first 256 KB of its file. Codex sessions without one still list, with a blank title in the CLI and `(untitled)` in the dashboard unless Codex stored a thread name. Claude and omp sessions with no prompt in that head are not listed.
+
+### Subagents are not analyzed
+
+Subagent transcripts are excluded from search and cannot be selected: Codex subagent rollouts, Claude `subagents/` files and sidechains (Claude's name for a delegated conversation kept apart from the main thread), and omp sessions nested under another session or carrying a `parentSession`. A Codex subagent's report back to the main agent still appears in the main session, as a system message.
 
 ### What a session loses on the way in
 
-A session becomes one ATIF trajectory, the step-by-step format Insights stores each trace in. Some content does not survive:
+A session becomes one ATIF trajectory, the step-by-step format Insights stores each trace in, inside a [local trace file](#local-trace-file-format). Some content does not survive:
 
 - Claude hook attachments and Codex encrypted reasoning are dropped.
 - Images become the text `[image]`.
-- Tool output, and each tool argument value, over 20,000 characters is cut with a `[truncated N chars]` marker.
+- Tool output, and each tool argument value, over 20,000 characters is cut with a `[truncated N chars]` marker. This cap bounds memory and snapshot size while the file is read. Models never receive tool output bodies, so it does not change what they read.
 - omp extension state (`custom` records) and hidden notices are dropped. omp skill prompts and displayed background-job results are kept.
 
-The 20,000-character cut is a size guard applied while the file is read. It is not what a model reads. Each trace still goes through the 500,000-byte conversation projection described under [Local trace file format](#local-trace-file-format), which keeps the first user message and the newest messages and reports every omission in `--preview-input`. A long session therefore loses its middle even when no single tool output was trimmed.
+A long session still loses its middle in the compact view a model reads; see [What the classifier reads](#what-the-classifier-reads) for the caps.
 
 ## What the classifier reads
 
@@ -346,9 +371,54 @@ A local trace file contains a `traces` array. Each trace needs an ID, a span ID,
 }
 ```
 
-When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject a snapshot with neither `traces` nor `documents`. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
+To get local coding-agent sessions into this format, use `eq sessions --export`, which does the conversion. When you convert messages from another tool yourself, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject a snapshot with neither `traces` nor `documents`. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
 
-A snapshot may also carry an optional `documents` array, which defaults to empty. Each entry is a trace document: a `metadata` object (trace ID, span ID, timestamp, project, model, status and the other fields shown for a trace) and a `trajectory`, one ATIF trajectory holding the steps, tool calls and observations. `eq sessions --export` writes this form, with `"traces": []` and one document per session; `traces` stays required, so a hand-written file with only `documents` needs `"traces": []`. A file may hold both, and a run analyses the `traces` first, then the `documents`. Trace IDs in `documents` should be unique, and the export keeps the later-ending session when two share an ID.
+A snapshot may also carry a `documents` array of trace documents, which `eq sessions --export` writes with `"traces": []` and one document per session. `traces` stays required, so a hand-written file with only `documents` needs `"traces": []`. A document has two fields:
+
+- `metadata` holds the same fields as a trace: `schema_version`, `trace_id`, `span_id`, `timestamp` with a timezone, `project`, `model`, `provider`, `status`, `product` and `trace_type`.
+- `trajectory` is one ATIF trajectory: `schema_version`, `session_id`, an `agent` with `name` and `version`, and `steps`. Each step has a `step_id`, a `source` such as `user` or `agent`, a `message`, and for an agent step optional `tool_calls` and an `observation` with the `results` of those calls.
+
+This file holds one Codex session:
+
+```json
+{
+  "traces": [],
+  "documents": [
+    {
+      "metadata": {
+        "schema_version": 1,
+        "trace_id": "codex:738bbe12",
+        "span_id": "738bbe12",
+        "timestamp": "2026-10-02T16:25:32Z",
+        "project": "/Users/demo/code/shop-api",
+        "model": "gpt-6-sol",
+        "provider": "",
+        "status": "",
+        "product": "local-session",
+        "trace_type": "agent-session"
+      },
+      "trajectory": {
+        "schema_version": "ATIF-v1.7",
+        "session_id": "738bbe12",
+        "agent": {"name": "codex", "version": "0.52.0"},
+        "steps": [
+          {"step_id": 1, "source": "user", "message": "Explain how with_retry decides to give up."},
+          {
+            "step_id": 2,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "c1", "function_name": "shell", "arguments": {"command": ["rg", "with_retry"]}}],
+            "observation": {"results": [{"source_call_id": "c1", "content": "src/retry.py:12: def with_retry"}]}
+          },
+          {"step_id": 3, "source": "agent", "message": "It retries 3 times and gives up on 4xx responses."}
+        ]
+      }
+    }
+  ]
+}
+```
+
+Trace IDs must be unique across `traces` and `documents`; a duplicate fails the run. A run analyzes the `traces` first, then the `documents`.
 
 The summary model receives the compact conversation view, capped at 75,000 characters, plus the analysis prompt. The run form preview and saved population coverage describe a separate Finder projection capped at 500,000 UTF-8 bytes; those counts do not measure the summary prompt. For a local trace file, the run form reports projection truncation before you start the run. For live traces or a Finder export, the completed run reports it after loading. These counts show whole-message omissions and source and projected byte totals. Split long sessions into shorter traces when more of the conversation needs to influence the analysis.
 
