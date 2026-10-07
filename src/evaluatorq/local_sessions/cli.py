@@ -85,7 +85,8 @@ def _export(sessions: tuple[SessionSummary, ...], target: Path) -> None:
     with os.fdopen(fd, 'w', encoding='utf-8') as handle:
         handle.write(snapshot.model_dump_json())
     target.chmod(0o600)
-    typer.echo(f'Wrote {len(snapshot.documents)} sessions to {target}', err=True)
+    count = len(snapshot.documents)
+    typer.echo(f'Wrote {count} session{"" if count == 1 else "s"} to {target}', err=True)
     for _ref, reason in failed:
         typer.echo(f'Skipped {reason}', err=True)
 

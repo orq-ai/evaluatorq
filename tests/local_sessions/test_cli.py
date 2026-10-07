@@ -65,7 +65,7 @@ def test_export_writes_snapshot_with_documents(claude_projects: Path, tmp_path: 
     snapshot = Snapshot.model_validate_json(target.read_text(encoding='utf-8'))
     assert len(snapshot.documents) == 1
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
-    assert 'Wrote 1 sessions' in result.stderr
+    assert 'Wrote 1 session to' in result.stderr
 
 
 def test_export_empty_result_exits_2_and_writes_nothing(tmp_path: Path) -> None:
