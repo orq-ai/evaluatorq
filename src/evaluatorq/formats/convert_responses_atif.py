@@ -58,6 +58,7 @@ from evaluatorq.formats.responses import (
     ResponsesConversation,
     is_output_item,
     is_raw_tool_call,
+    is_sdk_output_item,
     output_item,
     response_starts,
     walk_items,
@@ -166,8 +167,8 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
         else:
             logger.warning('Responses custom_tool_call {!r} has no call_id; skipping it.', item.get('name'))
 
-    def unsupported_tool_call(index: int, item: dict[str, Any]) -> None:
-        """Keep unsupported Responses tool activity available for roundtrip and signal coverage checks."""
+    def unmapped_output(index: int, item: dict[str, Any]) -> None:
+        """Keep SDK output without a direct ATIF mapping available for roundtrip and coverage checks."""
         current_agent(index).unmapped_outputs.append(item)
 
     handlers = {
@@ -182,8 +183,8 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
     }
     for item in items:
         kind = item.get('type')
-        if isinstance(kind, str) and kind.endswith('_call') and kind not in handlers:
-            handlers[kind] = unsupported_tool_call
+        if isinstance(kind, str) and kind not in handlers and (is_sdk_output_item(item) or kind.endswith('_call')):
+            handlers[kind] = unmapped_output
     walk_items(items, handlers, 'ATIF')
     return drafts
 
@@ -656,7 +657,9 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
     if isinstance(unmapped, list):
         outputs = [
-            item for item in unmapped if isinstance(item, dict) and (is_output_item(item) or is_raw_tool_call(item))
+            item
+            for item in unmapped
+            if isinstance(item, dict) and (is_output_item(item) or is_raw_tool_call(item) or is_sdk_output_item(item))
         ]
         if len(outputs) != len(unmapped):
             logger.warning('Step {} has malformed Responses output items; dropping them.', step.step_id)

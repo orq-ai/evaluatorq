@@ -18,23 +18,6 @@ if TYPE_CHECKING:
     from evaluatorq.formats.chat import ChatConversation
     from evaluatorq.formats.otel import OtelTrace
 
-_KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | {'message', 'compaction'}
-_MODEL_OUTPUT_TYPES = frozenset({
-    'reasoning',
-    'function_call',
-    'custom_tool_call',
-    'mcp_call',
-    'file_search_call',
-    'web_search_call',
-    'computer_call',
-    'tool_search_call',
-    'image_generation_call',
-    'code_interpreter_call',
-    'local_shell_call',
-    'shell_call',
-    'apply_patch_call',
-})
-
 
 def _literal_string_values(annotation: Any) -> set[str]:
     """Read string values from a Literal annotation, allowing Annotated and union wrappers."""
@@ -73,10 +56,14 @@ def _sdk_output_item_types(output_item_type: Any) -> frozenset[str]:
     return frozenset(item_types)
 
 
-# Keep the recognized set aligned with the installed OpenAI SDK. An SDK union
-# member we cannot inspect stays on the raw preservation path.
+# Keep output recognition aligned with the installed OpenAI SDK. An SDK union
+# member we cannot inspect stays on the raw preservation path. Result items
+# ending in `_output` are transcript inputs, not model-response boundaries;
+# compaction has its own system-step mapping and is excluded from model outputs.
 _SDK_OUTPUT_TYPES = _sdk_output_item_types(ResponseOutputItem)
-_RESTORABLE_OUTPUT_TYPES = _MODEL_OUTPUT_TYPES & _SDK_OUTPUT_TYPES
+_RESPONSE_RESULT_ITEM_TYPES = frozenset(kind for kind in _SDK_OUTPUT_TYPES if kind.endswith('_output'))
+_RESTORABLE_OUTPUT_TYPES = _SDK_OUTPUT_TYPES - _RESPONSE_RESULT_ITEM_TYPES - {'compaction'}
+_KNOWN_ITEM_TYPES = RESPONSES_ITEM_TYPES | _SDK_OUTPUT_TYPES | {'message', 'compaction'}
 _INPUT_ITEM: TypeAdapter[ResponseInputItem] = TypeAdapter(ResponseInputItem)
 _OUTPUT_ITEM: TypeAdapter[ResponseOutputItem] = TypeAdapter(ResponseOutputItem)
 
@@ -107,7 +94,15 @@ def is_output_item(item: dict[str, Any]) -> bool:
         call_id = item.get('call_id')
         if not isinstance(call_id, str) or not call_id:
             return False
-    return kind in _RESTORABLE_OUTPUT_TYPES or (kind == 'message' and item.get('role') == 'assistant')
+    return (isinstance(kind, str) and kind in _RESTORABLE_OUTPUT_TYPES and kind != 'message') or (
+        kind == 'message' and item.get('role') == 'assistant'
+    )
+
+
+def is_sdk_output_item(item: dict[str, Any]) -> bool:
+    """Whether the installed SDK has a typed output model for this item discriminator."""
+    kind = item_type(item)
+    return isinstance(kind, str) and kind in _SDK_OUTPUT_TYPES
 
 
 def is_raw_tool_call(item: dict[str, Any]) -> bool:
@@ -224,7 +219,7 @@ class ResponsesConversation(BaseModel):
             item.type
             for response in responses
             for item in response.output
-            if item.type not in _MODEL_OUTPUT_TYPES and not (item.type == 'message' and item.role == 'assistant')
+            if item.type not in _RESTORABLE_OUTPUT_TYPES and not (item.type == 'message' and item.role == 'assistant')
         })
         if unsupported:
             msg = f'Response.output item types {unsupported} are not supported by ResponsesConversation.responses'

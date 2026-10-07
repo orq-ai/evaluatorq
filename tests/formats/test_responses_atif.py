@@ -71,6 +71,65 @@ def test_response_output_holds_the_output_items_of_each_step() -> None:
     assert [[o.type for o in r.output] for r in back.responses] == [['reasoning', 'function_call'], ['message']]
 
 
+def test_sdk_output_type_outside_legacy_allowlist_keeps_response_boundary_and_roundtrip() -> None:
+    mcp_tools = {'type': 'mcp_list_tools', 'id': 'mt_1', 'server_label': 'remote', 'tools': []}
+    call = {'type': 'function_call', 'call_id': 'c1', 'name': 'lookup', 'arguments': '{}'}
+    call_result = {'type': 'function_call_output', 'call_id': 'c1', 'output': 'found'}
+    first_usage = {
+        'input_tokens': 3,
+        'output_tokens': 2,
+        'total_tokens': 5,
+        'input_tokens_details': {'cached_tokens': 1},
+        'output_tokens_details': {'reasoning_tokens': 0},
+    }
+    second_usage = {
+        'input_tokens': 7,
+        'output_tokens': 4,
+        'total_tokens': 11,
+        'input_tokens_details': {'cached_tokens': 2},
+        'output_tokens_details': {'reasoning_tokens': 1},
+    }
+    responses = [
+        Response.model_validate({
+            **_response('gpt-first', first_usage).model_dump(mode='json'),
+            'id': 'resp_first',
+            'output': [mcp_tools],
+        }),
+        Response.model_validate({
+            **_response('gpt-second', second_usage).model_dump(mode='json'),
+            'id': 'resp_second',
+            'output': [call],
+        }),
+    ]
+
+    conversation = ResponsesConversation(items=[mcp_tools, call, call_result], responses=responses)
+    trajectory = conversation.to_atif()
+    assert len(trajectory.steps) == 2
+    first, second = trajectory.steps
+    assert first.extra is not None
+    assert first.extra['evaluatorq.responses_output_items'] == [mcp_tools]
+    assert first.extra['response_id'] == 'resp_first'
+    assert first.model_name == 'gpt-first'
+    assert first.metrics is not None
+    assert first.metrics.prompt_tokens == 3
+    assert second.extra is not None
+    assert second.extra['response_id'] == 'resp_second'
+    assert second.model_name == 'gpt-second'
+    assert second.metrics is not None
+    assert second.metrics.prompt_tokens == 7
+    assert second.tool_calls is not None and second.tool_calls[0].tool_call_id == 'c1'
+
+    back = trajectory.to_responses()
+    assert back.items == [mcp_tools, call, call_result]
+    assert back.responses is not None
+    assert [[item.type for item in response.output] for response in back.responses] == [
+        ['mcp_list_tools'],
+        ['function_call'],
+    ]
+    assert [response.id for response in back.responses] == ['resp_first', 'resp_second']
+    assert [response.usage.input_tokens for response in back.responses if response.usage is not None] == [3, 7]
+
+
 def test_response_tool_definitions_are_kept_with_their_response() -> None:
     items = [
         {'type': 'function_call', 'call_id': 'a', 'name': 'lookup', 'arguments': '{"a": 1}'},
