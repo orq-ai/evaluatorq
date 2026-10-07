@@ -1697,7 +1697,7 @@
   }
   document.body.addEventListener('htmx:afterSwap', function (evt) {
     const swapped = evt.detail.target;
-    if (swapped && (swapped.id === 'finder-drawer' || swapped.matches('.fd-traces'))) {
+    if (swapped && (swapped.id === 'finder-drawer' || swapped.classList?.contains('fd-traces'))) {
       const on = swapped.querySelector('.fd-msg.on');
       if (on) drawerScrollTo(swapped, on.getAttribute('data-msg'));
     }

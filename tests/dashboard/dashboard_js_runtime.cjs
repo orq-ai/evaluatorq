@@ -888,3 +888,74 @@ test('a swap without a chart draws its insights maps and never loads vega', () =
   assert.deepEqual(queried, ['.insights-map-chart']);
   assert.deepEqual(appended, []);
 });
+
+function traceTranscript() {
+  const attrs = element => name => element.attrs[name];
+  const classes = () => {
+    const values = new Set();
+    return {
+      toggle(name, on) { if (on) values.add(name); else values.delete(name); },
+      contains(name) { return values.has(name); },
+    };
+  };
+  const messages = [1, 2].map(index => ({
+    attrs: { 'data-msg': String(index) }, open: false, classList: classes(),
+  }));
+  const minis = [1, 2].map(index => ({ attrs: { 'data-mini-msg': String(index) }, classList: classes() }));
+  for (const el of [...messages, ...minis]) el.getAttribute = attrs(el);
+  const thread = { scrollTop: 0, offsetTop: 0, clientHeight: 100 };
+  const second = { offsetTop: 400, clientHeight: 40 };
+  const root = {
+    classList: { contains: name => name === 'fd-traces' },
+    matches: selector => selector === '.fd-traces',
+    querySelectorAll: selector => (selector === '.fd-msg' ? messages : selector === '.fd-mini i' ? minis : []),
+    querySelector: selector => ({ '#fd-thread': thread, '#msg-2': second, '.fd-msg.on': messages[1] })[selector] ?? null,
+  };
+  messages[1].classList.toggle('on', true);
+  return { root, messages, minis, thread };
+}
+
+test('a mini-map click inside a trace block with no drawer selects that message', () => {
+  const app = loadDashboard();
+  const { root, messages, minis, thread } = traceTranscript();
+  const closest = target => selector => ({
+    '.fd-mini i[data-mini-msg]': target,
+    '#finder-drawer, .fd-traces': root,
+  })[selector] ?? null;
+  const mini = minis[1];
+  mini.closest = closest(mini);
+
+  app.documentEvents.emit('click', { target: mini });
+
+  assert.equal(messages[1].open, true);
+  assert.equal(messages[0].open, false);
+  assert.equal(messages[1].classList.contains('on'), true);
+  assert.equal(minis[1].classList.contains('on'), true);
+  assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
+});
+
+test('a message summary click inside a trace block with no drawer marks that message selected', () => {
+  const app = loadDashboard();
+  const { root, messages, thread } = traceTranscript();
+  messages[0].classList.toggle('on', true);
+  messages[1].classList.toggle('on', false);
+  const summary = {
+    parentElement: messages[1],
+    closest: selector => ({ '.fd-msg > summary': summary, '#finder-drawer, .fd-traces': root })[selector] ?? null,
+  };
+
+  app.documentEvents.emit('click', { target: summary });
+
+  assert.equal(messages[1].classList.contains('on'), true);
+  assert.equal(messages[0].classList.contains('on'), false);
+  assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
+});
+
+test('swapping a trace block scrolls the thread to the selected message', () => {
+  const app = loadDashboard();
+  const { root, thread } = traceTranscript();
+
+  app.body.emit('htmx:afterSwap', { detail: { target: root } });
+
+  assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
+});
