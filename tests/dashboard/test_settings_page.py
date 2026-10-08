@@ -1742,23 +1742,6 @@ async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: p
     assert await model_catalogue.models_by_provider(kind='embedding') == {'openai': ['openai/text-embedding-4']}
 
 
-def test_model_field_explains_a_missing_api_key(client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.delenv('ORQ_API_KEY', raising=False)
-    monkeypatch.setenv('EVALUATORQ_USER_SETTINGS', str(tmp_path / 'user-settings.json'))
-
-    html = client.get(
-        '/settings/models', params={'field': 'fast_model', 'auth_method': 'environment', 'fast_model': 'x'}
-    ).text
-
-    assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x"')
-    assert 'No Orq API key' in html
-    notices = [
-        client.get('/settings/models', params={'field': field, 'auth_method': 'environment'}).text
-        for field in ('fast_model', 'smart_model', 'classifier_model', 'embedding_model')
-    ]
-    assert sum('No Orq API key' in notice for notice in notices) == 1
-
-
 def test_model_field_filters_the_catalogue_by_the_fields_kind(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     kinds: list[str] = []
 

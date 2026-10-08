@@ -425,11 +425,14 @@ async def _settings_models(req: Request) -> NotStr:
             server = None
     update['orq_oauth_server'] = server
     settings = settings.model_copy(update=update)
+    notice = ''
+    notice_html = '<p id="models-warning" hx-swap-oob="innerHTML"></p>' if field == 'fast_model' else ''
     if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
         return NotStr(
             settings_model_control(
                 field, value, {}, note=_join_notes(env_note, 'Choose a CLI profile to load its models.')
             )
+            + notice_html
         )
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
     try:
@@ -440,19 +443,19 @@ async def _settings_models(req: Request) -> NotStr:
         groups = {}
         logger.warning('Could not load the model catalogue for {}: {}', field, exc)
         if isinstance(exc, MissingLLMCredentialsError):
-            note = (
-                (
+            note = ''
+            if field == 'fast_model':
+                notice = (
                     "No Orq API key for the chosen authentication method, so the model list can't load. "
                     'Set one under Authentication, or type a model id.'
                 )
-                if field == 'fast_model'
-                else ''
-            )
         else:
             note = "Couldn't load the model list from Orq. Type a model id."
     else:
         note = '' if groups else 'Orq returned no models for this field. Type a model id.'
-    return NotStr(settings_model_control(field, value, groups, note=_join_notes(env_note, note)))
+    if field == 'fast_model':
+        notice_html = f'<p id="models-warning" hx-swap-oob="innerHTML">{notice}</p>'
+    return NotStr(settings_model_control(field, value, groups, note=_join_notes(env_note, note)) + notice_html)
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901

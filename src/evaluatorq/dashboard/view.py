@@ -1167,7 +1167,8 @@ def settings_body(
     models_panel = _panel(
         'Models',
         'Window, limit and parallelism are set per run on the Trace search page',
-        f'<div class="config-list">{"".join(field_rows)}</div>',
+        f'<div class="config-list">{"".join(field_rows)}</div>'
+        '<p id="models-warning" class="settings-error settings-model-warning" role="alert"></p>',
     )
     auth_panel = _panel(
         'Authentication',
