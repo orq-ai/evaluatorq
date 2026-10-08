@@ -307,8 +307,7 @@ async function main() {
   }
 
   {
-    const SESSION_A = 'claude-code:/home/me/.claude/projects/p/a.jsonl';
-    const SESSION_B = 'codex:/home/me/.codex/sessions/2026/10/02/b.jsonl';
+    const [SESSION_A, SESSION_B] = fixtures.session_refs;
     const app = boot({
       ...baseHandlers(),
       '/insights/sessions/search': () => response(fixtures.sessions),

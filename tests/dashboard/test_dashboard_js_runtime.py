@@ -35,7 +35,7 @@ def test_insights_run_form_controller() -> None:
     from datetime import datetime, timezone
 
     from evaluatorq.dashboard.insights_run_form import RunFormValues, render_run_form, render_run_page
-    from evaluatorq.dashboard.insights_sessions_views import render_session_results
+    from evaluatorq.dashboard.insights_sessions_views import encode_ref, render_session_results
     from evaluatorq.local_sessions import SessionSearchResult, SessionSummary
 
     def summary(source: str, path: str) -> SessionSummary:
@@ -66,6 +66,8 @@ def test_insights_run_form_controller() -> None:
             replace(values, source='snapshot'), csrf='token', error='Browse to choose a trace file first.'
         ),
         'sessions': render_session_results(sessions, selected=frozenset(), roots_found=True),
+        # Refs carry the platform's path form (backslashes on Windows), so the harness compares against these.
+        'session_refs': [encode_ref(s) for s in sessions.sessions],
     }
     script = Path(__file__).with_name('insights_run_form.cjs')
     # Fixtures go in on stdin; insights_run_form.cjs explains why.

@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 from typing import TYPE_CHECKING
 
+import pytest
 import typer
 from typer.testing import CliRunner
 
@@ -20,8 +22,6 @@ from .test_search import _claude, _codex, _utc
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def _app() -> typer.Typer:
@@ -64,10 +64,12 @@ def test_export_writes_snapshot_with_documents(claude_projects: Path, tmp_path: 
     assert result.exit_code == 0, result.output
     snapshot = Snapshot.model_validate_json(target.read_text(encoding='utf-8'))
     assert len(snapshot.documents) == 1
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    if sys.platform != 'win32':  # Windows has no POSIX permission bits
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert 'Wrote 1 session to' in result.stderr
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='Windows has no POSIX permission bits')
 def test_export_over_an_existing_world_readable_file_leaves_it_private(claude_projects: Path, tmp_path: Path) -> None:
     _claude(claude_projects, 'c1')
     target = tmp_path / 'snap.json'
