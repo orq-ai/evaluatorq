@@ -1884,7 +1884,7 @@ def test_selected_profile_controls_facets_and_worker_credentials(
     assert token is not None
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
         patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn,
@@ -1918,7 +1918,7 @@ def test_missing_selected_profile_never_uses_environment(monkeypatch: pytest.Mon
     assert token is not None
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client') as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client') as resolve,
         patch('evaluatorq.dashboard.insights_routes.launch_insights') as launch,
     ):
         facets = client.get('/insights/facets?window_days=7')
@@ -1954,7 +1954,7 @@ def test_reloaded_selected_profile_is_used_and_named_when_orq_rejects_it(
         status_code = 401
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch(
             'evaluatorq.dashboard.insights_routes.load_facet_catalogue',
             new_callable=AsyncMock,
@@ -2004,7 +2004,7 @@ def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_pat
     getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'first'})
     getattr(client.app, 'state').finder_profile = OrqProfile('first', 'first-key', None, False)
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2037,7 +2037,7 @@ async def test_concurrent_insights_facet_misses_share_one_provider_call(
         return catalogue
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2068,7 +2068,7 @@ async def test_settings_generation_change_discards_stale_insights_facet_fetch(
         return FacetCatalogue(project=('old-profile',))
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2091,7 +2091,7 @@ def test_facet_cache_key_tracks_same_profile_credentials_and_endpoint(
     getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'same'})
     getattr(client.app, 'state').finder_profile = OrqProfile('same', 'first-secret', 'https://first.example', False)
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2111,7 +2111,7 @@ def test_facet_options_use_selected_window_and_keep_values(monkeypatch: pytest.M
     catalogue = FacetCatalogue(status=('ok',), provider=('openai',))
     load = AsyncMock(return_value=catalogue)
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2140,7 +2140,7 @@ def test_facet_catalogue_failure_is_visible(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     client = TestClient(build_app())
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, side_effect=RuntimeError('Orq unavailable')),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2158,7 +2158,7 @@ def test_facet_retry_bypasses_failed_cache_and_preserves_selection(
     client = TestClient(build_app())
     load = AsyncMock(side_effect=[RuntimeError('Orq unavailable'), FacetCatalogue(status=('ok',))])
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
