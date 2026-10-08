@@ -142,7 +142,7 @@ def test_conversation_view_keeps_a_long_opening_request_over_budget() -> None:
     assert view.startswith('USER: please please')
 
 
-def test_conversation_view_collapsed_is_the_default_and_ignores_tool_output_chars() -> None:
+def test_conversation_view_collapsed_is_the_default_and_ignores_tool_max_chars() -> None:
     expected = (
         'USER: Fix the failing parser test.\n'
         'ASSISTANT: Looking at the parser.\n'
@@ -151,7 +151,7 @@ def test_conversation_view_collapsed_is_the_default_and_ignores_tool_output_char
     )
 
     assert conversation_view(CODING_TRACE) == expected
-    assert conversation_view(CODING_TRACE, tools='collapsed', tool_output_chars=500) == expected
+    assert conversation_view(CODING_TRACE, tools='collapsed', tool_max_chars=500) == expected
 
 
 def test_conversation_view_per_call_lists_each_call_with_truncated_output() -> None:
@@ -172,7 +172,7 @@ def test_conversation_view_per_call_lists_each_call_with_truncated_output() -> N
         {'role': 'assistant', 'content': 'Done.'},
     )
 
-    view = conversation_view(trace, tools='per_call', tool_output_chars=40)
+    view = conversation_view(trace, tools='per_call', tool_max_chars=40)
     lines = view.splitlines()
 
     assert lines[2] == '  [tool] Bash: uv run pytest -q ⏎ echo done'
@@ -191,7 +191,7 @@ def test_conversation_view_per_call_lists_each_call_with_truncated_output() -> N
 
 
 def test_conversation_view_per_call_marks_errors_and_keeps_risky_commands_whole() -> None:
-    view = conversation_view(CODING_TRACE, tools='per_call', tool_output_chars=200)
+    view = conversation_view(CODING_TRACE, tools='per_call', tool_max_chars=200)
 
     assert (
         '  [tool] Bash [error]: cd repo && uv run pytest tests/test_parser.py -q\n    → Error: 1 failed, 3 passed'
@@ -204,8 +204,8 @@ def test_conversation_view_per_call_marks_errors_and_keeps_risky_commands_whole(
 def test_conversation_view_rejects_bad_tool_options() -> None:
     with pytest.raises(ValueError, match='tools must be'):
         conversation_view(CODING_TRACE, tools='verbose')  # ty: ignore[invalid-argument-type]
-    with pytest.raises(ValueError, match='tool_output_chars'):
-        conversation_view(CODING_TRACE, tools='per_call', tool_output_chars=-1)
+    with pytest.raises(ValueError, match='tool_max_chars'):
+        conversation_view(CODING_TRACE, tools='per_call', tool_max_chars=-1)
 
 
 def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:

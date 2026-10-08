@@ -202,7 +202,7 @@ def conversation_view(
     budget: int = VIEW_BUDGET,
     *,
     tools: Literal['collapsed', 'per_call'] = 'collapsed',
-    tool_output_chars: int = 0,
+    tool_max_chars: int = 0,
 ) -> str:
     """Render the conversation as plain text within `budget` characters.
 
@@ -216,14 +216,14 @@ def conversation_view(
     repeats counted, and drops tool outputs. `tools='per_call'` gives each call
     its own `[tool] name: input` line (status shown only when not completed), input cut like
     `tool_activity_chunks`. Tool result bodies can hold credentials or user data,
-    so they are left out unless `tool_output_chars` is above 0, in which case
+    so they are left out unless `tool_max_chars` is above 0, in which case
     each result is shown under its call with its start and end kept within
-    about that many characters. `tool_output_chars` has no effect when collapsed.
+    about that many characters. `tool_max_chars` has no effect when collapsed.
     """
     if tools not in ('collapsed', 'per_call'):
         raise ValueError(f"tools must be 'collapsed' or 'per_call', got {tools!r}")
-    if tool_output_chars < 0:
-        raise ValueError(f'tool_output_chars must be >= 0, got {tool_output_chars}')
+    if tool_max_chars < 0:
+        raise ValueError(f'tool_max_chars must be >= 0, got {tool_max_chars}')
     messages = prompt_messages(trace)
     results = (
         {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
@@ -252,9 +252,7 @@ def conversation_view(
                 flush()
                 lines.append(f'ASSISTANT: {_head_tail(text, ASSISTANT_EDGE, ASSISTANT_EDGE)}')
             if tools == 'per_call':
-                lines.extend(
-                    _per_call_line(call, results, tool_output_chars) for call in message.get('tool_calls') or []
-                )
+                lines.extend(_per_call_line(call, results, tool_max_chars) for call in message.get('tool_calls') or [])
             else:
                 pending.extend(_call_line(call) for call in message.get('tool_calls') or [])
     flush()
@@ -343,7 +341,9 @@ def _per_call_line(call: dict[str, Any], results: dict[Any, dict[str, Any]], out
     status = _tool_call_status(call_id, paired)
     flag = '' if status == 'completed' else f' [{status}]'  # completed is the common case; only flag the rest
     line = f'  [tool] {_call_name(call)}{flag}: {_call_input(call)}'
-    output = tool_result_to_text(result.get('content')).strip() if result and output_chars > 0 else ''
+    output = (
+        scrub_known_secrets(tool_result_to_text(result.get('content')).strip()) if result and output_chars > 0 else ''
+    )
     if output:
         half = max(output_chars // 2, 1)
         line += f'\n    → {_head_tail(output, half, half).replace(chr(10), " ⏎ ")}'
