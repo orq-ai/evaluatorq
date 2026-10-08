@@ -658,7 +658,9 @@ def test_trace_id_opens_its_saved_insights_detail(tmp_path, minimal_run, monkeyp
 
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     monkeypatch.setenv('ORQ_WORKSPACE', 'example-workspace')
-    monkeypatch.setattr(insights_routes, 'load_trace_record', forbidden)
+    monkeypatch.setattr(insights_routes, 'load_orq_record', forbidden)
+    monkeypatch.setattr(insights_routes, 'load_snapshot_record', forbidden)
+    monkeypatch.setattr(insights_routes, 'build_orq_client', forbidden)
     _write_run(tmp_path, minimal_run)
     client = TestClient(build_app())
 

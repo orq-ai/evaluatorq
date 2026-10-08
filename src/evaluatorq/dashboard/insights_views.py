@@ -12,6 +12,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
 from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
+from evaluatorq.dashboard.insights_trace_source import conversation_unavailable_reason
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.dashboard.ui_components import component_assets, script_asset, stylesheet_asset
@@ -650,21 +651,39 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight, *, view: Literal['a
         f'{" · " + esc(trace.project) if trace.project else ""}</p>{orq_link}'
     )
 
+    unavailable_reason = conversation_unavailable_reason(run)
+    if unavailable_reason is not None:
+        view = 'analysis'
+
     def tab_link(name: Literal['analysis', 'trace'], label: str) -> str:
         current = ' aria-current="page"' if view == name else ''
         active = ' active' if view == name else ''
         return f'<a class="insights-tab{active}" href="{esc(_trace_href(run, trace, view=name))}"{current}>{label}</a>'
 
-    tab_links = tab_link('analysis', 'Analysis') + tab_link('trace', 'Trace')
-    tab_nav = f'<nav class="insights-trace-tabs" aria-label="Trace views">{tab_links}</nav>'
+    trace_tab = (
+        tab_link('trace', 'Trace')
+        if unavailable_reason is None
+        else (
+            f'<span class="insights-tab disabled" aria-disabled="true" title="{esc(unavailable_reason)}">Trace</span>'
+            f'<span class="insights-muted insights-trace-tab-reason">{esc(unavailable_reason)}</span>'
+        )
+    )
+    tab_nav = (
+        f'<nav class="insights-trace-tabs" aria-label="Trace views">{tab_link("analysis", "Analysis")}{trace_tab}</nav>'
+    )
     if view == 'trace':
         conversation_url = (
             f'/insights/{quote(run.run_id, safe="")}/trace-conversation?'
             f'{urlencode({"trace_id": trace.trace_id, "span_id": trace.span_id or ""})}'
         )
+        show_send_error = (
+            'this.innerHTML = \'<p class="finder-empty" role="status">'
+            "Could not load the conversation. Reload to try again.</p>'"
+        )
         content = (
             f'<div class="fd-traces insights-trace-view" hx-get="{esc(conversation_url)}" hx-trigger="load" '
-            'hx-swap="outerHTML"><p class="finder-empty" role="status">Loading conversation…</p></div>'
+            f'hx-swap="outerHTML" hx-on::send-error="{esc(show_send_error)}">'
+            '<p class="finder-empty" role="status">Loading conversation…</p></div>'
         )
     else:
         content = (

@@ -72,7 +72,7 @@ def test_dataset_trace_without_orq_metadata_renders_list_detail_and_signal_route
     assert review.status_code == 200
     assert row['span_id'] is None
     assert row['ts'] is None
-    assert row['trace_url'] == '/insights/dataset-run/trace?trace_id=bench-row-7&span_id=&view=trace'
+    assert row['trace_url'] == '/insights/dataset-run/trace?trace_id=bench-row-7&span_id='
     assert row['orq_url'] is None
     assert row['signal_detail_url'] == (
         '/insights/dataset-run/trace-signals.json?trace_id=bench-row-7&span_id='

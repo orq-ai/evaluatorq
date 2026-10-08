@@ -118,6 +118,17 @@ class OrqSourceError(ValueError):
     """Live trace acquisition could not produce a valid snapshot."""
 
 
+def require_complete_targeted_load(snapshot: Snapshot, *, error_type: type[Exception], operation: str) -> None:
+    """Raise ``error_type`` when a targeted load stopped before covering its window.
+
+    Raises:
+        Exception: An ``error_type`` naming ``operation`` and the snapshot's ``incomplete_reason``.
+    """
+    incomplete_reason = snapshot.capture_metadata.get('incomplete_reason')
+    if incomplete_reason:
+        raise error_type(f'{operation} was incomplete: {incomplete_reason}')
+
+
 @dataclass
 class _Scan:
     """Counters and completion state one paging pass shares with its consumer."""
@@ -335,9 +346,9 @@ class OrqTraceSource:
         snapshot = await self.load_async(
             start, end, 1, facets=facets, numeric=numeric, target_trace_ids=frozenset({trace_id})
         )
-        incomplete_reason = snapshot.capture_metadata.get('incomplete_reason')
-        if incomplete_reason:
-            raise OrqSourceError(f'targeted load of trace {trace_id} was incomplete: {incomplete_reason}')
+        require_complete_targeted_load(
+            snapshot, error_type=OrqSourceError, operation=f'targeted load of trace {trace_id}'
+        )
         return next((record for record in snapshot.traces if record.trace_id == trace_id), None)
 
     async def _load_with_lifecycle(

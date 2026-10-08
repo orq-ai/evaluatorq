@@ -824,12 +824,12 @@ async def span_tree_fragment(
     try:
         spans = await load_spans(trace_id)
     except Exception as error:  # noqa: BLE001 - the conversation drawer remains usable if span lookup fails
-        logger.warning('Find span lookup failed for trace {}: {}', trace_id, error)
+        logger.warning('Span lookup failed for trace {}: {}', trace_id, error)
         return '<p class="finder-empty" role="status">Could not load spans. Try again.</p>'
     try:
         error_message = await load_first_error_message(trace_id, spans)
     except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
-        logger.warning('Find span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
+        logger.warning('Span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
         error_message = None
     from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
     from evaluatorq.dashboard.trace_finder.views import span_tree

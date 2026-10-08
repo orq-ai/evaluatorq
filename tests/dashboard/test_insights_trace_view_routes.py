@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,43 +12,18 @@ import pytest
 from loguru import logger
 from starlette.testclient import TestClient
 
-from evaluatorq.dashboard import insights_routes
+from evaluatorq.dashboard import insights_routes, insights_trace_source
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.insights.models import InsightsRun
-from evaluatorq.trace_finder.models import Snapshot, TraceRecord
+from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.orq_source import OrqTraceSource
+from tests.dashboard.insights_trace_helpers import snapshot_run, write_snapshot
 from tests.dashboard.test_insights_page import _write_run, minimal_run  # noqa: F401 — fixture reused
+from tests.insights.test_population import make_trace
 from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, span
 
 TRACE_PAGE = '/insights/run-1/trace?trace_id=trace-1&span_id=span-1'
 CONVERSATION = '/insights/run-1/trace-conversation?trace_id=trace-1&span_id=span-1'
-
-
-def _record(trace_id: str, span_id: str, content: str) -> TraceRecord:
-    return TraceRecord(
-        schema_version=1,
-        trace_id=trace_id,
-        span_id=span_id,
-        timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
-        messages=({'role': 'user', 'content': content},),
-        project='default',
-        model='m',
-        provider='p',
-        status='ok',
-        product='deployments',
-        trace_type='trace',
-    )
-
-
-def _write_snapshot(path: Path, records: list[TraceRecord]) -> str:
-    path.write_bytes(Snapshot(traces=tuple(records)).model_dump_json().encode())
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _snapshot_run(run: InsightsRun, path: Path, digest: str) -> InsightsRun:
-    return run.model_copy(
-        update={'population': {'mode': 'snapshot', 'snapshot_path': str(path), 'snapshot_sha256': digest}}
-    )
 
 
 @pytest.fixture
@@ -93,8 +66,8 @@ def test_unknown_view_falls_back_to_the_analysis_page(env: Path, minimal_run: In
 
 def test_snapshot_run_reads_the_conversation_from_its_snapshot(env: Path, minimal_run: InsightsRun) -> None:
     path = env / 'snap.json'
-    digest = _write_snapshot(path, [_record('trace-1', 'span-1', 'hello from the snapshot')])
-    _write_run(env, _snapshot_run(minimal_run, path, digest))
+    digest = write_snapshot(path, [make_trace('trace-1', span_id='span-1', content='hello from the snapshot')])
+    _write_run(env, snapshot_run(minimal_run, path, digest))
 
     response = TestClient(build_app()).get(CONVERSATION)
 
@@ -106,8 +79,8 @@ def test_snapshot_run_reads_the_conversation_from_its_snapshot(env: Path, minima
 
 def test_snapshot_run_with_the_file_gone_says_so_without_the_path(env: Path, minimal_run: InsightsRun) -> None:
     path = env / 'snap.json'
-    digest = _write_snapshot(path, [_record('trace-1', 'span-1', 'x')])
-    _write_run(env, _snapshot_run(minimal_run, path, digest))
+    digest = write_snapshot(path, [make_trace('trace-1', span_id='span-1', content='x')])
+    _write_run(env, snapshot_run(minimal_run, path, digest))
     path.unlink()
 
     response = TestClient(build_app()).get(CONVERSATION)
@@ -124,19 +97,20 @@ def _fake_source(monkeypatch: pytest.MonkeyPatch, record: TraceRecord | str) -> 
     async def source(app: Any):
         yield sentinel
 
-    async def load(run: InsightsRun, trace: Any, *, source: Any) -> TraceRecord | str:
-        assert source is sentinel
+    async def load(run: InsightsRun, trace: Any, *, open_source: Any) -> TraceRecord | str:
+        async with open_source() as opened:
+            assert opened is sentinel
         return record
 
     monkeypatch.setattr(insights_routes, '_trace_source', source)
-    monkeypatch.setattr(insights_routes, 'load_trace_record', load)
+    monkeypatch.setattr(insights_routes, 'load_orq_record', load)
 
 
 def test_orq_run_shows_the_transcript_and_a_spans_url(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_run(env, minimal_run)
-    _fake_source(monkeypatch, _record('trace-1', 'span-1', 'hello from orq'))
+    _fake_source(monkeypatch, make_trace('trace-1', span_id='span-1', content='hello from orq'))
 
     response = TestClient(build_app()).get(CONVERSATION)
 
@@ -150,7 +124,7 @@ def test_orq_run_with_a_different_span_shows_a_mismatch_notice(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_run(env, minimal_run)
-    _fake_source(monkeypatch, _record('trace-1', 'span-other', 'hello from orq'))
+    _fake_source(monkeypatch, make_trace('trace-1', span_id='span-other', content='hello from orq'))
     warnings: list[str] = []
     sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
 
@@ -182,15 +156,36 @@ def test_orq_run_without_credentials_degrades_visibly(
 
     try:
         conversation = client.get(CONVERSATION)
+        spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
     finally:
         logger.remove(sink)
-    spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
 
+    reason = 'Connect an Orq account in Settings to load this conversation.'
     assert conversation.status_code == 200
-    assert 'Connect an Orq account in Settings' in conversation.text
-    assert warnings == ['Insights trace source unavailable: no credentials\n']
+    assert reason in conversation.text
     assert spans.status_code == 200
-    assert 'Could not load spans. Try again.' in spans.text
+    assert reason in spans.text
+    assert 'Try again' not in spans.text
+    assert warnings == ['Insights trace source unavailable: no credentials\n'] * 2
+
+
+def test_orq_trace_without_a_recorded_time_does_not_look_up_credentials(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = minimal_run.model_copy(
+        update={'traces': [minimal_run.traces[0].model_copy(update={'timestamp': None}), *minimal_run.traces[1:]]}
+    )
+    _write_run(env, run)
+
+    def unexpected_auth(app: Any) -> Any:
+        raise AssertionError('a trace without a timestamp must not look up credentials')
+
+    monkeypatch.setattr(insights_routes, 'selected_dashboard_auth', unexpected_auth)
+
+    response = TestClient(build_app()).get(CONVERSATION)
+
+    assert response.status_code == 200
+    assert 'did not record when the trace ran' in response.text
 
 
 def _named_span(span_id: str, *, name: str, minute: int, parent_span_id: str | None = None) -> SimpleNamespace:
@@ -259,10 +254,40 @@ def test_source_construction_failure_still_closes_the_client(
     monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: orq)
     monkeypatch.setattr(insights_routes, 'OrqTraceSource', failing_source)
 
+    client = TestClient(build_app())
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+
+    try:
+        spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
+        conversation = client.get(CONVERSATION)
+    finally:
+        logger.remove(sink)
+
+    reason = 'Could not connect to Orq with the account selected in Settings.'
+    assert reason in spans.text
+    assert 'Try again' not in spans.text
+    assert reason in conversation.text
+    assert orq.exit_calls == [(None, None, None)] * 2
+    assert warnings == ['Insights trace source could not be created: hook registration failed\n'] * 2
+
+
+def test_span_load_failure_is_the_only_spans_panel_that_says_try_again(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_run(env, minimal_run)
+    _api_key_auth(monkeypatch)
+
+    class FailingSpans(FakeTraces):
+        async def list_spans_async(self, **kwargs: Any) -> Any:
+            raise RuntimeError('spans are down')
+
+    monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: FakeOrq(FailingSpans({})))
+
     response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1')
 
+    assert response.status_code == 200
     assert 'Could not load spans. Try again.' in response.text
-    assert orq.exit_calls == [(None, None, None)]
 
 
 def test_unknown_trace_and_snapshot_runs_have_no_span_or_conversation_routes(
@@ -270,8 +295,8 @@ def test_unknown_trace_and_snapshot_runs_have_no_span_or_conversation_routes(
 ) -> None:
     _write_run(env, minimal_run)
     path = env / 'snap.json'
-    digest = _write_snapshot(path, [_record('trace-1', 'span-1', 'x')])
-    _write_run(env, _snapshot_run(minimal_run, path, digest).model_copy(update={'run_id': 'snapshot-run'}))
+    digest = write_snapshot(path, [make_trace('trace-1', span_id='span-1', content='x')])
+    _write_run(env, snapshot_run(minimal_run, path, digest).model_copy(update={'run_id': 'snapshot-run'}))
     client = TestClient(build_app())
 
     unknown_spans = client.get('/insights/run-1/trace-spans?trace_id=unknown')
@@ -280,5 +305,109 @@ def test_unknown_trace_and_snapshot_runs_have_no_span_or_conversation_routes(
     assert unknown_spans.status_code == 404
     assert 'Span loading is unavailable.' in unknown_spans.text
     assert snapshot_spans.status_code == 404
-    assert client.get('/insights/run-1/trace-conversation?trace_id=unknown&span_id=span-1').status_code == 404
-    assert client.get('/insights/missing/trace-conversation?trace_id=trace-1&span_id=span-1').status_code == 404
+
+
+def test_trace_placeholder_reports_send_errors_and_lets_htmx_swap_successes(
+    env: Path, minimal_run: InsightsRun
+) -> None:
+    _write_run(env, minimal_run)
+
+    page = TestClient(build_app()).get(f'{TRACE_PAGE}&view=trace')
+
+    assert 'hx-on::before-swap' not in page.text
+    assert (
+        'hx-on::send-error="this.innerHTML = &#x27;&lt;p class=&quot;finder-empty&quot; role=&quot;status&quot;&gt;'
+        'Could not load the conversation. Reload to try again.&lt;/p&gt;&#x27;"'
+    ) in page.text
+
+
+@pytest.mark.parametrize(
+    ('url', 'reason'),
+    [
+        ('/insights/missing/trace-conversation?trace_id=trace-1&span_id=span-1', 'Insights run not found.'),
+        ('/insights/run-1/trace-conversation?trace_id=unknown&span_id=span-1', 'Trace not found in this Insights run.'),
+    ],
+    ids=['unknown-run', 'unknown-trace'],
+)
+def test_unknown_run_or_trace_conversation_is_a_200_unavailable_body(
+    env: Path, minimal_run: InsightsRun, url: str, reason: str
+) -> None:
+    _write_run(env, minimal_run)
+
+    response = TestClient(build_app()).get(url)
+
+    assert response.status_code == 200
+    assert response.text.startswith('<div class="fd-traces insights-trace-view">')
+    assert 'Conversation unavailable' in response.text
+    assert reason in response.text
+    assert 'trace-spans' not in response.text
+
+
+def test_run_from_an_unknown_source_has_no_orq_conversation_or_spans(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'dataset'}}))
+
+    def unexpected_client(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError('a dataset run must not call Orq')
+
+    monkeypatch.setattr(insights_routes, 'build_orq_client', unexpected_client)
+    client = TestClient(build_app())
+
+    conversation = client.get(CONVERSATION)
+    spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
+
+    assert conversation.status_code == 200
+    assert 'This run&#x27;s trace source cannot be re-read.' in conversation.text
+    assert 'trace-spans' not in conversation.text
+    assert spans.status_code == 404
+
+
+@pytest.mark.parametrize('view', ['analysis', 'trace'])
+def test_trace_tab_is_disabled_with_its_reason_when_the_conversation_cannot_be_reread(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch, view: str
+) -> None:
+    path = env / 'snap.json'
+    digest = write_snapshot(path, [make_trace('trace-1', span_id='span-1', content='x')])
+    _write_run(env, snapshot_run(minimal_run, path, digest))
+    path.unlink()
+
+    def unexpected(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError('the trace page must not call Orq or read the snapshot')
+
+    monkeypatch.setattr(insights_routes, 'build_orq_client', unexpected)
+    monkeypatch.setattr(insights_trace_source, 'read_snapshot', unexpected)
+
+    page = TestClient(build_app()).get(f'{TRACE_PAGE}&view={view}')
+
+    reason = 'The snapshot file this run read is no longer available or could not be read.'
+    assert page.status_code == 200
+    assert (
+        f'<span class="insights-tab disabled" aria-disabled="true" title="{reason}">Trace</span>'
+        f'<span class="insights-muted insights-trace-tab-reason">{reason}</span>'
+    ) in page.text
+    assert 'view=trace' not in page.text
+    assert 'trace-conversation' not in page.text
+    assert '<h3>Summary</h3>' in page.text
+
+
+def test_analysis_tab_of_a_rereadable_run_links_the_trace_tab_without_loading_it(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = env / 'snap.json'
+    digest = write_snapshot(path, [make_trace('trace-1', span_id='span-1', content='x')])
+    _write_run(env, snapshot_run(minimal_run, path, digest))
+
+    def unexpected(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError('the Analysis tab must not read the snapshot')
+
+    monkeypatch.setattr(insights_trace_source, 'read_snapshot', unexpected)
+
+    page = TestClient(build_app()).get(TRACE_PAGE)
+
+    assert page.status_code == 200
+    assert (
+        '<a class="insights-tab" href="/insights/run-1/trace?trace_id=trace-1&amp;span_id=span-1&amp;view=trace">'
+        'Trace</a>'
+    ) in page.text
+    assert 'insights-tab disabled' not in page.text

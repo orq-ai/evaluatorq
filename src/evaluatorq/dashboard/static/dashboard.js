@@ -1703,15 +1703,6 @@
       if (on) drawerScrollTo(swapped, on.getAttribute('data-msg'));
     }
   });
-  // htmx swaps no error response, so a failed Trace-tab load would otherwise keep its loading line forever.
-  ['htmx:sendError', 'htmx:responseError', 'htmx:timeout'].forEach(function (name) {
-    document.body.addEventListener(name, function (evt) {
-      const placeholder = evt.detail?.elt;
-      if (!placeholder?.matches?.('.insights-trace-view[hx-get]')) return;
-      placeholder.innerHTML =
-        '<p class="finder-empty" role="status">Could not load the conversation. Reload to try again.</p>';
-    });
-  });
   document.addEventListener('click', function (evt) {
     const mini = evt.target.closest('.fd-mini i[data-mini-msg]');
     const summary = evt.target.closest('.fd-msg > summary');

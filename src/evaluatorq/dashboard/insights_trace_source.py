@@ -3,23 +3,51 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from evaluatorq.insights.models import reads_snapshot
-from evaluatorq.insights.population import PopulationError, read_snapshot
+from evaluatorq.dashboard.insights_uploads import is_uploaded_source
+from evaluatorq.insights.models import population_source, reads_orq
+from evaluatorq.insights.population import TARGETED_RELOAD_MARGIN, PopulationError, read_snapshot
+from evaluatorq.insights.store import get_insights_runs_dir
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractAsyncContextManager
+
     from evaluatorq.insights.models import InsightsRun, TraceInsight
     from evaluatorq.trace_finder.models import TraceRecord
     from evaluatorq.trace_finder.orq_source import OrqTraceSource
 
-# The pipeline's Finder-export reload queries the same margin around a trace's start timestamp.
-_ANALYSED_TIME_MARGIN = timedelta(seconds=1)
+SOURCE_NOT_REREADABLE = "This run's trace source cannot be re-read."
+SNAPSHOT_PATH_MISSING = 'This run does not record where its snapshot was read from.'
+SNAPSHOT_UNREADABLE = 'The snapshot file this run read is no longer available or could not be read.'
+UPLOAD_DELETED = (
+    'The dashboard deletes uploaded snapshot files after the run, so this conversation is no longer available.'
+)
+
+
+def _gone_snapshot_reason(path: Path) -> str:
+    return UPLOAD_DELETED if is_uploaded_source(get_insights_runs_dir(), path) else SNAPSHOT_UNREADABLE
+
+
+def conversation_unavailable_reason(run: InsightsRun) -> str | None:
+    """Say why the Trace tab cannot re-read this run's conversations, or None when it can; a snapshot costs one stat."""
+    source = population_source(run.population)
+    if source == 'snapshot':
+        path = run.population.get('snapshot_path')
+        if not path:
+            return SNAPSHOT_PATH_MISSING
+        return None if Path(str(path)).is_file() else _gone_snapshot_reason(Path(str(path)))
+    return None if reads_orq(run.population) else SOURCE_NOT_REREADABLE
+
+
+def conversation_rereadable(run: InsightsRun) -> bool:
+    """Whether the Trace tab can re-read this run's conversations: from Orq, or from a snapshot file that still exists."""
+    return conversation_unavailable_reason(run) is None
 
 
 def _unavailable(trace: TraceInsight, reason: str, cause: object = None) -> str:
@@ -27,46 +55,67 @@ def _unavailable(trace: TraceInsight, reason: str, cause: object = None) -> str:
     return reason
 
 
-async def load_trace_record(
-    run: InsightsRun, trace: TraceInsight, *, source: OrqTraceSource | None
-) -> TraceRecord | str:
-    """Return the trace's record from its source, or a user-facing reason it cannot be shown.
+def source_not_rereadable(run: InsightsRun, trace: TraceInsight) -> str:
+    """Log and return the reason a run whose population is neither a snapshot nor an Orq read cannot be re-read."""
+    return _unavailable(trace, SOURCE_NOT_REREADABLE, f'population mode {run.population.get("mode")!r}')
 
-    An Orq run re-runs the pipeline's query for this one trace, with the run's filters and a window around the
-    analysed timestamp, so the same span is selected. A snapshot run reads its saved file and ignores ``source``;
-    the caller owns ``source``'s lifetime and has already logged why it is None.
+
+async def load_orq_record(
+    run: InsightsRun,
+    trace: TraceInsight,
+    *,
+    open_source: Callable[[], AbstractAsyncContextManager[OrqTraceSource | str]],
+) -> TraceRecord | str:
+    """Re-run the pipeline's query for this one trace, or return a user-facing reason it cannot be shown.
+
+    The query keeps the run's filters and a window around the analysed timestamp, so the same span is selected.
+    ``open_source`` is entered only once the trace has a timestamp; a string it yields is a reason it has logged.
     """
-    if reads_snapshot(run.population):
-        return await _from_snapshot(run, trace)
-    if source is None:
-        return 'Connect an Orq account in Settings to load this conversation.'
-    failure = 'Could not load the conversation from Orq. Open it in Orq instead.'
     timestamp = trace.timestamp
-    try:
-        record = await source.load_trace(
-            trace.trace_id,
-            start=timestamp - _ANALYSED_TIME_MARGIN if timestamp else None,
-            end=timestamp + _ANALYSED_TIME_MARGIN if timestamp else None,
-            facets=FacetSelection.model_validate(run.population.get('facets') or {}),
-            numeric=NumericFilters.model_validate(run.population.get('numeric') or {}),
+    if timestamp is None:
+        return _unavailable(
+            trace, 'This run did not record when the trace ran, so its conversation cannot be re-read from Orq.'
         )
-    except Exception as error:  # noqa: BLE001 — Orq and SDK failures vary; the tab must degrade visibly.
-        return _unavailable(trace, failure, f'{type(error).__name__}: {error}')
+    async with open_source() as source:
+        if isinstance(source, str):
+            return source
+        try:
+            record = await source.load_trace(
+                trace.trace_id,
+                start=timestamp - TARGETED_RELOAD_MARGIN,
+                end=timestamp + TARGETED_RELOAD_MARGIN,
+                facets=FacetSelection.model_validate(run.population.get('facets') or {}),
+                numeric=NumericFilters.model_validate(run.population.get('numeric') or {}),
+            )
+        except Exception as error:  # noqa: BLE001 — Orq and SDK failures vary; the tab must degrade visibly.
+            return _unavailable(
+                trace,
+                'Could not load the conversation from Orq. Open it in Orq instead.',
+                f'{type(error).__name__}: {error}',
+            )
     if record is None:
-        return _unavailable(trace, 'Orq no longer returns a conversation for this trace.')
+        return _unavailable(
+            trace,
+            'Orq did not return this trace for the account and workspace selected in Settings. '
+            'It may belong to another workspace, or it no longer exists.',
+        )
     return record
 
 
-async def _from_snapshot(run: InsightsRun, trace: TraceInsight) -> TraceRecord | str:
-    path = run.population.get('snapshot_path')
-    if not path:
-        return _unavailable(trace, 'This run does not record where its snapshot was read from.')
+async def load_snapshot_record(run: InsightsRun, trace: TraceInsight) -> TraceRecord | str:
+    """Read the trace's record from the snapshot file the run analysed, or return a user-facing reason it cannot."""
+    return await asyncio.to_thread(_from_snapshot, run, trace)
+
+
+def _from_snapshot(run: InsightsRun, trace: TraceInsight) -> TraceRecord | str:
+    raw_path = run.population.get('snapshot_path')
+    if not raw_path:
+        return _unavailable(trace, SNAPSHOT_PATH_MISSING)
+    path = Path(str(raw_path))
     try:
-        snapshot, digest = await asyncio.to_thread(read_snapshot, Path(str(path)))
+        snapshot, digest = read_snapshot(path)
     except PopulationError as error:
-        return _unavailable(
-            trace, 'The snapshot file this run read is no longer available or could not be read.', error
-        )
+        return _unavailable(trace, SNAPSHOT_UNREADABLE if path.exists() else _gone_snapshot_reason(path), error)
     saved_digest = run.population.get('snapshot_sha256')
     if saved_digest and saved_digest != digest:
         return _unavailable(

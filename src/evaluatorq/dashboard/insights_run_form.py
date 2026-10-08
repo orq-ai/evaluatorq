@@ -20,7 +20,7 @@ from evaluatorq.dashboard.insights_uploads import is_uploaded_source
 from evaluatorq.dashboard.insights_views import _back_to_runs
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.view import model_control
-from evaluatorq.insights.models import DimensionName, LabelSpec, reads_snapshot
+from evaluatorq.insights.models import DimensionName, LabelSpec, population_source
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
@@ -176,11 +176,12 @@ def _custom_labels(raw: str) -> tuple[LabelSpec, ...]:
 
 
 def _saved_source(population: Mapping[str, object]) -> Source:
-    if reads_snapshot(population):
+    source = population_source(population)
+    if source == 'snapshot':
         return 'snapshot'
     if population.get('mode') == 'finder' or population.get('finder_export'):
         return 'finder'
-    if population.get('mode') == 'query' or population.get('query'):
+    if source == 'query' or population.get('query'):
         return 'query'
     return 'recent'
 

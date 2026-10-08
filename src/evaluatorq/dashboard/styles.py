@@ -3466,6 +3466,8 @@ _INSIGHTS_CSS = """
 .insights-tab { padding:9px 12px; border-bottom:2px solid transparent; color:var(--text-muted); text-decoration:none; font-size:12.5px; }
 .insights-tab.active { border-color:var(--teal-600); color:var(--teal-600); font-weight:600; }
 .insights-tab:hover { color:var(--teal-600); }
+.insights-tab.disabled,.insights-tab.disabled:hover { color:var(--text-muted); opacity:.55; cursor:not-allowed; }
+.insights-trace-tab-reason { align-self:center; padding-left:6px; }
 .insights-dimensions { display:grid; grid-template-columns:minmax(0,1.1fr) minmax(300px,1fr); gap:16px; }
 .insights-dimension-control { display:flex; align-items:center; gap:9px; margin:0 0 12px; color:var(--text-muted); font-size:12px; }
 .insights-dimension-control select { padding:6px 8px; border:1px solid var(--border-default); border-radius:6px; background:var(--surface-card); color:var(--text-strong); font:inherit; }

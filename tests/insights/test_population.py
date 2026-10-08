@@ -37,13 +37,13 @@ from evaluatorq.trace_finder.models import (
 )
 
 
-def make_trace(trace_id: str) -> TraceRecord:
+def make_trace(trace_id: str, *, span_id: str | None = None, content: str = 'hello') -> TraceRecord:
     return TraceRecord(
         schema_version=1,
         trace_id=trace_id,
-        span_id=f'span-{trace_id}',
+        span_id=span_id or f'span-{trace_id}',
         timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
-        messages=({'role': 'user', 'content': 'hello'},),
+        messages=({'role': 'user', 'content': content},),
         project='default',
         model='gpt-5',
         provider='openai',

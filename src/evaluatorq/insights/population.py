@@ -47,7 +47,7 @@ from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.filter_selector import select_filters_with_response
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters, Snapshot
-from evaluatorq.trace_finder.orq_source import OrqTraceSource
+from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_targeted_load
 from evaluatorq.trace_finder.projection import MAX_TOKEN_BUDGET, project_trace, serialize_projection
 from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
 
@@ -60,6 +60,9 @@ if TYPE_CHECKING:
     from evaluatorq.insights.models import InsightsPopulation
     from evaluatorq.trace_finder.export import ExportFilters
     from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord
+
+# A targeted reload queries this far either side of a trace's recorded start, absorbing timestamp rounding.
+TARGETED_RELOAD_MARGIN = timedelta(seconds=1)
 
 
 class PopulationError(RuntimeError):
@@ -204,10 +207,8 @@ async def _load_traces(
             source.close()
         except Exception as close_error:  # noqa: BLE001 - cleanup must not mask the load result or error
             logger.warning('Insights population trace source cleanup failed: {}', close_error)
-    if target_trace_ids is not None and snapshot.capture_metadata.get('incomplete_reason'):
-        raise PopulationError(
-            f'reloading Finder export traces was incomplete: {snapshot.capture_metadata["incomplete_reason"]}'
-        )
+    if target_trace_ids is not None:
+        require_complete_targeted_load(snapshot, error_type=PopulationError, operation='reloading Finder export traces')
     documents = tuple(ensure_trace_document(trace) for trace in traces)
     try:
         ensure_unique_trace_ids(documents)
@@ -319,8 +320,8 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
     matched_times = [trace.timestamp for trace in export.traces if trace.trace_id in matched_ids]
     start, end = export.start, export.end
     if matched_times:
-        first = min(matched_times) - timedelta(seconds=1)
-        last = max(matched_times) + timedelta(seconds=1)
+        first = min(matched_times) - TARGETED_RELOAD_MARGIN
+        last = max(matched_times) + TARGETED_RELOAD_MARGIN
         start = max(start, first) if start is not None else first
         end = min(end, last) if end is not None else last
 

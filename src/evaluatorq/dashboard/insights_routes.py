@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal
@@ -37,7 +37,7 @@ from evaluatorq.dashboard.insights_run_form import (
     render_run_form,
     render_run_page,
 )
-from evaluatorq.dashboard.insights_trace_source import load_trace_record
+from evaluatorq.dashboard.insights_trace_source import load_orq_record, load_snapshot_record, source_not_rereadable
 from evaluatorq.dashboard.insights_uploads import (
     UploadRequestTooLargeError,
     cleanup_expired_uploads,
@@ -63,7 +63,7 @@ from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth, sp
 from evaluatorq.dashboard.trace_finder.views import trace_conversation, unavailable_conversation
 from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.estimate import StageModels, estimate_run, stage_seconds, trace_bound
-from evaluatorq.insights.models import InsightsRun, label_key, reads_snapshot
+from evaluatorq.insights.models import InsightsRun, label_key, population_source, reads_orq
 from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.trace_finder.export import RunExport
@@ -80,6 +80,7 @@ if TYPE_CHECKING:
     from evaluatorq.dashboard.auth import DashboardAuth
     from evaluatorq.insights.estimate import RunEstimate
     from evaluatorq.insights.models import TraceInsight
+    from evaluatorq.trace_finder.models import TraceRecord
 
 
 def _entries(
@@ -223,70 +224,75 @@ def _run_form_response(values: RunFormValues, error: str | None, status_code: in
     return _html(render_run_page(values, csrf=token, error=error), status_code)
 
 
-def _resolve_trace(run_id: str, trace_id: str | None, span_id: str | None) -> tuple[InsightsRun, TraceInsight] | str:
-    """Find a run's analysed trace; an empty ``span_id`` means the trace was analysed without one."""
+def _load_run(run_id: str) -> InsightsRun | None:
     _, loaded, _ = _entries(get_insights_runs_dir())
     resolved = _resolve(run_id, loaded)
-    if resolved is None or not isinstance(resolved[1], InsightsRun):
-        return '<p class="insights-empty">Insights run not found.</p>'
-    run = resolved[1]
+    return resolved[1] if resolved is not None and isinstance(resolved[1], InsightsRun) else None
+
+
+def _resolve_trace(run_id: str, trace_id: str | None, span_id: str | None) -> tuple[InsightsRun, TraceInsight] | str:
+    """Find a run's analysed trace, or say why not; an empty ``span_id`` means the trace was analysed without one."""
+    run = _load_run(run_id)
+    if run is None:
+        return 'Insights run not found.'
     span_id = span_id or None
     trace = next((item for item in run.traces if item.trace_id == trace_id and item.span_id == span_id), None)
     if trace is None:
-        return '<p class="insights-empty">Trace not found in this Insights run.</p>'
+        return 'Trace not found in this Insights run.'
     return run, trace
 
 
 @asynccontextmanager
-async def _trace_source(app: Any) -> AsyncIterator[OrqTraceSource | None]:
+async def _orq_client(app: Any, auth: DashboardAuth) -> AsyncIterator[Any]:
+    """Build an Orq client for ``auth``, scoped to the Settings workspace and project for a CLI login, and close it.
+
+    Yields:
+        The client; a construction failure raises before the yield.
+    """
+    settings = app.state.finder_settings if auth.method == 'cli_oauth' else None
+    orq = build_orq_client(
+        auth,
+        workspace=settings.orq_workspace if settings else None,
+        project=settings.orq_project_id if settings else None,
+    )
+    try:
+        yield orq
+    finally:
+        try:
+            await close_orq_client(orq)
+        except Exception as exc:  # noqa: BLE001 — cleanup must not hide the response
+            logger.warning('Could not close the Insights Orq client: {}', exc)
+
+
+@asynccontextmanager
+async def _trace_source(app: Any) -> AsyncIterator[OrqTraceSource | str]:
     """Open an Orq trace source for one request.
 
     Yields:
-        The source, or None when credentials or the client are unavailable.
+        The source, or the user-facing reason it could not be opened, after logging the cause once.
     """
-    opened = await _open_trace_source(app)
-    if opened is None:
-        yield None
-        return
-    orq, source = opened
-    try:
-        yield source
-    finally:
-        try:
-            source.close()
-        except Exception as exc:  # noqa: BLE001 — cleanup must not hide the trace response
-            logger.warning('Could not close the Insights trace source: {}', exc)
-        await _close_orq(orq)
-
-
-async def _open_trace_source(app: Any) -> tuple[Any, OrqTraceSource] | None:
     try:
         auth = selected_dashboard_auth(app)
     except ValueError as exc:
         logger.warning('Insights trace source unavailable: {}', exc)
-        return None
-    orq = None
-    try:
-        settings = app.state.finder_settings if auth.method == 'cli_oauth' else None
-        orq = build_orq_client(
-            auth,
-            workspace=settings.orq_workspace if settings else None,
-            project=settings.orq_project_id if settings else None,
-        )
-        source = OrqTraceSource(orq)
-    except Exception as exc:  # noqa: BLE001 — client construction failures render a visible unavailable state
-        logger.warning('Insights trace source could not be created: {}', exc)
-        if orq is not None:
-            await _close_orq(orq)
-        return None
-    return orq, source
-
-
-async def _close_orq(orq: Any) -> None:
-    try:
-        await close_orq_client(orq)
-    except Exception as exc:  # noqa: BLE001 — cleanup must not hide the trace response
-        logger.warning('Could not close the Insights trace client: {}', exc)
+        yield 'Connect an Orq account in Settings to load this conversation.'
+        return
+    async with AsyncExitStack() as stack:
+        try:
+            source = OrqTraceSource(await stack.enter_async_context(_orq_client(app, auth)))
+        except Exception as exc:  # noqa: BLE001 — client construction failures render a visible unavailable state
+            logger.warning('Insights trace source could not be created: {}', exc)
+            source = None
+        if source is None:
+            yield 'Could not connect to Orq with the account selected in Settings.'
+            return
+        try:
+            yield source
+        finally:
+            try:
+                source.close()
+            except Exception as exc:  # noqa: BLE001 — cleanup must not hide the trace response
+                logger.warning('Could not close the Insights trace source: {}', exc)
 
 
 def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> tuple[Path, InsightsRun | str] | None:
@@ -394,26 +400,14 @@ async def _load_catalogue(
     auth: DashboardAuth,
 ) -> tuple[FacetCatalogue | None, bool]:
     """Fetch one window catalogue and cache it only while its settings are current."""
-    orq = None
     credential_rejected = False
     try:
-        settings = app.state.finder_settings if auth.method == 'cli_oauth' else None
-        orq = build_orq_client(
-            auth,
-            workspace=settings.orq_workspace if settings else None,
-            project=settings.orq_project_id if settings else None,
-        )
-        catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
+        async with _orq_client(app, auth) as orq:
+            catalogue = await load_facet_catalogue(orq, start=now - timedelta(days=window_days), end=now, limit=50)
     except Exception as exc:  # noqa: BLE001 — provider errors render a visible unavailable state
         credential_rejected = _is_unauthorized(exc)
         logger.warning('Insights facet values are unavailable for the {}-day window: {}', window_days, exc)
         catalogue = None
-    finally:
-        if orq is not None:
-            try:
-                await close_orq_client(orq)
-            except Exception as exc:  # noqa: BLE001 — cleanup must not hide the catalogue response
-                logger.warning('Could not close the Insights facet catalogue client: {}', exc)
     if (
         generation == getattr(app.state, 'finder_generation', 0)
         and getattr(app.state, 'insights_facet_catalogues', None) is cache
@@ -732,66 +726,62 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             run_id, trace_id=req.query_params.get('trace_id'), span_id=req.query_params.get('span_id')
         )
         if isinstance(resolved, str):
-            return _html(resolved, 404)
+            return _html(f'<p class="insights-empty">{esc(resolved)}</p>', 404)
         view = 'trace' if req.query_params.get('view') == 'trace' else 'analysis'
         return _html(trace_detail_page(*resolved, view=view))
 
     @app.get('/insights/{run_id}/trace-conversation')
     async def insights_trace_conversation(req: Request, run_id: str) -> Response:
+        trace_id = req.query_params.get('trace_id')
         resolved = await asyncio.to_thread(
-            _resolve_trace, run_id, trace_id=req.query_params.get('trace_id'), span_id=req.query_params.get('span_id')
+            _resolve_trace, run_id, trace_id=trace_id, span_id=req.query_params.get('span_id')
         )
-        if isinstance(resolved, str):
-            return _html(resolved, 404)
-        run, trace = resolved
-        raw_msg = req.query_params.get('msg', '')
-        try:
-            msg = int(raw_msg) if raw_msg.isdigit() else None
-        except ValueError:
-            msg = None
-        spans_url: str | None
-        if reads_snapshot(run.population):
-            spans_url = None
-            record = await load_trace_record(run, trace, source=None)
-        else:
-            spans_url = f'/insights/{quote(run.run_id, safe="")}/trace-spans?{urlencode({"trace_id": trace.trace_id})}'
-            async with _trace_source(req.app) as source:
-                record = await load_trace_record(run, trace, source=source)
+        spans_url: str | None = None
         notice = ''
+        record: TraceRecord | str
+        if isinstance(resolved, str):
+            logger.warning('Insights run {} trace {} conversation unavailable: {}', run_id, trace_id, resolved)
+            record = resolved
+        else:
+            run, trace = resolved
+            source_kind = population_source(run.population)
+            if source_kind == 'snapshot':
+                record = await load_snapshot_record(run, trace)
+            elif source_kind == 'unknown':
+                record = source_not_rereadable(run, trace)
+            else:
+                spans_url = (
+                    f'/insights/{quote(run.run_id, safe="")}/trace-spans?{urlencode({"trace_id": trace.trace_id})}'
+                )
+                record = await load_orq_record(run, trace, open_source=lambda: _trace_source(req.app))
+                if not isinstance(record, str) and trace.span_id and record.span_id != trace.span_id:
+                    logger.warning(
+                        'Insights trace {} was analysed on span {} but Orq now selects span {}',
+                        trace.trace_id,
+                        trace.span_id,
+                        record.span_id,
+                    )
+                    notice = (
+                        '<p class="insights-muted" role="status">'
+                        f'Orq now selects span {esc(record.span_id)} for this trace; '
+                        f'the analysis used span {esc(trace.span_id)}.</p>'
+                    )
         if isinstance(record, str):
             body = unavailable_conversation(reason=record, spans_url=spans_url)
         else:
-            if trace.span_id and record.span_id != trace.span_id:
-                logger.warning(
-                    'Insights trace {} was analysed on span {} but Orq now selects span {}',
-                    trace.trace_id,
-                    trace.span_id,
-                    record.span_id,
-                )
-                notice = (
-                    '<p class="insights-muted" role="status">'
-                    f'Orq now selects span {esc(record.span_id)} for this trace; '
-                    f'the analysis used span {esc(trace.span_id)}.</p>'
-                )
             with cli_slug_render_scope():
-                body = await asyncio.to_thread(trace_conversation, record, spans_url=spans_url, msg=msg)
+                body = await asyncio.to_thread(trace_conversation, record, spans_url=spans_url)
         return _html(f'<div class="fd-traces insights-trace-view">{notice}{body}</div>')
 
     @app.get('/insights/{run_id}/trace-spans')
     async def insights_trace_spans(req: Request, run_id: str) -> Response:
         trace_id = req.query_params.get('trace_id', '')
-        _, loaded, _ = await asyncio.to_thread(_entries, get_insights_runs_dir())
-        resolved = _resolve(run_id, loaded)
-        if (
-            resolved is None
-            or not isinstance(resolved[1], InsightsRun)
-            or reads_snapshot(resolved[1].population)
-            or not any(item.trace_id == trace_id for item in resolved[1].traces)
-        ):
+        run = await asyncio.to_thread(_load_run, run_id)
+        if run is None or not reads_orq(run.population) or not any(item.trace_id == trace_id for item in run.traces):
             return _html('<p class="finder-empty">Span loading is unavailable.</p>', 404)
         async with _trace_source(req.app) as source:
-            if source is None:
-                return _html('<p class="finder-empty" role="status">Could not load spans. Try again.</p>')
+            if isinstance(source, str):
+                return _html(f'<p class="finder-empty" role="status">{esc(source)}</p>')
             return _html(
                 await span_tree_fragment(
                     trace_id, load_spans=source.list_spans, load_first_error_message=source.first_error_message

@@ -972,23 +972,3 @@ test('an outerHTML swap of a trace block scrolls the replacement, not the detach
 
   assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
 });
-
-for (const name of ['htmx:responseError', 'htmx:sendError', 'htmx:timeout']) {
-  test(`${name} on the Trace-tab placeholder replaces its loading line with a status`, () => {
-    const app = loadDashboard();
-    const placeholder = {
-      innerHTML: '<p class="finder-empty" role="status">Loading conversation…</p>',
-      matches: selector => selector === '.insights-trace-view[hx-get]',
-    };
-    const other = { innerHTML: 'untouched', matches: () => false };
-
-    app.body.emit(name, { detail: { elt: placeholder } });
-    app.body.emit(name, { detail: { elt: other } });
-
-    assert.equal(
-      placeholder.innerHTML,
-      '<p class="finder-empty" role="status">Could not load the conversation. Reload to try again.</p>'
-    );
-    assert.equal(other.innerHTML, 'untouched');
-  });
-}
