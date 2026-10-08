@@ -110,7 +110,7 @@ def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKi
     """
     try:
         document = json.loads(contents)
-    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueError
+    except (ValueError, RecursionError) as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueError
         raise ValueError('This file is not valid JSON.') from exc
     if kind is None:
         keys = set(document) if isinstance(document, dict) else set()

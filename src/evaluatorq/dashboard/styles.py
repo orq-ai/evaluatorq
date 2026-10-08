@@ -3435,7 +3435,7 @@ _INSIGHTS_CSS = """
 .insights-run-form .irf-editor-actions { display:flex; gap:8px; margin-top:12px; }
 .insights-run-form .irf-compact { margin:0 0 14px; padding:8px 12px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-sunken); color:var(--text-body); font-size:12px; }
 .insights-run-form .irf-review { margin-top:16px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-sunken); }
-.insights-run-form .irf-review:not(:has(.irf-summary, .irf-estimate)) { display:none; }
+.insights-run-form .irf-review:has(> #insights-run-plan:empty):has(> #insights-run-estimate:empty) { display:none; }
 .insights-run-form .irf-review :is(h4,h5) { margin:0 0 8px; color:var(--text-strong); font-size:12.5px; font-weight:600; letter-spacing:0; text-transform:none; }
 .insights-run-form .irf-plan:not(:empty) { padding:14px 16px; }
 .insights-run-form .irf-plan p { margin:0 0 12px; color:var(--text-strong); font-size:13px; }

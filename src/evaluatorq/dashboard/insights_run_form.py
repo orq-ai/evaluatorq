@@ -351,6 +351,7 @@ class RunFormValues:
         query = str(form.get('query') or '').strip() if orq else ''
         trace_file = '' if orq else str(form.get('trace_file') or '').strip()
         source: Source = ('query' if query else 'recent') if orq else _trace_file_source(trace_file)
+        orq_form: Mapping[str, object] = form if orq else {}
         defaults = _model_defaults()
         models = {name: str(form.get(name) or '').strip() or default for name, default in defaults.items()}
         if source != 'query':
@@ -358,8 +359,8 @@ class RunFormValues:
         return cls(
             source=source,
             query=query,
-            window_days=_whole_number(form, 'window_days', DEFAULT_WINDOW_DAYS, 'Window'),
-            limit=_whole_number(form, 'limit', DEFAULT_TRACE_LIMIT, 'Trace limit'),
+            window_days=_whole_number(orq_form, 'window_days', DEFAULT_WINDOW_DAYS, 'Window'),
+            limit=_whole_number(orq_form, 'limit', DEFAULT_TRACE_LIMIT, 'Trace limit'),
             facets=FacetSelection.model_validate({
                 name: _getlist(form, f'facet_{name}') if orq else [] for name in FACET_NAMES
             }),

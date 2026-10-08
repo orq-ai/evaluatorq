@@ -681,11 +681,21 @@ def test_fields_of_the_other_tab_are_dropped() -> None:
         'query': 'refunds',
         'facet_agent_name': 'support-bot',
         'compiler_model': 'acme/compiler',
+        'window_days': 'stale',
+        'limit': '',
     })
     assert (on_file.query, set(on_file.facets.agent_name)) == ('', set())
+    assert (on_file.window_days, on_file.limit) == (RunFormValues().window_days, 200)
     assert on_file.compiler_model != 'acme/compiler'
     on_orq = RunFormValues.from_form({'source': 'orq', 'trace_file': 's.json'})
     assert (on_orq.source, on_orq.trace_file) == ('recent', '')
+
+
+def test_deeply_nested_upload_is_rejected_as_invalid_json() -> None:
+    from evaluatorq.dashboard.insights_uploads import validate_upload
+
+    with pytest.raises(ValueError, match='not valid JSON'):
+        validate_upload(b'[' * 100_000)
 
 
 def test_a_missing_source_is_the_orq_tab_and_limit_defaults_to_200() -> None:
