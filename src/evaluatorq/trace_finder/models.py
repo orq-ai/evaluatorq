@@ -78,7 +78,7 @@ class TraceProjection(BaseModel):
 
     payload: dict[str, Any]
     serialized: str
-    estimated_tokens: int = Field(ge=0, le=50_000, description='UTF-8 byte upper bound on tokenizer tokens.')
+    estimated_tokens: int = Field(ge=0, le=500_000, description='UTF-8 byte upper bound on tokenizer tokens.')
     omitted_messages: int = Field(ge=0)
     omitted_bytes: int = Field(ge=0, description='Bytes omitted to fit the token budget; excludes schema projection.')
 

@@ -180,7 +180,7 @@ async def test_local_snapshot_uses_messages_without_orq(monkeypatch: pytest.Monk
 async def test_local_snapshot_reports_truncated_projection(tmp_path: Path) -> None:
     path = tmp_path / 'traces.json'
     long_trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': 'a' * 600_000}, {'role': 'assistant', 'content': 'done'})}
     )
     path.write_text(Snapshot(traces=(long_trace,)).model_dump_json(), encoding='utf-8')
 
@@ -203,7 +203,7 @@ async def test_live_population_reports_the_same_projection_coverage(monkeypatch:
     monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
     FakeSource.snapshot = Snapshot(traces=(
         make_trace('long').model_copy(
-            update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+            update={'messages': ({'role': 'user', 'content': 'a' * 600_000}, {'role': 'assistant', 'content': 'done'})}
         ),
     ))
 

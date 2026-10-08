@@ -680,7 +680,7 @@ def test_local_snapshot_preview_reports_omissions_before_start(tmp_path: Path) -
     from evaluatorq.trace_finder.models import Snapshot
 
     trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': 'a' * 600_000}, {'role': 'assistant', 'content': 'done'})}
     )
     path = tmp_path / 'traces.json'
     path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')

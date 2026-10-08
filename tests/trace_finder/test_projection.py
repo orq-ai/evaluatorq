@@ -27,7 +27,7 @@ def test_default_projection_budget_accepts_more_than_the_previous_limit() -> Non
 
     projection = project_trace(trace)
 
-    assert MAX_TOKEN_BUDGET == 50_000
+    assert MAX_TOKEN_BUDGET == 500_000
     assert projection.payload['messages'][0]['content'] == 'x' * 30_000
     assert projection.omitted_bytes == 0
     assert projection.estimated_tokens <= MAX_TOKEN_BUDGET

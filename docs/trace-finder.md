@@ -128,7 +128,7 @@ The finder merges the generated filters with any you chose explicitly and builds
 
 ### 3. Project each trace
 
-Each trace becomes a bounded classifier state of at most 50,000 serialized UTF-8 bytes. This is a conservative upper bound on tokenizer tokens, not a count from the selected model tokenizer. The projection keeps the **newest** conversation suffix and truncates text from the front when it has to.
+Each trace becomes a bounded classifier state of at most 500,000 serialized UTF-8 bytes. This is a conservative upper bound on tokenizer tokens, not a count from the selected model tokenizer. The projection keeps the **newest** conversation suffix and truncates text from the front when it has to.
 
 ??? info "What the projection keeps and drops"
     - **Keeps** tool-call arguments, completion status, and a fixed diagnostic category for a failed paired tool result.
@@ -277,6 +277,6 @@ The finder searches at most 5000 usable traces per run, even if a larger limit i
 | Traces per search | 500 by default, up to 5000 usable traces; Traces can load up to 5000 rows |
 | Search lookback | 7 days by default, 1–90 days |
 | Classifier parallelism | 100 by default, at most 200 |
-| Projection budget | 50,000 serialized UTF-8 bytes per trace, a conservative upper bound on tokenizer tokens; older conversation units go first |
+| Projection budget | 500,000 serialized UTF-8 bytes per trace, a conservative upper bound on tokenizer tokens; older conversation units go first |
 
 Loading the Traces table makes no model calls. Ask AI within results classifies up to the configured AI trace limit (default 500). A search makes one compiler call, at most one facet-selection call, and one classification call per selected trace when the plan has dimensions; a zero-dimension plan makes no per-trace calls. A 500-trace run therefore makes up to 502 model calls before retries. Narrow the limit and window when exploring a large workspace. If a facet lookup fails, the run warns and skips generated categorical filters; explicit filters and semantic classification still run. When Orq reports more facet values than the fetched limit, the finder warns and uses the returned values ranked by frequency.

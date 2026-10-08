@@ -16,7 +16,7 @@ from .models import TraceProjection, TraceRecord
 if TYPE_CHECKING:
     from evaluatorq.common.trace_document import TraceDocument
 
-MAX_TOKEN_BUDGET = 50_000
+MAX_TOKEN_BUDGET = 500_000
 MAX_PROJECTED_TOOL_CALLS = 32
 MAX_TOOL_FIELD_BYTES = 128
 OMISSION_MARKER = '[... earlier bytes omitted ...]'

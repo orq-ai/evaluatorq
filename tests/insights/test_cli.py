@@ -65,7 +65,7 @@ def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
 ) -> None:
     path = tmp_path / 'traces.json'
     trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': 'a' * 600_000}, {'role': 'assistant', 'content': 'done'})}
     )
     path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
     monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
