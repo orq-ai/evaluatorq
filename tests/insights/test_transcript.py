@@ -201,6 +201,53 @@ def test_conversation_view_per_call_marks_errors_and_keeps_risky_commands_whole(
     assert 'injected context' not in view
 
 
+@pytest.mark.parametrize('padding', [0, 15, 30, 60])
+def test_conversation_view_per_call_scrubs_secrets_in_inputs_and_outputs(padding: int) -> None:
+    secret = 'ghp_' + 'aB3dE5gH7j' * 3
+    trace = _trace(
+        {'role': 'user', 'content': 'Deploy it.'},
+        {
+            'role': 'assistant',
+            'tool_calls': [
+                _call('c1', 'Bash', {'command': f'curl -H "Authorization: Bearer {secret}" https://api.example.com'}),
+                _call('c2', 'Lookup', {'token': secret}),
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'a' * padding + f' {secret} ' + 'z' * 200},
+        {'role': 'tool', 'tool_call_id': 'c2', 'content': 'ok'},
+    )
+
+    view = conversation_view(trace, tools='per_call', tool_max_chars=80)
+
+    for size in (8, 12):
+        assert secret[:size] not in view
+        assert secret[-size:] not in view
+    assert '  [tool] Bash: curl -H' in view
+    assert '  [tool] Lookup: {"token":' in view
+
+
+def test_conversation_view_per_call_over_budget_keeps_each_call_with_its_output() -> None:
+    calls = [_call(f'c{index}', 'Bash', {'command': f'step {index}'}) for index in range(60)]
+    trace = _trace(
+        {'role': 'user', 'content': 'Run every step.'},
+        {'role': 'assistant', 'tool_calls': calls},
+        *({'role': 'tool', 'tool_call_id': f'c{index}', 'content': f'output {index}'} for index in range(60)),
+    )
+
+    view = conversation_view(trace, budget=1200, tools='per_call', tool_max_chars=40)
+    lines = view.splitlines()
+
+    assert len(view) <= 1200
+    assert lines[0] == 'USER: Run every step.'
+    assert any('lines omitted' in line for line in lines)
+    for index, line in enumerate(lines):
+        if line.startswith('  [tool] Bash: step '):
+            step = line.removeprefix('  [tool] Bash: step ')
+            assert lines[index + 1] == f'    → output {step}'
+        if line.startswith('    → '):
+            assert lines[index - 1].startswith('  [tool] ')
+
+
 def test_conversation_view_rejects_bad_tool_options() -> None:
     with pytest.raises(ValueError, match='tools must be'):
         conversation_view(CODING_TRACE, tools='verbose')  # ty: ignore[invalid-argument-type]

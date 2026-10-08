@@ -214,22 +214,19 @@ def conversation_view(
 
     `tools='collapsed'` turns a run of tool calls into one `[tools]` line with
     repeats counted, and drops tool outputs. `tools='per_call'` gives each call
-    its own `[tool] name: input` line (status shown only when not completed), input cut like
-    `tool_activity_chunks`. Tool result bodies can hold credentials or user data,
-    so they are left out unless `tool_max_chars` is above 0, in which case
-    each result is shown under its call with its start and end kept within
-    about that many characters. `tool_max_chars` has no effect when collapsed.
+    its own `[tool] name: input` line, input scrubbed and cut like
+    `tool_activity_chunks`. Status is shown only when the call did not complete.
+    Tool result bodies can hold credentials or user data, so they are left out
+    unless `tool_max_chars` is above 0, in which case each result is shown under
+    its call, scrubbed, with its start and end kept within about that many
+    characters. `tool_max_chars` has no effect when collapsed.
     """
     if tools not in ('collapsed', 'per_call'):
         raise ValueError(f"tools must be 'collapsed' or 'per_call', got {tools!r}")
     if tool_max_chars < 0:
         raise ValueError(f'tool_max_chars must be >= 0, got {tool_max_chars}')
     messages = prompt_messages(trace)
-    results = (
-        {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
-        if tools == 'per_call'
-        else {}
-    )
+    results = _results(messages)
     lines: list[str] = []
     pending: list[str] = []
 
@@ -324,25 +321,31 @@ def _results(messages: list[dict[str, Any]]) -> dict[Any, dict[str, Any]]:
 
 
 def _call_input(call: dict[str, Any]) -> str:
-    """A call's input on one line: the shell command, or the raw arguments, cut to `TOOL_INPUT_CHARS`."""
+    """A call's input on one line, scrubbed: the shell command, or the raw arguments, cut to `TOOL_INPUT_CHARS`."""
     name, arguments = _call_name(call), _call_arguments(call)
     if name in SHELL_TOOLS:
         command = _shell_command(arguments)
-        shown = command[:RISKY_COMMAND_CHARS] if is_risky_command(command) else command[:TOOL_INPUT_CHARS]
-        return shown.replace('\n', ' ⏎ ')
-    return _raw_arguments(call)[:TOOL_INPUT_CHARS]
+        limit = RISKY_COMMAND_CHARS if is_risky_command(command) else TOOL_INPUT_CHARS
+        return scrub_known_secrets(command)[:limit].replace('\n', ' ⏎ ')
+    return scrub_known_secrets(_raw_arguments(call))[:TOOL_INPUT_CHARS]
+
+
+def _paired_result(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> tuple[tuple[dict[str, Any], ...], str]:
+    """The call's result as the 0- or 1-tuple `projection` expects, and the call's status."""
+    result = results.get(call.get('id'))
+    paired = (result,) if result else ()
+    return paired, _tool_call_status(call.get('id'), paired)
 
 
 def _per_call_line(call: dict[str, Any], results: dict[Any, dict[str, Any]], output_chars: int) -> str:
     """One `conversation_view` line for a call; the paired result's text follows only when `output_chars` > 0."""
-    call_id = call.get('id')
-    result = results.get(call_id)
-    paired = (result,) if result else ()
-    status = _tool_call_status(call_id, paired)
-    flag = '' if status == 'completed' else f' [{status}]'  # completed is the common case; only flag the rest
+    paired, status = _paired_result(call, results)
+    flag = '' if status == 'completed' else f' [{status}]'
     line = f'  [tool] {_call_name(call)}{flag}: {_call_input(call)}'
     output = (
-        scrub_known_secrets(tool_result_to_text(result.get('content')).strip()) if result and output_chars > 0 else ''
+        scrub_known_secrets(tool_result_to_text(paired[0].get('content')).strip())
+        if paired and output_chars > 0
+        else ''
     )
     if output:
         half = max(output_chars // 2, 1)
@@ -353,9 +356,8 @@ def _per_call_line(call: dict[str, Any], results: dict[Any, dict[str, Any]], out
 def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> str:
     name, call_input = _call_name(call), _call_input(call)
     call_id = call.get('id')
-    result = results.get(call_id)
-    paired = (result,) if result else ()
-    status = _tool_call_status(call_id, paired)
+    paired, status = _paired_result(call, results)
+    result = paired[0] if paired else None
     # Result bodies are cut to keep a long trace inside one classifier call.
     # Non-shell results keep only the diagnostic category; shell output decides
     # whether a command worked, so it keeps an excerpt and its failure markers.
