@@ -175,6 +175,7 @@ async function main() {
       '/insights/uploads': () => response(JSON.stringify({kind: 'finder', path: '/runs/.uploads/finder-1.json'}), {status: 201}),
     });
     await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
     const input = app.form.querySelector('input[data-file]');
     input.files = [new File(['{}'], 'export.json', {type: 'application/json'})];
     input.dispatchEvent({type: 'change', bubbles: true, target: input});
@@ -198,6 +199,7 @@ async function main() {
       '/insights/snapshot-preview': () => response('<p>3 traces</p>'),
     });
     await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
     const traceFile = app.form.querySelector('input[name="trace_file"]');
     traceFile.value = '/old/finder.json';
     traceFile.dataset.kind = 'finder';
@@ -562,6 +564,151 @@ async function main() {
     await tick();
     assert.equal(app.form.querySelector('#insights-run-error').textContent, 'Could not prepare the selected sessions.');
     assert.deepEqual(visibleStep(app.form), ['1']);
+  }
+  {
+    let release;
+    let started;
+    const gate = new Promise(resolve => { release = resolve; });
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': async () => {
+        started();
+        await gate;
+        return response(fixtures.sessions);
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('[data-sessions-search]').click();
+    await requestStarted;
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    release();
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelectorAll('input[name="session"]').length, 0, 'a stale search cannot replace the current session results');
+    assert.equal(app.form.querySelector('#insights-sessions').getAttribute('aria-busy'), 'false');
+    assert.notEqual(app.form.querySelector('[data-sessions-status]').textContent, 'Searching local sessions…');
+  }
+
+  {
+    let release;
+    let started;
+    const gate = new Promise(resolve => { release = resolve; });
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/uploads': async () => {
+        started();
+        await gate;
+        return response(JSON.stringify({kind: 'snapshot', path: '/runs/.uploads/stale-file.json'}), {status: 201});
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    const input = app.form.querySelector('input[data-file]');
+    input.files = [new File(['{}'], 'traces.json', {type: 'application/json'})];
+    input.dispatchEvent({type: 'change', bubbles: true, target: input});
+    await requestStarted;
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    release();
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '', 'a late upload stays discarded after switching away and back');
+    assert.equal(app.form.querySelector('[data-file-name="file"]').value, '');
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '', 'the stale upload does not leak into the Local sessions tab');
+    assert.equal(app.form.querySelector('[data-file-name="sessions"]').value, '');
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    assert.equal(app.form.querySelector('#insights-run-error').textContent, 'Select at least one session.');
+  }
+
+  {
+    let release;
+    let started;
+    let posts = 0;
+    const gate = new Promise(resolve => { release = resolve; });
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': () => response(fixtures.sessions),
+      '/insights/sessions/snapshot': async () => {
+        posts += 1;
+        if (posts === 1) {
+          started();
+          await gate;
+          return response(JSON.stringify({path: '/runs/.uploads/stale-sessions.json', n_sessions: 2, bytes: 20, failed: []}), {status: 201});
+        }
+        return response(JSON.stringify({path: '/runs/.uploads/fresh-sessions.json', n_sessions: 2, bytes: 20, failed: []}), {status: 201});
+      },
+      '/insights/snapshot-preview': () => response('<p>fits</p>'),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('[data-sessions-search]').click();
+    await tick();
+    await tick();
+    app.form.querySelector('[data-sessions-all]').click();
+    app.form.querySelector('[data-irf-next]').click();
+    await requestStarted;
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    release();
+    await tick();
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '', 'a freeze response stays stale after switching away and back');
+    assert.deepEqual(visibleStep(app.form), ['1']);
+    app.form.querySelector('[data-irf-next]').click();
+    await tick();
+    await tick();
+    await tick();
+    assert.equal(posts, 2, 'Continue freezes the current selection after the cancelled request');
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/runs/.uploads/fresh-sessions.json');
+    assert.deepEqual(visibleStep(app.form), ['2']);
+  }
+
+  {
+    let release;
+    let started;
+    const gate = new Promise(resolve => { release = resolve; });
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': () => response(fixtures.sessions),
+      '/insights/sessions/snapshot': async () => {
+        started();
+        await gate;
+        return response(JSON.stringify({path: '/runs/.uploads/stale-sessions.json', n_sessions: 2, bytes: 20, failed: []}), {status: 201});
+      },
+      '/insights/uploads': () => response(JSON.stringify({kind: 'snapshot', path: '/runs/.uploads/file-owner.json'}), {status: 201}),
+      '/insights/snapshot-preview': () => response('<p>fits</p>'),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('[data-sessions-search]').click();
+    await tick();
+    await tick();
+    app.form.querySelector('[data-sessions-all]').click();
+    app.form.querySelector('[data-irf-next]').click();
+    await requestStarted;
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    const input = app.form.querySelector('input[data-file]');
+    input.files = [new File(['{}'], 'owned-file.json', {type: 'application/json'})];
+    input.dispatchEvent({type: 'change', bubbles: true, target: input});
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/runs/.uploads/file-owner.json');
+    release();
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/runs/.uploads/file-owner.json', 'a late freeze cannot replace a file owned by the active tab');
+    assert.equal(app.form.querySelector('[data-file-name="file"]').value, 'owned-file.json');
+    assert.equal(app.form.querySelector('[data-file-name="sessions"]').value, '');
+    assert.deepEqual(visibleStep(app.form), ['1'], 'the stale freeze cannot advance the form');
   }
 }
 

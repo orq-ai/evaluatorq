@@ -128,26 +128,34 @@ A **local session** is one conversation that Claude Code, Claude desktop, Codex 
 
 ### Analyze sessions from the CLI
 
-Two commands: `eq sessions` lists and exports, `eq insights --from-snapshot` analyzes. This exports the newest 500 sessions run in the current repository since 1 October, then runs the coding-agent questions on them:
+Use `eq insights --sessions` to select and analyze local sessions in one command. This example uses `--project-dir .` and `--from` to analyze up to 1000 of the newest sessions run in the current repository since 1 October:
 
 ```bash
-eq sessions --project-dir . --from 2026-10-01 --export sessions.json
+eq insights --sessions --project-dir . --from 2026-10-01 --coding
+```
+
+The command searches locally, freezes the matching sessions into a private temporary snapshot, and uses the normal Insights pipeline. The temporary file is removed when the command ends. `--coding` adds the coding-agent questions described in [Analyze coding agents](#analyze-coding-agents): task type, outcome, whether the agent verified its work, unfixed tool errors and risky actions.
+
+Use `eq agent-sessions` to inspect the matches without model calls, or export a reusable snapshot:
+
+```bash
+eq agent-sessions --project-dir . --from 2026-10-01 --export sessions.json
 eq insights --from-snapshot sessions.json --coding
 ```
 
-`--export` freezes the sessions into a snapshot file readable only by you. Listing and exporting read local files only. `--coding` adds the coding-agent questions described in [Analyze coding agents](#analyze-coding-agents): task type, outcome, whether the agent verified its work, unfixed tool errors and risky actions.
+Listing and exporting read local files only. On POSIX systems, an export is written with owner-only file permissions; on Windows, access depends on the destination folder's permissions. You can still copy or share the snapshot.
 
 `--export` writes the sessions that were listed. Without `--limit`, an export lists up to 1000 sessions, while a plain listing shows 50; an explicit `--limit` always wins. When the list is full, stderr says `Listed the newest 1000 sessions; narrow --from/--to or --text to see more.` Narrow the dates or text so the export holds the sessions you mean to analyze. If the 20-second search deadline cut the search short, stderr also says the export is partial.
 
 To analyze one week, give both ends of it. `--from` starts at midnight local time on that day, `--to` includes the whole of that day, and a session is included when its time span overlaps the window:
 
 ```bash
-eq sessions --from 2026-10-05 --to 2026-10-11 --export week.json
+eq insights --sessions --from 2026-10-05 --to 2026-10-11 --coding
 ```
 
-The session list shows when and where each session ran, not how it went. Finding the sessions that went badly takes a model run: `eq insights --coding` labels each session's outcome, verification, unfixed errors and risky actions. The deterministic [trace signals](#trace-signals) saved with the run count tool errors and retries without a model, but they describe structure, not whether the work succeeded. `--json` prints the matches as a JSON array on stdout instead of the table.
+The session list shows when and where each session ran, not how it went. Finding the sessions that went badly takes a model run: `eq insights --sessions --coding` labels each session's outcome, verification, unfixed errors and risky actions. The deterministic [trace signals](#trace-signals) saved with the run count tool errors and retries without a model, but they describe structure, not whether the work succeeded. `eq agent-sessions --json` prints the matches as a JSON array on stdout instead of the table.
 
-To get from a finished run to the sessions that went badly, open the run in `eq dashboard` under **Insights** and select the `outcome` value `not_done` or `partial`, or the `unfixed_error` value yes, in **Themes**; the trace list then holds only those sessions (see [Review a run](#review-a-run)). Each trace ID is `<source>:<session ID>`, built from the `source` and `session_id` fields that `eq sessions --json` prints next to each session's `path`.
+To get from a finished run to the sessions that went badly, open the run in `eq dashboard` under **Insights** and select the `outcome` value `not_done` or `partial`, or the `unfixed_error` value yes, in **Themes**; the trace list then holds only those sessions (see [Review a run](#review-a-run)). Each trace ID is `<source>:<session ID>`, built from the `source` and `session_id` fields that `eq agent-sessions --json` prints next to each session's `path`.
 
 A selection holds at most 1000 sessions. Sessions that fail to load are reported on stderr and skipped; the export fails only when none loads. When two selected files share a session ID, the export keeps the one that ends later.
 
@@ -157,7 +165,7 @@ Before the run starts, the CLI states where the sessions go:
 Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
 ```
 
-The size is the snapshot file on disk, not the amount sent. The summary and classifier models read the compact view described in [What the classifier reads](#what-the-classifier-reads): your messages (each up to 8,000 characters), the first and last 300 characters of each assistant message, and one line per tool call with its input cut to 300 characters. Tool output bodies are not sent, except that for shell calls the tool-call questions read fixed failure markers and the first and last 150 characters of the output, scrubbed of credentials first. Every other call sends only whether it failed and a diagnostic category. The embedding model reads the summaries. There is no confirmation prompt and no redaction, so check the models named in that line before you run.
+The size is the snapshot file on disk, not the amount sent. The summary and classifier models read the compact view described in [What the classifier reads](#what-the-classifier-reads): your messages (each up to 8,000 characters), the first and last 300 characters of each assistant message, and one line per tool call with its input cut to 300 characters. Tool output bodies are not sent, except that for shell calls the tool-call questions read fixed failure markers and the first and last 150 characters of the output, scrubbed of credentials first. Every other call sends only whether it failed and a diagnostic category. The embedding model reads the summaries. There is no confirmation prompt or general redaction of conversation text; only shell output gets the credential scrub described above. Check the models named in that line before you run.
 
 To check what a run would send without sending anything, run the preview. It needs no Orq credential, and it ends with the same sentence worded as what a run would send. It also measures how much the Finder projection would cut from each session; that 500,000-byte projection is separate from the compact view a model reads, so its counts do not measure model input:
 
@@ -173,6 +181,12 @@ A run would send 6 traces (1017.5 KB) from sessions.json to models: summary open
 
 The WARNING line appears once per trace the projection cuts, and the next line totals the snapshot.
 
+You can preview a fresh selection without exporting it first:
+
+```bash
+eq insights --sessions --project-dir . --from 2026-10-01 --preview-input
+```
+
 ### Analyze sessions from the dashboard
 
 In **Insights → New run**, choose the **Local sessions** tab, the third next to **Orq traces** and **Trace file**. Tick the tools, then set the dates, a project directory (an absolute path, or one starting with `~`) or text, and press **Search**. The dates start as the last seven days, so widen them to see older sessions. Tick the sessions you want, or the header box for all of them, up to 1000, and press **Continue**. That freezes the selection into a snapshot in the dashboard's Insights folder. The **Review** step shows the same `Sending N traces` sentence as the CLI. A snapshot over the 100 MiB upload limit is rejected with a message to select fewer sessions.
@@ -181,7 +195,7 @@ When the 20-second deadline passes, the results say `Searched N of M session fil
 
 ### Search sessions
 
-`eq sessions` lists sessions newest first. Every filter is optional and they combine.
+`eq agent-sessions` lists sessions newest first. Every filter is optional and they combine. The same filters work with `eq insights --sessions`; that command defaults to 1000 sessions and accepts `--preview-input` to stop before model requests. Session filters require `--sessions`, and local-session selection cannot be combined with `--query`, either file-source option, or Orq population filters.
 
 | Source | Default folders | Override |
 |---|---|---|
@@ -198,9 +212,9 @@ Cowork is Claude desktop's agent mode, which runs sessions in a virtual machine.
 | `--from`, `--to` | Sessions whose time span overlaps the window. Both are `YYYY-MM-DD` in local time, and `--to` includes that whole day |
 | `--project-dir` | Sessions run in that directory, below it, or in a linked git worktree of it, so `--project-dir .` also finds sessions from sibling worktrees of the same repository. A deleted worktree and a Cowork VM path match only when written the same way as the session's own path |
 | `--text` | Case-insensitive text in any message, including system notices and Claude's thinking, up to 500 characters. Tool calls and tool output are not searched |
-| `--limit` | Maximum sessions, 1 to 1000. Default 50, or 1000 with `--export` |
-| `--json` | Print the matches as a JSON array on stdout instead of the table |
-| `--export` | Write the listed sessions as a snapshot file |
+| `--limit` | Maximum sessions, 1 to 1000. `eq agent-sessions` defaults to 50, or 1000 with `--export`; `eq insights --sessions` defaults to 1000 |
+| `--json` | On `eq agent-sessions`, print the matches as a JSON array on stdout instead of the table |
+| `--export` | On `eq agent-sessions`, write the listed sessions as a snapshot file |
 
 The search stops at 20 seconds, and the deadline also covers listing the session files, so a very large session folder cannot run past it. The sessions found so far are listed, and stderr says `Searched N of M session files before the 20s limit; narrow --from/--to or --text to see the rest.` M counts the files found before the stop. A short list after that note may be incomplete.
 
@@ -374,9 +388,9 @@ A local trace file contains a `traces` array. Each trace needs an ID, a span ID,
 }
 ```
 
-To get local coding-agent sessions into this format, use `eq sessions --export`, which does the conversion. When you convert messages from another tool yourself, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject a snapshot with neither `traces` nor `documents`. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
+To get local coding-agent sessions into this format, use `eq agent-sessions --export`, which does the conversion. When you convert messages from another tool yourself, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject a snapshot with neither `traces` nor `documents`. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
 
-A snapshot may also carry a `documents` array of trace documents, which `eq sessions --export` writes with `"traces": []` and one document per session. `traces` stays required, so a hand-written file with only `documents` needs `"traces": []`. A document has two fields:
+A snapshot may also carry a `documents` array of trace documents, which `eq agent-sessions --export` writes with `"traces": []` and one document per session. `traces` stays required, so a hand-written file with only `documents` needs `"traces": []`. A document has two fields:
 
 - `metadata` holds the same fields as a trace: `schema_version`, `trace_id`, `span_id`, `timestamp` with a timezone, `project`, `model`, `provider`, `status`, `product` and `trace_type`.
 - `trajectory` is one ATIF trajectory: `schema_version`, `session_id`, an `agent` with `name` and `version`, and `steps`. Each step has a `step_id`, a `source` such as `user` or `agent`, a `message`, and for an agent step optional `tool_calls` and an `observation` with the `results` of those calls.

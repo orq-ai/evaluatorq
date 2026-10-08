@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -244,8 +245,122 @@ def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_sh
     console.print(f'Run file: {run_path}' if run_path else 'Run file: unavailable.')
 
 
+def _validate_sessions_population_source(
+    query: str | None,
+    from_finder: Path | None,
+    from_snapshot: Path | None,
+    population_options: tuple[tuple[str, bool], ...],
+) -> None:
+    if query is not None:
+        emit_error('--sessions cannot be combined with --query')
+        raise typer.Exit(code=2)
+    if from_finder is not None:
+        emit_error('--sessions cannot be combined with --from-finder')
+        raise typer.Exit(code=2)
+    if from_snapshot is not None:
+        emit_error('--sessions cannot be combined with --from-snapshot')
+        raise typer.Exit(code=2)
+    conflicting = [name for name, used in population_options if used]
+    if conflicting:
+        emit_error(f'--sessions cannot be combined with population options: {", ".join(conflicting)}')
+        raise typer.Exit(code=2)
+
+
+def _run_local_sessions(
+    *,
+    sources: list[str] | None,
+    start: str | None,
+    end: str | None,
+    project_dir: Path | None,
+    text: str | None,
+    limit: int | None,
+    preview_input: bool,
+    options: dict[str, Any],
+) -> None:
+    """Freeze one bounded local search into a private snapshot for the standard pipeline path."""
+    from evaluatorq.common.private_files import write_private_atomic
+    from evaluatorq.local_sessions.cli import search_session_options
+    from evaluatorq.local_sessions.models import MAX_SELECTED_SESSIONS, SessionLoadError
+    from evaluatorq.local_sessions.search import build_session_snapshot
+
+    if limit is not None and limit > MAX_SELECTED_SESSIONS:
+        emit_error(f'--limit must be at most {MAX_SELECTED_SESSIONS} with --sessions')
+        raise typer.Exit(code=2)
+    result = search_session_options(
+        sources,
+        start=start,
+        end=end,
+        project_dir=project_dir,
+        text=text,
+        limit=limit if limit is not None else MAX_SELECTED_SESSIONS,
+    )
+    try:
+        frozen = build_session_snapshot([session.ref() for session in result.sessions])
+    except SessionLoadError as exc:
+        emit_error(exc)
+        raise typer.Exit(code=1) from None
+    for _ref, reason in frozen.failed:
+        typer.echo(f'Skipped {reason}', err=True)
+
+    try:
+        temp_directory = tempfile.TemporaryDirectory(prefix='evaluatorq-insights-sessions-')
+    except OSError as exc:
+        reason = exc.strerror or type(exc).__name__
+        emit_error(f'could not create temporary local-session snapshot directory: {reason}')
+        raise typer.Exit(code=1) from None
+    with temp_directory as temp_dir:
+        snapshot_path = Path(temp_dir) / 'sessions.json'
+        try:
+            write_private_atomic(snapshot_path, frozen.data)
+        except OSError as exc:
+            emit_error(f'could not write temporary local-session snapshot: {exc.strerror or type(exc).__name__}')
+            raise typer.Exit(code=1) from None
+        if preview_input:
+            coverage = _print_snapshot_preview(snapshot_path)
+            _print_local_send(
+                snapshot_path,
+                n_traces=coverage['n_traces'],
+                summary_model=options['summary_model'],
+                classifier_model=options['classifier_model'],
+                embedding_model=options['embedding_model'],
+                preview=True,
+            )
+            return
+        options.update(
+            sessions=False,
+            source=None,
+            start=None,
+            end=None,
+            project_dir=None,
+            session_text=None,
+            limit=None,
+            from_snapshot=snapshot_path,
+        )
+        insights_cmd(**options)
+
+
 def insights_cmd(
     query: Annotated[str | None, typer.Option('--query', help='Optional semantic question to select traces.')] = None,
+    sessions: Annotated[  # noqa: FBT002
+        bool, typer.Option('--sessions', help='Use local coding-agent sessions as the population.')
+    ] = False,
+    source: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--source',
+            help='Session source: claude-code, claude-desktop, codex or omp; repeatable. Defaults to all.',
+        ),
+    ] = None,
+    start: Annotated[str | None, typer.Option('--from', help='First local day to include, YYYY-MM-DD.')] = None,
+    end: Annotated[str | None, typer.Option('--to', help='Last local day to include, YYYY-MM-DD.')] = None,
+    project_dir: Annotated[
+        Path | None,
+        typer.Option('--project-dir', help='Only sessions from this directory, its descendants, or its worktrees.'),
+    ] = None,
+    session_text: Annotated[
+        str | None,
+        typer.Option('--text', help='Only sessions whose messages contain this text (case-insensitive).'),
+    ] = None,
     profile: Annotated[
         str | None,
         typer.Option('--profile', help='Orq CLI profile for traces and model calls; overrides saved settings.'),
@@ -258,12 +373,15 @@ def insights_cmd(
         Path | None,
         typer.Option(
             '--from-snapshot',
-            help='Use traces and messages from a local snapshot JSON file, including `eq sessions --export` files.',
+            help='Use traces and messages from a local snapshot JSON file, including `eq agent-sessions --export` files.',
         ),
     ] = None,
     preview_input: Annotated[  # noqa: FBT002
         bool,
-        typer.Option('--preview-input', help='Show local snapshot truncation without starting a run.'),
+        typer.Option(
+            '--preview-input',
+            help='Preview local-session or snapshot input truncation without starting a run.',
+        ),
     ] = False,
     label: Annotated[
         list[str] | None,
@@ -322,7 +440,15 @@ def insights_cmd(
     window_days: Annotated[
         int | None, typer.Option('--window-days', min=1, max=90, help='Recent days to scan.')
     ] = None,
-    limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to scan.')] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            '--limit',
+            min=1,
+            max=5000,
+            help='Maximum traces to scan (up to 5000); with --sessions, maximum 1000 (default 1000).',
+        ),
+    ] = None,
     parallelism: Annotated[
         int | None,
         typer.Option('--parallelism', min=1, max=200, help='Concurrent model calls.'),
@@ -346,7 +472,50 @@ def insights_cmd(
         typer.Option('--duration-ms-max', min=0, help='Maximum trace duration in milliseconds.'),
     ] = None,
 ) -> None:
-    """Discover trace dimensions and answer fixed label questions."""
+    options = locals().copy()
+    if sessions:
+        _validate_sessions_population_source(
+            query,
+            from_finder,
+            from_snapshot,
+            (
+                ('--window-days', window_days is not None),
+                ('--project', bool(project)),
+                ('--model', bool(model)),
+                ('--provider', bool(provider)),
+                ('--status', bool(status)),
+                ('--product', bool(product)),
+                ('--trace-type', bool(trace_type)),
+                ('--agent', bool(agent)),
+                ('--tool', bool(tool)),
+                ('--tokens-min', tokens_min is not None),
+                ('--tokens-max', tokens_max is not None),
+                ('--duration-ms-min', duration_ms_min is not None),
+                ('--duration-ms-max', duration_ms_max is not None),
+            ),
+        )
+        _run_local_sessions(
+            sources=source,
+            start=start,
+            end=end,
+            project_dir=project_dir,
+            text=session_text,
+            limit=limit,
+            preview_input=preview_input,
+            options=options,
+        )
+        return
+    session_only = (
+        ('--source', bool(source)),
+        ('--from', start is not None),
+        ('--to', end is not None),
+        ('--project-dir', project_dir is not None),
+        ('--text', session_text is not None),
+    )
+    for option, used in session_only:
+        if used:
+            emit_error(f'{option} requires --sessions')
+            raise typer.Exit(code=2)
     _validate_population_source(
         from_finder,
         from_snapshot,

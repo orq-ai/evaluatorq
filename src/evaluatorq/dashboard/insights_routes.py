@@ -50,7 +50,6 @@ from evaluatorq.dashboard.insights_uploads import (
     limit_request_body,
     receive_upload,
     store_upload,
-    validate_upload,
 )
 from evaluatorq.dashboard.insights_views import (
     TABS,

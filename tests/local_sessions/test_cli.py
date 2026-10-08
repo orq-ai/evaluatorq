@@ -1,4 +1,4 @@
-"""`eq sessions`."""
+"""`eq agent-sessions`."""
 
 # ruff: noqa: S101, SLF001
 
@@ -31,7 +31,9 @@ def _app() -> typer.Typer:
 
 
 def _run(*args: str):
-    return CliRunner().invoke(_app(), ['sessions', *args], env={'COLUMNS': '200'})
+    return CliRunner().invoke(_app(), ['agent-sessions', *args], env={'COLUMNS': '200'})
+
+
 
 
 def test_table_output(claude_projects: Path, codex_home: Path) -> None:

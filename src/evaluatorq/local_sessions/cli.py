@@ -1,4 +1,4 @@
-"""`eq sessions`: search local coding-agent sessions and export them as an Insights snapshot."""
+"""`eq agent-sessions`: search local coding-agent sessions and export them as an Insights snapshot."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from evaluatorq.local_sessions.models import (
     SESSION_SOURCES,
     SessionLoadError,
     SessionQuery,
+    SessionSearchResult,
     SessionSource,
     SessionSummary,
     day_window,
@@ -49,6 +50,66 @@ def _sources(values: list[str] | None) -> tuple[SessionSource, ...]:
         if value not in SESSION_SOURCES:
             raise _fail(f'unknown --source {value!r}; choose from {", ".join(SESSION_SOURCES)}')
     return tuple(source for source in SESSION_SOURCES if source in values)
+
+
+def _query(
+    sources: tuple[SessionSource, ...],
+    *,
+    start: str | None,
+    end: str | None,
+    project_dir: Path | None,
+    text: str | None,
+    limit: int,
+) -> SessionQuery:
+    """Build the shared local-session query, including date and text validation."""
+    start_day = _day(start, flag='--from') if start else None
+    end_day = _day(end, flag='--to') if end else None
+    try:
+        start_at, end_at = day_window(start_day, end_day, None)
+    except ValueError as exc:
+        raise _fail(str(exc)) from None
+    if text is not None and len(text) > MAX_SESSION_TEXT_CHARS:
+        raise _fail(f'--text is limited to {MAX_SESSION_TEXT_CHARS} characters, got {len(text)}')
+    return SessionQuery(
+        sources=sources,
+        start=start_at,
+        end=end_at,
+        project_dir=str(project_dir) if project_dir is not None else None,
+        text=text or None,
+        limit=limit,
+    )
+
+
+def _search_notices(result: SessionSearchResult, query: SessionQuery) -> None:
+    if not result.complete:
+        typer.echo(
+            f'Searched {result.scanned_files} of {result.candidate_files} session files before the '
+            f'{SEARCH_DEADLINE_SECONDS:g}s limit; narrow --from/--to or --text to see the rest.',
+            err=True,
+        )
+    if len(result.sessions) == query.limit:
+        more = (
+            f'raise --limit (up to {MAX_SELECTED_SESSIONS}) to see more.'
+            if query.limit < MAX_SELECTED_SESSIONS
+            else 'narrow --from/--to or --text to see more.'
+        )
+        typer.echo(f'Listed the newest {query.limit} sessions; {more}', err=True)
+
+
+def search_session_options(
+    sources: list[str] | None,
+    *,
+    start: str | None,
+    end: str | None,
+    project_dir: Path | None,
+    text: str | None,
+    limit: int,
+) -> SessionSearchResult:
+    """Search sources using the same option parsing and notices as `eq agent-sessions`."""
+    query = _query(_sources(sources), start=start, end=end, project_dir=project_dir, text=text, limit=limit)
+    result = search_sessions(query)
+    _search_notices(result, query)
+    return result
 
 
 def _print_table(sessions: tuple[SessionSummary, ...]) -> None:
@@ -129,44 +190,21 @@ def sessions_cmd(
         ),
     ] = None,
 ) -> None:
-    """Search Claude Code, Claude desktop, Codex and omp sessions on this machine. Reads local files only."""
-    sources = _sources(source)
-    start_day = _day(start, flag='--from') if start else None
-    end_day = _day(end, flag='--to') if end else None
-    try:
-        start_at, end_at = day_window(start_day, end_day, None)
-    except ValueError as exc:
-        raise _fail(str(exc)) from None
-    if text is not None and len(text) > MAX_SESSION_TEXT_CHARS:
-        raise _fail(f'--text is limited to {MAX_SESSION_TEXT_CHARS} characters, got {len(text)}')
-    query = SessionQuery(
-        sources=sources,
-        start=start_at,
-        end=end_at,
-        project_dir=str(project_dir) if project_dir is not None else None,
-        text=text or None,
+    """`eq agent-sessions`: search local session files. Reads on this machine only."""
+    result = search_session_options(
+        source,
+        start=start,
+        end=end,
+        project_dir=project_dir,
+        text=text,
         limit=limit if limit is not None else (MAX_SELECTED_SESSIONS if export is not None else 50),
     )
-    result = search_sessions(query)
 
     if json_output:
         echo_json([session.model_dump(mode='json') for session in result.sessions])
     else:
         _print_table(result.sessions)
-    if not result.complete:
-        typer.echo(
-            f'Searched {result.scanned_files} of {result.candidate_files} session files before the '
-            f'{SEARCH_DEADLINE_SECONDS:g}s limit; narrow --from/--to or --text to see the rest.',
-            err=True,
-        )
-        if export is not None:
-            typer.echo('The export is partial: it holds only the sessions found before the search stopped.', err=True)
-    if len(result.sessions) == query.limit:
-        more = (
-            f'raise --limit (up to {MAX_SELECTED_SESSIONS}) to see more.'
-            if query.limit < MAX_SELECTED_SESSIONS
-            else 'narrow --from/--to or --text to see more.'
-        )
-        typer.echo(f'Listed the newest {query.limit} sessions; {more}', err=True)
+    if export is not None and not result.complete:
+        typer.echo('The export is partial: it holds only the sessions found before the search stopped.', err=True)
     if export is not None:
         _export(result.sessions, export)

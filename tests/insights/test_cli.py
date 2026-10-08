@@ -32,6 +32,7 @@ from evaluatorq.trace_finder import cli as finder_cli
 from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 from evaluatorq.trace_finder.models import Snapshot
 from tests.insights.test_population import make_trace
+from tests.local_sessions.conftest import claude_projects, codex_home
 
 
 def _app() -> typer.Typer:
@@ -40,12 +41,29 @@ def _app() -> typer.Typer:
     return app
 
 
-def test_help_lists_population_and_clustering_options() -> None:
+def test_help_lists_population_session_and_clustering_options() -> None:
     result = CliRunner().invoke(_app(), ['insights', '--help'], env={'COLUMNS': '120'})
 
     assert result.exit_code == 0, result.output
     help_text = unstyle(result.output)
-    for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--from-snapshot', '--preview-input', '--max-clusters', '--classifier-model'):
+    for option in (
+        '--query',
+        '--profile',
+        '--label',
+        '--dimension',
+        '--from-finder',
+        '--from-snapshot',
+        '--preview-input',
+        '--sessions',
+        '--source',
+        '--from',
+        '--to',
+        '--project-dir',
+        '--text',
+        '--limit',
+        '--max-clusters',
+        '--classifier-model',
+    ):
         assert option in help_text
 
 
@@ -61,6 +79,156 @@ def test_score_preset_display_does_not_repeat_level_index(minimal_run: Any, caps
     description = spec.criteria[0].split(':', 1)[0].removeprefix('0 ')
     assert f'0 · {description}' in output
     assert '0 · 0 ' not in output
+
+
+@pytest.mark.parametrize(
+    ('options', 'message'),
+    [
+        (['--sessions', '--query', 'refunds'], '--sessions cannot be combined with --query'),
+        (['--sessions', '--from-snapshot', 'snapshot.json'], '--sessions cannot be combined with --from-snapshot'),
+        (['--sessions', '--from-finder', 'finder.json'], '--sessions cannot be combined with --from-finder'),
+        (['--sessions', '--window-days', '2'], '--sessions cannot be combined with population options: --window-days'),
+        (['--sessions', '--project', 'demo'], '--sessions cannot be combined with population options: --project'),
+        (['--sessions', '--source', 'claude'], "unknown --source 'claude'; choose from"),
+        (['--project-dir', '.'], '--project-dir requires --sessions'),
+        (['--source', 'codex'], '--source requires --sessions'),
+        (['--from', '2026-10-01'], '--from requires --sessions'),
+    ],
+)
+def test_sessions_source_conflicts_are_usage_errors(options: list[str], message: str) -> None:
+    result = CliRunner().invoke(_app(), ['insights', *options])
+
+    assert result.exit_code == 2
+    assert message in result.output
+
+
+def test_sessions_preview_is_offline_and_does_not_start_pipeline(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path
+) -> None:
+    from tests.local_sessions.test_search import _claude
+
+    _claude(claude_projects, 'session-preview')
+    monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
+    monkeypatch.setattr(cli_module, 'insights', lambda *_args, **_kwargs: pytest.fail('preview must not run pipeline'))
+
+    result = CliRunner().invoke(
+        _app(), ['insights', '--sessions', '--preview-input'], env={'COLUMNS': '120', 'ORQ_API_KEY': ''}
+    )
+
+    assert result.exit_code == 0, result.output
+    assert 'Model input projection:' in result.output
+    assert 'A run would send' in result.output
+
+
+def test_sessions_freeze_search_results_and_pass_local_content_to_pipeline(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path, minimal_run: Any
+) -> None:
+    from tests.local_sessions.test_search import _claude
+
+    _claude(claude_projects, 'session-content', text='the session prompt appears')
+    received: dict[str, Any] = {}
+    snapshot_paths: list[Path] = []
+
+    async def fake_insights(population: Any, **kwargs: Any) -> Any:
+        from evaluatorq.insights.population import resolve_population
+
+        assert population.snapshot_path is not None
+        snapshot_paths.append(population.snapshot_path)
+        resolved = await resolve_population(
+            population,
+            orq=None,
+            client=None,
+            compiler_model='unused',
+            classifier_model='unused',
+        )
+        received['documents'] = resolved.traces
+        return minimal_run
+
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    result = CliRunner().invoke(
+        _app(), ['insights', '--sessions', '--text', 'session prompt', '--limit', '1']
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(received['documents']) == 1
+    assert 'the session prompt appears' in str(received['documents'][0].trajectory)
+    assert len(snapshot_paths) == 1
+    assert not snapshot_paths[0].exists()
+    assert not snapshot_paths[0].parent.exists()
+
+
+def test_sessions_source_and_inclusive_local_day_filter_reach_the_pipeline(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path, codex_home: Path, minimal_run: Any
+) -> None:
+    from tests.local_sessions.test_search import _claude, _codex, _utc
+
+    _claude(claude_projects, 'matching-claude', text='shared text', start=_utc(2))
+    _codex(codex_home, 'matching-codex', text='shared text', start=_utc(2))
+    received: dict[str, Any] = {}
+
+    async def fake_insights(population: Any, **kwargs: Any) -> Any:
+        from evaluatorq.insights.population import resolve_population
+
+        resolved = await resolve_population(
+            population,
+            orq=None,
+            client=None,
+            compiler_model='unused',
+            classifier_model='unused',
+        )
+        received['documents'] = resolved.traces
+        return minimal_run
+
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    local_day = _utc(2).astimezone().date().isoformat()
+    result = CliRunner().invoke(
+        _app(),
+        [
+            'insights',
+            '--sessions',
+            '--source',
+            'codex',
+            '--from',
+            local_day,
+            '--to',
+            local_day,
+            '--text',
+            'shared text',
+            '--limit',
+            '1',
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(received['documents']) == 1
+    assert received['documents'][0].metadata.project == '/work/codex'
+    assert 'shared text' in str(received['documents'][0].trajectory)
+
+
+def test_sessions_snapshot_is_removed_when_pipeline_fails(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path
+) -> None:
+    from evaluatorq.insights.models import InsightsPopulation
+    from tests.local_sessions.test_search import _claude
+
+    _claude(claude_projects, 'session-error')
+    snapshot_paths: list[Path] = []
+
+    async def fail_pipeline(population: Any, **kwargs: Any) -> Any:
+        assert isinstance(population, InsightsPopulation)
+        assert population.snapshot_path is not None
+        snapshot_paths.append(population.snapshot_path)
+        raise RuntimeError('expected pipeline failure')
+
+    monkeypatch.setattr(cli_module, 'insights', fail_pipeline)
+    result = CliRunner().invoke(_app(), ['insights', '--sessions'])
+
+    assert result.exit_code == 1, result.output
+    assert len(snapshot_paths) == 1
+    assert not snapshot_paths[0].exists()
+    assert not snapshot_paths[0].parent.exists()
+
+
 def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

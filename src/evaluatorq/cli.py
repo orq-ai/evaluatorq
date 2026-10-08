@@ -282,7 +282,10 @@ def _register_subapps(app: typer.Typer) -> None:
         epilog=_FIND_EPILOG,
     )(find)
     app.command('insights', help='Discover and label patterns in Orq or local traces.')(insights_cmd)
-    app.command('sessions', help='Search local Claude Code, Claude desktop, Codex and omp sessions.')(sessions_cmd)
+    app.command(
+        'agent-sessions',
+        help='Search local Claude Code, Claude desktop, Codex and omp sessions.',
+    )(sessions_cmd)
 
 
 def main() -> None:

@@ -18,7 +18,7 @@ Every subcommand group is registered at startup regardless of which extras are i
 - **[Red Teaming](redteam.md)** — adversarial testing (`eq redteam`).
 - **[Simulation](simulation.md)** — multi-turn user simulation (`eq sim`; `sim` is shorthand).
 - **[`eq insights`](../insights.md#run-from-the-cli)** — cluster and label a population of traces.
-- **[`eq sessions`](../insights.md#local-coding-agent-sessions)** — search local Claude Code, Claude desktop, Codex and omp sessions by date, project directory or text, and export them as a snapshot for `eq insights --from-snapshot`.
+- **[`eq agent-sessions`](../insights.md#local-coding-agent-sessions)** — inspect local Claude Code, Claude desktop, Codex and omp sessions by date, project directory or text, and export them as a snapshot. Use `eq insights --sessions` to analyze them directly.
 
 ## Model flags
 
