@@ -943,13 +943,13 @@ def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> st
     )
     if not scope.error and not any(option == project_id for option, _ in projects):
         project_id = ''
-    error_html = f'<span class="settings-error" role="alert">{esc(scope.error)}</span>' if scope.error else ''
+    project_current = _pick_row(project_id) if scope.error and project_id else projects[0][1]
     placeholder = '<span class="rich-pick-placeholder">Choose a workspace</span>'
     return (
         '<label class="settings-auth-detail-label" for="orq_workspace">Workspace</label>'
         f'{_rich_pick("orq_workspace", workspace, workspaces, current=placeholder)}'
         '<label class="settings-auth-detail-label" for="orq_project_id">Project</label>'
-        f'{_rich_pick("orq_project_id", project_id, projects, current=projects[0][1])}{error_html}'
+        f'{_rich_pick("orq_project_id", project_id, projects, current=project_current)}{error_html}'
     )
 
 

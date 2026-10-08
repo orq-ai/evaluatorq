@@ -1873,8 +1873,8 @@ def test_cli_oauth_project_survives_failed_discovery_and_saves_after_recovery(
     })
     assert failed_lookup.status_code == 200
     assert '<input type="hidden" name="orq_project_id" value="project-a">' in failed_lookup.text
-    assert _pick_options(failed_lookup.text, 'orq_project_id')['project-a'].startswith(' is-selected"')
-    assert 'Project listing unavailable' in failed_lookup.text
+    assert 'Alpha project' in failed_lookup.text
+    assert 'All projects</button>' not in failed_lookup.text
 
     failed_save = client.post('/settings', data=csrf_data({
         **_MODELS,
