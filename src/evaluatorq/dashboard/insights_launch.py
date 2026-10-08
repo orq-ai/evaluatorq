@@ -17,7 +17,8 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, NamedTuple
 
 from loguru import logger
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
@@ -41,6 +42,25 @@ from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import FacetSelection, Snapshot
 
 Source = Literal['recent', 'query', 'finder', 'snapshot']
+
+
+class SourceInfo(NamedTuple):
+    """How one launch `Source` shows up: its run form tab, its stored `population.mode`, and its label."""
+
+    tab: Literal['orq', 'file']
+    mode: str
+    label: str
+
+
+SOURCES: MappingProxyType[Source, SourceInfo] = MappingProxyType({
+    'recent': SourceInfo('orq', 'filter', 'Orq traces'),
+    'query': SourceInfo('orq', 'query', 'Orq traces matching a question'),
+    'finder': SourceInfo('file', 'export', 'Trace file (Finder export)'),
+    'snapshot': SourceInfo('file', 'snapshot', 'Trace file'),
+})
+SOURCE_BY_MODE: MappingProxyType[str, Source] = MappingProxyType({
+    info.mode: source for source, info in SOURCES.items()
+})
 Preset = str
 _CODING_PRESETS = {spec.name: spec for spec in CODING_LABELS[1:]}
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'

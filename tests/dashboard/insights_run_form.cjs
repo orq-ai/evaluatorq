@@ -180,8 +180,10 @@ async function main() {
     input.dispatchEvent({type: 'change', bubbles: true, target: input});
     await tick();
     await tick();
-    assert.equal(app.form.querySelector('input[name="finder_export"]').value, '/runs/.uploads/finder-1.json');
-    assert.equal(app.form.querySelector('input[name="snapshot_path"]').value, '', 'the other hidden path is cleared');
+    const traceFile = app.form.querySelector('input[name="trace_file"]');
+    assert.equal(traceFile.value, '/runs/.uploads/finder-1.json');
+    assert.equal(traceFile.dataset.kind, 'finder', 'the upload route says which kind of file it read');
+    assert.ok(!app.calls.some(call => call.url === '/insights/snapshot-preview'), 'a Finder export is not measured');
     assert.equal(app.form.querySelector('[data-file-name]').value, 'export.json');
     assert.equal(app.form.querySelector('[data-file-status]').textContent, 'Finder export is ready.');
     const upload = app.calls.find(call => call.url === '/insights/uploads');
@@ -196,14 +198,16 @@ async function main() {
       '/insights/snapshot-preview': () => response('<p>3 traces</p>'),
     });
     await tick();
-    app.form.querySelector('input[name="finder_export"]').value = '/old/finder.json';
+    const traceFile = app.form.querySelector('input[name="trace_file"]');
+    traceFile.value = '/old/finder.json';
+    traceFile.dataset.kind = 'finder';
     const input = app.form.querySelector('input[data-file]');
     input.files = [new File(['{}'], 'snap.json', {type: 'application/json'})];
     input.dispatchEvent({type: 'change', bubbles: true, target: input});
     await tick();
     await tick();
-    assert.equal(app.form.querySelector('input[name="snapshot_path"]').value, '/tmp/snap.json');
-    assert.equal(app.form.querySelector('input[name="finder_export"]').value, '', 'the finder path is cleared');
+    assert.equal(traceFile.value, '/tmp/snap.json', 'a new upload replaces the earlier file');
+    assert.equal(traceFile.dataset.kind, 'snapshot');
     assert.equal(app.form.querySelector('[data-file-status]').textContent, 'Trace snapshot is ready.');
     assert.ok(app.calls.some(call => call.url === '/insights/snapshot-preview'), 'a snapshot is measured');
   }

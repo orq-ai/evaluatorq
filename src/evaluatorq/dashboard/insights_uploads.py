@@ -9,7 +9,7 @@ import re
 import stat
 import time
 import uuid
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import ValidationError
 
@@ -209,6 +209,12 @@ def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
     return contents
 
 
+def upload_kind(path: Path) -> UploadKind | None:
+    """The kind a stored upload's name records, or `None` for a file this module did not name."""
+    match = _UPLOAD_NAME.fullmatch(path.name)
+    return cast('UploadKind', match.group(1)) if match else None
+
+
 def is_uploaded_source(runs_dir: Path, path: Path) -> bool:
     """Return whether a path has the unambiguous route-owned upload shape."""
     directory = uploads_dir(runs_dir)
@@ -225,8 +231,7 @@ def cleanup_uploaded_source(runs_dir: Path, path: Path) -> None:
     if not is_uploaded_source(runs_dir, path):
         return
     try:
-        kind = 'finder' if path.name.startswith('finder-') else 'snapshot'
-        read_uploaded_source(runs_dir, path, kind)
+        read_uploaded_source(runs_dir, path, upload_kind(path) or 'snapshot')
         path.unlink(missing_ok=True)
     except (FileNotFoundError, OSError, ValueError):
         return

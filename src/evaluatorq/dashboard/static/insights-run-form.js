@@ -100,7 +100,7 @@
     const form = ctx.form;
     const active = activeSource(form);
     if (step === 1) {
-      if (active === 'file' && !field(form, 'finder_export').value.trim() && !field(form, 'snapshot_path').value.trim()) {
+      if (active === 'file' && !field(form, 'trace_file').value.trim()) {
         return 'Browse to choose a trace file first.';
       }
       if (active === 'orq') {
@@ -120,7 +120,8 @@
 
   async function measureSnapshot(ctx) {
     const form = ctx.form;
-    const path = field(form, 'snapshot_path').value.trim();
+    const traceFile = field(form, 'trace_file');
+    const path = traceFile.dataset.kind === 'snapshot' ? traceFile.value.trim() : '';
     const host = form.querySelector('#insights-snapshot-preview');
     if (!path) {
       host.textContent = '';
@@ -354,8 +355,9 @@
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'Upload failed.');
       const finder = result.kind === 'finder';
-      field(form, 'finder_export').value = finder ? result.path : '';
-      field(form, 'snapshot_path').value = finder ? '' : result.path;
+      const traceFile = field(form, 'trace_file');
+      traceFile.value = result.path;
+      traceFile.dataset.kind = result.kind;
       form.querySelector('[data-file-name]').value = file.name;
       status.textContent = finder ? 'Finder export is ready.' : 'Trace snapshot is ready.';
       showError(ctx, '');
@@ -376,7 +378,7 @@
       showError(ctx, message);
       return;
     }
-    if (ctx.step === 1 && activeSource(ctx.form) === 'file' && field(ctx.form, 'snapshot_path').value.trim()) {
+    if (ctx.step === 1 && activeSource(ctx.form) === 'file' && field(ctx.form, 'trace_file').dataset.kind === 'snapshot') {
       const next = ctx.form.querySelector('[data-irf-next]');
       next.disabled = true;
       const measured = await measureSnapshot(ctx);

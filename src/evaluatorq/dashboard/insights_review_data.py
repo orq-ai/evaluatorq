@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
 from evaluatorq.common.structured_output import sum_structured_usage
+from evaluatorq.dashboard.insights_launch import SOURCE_BY_MODE, SOURCES
 from evaluatorq.dashboard.insights_review_projection import review_trace_key, review_xy, review_xy_state
 from evaluatorq.dashboard.insights_views import _signal_summary, _trace_href
 from evaluatorq.dashboard.trace_links import trace_span_url
@@ -33,13 +34,9 @@ def build_signal_detail_payload(run: InsightsRun, trace_id: str, span_id: str | 
     }
 
 
-# Stored `population.mode` values, named the way the run form's "Which traces?" tabs name them.
-SOURCE_LABELS = {
-    'filter': 'Orq traces',
-    'query': 'Orq traces matching a question',
-    'export': 'Trace file (Finder export)',
-    'snapshot': 'Trace file',
-}
+def _source_label(mode: object) -> str:
+    source = SOURCE_BY_MODE.get(str(mode))
+    return SOURCES[source].label if source is not None else str(mode or '')
 
 
 def _timestamp(value: datetime | None) -> str | None:
@@ -167,7 +164,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'created': _timestamp(run.created_at),
             'status': run.status,
             'population': population,
-            'source_label': SOURCE_LABELS.get(str(population.get('mode')), str(population.get('mode') or '')),
+            'source_label': _source_label(population.get('mode')),
             'cost': cost,
             'cost_is_partial': total_usage.cost_is_partial if total_usage is not None else None,
             'cost_by_stage': {

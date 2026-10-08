@@ -104,7 +104,7 @@ def test_defaults_render_three_steps_with_every_offered_choice() -> None:
     assert 'id="insights-run-estimate"' in html
     assert 'name="csrf" value="t"' in html
     assert 'data-mount="page"' in html
-    assert 'name="finder_export" value=""' in html and 'name="snapshot_path" value=""' in html
+    assert 'name="trace_file" value="" data-kind=""' in html and 'name="finder_export"' not in html
     assert 'A Finder export or a local trace file (JSON).' in html
     assert html.count('type="file"') == 1
 
@@ -145,13 +145,13 @@ def test_from_run_round_trips_a_saved_run(tmp_path: Path) -> None:
 def test_from_run_clears_a_missing_uploaded_file_and_asks_for_a_fresh_one(tmp_path: Path) -> None:
     missing = RunFormValues.from_run(_saved_run({'mode': 'snapshot', 'snapshot_path': str(tmp_path / 'gone.json')}), tmp_path)
     assert missing.source == 'snapshot'
-    assert missing.snapshot_path == ''
+    assert missing.trace_file == ''
     assert missing.error is not None and 'fresh file' in missing.error
 
     present = tmp_path / 'traces.json'
     present.write_text('{}', encoding='utf-8')
     kept = RunFormValues.from_run(_saved_run({'mode': 'snapshot', 'snapshot_path': str(present)}), tmp_path)
-    assert kept.snapshot_path == str(present)
+    assert kept.trace_file == str(present)
     assert kept.error is None
 
 
@@ -410,7 +410,7 @@ def test_a_finder_export_gives_an_exact_trace_count(monkeypatch: pytest.MonkeyPa
     client = TestClient(build_app())
 
     response = client.get(
-        '/insights/new/plan', params={**_PLAN_QUERY, 'source': 'file', 'finder_export': str(export), 'compact': '1'}
+        '/insights/new/plan', params={**_PLAN_QUERY, 'source': 'file', 'trace_file': str(export), 'compact': '1'}
     )
 
     assert response.status_code == 200
@@ -649,9 +649,23 @@ def test_orq_tab_maps_to_recent_when_blank_and_query_when_asked() -> None:
     InsightsLaunchSpec.model_validate(RunFormValues.from_form({'source': 'orq', 'dimensions': 'intent'}).launch_fields())
 
 
-def test_file_tab_maps_by_which_hidden_path_is_filled() -> None:
-    assert RunFormValues.from_form({'source': 'file', 'finder_export': 'f.json'}).source == 'finder'
-    assert RunFormValues.from_form({'source': 'file', 'snapshot_path': 's.json'}).source == 'snapshot'
+def test_file_tab_takes_the_kind_from_the_stored_upload_name_or_the_exports_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    uploads = tmp_path / 'insights' / '.uploads'
+    hex_id = 'a' * 32
+
+    def source(trace_file: str) -> str:
+        return RunFormValues.from_form({'source': 'file', 'trace_file': trace_file}).source
+
+    assert source(str(uploads / f'finder-{hex_id}.json')) == 'finder'
+    assert source(str(uploads / f'snapshot-{hex_id}.json')) == 'snapshot'
+    assert source(str(get_finder_exports_dir() / 'trace-finder-7.json')) == 'finder'
+    assert source(str(tmp_path / 'claude-traces.json')) == 'snapshot'
+    assert source('') == 'snapshot'
+    finder = RunFormValues.from_form({'source': 'file', 'trace_file': str(uploads / f'finder-{hex_id}.json')})
+    assert (finder.launch_fields()['finder_export'], finder.launch_fields()['snapshot_path']) == (finder.trace_file, '')
 
 
 @pytest.mark.parametrize('stale', ['recent', 'query', 'finder', 'snapshot', 'bogus'])
@@ -663,15 +677,15 @@ def test_only_the_two_tabs_are_accepted(stale: str) -> None:
 def test_fields_of_the_other_tab_are_dropped() -> None:
     on_file = RunFormValues.from_form({
         'source': 'file',
-        'snapshot_path': 's.json',
+        'trace_file': 's.json',
         'query': 'refunds',
         'facet_agent_name': 'support-bot',
         'compiler_model': 'acme/compiler',
     })
     assert (on_file.query, set(on_file.facets.agent_name)) == ('', set())
     assert on_file.compiler_model != 'acme/compiler'
-    on_orq = RunFormValues.from_form({'source': 'orq', 'finder_export': 'f.json', 'snapshot_path': 's.json'})
-    assert (on_orq.source, on_orq.finder_export, on_orq.snapshot_path) == ('recent', '', '')
+    on_orq = RunFormValues.from_form({'source': 'orq', 'trace_file': 's.json'})
+    assert (on_orq.source, on_orq.trace_file) == ('recent', '')
 
 
 def test_a_missing_source_is_the_orq_tab_and_limit_defaults_to_200() -> None:

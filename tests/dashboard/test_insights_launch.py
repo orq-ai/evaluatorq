@@ -668,7 +668,7 @@ def test_dashboard_starts_local_snapshot_run_without_trace_lookup(tmp_path: Path
     ):
         response = client.post(
             '/insights/runs',
-            data={'csrf': token.group(1), 'source': 'file', 'snapshot_path': str(path), 'dimensions': 'intent'},
+            data={'csrf': token.group(1), 'source': 'file', 'trace_file': str(path), 'dimensions': 'intent'},
             follow_redirects=False,
         )
 

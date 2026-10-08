@@ -18,11 +18,13 @@ from evaluatorq.dashboard.facet_picker import render_facet_chips, render_facet_m
 from evaluatorq.dashboard.insights_launch import (
     DEFAULT_TRACE_LIMIT,
     DEFAULT_WINDOW_DAYS,
+    SOURCE_BY_MODE,
+    SOURCES,
     InsightsLaunchSpec,
     Source,
     get_finder_exports_dir,
 )
-from evaluatorq.dashboard.insights_uploads import is_uploaded_source
+from evaluatorq.dashboard.insights_uploads import is_uploaded_source, upload_kind
 from evaluatorq.dashboard.insights_views import _back_to_runs
 from evaluatorq.dashboard.shell import icon, page
 from evaluatorq.dashboard.view import model_control
@@ -102,7 +104,7 @@ _DIMENSION_TEXT: MappingProxyType[DimensionName, tuple[str, str]] = MappingProxy
     'sentiment': ('Sentiment', 'how users felt'),
 })
 
-FormTab = Literal['orq', 'file']
+FormTab = Literal['orq', 'file']  # the `tab` of each `SOURCES` entry
 _FILE_HINT = 'A Finder export or a local trace file (JSON).'
 # Each tab maps onto the launch spec's four-valued `Source` in `RunFormValues.from_form`.
 _SOURCES: tuple[tuple[FormTab, str, str, str], ...] = (
@@ -130,7 +132,22 @@ _SOURCES: tuple[tuple[FormTab, str, str, str], ...] = (
 
 
 def _form_tab(source: Source) -> FormTab:
-    return 'file' if source in ('finder', 'snapshot') else 'orq'
+    return SOURCES[source].tab
+
+
+def _trace_file_source(trace_file: str) -> Source:
+    """Which file source a chosen trace file is.
+
+    An upload's stored name records the kind the upload route read from its contents. Any other file comes from a
+    saved run, and a new launch takes a Finder export only from the Finder exports folder.
+    """
+    if not trace_file:
+        return 'snapshot'
+    path = Path(trace_file).expanduser()
+    kind = upload_kind(path)
+    if kind is not None:
+        return kind
+    return 'finder' if path.parent.resolve() == get_finder_exports_dir().resolve() else 'snapshot'
 
 
 def _check_registries() -> None:
@@ -205,13 +222,14 @@ def _custom_labels(raw: str) -> tuple[LabelSpec, ...]:
 
 
 def _saved_source(population: Mapping[str, object]) -> Source:
-    if population.get('mode') == 'snapshot' or population.get('snapshot_path'):
+    source = SOURCE_BY_MODE.get(str(population.get('mode')))
+    if source is not None:
+        return source
+    if population.get('snapshot_path'):
         return 'snapshot'
-    if population.get('mode') in ('finder', 'export') or population.get('finder_export'):
+    if population.get('finder_export'):
         return 'finder'
-    if population.get('mode') == 'query' or population.get('query'):
-        return 'query'
-    return 'recent'
+    return 'query' if population.get('query') else 'recent'
 
 
 def _saved_file_usable(source: Source, path: Path, runs_dir: Path) -> bool:
@@ -256,8 +274,7 @@ class RunFormValues:
     custom_labels: tuple[LabelSpec, ...] = ()
     name: str = ''
     parallelism: int = 20
-    finder_export: str = ''
-    snapshot_path: str = ''
+    trace_file: str = ''
     source_name: str = ''
     preset: str | None = None
     mount: Mount = 'page'
@@ -313,8 +330,7 @@ class RunFormValues:
             classifier_model=run.config.classifier_model,
             embedding_model=run.config.embedding_model,
             compiler_model=run.config.compiler_model or _model_defaults()['compiler_model'],
-            finder_export=kept_path if source == 'finder' else '',
-            snapshot_path=kept_path if source == 'snapshot' else '',
+            trace_file=kept_path,
             source_name=str(population.get('source_name') or '') if kept_path else '',
             error=(
                 'The original local file is no longer available. Browse for a fresh file to continue.'
@@ -333,11 +349,8 @@ class RunFormValues:
         # Fields of the tab that is not chosen are still in the submitted form; drop them so they are never saved.
         orq = tab == 'orq'
         query = str(form.get('query') or '').strip() if orq else ''
-        finder_export = '' if orq else str(form.get('finder_export') or '')
-        snapshot_path = '' if orq else str(form.get('snapshot_path') or '')
-        source: Source = (
-            ('query' if query.strip() else 'recent') if orq else ('finder' if finder_export else 'snapshot')
-        )
+        trace_file = '' if orq else str(form.get('trace_file') or '').strip()
+        source: Source = ('query' if query else 'recent') if orq else _trace_file_source(trace_file)
         defaults = _model_defaults()
         models = {name: str(form.get(name) or '').strip() or default for name, default in defaults.items()}
         if source != 'query':
@@ -356,8 +369,7 @@ class RunFormValues:
             custom_labels=_custom_labels(str(form.get('custom_labels_json') or '[]')),
             name=str(form.get('name') or ''),
             parallelism=_whole_number(form, 'parallelism', 20, 'Parallel requests'),
-            finder_export=finder_export,
-            snapshot_path=snapshot_path,
+            trace_file=trace_file,
             source_name=str(form.get('source_name') or ''),
             preset=str(form.get('preset') or '') or None,
             mount=mount,
@@ -370,8 +382,8 @@ class RunFormValues:
             'name': self.name,
             'source': self.source,
             'query': self.query,
-            'finder_export': self.finder_export,
-            'snapshot_path': self.snapshot_path,
+            'finder_export': self.trace_file if self.source == 'finder' else '',
+            'snapshot_path': self.trace_file if self.source == 'snapshot' else '',
             'source_name': self.source_name,
             'window_days': self.window_days,
             'limit': self.limit,
@@ -494,15 +506,14 @@ def _preset_buttons(values: RunFormValues) -> str:
 
 
 def _file_source(values: RunFormValues) -> str:
-    chosen = values.finder_export or values.snapshot_path
-    shown = values.source_name if chosen else ''
-    shown = shown or (Path(chosen).name if chosen else '')
-    if values.finder_export:
-        status = 'Finder export is ready.'
-    elif values.snapshot_path:
-        status = 'Trace snapshot is ready.'
-    else:
+    chosen = values.trace_file
+    shown = (values.source_name or Path(chosen).name) if chosen else ''
+    if not chosen:
         status = _FILE_HINT
+    elif values.source == 'finder':
+        status = 'Finder export is ready.'
+    else:
+        status = 'Trace snapshot is ready.'
     return (
         '<div class="irf-field" data-source="file"><span class="irf-label">Trace file</span>'
         '<div class="irf-file"><input type="text" readonly data-file-name aria-label="Selected trace file" '
@@ -661,8 +672,8 @@ def render_run_form(values: RunFormValues, *, csrf: str, error: str | None = Non
         f'<input type="hidden" name="mount" value="{values.mount}">'
         f'<input type="hidden" name="preset" value="{esc(values.preset or "")}">'
         f'<input type="hidden" name="custom_labels_json" value="{esc(custom_json)}">'
-        f'<input type="hidden" name="finder_export" value="{esc(values.finder_export)}">'
-        f'<input type="hidden" name="snapshot_path" value="{esc(values.snapshot_path)}">'
+        f'<input type="hidden" name="trace_file" value="{esc(values.trace_file)}" '
+        f'data-kind="{values.source if values.trace_file else ""}">'
         f'<ol class="irf-steps" aria-label="Steps">{steps}</ol>'
         '<p id="insights-run-compact" class="irf-compact" role="status" aria-live="polite">Estimating traces, cost and time…</p>'
         f'<p id="insights-run-error" class="insights-error" role="alert"{"" if message else " hidden"}>{esc(message or "")}</p>'
