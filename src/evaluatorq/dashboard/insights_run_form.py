@@ -648,8 +648,9 @@ def _step_three(values: RunFormValues) -> str:
         f'<div id="insights-run-models">{_model_pickers(values)}</div>'
         '<label class="irf-field"><span class="irf-label">Parallel requests</span>'
         f'<input name="parallelism" type="number" min="1" max="200" value="{values.parallelism}"></label>'
-        '<div id="insights-run-estimate"></div>'
+        '<div class="irf-review">'
         '<div id="insights-run-plan" class="irf-plan" role="status" aria-live="polite"></div>'
+        '<div id="insights-run-estimate"></div></div>'
         '<p class="irf-hint">The run reads the selected traces and makes model requests. Progress appears on its run page.</p>'
         '</section>'
     )
