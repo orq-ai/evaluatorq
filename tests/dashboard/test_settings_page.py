@@ -842,6 +842,8 @@ def test_cli_oauth_rejects_scope_from_another_workspace(
     assert response.status_code == 422
     assert 'Choose a project in the selected workspace' in response.text
     assert load_settings(settings_file).orq_project_id is None
+
+
 def test_cli_oauth_scope_error_preserves_saved_scope_until_recovery(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -891,8 +893,6 @@ def test_cli_oauth_scope_error_preserves_saved_scope_until_recovery(
     assert (settings.orq_workspace, settings.orq_project_id, settings.orq_project_name) == (
         'beta', 'project-b', 'Beta project',
     )
-
-
 
 
 def test_cli_oauth_scope_does_not_query_an_unlisted_server(
@@ -1843,6 +1843,8 @@ def test_saving_does_not_persist_a_command_line_model(client: TestClient, settin
     saved = json.loads(settings_file.read_text())
     assert saved['smart_model'] == 'saved/smart'
     assert saved['embedding_model'] is None
+
+
 def test_cli_oauth_project_survives_failed_discovery_and_saves_after_recovery(
     client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1873,8 +1875,9 @@ def test_cli_oauth_project_survives_failed_discovery_and_saves_after_recovery(
     })
     assert failed_lookup.status_code == 200
     assert '<input type="hidden" name="orq_project_id" value="project-a">' in failed_lookup.text
-    assert 'Alpha project' in failed_lookup.text
-    assert 'All projects</button>' not in failed_lookup.text
+    trigger = failed_lookup.text.split('id="orq_project_id"', 1)[1].split('</button>', 1)[0]
+    assert 'project-a' in trigger and 'All projects' not in trigger
+    assert 'Project listing unavailable' in failed_lookup.text
 
     failed_save = client.post('/settings', data=csrf_data({
         **_MODELS,

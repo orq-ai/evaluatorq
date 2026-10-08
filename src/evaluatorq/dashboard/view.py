@@ -944,6 +944,7 @@ def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> st
     if not scope.error and not any(option == project_id for option, _ in projects):
         project_id = ''
     project_current = _pick_row(project_id) if scope.error and project_id else projects[0][1]
+    error_html = f'<span class="settings-error" role="alert">{esc(scope.error)}</span>' if scope.error else ''
     placeholder = '<span class="rich-pick-placeholder">Choose a workspace</span>'
     return (
         '<label class="settings-auth-detail-label" for="orq_workspace">Workspace</label>'
