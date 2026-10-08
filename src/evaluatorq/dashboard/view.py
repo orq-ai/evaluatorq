@@ -925,7 +925,11 @@ def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
 def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> str:
     """Render CLI OAuth workspace and project choices from the selected server."""
     if scope.error and not scope.workspaces:
-        return f'<p class="settings-error">{esc(scope.error)}</p>'
+        return (
+            f'<p class="settings-error">{esc(scope.error)}</p>'
+            f'<input type="hidden" name="orq_workspace" value="{esc(workspace)}">'
+            f'<input type="hidden" name="orq_project_id" value="{esc(project_id)}">'
+        )
     if not scope.workspaces:
         return '<p class="settings-auth-hint">No workspaces available for this CLI session.</p>'
     workspace_ids = {item.key: item.id for item in scope.workspaces}

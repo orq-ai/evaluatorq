@@ -842,6 +842,57 @@ def test_cli_oauth_rejects_scope_from_another_workspace(
     assert response.status_code == 422
     assert 'Choose a project in the selected workspace' in response.text
     assert load_settings(settings_file).orq_project_id is None
+def test_cli_oauth_scope_error_preserves_saved_scope_until_recovery(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard.orq_scope import OAuthScopes, OrqProject, OrqWorkspace
+
+    sessions = (OAuthSession('https://my.orq.ai', 'my.orq.ai', None, None, 'valid', True),)
+    available = OAuthScopes(
+        workspaces=(OrqWorkspace('workspace-a', 'alpha'), OrqWorkspace('workspace-b', 'beta')),
+        projects=(OrqProject('project-b', 'Beta project', 'workspace-b'),),
+    )
+    fail_discovery = True
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: sessions)
+
+    def discover(_server: str, *, workspace: str = '') -> OAuthScopes:
+        return OAuthScopes(error='Could not load workspace scope.') if fail_discovery else available
+
+    monkeypatch.setattr(app_module, 'discover_oauth_scopes', discover)
+    saved_scope = {
+        'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'https://my.orq.ai',
+        'orq_workspace': 'beta', 'orq_project_id': 'project-b', 'orq_project_name': 'Beta project',
+    }
+    save_settings(DashboardSettings.model_validate(saved_scope), settings_file)
+
+    failed = client.get('/settings/oauth-scope', params={
+        'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'beta', 'orq_project_id': 'project-b',
+    })
+    assert 'Could not load workspace scope.' in failed.text
+    assert '<input type="hidden" name="orq_workspace" value="beta">' in failed.text
+    assert '<input type="hidden" name="orq_project_id" value="project-b">' in failed.text
+
+    fail_discovery = False
+    recovered = client.get('/settings/oauth-scope', params={
+        'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'beta', 'orq_project_id': 'project-b',
+    })
+    assert _pick_options(recovered.text, 'orq_workspace')['beta'].startswith(' is-selected"')
+    assert _pick_options(recovered.text, 'orq_project_id')['project-b'].startswith(' is-selected"')
+    saved = client.post('/settings', data=csrf_data({**_MODELS, **saved_scope}))
+    assert saved.status_code == 303
+    settings = load_settings(settings_file)
+    assert (settings.orq_workspace, settings.orq_project_id) == ('beta', 'project-b')
+
+    fail_discovery = True
+    rejected = client.post('/settings', data=csrf_data({**_MODELS, **saved_scope}))
+    assert rejected.status_code == 422
+    assert 'Could not load workspace scope.' in rejected.text
+    settings = load_settings(settings_file)
+    assert (settings.orq_workspace, settings.orq_project_id, settings.orq_project_name) == (
+        'beta', 'project-b', 'Beta project',
+    )
+
+
 
 
 def test_cli_oauth_scope_does_not_query_an_unlisted_server(
