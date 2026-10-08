@@ -24,7 +24,7 @@ from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.apply_ui import apply_model
 from evaluatorq.dashboard.security import CSRF_FIELD, _CSRF_TOKEN
 from evaluatorq.trace_finder import FacetCatalogue, RunSnapshot
-from evaluatorq.trace_finder.settings import DashboardSettings, load_settings, save_settings
+from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, load_settings, save_settings
 
 
 _MODELS = {
@@ -634,9 +634,6 @@ def test_environment_auth_ignores_old_and_submitted_scope(
     monkeypatch.setenv('ORQ_WORKSPACE', 'environment-workspace')
     fresh = TestClient(build_app(roots=[settings_file.parent]), follow_redirects=False)
 
-    page = fresh.get('/settings').text
-    assert 'name="orq_workspace"' not in page
-    assert 'name="orq_project_id"' not in page
     assert 'old-project' not in fresh.get('/find').text
     assert effective_settings().orq_project_id is None
     response = fresh.post('/settings', data=csrf_data({
@@ -684,8 +681,6 @@ def test_settings_page_shows_environment_authentication_without_cli_profiles(
     assert 'name="orq_auth_method" value="environment" checked' in html
     assert 'name="orq_auth_method" value="cli_oauth"' in html
     assert 'name="orq_auth_method" value="stored_api_key"' in html
-    assert 'name="orq_workspace"' not in html
-    assert 'name="orq_project_id"' not in html
 
 
 def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -756,6 +751,111 @@ def test_settings_page_defers_the_session_check_and_keeps_the_saved_server_in_th
 
     assert 'hx-get="/settings/oauth-sessions?value=https%3A%2F%2Fmy.staging.orq.ai" hx-trigger="load"' in html
     assert '<input type="hidden" name="orq_oauth_server" value="https://my.staging.orq.ai">' in html
+
+
+
+def test_cli_oauth_scope_selects_project_in_chosen_workspace(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard.orq_scope import OAuthScopes, OrqProject, OrqWorkspace
+
+    scopes = OAuthScopes(
+        workspaces=(OrqWorkspace('workspace-a', 'alpha'), OrqWorkspace('workspace-b', 'beta')),
+        projects=(OrqProject('project-a', 'Alpha project', 'workspace-a'),
+                  OrqProject('project-b', 'Beta project', 'workspace-b')),
+    )
+    seen: list[str] = []
+
+    def discover(server: str, *, workspace: str = '') -> OAuthScopes:
+        seen.append(f'{server}:{workspace}')
+        return scopes
+
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', 'alpha', 'valid', True),
+    ))
+    monkeypatch.setattr(app_module, 'discover_oauth_scopes', discover)
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'https://my.orq.ai',
+        'orq_workspace': 'beta', 'orq_project_id': 'project-b', 'orq_project_name': 'Beta project',
+    }), settings_file)
+
+    page = client.get('/settings').text
+    assert 'hx-get="/settings/oauth-scope"' in page
+    assert '<input type="hidden" name="orq_workspace" value="beta">' in page
+    assert '<input type="hidden" name="orq_project_id" value="project-b">' in page
+    response = client.get('/settings/oauth-scope', params={
+        'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'beta', 'orq_project_id': 'project-b',
+    })
+    assert response.status_code == 200
+    assert '<select' not in response.text
+    assert _pick_options(response.text, 'orq_workspace').keys() == {'alpha', 'beta'}
+    assert _pick_options(response.text, 'orq_workspace')['beta'].startswith(' is-selected"')
+    assert _pick_options(response.text, 'orq_project_id').keys() == {'', 'project-b'}
+    assert _pick_options(response.text, 'orq_project_id')['project-b'].startswith(' is-selected"')
+    assert seen == ['https://my.orq.ai:beta']
+
+    switched = client.get('/settings/oauth-scope', params={
+        'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'alpha', 'orq_project_id': 'project-b',
+    })
+    assert '<input type="hidden" name="orq_project_id" value="">' in switched.text
+    assert _pick_options(switched.text, 'orq_project_id').keys() == {'', 'project-a'}
+    assert 'All projects' in switched.text
+
+    old_server_scope = client.get('/settings/oauth-scope', params={
+        'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'old-workspace', 'orq_project_id': 'project-b',
+    })
+    assert '<input type="hidden" name="orq_workspace" value="">' in old_server_scope.text
+    assert '<input type="hidden" name="orq_project_id" value="">' in old_server_scope.text
+
+    saved = client.post('/settings', data=csrf_data({
+        **_MODELS, 'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'https://my.orq.ai',
+        'orq_workspace': 'beta', 'orq_project_id': 'project-b',
+    }))
+    assert saved.status_code == 303
+    settings = load_settings(settings_file)
+    assert (settings.orq_workspace, settings.orq_project_id, settings.orq_project_name) == (
+        'beta', 'project-b', 'Beta project',
+    )
+    assert effective_settings().orq_workspace == 'beta'
+    assert effective_settings().orq_project_id == 'project-b'
+
+
+def test_cli_oauth_rejects_scope_from_another_workspace(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard.orq_scope import OAuthScopes, OrqProject, OrqWorkspace
+
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://my.orq.ai', 'my.orq.ai', None, None, 'valid', True),
+    ))
+    def discover(_server: str, *, workspace: str = '') -> OAuthScopes:
+        return OAuthScopes(
+            workspaces=(OrqWorkspace('workspace-a', 'alpha'), OrqWorkspace('workspace-b', 'beta')),
+            projects=(OrqProject('project-a', 'Alpha project', 'workspace-a'),),
+        )
+
+    monkeypatch.setattr(app_module, 'discover_oauth_scopes', discover)
+    response = client.post('/settings', data=csrf_data({
+        **_MODELS, 'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'https://my.orq.ai',
+        'orq_workspace': 'beta', 'orq_project_id': 'project-a',
+    }))
+    assert response.status_code == 422
+    assert 'Choose a project in the selected workspace' in response.text
+    assert load_settings(settings_file).orq_project_id is None
+
+
+def test_cli_oauth_scope_does_not_query_an_unlisted_server(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: ())
+
+    def never(_server: str, *, workspace: str = '') -> object:
+        raise AssertionError('unlisted server reached the CLI')
+
+    monkeypatch.setattr(app_module, 'discover_oauth_scopes', never)
+    response = client.get('/settings/oauth-scope', params={'orq_oauth_server': 'http://169.254.169.254'})
+    assert response.status_code == 200
+    assert 'Sign in to this Orq server' in response.text
 
 
 def test_cli_oauth_field_offers_saved_sessions_with_their_checked_token_status(
@@ -951,7 +1051,6 @@ def test_selecting_another_profile_does_not_show_its_scope_before_save(
     assert 'https://staging.orq.ai' in html
     assert 'Selected profile API key' in html
     assert 'onchange="location.assign' not in html
-    assert 'settings-auth-scope' not in html
     assert 'project-staging' not in html
     assert 'project-bauke' not in html
     assert json.loads(settings_file.read_text())['orq_project_id'] == 'project-bauke'
@@ -1602,6 +1701,11 @@ def test_model_field_explains_a_missing_api_key(client: TestClient, monkeypatch:
 
     assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x"')
     assert 'No Orq API key' in html
+    notices = [
+        client.get('/settings/models', params={'field': field, 'auth_method': 'environment'}).text
+        for field in ('fast_model', 'smart_model', 'classifier_model', 'embedding_model')
+    ]
+    assert sum('No Orq API key' in notice for notice in notices) == 1
 
 
 def test_model_field_filters_the_catalogue_by_the_fields_kind(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

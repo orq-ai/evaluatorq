@@ -814,7 +814,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-auth-panel:has(input[name="orq_auth_method"][value="environment"]:checked) .settings-auth-config { display: none; }
 .settings-auth-config > .settings-auth-step { margin: 0 0 14px; }
 .settings-auth-detail { display: none; max-width: 640px; gap: 7px; }
-.settings-oauth-field { display: grid; gap: 7px; }
+.settings-oauth-field, .settings-auth-scope { display: grid; gap: 7px; }
 .settings-auth-panel:has(input[value="environment"]:checked) .settings-auth-detail[data-auth-method="environment"],
 .settings-auth-panel:has(input[value="cli_profile"]:checked) .settings-auth-detail[data-auth-method="cli_profile"],
 .settings-auth-panel:has(input[value="cli_oauth"]:checked) .settings-auth-detail[data-auth-method="cli_oauth"],
