@@ -868,6 +868,7 @@ def _rich_pick(
     current: str = '',
     describedby: str = '',
     compact: bool = False,
+    filter: bool = False,
 ) -> str:
     """A menu of rich rows that submits *value* through a hidden input.
 
@@ -885,13 +886,21 @@ def _rich_pick(
     )
     rows_off = ''.join(f'<div class="rich-pick-disabled" aria-disabled="true">{row}</div>' for row in disabled)
     described = f' aria-describedby="{esc(describedby)}"' if describedby else ''
+    search_html = (
+        f'<input class="facet-search" type="search" placeholder="Search" aria-label="Search {esc(name.replace("_", " "))} options" autocomplete="off">'
+        '<div class="facet-values">'
+        if filter
+        else ''
+    )
+    empty_html = '</div><p class="facet-no-results" hidden>No matches.</p>' if filter else ''
     return (
-        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}">'
+        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}{" rich-pick--filter" if filter else ""}">'
         f'<input type="hidden" name="{esc(name)}" value="{esc(value)}">'
         f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false"{described}>'
         f'{selected}</button>'
-        f'<div class="finder-facets"><div class="facet-list">{buttons}{rows_off}</div></div></span>'
-    )
+        f'<div class="finder-facets"><div class="facet-list">'
+        f'{search_html}{buttons}{rows_off}{empty_html}'
+        f'</div></div></span>'
 
 
 def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
@@ -948,9 +957,9 @@ def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> st
     placeholder = '<span class="rich-pick-placeholder">Choose a workspace</span>'
     return (
         '<label class="settings-auth-detail-label" for="orq_workspace">Workspace</label>'
-        f'{_rich_pick("orq_workspace", workspace, workspaces, current=placeholder)}'
+        f'{_rich_pick("orq_workspace", workspace, workspaces, current=placeholder, filter=True)}'
         '<label class="settings-auth-detail-label" for="orq_project_id">Project</label>'
-        f'{_rich_pick("orq_project_id", project_id, projects, current=project_current)}{error_html}'
+        f'{_rich_pick("orq_project_id", project_id, projects, current=project_current, filter=True)}{error_html}'
     )
 
 
