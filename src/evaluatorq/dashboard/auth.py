@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, list_orq_profiles, resolve_orq_client
@@ -73,22 +74,46 @@ def resolve_dashboard_auth(
     raise ValueError('Unknown dashboard authentication method. Choose one in Settings.')
 
 
-def auth_identity(auth: DashboardAuth, settings: DashboardSettings) -> str:
-    """Hash the selected account and scope without putting a secret in a worker payload."""
-
-    fields = {
+def _account_fields(auth: DashboardAuth) -> dict[str, Any]:
+    fields: dict[str, Any] = {
         'method': auth.method,
         'base_url': auth.base_url.rstrip('/'),
         'profile': auth.profile.name if auth.profile else None,
-        'workspace': settings.orq_workspace,
-        'project': settings.orq_project_id,
         'key_fingerprint': sha256(auth.api_key.encode()).hexdigest() if auth.api_key else None,
     }
     if auth.method == 'cli_oauth':
         from evaluatorq.common.cli_oauth import oauth_subject
 
         fields['oauth_subject'] = oauth_subject(auth.base_url)
+    return fields
+
+
+def _hash_fields(fields: dict[str, Any]) -> str:
     return sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+
+
+def auth_identity(auth: DashboardAuth, settings: DashboardSettings) -> str:
+    """Hash the selected account and scope without putting a secret in a worker payload."""
+
+    return _hash_fields({
+        **_account_fields(auth),
+        'workspace': settings.orq_workspace,
+        'project': settings.orq_project_id,
+    })
+
+
+def account_identity(auth: DashboardAuth) -> str:
+    """Hash only the selected account, without workspace, project, or any secret."""
+
+    return _hash_fields(_account_fields(auth))
+
+
+def account_label(auth: DashboardAuth) -> str:
+    """Name the account for display: profile or method name plus host, never a secret."""
+
+    name = auth.profile.name if auth.profile else auth.label
+    host = urlparse(auth.base_url).netloc or auth.base_url.rstrip('/')
+    return f'{name} on {host}'
 
 
 def build_auth_clients(

@@ -16,7 +16,13 @@ from loguru import logger
 from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.run_manifest import fail_if_running
 from evaluatorq.contracts import RunManifest
-from evaluatorq.dashboard.auth import auth_identity, build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.auth import (
+    account_identity,
+    account_label,
+    auth_identity,
+    build_auth_clients,
+    resolve_dashboard_auth,
+)
 from evaluatorq.dashboard.insights_launch import (
     _MANIFEST_ENV,
     _SNAPSHOT_ENV,
@@ -381,11 +387,18 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
     if payload.auth_method is not None and settings.orq_auth_method != payload.auth_method:
         raise ValueError('Dashboard authentication changed after this run started. Start the run again.')
     auth = resolve_dashboard_auth(settings)
+    account = await asyncio.to_thread(account_identity, auth)
     if (
         payload.auth_identity is not None
         and await asyncio.to_thread(auth_identity, auth, settings) != payload.auth_identity
     ):
         raise ValueError('Dashboard authentication or scope changed after this run started. Start the run again.')
+    orq_scope = {
+        'account': account,
+        'account_label': account_label(auth),
+        'workspace': settings.orq_workspace,
+        'project': settings.orq_project_id,
+    }
     orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
     try:
         run = await insights(
@@ -398,6 +411,7 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             runs_dir=payload.runs_dir,
             **spec.model_overrides(),
             _run_id=payload.run_id,
+            _orq_scope=orq_scope,
             llm_client=llm,
             orq_client=orq,
             **extra,

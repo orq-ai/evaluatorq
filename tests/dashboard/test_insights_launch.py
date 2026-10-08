@@ -19,7 +19,7 @@ from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.dashboard import insights_routes
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.auth import DashboardAuth, auth_identity
+from evaluatorq.dashboard.auth import DashboardAuth, account_identity, account_label, auth_identity
 from evaluatorq.dashboard.insights_launch import (
     MAX_FINDER_EXPORT_BYTES,
     InsightsLaunchPayload,
@@ -96,6 +96,65 @@ def test_oauth_identity_changes_with_signed_in_account(monkeypatch: pytest.Monke
     assert first != second
     assert 'user-one' not in first
     assert 'user-two' not in second
+
+
+def test_auth_identity_hash_is_unchanged_by_the_account_split() -> None:
+    settings = DashboardSettings.model_validate({'orq_workspace': 'ws-a', 'orq_project_id': 'proj-1'})
+
+    identity = auth_identity(DashboardAuth('environment', 'sk-test-123', 'https://my.orq.ai/'), settings)
+
+    assert identity == '2513154a6929ee4ab08e05523f36628fb7c294f0a3e3b9bfecfd56803a477862'
+
+
+def test_account_identity_ignores_scope_and_tells_accounts_apart() -> None:
+    research = OrqProfile(name='research', api_key='key-a', server=None, active=False)
+    other = OrqProfile(name='other', api_key='key-a', server=None, active=False)
+    auth = DashboardAuth('cli_profile', 'key-a', 'https://my.orq.ai', research)
+
+    assert account_identity(auth) == account_identity(
+        DashboardAuth('cli_profile', 'key-a', 'https://my.orq.ai/', research)
+    )
+    assert account_identity(auth) != account_identity(DashboardAuth('cli_profile', 'key-a', 'https://my.orq.ai', other))
+    assert account_identity(auth) != account_identity(
+        DashboardAuth('cli_profile', 'key-b', 'https://my.orq.ai', research)
+    )
+    assert account_label(auth) == 'research on my.orq.ai'
+    assert account_label(DashboardAuth('environment', 'key-a', 'https://my.orq.ai')) == 'ORQ_API_KEY on my.orq.ai'
+
+
+def test_worker_passes_the_account_and_scope_without_a_secret(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    seen: dict[str, object] = {}
+
+    async def fake_insights(population: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return type('Run', (), {'status': 'completed'})()
+
+    auth = DashboardAuth('environment', 'sk-secret-key', 'https://my.orq.ai')
+    settings = DashboardSettings.model_validate({
+        'orq_auth_method': 'environment',
+        'orq_workspace': 'ws-a',
+        'orq_project_id': 'proj-a',
+    })
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: settings)
+    monkeypatch.setattr(insights_worker, 'resolve_dashboard_auth', lambda _settings: auth)
+    monkeypatch.setattr(
+        insights_worker, 'build_auth_clients', lambda *_a, **_k: (object(), type('C', (), {'close': AsyncMock()})())
+    )
+    monkeypatch.setattr(insights_worker, 'close_orq_client', AsyncMock())
+    monkeypatch.setattr(insights_worker, 'insights', fake_insights)
+    payload = InsightsLaunchPayload(run_id='r', run_name='n', runs_dir=tmp_path, spec=InsightsLaunchSpec())
+
+    assert asyncio.run(insights_worker._run_with_selected_auth(payload, InsightsPopulation(query='refunds'))) is True
+
+    assert seen['_orq_scope'] == {
+        'account': account_identity(auth),
+        'account_label': 'ORQ_API_KEY on my.orq.ai',
+        'workspace': 'ws-a',
+        'project': 'proj-a',
+    }
+    assert 'sk-secret-key' not in json.dumps(seen['_orq_scope'])
 
 
 def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:

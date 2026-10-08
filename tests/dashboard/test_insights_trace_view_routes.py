@@ -14,6 +14,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.dashboard import insights_routes, insights_trace_source
 from evaluatorq.dashboard.app import build_app
+from evaluatorq.dashboard.auth import DashboardAuth
 from evaluatorq.insights.models import InsightsRun
 from evaluatorq.trace_finder.models import TraceRecord
 from evaluatorq.trace_finder.orq_source import OrqTraceSource
@@ -94,7 +95,7 @@ def _fake_source(monkeypatch: pytest.MonkeyPatch, record: TraceRecord | str) -> 
     sentinel = object()
 
     @asynccontextmanager
-    async def source(app: Any):
+    async def source(app: Any, run: InsightsRun):
         yield sentinel
 
     async def load(run: InsightsRun, trace: Any, *, open_source: Any) -> TraceRecord | str:
@@ -239,6 +240,84 @@ def test_spans_route_closes_the_source_and_the_client(
     assert response.status_code == 200
     assert len(closed) == 1
     assert orq.exit_calls == [(None, None, None)]
+
+
+SPANS = '/insights/run-1/trace-spans?trace_id=trace-1'
+
+
+def _scoped_run(minimal_run: InsightsRun, scope: Any) -> InsightsRun:
+    return minimal_run.model_copy(update={'population': {**minimal_run.population, 'orq_scope': scope}})
+
+
+def _recorded_scope(account: str = 'account-a') -> dict[str, str | None]:
+    return {'account': account, 'account_label': 'CLI OAuth on my.orq.ai', 'workspace': 'ws-a', 'project': 'proj-a'}
+
+
+def _cli_oauth(monkeypatch: pytest.MonkeyPatch, *, account: str) -> list[dict[str, Any]]:
+    auth = DashboardAuth(method='cli_oauth', api_key=None, base_url='https://my.orq.ai')
+    built: list[dict[str, Any]] = []
+
+    def build(auth: DashboardAuth, **kwargs: Any) -> FakeOrq:
+        built.append(kwargs)
+        return FakeOrq(FakeTraces({}, spans={'trace-1': [_named_span('span-root', name='root', minute=0)]}))
+
+    monkeypatch.setattr(insights_routes, 'selected_dashboard_auth', lambda app: auth)
+    monkeypatch.setattr(insights_routes, 'account_identity', lambda auth: account)
+    monkeypatch.setattr(insights_routes, 'build_orq_client', build)
+    return built
+
+
+@pytest.mark.parametrize('scope', [None, 'not-a-scope'])
+def test_a_run_without_a_valid_recorded_scope_reads_with_the_settings_workspace(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch, scope: Any
+) -> None:
+    _write_run(env, minimal_run if scope is None else _scoped_run(minimal_run, scope))
+    built = _cli_oauth(monkeypatch, account='account-a')
+
+    app = build_app()
+    app.state.finder_settings = app.state.finder_settings.model_copy(
+        update={'orq_workspace': 'settings-ws', 'orq_project_id': 'settings-project'}
+    )
+
+    TestClient(app).get(CONVERSATION)
+
+    assert built == [{'workspace': 'settings-ws', 'project': 'settings-project'}]
+
+
+def test_a_run_read_by_the_selected_account_uses_its_recorded_workspace(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_run(env, _scoped_run(minimal_run, _recorded_scope()))
+    built = _cli_oauth(monkeypatch, account='account-a')
+    client = TestClient(build_app())
+
+    client.get(CONVERSATION)
+    spans = client.get(SPANS)
+
+    assert built == [{'workspace': 'ws-a', 'project': 'proj-a'}] * 2
+    assert 'root' in spans.text
+
+
+def test_a_run_read_by_another_account_names_it_without_calling_orq(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_run(env, _scoped_run(minimal_run, _recorded_scope(account='account-a')))
+    built = _cli_oauth(monkeypatch, account='account-b')
+    client = TestClient(build_app())
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+
+    try:
+        conversation = client.get(CONVERSATION)
+        spans = client.get(SPANS)
+    finally:
+        logger.remove(sink)
+
+    reason = 'This run read Orq as CLI OAuth on my.orq.ai. Select that account in Settings to load this conversation.'
+    assert reason in conversation.text
+    assert reason in spans.text
+    assert built == []
+    assert warnings == ['Insights run run-1 read Orq as CLI OAuth on my.orq.ai, but Settings selects CLI OAuth\n'] * 2
 
 
 def test_source_construction_failure_still_closes_the_client(

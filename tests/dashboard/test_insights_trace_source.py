@@ -184,8 +184,8 @@ async def test_orq_trace_without_a_conversation_is_reported(orq_run: InsightsRun
     result = await load_orq_record(orq_run, orq_run.traces[0], open_source=_opened(source))
 
     assert result == (
-        'Orq did not return this trace for the account and workspace selected in Settings. '
-        'It may belong to another workspace, or it no longer exists.'
+        'Orq did not return this trace in the workspace used for this request. '
+        'Check that the account has access to that workspace and that the trace still exists.'
     )
 
 
