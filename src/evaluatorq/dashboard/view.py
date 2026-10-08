@@ -901,6 +901,7 @@ def _rich_pick(
         f'<div class="finder-facets"><div class="facet-list">'
         f'{search_html}{buttons}{rows_off}{empty_html}'
         f'</div></div></span>'
+    )
 
 
 def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
