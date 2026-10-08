@@ -81,7 +81,7 @@ def test_export_over_an_existing_world_readable_file_leaves_it_private(claude_pr
     assert result.exit_code == 0, result.output
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert Snapshot.model_validate_json(target.read_text(encoding='utf-8')).documents
-    assert [path.name for path in tmp_path.iterdir()] == ['snap.json']
+    assert [path.name for path in target.parent.iterdir() if path.name != 'session-roots'] == ['snap.json']
 
 
 def test_export_empty_result_exits_2_and_writes_nothing(tmp_path: Path) -> None:
