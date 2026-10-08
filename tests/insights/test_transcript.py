@@ -142,6 +142,119 @@ def test_conversation_view_keeps_a_long_opening_request_over_budget() -> None:
     assert view.startswith('USER: please please')
 
 
+def test_conversation_view_collapsed_is_the_default_and_ignores_tool_max_chars() -> None:
+    expected = (
+        'USER: Fix the failing parser test.\n'
+        'ASSISTANT: Looking at the parser.\n'
+        '  [tools] Skill: systematic-debugging, Bash: pytest, Edit: src/parser.py, Bash: `git push --force origin main`\n'
+        'ASSISTANT: Fixed and pushed.'
+    )
+
+    assert conversation_view(CODING_TRACE) == expected
+    assert conversation_view(CODING_TRACE, tools='collapsed', tool_max_chars=500) == expected
+
+
+def test_conversation_view_per_call_lists_each_call_with_truncated_output() -> None:
+    log = 'HEAD' + 'x' * 500 + 'TAIL'
+    trace = _trace(
+        {'role': 'user', 'content': 'Run the tests.'},
+        {
+            'role': 'assistant',
+            'content': 'Running.',
+            'tool_calls': [
+                _call('c1', 'Bash', {'command': 'uv run pytest -q\necho done'}),
+                _call('c2', 'Read', {'file_path': 'src/a.py'}),
+                _call('c3', 'Read', {'file_path': 'src/b.py'}),
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': log},
+        {'role': 'tool', 'tool_call_id': 'c2', 'content': 'line one\nline two'},
+        {'role': 'assistant', 'content': 'Done.'},
+    )
+
+    view = conversation_view(trace, tools='per_call', tool_max_chars=40)
+    lines = view.splitlines()
+
+    assert lines[2] == '  [tool] Bash: uv run pytest -q ⏎ echo done'
+    assert lines[3].startswith('    → HEAD')
+    assert lines[3].endswith('TAIL')
+    assert '[... 468 chars ...]' in lines[3]
+    assert lines[4] == '  [tool] Read: {"file_path": "src/a.py"}'
+    assert lines[5] == '    → line one ⏎ line two'
+    assert lines[6] == '  [tool] Read [pending]: {"file_path": "src/b.py"}'
+    assert lines[7] == 'ASSISTANT: Done.'
+    # 0 (the default) keeps the per-call lines but omits every result body
+    without_output = conversation_view(trace, tools='per_call')
+    assert 'HEAD' not in without_output
+    assert '→' not in without_output
+    assert '  [tool] Read [pending]: {"file_path": "src/b.py"}' in without_output
+
+
+def test_conversation_view_per_call_marks_errors_and_keeps_risky_commands_whole() -> None:
+    view = conversation_view(CODING_TRACE, tools='per_call', tool_max_chars=200)
+
+    assert (
+        '  [tool] Bash [error]: cd repo && uv run pytest tests/test_parser.py -q\n    → Error: 1 failed, 3 passed'
+        in view
+    )
+    assert '  [tool] Bash: git push --force origin main\n    → forced update' in view
+    assert 'injected context' not in view
+
+
+@pytest.mark.parametrize('padding', [0, 15, 30, 60])
+def test_conversation_view_per_call_scrubs_secrets_in_inputs_and_outputs(padding: int) -> None:
+    secret = 'ghp_' + 'aB3dE5gH7j' * 3
+    trace = _trace(
+        {'role': 'user', 'content': 'Deploy it.'},
+        {
+            'role': 'assistant',
+            'tool_calls': [
+                _call('c1', 'Bash', {'command': f'curl -H "Authorization: Bearer {secret}" https://api.example.com'}),
+                _call('c2', 'Lookup', {'token': secret}),
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'a' * padding + f' {secret} ' + 'z' * 200},
+        {'role': 'tool', 'tool_call_id': 'c2', 'content': 'ok'},
+    )
+
+    view = conversation_view(trace, tools='per_call', tool_max_chars=80)
+
+    for size in (8, 12):
+        assert secret[:size] not in view
+        assert secret[-size:] not in view
+    assert '  [tool] Bash: curl -H' in view
+    assert '  [tool] Lookup: {"token":' in view
+
+
+def test_conversation_view_per_call_over_budget_keeps_each_call_with_its_output() -> None:
+    calls = [_call(f'c{index}', 'Bash', {'command': f'step {index}'}) for index in range(60)]
+    trace = _trace(
+        {'role': 'user', 'content': 'Run every step.'},
+        {'role': 'assistant', 'tool_calls': calls},
+        *({'role': 'tool', 'tool_call_id': f'c{index}', 'content': f'output {index}'} for index in range(60)),
+    )
+
+    view = conversation_view(trace, budget=1200, tools='per_call', tool_max_chars=40)
+    lines = view.splitlines()
+
+    assert len(view) <= 1200
+    assert lines[0] == 'USER: Run every step.'
+    assert any('lines omitted' in line for line in lines)
+    for index, line in enumerate(lines):
+        if line.startswith('  [tool] Bash: step '):
+            step = line.removeprefix('  [tool] Bash: step ')
+            assert lines[index + 1] == f'    → output {step}'
+        if line.startswith('    → '):
+            assert lines[index - 1].startswith('  [tool] ')
+
+
+def test_conversation_view_rejects_bad_tool_options() -> None:
+    with pytest.raises(ValueError, match='tools must be'):
+        conversation_view(CODING_TRACE, tools='verbose')  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match='tool_max_chars'):
+        conversation_view(CODING_TRACE, tools='per_call', tool_max_chars=-1)
+
+
 def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:
     [view] = tool_activity_chunks(CODING_TRACE)
 

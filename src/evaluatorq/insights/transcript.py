@@ -3,9 +3,10 @@
 Three views, each for one `/classify` call:
 
 - `conversation_view`: what the user said and what the agent answered. User
-  turns stay whole, assistant text keeps its start and end, tool calls shrink
-  to one line each and tool outputs are dropped. The opening user turns are
-  never cut; an over-budget trace loses its middle.
+  turns stay whole, assistant text keeps its start and end, and each run of tool
+  calls shrinks to one line with outputs dropped (`tools='per_call'` gives one
+  line per call with status and, opt-in, a truncated output). The opening user
+  turns are never cut; an over-budget trace loses its middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
 - `tool_activity_chunks`: every tool call with its input and status, the start
   and end of each shell output, and fixed labels for failures found in it, for the
@@ -24,7 +25,7 @@ import re
 import shlex
 from collections import Counter
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel
 
@@ -196,16 +197,36 @@ def tool_inventory(trace: TraceRecord | TraceDocument) -> str:
     return '\n'.join(lines)
 
 
-def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUDGET) -> str:
+def conversation_view(
+    trace: TraceRecord | TraceDocument,
+    budget: int = VIEW_BUDGET,
+    *,
+    tools: Literal['collapsed', 'per_call'] = 'collapsed',
+    tool_max_chars: int = 0,
+) -> str:
     """Render the conversation as plain text within `budget` characters.
 
     User turns are kept whole up to `USER_TURN_CHARS` (a pasted log keeps its
     start and end), minus injected `<system-reminder>` blocks;
-    assistant text keeps its first and last `ASSISTANT_EDGE` characters, and a
-    run of tool calls becomes one `[tools]` line with repeats counted. Tool
-    outputs are dropped. A risky shell command is kept verbatim rather than
-    collapsed to its program name, up to `RISKY_COMMAND_CHARS` characters.
+    assistant text keeps its first and last `ASSISTANT_EDGE` characters. A risky
+    shell command is kept verbatim rather than collapsed to its program name,
+    up to `RISKY_COMMAND_CHARS` characters.
+
+    `tools='collapsed'` turns a run of tool calls into one `[tools]` line with
+    repeats counted, and drops tool outputs. `tools='per_call'` gives each call
+    its own `[tool] name: input` line, input scrubbed and cut like
+    `tool_activity_chunks`. Status is shown only when the call did not complete.
+    Tool result bodies can hold credentials or user data, so they are left out
+    unless `tool_max_chars` is above 0, in which case each result is shown under
+    its call, scrubbed, with its start and end kept within about that many
+    characters. `tool_max_chars` has no effect when collapsed.
     """
+    if tools not in ('collapsed', 'per_call'):
+        raise ValueError(f"tools must be 'collapsed' or 'per_call', got {tools!r}")
+    if tool_max_chars < 0:
+        raise ValueError(f'tool_max_chars must be >= 0, got {tool_max_chars}')
+    messages = prompt_messages(trace)
+    results = _results(messages)
     lines: list[str] = []
     pending: list[str] = []
 
@@ -215,7 +236,7 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
             lines.append('  [tools] ' + ', '.join(f'{name} x{n}' if n > 1 else name for name, n in runs.items()))
             pending.clear()
 
-    for message in prompt_messages(trace):
+    for message in messages:
         role = message.get('role')
         if role == 'user':
             text = _user_text(message)
@@ -227,7 +248,10 @@ def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUD
             if text:
                 flush()
                 lines.append(f'ASSISTANT: {_head_tail(text, ASSISTANT_EDGE, ASSISTANT_EDGE)}')
-            pending.extend(_call_line(call) for call in message.get('tool_calls') or [])
+            if tools == 'per_call':
+                lines.extend(_per_call_line(call, results, tool_max_chars) for call in message.get('tool_calls') or [])
+            else:
+                pending.extend(_call_line(call) for call in message.get('tool_calls') or [])
     flush()
     return _fit(lines, budget, keep_opening_users=True)
 
@@ -296,18 +320,44 @@ def _results(messages: list[dict[str, Any]]) -> dict[Any, dict[str, Any]]:
     return {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
 
 
-def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> str:
+def _call_input(call: dict[str, Any]) -> str:
+    """A call's input on one line, scrubbed: the shell command, or the raw arguments, cut to `TOOL_INPUT_CHARS`."""
     name, arguments = _call_name(call), _call_arguments(call)
     if name in SHELL_TOOLS:
         command = _shell_command(arguments)
-        shown = command[:RISKY_COMMAND_CHARS] if is_risky_command(command) else command[:TOOL_INPUT_CHARS]
-        call_input = shown.replace('\n', ' ⏎ ')
-    else:
-        call_input = _raw_arguments(call)[:TOOL_INPUT_CHARS]
-    call_id = call.get('id')
-    result = results.get(call_id)
+        limit = RISKY_COMMAND_CHARS if is_risky_command(command) else TOOL_INPUT_CHARS
+        return scrub_known_secrets(command)[:limit].replace('\n', ' ⏎ ')
+    return scrub_known_secrets(_raw_arguments(call))[:TOOL_INPUT_CHARS]
+
+
+def _paired_result(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> tuple[tuple[dict[str, Any], ...], str]:
+    """The call's result as the 0- or 1-tuple `projection` expects, and the call's status."""
+    result = results.get(call.get('id'))
     paired = (result,) if result else ()
-    status = _tool_call_status(call_id, paired)
+    return paired, _tool_call_status(call.get('id'), paired)
+
+
+def _per_call_line(call: dict[str, Any], results: dict[Any, dict[str, Any]], output_chars: int) -> str:
+    """One `conversation_view` line for a call; the paired result's text follows only when `output_chars` > 0."""
+    paired, status = _paired_result(call, results)
+    flag = '' if status == 'completed' else f' [{status}]'
+    line = f'  [tool] {_call_name(call)}{flag}: {_call_input(call)}'
+    output = (
+        scrub_known_secrets(tool_result_to_text(paired[0].get('content')).strip())
+        if paired and output_chars > 0
+        else ''
+    )
+    if output:
+        half = max(output_chars // 2, 1)
+        line += f'\n    → {_head_tail(output, half, half).replace(chr(10), " ⏎ ")}'
+    return line
+
+
+def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> str:
+    name, call_input = _call_name(call), _call_input(call)
+    call_id = call.get('id')
+    paired, status = _paired_result(call, results)
+    result = paired[0] if paired else None
     # Result bodies are cut to keep a long trace inside one classifier call.
     # Non-shell results keep only the diagnostic category; shell output decides
     # whether a command worked, so it keeps an excerpt and its failure markers.
