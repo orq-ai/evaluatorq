@@ -131,18 +131,18 @@ A **local session** is one conversation that Claude Code, Claude desktop, Codex 
 Two commands: `eq sessions` lists and exports, `eq insights --from-snapshot` analyzes. This exports the newest 500 sessions run in the current repository since 1 October, then runs the coding-agent questions on them:
 
 ```bash
-eq sessions --project-dir . --from 2026-10-01 --limit 500 --export sessions.json
+eq sessions --project-dir . --from 2026-10-01 --export sessions.json
 eq insights --from-snapshot sessions.json --coding
 ```
 
 `--export` freezes the sessions into a snapshot file readable only by you. Listing and exporting read local files only. `--coding` adds the coding-agent questions described in [Analyze coding agents](#analyze-coding-agents): task type, outcome, whether the agent verified its work, unfixed tool errors and risky actions.
 
-`--export` writes the sessions that were listed, and `--limit` defaults to 50. When the list is full, stderr says `Listed the newest 500 sessions; raise --limit (up to 1000) to see more.` Raise `--limit` or narrow the dates so the export holds the sessions you mean to analyze. If the 20-second search deadline cut the search short, stderr also says the export is partial.
+`--export` writes the sessions that were listed. Without `--limit`, an export lists up to 1000 sessions, while a plain listing shows 50; an explicit `--limit` always wins. When the list is full, stderr says `Listed the newest 1000 sessions; narrow --from/--to or --text to see more.` Narrow the dates or text so the export holds the sessions you mean to analyze. If the 20-second search deadline cut the search short, stderr also says the export is partial.
 
 To analyze one week, give both ends of it. `--from` starts at midnight local time on that day, `--to` includes the whole of that day, and a session is included when its time span overlaps the window:
 
 ```bash
-eq sessions --from 2026-10-05 --to 2026-10-11 --limit 500 --export week.json
+eq sessions --from 2026-10-05 --to 2026-10-11 --export week.json
 ```
 
 The session list shows when and where each session ran, not how it went. Finding the sessions that went badly takes a model run: `eq insights --coding` labels each session's outcome, verification, unfixed errors and risky actions. The deterministic [trace signals](#trace-signals) saved with the run count tool errors and retries without a model, but they describe structure, not whether the work succeeded. `--json` prints the matches as a JSON array on stdout instead of the table.
@@ -157,7 +157,7 @@ Before the run starts, the CLI states where the sessions go:
 Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
 ```
 
-The size is the snapshot file on disk, not the amount sent. The summary and classifier models read the compact view described in [What the classifier reads](#what-the-classifier-reads): your messages (each up to 8,000 characters), the first and last 300 characters of each assistant message, and one line per tool call with its input cut to 300 characters. Tool output bodies are never sent, only whether the call failed and a diagnostic category. The embedding model reads the summaries. There is no confirmation prompt and no redaction, so check the models named in that line before you run.
+The size is the snapshot file on disk, not the amount sent. The summary and classifier models read the compact view described in [What the classifier reads](#what-the-classifier-reads): your messages (each up to 8,000 characters), the first and last 300 characters of each assistant message, and one line per tool call with its input cut to 300 characters. Tool output bodies are not sent, except that for shell calls the tool-call questions read fixed failure markers and the first and last 150 characters of the output, scrubbed of credentials first. Every other call sends only whether it failed and a diagnostic category. The embedding model reads the summaries. There is no confirmation prompt and no redaction, so check the models named in that line before you run.
 
 To check what a run would send without sending anything, run the preview. It needs no Orq credential, and it ends with the same sentence worded as what a run would send. It also measures how much the Finder projection would cut from each session; that 500,000-byte projection is separate from the compact view a model reads, so its counts do not measure model input:
 
@@ -197,14 +197,14 @@ Cowork is Claude desktop's agent mode, which runs sessions in a virtual machine.
 | `--source` | `claude-code`, `claude-desktop`, `codex` or `omp`; repeat the flag for several. Default: all four |
 | `--from`, `--to` | Sessions whose time span overlaps the window. Both are `YYYY-MM-DD` in local time, and `--to` includes that whole day |
 | `--project-dir` | Sessions run in that directory, below it, or in a linked git worktree of it, so `--project-dir .` also finds sessions from sibling worktrees of the same repository. A deleted worktree and a Cowork VM path match only when written the same way as the session's own path |
-| `--text` | Case-insensitive text in any message, including system notices and Claude's thinking. Tool calls and tool output are not searched |
-| `--limit` | Maximum sessions, 1 to 1000. Default 50 |
+| `--text` | Case-insensitive text in any message, including system notices and Claude's thinking, up to 500 characters. Tool calls and tool output are not searched |
+| `--limit` | Maximum sessions, 1 to 1000. Default 50, or 1000 with `--export` |
 | `--json` | Print the matches as a JSON array on stdout instead of the table |
 | `--export` | Write the listed sessions as a snapshot file |
 
-The search stops at 20 seconds. The sessions found so far are listed, and stderr says `Searched N of M session files before the 20s limit; narrow --from/--to or --text to see the rest.` A short list after that note may be incomplete.
+The search stops at 20 seconds, and the deadline also covers listing the session files, so a very large session folder cannot run past it. The sessions found so far are listed, and stderr says `Searched N of M session files before the 20s limit; narrow --from/--to or --text to see the rest.` M counts the files found before the stop. A short list after that note may be incomplete.
 
-A session is listed only if a user prompt appears in the first 256 KB of its file. Codex sessions without one still list, with a blank title in the CLI and `(untitled)` in the dashboard unless Codex stored a thread name. Claude and omp sessions with no prompt in that head are not listed.
+Claude Code, Claude desktop, Codex and omp sessions are listed even when no user prompt appears in the first 256 KB of the file. Such a session has a blank title in the CLI and `(untitled)` in the dashboard, unless Codex stored a thread name.
 
 ### Subagents are not analyzed
 
@@ -216,7 +216,7 @@ A session becomes one ATIF trajectory, the step-by-step format Insights stores e
 
 - Claude hook attachments and Codex encrypted reasoning are dropped.
 - Images become the text `[image]`.
-- Tool output, and each tool argument value, over 20,000 characters is cut with a `[truncated N chars]` marker. This cap bounds memory and snapshot size while the file is read. Models never receive tool output bodies, so it does not change what they read.
+- Tool output, and each tool argument value, over 20,000 characters is cut with a `[truncated N chars]` marker. This cap bounds memory and snapshot size while the file is read. It keeps the first and last 10,000 characters of a long text and removes the middle, so it only changes what a model reads for shell output longer than 20,000 characters, and a failure marker found only in that middle is lost.
 - omp extension state (`custom` records) and hidden notices are dropped. omp skill prompts and displayed background-job results are kept.
 
 A long session still loses its middle in the compact view a model reads; see [What the classifier reads](#what-the-classifier-reads) for the caps.

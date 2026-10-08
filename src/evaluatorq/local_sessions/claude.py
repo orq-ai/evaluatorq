@@ -2,26 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.local_sessions import _jsonl, items
-from evaluatorq.local_sessions.models import (
-    ParsedSession,
-    SessionFamily,
-    SessionLoadError,
-    SessionSource,
-    SessionSummary,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from evaluatorq.local_sessions.models import ParsedSession, SessionFamily, SessionSource, SessionSummary
+
 _COWORK_ROOT = 'local-agent-mode-sessions'
-_HEAD_TAIL_BYTES = 262_144
-_TEXT_CHARS = 200
 _DESKTOP_ENTRYPOINTS = frozenset({'claude-desktop', 'local-agent'})
 _CONVERSATION = frozenset({'user', 'assistant'})
 
@@ -85,64 +77,35 @@ class _ClaudeReader:
         return projects == root
 
     def summarize(self, path: Path) -> SessionSummary | None:
-        try:
-            head = _jsonl.read_head(path, max_bytes=_HEAD_TAIL_BYTES)
-            tail = _jsonl.read_tail(path, max_bytes=_HEAD_TAIL_BYTES)
-            stat = path.stat()
-            first_line = next((record for record in head if record.get('type') in _CONVERSATION), None)
-            if first_line is None or first_line.get('isSidechain') is True:
-                return None
-            first_prompt = next((text for record in head if (text := _prompt_text(record))), None)
-            if first_prompt is None:
-                return None
-            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-            started = _first(head, 'timestamp')
-            updated = next(
-                (record['timestamp'] for record in reversed(tail) if isinstance(record.get('timestamp'), str)), ''
-            )
-            source: SessionSource = (
-                'claude-desktop'
-                if any(record.get('entrypoint') in _DESKTOP_ENTRYPOINTS for record in (*head, *tail))
-                else 'claude-code'
-            )
-            return SessionSummary(
-                source=source,
-                path=path.absolute(),
-                session_id=_first(head, 'sessionId') or path.stem,
-                title=(_last_value(tail, 'custom-title', 'customTitle') or _last_value(tail, 'ai-title', 'aiTitle'))[
-                    :_TEXT_CHARS
-                ],
-                project_dir=_first(head, 'cwd'),
-                started_at=_jsonl.timestamp_or(started, mtime),
-                updated_at=_jsonl.timestamp_or(updated, mtime),
-                size_bytes=stat.st_size,
-                first_prompt=first_prompt.strip()[:_TEXT_CHARS],
-                agent_version=_first(head, 'version'),
-            )
-        except (OSError, ValueError) as exc:
-            if isinstance(exc, SessionLoadError):
-                raise
-            raise SessionLoadError(f'{path}: unreadable session ({type(exc).__name__})') from exc
+        return _jsonl.summarize_session(path, _extract)
 
-    def parse(self, path: Path) -> ParsedSession:
-        summary = self.summarize(path)
-        if summary is None:
-            raise SessionLoadError(f'{path}: not a main session')
-        try:
-            records, skipped = _jsonl.read_records(path)
-        except OSError as exc:
-            raise SessionLoadError(f'{path}: unreadable session ({type(exc).__name__})') from exc
-        _jsonl.warn_skipped(path, skipped)
-        kept = _active_branch(records)
-        converted, model, total_tokens = _map_records(kept)
-        if not converted:
-            raise SessionLoadError(f'{path}: no conversation items')
-        return ParsedSession(
-            summary=summary, items=converted, model=model, total_tokens=total_tokens, skipped_lines=skipped
-        )
+    def parse(self, path: Path, summary: SessionSummary) -> ParsedSession:
+        return _jsonl.parse_session(path, summary, lambda records: _map_records(_active_branch(records)))
 
 
 READER = _ClaudeReader()
+
+
+def _extract(head: _jsonl.Records, tail: _jsonl.Records) -> _jsonl.SummaryParts | None:
+    if not any(
+        record.get('type') in _CONVERSATION and record.get('isSidechain') is not True for record in (*head, *tail)
+    ):
+        return None
+    first_prompt = next((text for record in head if (text := _prompt_text(record))), '')
+    source: SessionSource = (
+        'claude-desktop'
+        if any(record.get('entrypoint') in _DESKTOP_ENTRYPOINTS for record in (*head, *tail))
+        else 'claude-code'
+    )
+    return _jsonl.SummaryParts(
+        source=source,
+        session_id=_first(head, 'sessionId'),
+        title=_last_value(tail, 'custom-title', 'customTitle') or _last_value(tail, 'ai-title', 'aiTitle'),
+        project_dir=_first(head, 'cwd'),
+        started=_first(head, 'timestamp'),
+        first_prompt=first_prompt,
+        agent_version=_first(head, 'version'),
+    )
 
 
 def _parent_of(record: dict[str, Any]) -> str | None:
@@ -177,7 +140,9 @@ def _active_branch(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         (
             record['leafUuid']
             for record in reversed(records)
-            if record.get('type') == 'last-prompt' and record.get('leafUuid') in index
+            if record.get('type') == 'last-prompt'
+            and isinstance(record.get('leafUuid'), str)
+            and record['leafUuid'] in index
         ),
         None,
     )

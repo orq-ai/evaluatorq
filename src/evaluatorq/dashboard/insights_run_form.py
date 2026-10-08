@@ -29,10 +29,10 @@ from evaluatorq.dashboard.insights_uploads import is_uploaded_source, upload_kin
 from evaluatorq.dashboard.insights_views import _back_to_runs
 from evaluatorq.dashboard.shell import icon, page
 from evaluatorq.dashboard.view import model_control
-from evaluatorq.insights.models import DimensionName, LabelSpec
+from evaluatorq.insights.models import DimensionName, LabelSpec, default_insights_models
 from evaluatorq.insights.population import describe_local_send
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
-from evaluatorq.local_sessions import SESSION_SOURCES
+from evaluatorq.local_sessions import MAX_SESSION_TEXT_CHARS, SESSION_SOURCES
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 
 if TYPE_CHECKING:
@@ -267,10 +267,11 @@ INSIGHTS_MODEL_FIELDS: MappingProxyType[str, tuple[ModelKind, str]] = MappingPro
 
 def _model_defaults() -> dict[str, str]:
     """What a run uses when the form does not choose: each Insights task's model role."""
+    models = default_insights_models()
     return {
-        'summary_model': role_model('smart', task='insights.summary'),
-        'classifier_model': role_model('classifier', task='insights.labels'),
-        'embedding_model': role_model('embedding', task='insights.embedding'),
+        'summary_model': models['summary'],
+        'classifier_model': models['classifier'],
+        'embedding_model': models['embedding'],
         'compiler_model': role_model('fast', task='finder.compiler'),
     }
 
@@ -573,7 +574,7 @@ def _sessions_source(values: RunFormValues) -> str:
         '<label class="irf-field"><span class="irf-label">Project directory</span>'
         '<input type="text" name="session_project_dir" placeholder="/path/to/project"></label>'
         '<label class="irf-field"><span class="irf-label">Contains text</span>'
-        '<input type="text" name="session_text"></label>'
+        f'<input type="text" name="session_text" maxlength="{MAX_SESSION_TEXT_CHARS}"></label>'
         '<div class="irf-editor-actions"><button type="button" class="irf-btn" data-sessions-search>Search</button></div>'
         '<div id="insights-sessions" aria-live="polite" aria-busy="false"></div>'
         f'<p class="irf-hint" data-sessions-status role="status">{esc(status)}</p>'

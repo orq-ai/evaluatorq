@@ -11,7 +11,7 @@ from loguru import logger
 from evaluatorq.local_sessions import session_document
 from evaluatorq.local_sessions.omp import READER
 
-from .conftest import write_jsonl
+from .conftest import parse_file, write_jsonl
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -88,8 +88,23 @@ def test_parent_session_is_not_a_main_session(omp_sessions: Path) -> None:
     assert READER.summarize(path) is None
 
 
-def test_session_without_a_prompt_is_not_listed(omp_sessions: Path) -> None:
-    assert READER.summarize(_session(omp_sessions, _header())) is None
+def test_session_without_a_prompt_is_listed_with_an_empty_prompt(omp_sessions: Path) -> None:
+    summary = READER.summarize(_session(omp_sessions, _header()))
+    assert summary is not None
+    assert summary.first_prompt == ''
+
+
+def test_session_whose_prompt_is_beyond_the_head_is_listed(omp_sessions: Path) -> None:
+    path = _session(omp_sessions, [*_header(), _user('a', None, 1, 'x' * 300_000), _user('b', 'a', 2, 'later')])
+    summary = READER.summarize(path)
+    assert summary is not None
+    assert summary.first_prompt == ''
+    assert summary.session_id == SID
+
+
+def test_oversized_first_line_does_not_raise(omp_sessions: Path) -> None:
+    path = _session(omp_sessions, [{'type': 'session', 'id': SID, 'pad': 'x' * 300_000}])
+    assert READER.summarize(path) is None
 
 
 def test_rewound_branch_keeps_only_the_last_leaf_chain(omp_sessions: Path) -> None:
@@ -102,7 +117,7 @@ def test_rewound_branch_keeps_only_the_last_leaf_chain(omp_sessions: Path) -> No
             _user('c', 'a', 3, 'rewound'),
         ],
     )
-    assert _texts(READER.parse(path).items) == ['first', 'rewound']
+    assert _texts(parse_file(READER, path).items) == ['first', 'rewound']
 
 
 def test_tool_call_and_result_become_a_tool_call_with_observation(omp_sessions: Path) -> None:
@@ -153,7 +168,7 @@ def test_tool_call_and_result_become_a_tool_call_with_observation(omp_sessions: 
             ),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert parsed.model == 'claude-x'
     assert parsed.total_tokens == 15
     assert [item['type'] for item in parsed.items].count('reasoning') == 1
@@ -179,7 +194,7 @@ def test_provider_prefixes_the_model(omp_sessions: Path) -> None:
             ),
         ],
     )
-    assert READER.parse(path).model == 'openai/gpt-x'
+    assert parse_file(READER, path).model == 'openai/gpt-x'
 
 
 def test_errored_tool_result_is_prefixed_for_the_transcript(omp_sessions: Path) -> None:
@@ -206,7 +221,7 @@ def test_errored_tool_result_is_prefixed_for_the_transcript(omp_sessions: Path) 
             ),
         ],
     )
-    outputs = [item['output'] for item in READER.parse(path).items if item['type'] == 'function_call_output']
+    outputs = [item['output'] for item in parse_file(READER, path).items if item['type'] == 'function_call_output']
     assert outputs == ['Error: boom']
 
 
@@ -220,7 +235,7 @@ def test_bash_execution_respects_exclude_from_context(omp_sessions: Path) -> Non
             _msg('c', 'b', 3, role='bashExecution', command='secret', output='no', excludeFromContext=True),
         ],
     )
-    assert _texts(READER.parse(path).items) == ['hi', '$ ls\nx.py']
+    assert _texts(parse_file(READER, path).items) == ['hi', '$ ls\nx.py']
 
 
 def test_compaction_becomes_a_system_step_and_preserve_data_is_never_read(omp_sessions: Path) -> None:
@@ -232,7 +247,7 @@ def test_compaction_becomes_a_system_step_and_preserve_data_is_never_read(omp_se
             _entry('b', 'a', 2, type='compaction', summary='so far', preserveData={'marker': 'PRESERVE-MARKER-XYZ'}),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert 'so far' in str(parsed.items[-1])
     assert 'PRESERVE-MARKER-XYZ' not in str(parsed.items)
     document = session_document(parsed)
@@ -256,7 +271,7 @@ def test_custom_messages_map_by_type_and_display(omp_sessions: Path) -> None:
             custom('e', 'd', 'workflow-result', '   ', display=True),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert [(item['role'], text) for item, text in zip(parsed.items, _texts(parsed.items), strict=True)] == [
         ('user', 'go'),
         ('user', 'run the skill'),
@@ -274,7 +289,7 @@ def test_reset_boundary_becomes_a_system_step(omp_sessions: Path) -> None:
             _user('c', 'b', 3, 'again'),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert _texts(parsed.items) == ['go', 'Conversation context was reset.', 'again']
     assert parsed.items[1]['role'] == 'system'
 
@@ -296,7 +311,7 @@ def test_known_dropped_types_are_silent_and_unknown_types_are_counted(omp_sessio
     messages: list[str] = []
     sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
     try:
-        parsed = READER.parse(path)
+        parsed = parse_file(READER, path)
     finally:
         logger.remove(sink)
     assert _texts(parsed.items) == ['go']

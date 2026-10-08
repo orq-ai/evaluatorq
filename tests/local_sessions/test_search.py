@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -13,17 +13,21 @@ from loguru import logger
 
 from evaluatorq.local_sessions import (
     MAX_SELECTED_SESSIONS,
+    day_window,
     SessionLoadError,
     SessionQuery,
     SessionRef,
+    SnapshotTooLarge,
     build_session_snapshot,
     load_session_document,
     project_matches,
     resolve_session_ref,
     search_sessions,
 )
+from evaluatorq.local_sessions import claude as claude_module
 from evaluatorq.local_sessions.claude import READER as CLAUDE
 from evaluatorq.local_sessions.readers import READERS
+from evaluatorq.trace_finder.models import Snapshot
 
 from .conftest import write_jsonl
 
@@ -249,7 +253,7 @@ def test_deadline_stops_scan_with_warning(claude_projects: Path, warnings: list[
     result = search_sessions(SessionQuery(), deadline_seconds=0)
     assert result.complete is False
     assert result.scanned_files == 0
-    assert any('Session search stopped after 0 of 1 files' in message for message in warnings)
+    assert any('Session file walk stopped after finding 0 files' in message for message in warnings)
 
 
 def test_cancelled_stops_scan(claude_projects: Path) -> None:
@@ -353,8 +357,9 @@ def test_snapshot_deduplicates_trace_ids(claude_projects: Path, warnings: list[s
         ],
     )
     refs = [SessionRef(source='claude-code', path=older), SessionRef(source='claude-code', path=newer)]
-    snapshot, failed = build_session_snapshot(refs)
-    assert failed == []
+    frozen = build_session_snapshot(refs)
+    snapshot = Snapshot.model_validate_json(frozen.data)
+    assert frozen.failed == []
     assert len(snapshot.documents) == 1
     assert snapshot.documents[0].metadata.project == '/other'
     assert snapshot.capture_metadata == {'source': 'local-sessions', 'sessions': 1}
@@ -364,11 +369,11 @@ def test_snapshot_deduplicates_trace_ids(claude_projects: Path, warnings: list[s
 def test_snapshot_reports_broken_ref_and_loads_rest(claude_projects: Path, warnings: list[str]) -> None:
     good = _claude(claude_projects, 'good')
     broken = SessionRef(source='claude-code', path=claude_projects / '-work-proj' / 'gone.jsonl')
-    snapshot, failed = build_session_snapshot([SessionRef(source='claude-code', path=good), broken])
-    assert len(snapshot.documents) == 1
-    assert [ref for ref, _ in failed] == [broken]
-    assert 'not a file' in failed[0][1]
-    assert not snapshot.is_empty
+    frozen = build_session_snapshot([SessionRef(source='claude-code', path=good), broken])
+    assert frozen.n_sessions == 1
+    assert [ref for ref, _ in frozen.failed] == [broken]
+    assert 'not a file' in frozen.failed[0][1]
+    assert not Snapshot.model_validate_json(frozen.data).is_empty
 
 
 def test_snapshot_all_broken_raises(claude_projects: Path) -> None:
@@ -407,11 +412,11 @@ def test_snapshot_reports_summarize_oserror_and_loads_rest(
 
     monkeypatch.setattr(CLAUDE, 'summarize', summarize)
     refs = [SessionRef(source='claude-code', path=flaky), SessionRef(source='claude-code', path=good)]
-    snapshot, failed = build_session_snapshot(refs)
-    assert len(snapshot.documents) == 1
-    assert [ref for ref, _ in failed] == [refs[0]]
-    assert 'OSError' in failed[0][1]
-    assert 'gone' not in failed[0][1]
+    frozen = build_session_snapshot(refs)
+    assert frozen.n_sessions == 1
+    assert [ref for ref, _ in frozen.failed] == [refs[0]]
+    assert 'OSError' in frozen.failed[0][1]
+    assert 'gone' not in frozen.failed[0][1]
 
 
 def test_ascii_needle_mixed_case_matches_through_bytes_path(claude_projects: Path) -> None:
@@ -449,3 +454,129 @@ def test_cancel_during_multi_chunk_file_stops_search(
     assert result.complete is False
     assert result.sessions == ()
     assert any('Session search stopped' in message for message in warnings)
+
+
+def test_loading_a_session_document_summarizes_it_once(claude_projects: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = _claude(claude_projects, 'once')
+    calls: list[Path] = []
+    original = CLAUDE.summarize
+    monkeypatch.setattr(CLAUDE, 'summarize', lambda p: (calls.append(p), original(p))[1])
+
+    load_session_document(SessionRef(source='claude-code', path=path))
+
+    assert len(calls) == 1
+
+
+def test_searching_with_text_summarizes_a_match_once(claude_projects: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _claude(claude_projects, 'once', text='needle here')
+    calls: list[Path] = []
+    original = CLAUDE.summarize
+    monkeypatch.setattr(CLAUDE, 'summarize', lambda p: (calls.append(p), original(p))[1])
+
+    assert _ids(search_sessions(SessionQuery(text='needle'))) == {'once'}
+    assert len(calls) == 1
+
+
+def test_a_list_leaf_uuid_does_not_abort_search_or_snapshot(claude_projects: Path) -> None:
+    bad = _claude(claude_projects, 'bad', text='needle', extra=[{'type': 'last-prompt', 'leafUuid': ['a1']}])
+    _claude(claude_projects, 'good', text='needle')
+
+    result = search_sessions(SessionQuery(text='needle'))
+    frozen = build_session_snapshot([SessionRef(source='claude-code', path=bad)])
+
+    assert 'good' in _ids(result)
+    assert frozen.failed == [] and frozen.n_sessions == 1
+
+
+def test_a_non_value_error_from_a_mapper_becomes_a_session_load_error(
+    claude_projects: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _claude(claude_projects, 'boom', text='needle')
+
+    def explode(_records: Any) -> Any:
+        raise TypeError('secret user words')
+
+    monkeypatch.setattr(claude_module, '_map_records', explode)
+
+    with pytest.raises(SessionLoadError, match=r'unreadable session \(TypeError\)') as caught:
+        load_session_document(SessionRef(source='claude-code', path=path))
+    assert 'secret' not in str(caught.value)
+    assert _ids(search_sessions(SessionQuery(text='needle'))) == set()
+    snapshot_error = pytest.raises(SessionLoadError, build_session_snapshot, [SessionRef(source='claude-code', path=path)])
+    assert snapshot_error.match('none of the 1 selected sessions')
+
+
+def test_snapshot_budget_raises_as_soon_as_it_is_passed(claude_projects: Path) -> None:
+    refs = [SessionRef(source='claude-code', path=_claude(claude_projects, sid)) for sid in ('a', 'b')]
+
+    with pytest.raises(SnapshotTooLarge):
+        build_session_snapshot(refs, max_bytes=10)
+    frozen = build_session_snapshot(refs, max_bytes=10_000_000)
+    assert frozen.n_sessions == 2
+    assert len(Snapshot.model_validate_json(frozen.data).documents) == 2
+
+
+def test_the_budget_counts_the_whole_snapshot_not_only_its_documents(claude_projects: Path) -> None:
+    refs = [SessionRef(source='claude-code', path=_claude(claude_projects, 'only'))]
+    size = len(build_session_snapshot(refs).data)
+    document_bytes = len(load_session_document(refs[0]).model_dump_json().encode())
+
+    assert build_session_snapshot(refs, max_bytes=size).n_sessions == 1
+    with pytest.raises(SnapshotTooLarge):
+        build_session_snapshot(refs, max_bytes=size - 1)
+    assert document_bytes < size - 1, 'the envelope is what the second case rejects'
+
+
+def test_the_frozen_bytes_are_what_the_snapshot_model_would_write(claude_projects: Path) -> None:
+    refs = [
+        SessionRef(source='claude-code', path=_claude(claude_projects, sid, text=text))
+        for sid, text in (('a', 'plain'), ('b', 'non-ascii é “quoted” \u2028 line'))
+    ]
+
+    frozen = build_session_snapshot(refs)
+
+    documents = tuple(load_session_document(ref) for ref in refs)
+    expected = Snapshot(
+        traces=(), documents=documents, capture_metadata={'source': 'local-sessions', 'sessions': 2}
+    ).model_dump_json()
+    assert frozen.data == expected.encode()
+    assert Snapshot.model_validate_json(frozen.data).documents == documents
+
+
+def test_cancel_during_candidate_collection_returns_an_incomplete_search(claude_projects: Path) -> None:
+    for sid in ('a', 'b', 'c'):
+        _claude(claude_projects, sid)
+    checks = iter(range(100))
+
+    result = search_sessions(SessionQuery(), cancelled=lambda: next(checks) >= 1)
+
+    assert result.complete is False
+    assert result.candidate_files == 1, 'the walk stopped after the first file instead of listing all three'
+    assert result.scanned_files == 0
+    assert result.sessions == ()
+
+
+def test_day_window_is_half_open_in_the_given_zone() -> None:
+    west = timezone(timedelta(hours=-5))
+
+    start, end = day_window(date(2026, 10, 2), date(2026, 10, 2), west)
+
+    assert start == datetime(2026, 10, 2, 5, tzinfo=timezone.utc)
+    assert end == datetime(2026, 10, 3, 5, tzinfo=timezone.utc)
+    assert day_window(None, None, west) == (None, None)
+    assert day_window(date(2026, 10, 2), None, west) == (start, None)
+
+
+def test_day_window_without_a_zone_reads_days_in_the_machine_zone() -> None:
+    start, end = day_window(date(2026, 10, 2), date(2026, 10, 2), None)
+
+    assert start == datetime(2026, 10, 2).astimezone()
+    assert end == datetime(2026, 10, 3).astimezone()
+
+
+def test_day_window_rejects_a_reversed_range_and_an_out_of_range_day() -> None:
+    with pytest.raises(ValueError, match='first day must not be after the last day'):
+        day_window(date(2026, 10, 5), date(2026, 10, 1), timezone.utc)
+    with pytest.raises(ValueError, match='out of range'):
+        day_window(None, date.max, timezone.utc)
+    assert day_window(date(2026, 10, 1), date(2026, 10, 1), timezone.utc)[0] is not None

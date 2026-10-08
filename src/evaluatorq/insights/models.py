@@ -32,6 +32,17 @@ BoundedRatio = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 
 
+def default_insights_models(
+    summary: str | None = None, classifier: str | None = None, embedding: str | None = None
+) -> dict[str, str]:
+    """The summary/classifier/embedding ids an Insights run uses: explicit values win, else each task's model role."""
+    return {
+        'summary': summary or role_model('smart', task='insights.summary'),
+        'classifier': classifier or role_model('classifier', task='insights.labels'),
+        'embedding': embedding or role_model('embedding', task='insights.embedding'),
+    }
+
+
 class _TraceIdentity(Protocol):
     @property
     def trace_id(self) -> str: ...
@@ -290,10 +301,10 @@ class InsightsConfig(BaseModel):
 
     labels: list[LabelSpec]
     dimensions: list[DimensionName]
-    summary_model: str = Field(default_factory=lambda: role_model('smart', task='insights.summary'))
-    classifier_model: str = Field(default_factory=lambda: role_model('classifier', task='insights.labels'))
+    summary_model: str = Field(default_factory=lambda: default_insights_models()['summary'])
+    classifier_model: str = Field(default_factory=lambda: default_insights_models()['classifier'])
     compiler_model: str | None = None
-    embedding_model: str = Field(default_factory=lambda: role_model('embedding', task='insights.embedding'))
+    embedding_model: str = Field(default_factory=lambda: default_insights_models()['embedding'])
     max_clusters: int = Field(default=15, ge=1)
     max_subclusters: int = Field(default=15, ge=1)
     outlier_zscore: FiniteFloat | None = Field(default=None, ge=0)

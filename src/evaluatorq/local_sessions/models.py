@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime  # noqa: TC003 - pydantic field type
+from datetime import (
+    datetime,
+    time,
+    timedelta,
+    timezone,
+)
 from pathlib import Path  # noqa: TC003 - pydantic field type
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal
@@ -12,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from datetime import date, tzinfo
 
 SessionSource = Literal['claude-code', 'claude-desktop', 'codex', 'omp']
 SESSION_SOURCES: tuple[SessionSource, ...] = ('claude-code', 'claude-desktop', 'codex', 'omp')
@@ -28,6 +34,27 @@ assert set(FAMILY_OF) == set(SESSION_SOURCES)  # noqa: S101 - import-time regist
 MAX_SELECTED_SESSIONS = 1000
 MAX_TOOL_TEXT_CHARS = 20_000
 SEARCH_DEADLINE_SECONDS = 20.0
+MAX_SESSION_TEXT_CHARS = 500
+
+
+def day_window(first: date | None, last: date | None, zone: tzinfo | None) -> tuple[datetime | None, datetime | None]:
+    """Half-open UTC bounds `[first 00:00, last + 1 day 00:00)` in `zone`; `zone=None` reads days in the machine's zone.
+
+    Raises `ValueError` when `first` is after `last` or a day is out of range.
+    """
+    if first is not None and last is not None and first > last:
+        raise ValueError('The first day must not be after the last day.')
+    try:
+        start = _midnight(first, zone) if first is not None else None
+        end = _midnight(last + timedelta(days=1), zone) if last is not None else None
+    except OverflowError:
+        raise ValueError('The day is out of range.') from None
+    return start, end
+
+
+def _midnight(day: date, zone: tzinfo | None) -> datetime:
+    moment = datetime.combine(day, time.min, tzinfo=zone) if zone is not None else datetime.combine(day, time.min)
+    return moment.astimezone(timezone.utc)
 
 
 class SessionLoadError(ValueError):
@@ -75,7 +102,7 @@ class SessionQuery(BaseModel):
     start: datetime | None = None
     end: datetime | None = None
     project_dir: str | None = None
-    text: str | None = None
+    text: str | None = Field(default=None, max_length=MAX_SESSION_TEXT_CHARS)
     limit: int = Field(default=50, ge=1, le=MAX_SELECTED_SESSIONS)
 
 

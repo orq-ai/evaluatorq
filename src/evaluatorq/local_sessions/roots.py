@@ -20,13 +20,17 @@ def claude_desktop_dir() -> Path:
     return Path.home() / '.config' / 'Claude'
 
 
+def codex_home() -> Path:
+    return Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
+
+
 def session_roots(family: SessionFamily) -> tuple[Path, ...]:
     """Existing directories holding main session files for `family`, each tool's own env override first."""
     if family == 'claude':
         config = Path(os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude')
         candidates = (config / 'projects', claude_desktop_dir() / 'local-agent-mode-sessions')
     elif family == 'codex':
-        home = Path(os.environ.get('CODEX_HOME') or Path.home() / '.codex')
+        home = codex_home()
         candidates = (home / 'sessions', home / 'archived_sessions')
     else:
         agent = Path(os.environ.get('PI_CODING_AGENT_DIR') or Path.home() / '.omp' / 'agent')

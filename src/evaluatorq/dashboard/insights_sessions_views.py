@@ -6,6 +6,8 @@ from datetime import timezone
 from typing import TYPE_CHECKING
 
 from evaluatorq.common.reports import esc
+from evaluatorq.insights.population import format_size
+from evaluatorq.local_sessions import SEARCH_DEADLINE_SECONDS
 
 if TYPE_CHECKING:
     from evaluatorq.local_sessions import SessionSearchResult, SessionSummary
@@ -17,12 +19,6 @@ _NO_ROOTS = 'No Claude Code, Claude desktop, Codex or omp session folders were f
 def encode_ref(summary: SessionSummary) -> str:
     """The form value that names one session: `{source}:{path}`, split on the first colon."""
     return f'{summary.source}:{summary.path}'
-
-
-def _size(n_bytes: int) -> str:
-    if n_bytes >= 1024 * 1024:
-        return f'{n_bytes / (1024 * 1024):.1f} MB'
-    return f'{max(1, n_bytes // 1024) if n_bytes else 0} KB'
 
 
 def _row(summary: SessionSummary, selected: frozenset[str]) -> str:
@@ -37,7 +33,7 @@ def _row(summary: SessionSummary, selected: frozenset[str]) -> str:
         f'<td>{esc(summary.source)}</td>'
         f'<td class="irf-sessions-project">{esc(summary.project_dir)}</td>'
         f'<td class="irf-sessions-title">{esc(title)}</td>'
-        f'<td>{esc(_size(summary.size_bytes))}</td></tr>'
+        f'<td>{esc(format_size(summary.size_bytes))}</td></tr>'
     )
 
 
@@ -48,7 +44,7 @@ def render_session_results(result: SessionSearchResult, *, selected: frozenset[s
         if result.complete
         else (
             f'<p class="irf-hint" role="status">Searched {result.scanned_files} of {result.candidate_files} '
-            'session files before the 20-second limit. Narrow the dates or text to see the rest.</p>'
+            f'session files before the {SEARCH_DEADLINE_SECONDS:g}-second limit. Narrow the dates or text to see the rest.</p>'
         )
     )
     if not result.sessions:

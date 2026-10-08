@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq.local_sessions import _jsonl, items
-from evaluatorq.local_sessions.models import ParsedSession, SessionFamily, SessionLoadError, SessionSummary
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
-_HEAD_BYTES = 262_144
-_TAIL_BYTES = 65_536
-_TEXT_CHARS = 200
+    from evaluatorq.local_sessions.models import ParsedSession, SessionFamily, SessionSummary
+
 _USER_INVOKED = ('skill-prompt', 'collab-prompt')
-# Record types that carry no conversation content. They are dropped without a warning.
 _DROPPED = frozenset({
     'title',
     'session',
@@ -49,76 +45,44 @@ class _OmpReader:
         return path.suffix == '.jsonl' and path.parent.parent == root
 
     def summarize(self, path: Path) -> SessionSummary | None:
-        try:
-            head = _jsonl.read_head(path, max_bytes=_HEAD_BYTES)
-            session = next((record for record in head[:2] if record.get('type') == 'session'), None)
-            if session is None or session.get('parentSession'):
-                return None
-            first_prompt = next(
-                (
-                    text
-                    for record in head
-                    if record.get('type') == 'message'
-                    and (message := _message(record)).get('role') == 'user'
-                    and (text := items.blocks_text(message.get('content')))
-                ),
-                None,
-            )
-            if first_prompt is None:
-                return None
-            tail = _jsonl.read_tail(path, max_bytes=_TAIL_BYTES)
-            stat = path.stat()
-            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-            title_record = head[0] if head[0].get('type') == 'title' else {}
-            title = next(
-                (
-                    value
-                    for value in (title_record.get('title'), session.get('title'))
-                    if isinstance(value, str) and value
-                ),
-                '',
-            )
-            session_id = session.get('id')
-            if not isinstance(session_id, str) or not session_id:
-                session_id = path.stem
-            updated = next(
-                (record['timestamp'] for record in reversed(tail) if isinstance(record.get('timestamp'), str)), ''
-            )
-            return SessionSummary(
-                source='omp',
-                path=path.absolute(),
-                session_id=session_id,
-                title=title[:_TEXT_CHARS],
-                project_dir=session['cwd'] if isinstance(session.get('cwd'), str) else '',
-                started_at=_jsonl.timestamp_or(session.get('timestamp'), mtime),
-                updated_at=_jsonl.timestamp_or(updated, mtime),
-                size_bytes=stat.st_size,
-                first_prompt=first_prompt.strip()[:_TEXT_CHARS],
-                agent_version=session['version'] if isinstance(session.get('version'), str) else '',
-            )
-        except SessionLoadError:
-            raise
-        except (OSError, ValueError) as exc:
-            raise SessionLoadError(f'{path}: unreadable session ({type(exc).__name__})') from exc
+        return _jsonl.summarize_session(path, _extract)
 
-    def parse(self, path: Path) -> ParsedSession:
-        summary = self.summarize(path)
-        if summary is None:
-            raise SessionLoadError(f'{path}: not a main session')
-        try:
-            records, skipped = _jsonl.read_records(path)
-        except OSError as exc:
-            raise SessionLoadError(f'{path}: unreadable session ({type(exc).__name__})') from exc
-        _jsonl.warn_skipped(path, skipped)
-        converted, model, total_tokens = _map_records(_chain(records), path)
-        if not converted:
-            raise SessionLoadError(f'{path}: no conversation items')
-        return ParsedSession(
-            summary=summary, items=converted, model=model, total_tokens=total_tokens, skipped_lines=skipped
-        )
+    def parse(self, path: Path, summary: SessionSummary) -> ParsedSession:
+        return _jsonl.parse_session(path, summary, lambda records: _map_records(_chain(records), path))
 
 
 READER = _OmpReader()
+
+
+def _extract(head: _jsonl.Records, _tail: _jsonl.Records) -> _jsonl.SummaryParts | None:
+    session = next((record for record in head[:2] if record.get('type') == 'session'), None)
+    if session is None or session.get('parentSession'):
+        return None
+    first_prompt = next(
+        (
+            text
+            for record in head
+            if record.get('type') == 'message'
+            and (message := _message(record)).get('role') == 'user'
+            and (text := items.blocks_text(message.get('content')))
+        ),
+        '',
+    )
+    title_record = head[0] if head[0].get('type') == 'title' else {}
+    title = next(
+        (value for value in (title_record.get('title'), session.get('title')) if isinstance(value, str) and value),
+        '',
+    )
+    session_id = session.get('id')
+    return _jsonl.SummaryParts(
+        source='omp',
+        session_id=session_id if isinstance(session_id, str) else '',
+        title=title,
+        project_dir=session['cwd'] if isinstance(session.get('cwd'), str) else '',
+        started=session.get('timestamp'),
+        first_prompt=first_prompt,
+        agent_version=session['version'] if isinstance(session.get('version'), str) else '',
+    )
 
 
 def _chain(records: list[dict[str, Any]]) -> list[dict[str, Any]]:

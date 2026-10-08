@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from evaluatorq.local_sessions import session_document
 from evaluatorq.local_sessions.claude import READER
 
-from .conftest import write_jsonl
+from .conftest import parse_file, write_jsonl
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,7 +66,7 @@ def test_session_document_round_trips_through_atif(claude_projects: Path) -> Non
             },
         ],
     )
-    document = session_document(READER.parse(path))
+    document = session_document(parse_file(READER, path))
     steps = document.trajectory.steps
     assert [step.source for step in steps] == ['user', 'agent', 'agent']
     first = steps[1]

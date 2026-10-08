@@ -14,7 +14,7 @@ from evaluatorq.local_sessions import SessionLoadError, session_document
 from evaluatorq.local_sessions.claude import READER
 from evaluatorq.local_sessions.models import MAX_TOOL_TEXT_CHARS
 
-from .conftest import write_jsonl
+from .conftest import parse_file, write_jsonl
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -126,7 +126,7 @@ def test_attachment_parents_keep_the_whole_turn(claude_projects: Path) -> None:
             _assistant('a2', 'r1', 4, [{'type': 'text', 'text': 'all read'}], mid='m2'),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert [item['type'] for item in parsed.items] == ['message', 'function_call', 'function_call_output', 'message']
 
 
@@ -146,7 +146,7 @@ def test_parallel_tool_calls_keep_every_result(claude_projects: Path) -> None:
             _assistant('a3', 'r2', 3, [{'type': 'text', 'text': 'both done'}], mid='m2'),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     outputs = {item['call_id']: item['output'] for item in parsed.items if item['type'] == 'function_call_output'}
     assert outputs == {'t1': 'out-a', 't2': 'out-b'}
     step_observations = [
@@ -174,7 +174,7 @@ def _rewind_records(*, leaf: str | None) -> list[dict[str, Any]]:
 
 def test_rewound_branch_is_dropped(claude_projects: Path) -> None:
     path = write_jsonl(claude_projects / '-p' / 'rw.jsonl', _rewind_records(leaf='a3'))
-    text = _text_of(READER.parse(path).items)
+    text = _text_of(parse_file(READER, path).items)
     assert 'first question' in text
     assert 'LATER prompt' in text
     assert 'EARLIER' not in text
@@ -183,14 +183,14 @@ def test_rewound_branch_is_dropped(claude_projects: Path) -> None:
 
 def test_leaf_in_earlier_branch_keeps_that_branch(claude_projects: Path) -> None:
     path = write_jsonl(claude_projects / '-p' / 'rw2.jsonl', _rewind_records(leaf='a2'))
-    text = _text_of(READER.parse(path).items)
+    text = _text_of(parse_file(READER, path).items)
     assert 'EARLIER prompt' in text
     assert 'LATER' not in text
 
 
 def test_without_last_prompt_the_last_uuid_is_the_head(claude_projects: Path) -> None:
     path = write_jsonl(claude_projects / '-p' / 'rw3.jsonl', _rewind_records(leaf=None))
-    text = _text_of(READER.parse(path).items)
+    text = _text_of(parse_file(READER, path).items)
     assert 'LATER prompt' in text
     assert 'EARLIER' not in text
 
@@ -214,7 +214,7 @@ def test_tool_result_with_text_block_is_not_a_prompt(claude_projects: Path) -> N
             _assistant('a4', 'u2', 5, [{'type': 'text', 'text': 'next reply'}], mid='m3'),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     outputs = {item['call_id'] for item in parsed.items if item['type'] == 'function_call_output'}
     assert outputs == {'t1', 't2'}
     assert 'next reply' in _text_of(parsed.items)
@@ -231,7 +231,7 @@ def test_repeated_uuids_emit_once(claude_projects: Path) -> None:
             _assistant('a2', 'a1', 2, [{'type': 'text', 'text': 'end'}], mid='m2'),
         ],
     )
-    texts = [item for item in READER.parse(path).items if item['role'] == 'assistant']
+    texts = [item for item in parse_file(READER, path).items if item['role'] == 'assistant']
     assert len(texts) == 2
 
 
@@ -277,7 +277,7 @@ def test_compaction_keeps_pre_and_post_turns(claude_projects: Path) -> None:
             _assistant('a2', 'u2', 5, [{'type': 'text', 'text': 'post reply'}], mid='m2'),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     text = _text_of(parsed.items)
     assert 'before compaction' in text
     assert 'after compaction' in text
@@ -307,7 +307,7 @@ def test_parse_maps_blocks_to_items(claude_projects: Path) -> None:
             _assistant('a3', 'r1', 4, [{'type': 'text', 'text': 'finished'}], mid='m2', usage={'output_tokens': 7}),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert parsed.items == [
         {'type': 'message', 'role': 'user', 'content': [{'type': 'input_text', 'text': 'do it'}]},
         {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'hmm'}]},
@@ -329,8 +329,9 @@ def test_long_tool_output_is_trimmed(claude_projects: Path) -> None:
             _tool_result('r1', 'a1', 2, 't1', 'z' * 25_000),
         ],
     )
-    output = next(item['output'] for item in READER.parse(path).items if item['type'] == 'function_call_output')
-    assert output == 'z' * MAX_TOOL_TEXT_CHARS + '\n[truncated 5000 chars]'
+    output = next(item['output'] for item in parse_file(READER, path).items if item['type'] == 'function_call_output')
+    half = MAX_TOOL_TEXT_CHARS // 2
+    assert output == 'z' * half + '\n[truncated 5000 chars]\n' + 'z' * half
 
 
 def _capture() -> tuple[list[str], int]:
@@ -350,7 +351,7 @@ def test_partial_last_line_is_not_malformed(claude_projects: Path) -> None:
     )
     seen, sink = _capture()
     try:
-        parsed = READER.parse(path)
+        parsed = parse_file(READER, path)
     finally:
         logger.remove(sink)
     assert parsed.skipped_lines == 0
@@ -368,7 +369,7 @@ def test_malformed_middle_line_warns(claude_projects: Path) -> None:
     )
     seen, sink = _capture()
     try:
-        parsed = READER.parse(path)
+        parsed = parse_file(READER, path)
     finally:
         logger.remove(sink)
     assert parsed.skipped_lines == 1
@@ -377,7 +378,28 @@ def test_malformed_middle_line_warns(claude_projects: Path) -> None:
     assert 'SECRET-CONTENT' not in seen[0]
 
 
-def test_unreadable_head_raises(claude_projects: Path) -> None:
+def test_oversized_first_line_does_not_raise(claude_projects: Path) -> None:
     path = write_jsonl(claude_projects / '-p' / 'big.jsonl', ['{"type": "user", "pad": "' + 'x' * 300_000 + '"}'])
-    with pytest.raises(SessionLoadError):
-        READER.summarize(path)
+    assert READER.summarize(path) is None
+
+
+def test_first_prompt_beyond_the_head_is_listed_and_parses(claude_projects: Path) -> None:
+    path = write_jsonl(
+        claude_projects / '-p' / 'bigprompt.jsonl',
+        [
+            _user('u1', None, 1, 'x' * 300_000),
+            _assistant('a1', 'u1', 2, [{'type': 'text', 'text': 'ok'}], mid='m1'),
+        ],
+    )
+    summary = READER.summarize(path)
+    assert summary is not None
+    assert summary.first_prompt == ''
+    assert parse_file(READER, path).items
+
+
+def test_file_with_only_summary_records_is_not_listed(claude_projects: Path) -> None:
+    path = write_jsonl(
+        claude_projects / '-p' / 'summ.jsonl',
+        [{'type': 'summary', 'summary': 'old chat', 'leafUuid': 'x'}, {'type': 'summary', 'summary': 'again'}],
+    )
+    assert READER.summarize(path) is None

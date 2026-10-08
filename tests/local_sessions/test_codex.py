@@ -12,7 +12,7 @@ from loguru import logger
 from evaluatorq.local_sessions import SessionLoadError, session_document
 from evaluatorq.local_sessions.codex import READER
 
-from .conftest import write_jsonl
+from .conftest import parse_file, write_jsonl
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -117,7 +117,7 @@ def test_injected_context_is_not_the_first_prompt(codex_home: Path) -> None:
     summary = READER.summarize(path)
     assert summary is not None
     assert summary.first_prompt == 'real question'
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert [item['content'][0]['text'] for item in parsed.items] == ['real question']
 
 
@@ -127,7 +127,7 @@ def test_main_session_without_a_prompt_in_the_head_is_listed(codex_home: Path) -
     assert summary is not None
     assert summary.first_prompt == ''
     with pytest.raises(SessionLoadError):
-        READER.parse(path)
+        parse_file(READER, path)
 
 
 def test_agent_message_becomes_system_step_without_warning(codex_home: Path) -> None:
@@ -155,7 +155,7 @@ def test_agent_message_becomes_system_step_without_warning(codex_home: Path) -> 
     messages: list[str] = []
     sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
     try:
-        parsed = READER.parse(path)
+        parsed = parse_file(READER, path)
     finally:
         logger.remove(sink)
     assert not any('agent_message' in message for message in messages)
@@ -165,6 +165,22 @@ def test_agent_message_becomes_system_step_without_warning(codex_home: Path) -> 
     assert 'zzz' not in str(parsed.items)
     document = session_document(parsed)
     assert any(step.source == 'system' and 'found two bugs' in str(step.message) for step in document.trajectory.steps)
+
+
+@pytest.mark.parametrize('author', [None, '', 7])
+def test_agent_message_without_a_usable_author_omits_the_author_clause(codex_home: Path, author: object) -> None:
+    path = _rollout(
+        codex_home,
+        records=[
+            _meta(),
+            _message(1, 'user', 'delegate'),
+            _item(2, type='agent_message', content=[{'type': 'input_text', 'text': 'found it'}], author=author),
+        ],
+    )
+
+    system = [item for item in parse_file(READER, path).items if item.get('role') == 'system']
+
+    assert system[0]['content'][0]['text'] == 'Message from subagent:\nfound it'
 
 
 def test_custom_tool_call_becomes_tool_call_with_observation(codex_home: Path) -> None:
@@ -180,7 +196,7 @@ def test_custom_tool_call_becomes_tool_call_with_observation(codex_home: Path) -
             _message(6, 'assistant', 'patched'),
         ],
     )
-    document = session_document(READER.parse(path))
+    document = session_document(parse_file(READER, path))
     calls = [call for step in document.trajectory.steps for call in step.tool_calls or []]
     assert [call.function_name for call in calls] == ['apply_patch', 'shell']
     assert calls[0].arguments == {'input': '*** Begin Patch'}
@@ -202,7 +218,7 @@ def test_encrypted_only_reasoning_is_dropped_and_summary_kept(codex_home: Path) 
             _message(4, 'assistant', 'ok'),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     reasoning = [item for item in parsed.items if item['type'] == 'reasoning']
     assert len(reasoning) == 1
     assert reasoning[0]['summary'][0]['text'] == 'plan A'
@@ -219,7 +235,7 @@ def test_developer_messages_are_dropped_and_compaction_kept(codex_home: Path) ->
             {'timestamp': _ts(3), 'type': 'compacted', 'payload': {'message': 'so far'}},
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert 'secret policy' not in str(parsed.items)
     assert 'so far' in str(parsed.items[-1])
 
@@ -242,7 +258,7 @@ def test_model_and_total_tokens_come_from_last_records(codex_home: Path) -> None
             _message(6, 'assistant', 'done'),
         ],
     )
-    parsed = READER.parse(path)
+    parsed = parse_file(READER, path)
     assert parsed.total_tokens == 250
     assert parsed.model == 'gpt-b'
 
@@ -260,7 +276,7 @@ def test_unknown_item_type_warns_once_with_type_and_path(codex_home: Path) -> No
     messages: list[str] = []
     sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
     try:
-        READER.parse(path)
+        parse_file(READER, path)
     finally:
         logger.remove(sink)
     warnings = [message for message in messages if 'Skipped Codex item types' in message]
@@ -289,12 +305,12 @@ def test_long_custom_tool_input_gives_no_argument_warning(codex_home: Path) -> N
     messages: list[str] = []
     sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
     try:
-        document = session_document(READER.parse(path))
+        document = session_document(parse_file(READER, path))
     finally:
         logger.remove(sink)
     assert not any('not a JSON object' in message for message in messages)
     calls = [call for step in document.trajectory.steps for call in step.tool_calls or []]
-    assert calls[0].arguments['input'].endswith('[truncated 5000 chars]')
+    assert '\n[truncated 5000 chars]\n' in calls[0].arguments['input']
 
 
 def test_malformed_timestamps_fall_back_to_mtime(codex_home: Path) -> None:
@@ -318,7 +334,7 @@ def test_unreadable_index_gives_empty_title(codex_home: Path) -> None:
 def test_parse_rejects_subagent_rollout(codex_home: Path) -> None:
     path = _rollout(codex_home, records=[_meta(source={'subagent': {}}), _message(1, 'user', 'work')])
     with pytest.raises(SessionLoadError):
-        READER.parse(path)
+        parse_file(READER, path)
 
 
 def test_path_outside_root_is_not_a_session_path(codex_home: Path) -> None:

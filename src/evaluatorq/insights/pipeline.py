@@ -35,6 +35,7 @@ from evaluatorq.insights.models import (
     LabelSpec,
     StageFailure,
     TraceInsight,
+    default_insights_models,
     label_key,
     real_assistant_errors,
 )
@@ -459,9 +460,10 @@ async def insights(  # noqa: C901
     # An explicit classifier_model covers both stages; otherwise population search
     # follows finder.classifier and labelling follows insights.labels.
     finder_classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
-    classifier_model = classifier_model or role_model('classifier', task='insights.labels')
-    summary_model = summary_model or role_model('smart', task='insights.summary')
-    embedding_model = embedding_model or role_model('embedding', task='insights.embedding')
+    resolved = default_insights_models(summary_model, classifier_model, embedding_model)
+    classifier_model = resolved['classifier']
+    summary_model = resolved['summary']
+    embedding_model = resolved['embedding']
     run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()

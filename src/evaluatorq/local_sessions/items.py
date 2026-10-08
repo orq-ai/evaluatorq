@@ -13,7 +13,8 @@ _MARKER_ALLOWANCE = 100  # room for one `[truncated N chars]` marker and the JSO
 def trim(text: str) -> str:
     if len(text) <= MAX_TOOL_TEXT_CHARS:
         return text
-    return f'{text[:MAX_TOOL_TEXT_CHARS]}\n[truncated {len(text) - MAX_TOOL_TEXT_CHARS} chars]'
+    half = MAX_TOOL_TEXT_CHARS // 2
+    return f'{text[:half]}\n[truncated {len(text) - 2 * half} chars]\n{text[-half:]}'
 
 
 def blocks_text(blocks: object) -> str:

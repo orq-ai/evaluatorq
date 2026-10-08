@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from evaluatorq import cli as cli_root
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.insights import cli as cli_module
+from evaluatorq.insights import models as models_module
 from evaluatorq.insights.models import LabelResult, LabelSpec
 from evaluatorq.insights.presets import CONCERNING, USER_FRUSTRATION
 from evaluatorq.trace_finder.export import (
@@ -111,7 +112,7 @@ def test_snapshot_run_discloses_what_is_sent_to_which_models(
     path = tmp_path / 'sessions.json'
     path.write_text(Snapshot(traces=(), documents=(make_document('s1'),)).model_dump_json(), encoding='utf-8')
     roles = {'insights.summary': 'p/summary', 'insights.labels': 'p/classifier', 'insights.embedding': 'p/embed'}
-    monkeypatch.setattr(cli_module, 'role_model', lambda _role, *, task: roles[task])
+    monkeypatch.setattr(models_module, 'role_model', lambda _role, *, task: roles[task])
     monkeypatch.setattr(cli_module, 'insights', AsyncMock(return_value=minimal_run))
 
     result = CliRunner().invoke(
@@ -131,6 +132,15 @@ def test_snapshot_run_discloses_what_is_sent_to_which_models(
     insights_mock = cli_module.insights
     assert isinstance(insights_mock, AsyncMock)
     assert insights_mock.await_count == 1
+
+
+def test_local_send_reports_an_unreadable_snapshot_instead_of_a_traceback(tmp_path: Path) -> None:
+    with pytest.raises(typer.Exit) as raised:
+        cli_module._print_local_send(
+            tmp_path / 'missing.json', n_traces=1, summary_model=None, classifier_model=None, embedding_model=None
+        )
+
+    assert raised.value.exit_code == 2
 
 
 def test_snapshot_cli_rejects_empty_and_conflicting_sources(tmp_path: Path) -> None:

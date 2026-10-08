@@ -40,6 +40,13 @@
     }
   }
 
+  function randomId() {
+    const bytes = new Uint8Array(8);
+    if (global.crypto && global.crypto.getRandomValues) global.crypto.getRandomValues(bytes);
+    else bytes.forEach(function (_byte, index) { bytes[index] = Math.floor(Math.random() * 256); });
+    return Array.from(bytes, function (byte) { return byte.toString(16).padStart(2, '0'); }).join('');
+  }
+
   function words(text) {
     return String(text || '').split(' ').filter(Boolean);
   }
@@ -220,7 +227,7 @@
     if (ctx.sessionsAbort) ctx.sessionsAbort.abort();
     const abort = new AbortController();
     ctx.sessionsAbort = abort;
-    const body = new URLSearchParams({csrf: field(form, 'csrf').value, tz_offset: String(new Date().getTimezoneOffset())});
+    const body = new URLSearchParams({csrf: field(form, 'csrf').value, tz_offset: String(new Date().getTimezoneOffset()), session_tab: ctx.tabId});
     ['session_from', 'session_to', 'session_project_dir', 'session_text'].forEach(function (name) {
       body.set(name, field(form, name).value);
     });
@@ -657,7 +664,7 @@
     if (contexts.has(form)) return contexts.get(form);
     const ctx = {
       form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null,
-      sessionsAbort: null, sessionsDirty: false, selectionToken: 0, traceFileOwner: null,
+      tabId: randomId(), sessionsAbort: null, sessionsDirty: false, selectionToken: 0, traceFileOwner: null,
       planSequence: 0, compactSequence: 0, refreshTimer: null,
     };
     contexts.set(form, ctx);

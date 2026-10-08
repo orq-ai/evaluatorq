@@ -118,7 +118,7 @@ def snapshot_documents(snapshot: Snapshot) -> list[TraceDocument]:
     return [*(ensure_trace_document(trace) for trace in snapshot.traces), *snapshot.documents]
 
 
-def _format_size(n_bytes: int) -> str:
+def format_size(n_bytes: int) -> str:
     """Render a byte count with one decimal in KB or MB."""
     if n_bytes >= 1024 * 1024:
         return f'{n_bytes / (1024 * 1024):.1f} MB'
@@ -135,7 +135,7 @@ def describe_local_send(
     noun = 'trace' if n_traces == 1 else 'traces'
     verb = 'A run would send' if preview else 'Sending'
     return (
-        f'{verb} {n_traces:,} {noun} ({_format_size(n_bytes)}) from {file_name} to models: '
+        f'{verb} {n_traces:,} {noun} ({format_size(n_bytes)}) from {file_name} to models: '
         f'summary {models["summary"]}, classifier {models["classifier"]}, embedding {models["embedding"]}.'
     )
 

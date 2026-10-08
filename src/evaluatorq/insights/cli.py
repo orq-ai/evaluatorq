@@ -19,7 +19,6 @@ from rich.table import Table
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.llm_client import resolve_llm_client
-from evaluatorq.common.model_roles import role_model
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, resolve_orq_client
 from evaluatorq.trace_finder.cli import _facets, resolve_cli_profile
 from evaluatorq.trace_finder.export import RunExport
@@ -27,7 +26,7 @@ from evaluatorq.trace_finder.models import NumericFilters
 from evaluatorq.trace_finder.settings import effective_settings
 
 from . import presets
-from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec
+from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec, default_insights_models
 from .population import PopulationError, describe_local_send, describe_projection_coverage, preview_snapshot
 
 _DIMENSIONS: tuple[DimensionName, ...] = ('intent', 'failure', 'sentiment')
@@ -93,6 +92,29 @@ def _validate_finder_export(path: Path) -> RunExport:
         raise ValueError(f'could not read a valid finder export from {path}: {exc}') from exc
 
 
+def _validated_dimensions(
+    requested: list[str] | None, priority_dimension: str | None
+) -> tuple[tuple[DimensionName, ...], str]:
+    """The dimensions to run and the priority one; exits with code 2 and a message on an invalid choice."""
+    raw_dimensions = tuple(requested or _DIMENSIONS)
+    invalid_dimensions = sorted(set(raw_dimensions) - set(_DIMENSIONS))
+    if invalid_dimensions:
+        emit_error(f'unknown dimension(s): {", ".join(invalid_dimensions)}')
+        raise typer.Exit(code=2)
+    duplicate_dimensions = _duplicate_dimensions(raw_dimensions)
+    if duplicate_dimensions:
+        emit_error(f'--dimension cannot be repeated: {", ".join(sorted(duplicate_dimensions))}')
+        raise typer.Exit(code=2)
+    dimensions = cast('tuple[DimensionName, ...]', raw_dimensions)
+    if priority_dimension is not None and priority_dimension not in _DIMENSIONS:
+        emit_error(f'unknown priority dimension: {priority_dimension!r}')
+        raise typer.Exit(code=2)
+    if priority_dimension is not None and priority_dimension not in dimensions:
+        emit_error(f'--priority-dimension {priority_dimension!r} must also be included with --dimension')
+        raise typer.Exit(code=2)
+    return dimensions, priority_dimension or ('intent' if 'intent' in dimensions else dimensions[0])
+
+
 def _duplicate_dimensions(names: tuple[str, ...]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -144,7 +166,7 @@ def _print_snapshot_preview(path: Path) -> dict[str, int]:
 
 
 def _print_local_send(
-    path: Path | None,
+    path: Path,
     *,
     n_traces: int,
     summary_model: str | None,
@@ -152,19 +174,18 @@ def _print_local_send(
     embedding_model: str | None,
     preview: bool = False,
 ) -> None:
-    """For a local-snapshot run, state what is sent to which models; explicit options win, else the role defaults."""
-    if path is None:
-        return
+    """State what a local-snapshot run sends to which models; explicit options win, else the role defaults."""
+    try:
+        n_bytes = path.expanduser().stat().st_size
+    except OSError as exc:
+        emit_error(exc)
+        raise typer.Exit(code=2) from None
     Console(file=sys.stdout).print(
         describe_local_send(
             n_traces=n_traces,
-            n_bytes=path.expanduser().stat().st_size,
+            n_bytes=n_bytes,
             file_name=path.name,
-            models={
-                'summary': summary_model or role_model('smart', task='insights.summary'),
-                'classifier': classifier_model or role_model('classifier', task='insights.labels'),
-                'embedding': embedding_model or role_model('embedding', task='insights.embedding'),
-            },
+            models=default_insights_models(summary_model, classifier_model, embedding_model),
             preview=preview,
         ),
         markup=False,
@@ -364,23 +385,7 @@ def insights_cmd(
                 preview=True,
             )
             return
-    raw_dimensions = tuple(dimension or _DIMENSIONS)
-    invalid_dimensions = sorted(set(raw_dimensions) - set(_DIMENSIONS))
-    if invalid_dimensions:
-        emit_error(f'unknown dimension(s): {", ".join(invalid_dimensions)}')
-        raise typer.Exit(code=2)
-    duplicate_dimensions = _duplicate_dimensions(raw_dimensions)
-    if duplicate_dimensions:
-        emit_error(f'--dimension cannot be repeated: {", ".join(sorted(duplicate_dimensions))}')
-        raise typer.Exit(code=2)
-    dimensions = cast('tuple[DimensionName, ...]', raw_dimensions)
-    if priority_dimension is not None and priority_dimension not in _DIMENSIONS:
-        emit_error(f'unknown priority dimension: {priority_dimension!r}')
-        raise typer.Exit(code=2)
-    if priority_dimension is not None and priority_dimension not in dimensions:
-        emit_error(f'--priority-dimension {priority_dimension!r} must also be included with --dimension')
-        raise typer.Exit(code=2)
-    selected_priority_dimension = priority_dimension or ('intent' if 'intent' in dimensions else dimensions[0])
+    dimensions, selected_priority_dimension = _validated_dimensions(dimension, priority_dimension)
     try:
         labels = _resolve_labels(label)
         numeric = NumericFilters(
@@ -431,13 +436,14 @@ def insights_cmd(
         nonlocal run_path
         run_path = path
 
-    _print_local_send(
-        from_snapshot,
-        n_traces=snapshot_traces,
-        summary_model=summary_model,
-        classifier_model=classifier_model,
-        embedding_model=embedding_model,
-    )
+    if from_snapshot is not None:
+        _print_local_send(
+            from_snapshot,
+            n_traces=snapshot_traces,
+            summary_model=summary_model,
+            classifier_model=classifier_model,
+            embedding_model=embedding_model,
+        )
     try:
         run = asyncio.run(
             _run_insights_with_profile(

@@ -28,7 +28,9 @@ class SessionReader(Protocol):
         """`None` means readable but not a main session; an unreadable file raises `SessionLoadError`."""
         ...
 
-    def parse(self, path: Path) -> ParsedSession: ...
+    def parse(self, path: Path, summary: SessionSummary) -> ParsedSession:
+        """Parse a session already summarized as a main session; any failure is a `SessionLoadError`."""
+        ...
 
 
 READERS: Mapping[SessionFamily, SessionReader] = MappingProxyType({

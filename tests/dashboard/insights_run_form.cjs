@@ -338,6 +338,7 @@ async function main() {
     assert.equal(search.options.body.get('csrf'), 'token', 'the search carries the form token');
     assert.equal(search.options.body.get('tz_offset'), String(new Date().getTimezoneOffset()));
     assert.equal(search.options.body.get('session_text'), 'refund');
+    assert.match(search.options.body.get('session_tab'), /^[0-9a-f]{16}$/, 'the search names its tab');
     assert.deepEqual(search.options.body.getAll('session_source').sort(), ['claude-code', 'claude-desktop', 'codex', 'omp']);
     assert.deepEqual(search.options.body.getAll('selected'), []);
     assert.equal(rows().length, 2, 'the results replace the list');

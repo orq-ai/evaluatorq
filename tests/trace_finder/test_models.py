@@ -233,7 +233,9 @@ def test_snapshot_documents_round_trip_and_is_empty(tmp_path) -> None:
         '"timestamp":"2026-10-01T10:00:00Z","message":{"role":"user","content":"hi"}}\n',
         encoding='utf-8',
     )
-    document = session_document(READER.parse(path))
+    summary = READER.summarize(path)
+    assert summary is not None
+    document = session_document(READER.parse(path, summary))
     snapshot = Snapshot(traces=(), documents=(document,))
     assert not snapshot.is_empty
     assert Snapshot(traces=()).is_empty

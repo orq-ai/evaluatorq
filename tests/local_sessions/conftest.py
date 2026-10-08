@@ -9,10 +9,13 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from evaluatorq.local_sessions import clear_summary_cache, roots
+from evaluatorq.local_sessions import SessionLoadError, clear_summary_cache, roots
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from evaluatorq.local_sessions.models import ParsedSession
+    from evaluatorq.local_sessions.readers import SessionReader
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +29,14 @@ def write_jsonl(path: Path, records: Iterable[dict[str, Any] | str], *, trailing
     text = '\n'.join(record if isinstance(record, str) else json.dumps(record) for record in records)
     path.write_text(text + ('\n' if trailing_newline else ''), encoding='utf-8')
     return path
+
+
+def parse_file(reader: SessionReader, path: Path) -> ParsedSession:
+    """Summarize then parse, as `search` does."""
+    summary = reader.summarize(path)
+    if summary is None:
+        raise SessionLoadError(f'{path}: not a main session')
+    return reader.parse(path, summary)
 
 
 def _made(path: Path) -> Path:

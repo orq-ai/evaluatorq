@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
-from datetime import date, datetime, time, timedelta
-from pathlib import Path  # noqa: TC003 - typer resolves annotations at runtime
-from typing import Annotated, get_args
+from datetime import date
+from pathlib import Path  # noqa: TC003 — Typer resolves option annotations at runtime
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -13,14 +12,17 @@ from rich.table import Table
 
 from evaluatorq.common.cli_errors import emit_error
 from evaluatorq.common.cli_json import echo_json
+from evaluatorq.common.private_files import write_private_atomic
 from evaluatorq.local_sessions.models import (
     MAX_SELECTED_SESSIONS,
+    MAX_SESSION_TEXT_CHARS,
     SEARCH_DEADLINE_SECONDS,
     SESSION_SOURCES,
     SessionLoadError,
     SessionQuery,
     SessionSource,
     SessionSummary,
+    day_window,
 )
 from evaluatorq.local_sessions.search import build_session_snapshot, search_sessions
 
@@ -33,21 +35,19 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(code=_BAD_USAGE)
 
 
-def _day(value: str, *, flag: str, offset_days: int) -> datetime:
+def _day(value: str, *, flag: str) -> date:
     try:
-        day = date.fromisoformat(value)
+        return date.fromisoformat(value)
     except ValueError:
         raise _fail(f'{flag} must be a date like 2026-10-01, got {value!r}') from None
-    return datetime.combine(day + timedelta(days=offset_days), time.min).astimezone()
 
 
 def _sources(values: list[str] | None) -> tuple[SessionSource, ...]:
     if not values:
         return SESSION_SOURCES
-    known = get_args(SessionSource)
     for value in values:
-        if value not in known:
-            raise _fail(f'unknown --source {value!r}; choose from {", ".join(known)}')
+        if value not in SESSION_SOURCES:
+            raise _fail(f'unknown --source {value!r}; choose from {", ".join(SESSION_SOURCES)}')
     return tuple(source for source in SESSION_SOURCES if source in values)
 
 
@@ -76,18 +76,19 @@ def _export(sessions: tuple[SessionSummary, ...], target: Path) -> None:
     if not sessions:
         raise _fail('no sessions to export')
     try:
-        snapshot, failed = build_session_snapshot([session.ref() for session in sessions])
+        frozen = build_session_snapshot([session.ref() for session in sessions])
     except SessionLoadError as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-        handle.write(snapshot.model_dump_json())
-    target.chmod(0o600)
-    count = len(snapshot.documents)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_private_atomic(target, frozen.data)
+    except OSError as exc:
+        emit_error(f'could not write {target}: {exc.strerror or type(exc).__name__}')
+        raise typer.Exit(code=_BAD_USAGE) from None
+    count = frozen.n_sessions
     typer.echo(f'Wrote {count} session{"" if count == 1 else "s"} to {target}', err=True)
-    for _ref, reason in failed:
+    for _ref, reason in frozen.failed:
         typer.echo(f'Skipped {reason}', err=True)
 
 
@@ -109,8 +110,14 @@ def sessions_cmd(
         typer.Option('--text', help='Only sessions whose messages contain this text (case-insensitive).'),
     ] = None,
     limit: Annotated[
-        int, typer.Option('--limit', min=1, max=MAX_SELECTED_SESSIONS, help='Maximum sessions to list.')
-    ] = 50,
+        int | None,
+        typer.Option(
+            '--limit',
+            min=1,
+            max=MAX_SELECTED_SESSIONS,
+            help=f'Maximum sessions to list. Default 50, or {MAX_SELECTED_SESSIONS} with --export.',
+        ),
+    ] = None,
     json_output: Annotated[  # noqa: FBT002
         bool, typer.Option('--json', help='Emit sessions as a JSON array on stdout (machine-readable).')
     ] = False,
@@ -124,17 +131,21 @@ def sessions_cmd(
 ) -> None:
     """Search Claude Code, Claude desktop, Codex and omp sessions on this machine. Reads local files only."""
     sources = _sources(source)
-    start_at = _day(start, flag='--from', offset_days=0) if start else None
-    end_at = _day(end, flag='--to', offset_days=1) if end else None
-    if start_at is not None and end_at is not None and start_at >= end_at:
-        raise _fail('--from must not be after --to')
+    start_day = _day(start, flag='--from') if start else None
+    end_day = _day(end, flag='--to') if end else None
+    try:
+        start_at, end_at = day_window(start_day, end_day, None)
+    except ValueError as exc:
+        raise _fail(str(exc)) from None
+    if text is not None and len(text) > MAX_SESSION_TEXT_CHARS:
+        raise _fail(f'--text is limited to {MAX_SESSION_TEXT_CHARS} characters, got {len(text)}')
     query = SessionQuery(
         sources=sources,
         start=start_at,
         end=end_at,
         project_dir=str(project_dir) if project_dir is not None else None,
         text=text or None,
-        limit=limit,
+        limit=limit if limit is not None else (MAX_SELECTED_SESSIONS if export is not None else 50),
     )
     result = search_sessions(query)
 

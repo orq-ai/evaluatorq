@@ -16,7 +16,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.dashboard import insights_routes
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.insights_uploads import is_uploaded_source
+from evaluatorq.dashboard.insights_uploads import SNAPSHOT_TOO_LARGE_MESSAGE, is_uploaded_source
 from evaluatorq.insights.store import get_insights_runs_dir
 from evaluatorq.local_sessions import SessionSearchResult, clear_summary_cache
 from evaluatorq.trace_finder.models import Snapshot
@@ -202,6 +202,25 @@ def test_a_cut_short_search_says_how_much_it_scanned(
     )
 
 
+def test_the_deadline_note_follows_the_search_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.dashboard import insights_sessions_views
+
+    monkeypatch.setattr(insights_sessions_views, 'SEARCH_DEADLINE_SECONDS', 7.5)
+    result = SessionSearchResult(sessions=(), scanned_files=1, candidate_files=2, complete=False)
+
+    html = insights_sessions_views.render_session_results(result, selected=frozenset(), roots_found=True)
+
+    assert 'before the 7.5-second limit' in html
+
+
+def test_the_size_column_uses_the_disclosure_formatter(client: TestClient, token: str) -> None:
+    path = _claude('c1')
+
+    response = _search(client, token)
+
+    assert f'<td>{path.stat().st_size / 1024:.1f} KB</td>' in response.text
+
+
 def test_selected_sessions_stay_checked(client: TestClient, token: str) -> None:
     claude = _claude('c1')
     _codex('x1')
@@ -224,6 +243,8 @@ def test_search_rejects_a_bad_source_date_or_offset(client: TestClient, token: s
     assert _search(client, token, session_from='yesterday', tz_offset='0').status_code == 422
     assert _search(client, token, session_from='2026-10-02', tz_offset='abc').status_code == 422
     assert _search(client, token, session_from='2026-10-05', session_to='2026-10-02', tz_offset='0').status_code == 422
+    assert _search(client, token, session_text='x' * 501).status_code == 422
+    assert _search(client, token, session_text='x' * 500).status_code == 200
 
 
 def test_snapshot_freezes_two_sessions_into_an_upload(client: TestClient, token: str) -> None:
@@ -272,9 +293,66 @@ def test_an_oversized_snapshot_is_refused_with_its_size(
     response = client.post('/insights/sessions/snapshot', data={'csrf': token, 'session': [_ref('claude-code', claude)]})
 
     assert response.status_code == 413
-    assert response.json()['error'].startswith('The selected sessions make a ')
-    assert 'Select fewer sessions.' in response.json()['error']
+    assert response.json()['error'] == f'{SNAPSHOT_TOO_LARGE_MESSAGE} Select fewer sessions.'
     assert not (get_insights_runs_dir() / '.uploads').exists() or not list((get_insights_runs_dir() / '.uploads').iterdir())
+
+
+def test_the_freeze_stops_building_at_the_upload_budget(
+    client: TestClient, token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budgets: list[int | None] = []
+    real = insights_routes.build_session_snapshot
+
+    def spy(refs: Any, *, max_bytes: int | None = None) -> Any:
+        budgets.append(max_bytes)
+        return real(refs, max_bytes=max_bytes)
+
+    monkeypatch.setattr(insights_routes, 'build_session_snapshot', spy)
+    claude = _claude('c1')
+    monkeypatch.setattr(insights_routes, 'MAX_INSIGHTS_UPLOAD_BYTES', 10)
+
+    response = client.post('/insights/sessions/snapshot', data={'csrf': token, 'session': [_ref('claude-code', claude)]})
+
+    assert budgets == [10]
+    assert response.status_code == 413
+
+
+def test_a_newer_search_cancels_only_an_older_search_from_the_same_tab(
+    client: TestClient, token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cancels: list[Any] = []
+
+    def fake_search(_query: Any, *, cancelled: Any = None) -> SessionSearchResult:
+        cancels.append(cancelled)
+        return SessionSearchResult(sessions=(), scanned_files=0, candidate_files=0, complete=True)
+
+    monkeypatch.setattr(insights_routes, 'search_sessions', fake_search)
+    first_a, other_b, second_a = ('tab-a', 'tab-b', 'tab-a')
+    for tab in (first_a, other_b):
+        assert _search(client, token, session_tab=tab).status_code == 200
+    older_a, older_b = cancels
+    assert not older_a() and not older_b()
+
+    assert _search(client, token, session_tab=second_a).status_code == 200
+
+    assert older_a() is True, 'a newer search from the same tab cancels the older one'
+    assert older_b() is False, 'a search from another tab does not'
+    assert cancels[2]() is False
+
+
+def test_search_tab_registry_is_bounded(client: TestClient, token: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    cancels: list[Any] = []
+
+    def fake_search(_query: Any, *, cancelled: Any = None) -> SessionSearchResult:
+        cancels.append(cancelled)
+        return SessionSearchResult(sessions=(), scanned_files=0, candidate_files=0, complete=True)
+
+    monkeypatch.setattr(insights_routes, 'search_sessions', fake_search)
+    for index in range(insights_routes._MAX_SEARCH_TABS + 1):  # noqa: SLF001
+        _search(client, token, session_tab=f'tab-{index}')
+
+    assert cancels[0]() is True, 'the oldest tab was dropped from the registry'
+    assert cancels[-1]() is False
 
 
 def test_a_broken_session_is_reported_with_its_reason_but_no_content(client: TestClient, token: str) -> None:

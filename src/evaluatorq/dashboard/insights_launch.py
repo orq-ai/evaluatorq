@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_valid
 from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
+from evaluatorq.common.private_files import write_private_atomic
 from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
@@ -110,17 +111,7 @@ def _write_worker_state(path: Path, state: dict[str, object]) -> None:
     ):
         raise OSError(f'Insights worker state directory is not a private directory: {path.parent}')
     Path(path.parent).chmod(0o700)
-    descriptor, temporary = tempfile.mkstemp(prefix=f'.{path.stem}.', suffix='.tmp', dir=path.parent)
-    try:
-        with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
-            _set_private_file_mode(handle.fileno(), 0o600)
-            json.dump(state, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        Path(temporary).replace(path)
-    finally:
-        if Path(temporary).exists():
-            Path(temporary).unlink()
+    write_private_atomic(path, json.dumps(state))
 
 
 def start_worker_heartbeat(manifest_path: Path) -> tuple[threading.Event, threading.Thread]:

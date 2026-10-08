@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 MAX_INSIGHTS_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
+SNAPSHOT_TOO_LARGE_MESSAGE = f'Upload exceeds the {MAX_INSIGHTS_UPLOAD_BYTES // (1024 * 1024)} MB size limit.'
 MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 ABANDONED_UPLOAD_TTL_SECONDS = 24 * 60 * 60
 _UPLOAD_DIRECTORY = '.uploads'
@@ -78,7 +79,7 @@ def limit_request_body(request: Request) -> None:
             body = message.get('body', b'')
             consumed += len(body)
             if consumed > limit:
-                raise UploadRequestTooLargeError('Upload exceeds the 100 MB size limit.')
+                raise UploadRequestTooLargeError(SNAPSHOT_TOO_LARGE_MESSAGE)
         return message
 
     request._receive = limited_receive  # noqa: SLF001 — install the bounded ASGI receive wrapper.
@@ -116,7 +117,7 @@ def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKi
         keys = set(document) if isinstance(document, dict) else set()
         if 'matched_trace_ids' in keys:  # a Finder export also carries `traces`, so this key decides
             kind = 'finder'
-        elif 'traces' in keys:
+        elif 'traces' in keys or 'documents' in keys:
             kind = 'snapshot'
         else:
             raise ValueError('This file is neither a Finder export nor a trace snapshot.')

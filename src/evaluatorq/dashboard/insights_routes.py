@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import json
+from collections import OrderedDict
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -14,7 +16,7 @@ from urllib.parse import quote, urlencode
 from loguru import logger
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
@@ -41,6 +43,7 @@ from evaluatorq.dashboard.insights_run_form import (
 from evaluatorq.dashboard.insights_sessions_views import render_session_results
 from evaluatorq.dashboard.insights_uploads import (
     MAX_INSIGHTS_UPLOAD_BYTES,
+    SNAPSHOT_TOO_LARGE_MESSAGE,
     UploadRequestTooLargeError,
     UploadTooLargeError,
     cleanup_expired_uploads,
@@ -62,7 +65,7 @@ from evaluatorq.dashboard.insights_views import (
 )
 from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
 from evaluatorq.dashboard.security import csrf_token, request_rejected
-from evaluatorq.dashboard.trace_finder.routes import browser_offset_zone, local_to_utc, selected_dashboard_auth
+from evaluatorq.dashboard.trace_finder.routes import browser_offset_zone, selected_dashboard_auth
 from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.estimate import StageModels, estimate_run, stage_seconds, trace_bound
 from evaluatorq.insights.models import InsightsRun, label_key
@@ -70,12 +73,15 @@ from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.local_sessions import (
     MAX_SELECTED_SESSIONS,
+    MAX_SESSION_TEXT_CHARS,
     SESSION_FAMILIES,
     SESSION_SOURCES,
     SessionLoadError,
     SessionQuery,
     SessionRef,
+    SnapshotTooLarge,
     build_session_snapshot,
+    day_window,
     search_sessions,
     session_roots,
 )
@@ -385,10 +391,6 @@ def _is_unauthorized(error: Exception) -> bool:
 _SESSION_FORM_FIELDS = MAX_SELECTED_SESSIONS + 50
 
 
-def _json(payload: dict[str, Any], status_code: int) -> Response:
-    return Response(json.dumps(payload), status_code=status_code, media_type='application/json')
-
-
 def _file_size(raw_path: str) -> int | None:
     """The size of a local file, or `None` (with a warning) when it cannot be read."""
     try:
@@ -398,13 +400,8 @@ def _file_size(raw_path: str) -> int | None:
         return None
 
 
-class _SessionSearches:
-    """The newest session search wins: starting one cancels the scan of the one before it.
-
-    The dashboard serves one local user, so a module-level counter is enough.
-    """
-
-    latest = 0
+_MAX_SEARCH_TABS = 64
+_TAB_ID_CHARS = 64
 
 
 def _session_query(form: Any) -> SessionQuery:
@@ -421,26 +418,25 @@ def _session_query(form: Any) -> SessionQuery:
         except ValueError:
             raise ValueError('The browser timezone offset is not usable.') from None
         try:
-            if first:
-                start = local_to_utc(f'{date.fromisoformat(first)}T00:00:00', zone)
-            if last:
-                end = local_to_utc(f'{date.fromisoformat(last) + timedelta(days=1)}T00:00:00', zone)
-        except (ValueError, OverflowError):
+            days = (date.fromisoformat(first) if first else None, date.fromisoformat(last) if last else None)
+        except ValueError:
             raise ValueError('From and To must be dates like 2026-10-07.') from None
-        if start is not None and end is not None and start >= end:
-            raise ValueError('From must be on or before To.')
+        start, end = day_window(*days, zone)
     project_dir = str(form.get('session_project_dir') or '').strip() or None
     if project_dir is not None:
         expanded = Path(project_dir).expanduser()
         if not expanded.is_absolute():
             raise ValueError('Enter an absolute project directory, such as ~/code/repo.')
         project_dir = str(expanded)
+    text = str(form.get('session_text') or '').strip() or None
+    if text is not None and len(text) > MAX_SESSION_TEXT_CHARS:
+        raise ValueError(f'Search text is limited to {MAX_SESSION_TEXT_CHARS} characters.')
     return SessionQuery(
         sources=sources,
         start=start,
         end=end,
         project_dir=project_dir,
-        text=str(form.get('session_text') or '').strip() or None,
+        text=text,
         limit=MAX_SELECTED_SESSIONS,
     )
 
@@ -461,22 +457,13 @@ def _session_refs(values: list[str]) -> list[SessionRef]:
     return refs
 
 
-def _freeze_sessions(refs: list[SessionRef]) -> tuple[bytes, int, list[dict[str, str]]]:
-    """Load and serialize the selected sessions; the exception type is all a failed one reports."""
-    snapshot, failed = build_session_snapshot(refs)
-    contents = snapshot.model_dump_json().encode()
-    return contents, len(snapshot.documents), [{'path': str(ref.path), 'error': error} for ref, error in failed]
-
-
-def _store_session_snapshot(runs_dir: Path, contents: bytes) -> Path:
-    """Classify frozen sessions the way the upload route classifies a file, then store them as a snapshot upload."""
-    if validate_upload(contents) != 'snapshot':
-        raise ValueError('The selected sessions did not freeze into a trace snapshot.')
-    return store_upload(runs_dir, contents, 'snapshot')
-
-
 def register_insights_routes(app: Any) -> None:  # noqa: C901
     """Attach Insights page, fragment, and export routes to *app*."""
+
+    # A search is cancelled only by a newer search from the same browser tab; the dict is bounded by dropping the
+    # least recently searching tabs.
+    latest_search: OrderedDict[str, int] = OrderedDict()
+    search_generations = itertools.count(1)
 
     @app.get('/insights')
     def insights_home() -> Response:
@@ -622,9 +609,13 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             query = _session_query(form)
         except ValueError as exc:
             return _html(f'<p class="insights-error" role="alert">{esc(str(exc))}</p>', 422)
-        _SessionSearches.latest += 1
-        mine = _SessionSearches.latest
-        result = await asyncio.to_thread(search_sessions, query, cancelled=lambda: _SessionSearches.latest != mine)
+        tab = str(form.get('session_tab') or '')[:_TAB_ID_CHARS]
+        mine = next(search_generations)
+        latest_search[tab] = mine
+        latest_search.move_to_end(tab)
+        while len(latest_search) > _MAX_SEARCH_TABS:
+            latest_search.popitem(last=False)
+        result = await asyncio.to_thread(search_sessions, query, cancelled=lambda: latest_search.get(tab) != mine)
         roots_found = any(session_roots(family) for family in SESSION_FAMILIES)
         return _html(
             render_session_results(result, selected=frozenset(form.getlist('selected')), roots_found=roots_found)
@@ -634,30 +625,28 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         form = await req.form(max_fields=_SESSION_FORM_FIELDS)
         rejected = request_rejected(req, form)
         if rejected:
-            return _json({'error': rejected}, 403)
+            return JSONResponse({'error': rejected}, status_code=403)
         try:
             refs = _session_refs([str(value) for value in form.getlist('session')])
         except ValueError as exc:
-            return _json({'error': str(exc)}, 422)
+            return JSONResponse({'error': str(exc)}, status_code=422)
         directory = get_insights_runs_dir()
         cleanup_expired_uploads(directory)
         try:
-            contents, n_sessions, failed = await asyncio.to_thread(_freeze_sessions, refs)
+            frozen = await asyncio.to_thread(build_session_snapshot, refs, max_bytes=MAX_INSIGHTS_UPLOAD_BYTES)
+        except SnapshotTooLarge:
+            return JSONResponse({'error': f'{SNAPSHOT_TOO_LARGE_MESSAGE} Select fewer sessions.'}, status_code=413)
         except SessionLoadError as exc:
-            return _json({'error': str(exc)}, 422)
-        if len(contents) > MAX_INSIGHTS_UPLOAD_BYTES:
-            return _json(
-                {
-                    'error': f'The selected sessions make a {len(contents) / (1024 * 1024):.1f} MB snapshot; '
-                    f'the limit is {MAX_INSIGHTS_UPLOAD_BYTES // (1024 * 1024)} MB. Select fewer sessions.'
-                },
-                413,
-            )
+            return JSONResponse({'error': str(exc)}, status_code=422)
         try:
-            path = await asyncio.to_thread(_store_session_snapshot, directory, contents)
+            path = await asyncio.to_thread(store_upload, directory, frozen.data, 'snapshot')
         except (OSError, ValueError) as exc:
-            return _json({'error': str(exc)}, 422)
-        return _json({'path': str(path), 'n_sessions': n_sessions, 'bytes': len(contents), 'failed': failed}, 201)
+            return JSONResponse({'error': str(exc)}, status_code=422)
+        failed = [{'path': str(ref.path), 'error': error} for ref, error in frozen.failed]
+        return JSONResponse(
+            {'path': str(path), 'n_sessions': frozen.n_sessions, 'bytes': len(frozen.data), 'failed': failed},
+            status_code=201,
+        )
 
     app.add_route(Route('/insights/sessions/search', endpoint=insights_sessions_search, methods=['POST']))
     app.add_route(Route('/insights/sessions/snapshot', endpoint=insights_sessions_snapshot, methods=['POST']))
