@@ -270,7 +270,7 @@ The facet and numeric options are explicit OQL constraints. The question supplie
 
 ## Limits and cost
 
-The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. Each projected trace is capped at 50,000 serialized UTF-8 bytes, a conservative upper bound on tokenizer tokens rather than a count from the selected model's tokenizer; older conversation units are omitted first when the cap is reached.
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. Each projected trace is capped at 500,000 serialized UTF-8 bytes, a conservative upper bound on tokenizer tokens rather than a count from the selected model's tokenizer; older conversation units are omitted first when the cap is reached.
 
 | Limit | Value |
 |---|---|

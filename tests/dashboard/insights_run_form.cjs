@@ -284,12 +284,14 @@ async function main() {
     assert.equal(new URLSearchParams(planCalls()[0].url.split('?')[1]).get('limit'), '60');
 
     app.calls.length = 0;
+    assert.equal(app.form.querySelector('.irf-review').hidden, true, 'the review panel stays hidden until a plan is requested');
     app.form.querySelector('[data-irf-next]').click();
     await tick();
     app.form.querySelector('[data-irf-next]').click();
     await tick();
     await tick();
     assert.deepEqual(visibleStep(app.form), ['3']);
+    assert.equal(app.form.querySelector('.irf-review').hidden, false);
     const full = planCalls().filter(call => !call.url.includes('compact=1'));
     assert.equal(full.length, 1, 'opening the review step loads the full estimate once');
     assert.match(app.form.querySelector('#insights-run-estimate').innerHTML, /FULL ESTIMATE/);

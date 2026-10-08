@@ -23,12 +23,12 @@ def test_token_budget_uses_a_conservative_bound_for_dense_punctuation() -> None:
 
 
 def test_default_projection_budget_accepts_more_than_the_previous_limit() -> None:
-    trace = _trace(messages=({'role': 'user', 'content': 'x' * 30_000},))
+    trace = _trace(messages=({'role': 'user', 'content': 'x' * 100_000},))
 
     projection = project_trace(trace)
 
     assert MAX_TOKEN_BUDGET == 500_000
-    assert projection.payload['messages'][0]['content'] == 'x' * 30_000
+    assert projection.payload['messages'][0]['content'] == 'x' * 100_000
     assert projection.omitted_bytes == 0
     assert projection.estimated_tokens <= MAX_TOKEN_BUDGET
 

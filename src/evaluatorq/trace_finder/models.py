@@ -37,6 +37,10 @@ NumericFacetName = Literal['tokens', 'duration_ms']
 NUMERIC_FACET_NAMES: tuple[NumericFacetName, ...] = ('tokens', 'duration_ms')
 
 
+# Serialized UTF-8 bytes per projected trace, a conservative upper bound on tokenizer tokens.
+MAX_TOKEN_BUDGET = 500_000
+
+
 class TraceRecord(BaseModel):
     """One trace captured from the Orq trace source."""
 
@@ -78,7 +82,7 @@ class TraceProjection(BaseModel):
 
     payload: dict[str, Any]
     serialized: str
-    estimated_tokens: int = Field(ge=0, le=500_000, description='UTF-8 byte upper bound on tokenizer tokens.')
+    estimated_tokens: int = Field(ge=0, le=MAX_TOKEN_BUDGET, description='UTF-8 byte upper bound on tokenizer tokens.')
     omitted_messages: int = Field(ge=0)
     omitted_bytes: int = Field(ge=0, description='Bytes omitted to fit the token budget; excludes schema projection.')
 

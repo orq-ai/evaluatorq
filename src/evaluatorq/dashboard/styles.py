@@ -3435,7 +3435,6 @@ _INSIGHTS_CSS = """
 .insights-run-form .irf-editor-actions { display:flex; gap:8px; margin-top:12px; }
 .insights-run-form .irf-compact { margin:0 0 14px; padding:8px 12px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-sunken); color:var(--text-body); font-size:12px; }
 .insights-run-form .irf-review { margin-top:16px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--surface-sunken); }
-.insights-run-form .irf-review:has(> #insights-run-plan:empty):has(> #insights-run-estimate:empty) { display:none; }
 .insights-run-form .irf-review :is(h4,h5) { margin:0 0 8px; color:var(--text-strong); font-size:12.5px; font-weight:600; letter-spacing:0; text-transform:none; }
 .insights-run-form .irf-plan:not(:empty) { padding:14px 16px; }
 .insights-run-form .irf-plan p { margin:0 0 12px; color:var(--text-strong); font-size:13px; }
@@ -3447,9 +3446,9 @@ _INSIGHTS_CSS = """
 .insights-run-form .irf-estimate h5 { margin:14px 0 4px; }
 .insights-run-form .irf-estimate-totals { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px 20px; margin:0 0 14px; }
 .insights-run-form .irf-estimate-totals dt { color:var(--text-muted); font-size:11.5px; font-weight:500; }
-.insights-run-form .irf-estimate-totals dd { margin:0; }
-.insights-run-form .irf-total-value { margin-top:2px !important; color:var(--text-strong); font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
-.insights-run-form .irf-total-basis { margin-top:2px !important; color:var(--text-muted); font-size:11px; line-height:1.4; }
+.insights-run-form .irf-estimate-totals dd { margin:2px 0 0; }
+.insights-run-form .irf-total-value { color:var(--text-strong); font-size:14px; font-weight:600; font-variant-numeric:tabular-nums; }
+.insights-run-form .irf-total-basis { color:var(--text-muted); font-size:11px; line-height:1.4; }
 .insights-run-form .irf-estimate-scroll { overflow-x:auto; border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-card); }
 .insights-run-form .irf-estimate-table { width:100%; margin:0; border:0; border-collapse:collapse; background:transparent; font-size:12px; }
 .insights-run-form .irf-estimate-table :is(th,td) { padding:7px 10px; border:0; border-bottom:1px solid var(--border-subtle); text-align:left; vertical-align:top; }
@@ -3460,8 +3459,6 @@ _INSIGHTS_CSS = """
 .insights-run-form .irf-estimate-basis { min-width:220px; color:var(--text-muted); font-size:11.5px; line-height:1.45; }
 .insights-run-form .irf-estimate-unknowns { margin:0; padding-left:18px; color:var(--text-body); font-size:12px; line-height:1.6; }
 .insights-run-form .irf-estimate .irf-hint { margin:10px 0 0; font-size:11.5px; }
-/* report.css turns every table into stacked cards below 640px; this one scrolls instead, so its columns keep their headers. */
-@media (max-width:640px) { .insights-run-form .irf-estimate-table thead { display:table-header-group; } .insights-run-form .irf-estimate-table tr { display:table-row; margin:0; border:0; border-radius:0; } .insights-run-form .irf-estimate-table :is(th,td) { display:table-cell; } }
 .insights-run-form .irf-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
 .insights-run-form .irf-btn { padding:8px 15px; border:1px solid var(--border-default); border-radius:7px; background:var(--surface-card); color:var(--text-strong); font:inherit; font-size:12.5px; cursor:pointer; }
 .insights-run-form .irf-btn.primary { border-color:var(--teal-600); background:var(--teal-600); color:#fff; }

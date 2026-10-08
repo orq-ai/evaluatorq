@@ -348,10 +348,11 @@ class RunFormValues:
             raise ValueError('Choose Orq traces or Trace file.')
         # Fields of the tab that is not chosen are still in the submitted form; drop them so they are never saved.
         orq = tab == 'orq'
-        query = str(form.get('query') or '').strip() if orq else ''
-        trace_file = '' if orq else str(form.get('trace_file') or '').strip()
-        source: Source = ('query' if query else 'recent') if orq else _trace_file_source(trace_file)
         orq_form: Mapping[str, object] = form if orq else {}
+        file_form: Mapping[str, object] = {} if orq else form
+        query = str(orq_form.get('query') or '').strip()
+        trace_file = str(file_form.get('trace_file') or '').strip()
+        source: Source = ('query' if query else 'recent') if orq else _trace_file_source(trace_file)
         defaults = _model_defaults()
         models = {name: str(form.get(name) or '').strip() or default for name, default in defaults.items()}
         if source != 'query':
@@ -361,9 +362,7 @@ class RunFormValues:
             query=query,
             window_days=_whole_number(orq_form, 'window_days', DEFAULT_WINDOW_DAYS, 'Window'),
             limit=_whole_number(orq_form, 'limit', DEFAULT_TRACE_LIMIT, 'Trace limit'),
-            facets=FacetSelection.model_validate({
-                name: _getlist(form, f'facet_{name}') if orq else [] for name in FACET_NAMES
-            }),
+            facets=FacetSelection.model_validate({name: _getlist(orq_form, f'facet_{name}') for name in FACET_NAMES}),
             dimensions=tuple(_getlist(form, 'dimensions')),
             labels=tuple(_getlist(form, 'labels')),
             coding_labels=tuple(_getlist(form, 'coding_labels')),
@@ -649,7 +648,7 @@ def _step_three(values: RunFormValues) -> str:
         f'<div id="insights-run-models">{_model_pickers(values)}</div>'
         '<label class="irf-field"><span class="irf-label">Parallel requests</span>'
         f'<input name="parallelism" type="number" min="1" max="200" value="{values.parallelism}"></label>'
-        '<div class="irf-review">'
+        '<div class="irf-review" hidden>'
         '<div id="insights-run-plan" class="irf-plan" role="status" aria-live="polite"></div>'
         '<div id="insights-run-estimate"></div></div>'
         '<p class="irf-hint">The run reads the selected traces and makes model requests. Progress appears on its run page.</p>'

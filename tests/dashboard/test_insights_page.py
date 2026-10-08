@@ -242,6 +242,7 @@ def test_earlier_run_does_not_invent_missing_projection_counts(minimal_run: Insi
 
     assert '1 of 2 traces exceeded' in notice
     assert 'Whole-message counts were not saved' in notice
+    assert '50,000-byte budget this earlier run used' in notice
 
 
 def test_single_failed_trace_uses_singular_wording(minimal_run: InsightsRun) -> None:

@@ -118,6 +118,6 @@ def render_estimate(estimate: RunEstimate, stages: Sequence[tuple[str, str]]) ->
         '<section class="irf-estimate"><h4>Estimate</h4>'
         f'<dl class="irf-estimate-totals">{totals}</dl>{note}'
         '<div class="irf-estimate-scroll">'
-        f'<table class="irf-estimate-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+        f'<table class="irf-estimate-table no-stack"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
         f'{unknown_block}{excluded}</section>'
     )

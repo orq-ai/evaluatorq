@@ -338,8 +338,8 @@ def projection_notice(coverage: dict[str, Any]) -> str:
     if 'n_source_messages' not in coverage:
         return (
             '<section class="insights-projection" role="status"><b>Model input projection</b>'
-            f'<p>{trimmed:,} of {traces:,} traces exceeded the 50,000-byte budget. '
-            'Whole-message counts were not saved for this earlier run.</p></section>'
+            f'<p>{trimmed:,} of {traces:,} traces exceeded the 50,000-byte budget this earlier run used. '
+            'Whole-message counts were not saved for it.</p></section>'
         )
     return (
         '<section class="insights-projection" role="status"><b>Model input projection</b>'

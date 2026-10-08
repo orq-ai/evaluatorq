@@ -228,6 +228,7 @@
     const compact = form.querySelector('#insights-run-compact');
     const sequence = ++ctx.planSequence;
     ctx.compactSequence += 1;
+    host.closest('.irf-review').hidden = false;
     host.textContent = 'Working out the stages…';
     estimate.textContent = 'Working out the estimate…';
     try {
