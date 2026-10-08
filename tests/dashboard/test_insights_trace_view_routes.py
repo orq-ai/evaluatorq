@@ -176,12 +176,18 @@ def test_orq_run_without_credentials_degrades_visibly(
 
     monkeypatch.setattr(insights_routes, 'selected_dashboard_auth', no_auth)
     client = TestClient(build_app())
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
 
-    conversation = client.get(CONVERSATION)
+    try:
+        conversation = client.get(CONVERSATION)
+    finally:
+        logger.remove(sink)
     spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
 
     assert conversation.status_code == 200
     assert 'Connect an Orq account in Settings' in conversation.text
+    assert warnings == ['Insights trace source unavailable: no credentials\n']
     assert spans.status_code == 200
     assert 'Could not load spans. Try again.' in spans.text
 

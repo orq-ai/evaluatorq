@@ -34,12 +34,12 @@ async def load_trace_record(
 
     An Orq run re-runs the pipeline's query for this one trace, with the run's filters and a window around the
     analysed timestamp, so the same span is selected. A snapshot run reads its saved file and ignores ``source``;
-    the caller owns ``source``'s lifetime.
+    the caller owns ``source``'s lifetime and has already logged why it is None.
     """
     if reads_snapshot(run.population):
         return await _from_snapshot(run, trace)
     if source is None:
-        return _unavailable(trace, 'Connect an Orq account in Settings to load this conversation.')
+        return 'Connect an Orq account in Settings to load this conversation.'
     failure = 'Could not load the conversation from Orq. Open it in Orq instead.'
     timestamp = trace.timestamp
     try:

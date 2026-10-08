@@ -119,11 +119,13 @@ async def test_snapshot_run_without_a_recorded_path_is_reported(minimal_run: Ins
 
 
 @pytest.mark.asyncio
-async def test_orq_run_without_a_source_asks_for_an_account(minimal_run: InsightsRun, logged_warnings: list[str]) -> None:
+async def test_orq_run_without_a_source_asks_for_an_account_and_leaves_logging_to_the_caller(
+    minimal_run: InsightsRun, logged_warnings: list[str]
+) -> None:
     result = await load_trace_record(minimal_run, minimal_run.traces[0], source=None)
 
     assert result == 'Connect an Orq account in Settings to load this conversation.'
-    assert len(logged_warnings) == 1
+    assert logged_warnings == []
 
 
 @pytest.mark.asyncio
