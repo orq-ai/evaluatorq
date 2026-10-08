@@ -959,3 +959,16 @@ test('swapping a trace block scrolls the thread to the selected message', () => 
 
   assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
 });
+
+test('an outerHTML swap of a trace block scrolls the replacement, not the detached placeholder', () => {
+  const app = loadDashboard();
+  const { root, thread } = traceTranscript();
+  const placeholder = {
+    classList: { contains: name => name === 'fd-traces' },
+    querySelector: () => null,
+  };
+
+  app.body.emit('htmx:afterSwap', { target: root, detail: { target: placeholder } });
+
+  assert.equal(thread.scrollTop, 400 - 100 / 2 + 40 / 2);
+});

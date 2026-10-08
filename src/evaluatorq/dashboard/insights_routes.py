@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal
@@ -36,6 +37,7 @@ from evaluatorq.dashboard.insights_run_form import (
     render_run_form,
     render_run_page,
 )
+from evaluatorq.dashboard.insights_trace_source import load_trace_record
 from evaluatorq.dashboard.insights_uploads import (
     UploadRequestTooLargeError,
     cleanup_expired_uploads,
@@ -55,24 +57,29 @@ from evaluatorq.dashboard.insights_views import (
     unreadable_page,
 )
 from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
+from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
 from evaluatorq.dashboard.security import csrf_token, request_rejected
-from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
+from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth, span_tree_fragment
+from evaluatorq.dashboard.trace_finder.views import trace_conversation, unavailable_conversation
 from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.estimate import StageModels, estimate_run, stage_seconds, trace_bound
-from evaluatorq.insights.models import InsightsRun, label_key
+from evaluatorq.insights.models import InsightsRun, label_key, reads_snapshot
 from evaluatorq.insights.population import PopulationError, preview_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.orq_source import OrqTraceSource
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from evaluatorq.common.model_catalogue import ModelInfo
     from evaluatorq.contracts import RunManifest
     from evaluatorq.dashboard.auth import DashboardAuth
     from evaluatorq.insights.estimate import RunEstimate
+    from evaluatorq.insights.models import TraceInsight
 
 
 def _entries(
@@ -214,6 +221,72 @@ def _run_form_response(values: RunFormValues, error: str | None, status_code: in
     if values.mount == 'dialog':
         return _html(render_run_form(values, csrf=token, error=error), status_code)
     return _html(render_run_page(values, csrf=token, error=error), status_code)
+
+
+def _resolve_trace(run_id: str, trace_id: str | None, span_id: str | None) -> tuple[InsightsRun, TraceInsight] | str:
+    """Find a run's analysed trace; an empty ``span_id`` means the trace was analysed without one."""
+    _, loaded, _ = _entries(get_insights_runs_dir())
+    resolved = _resolve(run_id, loaded)
+    if resolved is None or not isinstance(resolved[1], InsightsRun):
+        return '<p class="insights-empty">Insights run not found.</p>'
+    run = resolved[1]
+    span_id = span_id or None
+    trace = next((item for item in run.traces if item.trace_id == trace_id and item.span_id == span_id), None)
+    if trace is None:
+        return '<p class="insights-empty">Trace not found in this Insights run.</p>'
+    return run, trace
+
+
+@asynccontextmanager
+async def _trace_source(app: Any) -> AsyncIterator[OrqTraceSource | None]:
+    """Open an Orq trace source for one request.
+
+    Yields:
+        The source, or None when credentials or the client are unavailable.
+    """
+    opened = await _open_trace_source(app)
+    if opened is None:
+        yield None
+        return
+    orq, source = opened
+    try:
+        yield source
+    finally:
+        try:
+            source.close()
+        except Exception as exc:  # noqa: BLE001 — cleanup must not hide the trace response
+            logger.warning('Could not close the Insights trace source: {}', exc)
+        await _close_orq(orq)
+
+
+async def _open_trace_source(app: Any) -> tuple[Any, OrqTraceSource] | None:
+    try:
+        auth = selected_dashboard_auth(app)
+    except ValueError as exc:
+        logger.warning('Insights trace source unavailable: {}', exc)
+        return None
+    orq = None
+    try:
+        settings = app.state.finder_settings if auth.method == 'cli_oauth' else None
+        orq = build_orq_client(
+            auth,
+            workspace=settings.orq_workspace if settings else None,
+            project=settings.orq_project_id if settings else None,
+        )
+        source = OrqTraceSource(orq)
+    except Exception as exc:  # noqa: BLE001 — client construction failures render a visible unavailable state
+        logger.warning('Insights trace source could not be created: {}', exc)
+        if orq is not None:
+            await _close_orq(orq)
+        return None
+    return orq, source
+
+
+async def _close_orq(orq: Any) -> None:
+    try:
+        await close_orq_client(orq)
+    except Exception as exc:  # noqa: BLE001 — cleanup must not hide the trace response
+        logger.warning('Could not close the Insights trace client: {}', exc)
 
 
 def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> tuple[Path, InsightsRun | str] | None:
@@ -655,21 +728,75 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
 
     @app.get('/insights/{run_id}/trace')
     def insights_trace(req: Request, run_id: str) -> Response:
-        _, loaded, _ = _entries(get_insights_runs_dir())
-        resolved = _resolve(run_id, loaded)
-        if resolved is None or not isinstance(resolved[1], InsightsRun):
-            return _html('<p class="insights-empty">Insights run not found.</p>', 404)
-        trace_id = req.query_params.get('trace_id')
-        span_id = req.query_params.get('span_id') if 'span_id' in req.query_params else None
-        if span_id == '':
-            span_id = None
-        trace = next(
-            (item for item in resolved[1].traces if item.trace_id == trace_id and item.span_id == span_id),
-            None,
+        resolved = _resolve_trace(
+            run_id, trace_id=req.query_params.get('trace_id'), span_id=req.query_params.get('span_id')
         )
-        if trace is None:
-            return _html('<p class="insights-empty">Trace not found in this Insights run.</p>', 404)
-        return _html(trace_detail_page(resolved[1], trace))
+        if isinstance(resolved, str):
+            return _html(resolved, 404)
+        view = 'trace' if req.query_params.get('view') == 'trace' else 'analysis'
+        return _html(trace_detail_page(*resolved, view=view))
+
+    @app.get('/insights/{run_id}/trace-conversation')
+    async def insights_trace_conversation(req: Request, run_id: str) -> Response:
+        resolved = await asyncio.to_thread(
+            _resolve_trace, run_id, trace_id=req.query_params.get('trace_id'), span_id=req.query_params.get('span_id')
+        )
+        if isinstance(resolved, str):
+            return _html(resolved, 404)
+        run, trace = resolved
+        raw_msg = req.query_params.get('msg', '')
+        try:
+            msg = int(raw_msg) if raw_msg.isdigit() else None
+        except ValueError:
+            msg = None
+        spans_url: str | None
+        if reads_snapshot(run.population):
+            spans_url = None
+            record = await load_trace_record(run, trace, source=None)
+        else:
+            spans_url = f'/insights/{quote(run.run_id, safe="")}/trace-spans?{urlencode({"trace_id": trace.trace_id})}'
+            async with _trace_source(req.app) as source:
+                record = await load_trace_record(run, trace, source=source)
+        notice = ''
+        if isinstance(record, str):
+            body = unavailable_conversation(reason=record, spans_url=spans_url)
+        else:
+            if trace.span_id and record.span_id != trace.span_id:
+                logger.warning(
+                    'Insights trace {} was analysed on span {} but Orq now selects span {}',
+                    trace.trace_id,
+                    trace.span_id,
+                    record.span_id,
+                )
+                notice = (
+                    '<p class="insights-muted" role="status">'
+                    f'Orq now selects span {esc(record.span_id)} for this trace; '
+                    f'the analysis used span {esc(trace.span_id)}.</p>'
+                )
+            with cli_slug_render_scope():
+                body = await asyncio.to_thread(trace_conversation, record, spans_url=spans_url, msg=msg)
+        return _html(f'<div class="fd-traces insights-trace-view">{notice}{body}</div>')
+
+    @app.get('/insights/{run_id}/trace-spans')
+    async def insights_trace_spans(req: Request, run_id: str) -> Response:
+        trace_id = req.query_params.get('trace_id', '')
+        _, loaded, _ = await asyncio.to_thread(_entries, get_insights_runs_dir())
+        resolved = _resolve(run_id, loaded)
+        if (
+            resolved is None
+            or not isinstance(resolved[1], InsightsRun)
+            or reads_snapshot(resolved[1].population)
+            or not any(item.trace_id == trace_id for item in resolved[1].traces)
+        ):
+            return _html('<p class="finder-empty">Span loading is unavailable.</p>', 404)
+        async with _trace_source(req.app) as source:
+            if source is None:
+                return _html('<p class="finder-empty" role="status">Could not load spans. Try again.</p>')
+            return _html(
+                await span_tree_fragment(
+                    trace_id, load_spans=source.list_spans, load_first_error_message=source.first_error_message
+                )
+            )
 
     @app.get('/insights/{run_id}/traces')
     def insights_traces(req: Request, run_id: str) -> Response:

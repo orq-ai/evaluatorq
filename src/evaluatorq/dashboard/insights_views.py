@@ -20,7 +20,7 @@ from evaluatorq.insights.population import describe_projection_coverage
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from typing import Any
+    from typing import Any, Literal
 
     from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import Cluster, InsightsRun, TraceInsight
@@ -430,9 +430,10 @@ def _find_cluster(run: InsightsRun, cluster_id: str) -> tuple[str, Cluster] | No
     return None
 
 
-def _trace_href(run: InsightsRun, trace: TraceInsight) -> str:
+def _trace_href(run: InsightsRun, trace: TraceInsight, *, view: Literal['analysis', 'trace'] = 'analysis') -> str:
     locator = urlencode({'trace_id': trace.trace_id, 'span_id': trace.span_id or ''})
-    return f'/insights/{quote(run.run_id, safe="")}/trace?{locator}'
+    suffix = '&view=trace' if view == 'trace' else ''
+    return f'/insights/{quote(run.run_id, safe="")}/trace?{locator}{suffix}'
 
 
 def _trace_id_link(run: InsightsRun, trace: TraceInsight) -> str:
@@ -581,8 +582,8 @@ def _tool_counts(title: str, counts: dict[str, int], empty: str) -> str:
     return f'<h4>{esc(title)}</h4>{body}'
 
 
-def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
-    """Show the saved analysis for one trace, including traces from a local snapshot."""
+def trace_detail_page(run: InsightsRun, trace: TraceInsight, *, view: Literal['analysis', 'trace'] = 'analysis') -> str:
+    """Show the saved analysis for one trace, or its source conversation, including traces from a local snapshot."""
 
     def field(name: str, value: str | None) -> str:
         return f'<dt>{esc(name)}</dt><dd>{esc(value)}</dd>' if value else ''
@@ -640,24 +641,43 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
     signal_html = (
         f'<div data-saved-signals="{esc(json.dumps(signal_options, ensure_ascii=False, separators=(",", ":")))}"></div>'
     )
-    body = (
-        '<div class="insights-layout"><div class="insights-main insights-trace-detail">'
+    header = (
         '<div class="insights-detail-kicker">Trace analysis</div>'
         f'<h2><code>{esc(trace.trace_id)}</code></h2>'
         f'<p class="insights-muted">{esc(trace.timestamp.isoformat(timespec="minutes") if trace.timestamp else "Time unavailable")}'
         f'{" · span " + esc(trace.span_id) if trace.span_id else ""}'
         f'{" · " + esc(trace.agent_name) if trace.agent_name else ""}'
         f'{" · " + esc(trace.project) if trace.project else ""}</p>{orq_link}'
-        f'{signal_html}'
-        '<section><h3>Summary</h3>'
-        f'<p>{esc(summary.summary) if summary is not None else "No summary was saved for this trace."}</p>'
-        f'{context_html}</section>'
-        f'<section><h3>Labels</h3>{labels_html}</section>'
-        f'<section><h3>Dimensions</h3>{dimensions_html}</section>'
-        f'<section><h3>Tool use</h3>{tools_html}</section>'
-        f'{errors_html}'
-        '</div></div>'
     )
+
+    def tab_link(name: Literal['analysis', 'trace'], label: str) -> str:
+        current = ' aria-current="page"' if view == name else ''
+        active = ' active' if view == name else ''
+        return f'<a class="insights-tab{active}" href="{esc(_trace_href(run, trace, view=name))}"{current}>{label}</a>'
+
+    tab_links = tab_link('analysis', 'Analysis') + tab_link('trace', 'Trace')
+    tab_nav = f'<nav class="insights-trace-tabs" aria-label="Trace views">{tab_links}</nav>'
+    if view == 'trace':
+        conversation_url = (
+            f'/insights/{quote(run.run_id, safe="")}/trace-conversation?'
+            f'{urlencode({"trace_id": trace.trace_id, "span_id": trace.span_id or ""})}'
+        )
+        content = (
+            f'<div class="fd-traces insights-trace-view" hx-get="{esc(conversation_url)}" hx-trigger="load" '
+            'hx-swap="outerHTML"><p class="finder-empty" role="status">Loading conversation…</p></div>'
+        )
+    else:
+        content = (
+            f'{signal_html}'
+            '<section><h3>Summary</h3>'
+            f'<p>{esc(summary.summary) if summary is not None else "No summary was saved for this trace."}</p>'
+            f'{context_html}</section>'
+            f'<section><h3>Labels</h3>{labels_html}</section>'
+            f'<section><h3>Dimensions</h3>{dimensions_html}</section>'
+            f'<section><h3>Tool use</h3>{tools_html}</section>'
+            f'{errors_html}'
+        )
+    body = f'<div class="insights-layout"><div class="insights-main insights-trace-detail">{header}{tab_nav}{content}</div></div>'
     back = f'<a class="report-back" href="/insights/{quote(run.run_id, safe="")}/tab/traces">← Traces in this run</a>'
     return page(
         'Insights trace',

@@ -1695,9 +1695,10 @@
     root.querySelectorAll('.fd-msg').forEach((el) => { el.open = el.getAttribute('data-msg') === String(index); });
     drawerScrollTo(root, index);
   }
+  const isTranscriptRoot = (el) => !!el && (el.id === 'finder-drawer' || !!(el.classList && el.classList.contains('fd-traces')));
   document.body.addEventListener('htmx:afterSwap', function (evt) {
-    const swapped = evt.detail.target;
-    if (swapped && (swapped.id === 'finder-drawer' || swapped.classList?.contains('fd-traces'))) {
+    const swapped = isTranscriptRoot(evt.target) ? evt.target : evt.detail.target;
+    if (isTranscriptRoot(swapped)) {
       const on = swapped.querySelector('.fd-msg.on');
       if (on) drawerScrollTo(swapped, on.getAttribute('data-msg'));
     }
