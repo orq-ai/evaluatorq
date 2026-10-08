@@ -18,6 +18,7 @@ from evaluatorq.dashboard import insights_routes
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.insights.models import InsightsRun
 from evaluatorq.trace_finder.models import Snapshot, TraceRecord
+from evaluatorq.trace_finder.orq_source import OrqTraceSource
 from tests.dashboard.test_insights_page import _write_run, minimal_run  # noqa: F401 — fixture reused
 from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, span
 
@@ -216,6 +217,52 @@ def test_spans_route_renders_the_span_tree_from_orq(
     assert response.status_code == 200
     assert 'answer refund question' in response.text
     assert 'look up refund policy' in response.text
+
+
+def _api_key_auth(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(insights_routes, 'selected_dashboard_auth', lambda app: SimpleNamespace(method='api_key'))
+
+
+def test_spans_route_closes_the_source_and_the_client(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_run(env, minimal_run)
+    _api_key_auth(monkeypatch)
+    orq = FakeOrq(FakeTraces({}, spans={'trace-1': [_named_span('span-root', name='root', minute=0)]}))
+    closed: list[OrqTraceSource] = []
+
+    class RecordingSource(OrqTraceSource):
+        def close(self) -> None:
+            closed.append(self)
+            super().close()
+
+    monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: orq)
+    monkeypatch.setattr(insights_routes, 'OrqTraceSource', RecordingSource)
+
+    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1')
+
+    assert response.status_code == 200
+    assert len(closed) == 1
+    assert orq.exit_calls == [(None, None, None)]
+
+
+def test_source_construction_failure_still_closes_the_client(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_run(env, minimal_run)
+    _api_key_auth(monkeypatch)
+    orq = FakeOrq(FakeTraces({}))
+
+    def failing_source(client: Any) -> OrqTraceSource:
+        raise RuntimeError('hook registration failed')
+
+    monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: orq)
+    monkeypatch.setattr(insights_routes, 'OrqTraceSource', failing_source)
+
+    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1')
+
+    assert 'Could not load spans. Try again.' in response.text
+    assert orq.exit_calls == [(None, None, None)]
 
 
 def test_unknown_trace_and_snapshot_runs_have_no_span_or_conversation_routes(
