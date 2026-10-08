@@ -941,7 +941,7 @@ def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> st
     projects.extend(
         (item.id, _pick_row(item.name, item.id)) for item in scope.projects if item.workspace_id == selected_id
     )
-    if not any(option == project_id for option, _ in projects):
+    if not scope.error and not any(option == project_id for option, _ in projects):
         project_id = ''
     error_html = f'<span class="settings-error" role="alert">{esc(scope.error)}</span>' if scope.error else ''
     placeholder = '<span class="rich-pick-placeholder">Choose a workspace</span>'

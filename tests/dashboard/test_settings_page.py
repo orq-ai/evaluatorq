@@ -1843,3 +1843,64 @@ def test_saving_does_not_persist_a_command_line_model(client: TestClient, settin
     saved = json.loads(settings_file.read_text())
     assert saved['smart_model'] == 'saved/smart'
     assert saved['embedding_model'] is None
+def test_cli_oauth_project_survives_failed_discovery_and_saves_after_recovery(
+    client: TestClient, settings_file: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from evaluatorq.dashboard.orq_scope import OAuthScopes, OrqProject, OrqWorkspace
+
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
+        OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', None, 'valid', True),
+    ))
+    saved = DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_oauth',
+        'orq_oauth_server': 'https://my.orq.ai',
+        'orq_workspace': 'alpha',
+        'orq_project_id': 'project-a',
+        'orq_project_name': 'Alpha project',
+    })
+    save_settings(saved, settings_file)
+
+    monkeypatch.setattr(
+        app_module,
+        'discover_oauth_scopes',
+        lambda *_args, **_kwargs: OAuthScopes(
+            workspaces=(OrqWorkspace('workspace-a', 'alpha'),),
+            error='Project listing unavailable',
+        ),
+    )
+    failed_lookup = client.get('/settings/oauth-scope', params={
+        'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'alpha', 'orq_project_id': 'project-a',
+    })
+    assert failed_lookup.status_code == 200
+    assert '<input type="hidden" name="orq_project_id" value="project-a">' in failed_lookup.text
+    assert _pick_options(failed_lookup.text, 'orq_project_id')['project-a'].startswith(' is-selected"')
+    assert 'Project listing unavailable' in failed_lookup.text
+
+    failed_save = client.post('/settings', data=csrf_data({
+        **_MODELS,
+        'orq_auth_method': 'cli_oauth',
+        'orq_oauth_server': 'https://my.orq.ai',
+        'orq_workspace': 'alpha',
+        'orq_project_id': 'project-a',
+    }))
+    assert failed_save.status_code == 422
+    assert load_settings(settings_file) == saved
+
+    monkeypatch.setattr(
+        app_module,
+        'discover_oauth_scopes',
+        lambda *_args, **_kwargs: OAuthScopes(
+            workspaces=(OrqWorkspace('workspace-a', 'alpha'),),
+            projects=(OrqProject('project-a', 'Recovered project name', 'workspace-a'),),
+        ),
+    )
+    recovered_save = client.post('/settings', data=csrf_data({
+        **_MODELS,
+        'orq_auth_method': 'cli_oauth',
+        'orq_oauth_server': 'https://my.orq.ai',
+        'orq_workspace': 'alpha',
+        'orq_project_id': 'project-a',
+    }))
+    assert recovered_save.status_code == 303
+    persisted = load_settings(settings_file)
+    assert (persisted.orq_project_id, persisted.orq_project_name) == ('project-a', 'Recovered project name')
