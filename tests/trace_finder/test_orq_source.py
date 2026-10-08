@@ -683,6 +683,18 @@ async def test_targeted_scan_limit_marks_snapshot_incomplete(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_load_trace_raises_when_its_targeted_scan_is_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.MAX_LIVE_TRACES', 1)
+    traces = FakeTraces({None: ([summary('other', messages=user_messages('other'))], True, 'next')})
+
+    with pytest.raises(OrqSourceError, match='scan_limit'):
+        await make_source(FakeOrq(traces)).load_trace(
+            'target', start=START, end=END, facets=FacetSelection(), numeric=NumericFilters()
+        )
+
+
+
+@pytest.mark.asyncio
 async def test_populates_summary_metadata_without_listing_spans() -> None:
     trace = summary('complete', messages=user_messages('from summary'))
     trace.agent_name = 'support-agent'

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,10 +12,12 @@ from loguru import logger
 
 from evaluatorq.dashboard.insights_trace_source import load_trace_record
 from evaluatorq.insights.models import InsightsRun, reads_snapshot
+from evaluatorq.insights.population import _load_traces
+from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot, TraceRecord
 from evaluatorq.trace_finder.orq_source import OrqTraceSource
 from tests.insights.conftest import minimal_run  # noqa: F401 — fixture reused from the insights suite
-from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, detail, span
+from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, detail, span, summary
 
 
 def _record(trace_id: str, span_id: str, content: str) -> TraceRecord:
@@ -127,7 +129,7 @@ async def test_orq_run_without_a_source_asks_for_an_account(minimal_run: Insight
 @pytest.mark.asyncio
 async def test_orq_run_hydrates_the_conversation(minimal_run: InsightsRun) -> None:
     traces = FakeTraces(
-        pages={None: ([], False, None)},
+        pages={None: ([summary('trace-1', messages=[])], False, None)},
         spans={'trace-1': [span('span-9', minute=1)]},
         details={('trace-1', 'span-9'): detail('span-9', 'hello from orq', minute=1)},
     )
@@ -141,27 +143,72 @@ async def test_orq_run_hydrates_the_conversation(minimal_run: InsightsRun) -> No
 
 
 @pytest.mark.asyncio
+async def test_orq_run_queries_with_the_run_filters_around_the_analysed_time(minimal_run: InsightsRun) -> None:
+    run = minimal_run.model_copy(update={'population': {'mode': 'filter', 'facets': {'status': ['error']}}})
+    traces = FakeTraces(pages={None: ([summary('trace-1')], False, None)})
+    analysed_at = run.traces[0].timestamp
+    assert analysed_at is not None
+
+    await load_trace_record(run, run.traces[0], source=OrqTraceSource(cast(Any, FakeOrq(traces))))
+
+    [query] = traces.query_calls
+    assert query['from_'] == analysed_at - timedelta(seconds=1)
+    assert query['to'] == analysed_at + timedelta(seconds=1)
+    assert 'filter status in ("error")' in query['oql']
+
+
+@pytest.mark.asyncio
 async def test_orq_failure_gives_the_could_not_load_reason(minimal_run: InsightsRun, logged_warnings: list[str]) -> None:
     class FailingTraces(FakeTraces):
-        async def list_spans_async(self, *, trace_id: str, **kwargs: Any) -> Any:
+        async def query_async(self, **kwargs: Any) -> Any:
             raise RuntimeError('orq is down')
 
-    source = OrqTraceSource(cast(Any, FakeOrq(FailingTraces(pages={None: ([], False, None)}))))
+    source = OrqTraceSource(cast(Any, FakeOrq(FailingTraces(pages={}))))
 
     result = await load_trace_record(minimal_run, minimal_run.traces[0], source=source)
 
     assert result == 'Could not load the conversation from Orq. Open it in Orq instead.'
-    assert any('conversation unavailable' in message and 'trace-1' in message for message in logged_warnings)
+    assert any('conversation unavailable' in message and 'orq is down' in message for message in logged_warnings)
 
 
 @pytest.mark.asyncio
-async def test_orq_trace_without_messages_is_reported(minimal_run: InsightsRun) -> None:
-    traces = FakeTraces(pages={None: ([], False, None)}, spans={'trace-1': []})
+@pytest.mark.parametrize('page', [[], [summary('trace-1', messages=[])]], ids=['absent', 'no-messages'])
+async def test_orq_trace_without_a_conversation_is_reported(minimal_run: InsightsRun, page: list[Any]) -> None:
+    traces = FakeTraces(pages={None: (page, False, None)}, spans={'trace-1': []})
     source = OrqTraceSource(cast(Any, FakeOrq(traces)))
 
     result = await load_trace_record(minimal_run, minimal_run.traces[0], source=source)
 
-    assert result == 'Orq returned no conversation messages for this trace.'
+    assert result == 'Orq no longer returns a conversation for this trace.'
+
+
+def _summary_with_transcript_and_child_llm_span() -> FakeTraces:
+    transcript = [{'role': 'user', 'content': 'q'}, {'role': 'assistant', 'content': 'a'}]
+    return FakeTraces(
+        pages={None: ([summary('trace-1', messages=transcript)], False, None)},
+        spans={'trace-1': [span('child-llm', minute=1, parent_span_id='root-trace-1')]},
+        details={('trace-1', 'child-llm'): detail('child-llm', 'child only', minute=1)},
+    )
+
+
+@pytest.mark.asyncio
+async def test_orq_run_reads_the_same_span_the_pipeline_analysed(minimal_run: InsightsRun) -> None:
+    [analysed] = await _load_traces(
+        cast(Any, FakeOrq(_summary_with_transcript_and_child_llm_span())),
+        start=None,
+        end=None,
+        limit=10,
+        facets=FacetSelection(),
+        numeric=NumericFilters(),
+    )
+    trace = minimal_run.traces[0].model_copy(update={'span_id': analysed.span_id})
+    source = OrqTraceSource(cast(Any, FakeOrq(_summary_with_transcript_and_child_llm_span())))
+
+    result = await load_trace_record(minimal_run, trace, source=source)
+
+    assert isinstance(result, TraceRecord)
+    assert result.span_id == analysed.span_id
+    assert [message['content'] for message in result.messages] == ['q', 'a']
 
 
 @pytest.mark.parametrize(

@@ -316,6 +316,30 @@ class OrqTraceSource:
         except Exception as error:
             raise OrqSourceError(f'live Orq trace loading failed: {error}') from error
 
+    async def load_trace(
+        self,
+        trace_id: str,
+        *,
+        start: datetime | None,
+        end: datetime | None,
+        facets: FacetSelection,
+        numeric: NumericFilters,
+    ) -> TraceRecord | None:
+        """Hydrate one trace from its query summary, selecting the span a targeted ``load_async`` selects.
+
+        Returns None when the query returns no usable conversation for the trace.
+
+        Raises:
+            OrqSourceError: The load failed or its targeted scan stopped before covering the window.
+        """
+        snapshot = await self.load_async(
+            start, end, 1, facets=facets, numeric=numeric, target_trace_ids=frozenset({trace_id})
+        )
+        incomplete_reason = snapshot.capture_metadata.get('incomplete_reason')
+        if incomplete_reason:
+            raise OrqSourceError(f'targeted load of trace {trace_id} was incomplete: {incomplete_reason}')
+        return next((record for record in snapshot.traces if record.trace_id == trace_id), None)
+
     async def _load_with_lifecycle(
         self,
         start: datetime | None,
