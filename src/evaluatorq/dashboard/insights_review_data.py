@@ -88,7 +88,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'id': review_trace_key(trace),
             'trace_id': trace.trace_id,
             'span_id': trace.span_id,
-            'trace_url': _trace_href(run, trace),
+            'trace_url': _trace_href(run, trace, view='trace'),
             'orq_url': (trace_span_url(trace.trace_id, trace.span_id) if not reads_snapshot(run.population) else None),
             'ts': _timestamp(getattr(trace, 'timestamp', None)),
             'agent': trace.agent_name,

@@ -103,7 +103,7 @@ def test_review_payload_provides_safe_server_built_trace_links(monkeypatch):
 
     assert row['trace_url'] == (
         '/insights/review-test/trace?'
-        + urlencode({'trace_id': 'trace /?&', 'span_id': 'span ?&'})
+        + urlencode({'trace_id': 'trace /?&', 'span_id': 'span ?&', 'view': 'trace'})
     )
     assert row['orq_url'] is None
     safe_trace = _trace('span_a-~').model_copy(update={'trace_id': 'trace.a-~'})

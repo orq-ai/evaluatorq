@@ -1045,9 +1045,10 @@ function signalsPanel(t) {
 function tracePanel(t) {
   const traceUrl = safeTraceUrl(t.trace_url);
   const orqUrl = safeOrqUrl(t.orq_url);
-  const traceLink = orqUrl
-    ? `<a class="linkbtn" href="${esc(orqUrl)}" target="_blank" rel="noopener noreferrer" style="float:right;font-size:12px">Open in Orq ↗</a>`
-    : traceUrl ? `<a class="btn sm trace-open" href="${esc(traceUrl)}">Open full trace</a>` : '';
+  const traceLink = [
+    traceUrl ? `<a class="btn sm trace-open" href="${esc(traceUrl)}">Open full trace</a>` : '',
+    orqUrl ? `<a class="linkbtn" href="${esc(orqUrl)}" target="_blank" rel="noopener noreferrer" style="float:right;font-size:12px">Open in Orq ↗</a>` : '',
+  ].join('');
   return `<div class="inner">${S.sel.prev ? `<button class="back" data-backto="${esc(S.sel.prev.id)}">← ${esc(C[S.sel.prev.id].name.slice(0, 34))}</button>` : `<button class="back" data-close>✕ Close</button>`}${traceLink}
     <div class="tid">${esc(t.id.slice(0, 12))}… · ${fmtTime(t.ts)} · ${esc(t.agent)}</div>
     <h2>${esc(t.topic || 'Trace')}</h2><p>${esc(t.summary || 'No summary for this trace.')}</p>
