@@ -894,7 +894,7 @@ def _rich_pick(
     )
     empty_html = '</div><p class="facet-no-results" hidden>No matches.</p>' if filterable else ''
     return (
-        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}{" rich-pick--filter" if filterable else ""}>'
+        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}{" rich-pick--filter" if filterable else ""}">'
         f'<input type="hidden" name="{esc(name)}" value="{esc(value)}">'
         f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false"{described}>'
         f'{selected}</button>'
