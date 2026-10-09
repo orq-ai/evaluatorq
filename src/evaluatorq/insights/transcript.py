@@ -250,6 +250,7 @@ def _render_full_conversation(
         offset += len(line) + 1
     return conversation, tuple(spans), len(messages)
 
+
 @overload
 def tool_activity_chunks(
     trace: TraceRecord | TraceDocument,
@@ -583,8 +584,6 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
         if excerpt:
             evidence.append(f'output: {excerpt}'.replace('\n', ' ⏎ '))
     return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
-
-
 
 
 def _tool_calls(trace: TraceRecord | TraceDocument) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:

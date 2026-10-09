@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
+from loguru import logger
+
 from .classifier import classifier_questions
 from .compiler import CompiledPlan
 from .filter_selector import FilterSelectionResult
@@ -67,10 +69,12 @@ class ClassifierRunner(Protocol):
         question_payloads: Mapping[str, Any],
     ) -> Awaitable[list[TraceClassification]]: ...
 
+
 class TraceProjector(Protocol):
     """Build the exact per-trace state for the selected classifier questions."""
 
     def __call__(self, trace: TraceRecord, *, question_payloads: Mapping[str, Any]) -> TraceProjection: ...
+
 
 class RunStore:
     """Own one replaceable run while keeping polling and callbacks independent.

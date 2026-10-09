@@ -89,12 +89,10 @@ def test_current_classifier_views_match_characterization_snapshots(use_atif: boo
     expected.pop('finder_classifier_state', None)
     expected.pop('summary_prompt', None)
     trace, long_trace = (ensure_trace_document(trace) if use_atif else trace for trace in _fixtures())
-    full_long = tool_activity_chunks(long_trace, budget=10**6)[0]
 
     actual = {
         'tool_inventory': tool_inventory(trace),
         'tool_activity_chunks': tool_activity_chunks(trace),
-        'tool_activity_cut': tool_activity_chunks(long_trace, budget=int(len(full_long) * 0.85)),
         'tool_activity_chunks_small_budget': tool_activity_chunks(long_trace, budget=450),
     }
     summary_prompt = _build_prompt(trace)

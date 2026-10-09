@@ -45,6 +45,7 @@ def classifier_questions(dimensions: Sequence[CompiledQuery]) -> dict[str, Any]:
     """Return the keyed question objects used by every trace-classifier request."""
     return {_question_key(index): dimension.task for index, dimension in enumerate(dimensions)}
 
+
 def build_classifier_evaluator(
     dimensions: Sequence[CompiledQuery],
     *,
