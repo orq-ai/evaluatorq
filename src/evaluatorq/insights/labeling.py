@@ -28,7 +28,11 @@ from evaluatorq.common.retry import with_retry
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.insights.models import LabelAnswer, LabelSpec
 from evaluatorq.insights.presets import CODING_AGENT, CODING_CONVERSATION_LABELS, CODING_TOOL_LABELS
-from evaluatorq.insights.transcript import conversation_view, tool_activity_chunks, tool_inventory
+from evaluatorq.insights.transcript import (
+    conversation_view,
+    tool_activity_chunks,
+    tool_inventory,
+)
 from evaluatorq.trace_finder.classifier import matches_selection
 
 if TYPE_CHECKING:
@@ -294,8 +298,10 @@ async def _label_one(
     With `coding` on, a first call asks `CODING_AGENT` over the trace's tool
     inventory. When it answers yes, the conversation call also asks the coding
     conversation labels, and a third call asks the coding tool labels over the
-    tool activity (inputs, statuses, outputs). A coding check that fails leaves
-    the coding labels unasked and says so in a warning; it never guesses yes.
+    tool activity (inputs, statuses, outputs). Shell outputs reach that view
+    scrubbed of credentials (`common.redact.scrub_known_secrets`). A
+    coding check that fails leaves the coding labels unasked and says so in a
+    warning; it never guesses yes.
     """
     answers: dict[str, LabelAnswer] = {}
     selected_coding = (
@@ -422,7 +428,8 @@ async def label_traces(
     every label's question plus (when `compiled` is given) the population-match
     question in a single request, and skip that call when neither is present.
     With `coding` on, each trace also gets the coding-agent check and, when it
-    answers yes, the coding labels (see `_label_one`). A
+    answers yes, the coding labels (see `_label_one`); the shell outputs those
+    labels read are scrubbed of credentials first. A
     per-trace failure never raises — it comes back as a `LabelOutcome` with
     `error` set and every answer failed, per the "per-trace failures never
     fail a run" house rule.

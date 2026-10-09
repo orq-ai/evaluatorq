@@ -74,7 +74,10 @@ def _fixtures() -> tuple[TraceRecord, TraceRecord]:
     for index in range(12):
         call_id = f'l{index}'
         long_messages.extend([
-            {'role': 'assistant', 'tool_calls': [_call(call_id, 'Read', json.dumps({'file_path': f'path/{index}.py', 'note': 'n' * 35}))]},
+            {
+                'role': 'assistant',
+                'tool_calls': [_call(call_id, 'Read', json.dumps({'file_path': f'path/{index}.py', 'note': 'n' * 35}))],
+            },
             {'role': 'tool', 'tool_call_id': call_id, 'content': 'x' * 120},
         ])
     return trace, _trace(long_messages, trace_id='long')

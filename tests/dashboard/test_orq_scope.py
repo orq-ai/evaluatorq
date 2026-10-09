@@ -7,6 +7,49 @@ import subprocess
 from evaluatorq.dashboard import orq_scope
 
 
+def test_oauth_scope_lists_multiple_workspaces_on_selected_server(monkeypatch) -> None:
+    calls: list[tuple[list[str], str | None, str | None, str | None]] = []
+
+    def cli(
+        args: list[str], *, profile: str | None, server: str | None, timeout: float, workspace: str | None = None
+    ) -> dict:
+        calls.append((args, profile, server, workspace))
+        if args[:2] == ['workspace', 'list']:
+            return {'workspaces': [
+                {'id': 'workspace-a', 'key': 'alpha'}, {'id': 'workspace-b', 'key': 'beta'},
+            ]}
+        assert workspace == 'beta'
+        return {'data': [
+            {'project_id': 'project-b', 'name': 'Beta project', 'workspace_id': 'workspace-b'},
+        ], 'has_more': False}
+
+    monkeypatch.setattr(orq_scope, '_cli_json', cli)
+    scope = orq_scope.discover_oauth_scopes('https://selected.orq.ai', workspace='beta')
+
+    assert [item.key for item in scope.workspaces] == ['alpha', 'beta']
+    assert [project.id for project in scope.projects] == ['project-b']
+    assert all(profile == '' and server == 'https://selected.orq.ai' for _, profile, server, _ in calls)
+    assert calls[0][0] == ['workspace', 'list']
+
+
+def test_oauth_scope_cli_drops_other_credentials_and_pins_server(monkeypatch) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'another-key')
+    monkeypatch.setenv('ORQ_SERVER', 'https://other.orq.ai')
+    monkeypatch.setattr(orq_scope.shutil, 'which', lambda _: '/usr/bin/orq')
+
+    def run(command, **kwargs):
+        assert command[:5] == ['/usr/bin/orq', '--profile', '', '--server', 'https://selected.orq.ai']
+        assert command[5:7] == ['--workspace', 'beta']
+        assert 'ORQ_API_KEY' not in kwargs['env']
+        assert 'ORQ_SERVER' not in kwargs['env']
+        return subprocess.CompletedProcess(command, 0, '{"data": []}', '')
+
+    monkeypatch.setattr(orq_scope.subprocess, 'run', run)
+    assert orq_scope._cli_json(
+        ['projects', 'list'], profile='', server='https://selected.orq.ai', workspace='beta', timeout=5
+    ) == {'data': []}
+
+
 def test_project_key_discovers_only_its_project_and_matching_workspace(monkeypatch) -> None:
     monkeypatch.setenv('ORQ_API_KEY', 'project-key')
     calls: list[list[str]] = []

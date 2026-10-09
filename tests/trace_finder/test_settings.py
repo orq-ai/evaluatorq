@@ -229,7 +229,7 @@ def test_old_profile_config_migrates_to_cli_profile_but_explicit_auth_wins() -> 
     assert explicit.orq_auth_method == 'environment'
 
 
-@pytest.mark.parametrize('method', ['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'])
+@pytest.mark.parametrize('method', ['environment', 'cli_profile', 'stored_api_key'])
 def test_legacy_scope_is_ignored_by_effective_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, method: str
 ) -> None:

@@ -21,6 +21,7 @@ If this file rots, `docs-coverage` reports stale gaps and people stop reading it
 | **reasoning-effort scope** | fixed (see below) | target under test · pipeline attacker/judge · simulator's own calls · core-evaluation judge |
 | **API endpoint** | `LLMCallConfig.api` / `EvaluatorConfig.api` (`contracts.py`, `redteam/contracts.py`) | `chat_completions` · `responses` |
 | **own-calls LLM config** | `llm_config=` on `simulate()` / `generate_and_simulate()` / `generate()` / the trace helpers, `llm_config=` on `red_team()`, plus the `sim_model=` / `model=` shorthands; on the CLI, `--llm-config` or `"llm_config"` in `--config` for the full config and `--sim-model` / `--attack-model` / `--evaluator-model` for the shorthand | full `LLMCallConfig` · model-name shorthand · neither (per-call-site defaults) |
+| **dashboard auth scope** | `DashboardSettings.orq_auth_method`, `orq_oauth_server`, `orq_workspace`, `orq_project_id` and Settings `/settings/oauth-scope` | CLI OAuth server · CLI OAuth workspace · CLI OAuth project · credential-wide scope for other methods |
 
 ### `reasoning-effort scope` is a choice, not a value
 
@@ -100,6 +101,7 @@ Marked `N/A` in the matrix, never reported as a gap.
 | API endpoint × target kind `deployment:` / callable / Vercel | these do not go through `request_params`; the endpoint is fixed by the transport |
 | own-calls LLM config × dashboard | it reads saved artifacts; it makes no call of its own to configure |
 | own-calls LLM config × `evaluatorq()` | the core loop runs your task function and your evaluators; it has no own-calls role to configure. Judge settings go to `llm_jury(...)` |
+| dashboard auth scope × non-dashboard surfaces | The Settings scope controls dashboard trace requests; `eq find` resolves its own CLI credential and per-run project flag |
 | own-calls LLM config `model-name shorthand` × `red_team()` | red team has no `sim_model` equivalent; both roles are named on `LLMConfig` |
 | `evaluatorq()` × data source `HuggingFace` | `data=` takes rows, a `DatasetIdInput` or an `ExperimentInput`. There is no HuggingFace form; the `hf:` specifier is a red-team `dataset=` spelling |
 | `evaluatorq()` × data source `generated` | the core loop runs your jobs over rows you supply. Nothing in it generates data — that is what `generate()` and the red-team dynamic pipeline are for |

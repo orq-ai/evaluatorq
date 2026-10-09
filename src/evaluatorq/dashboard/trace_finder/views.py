@@ -697,8 +697,11 @@ def table(snapshot: RunSnapshot) -> str:
 
 
 def _selection_rule_html(compiled: CompiledQuery, *, editable: bool, prefix: str = '') -> str:
-    from evaluatorq.trace_finder import ThresholdSelection
+    from evaluatorq.trace_finder import ThresholdSelection, selection_rule_text
 
+    if not editable:
+        lead, value = selection_rule_text(compiled)
+        return f'<p>{esc(lead)} <b>{esc(value)}</b></p>'
     task = compiled.task
     selection = compiled.selection
     if task.kind == 'choice':
@@ -706,8 +709,6 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool, prefix: str
         selected = next(
             (value for value in getattr(selection, 'values', ()) if value in labels), labels[0] if labels else ''
         )
-        if not editable:
-            return f'<p>Verdict <b>{esc(str(selected))}</b></p>'
         options = ''.join(
             f'<option value="{esc(str(label))}"{" selected" if label == selected else ""}>{esc(str(label))}</option>'
             for label in labels
@@ -715,8 +716,6 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool, prefix: str
         return f'<select name="{prefix}selection_value">{options}</select>'
     if task.kind == 'noul':
         selected_bool = next((value for value in getattr(selection, 'values', ()) if type(value) is bool), False)
-        if not editable:
-            return f'<p>Answer is <b>{"yes" if selected_bool else "no"}</b></p>'
         options = ''.join(
             f'<option value="{value}"{" selected" if selected_bool == (value == "true") else ""}>{value}</option>'
             for value in ('true', 'false')
@@ -726,8 +725,6 @@ def _selection_rule_html(compiled: CompiledQuery, *, editable: bool, prefix: str
         operator, threshold = 'gte', 0.5
     else:
         operator, threshold = selection.operator, selection.value
-    if not editable:
-        return f'<p>Score {esc(operator)} <b>{threshold:g}</b></p>'
     presets = (('gte', 0.5), ('gte', 0.7), ('gte', 0.8), ('lte', 0.3), ('lte', 0.5))
     options = (
         ''

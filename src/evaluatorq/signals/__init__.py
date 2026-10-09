@@ -10,12 +10,14 @@ report.values()  # name -> value, no-basis signals omitted
 
 from evaluatorq.signals.classify import classify_tool_roles
 from evaluatorq.signals.config import ClassifierConfig, SignalsConfig, TagThresholds
+from evaluatorq.signals.doors import DOOR_SIGNAL_NAMES, classify_tool_doors
 from evaluatorq.signals.evaluator import signal_evaluator, signal_evaluators, to_trajectory
 from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult
 from evaluatorq.signals.registry import SIGNAL_NAMES, compute_signals
 from evaluatorq.signals.walk import SignalContext
 
 __all__ = [
+    'DOOR_SIGNAL_NAMES',
     'SIGNAL_NAMES',
     'ClassifierConfig',
     'Evidence',
@@ -25,6 +27,7 @@ __all__ = [
     'SignalResult',
     'SignalsConfig',
     'TagThresholds',
+    'classify_tool_doors',
     'classify_tool_roles',
     'compute_signals',
     'signal_evaluator',
