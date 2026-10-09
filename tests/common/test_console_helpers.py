@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from rich.console import Console
 
-from evaluatorq.common.reports import confirm_run_plan, write_text_report
+from evaluatorq.common.reports import ask_confirm, confirm_run_plan, write_text_report
 
 
 def test_confirm_skip_renders_table_and_returns_true() -> None:
@@ -45,6 +45,42 @@ def test_confirm_skip_false_prompts(monkeypatch: pytest.MonkeyPatch) -> None:
         )
     )
     assert ok is True
+
+
+def test_ask_confirm_returns_the_answer_and_keeps_the_loop_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+
+    import typer
+
+    answered = threading.Event()
+
+    def confirm(*_a: object, **_kw: object) -> bool:
+        answered.wait(timeout=5)
+        return False
+
+    monkeypatch.setattr(typer, "confirm", confirm)
+
+    async def main() -> bool:
+        pending = asyncio.ensure_future(ask_confirm("Go?"))
+        await asyncio.sleep(0)
+        assert not pending.done()
+        answered.set()
+        return await pending
+
+    assert asyncio.run(main()) is False
+
+
+def test_ask_confirm_reraises_the_prompt_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    import click
+    import typer
+
+    def abort(*_a: object, **_kw: object) -> bool:
+        raise click.Abort
+
+    monkeypatch.setattr(typer, "confirm", abort)
+
+    with pytest.raises(click.Abort):
+        asyncio.run(ask_confirm("Go?"))
 
 
 def test_write_text_report_creates_file(tmp_path: Path) -> None:

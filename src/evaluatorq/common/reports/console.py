@@ -7,12 +7,58 @@ CLI hooks, avoiding duplicated inline logic in each CLI module.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from rich.console import Console
+
+
+def render_plan_table(console: Console, *, title: str, rows: list[tuple[str, str]]) -> None:
+    """Render a ROUNDED Parameter/Value table."""
+    import rich.box as box
+    from rich.table import Table
+
+    table = Table(title=title, show_header=True, header_style='bold', box=box.ROUNDED)
+    table.add_column('Parameter', style='white', min_width=18)
+    table.add_column('Value', style='cyan')
+    for name, value in rows:
+        table.add_row(name, value)
+    console.print(table)
+
+
+async def ask_confirm(prompt: str) -> bool:
+    """Ask ``typer.confirm(prompt, default=True)`` without pinning the event loop.
+
+    The read runs on a daemon thread rather than ``asyncio.to_thread``: on Ctrl-C ``asyncio.run``
+    cancels the awaiting task and then waits for its default executor, which would block on the
+    unfinished stdin read until the user pressed Enter.
+    """
+    import typer
+
+    loop = asyncio.get_running_loop()
+    answer: asyncio.Future[bool] = loop.create_future()
+
+    def settle(outcome: Callable[[], None]) -> None:
+        # The loop is already closed after an interrupt; nobody awaits the answer then.
+        with contextlib.suppress(RuntimeError):
+            loop.call_soon_threadsafe(lambda: None if answer.done() else outcome())
+
+    def ask() -> None:
+        try:
+            result = typer.confirm(prompt, default=True)
+        except BaseException as exc:  # noqa: BLE001 (handed to the awaiting task, e.g. click.Abort on Ctrl-D)
+            error = exc
+            settle(lambda: answer.set_exception(error))
+        else:
+            settle(lambda: answer.set_result(result))
+
+    threading.Thread(target=ask, name='evaluatorq-confirm', daemon=True).start()
+    return await answer
 
 
 async def confirm_run_plan(
@@ -34,26 +80,12 @@ async def confirm_run_plan(
             (useful for ``--yes`` / ``--no-confirm`` flags).
 
     Returns:
-        ``True`` if ``skip_confirm`` is set, otherwise the result of
-        ``typer.confirm(prompt, default=True)``.
+        ``True`` if ``skip_confirm`` is set, otherwise the answer from `ask_confirm`.
     """
-    import rich.box as box
-    from rich.table import Table
-
-    table = Table(title=title, show_header=True, header_style='bold', box=box.ROUNDED)
-    table.add_column('Parameter', style='white', min_width=18)
-    table.add_column('Value', style='cyan')
-    for name, value in rows:
-        table.add_row(name, value)
-    console.print(table)
-
+    render_plan_table(console, title=title, rows=rows)
     if skip_confirm:
         return True
-
-    import typer
-
-    # Blocking stdin read; offload so event loop is not pinned.
-    return await asyncio.to_thread(typer.confirm, prompt, default=True)
+    return await ask_confirm(prompt)
 
 
 def write_text_report(

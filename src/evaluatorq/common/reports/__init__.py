@@ -7,7 +7,7 @@ builders and per-section render functions.
 """
 
 from evaluatorq.common.reports import palette
-from evaluatorq.common.reports.console import confirm_run_plan, write_text_report
+from evaluatorq.common.reports.console import ask_confirm, confirm_run_plan, render_plan_table, write_text_report
 from evaluatorq.common.reports.html_helpers import (
     COLORS,
     STATUS_COLORS,
@@ -75,6 +75,7 @@ __all__ = [
     'SEVERITY_WEIGHTS',
     'STATUS_COLORS',
     'RendererRegistry',
+    'ask_confirm',
     'bar',
     'bold_bar',
     'center_table',
@@ -104,6 +105,7 @@ __all__ = [
     'render_html',
     'render_line_chart',
     'render_markdown',
+    'render_plan_table',
     'render_sparkline',
     'render_svg',
     'scale_color',

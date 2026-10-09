@@ -10,12 +10,14 @@ from typing import Annotated, Any
 import typer
 from loguru import logger
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 
 from evaluatorq.common import cli_width  # noqa: F401 — import for its non-TTY width side effect
 from evaluatorq.common.cli_epilog import examples
 from evaluatorq.common.cli_errors import emit_error
+from evaluatorq.common.cli_tty import should_skip_confirm
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.model_roles import BUILTIN, add_cli_models
 from evaluatorq.common.orq_client import (
@@ -25,6 +27,7 @@ from evaluatorq.common.orq_client import (
     list_orq_profiles,
     resolve_orq_client,
 )
+from evaluatorq.common.reports import confirm_run_plan
 
 from .compiler import CompileError
 from .debug import cli_debug
@@ -32,6 +35,7 @@ from .debug import enabled as debug_enabled
 from .export import export_json
 from .filter_selector import FilterSelectionError
 from .models import (
+    FACET_NAMES,
     DimensionAnswer,
     FacetSelection,
     NumericFilters,
@@ -39,6 +43,7 @@ from .models import (
     RunRequest,
     RunSnapshot,
     TraceClassification,
+    selection_rule_text,
 )
 from .orq_source import OrqSourceError
 from .pipeline import build_run_store
@@ -66,6 +71,8 @@ def resolve_cli_profile(name: str | None) -> OrqProfile | None:
 _FIND_EPILOG = examples(
     '# find traces whose conversations match a semantic question',
     'eq find "customers asking for a refund"',
+    '# skip the plan confirmation, for scripts',
+    'eq find "customers asking for a refund" --yes',
     '# scope the live population with repeatable metadata facets',
     'eq find "mentions a refund" --project support-agent --model gpt-5.6-luna',
     '# use credentials from an orq CLI profile',
@@ -126,7 +133,7 @@ def _request(
     end = datetime.now(timezone.utc)
     return RunRequest(
         query=query,
-        mode='immediate',
+        mode='review',
         population=PopulationRequest(
             start=end - timedelta(days=settings.window_days),
             end=end,
@@ -197,15 +204,56 @@ def _verdict(answer: DimensionAnswer) -> str:
     return value if answer.confidence is None else f'{value} ({answer.confidence:.2f})'
 
 
-async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot:
-    snapshot = await store.compile(request, wait=False)
+def _filters_text(facets: FacetSelection, numeric: NumericFilters) -> str:
+    parts = [
+        f'{name.replace("_", " ")}: {", ".join(sorted(values))}'
+        for name in FACET_NAMES
+        if (values := getattr(facets, name))
+    ]
+    if facets.project_id:
+        parts.append(f'project id: {facets.project_id}')
+    parts.extend(
+        f'{name.replace("_", " ")}: {value:,}' for name, value in numeric.model_dump().items() if value is not None
+    )
+    return '; '.join(parts) or 'none'
+
+
+def _plan_rows(snapshot: RunSnapshot) -> list[tuple[str, str]]:
+    request = snapshot.request
+    rows: list[tuple[str, str]] = []
+    if request is not None:
+        rows.append(('Question', request.query))
+        start, end = request.population.start, request.population.end
+        if start is not None and end is not None:
+            rows.append(('Window', f'{start:%Y-%m-%d %H:%M} to {end:%Y-%m-%d %H:%M} UTC'))
+    rows.extend([
+        ('Your filters', _filters_text(snapshot.explicit_filters, snapshot.explicit_numeric)),
+        ('Filters from question', _filters_text(snapshot.generated_filters, snapshot.generated_numeric)),
+    ])
+    for dimension in snapshot.dimensions or ():
+        lead, value = selection_rule_text(dimension)
+        rows.append((f'Dimension: {dimension.name}', f'{dimension.task.instructions}\nIncluded when: {lead} {value}'))
+    traces = f'{snapshot.total:,}'
+    if request is not None and snapshot.total >= request.population.limit:
+        traces += ' (the trace limit; more traces may match)'
+    rows.append(('Traces', traces))
+    if snapshot.filter_selection_error:
+        rows.append(('Filter warning', f'No filters from the question: {snapshot.filter_selection_error}'))
+    if snapshot.plan_warning:
+        rows.append(('Plan warning', snapshot.plan_warning))
+    return [(escape(name), escape(value)) for name, value in rows]
+
+
+async def _poll(
+    store: Any, snapshot: RunSnapshot, console: Console, *, active: frozenset[str], timeout: float
+) -> RunSnapshot:
     last_progress = _progress_key(snapshot)
     if debug_enabled():
         _print_progress(console, snapshot)
 
     async def poll() -> RunSnapshot:
         nonlocal snapshot, last_progress
-        while snapshot.state not in {'completed', 'failed', 'cancelled'}:
+        while snapshot.state in active:
             await asyncio.sleep(0.5)
             snapshot = await store.snapshot_for_render() if isinstance(store, RunStore) else await store.snapshot()
             progress = _progress_key(snapshot)
@@ -215,7 +263,10 @@ async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot
         return await store.snapshot() if isinstance(store, RunStore) else snapshot
 
     try:
-        return await asyncio.wait_for(poll(), timeout=MAX_FIND_WAIT_SECONDS)
+        if debug_enabled():
+            return await asyncio.wait_for(poll(), timeout=timeout)
+        with console.status('Finding traces…'):
+            return await asyncio.wait_for(poll(), timeout=timeout)
     except asyncio.TimeoutError as error:
         try:
             await asyncio.wait_for(store.cancel(), timeout=10)
@@ -224,9 +275,45 @@ async def _run(store: Any, request: RunRequest, console: Console) -> RunSnapshot
         raise TimeoutError(f'Find run exceeded the {MAX_FIND_WAIT_SECONDS}-second wait limit.') from error
 
 
-async def _run_with_cleanup(store: Any, request: RunRequest, console: Console, resolved: Any, orq: Any) -> RunSnapshot:
+async def _run(store: Any, request: RunRequest, console: Console, *, yes: bool = False) -> RunSnapshot | None:
+    """Compile for review, confirm the plan, then classify; ``None`` when the user declines.
+
+    Planning and classification share one wait budget; time at the prompt does not count.
+    """
+    loop = asyncio.get_running_loop()
+    began = loop.time()
+    snapshot = await store.compile(request, wait=False)
+    snapshot = await _poll(store, snapshot, console, active=frozenset({'compiling'}), timeout=MAX_FIND_WAIT_SECONDS)
+    if snapshot.state != 'awaiting_review':
+        return snapshot
+    planning = loop.time() - began
+    dimensions = snapshot.dimensions or ()
+    noun = 'trace' if snapshot.total == 1 else 'traces'
+    confirmed = await confirm_run_plan(
+        console,
+        title='Find plan',
+        rows=_plan_rows(snapshot),
+        prompt=f'Classify {snapshot.total:,} {noun}?',
+        # A zero-dimension plan makes no classify calls, so there is nothing to approve.
+        skip_confirm=should_skip_confirm(yes) or not dimensions,
+    )
+    if not confirmed:
+        return None
+    snapshot = await store.start(snapshot.request, dimensions, wait=False)
+    return await _poll(
+        store,
+        snapshot,
+        console,
+        active=frozenset({'compiling', 'classifying'}),
+        timeout=max(MAX_FIND_WAIT_SECONDS - planning, 0),
+    )
+
+
+async def _run_with_cleanup(
+    store: Any, request: RunRequest, console: Console, resolved: Any, orq: Any, *, yes: bool
+) -> RunSnapshot | None:
     try:
-        return await _run(store, request, console)
+        return await _run(store, request, console, yes=yes)
     finally:
         try:
             await store.close()
@@ -247,6 +334,10 @@ def find(
     debug: Annotated[  # noqa: FBT002 — named CLI flag
         bool,
         typer.Option('--debug', help='Show progress and model requests and responses, including trace content.'),
+    ] = False,
+    yes: Annotated[  # noqa: FBT002 (named CLI flag)
+        bool,
+        typer.Option('--yes', '-y', help='Skip the plan confirmation prompt.'),
     ] = False,
     profile: Annotated[
         str | None,
@@ -364,18 +455,20 @@ def find(
         runner_entered = True
         console = Console()
         with cli_debug(active=debug):
-            if debug_enabled():
-                snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq))
-            else:
-                with console.status('Finding traces…'):
-                    snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq))
+            snapshot = asyncio.run(_run_with_cleanup(store, request, console, resolved, orq, yes=yes))
     except (CompileError, FilterSelectionError, OrqSourceError, TimeoutError, ValueError) as exc:
         emit_error(exc)
         raise typer.Exit(code=1) from None
+    except KeyboardInterrupt:
+        typer.echo('\nInterrupted.')
+        raise typer.Exit(code=130) from None
     finally:
         if not runner_entered:
             asyncio.run(_close_clients(resolved, orq))
 
+    if snapshot is None:
+        console.print('Cancelled; no traces were classified.')
+        return
     if snapshot.state != 'completed' or snapshot.failed:
         detail = (
             snapshot.error
