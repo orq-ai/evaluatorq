@@ -48,8 +48,8 @@ from evaluatorq.dashboard.insights_run_form import (
     render_run_form,
     render_run_page,
 )
-from evaluatorq.dashboard.insights_trace_source import load_orq_record, load_snapshot_record, source_not_rereadable
 from evaluatorq.dashboard.insights_sessions_views import render_session_results
+from evaluatorq.dashboard.insights_trace_source import load_orq_record, load_snapshot_record, source_not_rereadable
 from evaluatorq.dashboard.insights_uploads import (
     MAX_INSIGHTS_UPLOAD_BYTES,
     SNAPSHOT_TOO_LARGE_MESSAGE,
@@ -112,6 +112,7 @@ from evaluatorq.trace_finder.settings import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
     from evaluatorq.common.model_catalogue import ModelInfo
     from evaluatorq.contracts import RunManifest
     from evaluatorq.dashboard.auth import DashboardAuth
