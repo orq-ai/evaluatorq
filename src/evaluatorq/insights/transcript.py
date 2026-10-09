@@ -31,6 +31,7 @@ from evaluatorq.common.model_input import (
     is_jev_model,
     jev_state,
     jev_state_char_limit,
+    pair_tool_call_results,
     serialized_chars,
     serialized_question_chars,
 )
@@ -325,36 +326,17 @@ def _jev_tool_activity_chunks(
 
 
 def _jev_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    calls: list[dict[str, Any]] = []
-    latest_call_by_id: dict[str, dict[str, Any]] = {}
-    orphans: list[tuple[int, dict[str, Any]]] = []
-    for message_index, message in enumerate(messages):
-        if message.get('role') == 'assistant':
-            for call_index, call in enumerate(message.get('tool_calls') or []):
-                if not isinstance(call, dict):
-                    continue
-                record = {
-                    'index': message_index,
-                    'call_index': call_index,
-                    'call': _jev_activity_call(call),
-                    'results': [],
-                }
-                calls.append(record)
-                call_id = call.get('id')
-                if isinstance(call_id, str):
-                    latest_call_by_id[call_id] = record
-        elif message.get('role') == 'tool':
-            call_id = message.get('tool_call_id')
-            record = latest_call_by_id.get(call_id) if isinstance(call_id, str) else None
-            if record is None:
-                orphans.append((message_index, message))
-            else:
-                record['results'].append((message_index, message))
-
+    call_records, orphan_records = pair_tool_call_results(messages)
     units = [
-        {'kind': 'call', 'index': record['index'], 'order': record['call_index'], 'record': record} for record in calls
+        {
+            'kind': 'call',
+            'index': record['index'],
+            'order': record['call_index'],
+            'record': {**record, 'call': _jev_activity_call(record['call'])},
+        }
+        for record in call_records
     ]
-    units.extend({'kind': 'orphan', 'index': index, 'order': 0, 'message': result} for index, result in orphans)
+    units.extend({'kind': 'orphan', 'index': index, 'order': 0, 'message': result} for index, result in orphan_records)
     units.sort(key=itemgetter('index', 'order'))
     return units
 
@@ -391,45 +373,50 @@ def _jev_activity_call(call: dict[str, Any]) -> dict[str, Any]:
     return {**call, 'arguments': _shell_command(arguments)}
 
 
-def _jev_activity_events(
-    units: list[dict[str, Any]],
-) -> list[tuple[int, int, int, str, dict[str, Any], dict[str, Any] | None]]:
-    events: list[tuple[int, int, int, str, dict[str, Any], dict[str, Any] | None]] = []
+def _jev_activity_source(
+    context: list[dict[str, Any]], units: list[dict[str, Any]]
+) -> tuple[
+    list[dict[str, Any]],
+    dict[tuple[int, int], dict[str, Any]],
+    dict[int, dict[str, Any]],
+    set[tuple[int, int]],
+    set[int],
+]:
+    source = list(context)
+    call_groups: dict[int, list[dict[str, Any]]] = {}
+    events: list[tuple[int, int, str, Any, dict[str, Any] | None]] = []
     for unit in units:
         if unit['kind'] == 'call':
             record = unit['record']
-            events.append((record['index'], record['call_index'], 0, 'call', record['call'], record))
-            events.extend((index, 0, 1, 'result', result, record) for index, result in record['results'])
+            call_groups.setdefault(record['index'], []).append(record)
+            events.extend((index, 1, 'result', result, record) for index, result in record['results'])
         else:
-            events.append((unit['index'], unit['order'], 1, 'orphan', unit['message'], None))
-    events.sort(key=itemgetter(slice(3)))
-    return events
+            events.append((unit['index'], 1, 'orphan', unit['message'], None))
+    events.extend((index, 0, 'calls', records, None) for index, records in call_groups.items())
+    events.sort(key=itemgetter(0, 1))
 
-
-def _jev_activity_source(
-    context: list[dict[str, Any]], units: list[dict[str, Any]]
-) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]], dict[int, dict[str, Any]], set[int], set[int]]:
-    source = list(context)
-    call_metadata: dict[int, dict[str, Any]] = {}
+    call_metadata: dict[tuple[int, int], dict[str, Any]] = {}
     result_metadata: dict[int, dict[str, Any]] = {}
-    expected_calls: set[int] = set()
+    expected_calls: set[tuple[int, int]] = set()
     expected_results: set[int] = set()
-    for _, _, _, kind, message, record in _jev_activity_events(units):
-        index = len(source)
-        if kind == 'call':
-            if record is None:
-                raise ValueError('Jev tool call is missing its pairing record')
-            source.append({'role': 'assistant', 'tool_calls': [message]})
-            expected_calls.add(index)
-            paired = tuple(result for _, result in record['results'])
-            call_id = record['call'].get('id')
-            metadata: dict[str, Any] = {'status': _tool_call_status(call_id, paired)}
-            category = _tool_result_category(call_id, paired)
-            if category is not None:
-                metadata['diagnostic'] = category
-            call_metadata[index] = metadata
+    for _, _, kind, message, record in events:
+        if kind == 'calls':
+            records = sorted(message, key=itemgetter('call_index'))
+            message_index = len(source)
+            source.append({'role': 'assistant', 'tool_calls': [call_record['call'] for call_record in records]})
+            for call_index, call_record in enumerate(records):
+                identity = (message_index, call_index)
+                expected_calls.add(identity)
+                paired = tuple(result for _, result in call_record['results'])
+                call_id = call_record['call'].get('id')
+                metadata: dict[str, Any] = {'status': _tool_call_status(call_id, paired)}
+                category = _tool_result_category(call_id, paired)
+                if category is not None:
+                    metadata['diagnostic'] = category
+                call_metadata[identity] = metadata
             continue
 
+        index = len(source)
         source.append(message)
         expected_results.add(index)
         if kind == 'result' and record is not None and _call_name(record['call']) in SHELL_TOOLS:
@@ -441,16 +428,20 @@ def _jev_activity_source(
 
 
 def _annotate_jev_activity_state(
-    state: dict[str, Any], call_metadata: dict[int, dict[str, Any]], result_metadata: dict[int, dict[str, Any]]
-) -> tuple[set[int], set[int]]:
-    visible_calls: set[int] = set()
+    state: dict[str, Any],
+    call_metadata: dict[tuple[int, int], dict[str, Any]],
+    result_metadata: dict[int, dict[str, Any]],
+) -> tuple[set[tuple[int, int]], set[int]]:
+    visible_calls: set[tuple[int, int]] = set()
     visible_results: set[int] = set()
     for entry in state.get('messages', []):
         if entry.get('type') == 'tool_call':
             index = entry.get('index')
-            if isinstance(index, int):
-                visible_calls.add(index)
-                entry.update(call_metadata.get(index, {}))
+            call_index = entry.get('call_index')
+            if isinstance(index, int) and isinstance(call_index, int):
+                identity = (index, call_index)
+                visible_calls.add(identity)
+                entry.update(call_metadata.get(identity, {}))
             for result in entry.get('results', []):
                 result_index = result.get('index') if isinstance(result, dict) else None
                 if isinstance(result_index, int):

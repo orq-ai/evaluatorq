@@ -129,16 +129,58 @@ def effective_trace_input_chars() -> int:
     return effective_settings().trace_input_chars
 
 
-def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[str, Any]:
-    """Build scrubbed, indexed message entries with each tool call grouped with its results."""
-    entries: list[dict[str, Any]] = []
+def pair_tool_call_results(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[tuple[int, dict[str, Any]]]]:
+    """Pair results with duplicate call ids FIFO within the latest assistant message group."""
     calls: list[dict[str, Any]] = []
     latest_call_group_by_id: dict[str, tuple[int, list[dict[str, Any]]]] = {}
     next_call_index_by_id: dict[str, int] = {}
-    orphan_results: list[dict[str, Any]] = []
+    orphan_results: list[tuple[int, dict[str, Any]]] = []
+
+    for index, message in enumerate(messages):
+        role = message.get('role')
+        if role == 'assistant':
+            for call_index, call in enumerate(message.get('tool_calls') or []):
+                if not isinstance(call, dict):
+                    continue
+                record = {'index': index, 'call_index': call_index, 'call': call, 'results': []}
+                calls.append(record)
+                call_id = call.get('id')
+                if isinstance(call_id, str):
+                    group = latest_call_group_by_id.get(call_id)
+                    if group is None or group[0] != index:
+                        latest_call_group_by_id[call_id] = (index, [record])
+                        next_call_index_by_id[call_id] = 0
+                    else:
+                        group[1].append(record)
+        elif role == 'tool':
+            call_id = message.get('tool_call_id')
+            if not isinstance(call_id, str) or call_id not in latest_call_group_by_id:
+                orphan_results.append((index, message))
+            else:
+                _, matching_calls = latest_call_group_by_id[call_id]
+                call_index = min(next_call_index_by_id.get(call_id, 0), len(matching_calls) - 1)
+                matching_calls[call_index]['results'].append((index, message))
+                next_call_index_by_id[call_id] = min(call_index + 1, len(matching_calls))
+
+    return calls, orphan_results
+
+
+def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[str, Any]:
+    """Build scrubbed, indexed message entries with each tool call grouped with its results."""
+    call_records, orphan_records = pair_tool_call_results(messages)
+    entries: list[dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
+    orphan_results = [
+        {'index': index, 'role': 'tool', 'type': 'orphan_result', **_result(message, global_char_cap)}
+        for index, message in orphan_records
+    ]
 
     for index, message in enumerate(messages):
         role = message.get('role', 'unknown')
+        if role == 'tool':
+            continue
         if role in {'system', 'developer', 'user', 'assistant'}:
             body, media = _content(message.get('content'))
             body = cap_text(body, global_char_cap)[0]
@@ -150,47 +192,21 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
                     'text': body,
                     **({'media': media} if media else {}),
                 })
-        if role == 'tool':
-            call_id = message.get('tool_call_id')
-            if not isinstance(call_id, str) or call_id not in latest_call_group_by_id:
-                orphan_results.append({
-                    'index': index,
-                    'role': 'tool',
-                    'type': 'orphan_result',
-                    **_result(message, global_char_cap),
-                })
-            else:
-                _, matching_calls = latest_call_group_by_id[call_id]
-                call_index = min(next_call_index_by_id.get(call_id, 0), len(matching_calls) - 1)
-                matching_calls[call_index]['results'].append(_result_entry(message, index, global_char_cap))
-                next_call_index_by_id[call_id] = min(call_index + 1, len(matching_calls))
-            continue
-        if role == 'assistant':
-            for call_index, call in enumerate(message.get('tool_calls') or []):
-                if not isinstance(call, dict):
-                    continue
-                function = call.get('function') if isinstance(call.get('function'), dict) else {}
-                call_id = call.get('id')
-                call_entry: dict[str, Any] = {
-                    'index': index,
-                    'call_index': call_index,
-                    'role': 'assistant',
-                    'type': 'tool_call',
-                    'id': call_id,
-                    'name': function.get('name', call.get('name')),
-                    'input': cap_text(
-                        clean_model_text(function.get('arguments', call.get('arguments'))), global_char_cap
-                    )[0],
-                    'results': [],
-                }
-                calls.append(call_entry)
-                if isinstance(call_id, str):
-                    group = latest_call_group_by_id.get(call_id)
-                    if group is None or group[0] != index:
-                        latest_call_group_by_id[call_id] = (index, [call_entry])
-                        next_call_index_by_id[call_id] = 0
-                    else:
-                        group[1].append(call_entry)
+
+    for record in call_records:
+        call = record['call']
+        function = call.get('function') if isinstance(call.get('function'), dict) else {}
+        call_id = call.get('id')
+        calls.append({
+            'index': record['index'],
+            'call_index': record['call_index'],
+            'role': 'assistant',
+            'type': 'tool_call',
+            'id': call_id,
+            'name': function.get('name', call.get('name')),
+            'input': cap_text(clean_model_text(function.get('arguments', call.get('arguments'))), global_char_cap)[0],
+            'results': [_result_entry(message, index, global_char_cap) for index, message in record['results']],
+        })
 
     entries.extend(calls)
     entries.extend(orphan_results)

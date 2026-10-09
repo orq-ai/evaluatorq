@@ -745,6 +745,7 @@ def test_jev_activity_pairs_repeated_ids_and_preserves_orphan_results() -> None:
                 {'id': 'parallel', 'function': {'name': 'Bash', 'arguments': '{"command":"parallel"}'}},
             ],
         },
+        {'role': 'tool', 'tool_call_id': 'duplicate', 'content': 'first result'},
         {'role': 'tool', 'tool_call_id': 'duplicate', 'content': 'second result'},
         {'role': 'tool', 'tool_call_id': 'parallel', 'content': 'parallel result'},
         {
@@ -761,7 +762,7 @@ def test_jev_activity_pairs_repeated_ids_and_preserves_orphan_results() -> None:
     entries = state['messages']
     activity = [entry for entry in entries if entry['type'] == 'tool_call']
     assert [entry['input'] for entry in activity] == ['first', 'second', 'parallel', 'third']
-    assert activity[0]['results'] == []
+    assert activity[0]['results'][0]['text'] == 'first result'
     assert activity[1]['results'][0]['text'] == 'second result'
     assert activity[2]['results'][0]['text'] == 'parallel result'
     assert activity[3]['results'][0]['text'] == 'third result'
