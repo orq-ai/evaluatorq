@@ -131,29 +131,77 @@ def test_orq_run_with_a_different_span_never_shows_substituted_conversation(
     async def source(app: Any, run: InsightsRun):
         traces = FakeTraces(
             pages={None: ([summary('trace-1', messages=[])], False, None)},
-            spans={'trace-1': [span('span-other', minute=1)]},
+            spans={'trace-1': [_named_span('span-other', name='current trace root', minute=1)]},
             details={('trace-1', 'span-other'): detail('span-other', 'substituted transcript secret', minute=1)},
         )
         yield OrqTraceSource(cast(Any, FakeOrq(traces)))
 
-    monkeypatch.setattr(insights_routes, '_trace_source', source)
-    warnings: list[str] = []
-    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
-    try:
-        client = TestClient(build_app())
-        response = client.get(CONVERSATION)
-        spans = client.get(SPANS)
-        assert response.status_code == 200
-    finally:
-        logger.remove(sink)
+    client = TestClient(build_app())
+    response = client.get(CONVERSATION)
+    spans = client.get(SPANS)
+
 
     assert 'substituted transcript secret' not in response.text
     assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' in response.text
-    assert len([message for message in warnings if 'conversation unavailable' in message]) == 2
     assert 'trace-spans' not in response.text
     assert spans.status_code == 200
-    assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' in spans.text
+    assert 'current trace root' in spans.text
+    assert 'substituted transcript secret' not in spans.text
+    assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' not in spans.text
     assert 'span-other' not in spans.text
+
+
+def test_spans_route_renders_when_conversation_query_fails(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+    _api_key_auth(monkeypatch)
+
+    class FailingQuery(FakeTraces):
+        async def query_async(self, **kwargs: Any) -> Any:
+            self.query_calls.append(kwargs)
+            raise RuntimeError('conversation query unavailable')
+
+    traces = FailingQuery(
+        {},
+        spans={'trace-1': [_named_span('span-root', name='current trace root', minute=0)]},
+    )
+    monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: FakeOrq(traces))
+    client = TestClient(build_app())
+
+    conversation = client.get(CONVERSATION)
+    query_count = len(traces.query_calls)
+    spans = client.get(SPANS)
+
+    assert 'Conversation unavailable' in conversation.text
+    assert 'current trace root' in spans.text
+    assert len(traces.query_calls) == query_count
+
+
+def test_spans_route_renders_when_conversation_timestamp_is_missing(
+    env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = minimal_run.model_copy(
+        update={
+            'population': {'mode': 'query'},
+            'traces': [minimal_run.traces[0].model_copy(update={'timestamp': None}), *minimal_run.traces[1:]],
+        }
+    )
+    _write_run(env, run)
+    _api_key_auth(monkeypatch)
+    traces = FakeTraces(
+        {},
+        spans={'trace-1': [_named_span('span-root', name='current trace root', minute=0)]},
+    )
+    monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: FakeOrq(traces))
+    client = TestClient(build_app())
+
+    conversation = client.get(CONVERSATION)
+    spans = client.get(SPANS)
+
+    assert 'did not record when the trace ran' in conversation.text
+    assert 'trace-spans?trace_id=trace-1' in conversation.text
+    assert 'current trace root' in spans.text
 
 
 
