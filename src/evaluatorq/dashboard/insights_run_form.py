@@ -81,7 +81,7 @@ RUN_PRESETS: tuple[RunPreset, ...] = (
         description='Frustration, outcome, risky actions',
         dimensions=('intent', 'failure'),
         labels=('user_frustration',),
-        coding_labels=('task_type', 'outcome', 'unfixed_error', 'risky_action'),
+        coding_labels=tuple(spec.name for spec in CODING_LABELS[1:]),
     ),
 )
 

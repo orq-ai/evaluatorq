@@ -33,6 +33,8 @@ All notable changes to `evaluatorq` are documented here.
 - **Trace finder planning and filtering now explain more of what happened.** Descriptive phrases such as `coding agents` become classifier dimensions instead of being treated as numeric-only questions, boolean selections accept `true` and `false` labels, model or provider filters can find model-level traces, and Within results names the filter and nearest loaded value when every row is dropped. Numeric-only plans with uncovered words show a warning that names the uncovered question text.
 ### Notable defaults
 
+- **The Insights Coding agent preset now selects every coding-agent question.** Verified, Scope creep and User corrections join Task type, Outcome, Unfixed error and Risky action; you can still turn individual questions off.
+
 - **The Trace Finder projection budget is now 500,000 serialized UTF-8 bytes per trace, up from 50,000.** The projection already compresses tool calls and long fields, so the hard cap only trims the oldest conversation units of very long traces. A Finder classification call on a long trace can now carry up to ten times as much input, and the Insights trace file preview and saved projection coverage measure against the new budget.
 
 - **The Insights run form and the dashboard launch spec now default to up to 200 traces.** The form already showed 200, but a submission without a limit fell back to 100. The CLI default is unchanged.
