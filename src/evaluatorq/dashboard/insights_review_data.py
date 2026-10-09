@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import quote, urlencode
 
 from evaluatorq.common.structured_output import sum_structured_usage
 from evaluatorq.dashboard.insights_launch import SOURCE_BY_MODE, SOURCES
 from evaluatorq.dashboard.insights_review_projection import review_trace_key, review_xy, review_xy_state
+from evaluatorq.dashboard.insights_trace_source import conversation_rereadable
 from evaluatorq.dashboard.insights_views import _signal_summary, _trace_href
 from evaluatorq.dashboard.trace_links import trace_span_url
-from evaluatorq.insights.models import label_key, real_assistant_errors
+from evaluatorq.insights.models import label_key, reads_snapshot, real_assistant_errors
 from evaluatorq.insights.presets import CODING_LABELS
 from evaluatorq.insights.transcript import SHELL_TOOLS
 
@@ -73,6 +74,7 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
         }
         for result in run.labels.values()
     ]
+    trace_view: Literal['analysis', 'trace'] = 'trace' if conversation_rereadable(run) else 'analysis'
     traces: list[dict[str, object]] = []
     for trace in run.traces:
         answers: dict[str, list[object]] = {}
@@ -94,12 +96,8 @@ def build_review_payload(run: InsightsRun) -> dict[str, object]:
             'id': review_trace_key(trace),
             'trace_id': trace.trace_id,
             'span_id': trace.span_id,
-            'trace_url': _trace_href(run, trace),
-            'orq_url': (
-                trace_span_url(trace.trace_id, trace.span_id)
-                if run.population.get('mode') != 'snapshot' and not run.population.get('snapshot_path')
-                else None
-            ),
+            'trace_url': _trace_href(run, trace, view=trace_view),
+            'orq_url': (trace_span_url(trace.trace_id, trace.span_id) if not reads_snapshot(run.population) else None),
             'ts': _timestamp(getattr(trace, 'timestamp', None)),
             'agent': trace.agent_name,
             'l': answers,

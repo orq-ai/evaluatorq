@@ -13,7 +13,7 @@ from evaluatorq.signals import registry
 from evaluatorq.signals.models import Evidence, Precondition, SignalReport, SignalResult, result
 from evaluatorq.signals.registry import compute_signals
 
-from .conftest import agent, call, ok, spawned, traj, user
+from .conftest import agent, call, context, ok, spawned, traj, user
 
 
 def _fine(ctx):
@@ -122,6 +122,49 @@ def test_result_turns_a_failed_required_precondition_into_no_basis() -> None:
 def test_result_sorts_evidence_by_path_then_step() -> None:
     ev = [Evidence(step_id=3), Evidence(step_id=1, agent_path=('s',)), Evidence(step_id=2)]
     assert [(e.agent_path, e.step_id) for e in result('x', 'A', 1, ev).evidence] == [((), 2), ((), 3), (('s',), 1)]
+
+
+def test_source_coverage_failure_keeps_signal_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
+    coverage = Precondition(name='source tool activity represented', met=False, detail='unrepresented: shell @step 2')
+    monkeypatch.setattr(registry.pre, 'source_tool_coverage', lambda _ctx: coverage)
+    evidence = [Evidence(step_id=2, call_id='c1', reason='observed call')]
+    computed = SignalResult(
+        name='tool_call_count', group='B', value=1, evidence=evidence,
+        reason='one call observed', rule_version='rules-7',
+    )
+
+    failed = registry._require_source_tool_coverage(computed, context(traj([user()])))
+
+    assert failed.value is None
+    assert failed.no_basis == coverage.detail
+    assert failed.evidence == evidence
+    assert failed.reason == 'one call observed'
+    assert failed.rule_version == 'rules-7'
+    assert failed.preconditions[-1] == coverage
+
+
+def test_inherited_coverage_failure_keeps_tag_diagnostics() -> None:
+    evidence = [Evidence(step_id=3, reason='tagged')]
+    computed = SignalResult(
+        name='tool_churn', group='D', value=True, evidence=evidence,
+        reason='retry condition met', rule_version='rules-8',
+    )
+    prior = {
+        'tool_call_count': SignalResult(
+            name='tool_call_count', group='B', no_basis='unrepresented source tool',
+            preconditions=[Precondition(name='source tool activity represented', met=False, detail='missing result')],
+        ),
+    }
+
+    failed = registry._inherit_source_tool_coverage(computed, 'tool_churn', prior)
+
+    assert failed.value is None
+    assert failed.no_basis == 'tool-dependent metrics unavailable: tool_call_count'
+    assert failed.evidence == evidence
+    assert failed.reason == 'retry condition met'
+    assert failed.rule_version == 'rules-8'
+    assert failed.preconditions[-1].name == 'source tool activity represented'
+    assert failed.preconditions[-1].met is False
 
 
 def test_report_values_omit_no_basis_but_keep_zero() -> None:

@@ -183,10 +183,35 @@ def _segment(items: list[dict[str, Any]], starts: dict[int, Response]) -> list[_
     }
     for item in items:
         kind = item.get('type')
-        if isinstance(kind, str) and kind not in handlers and (is_sdk_output_item(item) or kind.endswith('_call')):
-            handlers[kind] = unmapped_output
+        if isinstance(kind, str) and kind not in handlers:
+            if kind.endswith('_call_output'):
+                handlers[kind] = lambda _, raw, drafts=drafts: _attach_builtin_output(raw, drafts)
+            elif is_sdk_output_item(item) or kind.endswith('_call'):
+                handlers[kind] = unmapped_output
     walk_items(items, handlers, 'ATIF')
     return drafts
+
+
+def _attach_builtin_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
+    """Keep unsupported built-in tool results as raw activity and close their agent turn."""
+    last = drafts[-1] if drafts and drafts[-1].source == 'agent' else _Draft(source='agent')
+    if not drafts or last is not drafts[-1]:
+        drafts.append(last)
+    last.unmapped_results.append(item)
+    last.result_order.append({
+        'type': 'builtin',
+        'index': sum(1 for prior in last.unmapped_results[:-1] if _is_builtin_result(prior)),
+    })
+    last.seen_result = True
+
+
+def _is_builtin_result(item: Any) -> bool:
+    kind = item.get('type') if isinstance(item, dict) else None
+    return (
+        isinstance(kind, str)
+        and kind.endswith('_call_output')
+        and kind not in ('function_call_output', 'custom_tool_call_output')
+    )
 
 
 def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
@@ -196,7 +221,11 @@ def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
             break
         if any(call.get('call_id') == call_id for call in draft.unmapped_outputs):
             draft.unmapped_results.append(item)
-            draft.result_order.append({'type': 'custom', 'index': len(draft.unmapped_results) - 1})
+            draft.result_order.append({
+                'type': 'custom',
+                'index': sum(1 for result in draft.unmapped_results if result.get('type') == 'custom_tool_call_output')
+                - 1,
+            })
             draft.seen_result = True
             return
     logger.warning('custom_tool_call_output for call_id {!r} matches no custom_tool_call; preserving it.', call_id)
@@ -204,7 +233,10 @@ def _attach_custom_output(item: dict[str, Any], drafts: list[_Draft]) -> None:
     if not drafts or last is not drafts[-1]:
         drafts.append(last)
     last.unmapped_results.append(item)
-    last.result_order.append({'type': 'custom', 'index': len(last.unmapped_results) - 1})
+    last.result_order.append({
+        'type': 'custom',
+        'index': sum(1 for result in last.unmapped_results if result.get('type') == 'custom_tool_call_output') - 1,
+    })
     last.seen_result = True
 
 
@@ -343,10 +375,12 @@ def _agent_step(draft: _Draft, step_id: int) -> AtifStep:
     if response is not None:
         placeholder = _is_placeholder(response)
         extra.update(_response_extra(response, placeholder=placeholder))
+        response_tools = [tool.model_dump(mode='json', exclude_none=True) for tool in response.tools]
+        if response_tools or not placeholder:
+            # Preserve explicit empty schemas for real Responses. Synthetic placeholders created by
+            # atif_to_responses keep the key absent unless they carry actual tool definitions.
+            extra[_RESPONSE_TOOLS_KEY] = response_tools
         if not placeholder:
-            response_tools = [tool.model_dump(mode='json', exclude_none=True) for tool in response.tools]
-            if response_tools:
-                extra[_RESPONSE_TOOLS_KEY] = response_tools
             fields = {
                 'model_name': response.model or None,
                 'timestamp': (
@@ -656,42 +690,57 @@ def _agent_items(step: AtifStep, seed: str) -> list[dict[str, Any]]:
     outputs: list[dict[str, Any]] = []
     unmapped = (step.extra or {}).get(_UNMAPPED_OUTPUTS_KEY)
     if isinstance(unmapped, list):
-        outputs = [
-            item
-            for item in unmapped
-            if isinstance(item, dict) and (is_output_item(item) or is_raw_tool_call(item) or is_sdk_output_item(item))
-        ]
-        if len(outputs) != len(unmapped):
+        outputs = [item for item in unmapped if _is_restorable_raw_output(item)]
+        if len(outputs) + sum(_is_builtin_result(item) for item in unmapped) != len(unmapped):
             logger.warning('Step {} has malformed Responses output items; dropping them.', step.step_id)
         insertion = next(
             (index for index, item in enumerate(items) if item.get('type') == 'function_call_output'), len(items)
         )
         items[insertion:insertion] = outputs
     results: list[dict[str, Any]] = []
+    builtin_results: list[dict[str, Any]] = []
+    if isinstance(unmapped, list):
+        builtin_results.extend(item for item in unmapped if isinstance(item, dict) and _is_builtin_result(item))
     raw_results = (step.extra or {}).get(_UNMAPPED_RESULTS_KEY)
     if isinstance(raw_results, list):
         results = [
-            item for item in raw_results if isinstance(item, dict) and item.get('type') == 'custom_tool_call_output'
+            item
+            for item in raw_results
+            if isinstance(item, dict) and (item.get('type') == 'custom_tool_call_output' or _is_builtin_result(item))
         ]
         if len(results) != len(raw_results):
-            logger.warning('Step {} has malformed Responses custom tool results; dropping them.', step.step_id)
-    _order_result_items(items, results, (step.extra or {}).get(_RESULT_ORDER_KEY))
+            logger.warning('Step {} has malformed Responses unmapped tool results; dropping them.', step.step_id)
+        builtin_results.extend(item for item in results if _is_builtin_result(item))
+        results = [item for item in results if not _is_builtin_result(item)]
+    _order_result_items(items, results, builtin_results, (step.extra or {}).get(_RESULT_ORDER_KEY))
     return items
 
 
-def _order_result_items(items: list[dict[str, Any]], custom_results: list[dict[str, Any]], order: Any) -> None:
+def _is_restorable_raw_output(item: Any) -> bool:
+    return (
+        isinstance(item, dict)
+        and not _is_builtin_result(item)
+        and (is_output_item(item) or is_raw_tool_call(item) or is_sdk_output_item(item))
+    )
+
+
+def _order_result_items(
+    items: list[dict[str, Any]], custom_results: list[dict[str, Any]], builtin_results: list[dict[str, Any]], order: Any
+) -> None:
     ordinary = [item for item in items if item.get('type') == 'function_call_output']
     if not isinstance(order, list):
-        items.extend(custom_results)
+        items.extend([*custom_results, *builtin_results])
         return
-    expected = {('function', index) for index in range(len(ordinary))} | {
-        ('custom', index) for index in range(len(custom_results))
-    }
+    expected = (
+        {('function', index) for index in range(len(ordinary))}
+        | {('custom', index) for index in range(len(custom_results))}
+        | {('builtin', index) for index in range(len(builtin_results))}
+    )
     observed: list[tuple[str, int]] = []
     for entry in order:
         if (
             not isinstance(entry, dict)
-            or entry.get('type') not in ('function', 'custom')
+            or entry.get('type') not in ('function', 'custom', 'builtin')
             or not isinstance(entry.get('index'), int)
             or isinstance(entry.get('index'), bool)
         ):
@@ -699,12 +748,12 @@ def _order_result_items(items: list[dict[str, Any]], custom_results: list[dict[s
             break
         observed.append((entry['type'], entry['index']))
     if len(observed) != len(expected) or set(observed) != expected:
-        logger.warning('Malformed Responses result order metadata; restoring function results before custom results.')
+        logger.warning('Malformed Responses result order metadata; restoring function, custom and built-in results.')
         items[:] = [item for item in items if item.get('type') != 'function_call_output']
         insertion = next(
             (index for index, item in enumerate(items) if item.get('type') == 'custom_tool_call_output'), len(items)
         )
-        items[insertion:insertion] = [*ordinary, *custom_results]
+        items[insertion:insertion] = [*ordinary, *custom_results, *builtin_results]
         return
     combined: list[dict[str, Any]] = []
     for entry in order:
@@ -715,8 +764,10 @@ def _order_result_items(items: list[dict[str, Any]], custom_results: list[dict[s
             combined.append(ordinary[index])
         elif entry.get('type') == 'custom' and 0 <= index < len(custom_results):
             combined.append(custom_results[index])
-    if len(combined) != len(ordinary) + len(custom_results):
-        combined = [*ordinary, *custom_results]
+        elif entry.get('type') == 'builtin' and 0 <= index < len(builtin_results):
+            combined.append(builtin_results[index])
+    if len(combined) != len(ordinary) + len(custom_results) + len(builtin_results):
+        combined = [*ordinary, *custom_results, *builtin_results]
     items[:] = [item for item in items if item.get('type') != 'function_call_output']
     items.extend(combined)
 

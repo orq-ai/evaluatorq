@@ -36,6 +36,7 @@ from evaluatorq.insights.models import (
     StageFailure,
     TraceInsight,
     label_key,
+    reads_orq,
     real_assistant_errors,
 )
 from evaluatorq.insights.population import PopulationError, resolve_population
@@ -58,7 +59,7 @@ MIN_CLUSTER_SIZE = 5
 LOW_CONFIDENCE = 0.6
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
     from openai import AsyncOpenAI
@@ -432,6 +433,7 @@ async def insights(  # noqa: C901
     _finder_export_source: Path | None = None,
     _finder_export_sha256: str | None = None,
     _source_name: str | None = None,
+    _orq_scope: Mapping[str, str | None] | None = None,
     _on_saved: Callable[[Path], None] | None = None,
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
@@ -595,6 +597,8 @@ async def insights(  # noqa: C901
                     run.population['finder_export_sha256'] = _finder_export_sha256
             if _source_name:
                 run.population['source_name'] = _source_name
+            if _orq_scope is not None and reads_orq(run.population):
+                run.population['orq_scope'] = dict(_orq_scope)
             truncated = resolved.echo.get('n_projection_truncated', 0)
             if truncated:
                 trace_count = len(resolved.traces)

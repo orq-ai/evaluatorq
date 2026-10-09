@@ -27,6 +27,7 @@ from evaluatorq.dashboard.insights_run_form import (
     OFFERED_LABELS,
     RUN_PRESETS,
     RunFormValues,
+    _saved_source,
     render_run_form,
 )
 from evaluatorq.common.run_manifest import start_manifest
@@ -155,6 +156,27 @@ def test_from_run_clears_a_missing_uploaded_file_and_asks_for_a_fresh_one(tmp_pa
     assert kept.error is None
 
 
+@pytest.mark.parametrize(
+    ('population', 'expected'),
+    [
+        ({}, 'recent'),
+        ({'mode': 'snapshot'}, 'snapshot'),
+        ({'mode': 'export', 'snapshot_path': '/x.json'}, 'snapshot'),
+        ({'mode': 'export', 'finder_export': '/x.json', 'query': 'refunds'}, 'finder'),
+        ({'finder_export': '/x.json'}, 'finder'),
+        ({'mode': 'finder'}, 'finder'),
+        ({'mode': 'query'}, 'query'),
+        ({'query': 'refunds'}, 'query'),
+        ({'mode': 'export', 'query': 'refunds'}, 'query'),
+        ({'mode': 'export'}, 'recent'),
+        ({'mode': 'filter'}, 'recent'),
+        ({'mode': 'dataset'}, 'recent'),
+    ],
+)
+def test_saved_source_maps_each_saved_population_to_its_form_source(population: dict[str, object], expected: str) -> None:
+    assert _saved_source(population) == expected
+
+
 def test_from_form_reads_query_parameters_and_form_data_the_same_way() -> None:
     from starlette.datastructures import FormData, QueryParams
 
@@ -275,6 +297,7 @@ def test_plan_route_reports_the_validation_message(monkeypatch: pytest.MonkeyPat
     assert response.status_code == 422
     assert 'role="alert"' in response.text
     assert 'Browse to choose a trace file first' in response.text
+
 
 @pytest.fixture(autouse=True)
 def _no_orq_lookups(monkeypatch: pytest.MonkeyPatch) -> None:

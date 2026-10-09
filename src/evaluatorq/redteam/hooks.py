@@ -23,6 +23,7 @@ from loguru import logger
 
 from evaluatorq.common.async_utils import combine_confirm, fan_out
 from evaluatorq.common.cli_tty import shell_path
+from evaluatorq.common.reports.console import render_plan_table
 from evaluatorq.common.reports.html_helpers import pct
 from evaluatorq.redteam.contracts import AgentCapability, PipelineStage
 from evaluatorq.redteam.reports.display import print_report_summary
@@ -474,13 +475,8 @@ class RichHooks:
 
     async def on_confirm(self, payload: ConfirmPayload) -> bool:
         """Render a detailed run plan and prompt for confirmation."""
-        from rich import box
-        from rich.table import Table
-
         # ── Run parameters table ────────────────────────────────────────
-        table = Table(title='Run Plan', show_header=True, header_style='bold', box=box.ROUNDED)
-        table.add_column('Parameter', style='white', min_width=20)
-        table.add_column('Value', style='cyan')
+        rows: list[tuple[str, str]] = []
 
         target = payload.get('target', '?')
         mode = payload.get('mode', '?')
@@ -494,38 +490,36 @@ class RichHooks:
         num_dynamic = payload.get('num_dynamic')
         num_static = payload.get('num_static')
 
-        table.add_row('Target', str(target))
-        table.add_row('Mode', str(mode))
+        rows.extend([('Target', str(target)), ('Mode', str(mode))])
 
         # A replay runs stored cases verbatim — say so up front, or the plan is
         # indistinguishable from a fresh run that generated its own datapoints.
         replay_of = payload.get('replay_of')
         if replay_of:
-            table.add_row('Replay Of', str(replay_of))
+            rows.append(('Replay Of', str(replay_of)))
 
         # Compute target count from agent_contexts or comma-separated target string
         agent_contexts_raw = payload.get('agent_contexts') or {}
         num_targets = len(agent_contexts_raw) or 1
 
         if num_dp is not None:
-            table.add_row('Datapoints', str(num_dp))
+            rows.append(('Datapoints', str(num_dp)))
             if num_targets > 1:
                 total_attacks = num_dp * num_targets
-                table.add_row(
-                    'Total Attacks',
-                    f'{total_attacks} ({num_dp} datapoints × {num_targets} targets)',  # noqa: RUF001
-                )
+                rows.append(('Total Attacks', f'{total_attacks} ({num_dp} datapoints × {num_targets} targets)'))  # noqa: RUF001
 
-        table.add_row('Categories', str(len(categories)))
-        table.add_row('Attack Model', str(attack_model))
-        table.add_row('Evaluator Model', str(evaluator_model))
-        table.add_row('Max Turns', str(max_turns))
-        table.add_row('Parallelism', str(datapoint_parallelism))
+        rows.extend([
+            ('Categories', str(len(categories))),
+            ('Attack Model', str(attack_model)),
+            ('Evaluator Model', str(evaluator_model)),
+            ('Max Turns', str(max_turns)),
+            ('Parallelism', str(datapoint_parallelism)),
+        ])
 
         if dataset_path:
-            table.add_row('Dataset', str(dataset_path))
+            rows.append(('Dataset', str(dataset_path)))
 
-        self._console.print(table)
+        render_plan_table(self._console, title='Run Plan', rows=rows, parameter_width=20)
 
         # Detected capabilities tables are rendered earlier, in
         # on_stage_end(CONTEXT_RETRIEVAL), so the operator sees per-resource

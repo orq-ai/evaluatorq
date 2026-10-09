@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from loguru import logger
 import pytest
 from pydantic import ValidationError
 from starlette.testclient import TestClient
@@ -19,7 +20,7 @@ from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.dashboard import insights_routes
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.auth import DashboardAuth, auth_identity
+from evaluatorq.dashboard.auth import DashboardAuth, account_identity, account_label, auth_identity, verified_account_identity
 from evaluatorq.dashboard.insights_launch import (
     MAX_FINDER_EXPORT_BYTES,
     InsightsLaunchPayload,
@@ -33,7 +34,7 @@ from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.presets import CUSTOMER_SATISFACTION, SENTIMENT
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import save_run
-from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection, Snapshot
 from evaluatorq.trace_finder.settings import DashboardSettings
 from tests.dashboard.test_insights_page import minimal_run
 from tests.insights.test_population import _run_export, make_trace
@@ -98,6 +99,286 @@ def test_oauth_identity_changes_with_signed_in_account(monkeypatch: pytest.Monke
     assert 'user-two' not in second
 
 
+def test_auth_identity_hash_is_unchanged_by_the_account_split() -> None:
+    settings = DashboardSettings.model_validate({'orq_workspace': 'ws-a', 'orq_project_id': 'proj-1'})
+
+    identity = auth_identity(DashboardAuth('environment', 'sk-test-123', 'https://my.orq.ai/'), settings)
+
+    assert identity == '2513154a6929ee4ab08e05523f36628fb7c294f0a3e3b9bfecfd56803a477862'
+
+
+def test_account_identity_ignores_scope_and_tells_accounts_apart() -> None:
+    research = OrqProfile(name='research', api_key='key-a', server=None, active=False)
+    other = OrqProfile(name='other', api_key='key-a', server=None, active=False)
+    auth = DashboardAuth('cli_profile', 'key-a', 'https://my.orq.ai', research)
+
+    assert account_identity(auth) == account_identity(
+        DashboardAuth('cli_profile', 'key-a', 'https://my.orq.ai/', research)
+    )
+    assert account_identity(auth) != account_identity(DashboardAuth('cli_profile', 'key-a', 'https://my.orq.ai', other))
+    assert account_identity(auth) != account_identity(
+        DashboardAuth('cli_profile', 'key-b', 'https://my.orq.ai', research)
+    )
+    assert account_label(auth) == 'research on my.orq.ai'
+    assert account_label(DashboardAuth('environment', 'key-a', 'https://my.orq.ai')) == 'ORQ_API_KEY on my.orq.ai'
+
+
+def test_worker_passes_the_account_and_scope_without_a_secret(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    seen: dict[str, object] = {}
+
+    async def fake_insights(population: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return type('Run', (), {'status': 'completed'})()
+
+    auth = DashboardAuth('environment', 'sk-secret-key', 'https://my.orq.ai')
+    settings = DashboardSettings.model_validate({
+        'orq_auth_method': 'environment',
+        'orq_workspace': 'ws-a',
+        'orq_project_id': 'proj-a',
+    })
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: settings)
+    class Orq:
+        workspaces = type('Workspaces', (), {'list_async': AsyncMock(return_value=type('Response', (), {'data': [type('Workspace', (), {'id': 'workspace-verified'})()]})())})()
+
+    monkeypatch.setattr(
+        insights_worker, 'build_auth_clients', lambda *_a, **_k: (Orq(), type('C', (), {'close': AsyncMock()})())
+    )
+    monkeypatch.setattr(insights_worker, 'close_orq_client', AsyncMock())
+    monkeypatch.setattr(insights_worker, 'insights', fake_insights)
+    payload = InsightsLaunchPayload(run_id='r', run_name='n', runs_dir=tmp_path, spec=InsightsLaunchSpec())
+
+    assert asyncio.run(insights_worker._run_with_selected_auth(payload, InsightsPopulation(query='refunds'))) is True
+
+    assert seen['_orq_scope'] == {
+        'account': asyncio.run(verified_account_identity(auth, Orq())),
+        'account_version': '2',
+        'account_label': 'ORQ_API_KEY on my.orq.ai',
+        'workspace': 'ws-a',
+        'project': 'proj-a',
+    }
+    assert 'sk-secret-key' not in json.dumps(seen['_orq_scope'])
+
+def test_worker_warns_and_keeps_legacy_identity_when_provider_verification_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    seen: dict[str, object] = {}
+    auth = DashboardAuth('environment', 'sk-secret-key', 'https://my.orq.ai')
+    settings = DashboardSettings.model_validate({'orq_auth_method': 'environment'})
+
+    async def fake_insights(population: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return type('Run', (), {'status': 'completed'})()
+
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: settings)
+    monkeypatch.setattr(insights_worker, 'resolve_dashboard_auth', lambda settings: auth)
+    monkeypatch.setattr(
+        insights_worker, 'build_auth_clients', lambda *_a, **_k: (object(), type('C', (), {'close': AsyncMock()})())
+    )
+    monkeypatch.setattr(insights_worker, 'close_orq_client', AsyncMock())
+    monkeypatch.setattr(insights_worker, 'verified_account_identity', AsyncMock(side_effect=RuntimeError('unavailable')))
+    monkeypatch.setattr(insights_worker, 'insights', fake_insights)
+    payload = InsightsLaunchPayload(run_id='r', run_name='n', runs_dir=tmp_path, spec=InsightsLaunchSpec())
+    warnings: list[str] = []
+    sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
+    try:
+        assert asyncio.run(insights_worker._run_with_selected_auth(payload, InsightsPopulation(query='refunds'))) is True
+    finally:
+        logger.remove(sink)
+
+    scope = seen['_orq_scope']
+    assert isinstance(scope, dict)
+    assert scope['account'] == account_identity(auth)
+    assert scope['account_version'] is None
+    assert 'sk-secret-key' not in json.dumps(scope)
+    assert len(warnings) == 1
+    assert 'Could not verify the Orq account' in warnings[0]
+    assert 'sk-secret-key' not in warnings[0]
+
+
+def test_worker_does_not_verify_or_persist_orq_scope_for_local_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.dashboard import insights_worker
+
+    snapshot_path = tmp_path / 'snapshot.json'
+    snapshot_path.write_text(Snapshot(traces=[make_trace('snapshot-trace', span_id='root', content='hello')]).model_dump_json())
+    spec = InsightsLaunchSpec(source='snapshot', snapshot_path=str(snapshot_path))
+    settings = DashboardSettings.model_validate({'orq_auth_method': 'environment'})
+    auth = DashboardAuth('environment', 'key', 'https://my.orq.ai')
+    seen: dict[str, object] = {}
+
+    async def fake_insights(population: object, **kwargs: object) -> object:
+        seen.update(kwargs)
+        return type('Run', (), {'status': 'completed'})()
+
+    monkeypatch.setattr(insights_worker, 'effective_settings', lambda: settings)
+    monkeypatch.setattr(insights_worker, 'resolve_dashboard_auth', lambda settings: auth)
+    monkeypatch.setattr(
+        insights_worker, 'build_auth_clients', lambda *_a, **_k: (object(), type('C', (), {'close': AsyncMock()})())
+    )
+    monkeypatch.setattr(insights_worker, 'close_orq_client', AsyncMock())
+    verify = AsyncMock(side_effect=AssertionError('local snapshots must not verify an Orq account'))
+    monkeypatch.setattr(insights_worker, 'verified_account_identity', verify)
+    monkeypatch.setattr(insights_worker, 'insights', fake_insights)
+    payload = InsightsLaunchPayload(run_id='r', run_name='n', runs_dir=tmp_path, spec=spec)
+
+    assert asyncio.run(insights_worker._run_with_selected_auth(payload, spec.population())) is True
+
+    verify.assert_not_awaited()
+    assert seen['_orq_scope'] is None
+
+
+def test_verified_workspace_identity_survives_key_rotation_and_separates_workspaces() -> None:
+    async def identity(key: str, workspace_id: str) -> str:
+        auth = DashboardAuth('environment', key, 'https://my.orq.ai/')
+        client = type(
+            'Client',
+            (),
+            {'workspaces': type(
+                'Workspaces',
+                (),
+                {'list_async': AsyncMock(return_value=type(
+                    'Response', (), {'data': [type('Workspace', (), {'id': workspace_id})()]}
+                )())},
+            )()},
+        )()
+        return await verified_account_identity(auth, client)
+
+    assert asyncio.run(identity('key-one', 'workspace-a')) == asyncio.run(identity('key-two', 'workspace-a'))
+    assert asyncio.run(identity('key-one', 'workspace-a')) != asyncio.run(identity('key-one', 'workspace-b'))
+
+
+def test_verified_oauth_identity_ignores_selected_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.common import cli_oauth
+
+    monkeypatch.setattr(cli_oauth, 'oauth_subject', lambda _server: {
+        'user_id': 'user-one', 'workspace_id': 'workspace-a', 'project_id': 'project-a'
+    })
+    auth = DashboardAuth('cli_oauth', None, 'https://my.orq.ai')
+    first = asyncio.run(verified_account_identity(auth, object()))
+    monkeypatch.setattr(cli_oauth, 'oauth_subject', lambda _server: {
+        'user_id': 'user-one', 'workspace_id': 'workspace-b', 'project_id': 'project-b'
+    })
+    assert asyncio.run(verified_account_identity(auth, object())) == first
+
+
+def test_verified_project_identity_survives_key_rotation() -> None:
+    import httpx
+    from orq_ai_sdk.models import APIDefaultError, ListProjectsResponse, Project
+
+    response = httpx.Response(
+        403,
+        request=httpx.Request('GET', 'https://my.orq.ai/v2/workspaces'),
+        text='Project keys cannot list workspaces',
+    )
+    forbidden = APIDefaultError('API error occurred', response)
+
+    async def identity(key: str, project_id: str) -> str:
+        auth = DashboardAuth('environment', key, 'https://my.orq.ai/')
+        project = Project.model_construct(project_id=project_id)
+        client = type(
+            'Client',
+            (),
+            {
+                'workspaces': type(
+                    'Workspaces',
+                    (),
+                    {'list_async': AsyncMock(side_effect=forbidden)},
+                )(),
+                'projects': type(
+                    'Projects',
+                    (),
+                    {
+                        'list_async': AsyncMock(
+                            return_value=ListProjectsResponse.model_construct(data=[project], has_more=False)
+                        )
+                    },
+                )(),
+            },
+        )()
+        return await verified_account_identity(auth, client)
+
+    first = asyncio.run(identity('key-one', 'project-a'))
+    assert first == asyncio.run(identity('key-two', 'project-a'))
+    assert first != asyncio.run(identity('key-one', 'project-b'))
+
+
+def test_verified_identity_rejects_truncated_workspace_listing() -> None:
+    from orq_ai_sdk.models import ListWorkspacesResponse, Workspace
+
+    auth = DashboardAuth('environment', 'key', 'https://my.orq.ai')
+    response = ListWorkspacesResponse.model_construct(
+        data=[Workspace.model_construct(id='workspace-a')], has_more=True
+    )
+    client = type(
+        'Client',
+        (),
+        {'workspaces': type('Workspaces', (), {'list_async': AsyncMock(return_value=response)})()},
+    )()
+
+    with pytest.raises(ValueError, match='multiple workspaces'):
+        asyncio.run(verified_account_identity(auth, client))
+
+@pytest.mark.parametrize(
+    ('project_ids', 'has_more', 'reason'),
+    [(['project-a'], True, 'multiple projects'), (['project-a', 'project-b'], False, 'exactly one project')],
+)
+def test_verified_project_identity_rejects_ambiguous_project_pages(
+    project_ids: list[str], has_more: bool, reason: str
+) -> None:
+    import httpx
+    from orq_ai_sdk.models import APIDefaultError, ListProjectsResponse, Project
+
+    forbidden = APIDefaultError(
+        'API error occurred',
+        httpx.Response(
+            403,
+            request=httpx.Request('GET', 'https://my.orq.ai/v2/workspaces'),
+            text='Project keys cannot list workspaces',
+        ),
+    )
+    page = ListProjectsResponse.model_construct(
+        data=[Project.model_construct(project_id=project_id) for project_id in project_ids],
+        has_more=has_more,
+    )
+    client = type(
+        'Client',
+        (),
+        {
+            'workspaces': type('Workspaces', (), {'list_async': AsyncMock(side_effect=forbidden)})(),
+            'projects': type('Projects', (), {'list_async': AsyncMock(return_value=page)})(),
+        },
+    )()
+    auth = DashboardAuth('environment', 'key', 'https://my.orq.ai')
+
+    with pytest.raises(ValueError, match=reason):
+        asyncio.run(verified_account_identity(auth, client))
+
+
+
+def test_verified_project_identity_does_not_fallback_after_non_403_workspace_error() -> None:
+    from orq_ai_sdk.models import ListProjectsResponse
+
+    projects = AsyncMock(return_value=ListProjectsResponse.model_construct(data=[], has_more=False))
+    failure = RuntimeError('temporary provider outage')
+    client = type(
+        'Client',
+        (),
+        {
+            'workspaces': type('Workspaces', (), {'list_async': AsyncMock(side_effect=failure)})(),
+            'projects': type('Projects', (), {'list_async': projects})(),
+        },
+    )()
+    auth = DashboardAuth('environment', 'key', 'https://my.orq.ai')
+
+    with pytest.raises(RuntimeError, match='temporary provider outage'):
+        asyncio.run(verified_account_identity(auth, client))
+
+    projects.assert_not_awaited()
 def test_launch_persists_plan_before_spawning_worker(tmp_path: Path) -> None:
     spec = InsightsLaunchSpec(source='query', query='refunds', labels=['sentiment'], dimensions=['intent', 'failure'])
     with (
@@ -1919,7 +2200,7 @@ def test_selected_profile_controls_facets_and_worker_credentials(
     assert token is not None
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
         patch('evaluatorq.dashboard.insights_launch.subprocess.Popen') as spawn,
@@ -1953,7 +2234,7 @@ def test_missing_selected_profile_never_uses_environment(monkeypatch: pytest.Mon
     assert token is not None
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client') as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client') as resolve,
         patch('evaluatorq.dashboard.insights_routes.launch_insights') as launch,
     ):
         facets = client.get('/insights/facets?window_days=7')
@@ -1989,7 +2270,7 @@ def test_reloaded_selected_profile_is_used_and_named_when_orq_rejects_it(
         status_code = 401
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch(
             'evaluatorq.dashboard.insights_routes.load_facet_catalogue',
             new_callable=AsyncMock,
@@ -2039,7 +2320,7 @@ def test_facet_cache_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_pat
     getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'first'})
     getattr(client.app, 'state').finder_profile = OrqProfile('first', 'first-key', None, False)
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2072,7 +2353,7 @@ async def test_concurrent_insights_facet_misses_share_one_provider_call(
         return catalogue
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2103,7 +2384,7 @@ async def test_settings_generation_change_discards_stale_insights_facet_fetch(
         return FacetCatalogue(project=('old-profile',))
 
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2126,7 +2407,7 @@ def test_facet_cache_key_tracks_same_profile_credentials_and_endpoint(
     getattr(client.app, 'state').finder_settings = DashboardSettings.model_validate({'orq_profile': 'same'})
     getattr(client.app, 'state').finder_profile = OrqProfile('same', 'first-secret', 'https://first.example', False)
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()) as resolve,
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()) as resolve,
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, return_value=FacetCatalogue()),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2146,7 +2427,7 @@ def test_facet_options_use_selected_window_and_keep_values(monkeypatch: pytest.M
     catalogue = FacetCatalogue(status=('ok',), provider=('openai',))
     load = AsyncMock(return_value=catalogue)
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2175,7 +2456,7 @@ def test_facet_catalogue_failure_is_visible(monkeypatch: pytest.MonkeyPatch, tmp
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     client = TestClient(build_app())
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', new_callable=AsyncMock, side_effect=RuntimeError('Orq unavailable')),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):
@@ -2193,7 +2474,7 @@ def test_facet_retry_bypasses_failed_cache_and_preserves_selection(
     client = TestClient(build_app())
     load = AsyncMock(side_effect=[RuntimeError('Orq unavailable'), FacetCatalogue(status=('ok',))])
     with (
-        patch('evaluatorq.dashboard.insights_routes.resolve_orq_client', return_value=object()),
+        patch('evaluatorq.dashboard.auth.resolve_orq_client', return_value=object()),
         patch('evaluatorq.dashboard.insights_routes.load_facet_catalogue', load),
         patch('evaluatorq.dashboard.insights_routes.close_orq_client', new_callable=AsyncMock),
     ):

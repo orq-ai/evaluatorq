@@ -28,7 +28,7 @@ from evaluatorq.dashboard.insights_uploads import is_uploaded_source, upload_kin
 from evaluatorq.dashboard.insights_views import _back_to_runs
 from evaluatorq.dashboard.shell import icon, page
 from evaluatorq.dashboard.view import model_control
-from evaluatorq.insights.models import DimensionName, LabelSpec
+from evaluatorq.insights.models import DimensionName, LabelSpec, population_source
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, effective_settings
@@ -224,14 +224,17 @@ def _custom_labels(raw: str) -> tuple[LabelSpec, ...]:
 
 
 def _saved_source(population: Mapping[str, object]) -> Source:
+    population_kind = population_source(population)
+    if population_kind == 'snapshot':
+        return 'snapshot'
     source = SOURCE_BY_MODE.get(str(population.get('mode')))
     if source is not None:
         return source
-    if population.get('snapshot_path'):
-        return 'snapshot'
     if population.get('finder_export'):
         return 'finder'
-    return 'query' if population.get('query') else 'recent'
+    if population_kind == 'query' or population.get('query'):
+        return 'query'
+    return 'recent'
 
 
 def _saved_file_usable(source: Source, path: Path, runs_dir: Path) -> bool:
