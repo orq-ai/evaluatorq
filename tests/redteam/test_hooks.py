@@ -226,6 +226,10 @@ class TestRichHooks:
         asyncio.run(hooks.on_confirm(payload))
         output = buf.getvalue()
         assert '30' in output or 'Datapoint' in output
+        assert '│ Parameter            │ Value' in output
+        assert output.index('│ Target') < output.index('│ Mode') < output.index('│ Datapoints')
+        assert 'Replay Of' not in output
+        assert 'Total Attacks' not in output
 
     def _stage_end_meta(
         self,

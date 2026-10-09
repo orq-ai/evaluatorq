@@ -18,13 +18,26 @@ if TYPE_CHECKING:
     from rich.console import Console
 
 
-def render_plan_table(console: Console, *, title: str, rows: list[tuple[str, str]]) -> None:
-    """Render a ROUNDED Parameter/Value table."""
+def render_plan_table(
+    console: Console,
+    *,
+    title: str,
+    rows: list[tuple[str, str]],
+    parameter_width: int = 18,
+) -> None:
+    """Render a ROUNDED Parameter/Value table.
+
+    Args:
+        console: Rich Console to print to.
+        title: Table title shown in the header.
+        rows: Sequence of (parameter, value) pairs to add as table rows.
+        parameter_width: Minimum width of the Parameter column.
+    """
     import rich.box as box
     from rich.table import Table
 
     table = Table(title=title, show_header=True, header_style='bold', box=box.ROUNDED)
-    table.add_column('Parameter', style='white', min_width=18)
+    table.add_column('Parameter', style='white', min_width=parameter_width)
     table.add_column('Value', style='cyan')
     for name, value in rows:
         table.add_row(name, value)
