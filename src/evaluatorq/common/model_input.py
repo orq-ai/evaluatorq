@@ -133,7 +133,8 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
     """Build scrubbed, indexed message entries with each tool call grouped with its results."""
     entries: list[dict[str, Any]] = []
     calls: list[dict[str, Any]] = []
-    latest_call_by_id: dict[str, dict[str, Any]] = {}
+    latest_call_group_by_id: dict[str, tuple[int, list[dict[str, Any]]]] = {}
+    next_call_index_by_id: dict[str, int] = {}
     orphan_results: list[dict[str, Any]] = []
 
     for index, message in enumerate(messages):
@@ -151,8 +152,7 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
                 })
         if role == 'tool':
             call_id = message.get('tool_call_id')
-            call = latest_call_by_id.get(call_id) if isinstance(call_id, str) else None
-            if call is None:
+            if not isinstance(call_id, str) or call_id not in latest_call_group_by_id:
                 orphan_results.append({
                     'index': index,
                     'role': 'tool',
@@ -160,7 +160,10 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
                     **_result(message, global_char_cap),
                 })
             else:
-                call['results'].append(_result_entry(message, index, global_char_cap))
+                _, matching_calls = latest_call_group_by_id[call_id]
+                call_index = min(next_call_index_by_id.get(call_id, 0), len(matching_calls) - 1)
+                matching_calls[call_index]['results'].append(_result_entry(message, index, global_char_cap))
+                next_call_index_by_id[call_id] = min(call_index + 1, len(matching_calls))
             continue
         if role == 'assistant':
             for call_index, call in enumerate(message.get('tool_calls') or []):
@@ -182,7 +185,12 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
                 }
                 calls.append(call_entry)
                 if isinstance(call_id, str):
-                    latest_call_by_id[call_id] = call_entry
+                    group = latest_call_group_by_id.get(call_id)
+                    if group is None or group[0] != index:
+                        latest_call_group_by_id[call_id] = (index, [call_entry])
+                        next_call_index_by_id[call_id] = 0
+                    else:
+                        group[1].append(call_entry)
 
     entries.extend(calls)
     entries.extend(orphan_results)

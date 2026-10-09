@@ -91,6 +91,51 @@ def test_jev_tool_call_pairs_every_matching_result_and_retains_status() -> None:
     assert any(item['type'] == 'orphan_result' for item in state['messages'])
 
 
+def test_jev_duplicate_tool_call_ids_pair_results_in_source_order() -> None:
+    source = [
+        {
+            'role': 'assistant',
+            'tool_calls': [
+                {'id': 'call-duplicate', 'function': {'name': 'first', 'arguments': 'a'}},
+                {'id': 'call-duplicate', 'function': {'name': 'second', 'arguments': 'b'}},
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'call-duplicate', 'content': 'first result'},
+        {'role': 'tool', 'tool_call_id': 'call-duplicate', 'content': 'second result'},
+    ]
+
+    state = jev_state(source, global_char_cap=500_000)
+    calls = [item for item in state['messages'] if item['type'] == 'tool_call']
+
+    assert [call['name'] for call in calls] == ['first', 'second']
+    assert [[result['text'] for result in call['results']] for call in calls] == [
+        ['first result'],
+        ['second result'],
+    ]
+
+
+def test_jev_reused_tool_call_id_uses_latest_assistant_group() -> None:
+    source = [
+        {
+            'role': 'assistant',
+            'tool_calls': [{'id': 'call-reused', 'function': {'name': 'earlier', 'arguments': 'a'}}],
+        },
+        {
+            'role': 'assistant',
+            'tool_calls': [{'id': 'call-reused', 'function': {'name': 'later', 'arguments': 'b'}}],
+        },
+        {'role': 'tool', 'tool_call_id': 'call-reused', 'content': 'latest result'},
+    ]
+
+    state = jev_state(source, global_char_cap=500_000)
+    calls = [item for item in state['messages'] if item['type'] == 'tool_call']
+
+    assert [call['name'] for call in calls] == ['earlier', 'later']
+    assert calls[0]['results'] == []
+    assert [result['text'] for result in calls[1]['results']] == ['latest result']
+
+
+
 def test_jev_model_gate_and_question_capacity_validation() -> None:
     assert is_jev_model('typesafe/jev-latest')
     assert not is_jev_model('openai/gpt-6-luna')

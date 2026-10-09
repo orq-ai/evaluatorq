@@ -729,6 +729,8 @@ def test_local_snapshot_preview_reports_character_coverage_before_start(tmp_path
             'classifier_model': 'typesafe/jev-latest',
         },
     )
+    assert unknown_questions.status_code == 200
+    assert '500,000 characters' in unknown_questions.text
     assert client.post('/insights/snapshot-preview', data={'snapshot_path': str(path)}).status_code == 403
     assert client.post(
         '/insights/snapshot-preview', data={'csrf': token.group(1), 'snapshot_path': str(tmp_path / 'missing.json')}
