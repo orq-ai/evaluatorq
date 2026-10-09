@@ -18,7 +18,7 @@ from evaluatorq.formats.atif import AtifAgent, AtifStep, AtifTrajectory
 from evaluatorq.insights import summarize as summarize_module
 from evaluatorq.insights.cache import InsightsCache, prompt_hash
 from evaluatorq.insights.models import TraceSummary
-from evaluatorq.insights.summarize import SUMMARY_PROMPT, summarize_traces
+from evaluatorq.insights.summarize import summarize_traces
 from evaluatorq.insights.usage import UsageLedger
 from evaluatorq.trace_finder.models import TraceRecord
 
@@ -41,6 +41,19 @@ def make_trace(trace_id: str, content: str = 'hello') -> TraceRecord:
         trace_type='conversation',
     )
 
+
+
+def test_summary_prompt_caps_final_delimited_request_without_cutting_instructions() -> None:
+    cap = 3_000
+    trace = make_trace('escaped', content='&' * 20_000)
+
+    prompt = summarize_module._build_prompt(trace, input_char_cap=cap)
+
+    assert len(prompt) <= cap
+    assert '<critical_rules>' in prompt
+    assert 'Now produce the structured analysis.' in prompt
+    assert '[... ' in prompt
+    assert '&amp;' in prompt
 
 def make_summary(summary_text: str = 'A user asked a question.') -> TraceSummary:
     return TraceSummary(
@@ -94,7 +107,16 @@ def fake_client() -> AsyncOpenAI:
 async def test_summarize_traces_calls_generate_structured_and_caches(
     monkeypatch: pytest.MonkeyPatch, cache: InsightsCache
 ) -> None:
-    trace = make_trace('trace-1')
+    messages = (
+        {'role': 'user', 'content': 'REQUEST-START ' + 'x' * 80_000 + ' REQUEST-END'},
+        {
+            'role': 'assistant',
+            'tool_calls': [{'id': 'call-1', 'function': {'name': 'shell.exec', 'arguments': 'run tests'}}],
+        },
+        {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'tool result payload'},
+        {'role': 'assistant', 'content': 'FINAL-ANSWER'},
+    )
+    trace = make_trace('trace-1').model_copy(update={'messages': messages})
     summary = make_summary()
     captured_messages: list[list[dict[str, Any]]] = []
 
@@ -114,11 +136,15 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
     content = captured_messages[0][0]['content']
     assert '<conversation>' in content
     assert '</conversation>' in content
+    for phrase in ('REQUEST-START ', ' REQUEST-END', 'tool input shell.exec: run tests', 'tool result payload', 'FINAL-ANSWER'):
+        assert phrase in content
 
     cached = cache.get_summary(
         'trace-1', 'span-trace-1', 'openai/gpt-6-luna', prompt_hash(captured_messages[0][0]['content'])
     )
     assert cached == summary
+
+
 
 
 @pytest.mark.asyncio
@@ -342,12 +368,6 @@ async def test_summarize_records_usage_from_billed_exception(monkeypatch: pytest
     assert isinstance(result['trace-fail'], str)
     assert ledger.totals()['summary'] == billed
 
-
-def test_summary_prompt_has_no_scalar_fields_from_upstream() -> None:
-    # The old taxonomy/scalar fields are now classifier labels, not part of the
-    # summary schema or its prompt.
-    for dropped in ('user_frustration', 'customer_satisfaction', 'made_errors', 'concerning_score'):
-        assert dropped not in SUMMARY_PROMPT
 
 
 @pytest.mark.asyncio

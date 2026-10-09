@@ -81,30 +81,43 @@ def _row(row: StageEstimate, titles: dict[str, str]) -> str:
         else _span(row.seconds_low, row.seconds_high, _duration, prefix='about ')
     )
     return (
-        f'<tr><td>{esc(_title(row, titles))}</td><td>{esc(traces)}</td><td>{esc(cost)}</td><td>{esc(time)}</td>'
+        f'<tr><th scope="row">{esc(_title(row, titles))}</th><td class="num">{esc(traces)}</td>'
+        f'<td class="num">{esc(cost)}</td><td class="num">{esc(time)}</td>'
         f'<td class="irf-estimate-basis">{esc(row.basis)}</td></tr>'
     )
+
+
+def _total(label: str, value: str, basis: str) -> str:
+    detail = f'<dd class="irf-total-basis">{esc(basis)}</dd>' if basis and basis != value else ''
+    return f'<div><dt>{label}</dt><dd class="irf-total-value">{esc(value)}</dd>{detail}</div>'
 
 
 def render_estimate(estimate: RunEstimate, stages: Sequence[tuple[str, str]]) -> str:
     """The review step's full block: totals, each number's basis, the per-stage table and what is unknown."""
     titles = dict(stages)
     traces = 'unknown' if estimate.bound.n is None else _traces_value(estimate)
-    lines = (
-        f'<li><strong>Traces</strong> {esc(traces)} <small>{esc(estimate.bound.basis)}</small></li>'
-        f'<li><strong>Cost</strong> {esc(_cost_value(estimate))} '
-        '<small>traces x tokens per stage x each stage&#x27;s model price from the Orq catalogue</small></li>'
-        f'<li><strong>Time</strong> {esc(_time_value(estimate))} <small>{esc(estimate.time_basis)}</small></li>'
+    totals = (
+        _total('Traces', traces, estimate.bound.basis)
+        + _total(
+            'Cost',
+            _cost_value(estimate),
+            "traces \u00d7 tokens per stage \u00d7 each stage's model price in the Orq catalogue",
+        )
+        + _total('Time', _time_value(estimate), estimate.time_basis)
     )
     note = f'<p class="irf-hint">{esc(estimate.time_note)}.</p>' if estimate.time_note and estimate.seconds_high else ''
     unknowns = ''.join(f'<li>{esc(item)}</li>' for item in estimate.unknowns)
     unknown_block = f'<h5>Unknown</h5><ul class="irf-estimate-unknowns">{unknowns}</ul>' if unknowns else ''
-    head = '<th>Stage</th><th>Traces</th><th>Cost</th><th>Time</th><th>Basis</th>'
+    head = (
+        '<th scope="col">Stage</th><th scope="col" class="num">Traces</th><th scope="col" class="num">Cost</th>'
+        '<th scope="col" class="num">Time</th><th scope="col">Basis</th>'
+    )
     body = ''.join(_row(row, titles) for row in estimate.rows)
     excluded = f'<p class="irf-hint">Not included: {esc("; ".join(estimate.excluded))}.</p>'
     return (
         '<section class="irf-estimate"><h4>Estimate</h4>'
-        f'<ul class="irf-estimate-totals">{lines}</ul>{note}'
-        f'<table class="irf-estimate-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+        f'<dl class="irf-estimate-totals">{totals}</dl>{note}'
+        '<div class="irf-estimate-scroll">'
+        f'<table class="irf-estimate-table no-stack"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
         f'{unknown_block}{excluded}</section>'
     )

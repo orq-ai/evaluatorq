@@ -12,7 +12,7 @@ An Insights run keeps three different things separate. A **classifier** is the m
 | Labels | Fixed classifier questions | One answer per trace for each yes/no (`noul`), choice, or score question, with confidence and probabilities. |
 | Discovered dimensions | Text fields from a per-trace summary | Two-level clusters and saved 3D UMAP coordinates for traces in groups large enough to project. |
 
-The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary model writes these text fields from the compact conversation view described below, including assistant tool calls but excluding tool-result bodies. Tool result bodies are omitted from saved projections because they may contain credentials the projector cannot recognize. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
+The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary request includes every readable conversation message, tool input, and tool result, but its full prompt including analysis instructions fits within the global input cap; the conversation is shortened as needed to leave room for those instructions. The summary model does not reuse the classifier's compact Jev state. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
 
 The run writes its JSON result to `.evaluatorq/insights-runs/` and its manifest under `.evaluatorq/insights-runs/.manifests/`; `EVALUATORQ_DIR` changes the base directory. It does not store message bodies or embedding vectors in the run JSON.
 
@@ -116,15 +116,135 @@ Pass `--coding` (or `coding_analysis=True` in Python, or tick individual **Codin
 | `unfixed_error` | yes/no | Tool calls | Whether a tool error was left unresolved at the end. |
 | `risky_action` | choice | Tool calls | The most serious destructive or hard-to-undo action the agent took without being asked: `none`, `deleted`, `history_rewrite`, `merged_or_closed`, `published`, `infra_change`, or `secret_exposed`. A plain push is routine. |
 
-The conversation labels are asked in the same classifier call as your selected labels. The tool-call labels get their own call. It reads the user turns and, for each tool call, its name, status, and the first 300 characters of its input. To keep long traces inside one classifier call, tool result bodies are cut. A failed call keeps a diagnostic category. A shell call keeps fixed failure markers found anywhere in its output (`nonzero_exit`, `tests_failed`, `exception`, `build_failed`), so `unfixed_error` can see a command that failed inside a call whose status is `completed`, and the first and last 150 characters of that output. The output is scrubbed of credentials in full before it is cut, by a local pattern pass (`scrub_known_secrets`: private keys, tokens, JWTs, password flags and the like; no network call), so secrets reach the classifier as placeholders such as `<API_KEY>` and no fragment of one survives the cut. Other results show `result body omitted`. If a trace's tool calls are too long for one call, Insights cuts the middle only when that loses at most 30% of the text; otherwise it splits the calls into consecutive parts, asks each part separately with the opening user messages repeated, and merges the answers. `risky_action` takes the most confident answer other than `none` from any part, and `unfixed_error` takes the answer from the last part, because an error only counts as unfixed if it is still broken at the end. If a part fails and no other part found anything, the label fails rather than reading as no. You cannot name your own label after one of these. A coding label a trace was not asked counts as not asked, not as failed.
+The conversation labels are asked in the same classifier call as your selected labels. The tool-call labels get their own call. Non-Jev tool views read the first 300 characters of each input; non-shell result bodies are omitted except for a diagnostic category, while shell results also keep fixed failure markers and their first and last 150 characters. Jev tool views keep the first and last 100 characters of each input and result, plus recorded status, exit code, and error code; shell failure markers are checked across the full scrubbed output. Jev inputs and results are scrubbed before excerpting, and non-Jev shell outputs are scrubbed before their excerpts. If a non-Jev tool view is too long, Insights cuts the middle only when at most 30% is lost; otherwise it splits calls into ordered parts. Jev splits complete tool records into chunks that reserve the exact serialized selected questions under the global input cap and fit the Jev state-plus-question ceilings. `risky_action` takes the most confident answer other than `none` from any part, and `unfixed_error` takes the answer from the last part, because an error only counts as unfixed if it is still broken at the end. If a part fails and no other part found anything, the label fails rather than reading as no. You cannot name your own label after one of these. A coding label a trace was not asked counts as not asked, not as failed.
+
+Jev coding-tool requests use filtered structured states containing user messages, calls, paired results, and orphan results. Each chunk reserves the exact serialized coding question payload from the configured total input cap, then keeps complete call/result records together under the resulting Jev state ceiling. Final request fitting cannot drop calls from the middle of a chunk.
 
 ```bash
 eq insights --from-snapshot claude-traces.json --label sentiment --label user_frustration --coding
 ```
 
+## Local coding-agent sessions
+
+A **local session** is one conversation that Claude Code, Claude desktop, Codex or omp saved as a file on your computer. Insights can search those files and analyze the sessions you pick the same way it analyzes traces from Orq. It does not read sessions on another machine, and it does not analyze delegated work; see [Subagents are not analyzed](#subagents-are-not-analyzed).
+
+### Analyze sessions from the CLI
+
+Use `eq insights --sessions` to select and analyze local sessions in one command. This example uses `--project-dir .` and `--from` to analyze up to 1000 of the newest sessions run in the current repository since 1 October:
+
+```bash
+eq insights --sessions --project-dir . --from 2026-10-01 --coding
+```
+
+The command searches locally, freezes the matching sessions into a private temporary snapshot, and uses the normal Insights pipeline. The temporary file is removed when the command ends. `--coding` adds the coding-agent questions described in [Analyze coding agents](#analyze-coding-agents): task type, outcome, whether the agent verified its work, unfixed tool errors and risky actions.
+
+Use `eq agent-sessions` to inspect the matches without model calls, or export a reusable snapshot:
+
+```bash
+eq agent-sessions --project-dir . --from 2026-10-01 --export sessions.json
+eq insights --from-snapshot sessions.json --coding
+```
+
+Listing and exporting read local files only. On POSIX systems, an export is written with owner-only file permissions; on Windows, access depends on the destination folder's permissions. You can still copy or share the snapshot.
+
+`--export` writes the sessions that were listed. Without `--limit`, an export lists up to 1000 sessions, while a plain listing shows 50; an explicit `--limit` always wins. When the list is full, stderr says `Listed the newest 1000 sessions; narrow --from/--to or --text to see more.` Narrow the dates or text so the export holds the sessions you mean to analyze. If the 20-second search deadline cut the search short, stderr also says the export is partial.
+
+To analyze one week, give both ends of it. `--from` starts at midnight local time on that day, `--to` includes the whole of that day, and a session is included when its time span overlaps the window:
+
+```bash
+eq insights --sessions --from 2026-10-05 --to 2026-10-11 --coding
+```
+
+The session list shows when and where each session ran, not how it went. Finding the sessions that went badly takes a model run: `eq insights --sessions --coding` labels each session's outcome, verification, unfixed errors and risky actions. The deterministic [trace signals](#trace-signals) saved with the run count tool errors and retries without a model, but they describe structure, not whether the work succeeded. `eq agent-sessions --json` prints the matches as a JSON array on stdout instead of the table.
+
+To get from a finished run to the sessions that went badly, open the run in `eq dashboard` under **Insights** and select the `outcome` value `not_done` or `partial`, or the `unfixed_error` value yes, in **Themes**; the trace list then holds only those sessions (see [Review a run](#review-a-run)). Each trace ID is `<source>:<session ID>`, built from the `source` and `session_id` fields that `eq agent-sessions --json` prints next to each session's `path`.
+
+A selection holds at most 1000 sessions. Sessions that fail to load are reported on stderr and skipped; the export fails only when none loads. When two selected files share a session ID, the export keeps the one that ends later.
+
+Before the run starts, the CLI states where the sessions go:
+
+```console
+Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
+```
+
+The size is the snapshot file on disk, not the amount sent. Summaries receive the retained readable conversation, tool inputs and tool results, shortened as needed so the whole summary prompt fits `trace_input_chars` (500,000 characters by default). Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); Jev uses structured excerpts rather than the full summary transcript. The embedding model reads the summaries. Known credential patterns are scrubbed locally before rendering, but this does not remove all personal or confidential content. There is no confirmation prompt. Check the models named in that line before you run.
+
+To check what a run would send without sending anything, run the preview. It needs no Orq credential, and it ends with the same sentence worded as what a run would send. Its coverage line uses the run's summary and classifier renderers, configured input cap, classifier model and selected questions:
+
+```bash
+eq insights --from-snapshot sessions.json --preview-input
+```
+
+```console
+Model input coverage: 0 of 2 traces hit a summary or classifier input cap of 500,000 characters. Average rendered inputs: summary 3,053 characters; classifier request 768 (state 412, questions 356). 0 of 8 source messages were omitted from the Jev classifier state.
+A run would send 2 traces (3.9 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
+```
+
+The coverage line reports how many traces hit a summary or classifier cap, average rendered character counts for the summary and combined classifier request, and messages omitted from Jev state. These are character counts, not exact tokenizer counts.
+
+You can preview a fresh selection without exporting it first:
+
+```bash
+eq insights --sessions --project-dir . --from 2026-10-01 --preview-input
+```
+
+### Analyze sessions from the dashboard
+
+In **Insights → New run**, choose **Local sessions**, the third tab next to **Orq traces** and **Trace file**. Use the source checkboxes to select any combination of Claude Code, Claude desktop, Codex and omp. Open the **Last 7 days** menu to choose **Last 30 days** or **All dates**, or expand **Custom range** inside that menu. Set From and To with the native calendar controls, then press **Apply range**. These dates use your browser's local timezone, include the whole To day, and can be left open-ended. Click outside the date menu to close it without changing the date bounds.
+
+**Project directory** includes projects below that directory and linked Git worktrees. Enter `~` for projects under the home directory of the dashboard user, or leave it blank for every recorded project location. **Browse** opens a folder browser on the machine running the dashboard, with breadcrumbs, Home, Parent and more folders when needed. Navigate, then press **Use this folder**; **Cancel** keeps the path you typed. Browsing lists folder names without uploading or reading file contents. The filter matches project locations recorded in sessions; it does not scan project files or look for session stores in that directory.
+
+**Contains text** is a case-insensitive literal substring, not a regular expression. For example, `error` matches `ERROR`, but `error|timeout` searches for those exact characters rather than either word.
+
+Press **Search**, tick the sessions you want, or the header box for all of them, up to 1000, and press **Continue**. That freezes the selection into a snapshot in the dashboard's Insights folder. The **Review** step shows the same `Sending N traces` sentence as the CLI. A snapshot over the 100 MiB upload limit is rejected with a message to select fewer sessions.
+
+When the 20-second deadline passes, the results say `Searched N of M session files before the 20-second limit. Narrow the dates or text to see the rest.`
+
+### Search sessions
+
+`eq agent-sessions` lists sessions newest first. Every filter is optional and they combine. The same filters work with `eq insights --sessions`; that command defaults to 1000 sessions and accepts `--preview-input` to stop before model requests. Session filters require `--sessions`, and local-session selection cannot be combined with `--query`, either file-source option, or Orq population filters.
+
+| Source | Default folders | Override |
+|---|---|---|
+| `claude-code` | `~/.claude/projects` | `CLAUDE_CONFIG_DIR` (replaces `~/.claude`) |
+| `claude-desktop` | Claude desktop's code sessions in `~/.claude/projects`, and Cowork sessions in the folder named below | `CLAUDE_CONFIG_DIR` for the first; none for the Cowork folder |
+| `codex` | `~/.codex/sessions` and `~/.codex/archived_sessions` | `CODEX_HOME` (replaces `~/.codex`) |
+| `omp` | `~/.omp/agent/sessions` | `PI_CODING_AGENT_DIR` (replaces `~/.omp/agent`) |
+
+Cowork is Claude desktop's agent mode, which runs sessions in a virtual machine. Insights reads its sessions from `~/Library/Application Support/Claude/local-agent-mode-sessions` on macOS, `%APPDATA%/Claude/local-agent-mode-sessions` on Windows and `~/.config/Claude/local-agent-mode-sessions` on Linux. Only the macOS path has been checked against a real install. A missing folder is skipped silently.
+
+| Flag | Matches |
+|---|---|
+| `--source` | `claude-code`, `claude-desktop`, `codex` or `omp`; repeat the flag for several. Default: all four |
+| `--from`, `--to` | Sessions whose time span overlaps the window. Both are `YYYY-MM-DD` in local time, and `--to` includes that whole day |
+| `--project-dir` | Sessions run in that directory, below it, or in a linked git worktree of it, so `--project-dir .` also finds sessions from sibling worktrees of the same repository. A deleted worktree and a Cowork VM path match only when written the same way as the session's own path |
+| `--text` | Case-insensitive literal substring in any message, including system notices and Claude's thinking, up to 500 characters; not a regular expression. Tool calls and tool output are not searched |
+| `--limit` | Maximum sessions, 1 to 1000. `eq agent-sessions` defaults to 50, or 1000 with `--export`; `eq insights --sessions` defaults to 1000 |
+| `--json` | On `eq agent-sessions`, print the matches as a JSON array on stdout instead of the table |
+| `--export` | On `eq agent-sessions`, write the listed sessions as a snapshot file |
+
+The search stops at 20 seconds, and the deadline also covers listing the session files, so a very large session folder cannot run past it. The sessions found so far are listed, and stderr says `Searched N of M session files before the 20s limit; narrow --from/--to or --text to see the rest.` M counts the files found before the stop. A short list after that note may be incomplete.
+
+Claude Code, Claude desktop, Codex and omp sessions are listed even when no user prompt appears in the first 256 KB of the file. Such a session has a blank title in the CLI and `(untitled)` in the dashboard, unless Codex stored a thread name.
+
+### Subagents are not analyzed
+
+Subagent transcripts are excluded from search and cannot be selected: Codex subagent rollouts, Claude `subagents/` files and sidechains (Claude's name for a delegated conversation kept apart from the main thread), and omp sessions nested under another session or carrying a `parentSession`. A Codex subagent's report back to the main agent still appears in the main session, as a system message.
+
+### What a session loses on the way in
+
+A session becomes one ATIF trajectory, the step-by-step format Insights stores each trace in, inside a [local trace file](#local-trace-file-format). Some content does not survive:
+
+- Claude hook attachments and Codex encrypted reasoning are dropped.
+- Images become the text `[image]`.
+- Tool output, and each tool argument value, over 20,000 characters is cut with a `[truncated N chars]` marker. This read-time cap bounds memory and snapshot size by keeping the first and last 10,000 characters and removing the middle. Models cannot analyze the removed text; a failure marker found only in that middle is lost.
+- omp extension state (`custom` records) and hidden notices are dropped. omp skill prompts and displayed background-job results are kept.
+
+The model-input cap applies separately to the retained session content: a long summary transcript or classifier state can lose more text to fit its request budget. See [What the classifier reads](#what-the-classifier-reads) for the model-specific caps.
+
 ## What the classifier reads
 
-The classifier does not read the summary. It reads a compact view of the conversation: every user message with injected `<system-reminder>` blocks removed, the start and end of each assistant message, and one line per group of tool calls. Tool outputs are left out. A tool call shows its file, path, or URL; a shell call shows its program, such as `pytest` or `git status`, and a risky shell command appears as written, cut to its first 300 characters like any other tool input. When a view is longer than 75,000 characters (about 25,000 tokens), Insights keeps the opening user messages and the end of the trace and cuts the middle.
+The classifier does not read the summary. `trace_input_chars`, saved in Dashboard Settings and defaulting to 500,000, caps classifier state and the exact serialized question payloads together. For `typesafe/jev` models, the state is indexed and structured; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages. Jev state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched. Other classifiers receive the full readable conversation, including tool inputs and results, shortened as needed to leave room for their selected questions. Known media parts render as placeholders, while unrelated structured content remains JSON. The source trace stays unchanged.
 
 Every trace also records how often it called each tool, shell program, and skill, counted from its messages. The trace detail page lists them under **Tool use**.
 
@@ -207,20 +327,21 @@ Open **Insights → New run**, or click **+ New run** or **Re-run** on a run pag
 
 The step bar shows `1 · Traces`, `2 · Analysis` and `3 · Review`. **Continue** validates the current step, and **Start run** appears on the last. The same bar carries a one-line estimate of traces, cost and time that updates as you change the form.
 
-**1 · Traces.** Choose a source:
+**1 · Traces.** Choose where the traces come from:
 
-| Source | Population | Window, limit and filters |
+| Tab | Population | Window, limit and filters |
 |---|---|---|
-| Recent | Recent traces from Orq | Apply |
-| Question | Traces from the window that the classifier says match your question | Apply |
-| Finder export | The traces in a Trace Finder JSON export | Do not apply; the file defines the population |
-| Local file | A trace snapshot with embedded messages | Do not apply; the file defines the population |
+| Orq traces | Traces from Orq. Leave **Question** blank for every trace in the window, or fill it in and the classifier keeps only the traces that match | Apply: last N days, up to N traces (default 200) and filters |
+| Trace file | The traces in an uploaded file: a Trace Finder JSON export or a local trace snapshot | Do not apply; the file defines the population |
+| Local sessions | Claude Code, Claude desktop, Codex and omp sessions you select; see [Local coding-agent sessions](#local-coding-agent-sessions) | Do not apply; the selection defines the population |
 
-For the two file sources, click **Browse…** and choose a file. There is no path field: the dashboard stores the upload under a random name and keeps the original file name for the run. The dashboard accepts Finder exports up to 10 MiB and snapshots up to 100 MiB. A larger file does not upload; run it from the terminal with `eq insights --from-finder PATH` or `eq insights --from-snapshot PATH`. For a snapshot, the form reports the measured truncation before you start.
+On **Trace file**, click **Browse…** to upload a Finder export or trace snapshot, or select a recent file. There is no path field or file-type choice: the dashboard detects the kind from the content and stores uploads under a random name. The browser sends the selected file's name, not its original file location. A Finder export with `matched_trace_ids` can be up to 10 MiB; a snapshot with `traces` can be up to 100 MiB. Larger files do not upload; run them from the terminal with `eq insights --from-finder PATH` or `eq insights --from-snapshot PATH`. A file with neither key is rejected. For a snapshot, the form reports the measured truncation before you start.
 
-For Recent and Question, **+ Filter** opens the same filter menu as Traces and Trace search, and each chosen value appears as a removable chip. Every value shows how many traces in the selected window carry it, and values are ordered from most to least frequent. Multiple values within one facet match any of them; different facets must all match, and the filters apply before the trace limit. The menu loads from Orq for the selected window. If Orq rejects the credential or cannot be reached, the form says so and keeps your chosen filters; fix the credential in **Settings → Authentication** and click **Retry**.
+The **Recent trace files** list lets you reuse retained uploads and approved Finder exports without uploading them again. Each row shows the filename, kind (Finder export or trace snapshot), trace count, and **Saved / last used** timestamp. An uploaded copy is retained for seven days after its most recent run attempt, including a failed attempt; if you upload a file but never run it, the seven days start at upload. The browser shares the filename with the dashboard, never the original file path.
 
-**2 · Analysis.** A **Preset** ticks a starting selection that you can then change. The presets are **Find failures** (group by failure and intent; ask about assistant mistakes and frustration), **Understand intents** (group by intent), and **Coding agent** (group by intent and failure; ask about frustration; ask the task type, outcome, unfixed error and risky action coding questions). The rest of the step is:
+On **Orq traces**, **+ Filter** opens the same filter menu as Traces and Trace search, and each chosen value appears as a removable chip. Every value shows how many traces in the selected window carry it, and values are ordered from most to least frequent. Multiple values within one facet match any of them; different facets must all match, and the filters apply before the trace limit. The menu loads from Orq for the selected window. If Orq rejects the credential or cannot be reached, the form says so and keeps your chosen filters; fix the credential in **Settings → Authentication** and click **Retry**.
+
+**2 · Analysis.** A **Preset** ticks a starting selection that you can then change. The presets are **Find failures** (group by failure and intent; ask about assistant mistakes and frustration), **Understand intents** (group by intent), and **Coding agent** (group by intent and failure; ask about frustration; ask all coding questions: task type, outcome, verified, scope creep, user corrections, unfixed error and risky action). The rest of the step is:
 
 - **Group traces by** offers the discovered dimensions `intent`, `failure` and `sentiment`.
 - **Ask about every trace** offers the labels `sentiment`, `customer_satisfaction`, `made_errors` and `user_frustration`. **+ Write your own question** adds a custom yes/no, choice, or 1–5 score question. A choice question needs answer names and descriptions, and a score question needs five criteria. Custom names cannot reuse a preset or coding-label name, and the form validates them before launch.
@@ -235,7 +356,7 @@ Without **Assistant mistakes**, the run estimates the error share from the summa
 | Summary model | The per-trace summary | The `summary_model` default of `InsightsConfig` |
 | Classifier model | Label questions; must serve `/classify` | The classifier model from Settings |
 | Embedding model | Embeddings of the summaries | The `embedding_model` default of `InsightsConfig` |
-| Question compiler | Compiling a Question source into a population filter; shown only for that source | The compiler model from Settings |
+| Question compiler | Compiling your question into a population filter; shown only when the **Question** field is filled | The compiler model from Settings |
 
 The run uses the models you pick and records them in its config, so **Re-run** prefills them. Starting a run is rejected when the Orq catalogue says the classifier cannot serve `/classify` or the embedding model is not an embedding model. When the catalogue is unavailable, the pickers become text boxes, a typed id is accepted, and a warning is logged. A blank field falls back to the default.
 
@@ -243,15 +364,15 @@ The run uses the models you pick and records them in its config, so **Re-run** p
 
 ### Read the estimate
 
-The estimate is a ceiling computed before any request is made. It states a basis beside every number, and it shows `unknown` with the reason instead of a number it cannot ground.
+The estimate is computed before any request is made. Trace counts and configured input caps bound the figures where applicable; coding activity can require extra classifier chunks, which the estimate names as unknown. It states a basis beside every number and shows `unknown` with the reason instead of a number it cannot ground.
 
-- **Traces.** A Finder export or snapshot gives an exact count, read from the file. Recent and Question give `up to N`: the smallest of the trace limit and the Orq count for your filters. With no filters it uses the workspace's status counts. With several facets it takes the smallest of the per-facet sums, because a trace must match them all. If Orq truncated a facet's values, or you filter by a project id Orq cannot count, the bound falls back to the trace limit and says why. If the file's count cannot be read, the count is `unknown`.
-- **Cost.** Per stage, traces multiplied by tokens per trace multiplied by the stage model's price in the Orq catalogue. The token figures are caps, not measurements: the classifier and summary read at most the conversation view cap of 75,000 characters at three characters per token, a classify answer is four tokens, the summary writes up to its `max_tokens`, and an embedding is as long as the summary cap. A stage whose model has no price shows `unknown` and is left out of the total, which then reads `(priced stages only)`.
+- **Traces.** A trace file gives an exact count, read from the file. Orq traces give `up to N`: the smallest of the trace limit and the Orq count for your filters. With no filters it uses the workspace's status counts. With several facets it takes the smallest of the per-facet sums, because a trace must match them all. If Orq truncated a facet's values, or you filter by a project id Orq cannot count, the bound falls back to the trace limit and says why. If the file's count cannot be read, the count is `unknown`.
+- **Cost.** Per stage, traces multiplied by the model's input and output estimates and its Orq catalogue price. Input estimates divide the configured character cap by about four for a rough token estimate; this is not the model tokenizer or an exact token-count guarantee. Classifier state and exact serialized questions share the configured cap. Jev state is also limited to 112,000 characters, with state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. The Jev estimate uses up to the smaller of the configured cap and the 256,000-character state-plus-questions ceiling. The summary request, including its analysis prompt, fits within the configured cap; the conversation is shortened as needed to leave room. Long coding activity may require additional chunks, so its estimate is a baseline and marks that cost unknown. A stage whose model has no price shows `unknown` and is left out of the total, which then reads `(priced stages only)`.
 - **Time.** Median per-trace seconds for each stage from your earlier Insights runs, scaled to the parallelism you chose when those runs recorded theirs. It reads `estimated after your first run` until a completed run exists, and `(timed stages only)` when some stages have no earlier timing. The figure is rough.
 
-A Question source labels every trace in range, but only the matching traces reach the summary and embedding stages. Those stages therefore show a range from zero to every trace, and the total shows `$low to $high`. The review step also lists the stages with their traces, cost, time and basis, names what is unknown, and states what the estimate leaves out: trace selection (question compiling and filter choice), and cluster naming and merging.
+An Orq traces run with a question labels every trace in range, but only the matching traces reach the summary and embedding stages. Those stages therefore show a range from zero to every trace, and the total shows `$low to $high`. The review step also lists the stages with their traces, cost, time and basis, names what is unknown, and states what the estimate leaves out: trace selection (question compiling and filter choice), and cluster naming and merging.
 
-Choosing coding questions adds one more classify call per trace, shown as its own row. It is an upper bound, because the call runs only for traces the gate identifies as coding agents, and it is timed at the whole label stage.
+Choosing coding questions adds a baseline of one classify request per coding trace, shown as its own row. The gate skips non-coding traces, while long activity can split into additional chunks; the estimate marks that extra cost as unknown and uses the whole label stage for timing.
 
 The exact cost and progress become visible as the run proceeds. The dashboard continues the run in the background if you restart the dashboard, and saved stage status remains on the run page.
 
@@ -259,7 +380,7 @@ A raw array of session objects is not a snapshot; convert it to `Snapshot` JSON 
 
 ### Local trace file format
 
-A local trace file contains a `traces` array. Each trace needs an ID, a span ID, a timestamp with a timezone, a non-empty `messages` array, and the metadata fields shown below. Empty strings mean the source did not provide a value; do not fill unknown model or provider names by guessing. Save this example as `traces.json`, start `eq dashboard`, choose **Local file** in the new-run form, click **Browse…** and choose the file. The dashboard validates the file before starting the run.
+A local trace file contains a `traces` array. Each trace needs an ID, a span ID, a timestamp with a timezone, a non-empty `messages` array, and the metadata fields shown below. Empty strings mean the source did not provide a value; do not fill unknown model or provider names by guessing. Save this example as `traces.json`, start `eq dashboard`, choose the **Trace file** tab in the new-run form, click **Browse…** and choose the file. The dashboard validates the file before starting the run.
 
 ```json
 {
@@ -284,9 +405,56 @@ A local trace file contains a `traces` array. Each trace needs an ID, a span ID,
 }
 ```
 
-When converting a local session export, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject an empty snapshot. A Finder export cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
+To get local coding-agent sessions into this format, use `eq agent-sessions --export`, which does the conversion. When you convert messages from another tool yourself, keep each session's message order and include assistant `tool_calls` and tool messages in `messages`. The dashboard and CLI reject a snapshot with neither `traces` nor `documents`. A Finder export is accepted on the same tab but cannot replace this file: it does not contain message content and its trace IDs must already exist in Orq.
 
-The summary model receives the compact conversation view, capped at 75,000 characters, plus the analysis prompt. The run form preview and saved population coverage describe a separate Finder projection capped at 50,000 UTF-8 bytes; those counts do not measure the summary prompt. For a local trace file, the run form reports projection truncation before you start the run. For live traces or a Finder export, the completed run reports it after loading. These counts show whole-message omissions and source and projected byte totals. Split long sessions into shorter traces when more of the conversation needs to influence the analysis.
+A snapshot may also carry a `documents` array of trace documents, which `eq agent-sessions --export` writes with `"traces": []` and one document per session. `traces` stays required, so a hand-written file with only `documents` needs `"traces": []`. A document has two fields:
+
+- `metadata` holds the same fields as a trace: `schema_version`, `trace_id`, `span_id`, `timestamp` with a timezone, `project`, `model`, `provider`, `status`, `product` and `trace_type`.
+- `trajectory` is one ATIF trajectory: `schema_version`, `session_id`, an `agent` with `name` and `version`, and `steps`. Each step has a `step_id`, a `source` such as `user` or `agent`, a `message`, and for an agent step optional `tool_calls` and an `observation` with the `results` of those calls.
+
+This file holds one Codex session:
+
+```json
+{
+  "traces": [],
+  "documents": [
+    {
+      "metadata": {
+        "schema_version": 1,
+        "trace_id": "codex:738bbe12",
+        "span_id": "738bbe12",
+        "timestamp": "2026-10-02T16:25:32Z",
+        "project": "/Users/demo/code/shop-api",
+        "model": "gpt-6-sol",
+        "provider": "",
+        "status": "",
+        "product": "local-session",
+        "trace_type": "agent-session"
+      },
+      "trajectory": {
+        "schema_version": "ATIF-v1.7",
+        "session_id": "738bbe12",
+        "agent": {"name": "codex", "version": "0.52.0"},
+        "steps": [
+          {"step_id": 1, "source": "user", "message": "Explain how with_retry decides to give up."},
+          {
+            "step_id": 2,
+            "source": "agent",
+            "message": "",
+            "tool_calls": [{"tool_call_id": "c1", "function_name": "shell", "arguments": {"command": ["rg", "with_retry"]}}],
+            "observation": {"results": [{"source_call_id": "c1", "content": "src/retry.py:12: def with_retry"}]}
+          },
+          {"step_id": 3, "source": "agent", "message": "It retries 3 times and gives up on 4xx responses."}
+        ]
+      }
+    }
+  ]
+}
+```
+
+Trace IDs must be unique across `traces` and `documents`; a duplicate fails the run. A run analyzes the `traces` first, then the `documents`.
+
+The summary prompt, including analysis instructions, fits within the global model-input character cap saved in Dashboard Settings, defaulting to 500,000 characters. Its conversation portion keeps the full readable conversation, tool inputs, and tool results as far as that cap allows. For classification, the exact serialized selected questions share the cap with state. For Jev, the preview uses the same structured state renderer as the model request and reports state, questions, and combined request sizes; Jev additionally applies its 112,000-character state ceiling and the 128,000/256,000-character state-plus-question ceilings. These are character-based estimates, not exact tokenizer counts. The source trace stays intact on disk.
 
 Each run has a state file under `.evaluatorq/insights-runs/.manifests/<run-id>.json` and a report in `.evaluatorq/insights-runs/`. The state file records the stage plan, current stage, outcomes, errors, and report path. The report's `evaluatorq_version` field records the evaluatorq version that produced it; reports saved before this field existed have `null`. The report's `population` block records the source: the filters and time window for a live selection, or the file path and a SHA-256 of its contents (`snapshot_sha256` or `finder_export_sha256`) for a file. A file uploaded in the dashboard is stored under a random name, so its original file name is kept in `source_name`. If a run fails before writing its report, it still appears in the dashboard with the failed stage and error. The worker log is under `.evaluatorq/insights-runs/.logs/<run-id>.log`.
 

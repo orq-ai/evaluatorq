@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import io
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
+
+from evaluatorq.common.model_input import fit_classifier_input, serialized_question_chars
+from evaluatorq.trace_finder.classifier import classifier_questions
 
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyResponse
 from evaluatorq.trace_finder.compiler import CompiledPlan
@@ -24,6 +28,7 @@ from evaluatorq.trace_finder.models import (
     TraceClassification,
     TraceRecord,
 )
+from evaluatorq.trace_finder.projection import project_trace
 from evaluatorq.trace_finder.run_store import RunStore
 from evaluatorq.trace_finder.explorer import ExplorerStore
 from evaluatorq.trace_finder.rows import TraceRow
@@ -107,8 +112,9 @@ class Runner:
         *,
         parallelism: int,
         on_complete: Any,
+        question_payloads: Any,
     ) -> list[TraceClassification]:
-        del projections, dimensions, parallelism
+        del projections, dimensions, parallelism, question_payloads
         self.calls += 1
         self.on_complete = on_complete
         self.entered.set()
@@ -131,8 +137,9 @@ class RaisingRunner(Runner):
         *,
         parallelism: int,
         on_complete: Any,
+        question_payloads: Any,
     ) -> list[TraceClassification]:
-        del projections, dimensions, parallelism
+        del projections, dimensions, parallelism, question_payloads
         self.calls += 1
         self.on_complete = on_complete
         self.entered.set()
@@ -230,6 +237,54 @@ def make_store(
         now_utc=clock.now,
     )
     return store, planner, loader, runner, clock
+
+
+@pytest.mark.asyncio
+async def test_run_store_projection_matches_question_fitted_classifier_state() -> None:
+    classifier_model = 'openai/gpt-6-luna'
+    cap = 4_096
+    dimension = compiled_query().model_copy(
+        update={'task': compiled_query().task.model_copy(update={'instructions': 'Q' * 1_000})}
+    )
+    planner = Planner()
+    planner.plan = CompiledPlan(dimensions=(dimension,), numeric=NumericFilters())
+    runner = Runner()
+    long_trace = trace(1).model_copy(update={'messages': ({'role': 'user', 'content': 'x' * 20_000},)})
+
+
+    async def select_filters(query: str, population: PopulationRequest) -> FacetSelection:
+        del query, population
+        return FacetSelection()
+
+    async def load_traces() -> tuple[TraceRecord, ...]:
+        return (long_trace,)
+
+
+    store = RunStore(
+        compiler=planner,
+        population_loader=Loader(),
+        run_classifier=runner,
+        filter_selector=select_filters,
+        project_trace=partial(project_trace, model=classifier_model, trace_input_chars=cap),
+    )
+    await store.compile(request(), traces=load_traces)
+    await runner.entered.wait()
+    runner.release.set()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
+
+    snapshot = await store.snapshot()
+    projection = snapshot.projections['trace-1']
+    questions = classifier_questions((dimension,))
+    question_chars = serialized_question_chars(questions)
+    classifier_state = fit_classifier_input(
+        projection.payload,
+        model=classifier_model,
+        questions=questions,
+        global_char_cap=cap,
+    )
+    assert projection.payload == classifier_state
+    assert len(projection.serialized) + question_chars <= cap
 
 
 @pytest.mark.asyncio

@@ -9,10 +9,11 @@ import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from functools import partial
-from typing import TYPE_CHECKING, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from loguru import logger
 
+from .classifier import classifier_questions
 from .compiler import CompiledPlan
 from .filter_selector import FilterSelectionResult
 from .models import (
@@ -34,7 +35,7 @@ from .progress import set_load_reporter
 from .projection import project_trace as default_project_trace
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
 
     from .explorer import ExplorerStore
 
@@ -65,7 +66,14 @@ class ClassifierRunner(Protocol):
         *,
         parallelism: int,
         on_complete: Callable[[TraceClassification], Awaitable[None]],
+        question_payloads: Mapping[str, Any],
     ) -> Awaitable[list[TraceClassification]]: ...
+
+
+class TraceProjector(Protocol):
+    """Build the exact per-trace state for the selected classifier questions."""
+
+    def __call__(self, trace: TraceRecord, *, question_payloads: Mapping[str, Any]) -> TraceProjection: ...
 
 
 class RunStore:
@@ -86,7 +94,7 @@ class RunStore:
         population_loader: PopulationLoader,
         run_classifier: ClassifierRunner,
         filter_selector: Callable[[str, PopulationRequest], Awaitable[FacetSelection | FilterSelectionResult]],
-        project_trace: Callable[[TraceRecord], TraceProjection] = default_project_trace,
+        project_trace: TraceProjector = default_project_trace,
         monotonic: Callable[[], float] = time.monotonic,
         now_utc: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         close: Callable[[], Awaitable[None] | None] | None = None,
@@ -438,7 +446,11 @@ class RunStore:
                     self._snapshot = replace(self._snapshot, state='awaiting_review', phase=None)
                     self._task = None
                     return self._view()
-                projections = {trace.trace_id: self._project_trace(trace) for trace in staged_traces}
+                question_payloads = classifier_questions(dimensions or ())
+                projections = {
+                    trace.trace_id: self._project_trace(trace, question_payloads=question_payloads)
+                    for trace in staged_traces
+                }
                 self._snapshot = replace(
                     self._snapshot,
                     projections=projections,
@@ -448,7 +460,14 @@ class RunStore:
                 )
                 self._started_monotonic = self._monotonic()
                 task = asyncio.create_task(
-                    self._execute(generation, staged_traces, projections, dimensions, request.parallelism)
+                    self._execute(
+                        generation,
+                        staged_traces,
+                        projections,
+                        dimensions,
+                        request.parallelism,
+                        question_payloads=question_payloads,
+                    )
                 )
                 self._task = task
                 return self._view()
@@ -554,6 +573,8 @@ class RunStore:
         projections: dict[str, TraceProjection],
         dimensions: tuple[CompiledQuery, ...],
         parallelism: int,
+        *,
+        question_payloads: Mapping[str, Any],
     ) -> None:
         async def complete(classification: TraceClassification) -> None:
             await self.complete_one(generation, classification)
@@ -565,6 +586,7 @@ class RunStore:
                 dimensions,
                 parallelism=parallelism,
                 on_complete=complete,
+                question_payloads=question_payloads,
             )
             async with self._lock:
                 if generation == self._generation and self._snapshot.state == 'classifying':

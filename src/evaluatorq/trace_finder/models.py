@@ -21,6 +21,8 @@ from pydantic import (
 from typing_extensions import Self
 
 from evaluatorq.common.judge import ClassifyQuestion, ClassifyResponse  # noqa: TC001
+from evaluatorq.common.trace_document import TraceDocument  # noqa: TC001 - pydantic field type
+from evaluatorq.trace_finder.settings import MAX_TRACE_INPUT_CHARS
 
 FacetName = Literal['project', 'model', 'provider', 'status', 'product', 'trace_type', 'agent_name', 'tool_name']
 FACET_NAMES: tuple[FacetName, ...] = (
@@ -35,6 +37,10 @@ FACET_NAMES: tuple[FacetName, ...] = (
 )
 NumericFacetName = Literal['tokens', 'duration_ms']
 NUMERIC_FACET_NAMES: tuple[NumericFacetName, ...] = ('tokens', 'duration_ms')
+
+
+# Shared limit for the persisted classifier-input cap.
+MAX_INPUT_CHAR_BUDGET = MAX_TRACE_INPUT_CHARS
 
 
 class TraceRecord(BaseModel):
@@ -78,9 +84,9 @@ class TraceProjection(BaseModel):
 
     payload: dict[str, Any]
     serialized: str
-    estimated_tokens: int = Field(ge=0, le=50_000, description='UTF-8 byte upper bound on tokenizer tokens.')
+    estimated_tokens: int = Field(ge=0, le=MAX_INPUT_CHAR_BUDGET, description='UTF-8 serialized input size estimate.')
     omitted_messages: int = Field(ge=0)
-    omitted_bytes: int = Field(ge=0, description='Bytes omitted to fit the token budget; excludes schema projection.')
+    omitted_bytes: int = Field(ge=0, description='Source bytes omitted or compressed from classifier input.')
 
 
 class DimensionAnswer(BaseModel):
@@ -119,7 +125,12 @@ class Snapshot(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     traces: tuple[TraceRecord, ...]
+    documents: tuple[TraceDocument, ...] = ()
     capture_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.traces and not self.documents
 
 
 class FacetSelection(BaseModel):

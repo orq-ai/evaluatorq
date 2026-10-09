@@ -36,6 +36,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports import fmt_cost as _fmt_cost
 from evaluatorq.dashboard.security import csrf_field
 from evaluatorq.simulation.metrics import TURN_METRICS
+from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1040,6 +1041,20 @@ def settings_body(
             f'<div class="config-row settings-field"><label class="config-key" for="{esc(name)}">{esc(label)}</label>'
             f'<span class="config-val">{control}{error_html}<span class="settings-auth-hint">{esc(hint)}</span></span></div>'
         )
+    trace_input_error = errors.get('trace_input_chars')
+    trace_input_error_html = (
+        f'<span class="settings-error" role="alert">{esc(trace_input_error)}</span>' if trace_input_error else ''
+    )
+    field_rows.append(
+        '<div class="config-row settings-field"><label class="config-key" for="trace_input_chars">'
+        'Model input cap</label><span class="config-val">'
+        f'<input id="trace_input_chars" name="trace_input_chars" type="number" min="{MIN_TRACE_INPUT_CHARS}" '
+        f'max="{MAX_TRACE_INPUT_CHARS}" step="1" '
+        f'value="{esc(setting_value("trace_input_chars") or str(DEFAULT_TRACE_INPUT_CHARS))}">'
+        f'{trace_input_error_html}<span class="settings-auth-hint">Maximum characters sent to model requests, '
+        'after scrubbing and before model-specific compression. Stored trace data is unchanged.</span>'
+        '</span></div>'
+    )
     # The effective per-task pins (flag, legacy env, settings file), not just the file's, so a shadowed
     # file value never shows and an active flag or env var does.
     pinned_tasks = [(task, found) for task in TASKS if (found := task_override(task))]

@@ -2,15 +2,9 @@
 
 Three views, each for one `/classify` call:
 
-- `conversation_view`: what the user said and what the agent answered. User
-  turns stay whole, assistant text keeps its start and end, tool calls shrink
-  to one line each and tool outputs are dropped. The opening user turns are
-  never cut; an over-budget trace loses its middle.
+- `full_conversation_view`: the readable source messages, tool inputs, and complete tool results for non-Jev classifiers and summaries, capped to the configured trace-input budget.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
-- `tool_activity_chunks`: every tool call with its input and status, the start
-  and end of each shell output, and fixed labels for failures found in it, for the
-  questions that need to see what a command did; a long trace is split into
-  several chunks rather than losing more than 30% of its middle.
+- `tool_activity_chunks`: user context and paired tool activity for coding-tool questions. Non-Jev traces keep their question-specific command excerpts; Jev traces use filtered structured state, 100-character input/result edges, and complete-record chunks that fit the exact question reserve and Jev state-plus-question ceilings.
 
 Nothing here calls a model or any other service. A shell output excerpt is scrubbed of credentials with
 `common.redact.scrub_known_secrets` over the whole output before it is cut to its start and end, so a secret across
@@ -23,14 +17,27 @@ import json
 import re
 import shlex
 from collections import Counter
+from operator import itemgetter
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 from pydantic import BaseModel
 
+from evaluatorq.common.messages import coerce_content_text, contains_media_content
+from evaluatorq.common.model_input import (
+    cap_text,
+    clean_model_text,
+    effective_trace_input_chars,
+    is_jev_model,
+    jev_state,
+    jev_state_char_limit,
+    pair_tool_call_results,
+    serialized_chars,
+    serialized_question_chars,
+)
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, prompt_messages
-from evaluatorq.contracts import content_to_text, tool_result_to_text
+from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
@@ -39,20 +46,12 @@ if TYPE_CHECKING:
 
     from evaluatorq.trace_finder.models import TraceRecord
 
-# Characters, sized for about 25k classifier tokens: tool-call text runs near 3 characters a token
-# (measured worst case 2.9), and `/classify` rejected views of 29k+ tokens with max_tokens_exceeded.
-VIEW_BUDGET = 75_000
-ASSISTANT_EDGE = 300
 TOOL_INPUT_CHARS = 300
-OPENING_SHARE = 0.4
-# Cut at most this share of a tool-activity view from the middle; longer views are split into chunks.
-MAX_CUT_SHARE = 0.3
 RISKY_COMMAND_CHARS = 300
 # Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
 SHELL_OUTPUT_CHARS = 300
-# A text longer than its two kept ends plus this many characters is cut; a text within that is kept whole.
+# Preserve short text whole instead of adding a cut marker for a few characters.
 CUT_SLACK = 40
-USER_TURN_CHARS = 8_000
 
 SKILL_TOOL = 'Skill'
 SHELL_TOOLS = SHELL_TOOL_NAMES
@@ -196,59 +195,123 @@ def tool_inventory(trace: TraceRecord | TraceDocument) -> str:
     return '\n'.join(lines)
 
 
-def conversation_view(trace: TraceRecord | TraceDocument, budget: int = VIEW_BUDGET) -> str:
-    """Render the conversation as plain text within `budget` characters.
+def full_conversation_view_with_message_spans(
+    trace: TraceRecord | TraceDocument,
+) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
+    """Return complete rendered text, source-message spans and total source-message count."""
+    return _render_full_conversation(trace, capture_message_spans=True)
 
-    User turns are kept whole up to `USER_TURN_CHARS` (a pasted log keeps its
-    start and end), minus injected `<system-reminder>` blocks;
-    assistant text keeps its first and last `ASSISTANT_EDGE` characters, and a
-    run of tool calls becomes one `[tools]` line with repeats counted. Tool
-    outputs are dropped. A risky shell command is kept verbatim rather than
-    collapsed to its program name, up to `RISKY_COMMAND_CHARS` characters.
-    """
+
+def full_conversation_view(trace: TraceRecord | TraceDocument, budget: int | None = None) -> str:
+    """Render source messages, tool inputs, and complete tool results for model input."""
+    rendered, _, _ = _render_full_conversation(trace, capture_message_spans=False)
+    cap = budget if budget is not None else effective_trace_input_chars()
+    return cap_text(rendered, cap)[0]
+
+
+def _render_full_conversation(
+    trace: TraceRecord | TraceDocument,
+    *,
+    capture_message_spans: bool,
+) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
+    messages = prompt_messages(trace)
     lines: list[str] = []
-    pending: list[str] = []
+    line_indexes = [] if capture_message_spans else None
+    for index, message in enumerate(messages):
+        role = message.get('role', 'unknown')
+        if role == 'tool':
+            content = message.get('content')
+            rendered = coerce_content_text(content) if contains_media_content(content) else tool_result_to_text(content)
+            result = scrub_known_secrets(rendered)
+            result = _REMINDER.sub('[harness reminder omitted]', result)
+            lines.append(f'{index} tool result {message.get("tool_call_id", "")}: {result}')
+            if line_indexes is not None:
+                line_indexes.append(index)
+        else:
+            content = scrub_known_secrets(coerce_content_text(message.get('content')))
+            content = _REMINDER.sub('[harness reminder omitted]', content)
+            if content.strip():
+                lines.append(f'{index} {role}: {content}')
+                if line_indexes is not None:
+                    line_indexes.append(index)
+        for call in message.get('tool_calls') or []:
+            name = _call_name(call)
+            arguments = _REMINDER.sub('[harness reminder omitted]', scrub_known_secrets(_raw_arguments(call)))
+            lines.append(f'{index} tool input {name}: {arguments}')
+            if line_indexes is not None:
+                line_indexes.append(index)
+    conversation = '\n'.join(lines)
+    if line_indexes is None:
+        return conversation, (), len(messages)
+    spans = []
+    offset = 0
+    for line, index in zip(lines, line_indexes, strict=True):
+        spans.append((offset, offset + len(line), index))
+        offset += len(line) + 1
+    return conversation, tuple(spans), len(messages)
 
-    def flush() -> None:
-        if pending:
-            runs = Counter(pending)
-            lines.append('  [tools] ' + ', '.join(f'{name} x{n}' if n > 1 else name for name, n in runs.items()))
-            pending.clear()
 
-    for message in prompt_messages(trace):
-        role = message.get('role')
-        if role == 'user':
-            text = _user_text(message)
-            if text:
-                flush()
-                lines.append(f'USER: {_head_tail(text, USER_TURN_CHARS // 2, USER_TURN_CHARS // 2)}')
-        elif role == 'assistant':
-            text = content_to_text(message.get('content')).strip()
-            if text:
-                flush()
-                lines.append(f'ASSISTANT: {_head_tail(text, ASSISTANT_EDGE, ASSISTANT_EDGE)}')
-            pending.extend(_call_line(call) for call in message.get('tool_calls') or [])
-    flush()
-    return _fit(lines, budget, keep_opening_users=True)
+@overload
+def tool_activity_chunks(
+    trace: TraceRecord | TraceDocument,
+    budget: int | None = None,
+    *,
+    model: None = None,
+    trace_input_chars: int | None = None,
+    question_payloads: list[Any] | dict[str, Any] | None = None,
+) -> list[str]: ...
+
+
+@overload
+def tool_activity_chunks(
+    trace: TraceRecord | TraceDocument,
+    budget: int | None = None,
+    *,
+    model: str,
+    trace_input_chars: int | None = None,
+    question_payloads: list[Any] | dict[str, Any] | None = None,
+) -> list[str] | list[dict[str, Any]]: ...
+
+
+@overload
+def tool_activity_chunks(
+    trace: TraceRecord | TraceDocument,
+    budget: int | None = None,
+    *,
+    model: str | None = None,
+    trace_input_chars: int | None = None,
+    question_payloads: list[Any] | dict[str, Any] | None = None,
+) -> list[str] | list[dict[str, Any]]: ...
 
 
 def tool_activity_chunks(
     trace: TraceRecord | TraceDocument,
-    budget: int = VIEW_BUDGET,
-) -> list[str]:
-    """Render every tool call with its input and status, with user turns for context.
-
-    Used for the questions that need to see what a command did: whether an error
-    stayed unfixed, and whether an action was risky. Assistant prose is left out,
-    and each tool result body is replaced by its diagnostic category; a shell
-    call also keeps the failure markers found in all of its output, and the start and end of that output. The output
-    is scrubbed with `scrub_known_secrets` in full before it is cut, so the raw output is never rendered.
-    A view that fits after cutting at most `MAX_CUT_SHARE` of it from the middle is
-    one chunk; a longer one is split into consecutive chunks of at most `budget`
-    characters, each starting with the opening user turns, for the caller to ask
-    separately and merge.
-    """
+    budget: int | None = None,
+    *,
+    model: str | None = None,
+    trace_input_chars: int | None = None,
+    question_payloads: list[Any] | dict[str, Any] | None = None,
+) -> list[str] | list[dict[str, Any]]:
+    """Render user context and paired tool activity for the coding-tool questions."""
+    global_cap = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
+    request_budget = min(global_cap, budget if budget is not None else global_cap)
+    if request_budget < 1:
+        raise ValueError('trace input character cap must be positive')
+    questions = question_payloads or []
+    jev = is_jev_model(model) if model is not None else False
     messages = prompt_messages(trace)
+    if jev:
+        units = _jev_activity_units(messages)
+        state_budget = jev_state_char_limit(questions, global_char_cap=request_budget)
+        if not units:
+            if len('No tool calls.') > state_budget:
+                raise ValueError('classifier questions leave no Jev state budget for tool activity')
+            return ['No tool calls.']
+        return _jev_tool_activity_chunks(messages, state_budget=state_budget, units=units)
+
+    chunk_budget = request_budget - serialized_question_chars(questions)
+    if chunk_budget <= 0:
+        raise ValueError('classifier questions leave no tool-activity state budget under the configured input cap')
     results = _results(messages)
     lines: list[str] = []
     for message in messages:
@@ -259,32 +322,231 @@ def tool_activity_chunks(
                 lines.append(f'USER: {_head_tail(text, 400, 200)}')
         elif role == 'assistant':
             lines.extend(_activity_line(call, results) for call in message.get('tool_calls') or [])
-    if not any(line.startswith('CALL') for line in lines):
+    call_lines = [line for line in lines if line.startswith('CALL')]
+    if any(len(line) + 1 > chunk_budget for line in call_lines):
+        raise ValueError('one non-Jev tool-activity record exceeds the question-reserved state budget')
+    if not call_lines:
+        if len('No tool calls.') > chunk_budget:
+            raise ValueError('classifier questions leave no non-Jev state budget for tool activity')
         return ['No tool calls.']
-    if sum(len(line) + 1 for line in lines) * (1 - MAX_CUT_SHARE) <= budget:
-        return [_fit(lines, budget, keep_opening_users=True)]
-    return _chunk(lines, budget)
+    full_view_chars = sum(len(line) for line in lines) + len(lines) - 1
+    if full_view_chars <= chunk_budget:
+        return ['\n'.join(lines)]
+    return _chunk(lines, chunk_budget)
+
+
+def _jev_tool_activity_chunks(
+    messages: list[dict[str, Any]], *, state_budget: int, units: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Split paired tool activity into Jev states without dropping complete call records."""
+    if not units:
+        return []
+    context = [message for message in messages if message.get('role') == 'user']
+    groups = _jev_group_activity_units(context, units, state_budget)
+    chunks = []
+    for number, group in enumerate(groups, start=1):
+        state = _jev_activity_state(context, group, state_budget, part=number, total=len(groups))
+        if state is None:
+            raise ValueError('Jev tool-activity chunk exceeded its reserved classifier state budget')
+        chunks.append(state)
+    return chunks
+
+
+def _jev_activity_units(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    call_records, orphan_records = pair_tool_call_results(messages)
+    units = [
+        {
+            'kind': 'call',
+            'index': record['index'],
+            'order': record['call_index'],
+            'record': {**record, 'call': _jev_activity_call(record['call'])},
+        }
+        for record in call_records
+    ]
+    units.extend({'kind': 'orphan', 'index': index, 'order': 0, 'message': result} for index, result in orphan_records)
+    units.sort(key=itemgetter('index', 'order'))
+    return units
+
+
+def _jev_group_activity_units(
+    context: list[dict[str, Any]], units: list[dict[str, Any]], state_budget: int
+) -> list[list[dict[str, Any]]]:
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for unit in units:
+        candidate = [*current, unit]
+        if _jev_activity_state(context, candidate, state_budget, part=999_999_999, total=999_999_999) is not None:
+            current = candidate
+            continue
+        if not current:
+            raise ValueError('one Jev tool-activity record exceeds the reserved classifier state budget')
+        groups.append(current)
+        current = [unit]
+        if _jev_activity_state(context, current, state_budget, part=999_999_999, total=999_999_999) is None:
+            raise ValueError('one Jev tool-activity record exceeds the reserved classifier state budget')
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _jev_activity_call(call: dict[str, Any]) -> dict[str, Any]:
+    """Keep the coding command itself as the bounded input for shell tools."""
+    if _call_name(call) not in SHELL_TOOLS:
+        return call
+    arguments = _call_arguments(call)
+    function = call.get('function')
+    if isinstance(function, dict):
+        return {**call, 'function': {**function, 'arguments': _shell_command(arguments)}}
+    return {**call, 'arguments': _shell_command(arguments)}
+
+
+def _jev_activity_source(
+    context: list[dict[str, Any]], units: list[dict[str, Any]]
+) -> tuple[
+    list[dict[str, Any]],
+    dict[tuple[int, int], dict[str, Any]],
+    dict[int, dict[str, Any]],
+    set[tuple[int, int]],
+    set[int],
+]:
+    source = list(context)
+    call_groups: dict[int, list[dict[str, Any]]] = {}
+    events: list[tuple[int, int, str, Any, dict[str, Any] | None]] = []
+    for unit in units:
+        if unit['kind'] == 'call':
+            record = unit['record']
+            call_groups.setdefault(record['index'], []).append(record)
+            events.extend((index, 1, 'result', result, record) for index, result in record['results'])
+        else:
+            events.append((unit['index'], 1, 'orphan', unit['message'], None))
+    events.extend((index, 0, 'calls', records, None) for index, records in call_groups.items())
+    events.sort(key=itemgetter(0, 1))
+
+    call_metadata: dict[tuple[int, int], dict[str, Any]] = {}
+    result_metadata: dict[int, dict[str, Any]] = {}
+    expected_calls: set[tuple[int, int]] = set()
+    expected_results: set[int] = set()
+    for _, _, kind, message, record in events:
+        if kind == 'calls':
+            records = sorted(message, key=itemgetter('call_index'))
+            message_index = len(source)
+            source.append({'role': 'assistant', 'tool_calls': [call_record['call'] for call_record in records]})
+            for call_index, call_record in enumerate(records):
+                identity = (message_index, call_index)
+                expected_calls.add(identity)
+                paired = tuple(result for _, result in call_record['results'])
+                call_id = call_record['call'].get('id')
+                metadata: dict[str, Any] = {'status': _tool_call_status(call_id, paired)}
+                category = _tool_result_category(call_id, paired)
+                if category is not None:
+                    metadata['diagnostic'] = category
+                call_metadata[identity] = metadata
+            continue
+
+        index = len(source)
+        source.append(message)
+        expected_results.add(index)
+        if kind == 'result' and record is not None and _call_name(record['call']) in SHELL_TOOLS:
+            text = _jev_result_text(message).strip()
+            markers = [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
+            if markers:
+                result_metadata[index] = {'output_markers': markers}
+    return source, call_metadata, result_metadata, expected_calls, expected_results
+
+
+def _annotate_jev_activity_state(
+    state: dict[str, Any],
+    call_metadata: dict[tuple[int, int], dict[str, Any]],
+    result_metadata: dict[int, dict[str, Any]],
+) -> tuple[set[tuple[int, int]], set[int]]:
+    visible_calls: set[tuple[int, int]] = set()
+    visible_results: set[int] = set()
+    for entry in state.get('messages', []):
+        if entry.get('type') == 'tool_call':
+            index = entry.get('index')
+            call_index = entry.get('call_index')
+            if isinstance(index, int) and isinstance(call_index, int):
+                identity = (index, call_index)
+                visible_calls.add(identity)
+                entry.update(call_metadata.get(identity, {}))
+            for result in entry.get('results', []):
+                result_index = result.get('index') if isinstance(result, dict) else None
+                if isinstance(result_index, int):
+                    visible_results.add(result_index)
+                    _clean_result_codes(result)
+                    result.update(result_metadata.get(result_index, {}))
+        elif entry.get('type') == 'orphan_result':
+            index = entry.get('index')
+            if isinstance(index, int):
+                visible_results.add(index)
+                _clean_result_codes(entry)
+                entry.update(result_metadata.get(index, {}))
+    return visible_calls, visible_results
+
+
+def _clean_result_codes(result: dict[str, Any]) -> None:
+    for key in ('status', 'exit_code', 'error_code'):
+        if key in result:
+            result[key] = clean_model_text(str(result[key]))
+
+
+def _jev_activity_state(
+    context: list[dict[str, Any]],
+    units: list[dict[str, Any]],
+    state_budget: int,
+    *,
+    part: int,
+    total: int,
+) -> dict[str, Any] | None:
+    source, call_metadata, result_metadata, expected_calls, expected_results = _jev_activity_source(context, units)
+    state = jev_state(source, global_char_cap=state_budget)
+    state['activity_chunk'] = {'part': part, 'total': total}
+    visible_calls, visible_results = _annotate_jev_activity_state(state, call_metadata, result_metadata)
+    if visible_calls != expected_calls or visible_results != expected_results:
+        return None
+    return state if serialized_chars(state) <= state_budget else None
+
+
+def _jev_result_text(message: dict[str, Any]) -> str:
+    content = message.get('content')
+    return coerce_content_text(content) if contains_media_content(content) else tool_result_to_text(content)
 
 
 def _chunk(lines: list[str], budget: int) -> list[str]:
-    """Split `lines` into consecutive chunks within `budget`, each repeating the opening user turns."""
+    """Split complete activity lines, bounding repeated user context before packing."""
     index = 0
     while index < len(lines) and lines[index].startswith('USER:'):
         index += 1
+    body = lines[index:]
+    if not body:
+        raise ValueError('non-Jev tool activity has no call records to chunk')
+
     opening = '\n'.join(lines[:index])
-    capacity = budget - len(opening) - 80  # room for the part header
+    largest_record = max(len(line) + 1 for line in body)
+    context_budget = budget - largest_record - 80
+    if context_budget < len('[... 0 chars left out ...]'):
+        raise ValueError('one non-Jev tool-activity record cannot fit with its chunk header')
+    if len(opening) > context_budget:
+        opening = cap_text(opening, context_budget)[0]
+    capacity = budget - len(opening) - 80
+    if capacity < largest_record:
+        raise ValueError('one non-Jev tool-activity record cannot fit with its chunk context and header')
+
     groups: list[list[str]] = [[]]
     used = 0
-    for line in lines[index:]:
+    for line in body:
         if groups[-1] and used + len(line) + 1 > capacity:
             groups.append([])
             used = 0
         groups[-1].append(line)
         used += len(line) + 1
-    return [
+    chunks = [
         '\n'.join([opening, f'[part {number} of {len(groups)} of the tool calls, in order]', *group]).lstrip('\n')
         for number, group in enumerate(groups, start=1)
     ]
+    if any(len(chunk) > budget for chunk in chunks):
+        raise ValueError('non-Jev tool-activity chunk exceeded its question-reserved state budget')
+    return chunks
 
 
 def join_cut(head: str, tail: str, omitted: int) -> str:
@@ -322,53 +584,6 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
         if excerpt:
             evidence.append(f'output: {excerpt}'.replace('\n', ' ⏎ '))
     return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
-
-
-def _fit(lines: list[str], budget: int, *, keep_opening_users: bool) -> str:
-    """Join `lines`, cutting from the middle when over `budget`; the opening user turns always survive."""
-    text = '\n'.join(lines)
-    if len(text) <= budget:
-        return text
-    opening: list[str] = []
-    index = 0
-    if keep_opening_users:
-        # Everything up to the first agent line: the task as the user stated it.
-        while index < len(lines) and lines[index].startswith('USER:'):
-            opening.append(lines[index])
-            index += 1
-    head_budget = max(int(budget * OPENING_SHARE), sum(len(line) + 1 for line in opening))
-    used = sum(len(line) + 1 for line in opening)
-    while index < len(lines) and used + len(lines[index]) + 1 <= head_budget:
-        opening.append(lines[index])
-        used += len(lines[index]) + 1
-        index += 1
-    closing: list[str] = []
-    remaining = budget - used - 60
-    for line in reversed(lines[index:]):
-        if len(line) + 1 > remaining:
-            break
-        closing.append(line)
-        remaining -= len(line) + 1
-    closing.reverse()
-    omitted = len(lines) - len(opening) - len(closing)
-    return '\n'.join([*opening, f'[... {omitted} lines omitted ...]', *closing])
-
-
-def _call_line(call: dict[str, Any]) -> str:
-    name, arguments = _call_name(call), _call_arguments(call)
-    if name in SHELL_TOOLS:
-        command = _shell_command(arguments)
-        if is_risky_command(command):
-            return f'{name}: `{command[:RISKY_COMMAND_CHARS].replace(chr(10), " ⏎ ")}`'
-        return f'{name}: {first_command(command)}'
-    if name == SKILL_TOOL:
-        skills = _SKILL_ARG.findall(_raw_arguments(call))
-        return f'{name}: {skills[0] if skills else "?"}'
-    for key in ('file_path', 'path', 'url', 'query', 'description', 'pattern'):
-        value = arguments.get(key)
-        if isinstance(value, str):
-            return f'{name}: {value[:80]}'
-    return name
 
 
 def _tool_calls(trace: TraceRecord | TraceDocument) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
@@ -442,7 +657,7 @@ def _strip_wrappers(words: list[str]) -> list[str]:
 
 
 def _user_text(message: dict[str, Any]) -> str:
-    return _REMINDER.sub('', content_to_text(message.get('content'))).strip()
+    return _REMINDER.sub('', coerce_content_text(message.get('content'))).strip()
 
 
 def _head_tail(text: str, head: int, tail: int) -> str:

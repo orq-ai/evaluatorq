@@ -11,8 +11,9 @@ this call path (`run_classify` already disarms the client's own retries).
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -24,15 +25,20 @@ from evaluatorq.common.judge import (
     JudgeError,
     run_classify,
 )
+from evaluatorq.common.model_input import (
+    cap_text,
+    effective_trace_input_chars,
+    fit_classifier_input,
+    is_jev_model,
+    jev_state,
+    jev_text_state,
+)
 from evaluatorq.common.retry import with_retry
+from evaluatorq.common.trace_document import prompt_messages
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.insights.models import LabelAnswer, LabelSpec
 from evaluatorq.insights.presets import CODING_AGENT, CODING_CONVERSATION_LABELS, CODING_TOOL_LABELS
-from evaluatorq.insights.transcript import (
-    conversation_view,
-    tool_activity_chunks,
-    tool_inventory,
-)
+from evaluatorq.insights.transcript import full_conversation_view, tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.classifier import matches_selection
 
 if TYPE_CHECKING:
@@ -112,7 +118,6 @@ def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnsw
         return LabelAnswer(
             value=answer.choice, confidence=answer.confidence, probabilities=answer.probabilities, error=None
         )
-    # kind == 'score'
     if answer.score is None or not isinstance(question.criteria, list):
         return LabelAnswer(
             value=None,
@@ -172,7 +177,7 @@ async def _classify_with_retry(
 
 async def _ask(
     trace: TraceRecord | TraceDocument,
-    state: str,
+    state: str | dict[str, Any],
     specs: Sequence[LabelSpec],
     *,
     client: AsyncOpenAI,
@@ -181,8 +186,19 @@ async def _ask(
     semaphore: asyncio.Semaphore,
     usage: UsageLedger | None,
     what: str,
+    trace_input_chars: int | None = None,
 ) -> tuple[dict[str, LabelAnswer], str | None]:
-    """Ask `specs` about `state` in one `/classify` call; a failed call fails every answer, never raises."""
+    """Ask `specs` about the bounded state in one `/classify` call."""
+    trace_input_chars = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
+    state = _prepare_state(state, model, trace_input_chars)
+    questions = {spec.name: spec.to_question(state) for spec in specs}
+    question_payloads = {name: question.model_dump(mode='json') for name, question in questions.items()}
+    state = fit_classifier_input(
+        state,
+        model=model,
+        questions=question_payloads,
+        global_char_cap=trace_input_chars,
+    )
     questions = {spec.name: spec.to_question(state) for spec in specs}
     async with semaphore:
         outcome = await _classify_with_retry(
@@ -196,6 +212,29 @@ async def _ask(
         failed = LabelAnswer(value=None, confidence=None, probabilities=None, error=message)
         return {spec.name: failed for spec in specs}, message
     return _read_answers(trace, questions, outcome.response.answers), None
+
+
+def _prepare_state(
+    state: str | dict[str, object],
+    model: str,
+    char_cap: int,
+) -> str | dict[str, object]:
+    """Apply the global cap while preserving the caller's question-specific state."""
+    if is_jev_model(model):
+        return state if isinstance(state, dict) else jev_text_state(state, global_char_cap=char_cap)
+    rendered = (
+        state
+        if isinstance(state, str)
+        else json.dumps(state, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+    )
+    return cap_text(rendered, char_cap)[0]
+
+
+def prepare_classifier_state(trace: TraceRecord | TraceDocument, *, model: str, char_cap: int) -> str | dict[str, Any]:
+    """Build the main Insights classifier state before any Jev question-capacity fit."""
+    if is_jev_model(model):
+        return jev_state(prompt_messages(trace), global_char_cap=char_cap)
+    return _prepare_state(full_conversation_view(trace, char_cap), model, char_cap)
 
 
 # ponytail: the two chunked tool labels, named here; move onto LabelSpec if other labels ever chunk.
@@ -289,9 +328,10 @@ async def _label_one(
     model: str,
     cfg: LLMCallConfig,
     semaphore: asyncio.Semaphore,
+    coding: bool,
     usage: UsageLedger | None = None,
-    coding: bool = False,
     coding_labels: Sequence[LabelSpec] | None = None,
+    trace_input_chars: int | None = None,
 ) -> LabelOutcome:
     """Label one trace.
 
@@ -303,6 +343,7 @@ async def _label_one(
     coding check that fails leaves the coding labels unasked and says so in a
     warning; it never guesses yes.
     """
+    trace_input_chars = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
     answers: dict[str, LabelAnswer] = {}
     selected_coding = (
         list(coding_labels)
@@ -326,6 +367,7 @@ async def _label_one(
             semaphore=semaphore,
             usage=usage,
             what='coding-agent check',
+            trace_input_chars=trace_input_chars,
         )
         answers.update(detected)
         verdict = detected[CODING_AGENT.name]
@@ -337,7 +379,7 @@ async def _label_one(
                 verdict.error,
             )
 
-    state = conversation_view(trace)
+    state = prepare_classifier_state(trace, model=model, char_cap=trace_input_chars)
     conversation_specs = [*labels, *(conversation_coding if is_coding else ())]
     questions: dict[str, ClassifyQuestion] = {spec.name: spec.to_question(state) for spec in conversation_specs}
     match_keys: list[str] = []
@@ -346,6 +388,16 @@ async def _label_one(
             key = _match_key(index, len(compiled))
             match_keys.append(key)
             questions[key] = dimension.task.model_copy(update={'state': state})
+    question_payloads = {name: question.model_dump(mode='json') for name, question in questions.items()}
+    state = fit_classifier_input(
+        state,
+        model=model,
+        questions=question_payloads,
+        global_char_cap=trace_input_chars,
+    )
+    questions = {spec.name: spec.to_question(state) for spec in conversation_specs}
+    for index, dimension in enumerate(compiled or ()):
+        questions[_match_key(index, len(compiled or ()))] = dimension.task.model_copy(update={'state': state})
 
     async def conversation_call() -> tuple[dict[str, ClassifyAnswer] | None, str | None]:
         if not questions:
@@ -367,7 +419,13 @@ async def _label_one(
     async def tool_call() -> dict[str, LabelAnswer]:
         if not is_coding or not tool_coding:
             return {}
-        chunks = tool_activity_chunks(trace)
+        question_payloads = {spec.name: spec.to_question('').model_dump(mode='json') for spec in tool_coding}
+        chunks = tool_activity_chunks(
+            trace,
+            model=model,
+            trace_input_chars=trace_input_chars,
+            question_payloads=question_payloads,
+        )
         asked = await asyncio.gather(
             *(
                 _ask(
@@ -380,6 +438,7 @@ async def _label_one(
                     semaphore=semaphore,
                     usage=usage,
                     what='coding tool-activity',
+                    trace_input_chars=trace_input_chars,
                 )
                 for chunk in chunks
             )
@@ -421,10 +480,11 @@ async def label_traces(
     usage: UsageLedger | None = None,
     coding: bool = False,
     coding_labels: Sequence[LabelSpec] | None = None,
+    trace_input_chars: int | None = None,
 ) -> list[LabelOutcome]:
     """Label every trace, bounded by `parallelism` concurrent `/classify` calls.
 
-    Per trace: render the conversation with `transcript.conversation_view`, ask
+    Per trace: prepare the classifier state from the full transcript or indexed Jev messages, ask
     every label's question plus (when `compiled` is given) the population-match
     question in a single request, and skip that call when neither is present.
     With `coding` on, each trace also gets the coding-agent check and, when it
@@ -437,6 +497,7 @@ async def label_traces(
     resolved_cfg = cfg if cfg is not None else _default_cfg(model)
     if parallelism <= 0:
         raise ValueError('parallelism must be greater than zero')
+    trace_input_chars = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
     semaphore = asyncio.Semaphore(parallelism)
     total = len(traces)
     completed = 0
@@ -456,6 +517,7 @@ async def label_traces(
                 usage=usage,
                 coding=coding,
                 coding_labels=coding_labels,
+                trace_input_chars=trace_input_chars,
             )
         except Exception as exc:  # noqa: BLE001 - an unexpected trace shape must not fail the whole pass
             message = str(exc) or type(exc).__name__

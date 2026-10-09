@@ -106,17 +106,18 @@ evaluatorq takes the first of these that is set, highest first:
 
 A task override is more specific than a role, so a task override in the settings file beats a role variable. A variable that is empty or only whitespace counts as unset.
 
-### Set models in the settings file
+### Set models and the input cap in the settings file
 
-The dashboard Settings page and the trace finder read and write `.evaluatorq/dashboard-settings.json`, or the path in `EVALUATORQ_DASHBOARD_SETTINGS`. The same file feeds the library and the CLI. A role field left out, or `null`, means use the default.
+The dashboard Settings page and the trace finder read and write `.evaluatorq/dashboard-settings.json`, or the path in `EVALUATORQ_DASHBOARD_SETTINGS`. The same file feeds the library and the CLI. A role field left out, or `null`, means use the default. The file also stores `trace_input_chars`, the maximum size of a rendered summary request or the combined classifier state and serialized questions; it defaults to `500000`. For Jev, the state is further limited to 112,000 characters, with state plus the longest question capped at 128,000 and state plus all questions capped at 256,000 characters.
 
 ```json
 {
-  "smart_model": "openai/gpt-5.6-luna",
+  "smart_model": "openai/gpt-6-sol",
   "embedding_model": "openai/text-embedding-3-large",
+  "trace_input_chars": 500000,
   "model_overrides": {
     "apply": "openai/gpt-6-luna",
-    "finder.compiler": "openai/gpt-5.6-luna"
+    "finder.compiler": "openai/gpt-6-luna"
   }
 }
 ```

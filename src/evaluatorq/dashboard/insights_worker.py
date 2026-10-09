@@ -38,8 +38,8 @@ from evaluatorq.dashboard.insights_launch import (
 )
 from evaluatorq.dashboard.insights_uploads import (
     MAX_INSIGHTS_UPLOAD_BYTES,
-    cleanup_uploaded_source,
-    is_uploaded_source,
+    cleanup_session_upload,
+    retain_uploaded_source,
 )
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
@@ -421,6 +421,7 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             labels=spec.label_specs(),
             dimensions=spec.dimension_names(),
             parallelism=spec.parallelism,
+            trace_input_chars=spec.trace_input_chars,
             coding_labels=spec.coding_labels,
             run_name=payload.run_name,
             runs_dir=payload.runs_dir,
@@ -439,13 +440,16 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             await close()
 
 
-def _cleanup_consumed_upload(runs_dir: Path, source: str, finder_export: str, snapshot_path: str) -> None:
-    """Delete only a route-owned source artifact after its pipeline attempt."""
+def _finish_consumed_upload(runs_dir: Path, source: str, finder_export: str, snapshot_path: str) -> None:
+    """Remove ephemeral session copies and retain reusable uploads after either run outcome."""
     source_value = finder_export if source == 'finder' else snapshot_path
     if source_value:
-        source_path = Path(source_value)
-        if is_uploaded_source(runs_dir, source_path):
-            cleanup_uploaded_source(runs_dir, source_path)
+        try:
+            path = Path(source_value)
+            if not cleanup_session_upload(runs_dir=runs_dir, path=path):
+                retain_uploaded_source(runs_dir=runs_dir, path=path)
+        except (OSError, ValueError, RuntimeError):
+            logger.warning('Could not finish cleanup or retention of an Insights uploaded source.')
 
 
 def main() -> int:
@@ -501,8 +505,11 @@ def main() -> int:
         if payload is not None and payload.spec.source == 'finder':
             _cleanup_finder_reference(payload.runs_dir, payload.run_id)
         if payload is not None:
-            _cleanup_consumed_upload(
-                payload.runs_dir, payload.spec.source, payload.spec.finder_export, payload.spec.snapshot_path
+            _finish_consumed_upload(
+                runs_dir=payload.runs_dir,
+                source=payload.spec.source,
+                finder_export=payload.spec.finder_export,
+                snapshot_path=payload.spec.snapshot_path,
             )
         elif payload is None and manifest_env:
             _cleanup_finder_reference_for_manifest(Path(manifest_env))

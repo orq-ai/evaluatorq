@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -360,14 +361,14 @@ async def test_parallelism_must_be_positive(parallelism: int) -> None:
 async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    original_view = labeling_module.conversation_view
+    original_messages = labeling_module.prompt_messages
 
     def sometimes_fail(trace):
         if trace.trace_id == 'bad':
             raise ValueError('malformed trace')
-        return original_view(trace)
+        return original_messages(trace)
 
-    monkeypatch.setattr(labeling_module, 'conversation_view', sometimes_fail)
+    monkeypatch.setattr(labeling_module, 'prompt_messages', sometimes_fail)
 
     async def fake_run_classify(
         *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
@@ -489,7 +490,7 @@ async def test_coding_agent_gets_coding_labels_in_conversation_and_tool_calls(mo
     monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
 
     [outcome] = await label_traces(
-        [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev', coding=True
+        [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='typesafe/jev-latest', coding=True
     )
 
     asked = [set(request.questions) for request in calls]
@@ -512,6 +513,7 @@ def _shell_trace(trace_id: str) -> TraceRecord:
                 {'role': 'user', 'content': 'Deploy it.'},
                 {
                     'role': 'assistant',
+                    'content': 'CONVERSATION_ONLY this belongs to the main conversation',
                     'tool_calls': [
                         {
                             'id': 'c1',
@@ -526,8 +528,10 @@ def _shell_trace(trace_id: str) -> TraceRecord:
     )
 
 
-def _tool_activity_states(calls: list[ClassifyRequest]) -> list[str]:
-    return [str(request.state) for request in calls if 'unfixed_error' in request.questions]
+def _tool_activity_states(calls: list[ClassifyRequest]) -> list[dict[str, Any]]:
+    return [
+        request.state for request in calls if 'unfixed_error' in request.questions and isinstance(request.state, dict)
+    ]
 
 
 @pytest.mark.asyncio
@@ -539,12 +543,253 @@ async def test_shell_output_reaches_the_tool_activity_question_only_after_scrubb
     calls: list[ClassifyRequest] = []
     detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
     monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
-    await label_traces([_shell_trace('t')], labels=[], compiled=None, client=_client(), model='jev', coding=True)
+    await label_traces(
+        [_shell_trace('t')], labels=[], compiled=None, client=_client(), model='typesafe/jev-latest', coding=True
+    )
 
     [state] = _tool_activity_states(calls)
-    assert 'output: Exit code 1 ⏎ API_KEY=<API_KEY> ⏎ 2 failed' in state
-    assert _SECRET not in state
-    assert 'output shows: nonzero_exit' in state
+    [activity] = [entry for entry in state['messages'] if entry['type'] == 'tool_call']
+    [result] = activity['results']
+    assert 'CONVERSATION_ONLY' not in json.dumps(state)
+    assert activity['input'] == 'make'
+    assert result['text'] == 'Exit code 1\nAPI_KEY=<API_KEY>\n2 failed'
+    assert _SECRET not in json.dumps(state)
+    assert 'nonzero_exit' in result.get('output_markers', [])
+
+    gate = next(request for request in calls if 'coding_agent' in request.questions)
+    gate_state = str(gate.state)
+    assert 'Tool calls: 1' in gate_state
+    assert 'make x1' in gate_state
+    assert 'CONVERSATION_ONLY' not in gate_state
+    assert 'Exit code 1' not in gate_state
+
+
+@pytest.mark.asyncio
+async def test_non_jev_request_reserves_serialized_questions_from_the_global_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from evaluatorq.common.llm_call import classify_request_body
+    from evaluatorq.common.model_input import serialized_chars
+
+    model = 'openai/gpt-6-luna'
+    trace = make_trace('non-jev-question-cap').model_copy(
+        update={'messages': ({'role': 'user', 'content': 'REQUEST-START-' + 'x' * 10_000 + '-REQUEST-END'},)}
+    )
+    label = LabelSpec(
+        name='cap_test',
+        kind='choice',
+        instructions='Classify this request. ' + 'q' * 500,
+        criteria={'resolved': 'Resolved.', 'unresolved': 'Unresolved.'},
+    )
+    requests: list[ClassifyRequest] = []
+
+    async def fake_run_classify(*, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        requests.append(request)
+        return ClassifyOutcome(
+            response=ClassifyResponse(
+                answers={'cap_test': ClassifyAnswer(type='choice', choice='resolved')}
+            )
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    [outcome] = await label_traces(
+        [trace],
+        labels=[label],
+        compiled=None,
+        client=_client(),
+        model=model,
+        trace_input_chars=1_500,
+    )
+
+    [request] = requests
+    assert outcome.error is None
+    assert isinstance(request.state, str)
+    question_chars = serialized_chars(classify_request_body(model, '', request.questions)['questions'])
+    assert len(request.state) + question_chars <= 1_500
+    assert 'REQUEST-START-' in request.state
+    assert 'REQUEST-END' in request.state
+
+
+@pytest.mark.asyncio
+async def test_questions_over_the_global_cap_fail_before_a_classifier_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    label = LabelSpec(name='too_large', kind='noul', instructions='q' * 1_000)
+    requests: list[ClassifyRequest] = []
+
+    async def fake_run_classify(*, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        requests.append(request)
+        return ClassifyOutcome(response=ClassifyResponse(answers={}))
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+    [outcome] = await label_traces(
+        [make_trace('question-over-cap')],
+        labels=[label],
+        compiled=None,
+        client=_client(),
+        model='openai/gpt-6-luna',
+        trace_input_chars=256,
+    )
+
+    assert not requests
+    assert outcome.error is not None
+    assert 'classifier questions leave no state budget' in outcome.error
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ('trace_input_chars', 'question_size', 'call_count'),
+    [(4_096, 0, 12), (500_000, 0, 250), (100_000, 55_000, 250)],
+)
+async def test_jev_tool_requests_keep_exact_edges_and_both_input_budgets(
+    monkeypatch: pytest.MonkeyPatch, trace_input_chars: int, question_size: int, call_count: int
+) -> None:
+    from evaluatorq.common.model_input import (
+        JEV_STATE_ALL_QUESTIONS_CHARS,
+        JEV_STATE_QUESTION_CHARS,
+        JEV_STATE_CHARS,
+        classifier_question_wire_payloads,
+        serialized_chars,
+        serialized_question_chars,
+    )
+    from evaluatorq.insights.presets import UNFIXED_ERROR
+
+    trace_messages: list[dict[str, Any]] = [{'role': 'user', 'content': 'Deploy this safely.'}]
+    tool_calls = []
+    tool_results = []
+    commands: dict[int, str] = {}
+    outputs: dict[int, str] = {}
+    for index in range(call_count):
+        call_id = f'c{index}'
+        command = f'printf HEAD-{index} ' + 'i' * 5_000 + f' --tail-arg=TAIL-{index}'
+        output = f'OUT-HEAD-{index}' + 'o' * 5_000 + f' OUT-TAIL-{index}\nScript failed'
+        commands[index] = command
+        outputs[index] = output
+        tool_calls.append({
+            'id': call_id,
+            'type': 'function',
+            'function': {'name': 'Bash', 'arguments': json.dumps({'command': command})},
+        })
+        tool_results.append({
+            'role': 'tool',
+            'tool_call_id': call_id,
+            'status': 'completed',
+            'exit_code': 1,
+            'error_code': f'ERR_{index}',
+            'content': output,
+        })
+    trace_messages.extend([{'role': 'assistant', 'tool_calls': tool_calls}, *tool_results])
+    trace = make_trace('jev-tool-budget').model_copy(update={'messages': tuple(trace_messages)})
+    question = UNFIXED_ERROR.model_copy(update={'instructions': 'Classify tool activity. ' + 'q' * question_size})
+    calls: list[ClassifyRequest] = []
+    monkeypatch.setattr('evaluatorq.insights.labeling.CODING_TOOL_LABELS', (question,))
+    detect = ClassifyOutcome(response=ClassifyResponse(answers={'coding_agent': ClassifyAnswer(type='noul', noul=0.9)}))
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', _coding_fake(detect, calls))
+
+    await label_traces(
+        [trace],
+        labels=[],
+        compiled=None,
+        client=_client(),
+        model='typesafe/jev-latest',
+        coding=True,
+        coding_labels=[question],
+        trace_input_chars=trace_input_chars,
+    )
+
+    requests = [request for request in calls if 'unfixed_error' in request.questions]
+    assert len(requests) > 1
+    states = []
+    for request in requests:
+        assert isinstance(request.state, dict)
+        state_chars = serialized_chars(request.state)
+        question_payloads = classifier_question_wire_payloads(request.questions)
+        longest_question = max(serialized_chars(item) for item in question_payloads.values())
+        question_chars = serialized_question_chars(request.questions)
+        assert state_chars + question_chars <= trace_input_chars
+        assert state_chars <= JEV_STATE_CHARS
+        assert state_chars + longest_question <= JEV_STATE_QUESTION_CHARS
+        assert state_chars + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
+        states.append(request.state)
+
+    entries = [entry for state in states for entry in state['messages']]
+    activity = [entry for entry in entries if entry['type'] == 'tool_call']
+    assert len(activity) == call_count
+    assert {entry['id'] for entry in activity} == {f'c{index}' for index in range(call_count)}
+    for entry in activity:
+        index = int(entry['id'][1:])
+        command = commands[index]
+        assert f'TAIL-{index}' in entry['input']
+        assert f'[... {len(command) - 200} chars left out ...]' in entry['input']
+        [result] = entry['results']
+        assert result['error_code'] == f'ERR_{index}'
+        assert result['status'] == 'completed'
+        assert result['exit_code'] == '1'
+        assert f'OUT-TAIL-{index}' in result['text']
+        assert f'[... {len(outputs[index]) - 200} chars left out ...]' in result['text']
+        assert 'nonzero_exit' in result.get('output_markers', [])
+        assert 'i' * 400 not in entry['input']
+        assert 'o' * 400 not in result['text']
+
+
+def test_jev_activity_pairs_repeated_ids_and_preserves_orphan_results() -> None:
+    from evaluatorq.insights.transcript import tool_activity_chunks
+
+    messages = (
+        {'role': 'user', 'content': 'Check these command results.'},
+        {'role': 'tool', 'tool_call_id': 'missing', 'content': 'orphan result'},
+        {
+            'role': 'assistant',
+            'tool_calls': [
+                {'id': 'duplicate', 'function': {'name': 'Bash', 'arguments': '{"command":"first"}'}},
+                {'id': 'duplicate', 'function': {'name': 'Bash', 'arguments': '{"command":"second"}'}},
+                {'id': 'parallel', 'function': {'name': 'Bash', 'arguments': '{"command":"parallel"}'}},
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'duplicate', 'content': 'first result'},
+        {'role': 'tool', 'tool_call_id': 'duplicate', 'content': 'second result'},
+        {'role': 'tool', 'tool_call_id': 'parallel', 'content': 'parallel result'},
+        {
+            'role': 'assistant',
+            'tool_calls': [{'id': 'duplicate', 'function': {'name': 'Bash', 'arguments': '{"command":"third"}'}}],
+        },
+        {'role': 'tool', 'tool_call_id': 'duplicate', 'content': 'third result'},
+    )
+    trace = make_trace('jev-duplicate-tools').model_copy(update={'messages': messages})
+
+    [state] = tool_activity_chunks(trace, model='typesafe/jev-latest', trace_input_chars=10_000)
+
+    assert isinstance(state, dict)
+    entries = state['messages']
+    activity = [entry for entry in entries if entry['type'] == 'tool_call']
+    assert [entry['input'] for entry in activity] == ['first', 'second', 'parallel', 'third']
+    assert activity[0]['results'][0]['text'] == 'first result'
+    assert activity[1]['results'][0]['text'] == 'second result'
+    assert activity[2]['results'][0]['text'] == 'parallel result'
+    assert activity[3]['results'][0]['text'] == 'third result'
+    assert any(entry['type'] == 'orphan_result' and entry['text'] == 'orphan result' for entry in entries)
+
+def test_jev_activity_keeps_orphan_results_without_assistant_calls() -> None:
+    from evaluatorq.insights.transcript import tool_activity_chunks
+
+    trace = make_trace('orphan-only-tools').model_copy(
+        update={'messages': ({'role': 'tool', 'tool_call_id': 'missing', 'content': 'orphan result'},)}
+    )
+
+    [state] = tool_activity_chunks(trace, model='typesafe/jev-latest', trace_input_chars=10_000)
+
+    assert isinstance(state, dict)
+    [entry] = state['messages']
+    assert entry['type'] == 'orphan_result'
+    assert entry['text'] == 'orphan result'
+
+def test_jev_activity_uses_no_calls_sentinel_only_for_empty_activity() -> None:
+    from evaluatorq.insights.transcript import tool_activity_chunks
+
+    [chunk] = tool_activity_chunks(
+        make_trace('no-tool-activity'), model='typesafe/jev-latest', trace_input_chars=10_000
+    )
+
+    assert chunk == 'No tool calls.'
 
 
 @pytest.mark.asyncio
@@ -561,7 +806,7 @@ async def test_selected_coding_labels_keep_gate_and_only_ask_selected_labels(mon
         labels=[],
         compiled=None,
         client=_client(),
-        model='jev',
+        model='typesafe/jev-latest',
         coding=True,
         coding_labels=[TASK_TYPE, UNFIXED_ERROR],
     )
@@ -584,7 +829,7 @@ async def test_conversation_only_coding_subset_skips_empty_tool_classify(monkeyp
         labels=[],
         compiled=None,
         client=_client(),
-        model='jev',
+        model='typesafe/jev-latest',
         coding=True,
         coding_labels=[TASK_TYPE],
     )
@@ -602,7 +847,7 @@ async def test_non_coding_agent_is_not_asked_coding_labels(monkeypatch: pytest.M
     monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(detect, calls))
 
     [outcome] = await label_traces(
-        [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev', coding=True
+        [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='typesafe/jev-latest', coding=True
     )
 
     assert [set(request.questions) for request in calls] == [{'coding_agent'}, {'sentiment'}]
@@ -621,7 +866,12 @@ async def test_failed_coding_check_skips_coding_labels_and_warns(monkeypatch: py
     sink = logger.add(lambda message: messages.append(str(message)), level='WARNING')
     try:
         [outcome] = await label_traces(
-            [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev', coding=True
+            [make_trace('t')],
+            labels=[SENTIMENT],
+            compiled=None,
+            client=_client(),
+            model='typesafe/jev-latest',
+            coding=True,
         )
     finally:
         logger.remove(sink)
@@ -639,7 +889,9 @@ async def test_coding_off_makes_one_call(monkeypatch: pytest.MonkeyPatch) -> Non
     calls: list[ClassifyRequest] = []
     monkeypatch.setattr(labeling_module, 'run_classify', _coding_fake(ClassifyOutcome(), calls))
 
-    await label_traces([make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='jev')
+    await label_traces(
+        [make_trace('t')], labels=[SENTIMENT], compiled=None, client=_client(), model='typesafe/jev-latest'
+    )
 
     assert [set(request.questions) for request in calls] == [{'sentiment'}]
 
@@ -673,3 +925,58 @@ def test_merge_chunks_last_chunk_decides_unfixed_error() -> None:
 
     assert _merge_chunks('unfixed_error', [_noul(0.9), _noul(0.1)]).value is False
     assert _merge_chunks('unfixed_error', [_noul(0.1), _noul(None, 'boom')]).error == 'boom'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('model', 'structured'), [('typesafe/jev-latest', True), ('openai/gpt-6-luna', False)])
+async def test_classifier_uses_jev_state_only_for_jev_and_full_transcript_otherwise(
+    monkeypatch: pytest.MonkeyPatch, model: str, structured: bool
+) -> None:
+    messages = (
+        {'role': 'user', 'content': 'REQUEST-START please help.'},
+        {
+            'role': 'assistant',
+            'tool_calls': [
+                {
+                    'id': 'lookup-1',
+                    'type': 'function',
+                    'function': {'name': 'search', 'arguments': '{"query":"middle-input"}'},
+                }
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'lookup-1', 'content': 'MIDDLE-RESULT found one record.'},
+        {'role': 'assistant', 'content': 'FINAL-ANSWER here is the result.'},
+    )
+    trace = make_trace('bounded').model_copy(update={'messages': messages})
+    requests: list[ClassifyRequest] = []
+
+    async def fake_run_classify(*, request: ClassifyRequest, **_: Any) -> ClassifyOutcome:
+        requests.append(request)
+        return ClassifyOutcome(
+            response=ClassifyResponse(answers={'sentiment': ClassifyAnswer(type='choice', choice='positive')})
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+
+    await label_traces(
+        [trace],
+        labels=[SENTIMENT],
+        compiled=None,
+        client=_client(),
+        model=model,
+        trace_input_chars=100_000,
+    )
+
+    state = requests[0].state
+    if structured:
+        assert isinstance(state, dict)
+        assert state['messages'][0]['text'] == 'REQUEST-START please help.'
+        assert any(entry['type'] == 'tool_call' for entry in state['messages'])
+        assert any(
+            entry['type'] == 'message' and entry['text'] == 'FINAL-ANSWER here is the result.'
+            for entry in state['messages']
+        )
+    else:
+        assert isinstance(state, str)
+        for phrase in ('REQUEST-START', 'middle-input', 'MIDDLE-RESULT', 'FINAL-ANSWER'):
+            assert phrase in state

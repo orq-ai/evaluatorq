@@ -80,7 +80,7 @@ def test_insights_header_hides_untracked_cost(minimal_run) -> None:
 def test_local_snapshot_run_does_not_offer_orq_trace_links(minimal_run: InsightsRun) -> None:
     run = minimal_run.model_copy(update={'population': {'mode': 'snapshot', 'limit': 2}})
 
-    assert 'local snapshot' in header(run)
+    assert 'trace file' in header(run)
     assert 'Open in Orq' not in cluster_detail(run, 'base-1')
     table = traces(run)
     assert '<th>Orq</th>' not in table
@@ -92,22 +92,25 @@ def test_local_snapshot_run_does_not_offer_orq_trace_links(minimal_run: Insights
     assert 'Open full trace in Orq' not in detail
 
 
-def test_run_page_shows_projection_coverage_for_loaded_traces(minimal_run: InsightsRun) -> None:
+def test_run_page_shows_character_input_coverage_for_loaded_traces(minimal_run: InsightsRun) -> None:
     run = minimal_run.model_copy(update={'population': {
         'mode': 'filter',
         'n_traces': 2,
         'n_projection_truncated': 1,
         'n_source_messages': 10,
         'n_omitted_messages': 3,
-        'source_bytes': 120_000,
-        'projected_bytes': 65_000,
+        'source_chars': 120_000,
+        'classifier_state_chars': 65_000,
+        'summary_input_chars': 100_000,
+        'classifier_state_format': 'jev',
+        'classifier_question_reserve': 'applied',
+        'trace_input_chars': 500_000,
     }})
 
     notice = failures(run)
 
-    assert '1 of 2 traces exceed' in notice
-    assert '3 of 10 whole messages omitted (30.0%)' in notice
-    assert '120,000 bytes' in notice and '65,000 bytes' in notice
+    assert '1 of 2 traces hit a summary or classifier input cap of 500,000 characters.' in notice
+    assert '3 of 10 source messages were omitted from the Jev classifier state.' in notice
 
 
 def test_saved_run_uses_redesign_and_python_owned_actions(tmp_path, minimal_run, monkeypatch):
@@ -183,7 +186,7 @@ def test_launch_route_passes_selected_coding_and_custom_labels(monkeypatch):
     custom = {'name': 'custom_question', 'kind': 'noul', 'instructions': 'Did the agent answer?'}
     data = {
         'csrf': token.group(1),
-        'source': 'recent',
+        'source': 'orq',
         'dimensions': 'intent',
         'coding_labels': [CODING_LABELS[1].name],
         'custom_labels_json': json.dumps([custom]),
@@ -213,15 +216,19 @@ def test_projection_warning_is_not_repeated_below_coverage(minimal_run: Insights
             'n_projection_truncated': 1,
             'n_source_messages': 2,
             'n_omitted_messages': 1,
-            'source_bytes': 60_000,
-            'projected_bytes': 30_000,
+            'source_chars': 60_000,
+            'classifier_state_chars': 30_000,
+            'summary_input_chars': 30_000,
+            'classifier_state_format': 'jev',
+            'classifier_question_reserve': 'applied',
+            'trace_input_chars': 500_000,
         },
         'warnings': ['Projection budget: 1 of 1 traces exceeded the model projection budget; 1 of 2 whole messages were omitted.'],
     })
 
     notice = failures(run)
 
-    assert notice.count('Model input projection') == 1
+    assert notice.count('Model input coverage') == 1
     assert 'Run warnings' not in notice
 
     earlier_run = run.model_copy(update={
@@ -233,15 +240,16 @@ def test_projection_warning_is_not_repeated_below_coverage(minimal_run: Insights
     assert 'Run warnings' not in failures(earlier_run)
 
 
-def test_earlier_run_does_not_invent_missing_projection_counts(minimal_run: InsightsRun) -> None:
+def test_earlier_run_does_not_invent_missing_character_coverage(minimal_run: InsightsRun) -> None:
     run = minimal_run.model_copy(update={'population': {
         'mode': 'snapshot', 'n_scanned': 2, 'n_projection_truncated': 1
     }})
 
     notice = failures(run)
 
-    assert '1 of 2 traces exceeded' in notice
-    assert 'Whole-message counts were not saved' in notice
+    assert 'Input character coverage was not recorded for this earlier run.' in notice
+    assert '50,000-byte' not in notice
+    assert 'Whole-message counts were not saved' not in notice
 
 
 def test_single_failed_trace_uses_singular_wording(minimal_run: InsightsRun) -> None:

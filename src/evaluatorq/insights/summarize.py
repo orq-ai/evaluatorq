@@ -19,12 +19,18 @@ from typing import TYPE_CHECKING
 
 from loguru import logger
 
+from evaluatorq.common.model_input import (
+    cap_text,
+    effective_trace_input_chars,
+    has_truncated_source_text,
+    source_text_chars,
+)
 from evaluatorq.common.sanitize import delimit
 from evaluatorq.common.structured_output import generate_structured, usage_from_exception
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.insights.cache import prompt_hash
 from evaluatorq.insights.models import TraceSummary, ensure_unique_trace_ids
-from evaluatorq.insights.transcript import conversation_view
+from evaluatorq.insights.transcript import full_conversation_view
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -89,9 +95,44 @@ Be specific and domain-aware. Avoid generic phrasing like "the user asked a ques
 Now produce the structured analysis. Remember: the "task" and "request" fields describe what the END-USER above wanted from the assistant — not what this prompt asked you to do."""
 
 
-def _build_prompt(trace: TraceRecord | TraceDocument) -> str:
-    conversation = delimit(conversation_view(trace), tag='conversation')
-    return render_template(SUMMARY_PROMPT, {'conversation': conversation})
+def _build_prompt(trace: TraceRecord | TraceDocument, *, input_char_cap: int | None = None) -> str:
+    return _build_prompt_with_coverage(trace, input_char_cap=input_char_cap)[0]
+
+
+def _build_prompt_with_coverage(
+    trace: TraceRecord | TraceDocument, *, input_char_cap: int | None = None
+) -> tuple[str, bool]:
+    cap = input_char_cap if input_char_cap is not None else effective_trace_input_chars()
+    empty_prompt = render_template(SUMMARY_PROMPT, {'conversation': delimit('', tag='conversation')})
+    if len(empty_prompt) > cap:
+        raise ValueError('trace_input_chars is too small for the summary prompt instructions')
+    source = full_conversation_view(trace, cap)
+    source_was_capped = has_truncated_source_text(source)
+    low, high = 0, len(source)
+    best: str | None = None
+    best_truncated = False
+    while low <= high:
+        limit = (low + high) // 2
+        if limit == 0 and source:
+            bounded = f'[... {source_text_chars(source)} chars left out ...]'
+        elif limit >= len(source):
+            bounded = source
+        else:
+            try:
+                bounded = cap_text(source, limit)[0]
+            except ValueError:
+                low = limit + 1
+                continue
+        prompt = render_template(SUMMARY_PROMPT, {'conversation': delimit(bounded, tag='conversation')})
+        if len(prompt) <= cap:
+            best = prompt
+            best_truncated = source_was_capped or limit < len(source)
+            low = limit + 1
+        else:
+            high = limit - 1
+    if best is None:
+        raise ValueError('trace_input_chars is too small for the summary prompt and an exact omission marker')
+    return best, best_truncated
 
 
 async def _summarize_one(
@@ -102,8 +143,9 @@ async def _summarize_one(
     cache: InsightsCache,
     semaphore: asyncio.Semaphore,
     usage: UsageLedger | None = None,
+    input_char_cap: int | None = None,
 ) -> tuple[str, TraceSummary | str]:
-    prompt = _build_prompt(trace)
+    prompt = _build_prompt(trace, input_char_cap=input_char_cap)
     key = prompt_hash(prompt)
     # InsightsCache has a NOT NULL span_id key. Dataset rows may not have one;
     # keep that absence in TraceDocument and use the empty value only for cache I/O.
@@ -151,18 +193,19 @@ async def summarize_traces(
     parallelism: int = 100,
     usage: UsageLedger | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    input_char_cap: int | None = None,
 ) -> dict[str, TraceSummary | str]:
-    """Summarize every trace, keyed by `trace_id`; value is the summary or an error string.
+    """Summarize every trace from its complete globally capped conversation text.
 
     Cache lookup first (per trace); a miss calls `generate_structured` with the
     fixed `TraceSummary` schema, bounded by `parallelism`. A trace whose reply
     does not parse, or whose call raises, is reported as an error string rather
-    than raised — per-trace failures never fail the run (the caller records it
-    on `TraceInsight.errors['summary']`).
+    than raised — per-trace failures never fail the run.
     """
     ensure_unique_trace_ids(traces)
     if parallelism <= 0:
         raise ValueError('parallelism must be greater than zero')
+    input_char_cap = input_char_cap if input_char_cap is not None else effective_trace_input_chars()
     semaphore = asyncio.Semaphore(parallelism)
     results: dict[str, TraceSummary | str] = {}
     next_index = 0
@@ -175,7 +218,13 @@ async def summarize_traces(
             next_index += 1
             trace = traces[index]
             trace_id, summary = await _summarize_one(
-                trace, client=client, model=model, cache=cache, semaphore=semaphore, usage=usage
+                trace,
+                client=client,
+                model=model,
+                cache=cache,
+                semaphore=semaphore,
+                usage=usage,
+                input_char_cap=input_char_cap,
             )
             results[trace_id] = summary
             completed += 1

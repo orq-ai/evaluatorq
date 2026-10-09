@@ -311,3 +311,15 @@ def test_review_payload_keeps_all_5000_traces_and_json_serializes():
     assert last_trace['trace_id'] == 'trace-4999'
     assert last_trace['has_summary'] is False
     json.dumps(payload)
+
+
+def test_review_payload_names_the_source_like_the_run_form_tabs() -> None:
+    run = _run([])
+    for mode, label in (
+        ('filter', 'Orq traces'),
+        ('query', 'Orq traces matching a question'),
+        ('export', 'Trace file (Finder export)'),
+        ('snapshot', 'Trace file'),
+    ):
+        payload = build_review_payload(run.model_copy(update={'population': {'mode': mode}}))
+        assert _mapping(payload['run'])['source_label'] == label

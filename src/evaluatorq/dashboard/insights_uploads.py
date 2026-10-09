@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import stat
 import time
 import uuid
-from typing import TYPE_CHECKING, Literal
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Literal, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
+from evaluatorq.common.private_files import write_private_atomic
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import Snapshot
 
@@ -22,11 +27,32 @@ if TYPE_CHECKING:
 
 MAX_INSIGHTS_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
+SNAPSHOT_TOO_LARGE_MESSAGE = f'Upload exceeds the {MAX_INSIGHTS_UPLOAD_BYTES // (1024 * 1024)} MB size limit.'
 MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
-ABANDONED_UPLOAD_TTL_SECONDS = 24 * 60 * 60
+UPLOAD_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _UPLOAD_DIRECTORY = '.uploads'
 UploadKind = Literal['finder', 'snapshot']
 _UPLOAD_NAME = re.compile(r'^(finder|snapshot)-[0-9a-f]{32}\.json$')
+_METADATA_SUFFIX = '.meta.json'
+
+
+class UploadMetadata(BaseModel):
+    """Private display details, never a claimed original filesystem path."""
+
+    display_name: str = Field(max_length=255)
+    modified_at: datetime | None = None
+    trace_count: int = Field(ge=0)
+    kind: UploadKind | None = None
+    source: Literal['file', 'sessions'] = 'file'
+
+
+@dataclass(frozen=True)
+class RecentTraceFile:
+    path: str
+    display_name: str
+    date: str
+    trace_count: int
+    kind: UploadKind
 
 
 def uploads_dir(runs_dir: Path) -> Path:
@@ -35,24 +61,39 @@ def uploads_dir(runs_dir: Path) -> Path:
 
 
 def cleanup_expired_uploads(runs_dir: Path, *, now: float | None = None) -> int:
-    """Remove stale route-owned uploads that were never consumed by a worker."""
+    """Prune route-owned copies seven days after upload or the latest completed run attempt."""
     directory = uploads_dir(runs_dir)
     if directory.is_symlink() or not directory.exists():
         return 0
     _ensure_private_directory(directory)
-    cutoff = (time.time() if now is None else now) - ABANDONED_UPLOAD_TTL_SECONDS
+    cutoff = (time.time() if now is None else now) - UPLOAD_RETENTION_SECONDS
     removed = 0
     for path in directory.iterdir():
         if _UPLOAD_NAME.fullmatch(path.name) is None or path.is_symlink():
             continue
         try:
             info = path.lstat()
-            if stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff:
+            if (
+                stat.S_ISREG(info.st_mode)
+                and (not hasattr(os, 'getuid') or info.st_uid == os.getuid())
+                and info.st_mtime < cutoff
+            ):
                 path.unlink()
+                metadata = path.with_name(path.name + _METADATA_SUFFIX)
+                if metadata.exists() and not metadata.is_symlink():
+                    metadata_info = metadata.lstat()
+                    if stat.S_ISREG(metadata_info.st_mode) and (
+                        not hasattr(os, 'getuid') or metadata_info.st_uid == os.getuid()
+                    ):
+                        metadata.unlink()
                 removed += 1
         except FileNotFoundError:
             continue
     return removed
+
+
+class UploadTooLargeError(ValueError):
+    """An upload body over its kind's size limit; the route answers 413 instead of 422."""
 
 
 class UploadRequestTooLargeError(Exception):
@@ -72,7 +113,7 @@ def limit_request_body(request: Request) -> None:
             body = message.get('body', b'')
             consumed += len(body)
             if consumed > limit:
-                raise UploadRequestTooLargeError('Upload exceeds the 100 MB size limit.')
+                raise UploadRequestTooLargeError(SNAPSHOT_TOO_LARGE_MESSAGE)
         return message
 
     request._receive = limited_receive  # noqa: SLF001 — install the bounded ASGI receive wrapper.
@@ -88,46 +129,92 @@ def _ensure_private_directory(path: Path) -> None:
     path.chmod(0o700)
 
 
-def validate_upload(contents: bytes, kind: UploadKind) -> None:
-    """Validate bounded UTF-8 JSON using the canonical Finder and snapshot loaders."""
-    limit = MAX_FINDER_EXPORT_BYTES if kind == 'finder' else MAX_INSIGHTS_UPLOAD_BYTES
-    if len(contents) > limit:
-        raise ValueError(
-            f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
-            if kind == 'finder'
-            else 'Upload exceeds the 100 MB size limit.'
-        )
+def upload_size_error(kind: UploadKind, size: int) -> str | None:
+    """The size-limit message for an upload of `kind`, or `None` when it fits."""
+    if kind == 'finder' and size > MAX_FINDER_EXPORT_BYTES:
+        return f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
+    if size > MAX_INSIGHTS_UPLOAD_BYTES:
+        return 'Upload exceeds the 100 MB size limit.'
+    return None
+
+
+def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKind:
+    """Parse an upload once, classify it by its top-level keys unless `kind` is given, and validate it.
+
+    Raises `UploadTooLargeError` above the kind's size limit and `ValueError` for any other invalid upload.
+    """
+    try:
+        document = json.loads(contents)
+    except (ValueError, RecursionError) as exc:  # JSONDecodeError and UnicodeDecodeError are both ValueError
+        raise ValueError('This file is not valid JSON.') from exc
+    if kind is None:
+        keys = set(document) if isinstance(document, dict) else set()
+        if 'matched_trace_ids' in keys:  # a Finder export also carries `traces`, so this key decides
+            kind = 'finder'
+        elif 'traces' in keys or 'documents' in keys:
+            kind = 'snapshot'
+        else:
+            raise ValueError('This file is neither a Finder export nor a trace snapshot.')
+    too_large = upload_size_error(kind, len(contents))
+    if too_large:
+        raise UploadTooLargeError(too_large)
+    del document  # validate in JSON mode, the way the worker and launch path read the stored file
     try:
         if kind == 'finder':
             RunExport.model_validate_json(contents)
-        else:
-            snapshot = Snapshot.model_validate_json(contents)
-            if not snapshot.traces:
-                raise ValueError('The trace snapshot contains no traces.')
-    except (ValidationError, UnicodeDecodeError) as exc:
+        elif Snapshot.model_validate_json(contents).is_empty:
+            raise ValueError('The trace snapshot contains no traces.')
+    except ValidationError as exc:
         raise ValueError(f'Upload is not a valid {kind} JSON file.') from exc
+    return kind
 
 
-def store_upload(runs_dir: Path, contents: bytes, kind: UploadKind) -> Path:
-    """Validate and atomically store an upload with a route-owned random name."""
-    validate_upload(contents, kind)
+def store_upload(
+    runs_dir: Path,
+    contents: bytes,
+    kind: UploadKind,
+    *,
+    display_name: str = '',
+    source: Literal['file', 'sessions'] = 'file',
+) -> Path:
+    """Store a validated copy and its private display metadata under a random name."""
     directory = uploads_dir(runs_dir)
-    _ensure_private_directory(directory)
     path = directory / f'{kind}-{uuid.uuid4().hex}.json'
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    metadata = UploadMetadata(
+        display_name=_display_name(display_name) or path.name,
+        modified_at=datetime.now(timezone.utc),
+        trace_count=_trace_count(contents, kind),
+        kind=kind,
+        source=source,
+    )
+    metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
+    stored = False
     try:
-        with os.fdopen(descriptor, 'wb') as handle:
-            handle.write(contents)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_private_atomic(path=path, contents=contents)
+        stored = True
+        write_private_atomic(path=metadata_path, contents=metadata.model_dump_json())
     except BaseException:
-        path.unlink(missing_ok=True)
+        if stored:
+            path.unlink(missing_ok=True)
         raise
     return path
 
 
-def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
-    """Read only a route-named regular upload from the private Insights directory."""
+def _display_name(name: str) -> str:
+    return ''.join(character for character in name.replace('\\', '/').rsplit('/', 1)[-1] if character.isprintable())[
+        :255
+    ]
+
+
+def _trace_count(contents: bytes, kind: UploadKind) -> int:
+    if kind == 'finder':
+        return len(RunExport.model_validate_json(contents).matched_trace_ids)
+    snapshot = Snapshot.model_validate_json(contents)
+    return len(snapshot.traces) + len(snapshot.documents)
+
+
+def _read_private_upload_file(runs_dir: Path, path: Path, *, limit: int, refresh_retention: bool = False) -> bytes:
+    """Open a private regular file without following a symlink, including metadata sidecars."""
     directory = uploads_dir(runs_dir)
     if path.is_symlink() or directory.is_symlink():
         raise ValueError('Uploaded source must be inside private Insights upload storage.')
@@ -138,9 +225,6 @@ def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
         raise ValueError('Uploaded source must be inside private Insights upload storage.') from exc
     if path.parent != directory:
         raise ValueError('Uploaded source must be inside private Insights upload storage.')
-    match = _UPLOAD_NAME.fullmatch(path.name)
-    if match is None or match.group(1) != kind:
-        raise ValueError('Uploaded source has the wrong file type.')
     directory_info = directory.lstat()
     if (
         not stat.S_ISDIR(directory_info.st_mode)
@@ -166,7 +250,9 @@ def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
                 or stat.S_IMODE(directory_opened.st_mode) != 0o700
             ):
                 raise ValueError('Insights upload storage changed while opening the file.')
-            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            descriptor = os.open(
+                path.name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd
+            )
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or (
             os.name != 'nt' and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600)
@@ -174,56 +260,162 @@ def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
             raise ValueError('Uploaded source must be a private regular file.')
         with os.fdopen(descriptor, 'rb') as handle:
             descriptor = None
-            contents = handle.read(MAX_INSIGHTS_UPLOAD_BYTES + 1)
+            if refresh_retention:
+                if os.utime in os.supports_fd:
+                    os.utime(handle.fileno(), None)
+                else:
+                    os.utime(path, None)
+            contents = handle.read(limit + 1)
     finally:
         if descriptor is not None:
             os.close(descriptor)
         if directory_fd is not None:
             os.close(directory_fd)
+    return contents
+
+
+def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
+    """Read and validate only a route-named private upload of the requested kind."""
+    if upload_kind(path) != kind:
+        raise ValueError('Uploaded source has the wrong file type.')
+    contents = _read_private_upload_file(runs_dir=runs_dir, path=path, limit=MAX_INSIGHTS_UPLOAD_BYTES)
     validate_upload(contents, kind)
     return contents
+
+
+def upload_kind(path: Path) -> UploadKind | None:
+    """The kind a stored upload's name records, or `None` for a file this module did not name."""
+    match = _UPLOAD_NAME.fullmatch(path.name)
+    return cast('UploadKind', match.group(1)) if match else None
 
 
 def is_uploaded_source(runs_dir: Path, path: Path) -> bool:
     """Return whether a path has the unambiguous route-owned upload shape."""
     directory = uploads_dir(runs_dir)
-    if path.is_symlink() or directory.is_symlink() or _UPLOAD_NAME.fullmatch(path.name) is None:
+    if _UPLOAD_NAME.fullmatch(path.name) is None:
         return False
     try:
-        return path.resolve().parent == directory.resolve()
+        return path.parent.absolute() == directory.absolute() or path.parent.resolve() == directory.resolve()
     except (OSError, RuntimeError):
         return False
 
 
-def cleanup_uploaded_source(runs_dir: Path, path: Path) -> None:
-    """Delete a valid upload file after worker consumption, leaving other files alone."""
-    if not is_uploaded_source(runs_dir, path):
+def retain_uploaded_source(runs_dir: Path, path: Path) -> None:
+    """Keep a valid route-owned copy for seven days after a worker attempt finishes."""
+    kind = upload_kind(path)
+    if kind is None or not is_uploaded_source(runs_dir, path):
         return
+    _read_private_upload_file(runs_dir=runs_dir, path=path, limit=0, refresh_retention=True)
+    metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
     try:
-        kind = 'finder' if path.name.startswith('finder-') else 'snapshot'
-        read_uploaded_source(runs_dir, path, kind)
-        path.unlink(missing_ok=True)
-    except (FileNotFoundError, OSError, ValueError):
+        raw = _read_private_upload_file(runs_dir=runs_dir, path=metadata_path, limit=4096)
+        metadata = UploadMetadata.model_validate_json(raw)
+        if metadata.kind == kind:
+            write_private_atomic(
+                path=metadata_path,
+                contents=metadata.model_copy(update={'modified_at': datetime.now(timezone.utc)}).model_dump_json(),
+            )
+    except (OSError, ValueError, RuntimeError):
         return
 
 
-async def receive_upload(upload: UploadFile, kind: UploadKind) -> bytes:
-    """Read an UploadFile in bounded chunks, rejecting content above the cap."""
+def cleanup_session_upload(runs_dir: Path, path: Path) -> bool:
+    """Delete a frozen session copy only when its private metadata records that source."""
+    if upload_kind(path) != 'snapshot' or not is_uploaded_source(runs_dir, path):
+        return False
+    metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
+    try:
+        raw = _read_private_upload_file(runs_dir=runs_dir, path=metadata_path, limit=4096)
+        metadata = UploadMetadata.model_validate_json(raw)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    if metadata.kind != 'snapshot' or metadata.source != 'sessions':
+        return False
+    _read_private_upload_file(runs_dir=runs_dir, path=path, limit=0)
+    path.unlink(missing_ok=True)
+    metadata_path.unlink(missing_ok=True)
+    return True
+
+
+def _recent_upload_entry(runs_dir: Path, path: Path, kind: UploadKind) -> tuple[float, RecentTraceFile] | None:
+    try:
+        _read_private_upload_file(runs_dir=runs_dir, path=path, limit=0)
+        metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
+        if metadata_path.exists() or metadata_path.is_symlink():
+            raw = _read_private_upload_file(runs_dir=runs_dir, path=metadata_path, limit=4096)
+            metadata = UploadMetadata.model_validate_json(raw)
+        else:
+            contents = read_uploaded_source(runs_dir=runs_dir, path=path, kind=kind)
+            metadata = UploadMetadata(display_name=path.name, trace_count=_trace_count(contents, kind), kind=kind)
+        if metadata.kind is not None and metadata.kind != kind:
+            return None
+        if metadata.source == 'sessions':
+            return None
+        modified = metadata.modified_at.timestamp() if metadata.modified_at is not None else path.stat().st_mtime
+        return modified, RecentTraceFile(
+            path=str(path),
+            display_name=metadata.display_name,
+            date=_file_date(modified),
+            trace_count=metadata.trace_count,
+            kind=kind,
+        )
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _recent_finder_entry(finder_dir: Path, path: Path) -> tuple[float, RecentTraceFile] | None:
+    from evaluatorq.dashboard.insights_launch import _read_approved_finder_export
+
+    try:
+        contents = _read_approved_finder_export(root=finder_dir, path=path)
+        validate_upload(contents, 'finder')
+        modified = path.stat().st_mtime
+        return modified, RecentTraceFile(
+            path=str(path),
+            display_name=path.name,
+            date=_file_date(modified),
+            trace_count=_trace_count(contents, 'finder'),
+            kind='finder',
+        )
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def recent_trace_files(runs_dir: Path, finder_dir: Path) -> list[RecentTraceFile]:
+    """List safe retained uploads and approved Finder exports, newest first."""
+    cleanup_expired_uploads(runs_dir)
+    entries: list[tuple[float, RecentTraceFile]] = []
+    directory = uploads_dir(runs_dir)
+    if directory.exists() and not directory.is_symlink():
+        for path in directory.iterdir():
+            kind = upload_kind(path)
+            if kind is None:
+                continue
+            entry = _recent_upload_entry(runs_dir, path, kind)
+            if entry is not None:
+                entries.append(entry)
+    if finder_dir.exists() and not finder_dir.is_symlink():
+        for path in finder_dir.glob('*.json'):
+            entry = _recent_finder_entry(finder_dir, path)
+            if entry is not None:
+                entries.append(entry)
+    return [entry for _, entry in sorted(entries, key=lambda item: (item[0], item[1].path), reverse=True)]
+
+
+def _file_date(modified: float) -> str:
+    return datetime.fromtimestamp(modified, tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+
+
+async def receive_upload(upload: UploadFile) -> tuple[UploadKind, bytes]:
+    """Read an UploadFile in bounded chunks, then classify and validate it off the event loop."""
     read = upload.read
     chunks = bytearray()
-    limit = MAX_FINDER_EXPORT_BYTES if kind == 'finder' else MAX_INSIGHTS_UPLOAD_BYTES
     while True:
-        chunk = await read(min(1024 * 1024, limit + 1 - len(chunks)))
+        chunk = await read(min(1024 * 1024, MAX_INSIGHTS_UPLOAD_BYTES + 1 - len(chunks)))
         if not chunk:
             break
         chunks.extend(chunk)
-        if len(chunks) > limit:
-            message = (
-                'Finder export exceeds the 10 MiB size limit.'
-                if kind == 'finder'
-                else 'Upload exceeds the 100 MB size limit.'
-            )
-            raise OverflowError(message)
+        if len(chunks) > MAX_INSIGHTS_UPLOAD_BYTES:
+            raise UploadTooLargeError('Upload exceeds the 100 MB size limit.')
     contents = bytes(chunks)
-    validate_upload(contents, kind)
-    return contents
+    return await asyncio.to_thread(validate_upload, contents), contents

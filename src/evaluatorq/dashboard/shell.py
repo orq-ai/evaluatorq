@@ -181,10 +181,10 @@ _NAV: list[tuple[str, str, str, str]] = [
 ]
 
 
-def _icon(path_data: str) -> str:
+def icon(path_data: str, *, cls: str = 'nav-icon', size: int = 16) -> str:
     return (
-        '<svg class="nav-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        f'<svg class="{cls}" width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" '
+        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
         f'{path_data}</svg>'
     )
 
@@ -195,9 +195,9 @@ def _sidebar_html(active_nav: str) -> str:
     mark = _load_mark()
     logo_html = f'<span class="nav-mark">{mark}</span>' if mark else ''
     items: list[str] = []
-    for key, label, href, icon in _NAV:
+    for key, label, href, icon_path in _NAV:
         active = ' active' if key == active_nav else ''
-        items.append(f'<a class="nav-item{active}" href="{href}">{_icon(icon)}<span>{esc(label)}</span></a>')
+        items.append(f'<a class="nav-item{active}" href="{href}">{icon(icon_path)}<span>{esc(label)}</span></a>')
     return (
         '<aside class="app-sidebar">'
         f'<a class="app-brand" href="/">{logo_html}'

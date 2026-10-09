@@ -827,8 +827,8 @@ async def test_partial_label_answer_failures_do_not_fail_label_stage(
     _patch_clients(monkeypatch)
     traces = [_trace(i) for i in range(6)]
     monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
-    failed = LabelSpec(name='first', kind='choice', instructions='first')
-    valid = LabelSpec(name='second', kind='choice', instructions='second')
+    failed = LabelSpec(name='first', kind='choice', instructions='first', criteria={'failed': 'The answer failed.'})
+    valid = LabelSpec(name='second', kind='choice', instructions='second', criteria={'valid': 'The answer is valid.'})
 
     async def label(*args, **kwargs):
         return [
@@ -866,7 +866,9 @@ async def test_all_label_requests_failing_skips_summary_and_dimensions_without_q
     _patch_clients(monkeypatch)
     traces = [_trace(i) for i in range(6)]
     monkeypatch.setattr(pipeline, 'resolve_population', _resolve(traces))
-    label_spec = LabelSpec(name='intent_label', kind='choice', instructions='classify intent')
+    label_spec = LabelSpec(
+        name='intent_label', kind='choice', instructions='classify intent', criteria={'intent': 'The intent label.'}
+    )
 
     async def label(*args, **kwargs):
         return [
