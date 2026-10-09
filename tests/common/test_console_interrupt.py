@@ -11,7 +11,8 @@ import pytest
 
 
 @pytest.mark.skipif(os.name != 'posix', reason='requires a POSIX pseudo-terminal')
-def test_ctrl_c_exits_confirmation_without_waiting_for_enter() -> None:
+@pytest.mark.parametrize('interrupt_thread', ['main', 'worker'])
+def test_ctrl_c_exits_confirmation_without_waiting_for_enter(interrupt_thread: str) -> None:
     """Ctrl-C at the shared run-plan prompt exits while its stdin read is pending."""
     import pty
 
@@ -30,7 +31,19 @@ terminal[6][termios.VINTR] = b'\x03'
 termios.tcsetattr(0, termios.TCSANOW, terminal)
 assert os.tcgetpgrp(0) == os.getpgrp()
 signal.signal(signal.SIGINT, signal.default_int_handler)
-signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
+if sys.argv[1] == 'worker':
+    import typer
+
+    real_confirm = typer.confirm
+
+    def worker_confirm(*args, **kwargs):
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
+        return real_confirm(*args, **kwargs)
+
+    typer.confirm = worker_confirm
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+else:
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
 
 async def main():
     await confirm_run_plan(
@@ -48,7 +61,7 @@ except KeyboardInterrupt:
 """
     child_pid, master_fd = pty.fork()
     if child_pid == 0:
-        os.execv(sys.executable, [sys.executable, '-c', program])
+        os.execv(sys.executable, [sys.executable, '-c', program, interrupt_thread])
     output = bytearray()
     child_reaped = False
     try:

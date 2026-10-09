@@ -75,7 +75,14 @@ async def ask_confirm(prompt: str) -> bool:
             settle(lambda: answer.set_result(result))
 
     threading.Thread(target=ask, name='evaluatorq-confirm', daemon=True).start()
-    return await answer
+    # A terminal SIGINT can be delivered to the stdin worker instead of the
+    # event-loop thread. Periodic wakeups let the loop process that signal.
+    try:
+        while not answer.done():
+            await asyncio.wait(fs=(answer,), timeout=0.1)
+        return answer.result()
+    finally:
+        answer.cancel()
 
 
 async def confirm_run_plan(
