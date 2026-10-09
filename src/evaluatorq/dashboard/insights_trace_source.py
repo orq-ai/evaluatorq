@@ -29,7 +29,7 @@ SNAPSHOT_UNREADABLE = 'The snapshot file this run read is no longer available or
 UPLOAD_DELETED = (
     'The dashboard deletes uploaded snapshot files after the run, so this conversation is no longer available.'
 )
-SPAN_MISMATCH = 'The conversation span analyzed by this run is no longer the span returned by Orq.'
+ORQ_SPAN_CHANGED = 'The conversation span analyzed by this run is no longer the span returned by Orq.'
 
 
 def _gone_snapshot_reason(path: Path) -> str:
@@ -70,8 +70,9 @@ async def load_orq_record(
 ) -> TraceRecord | str:
     """Re-run the pipeline's query for this one trace, or return a user-facing reason it cannot be shown.
 
-    The query keeps the run's filters and a window around the analysed timestamp, so the same span is selected.
-    ``open_source`` is entered only once the trace has a timestamp; a string it yields is a reason it has logged.
+    The query keeps the run's filters and a window around the analysed timestamp. The result is returned only when
+    Orq selects the saved span; a changed selection becomes an unavailable reason. ``open_source`` is entered only
+    once the trace has a timestamp; a string it yields is a reason it has logged.
     """
     timestamp = trace.timestamp
     if timestamp is None:
@@ -84,14 +85,14 @@ async def load_orq_record(
         try:
             record = await source.load_trace(
                 trace.trace_id,
-                span_id=trace.span_id,
+                expected_span_id=trace.span_id,
                 start=timestamp - TARGETED_RELOAD_MARGIN,
                 end=timestamp + TARGETED_RELOAD_MARGIN,
                 facets=FacetSelection.model_validate(run.population.get('facets') or {}),
                 numeric=NumericFilters.model_validate(run.population.get('numeric') or {}),
             )
         except OrqSpanMismatchError as error:
-            return _unavailable(trace, SPAN_MISMATCH, error)
+            return _unavailable(trace, ORQ_SPAN_CHANGED, error)
         except Exception as error:  # noqa: BLE001 — Orq and SDK failures vary; the tab must degrade visibly.
             return _unavailable(
                 trace,

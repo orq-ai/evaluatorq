@@ -16,6 +16,7 @@ from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot
 from evaluatorq.trace_finder.orq_source import (
     MAX_SPAN_PAGES,
+    OrqSpanMismatchError,
     OrqSourceError,
     OrqTraceSource,
     _conversation_messages,
@@ -689,7 +690,25 @@ async def test_load_trace_raises_when_its_targeted_scan_is_incomplete(monkeypatc
 
     with pytest.raises(OrqSourceError, match='scan_limit'):
         await make_source(FakeOrq(traces)).load_trace(
-            'target', span_id=None, start=START, end=END, facets=FacetSelection(), numeric=NumericFilters()
+            'target', expected_span_id='span-1', start=START, end=END, facets=FacetSelection(), numeric=NumericFilters()
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('expected_span_id', ['span-other', None])
+async def test_load_trace_rejects_a_different_selected_span(expected_span_id: str | None) -> None:
+    selected = summary('trace-1', messages=user_messages('current conversation'))
+    selected.root_span_id = 'span-current'
+    traces = FakeTraces({None: ([selected], False, None)})
+
+    with pytest.raises(OrqSpanMismatchError, match='analysis used'):
+        await make_source(FakeOrq(traces)).load_trace(
+            'trace-1',
+            expected_span_id=expected_span_id,
+            start=START,
+            end=END,
+            facets=FacetSelection(),
+            numeric=NumericFilters(),
         )
 
 

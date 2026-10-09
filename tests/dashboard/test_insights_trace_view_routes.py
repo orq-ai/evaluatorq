@@ -118,7 +118,7 @@ def test_orq_run_shows_the_transcript_and_a_spans_url(
 
     assert response.status_code == 200
     assert 'hello from orq' in response.text
-    assert 'hx-get="/insights/run-1/trace-spans?trace_id=trace-1"' in response.text
+    assert 'hx-get="/insights/run-1/trace-spans?trace_id=trace-1&amp;span_id=span-1"' in response.text
     assert 'now selects span' not in response.text
 
 
@@ -140,14 +140,20 @@ def test_orq_run_with_a_different_span_never_shows_substituted_conversation(
     warnings: list[str] = []
     sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
     try:
-        response = TestClient(build_app()).get(CONVERSATION)
+        client = TestClient(build_app())
+        response = client.get(CONVERSATION)
+        spans = client.get(SPANS)
+        assert response.status_code == 200
     finally:
         logger.remove(sink)
 
     assert 'substituted transcript secret' not in response.text
     assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' in response.text
-    assert len([message for message in warnings if 'conversation unavailable' in message]) == 1
-    assert 'trace-spans?trace_id=trace-1' in response.text
+    assert len([message for message in warnings if 'conversation unavailable' in message]) == 2
+    assert 'trace-spans' not in response.text
+    assert spans.status_code == 200
+    assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' in spans.text
+    assert 'span-other' not in spans.text
 
 
 
@@ -186,7 +192,7 @@ def test_orq_run_without_credentials_degrades_visibly(
 
     try:
         conversation = client.get(CONVERSATION)
-        spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
+        spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1&span_id=span-1')
     finally:
         logger.remove(sink)
 
@@ -225,9 +231,11 @@ def _named_span(span_id: str, *, name: str, minute: int, parent_span_id: str | N
 def test_spans_route_renders_the_span_tree_from_orq(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run)
+    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+    selected = summary('trace-1', messages=[{'role': 'user', 'content': 'analysed'}])
+    selected.root_span_id = 'span-1'
     traces = FakeTraces(
-        {},
+        {None: ([selected], False, None)},
         spans={
             'trace-1': [
                 _named_span('span-root', name='answer refund question', minute=0),
@@ -237,7 +245,7 @@ def test_spans_route_renders_the_span_tree_from_orq(
     )
     monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: FakeOrq(traces))
 
-    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1')
+    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1&span_id=span-1')
 
     assert response.status_code == 200
     assert 'answer refund question' in response.text
@@ -251,9 +259,16 @@ def _api_key_auth(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_spans_route_closes_the_source_and_the_client(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run)
+    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
     _api_key_auth(monkeypatch)
-    orq = FakeOrq(FakeTraces({}, spans={'trace-1': [_named_span('span-root', name='root', minute=0)]}))
+    selected = summary('trace-1', messages=[{'role': 'user', 'content': 'analysed'}])
+    selected.root_span_id = 'span-1'
+    orq = FakeOrq(
+        FakeTraces(
+            {None: ([selected], False, None)},
+            spans={'trace-1': [_named_span('span-root', name='root', minute=0)]},
+        )
+    )
     closed: list[OrqTraceSource] = []
 
     class RecordingSource(OrqTraceSource):
@@ -264,14 +279,14 @@ def test_spans_route_closes_the_source_and_the_client(
     monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: orq)
     monkeypatch.setattr(insights_routes, 'OrqTraceSource', RecordingSource)
 
-    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1')
+    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1&span_id=span-1')
 
     assert response.status_code == 200
     assert len(closed) == 1
     assert orq.exit_calls == [(None, None, None)]
 
 
-SPANS = '/insights/run-1/trace-spans?trace_id=trace-1'
+SPANS = '/insights/run-1/trace-spans?trace_id=trace-1&span_id=span-1'
 
 
 def _scoped_run(minimal_run: InsightsRun, scope: Any) -> InsightsRun:
@@ -288,7 +303,13 @@ def _cli_oauth(monkeypatch: pytest.MonkeyPatch, *, account: str) -> list[dict[st
 
     def build(auth: DashboardAuth, **kwargs: Any) -> FakeOrq:
         built.append(kwargs)
-        return FakeOrq(FakeTraces({}, spans={'trace-1': [_named_span('span-root', name='root', minute=0)]}))
+        selected = summary('trace-1', messages=[{'role': 'user', 'content': 'analysed'}])
+        selected.root_span_id = 'span-1'
+        return FakeOrq(
+            FakeTraces(
+                {None: ([selected], False, None)}, spans={'trace-1': [_named_span('span-root', name='root', minute=0)]}
+            )
+        )
 
     monkeypatch.setattr(insights_routes, 'selected_dashboard_auth', lambda app: auth)
     monkeypatch.setattr(insights_routes, 'account_identity', lambda auth: account)
@@ -316,7 +337,7 @@ def test_a_run_without_a_valid_recorded_scope_reads_with_the_settings_workspace(
 def test_a_run_read_by_the_selected_account_uses_its_recorded_workspace(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, _scoped_run(minimal_run, _recorded_scope()))
+    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query', 'orq_scope': _recorded_scope()}}))
     built = _cli_oauth(monkeypatch, account='account-a')
     client = TestClient(build_app())
 
@@ -367,7 +388,7 @@ def test_source_construction_failure_still_closes_the_client(
     sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
 
     try:
-        spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
+        spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1&span_id=span-1')
         conversation = client.get(CONVERSATION)
     finally:
         logger.remove(sink)
@@ -383,16 +404,22 @@ def test_source_construction_failure_still_closes_the_client(
 def test_span_load_failure_is_the_only_spans_panel_that_says_try_again(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run)
+    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
     _api_key_auth(monkeypatch)
 
     class FailingSpans(FakeTraces):
         async def list_spans_async(self, **kwargs: Any) -> Any:
             raise RuntimeError('spans are down')
 
-    monkeypatch.setattr(insights_routes, 'build_orq_client', lambda auth, **kwargs: FakeOrq(FailingSpans({})))
+    selected = summary('trace-1', messages=[{'role': 'user', 'content': 'analysed'}])
+    selected.root_span_id = 'span-1'
+    monkeypatch.setattr(
+        insights_routes,
+        'build_orq_client',
+        lambda auth, **kwargs: FakeOrq(FailingSpans({None: ([selected], False, None)})),
+    )
 
-    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1')
+    response = TestClient(build_app()).get('/insights/run-1/trace-spans?trace_id=trace-1&span_id=span-1')
 
     assert response.status_code == 200
     assert 'Could not load spans. Try again.' in response.text
@@ -463,7 +490,7 @@ def test_run_from_an_unknown_source_has_no_orq_conversation_or_spans(
     client = TestClient(build_app())
 
     conversation = client.get(CONVERSATION)
-    spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1')
+    spans = client.get('/insights/run-1/trace-spans?trace_id=trace-1&span_id=span-1')
 
     assert conversation.status_code == 200
     assert 'This run&#x27;s trace source cannot be re-read.' in conversation.text

@@ -335,19 +335,19 @@ class OrqTraceSource:
         self,
         trace_id: str,
         *,
-        span_id: str | None = None,
+        expected_span_id: str | None,
         start: datetime | None,
         end: datetime | None,
         facets: FacetSelection,
         numeric: NumericFilters,
     ) -> TraceRecord | None:
-        """Hydrate one trace from its query summary, selecting the span a targeted ``load_async`` selects.
+        """Hydrate one trace and reject it when it no longer resolves to the analysed span.
 
-        When ``span_id`` is nonempty, a different selected span is an unavailable analyzed conversation.
-        Returns None when the query returns no usable conversation for the trace.
+        The selected span must exactly match ``expected_span_id``, including when it is None. Returns None when
+        the query returns no usable conversation for the trace.
 
         Raises:
-            OrqSourceError: The load failed, its targeted scan stopped early, or the selected span differs.
+            OrqSourceError: The load failed, its targeted scan stopped before covering the window, or its span changed.
         """
         snapshot = await self.load_async(
             start, end, 1, facets=facets, numeric=numeric, target_trace_ids=frozenset({trace_id})
@@ -356,10 +356,9 @@ class OrqTraceSource:
             snapshot, error_type=OrqSourceError, operation=f'targeted load of trace {trace_id}'
         )
         record = next((record for record in snapshot.traces if record.trace_id == trace_id), None)
-        if record is not None and span_id and record.span_id != span_id:
+        if record is not None and record.span_id != expected_span_id:
             raise OrqSpanMismatchError(
-                f'The conversation span analyzed by this run is no longer the span returned by Orq '
-                f'(expected {span_id}, returned {record.span_id})'
+                f'trace {trace_id} reloaded as span {record.span_id!r}; the analysis used {expected_span_id!r}'
             )
         return record
 
