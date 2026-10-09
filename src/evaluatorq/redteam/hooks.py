@@ -16,7 +16,6 @@ Public API:
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, runtime_checkable
 
@@ -546,11 +545,9 @@ class RichHooks:
         if self._skip_confirm:
             return True
 
-        import typer
+        from evaluatorq.common.reports import ask_confirm
 
-        # typer.confirm is a blocking stdin read; offload it so the event loop
-        # is not pinned while waiting for the keypress.
-        return await asyncio.to_thread(typer.confirm, 'Proceed with this run?', default=True)
+        return await ask_confirm('Proceed with this run?')
 
     def _render_agent_capabilities(
         self,

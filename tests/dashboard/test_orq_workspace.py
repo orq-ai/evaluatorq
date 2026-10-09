@@ -37,6 +37,20 @@ def test_resolve_slug_none_when_unset() -> None:
     assert ow.resolve_slug() is None
 
 
+def test_cli_oauth_selected_server_and_workspace_drive_fallback_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    monkeypatch.setenv('ORQ_WORKSPACE', 'unrelated-environment-workspace')
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_oauth',
+        'orq_oauth_server': 'https://selected.orq.ai',
+        'orq_workspace': 'selected-workspace',
+    }))
+
+    assert ow.resolve_base_url() == 'https://selected.orq.ai'
+    assert ow.resolve_slug() == 'selected-workspace'
+
+
 def test_resolve_slug_from_authenticated_cli_and_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.dashboard.orq_scope import OrqScope
 
