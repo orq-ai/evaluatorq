@@ -2193,10 +2193,44 @@ def test_drawer_labels_empty_conversation_state() -> None:
         trace_type='agent',
         messages=({'role': 'user', 'content': ''},),
     )
-    html = drawer(TraceDetail(trace=trace, projection=None, classification=None), traces_layout=True)
+    detail = TraceDetail(trace=trace, projection=None, classification=None)
+    html = drawer(detail, traces_layout=True)
+    legacy_html = drawer(detail)
 
     assert 'class="fd-no-messages" role="status"' in html
     assert '<b>No messages available</b>' in html
+    assert '<p class="finder-empty">No messages.</p>' in legacy_html
+    assert '<details class="fd-msg' not in legacy_html
+
+
+def test_legacy_drawer_keeps_tool_only_conversation_content() -> None:
+    from evaluatorq.dashboard.trace_finder.views import drawer
+    from evaluatorq.trace_finder import TraceDetail
+
+    trace = TraceRecord(
+        schema_version=1,
+        trace_id='tool-only',
+        span_id='span',
+        timestamp=datetime(2026, 9, 27, tzinfo=timezone.utc),
+        project='p',
+        model='gpt-5.6-luna',
+        provider='openai',
+        status='ok',
+        product='chat',
+        trace_type='agent',
+        messages=(
+            {
+                'role': 'assistant',
+                'tool_calls': [
+                    {'type': 'function', 'function': {'name': 'lookup', 'arguments': '{"id":1}'}},
+                ],
+            },
+        ),
+    )
+    html = drawer(TraceDetail(trace=trace, projection=None, classification=None))
+
+    assert '<p class="finder-empty">No messages.</p>' not in html
+    assert 'lookup' in html
 
 
 def test_missing_trace_reason_is_escaped_and_wrapped() -> None:

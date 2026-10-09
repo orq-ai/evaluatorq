@@ -11,6 +11,7 @@ import pytest
 from loguru import logger
 
 from evaluatorq.dashboard.insights_trace_source import (
+    ORQ_SPAN_CHANGED,
     conversation_rereadable,
     conversation_unavailable_reason,
     load_orq_record,
@@ -138,12 +139,32 @@ async def test_orq_run_hydrates_the_conversation(orq_run: InsightsRun) -> None:
         details={('trace-1', 'span-9'): detail('span-9', 'hello from orq', minute=1)},
     )
     source = OrqTraceSource(cast(Any, FakeOrq(traces)))
+    matching_trace = orq_run.traces[0].model_copy(update={'span_id': 'span-9'})
 
-    result = await load_orq_record(orq_run, orq_run.traces[0], open_source=_opened(source))
+    result = await load_orq_record(orq_run, matching_trace, open_source=_opened(source))
 
     assert isinstance(result, TraceRecord)
     assert result.span_id == 'span-9'
     assert result.messages == ({'role': 'user', 'content': 'hello from orq'},)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('saved_span_id', ['span-1', None])
+async def test_orq_run_reports_a_changed_span_without_returning_its_conversation(
+    orq_run: InsightsRun, saved_span_id: str | None
+) -> None:
+    traces = FakeTraces(
+        pages={None: ([summary('trace-1', messages=[])], False, None)},
+        spans={'trace-1': [span('span-current', minute=1)]},
+        details={('trace-1', 'span-current'): detail('span-current', 'new conversation', minute=1)},
+    )
+    trace = orq_run.traces[0].model_copy(update={'span_id': saved_span_id})
+    source = OrqTraceSource(cast(Any, FakeOrq(traces)))
+
+    result = await load_orq_record(orq_run, trace, open_source=_opened(source))
+
+    assert result == ORQ_SPAN_CHANGED
+    assert 'new conversation' not in str(result)
 
 
 @pytest.mark.asyncio

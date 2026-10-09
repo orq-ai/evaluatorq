@@ -118,6 +118,10 @@ class OrqSourceError(ValueError):
     """Live trace acquisition could not produce a valid snapshot."""
 
 
+class OrqSpanMismatchError(OrqSourceError):
+    """The trace reload selected a different span than the saved analysis used."""
+
+
 def require_complete_targeted_load(snapshot: Snapshot, *, error_type: type[Exception], operation: str) -> None:
     """Raise ``error_type`` when a targeted load stopped before covering its window.
 
@@ -331,17 +335,18 @@ class OrqTraceSource:
         self,
         trace_id: str,
         *,
+        expected_span_id: str | None,
         start: datetime | None,
         end: datetime | None,
         facets: FacetSelection,
         numeric: NumericFilters,
     ) -> TraceRecord | None:
-        """Hydrate one trace from its query summary, selecting the span a targeted ``load_async`` selects.
+        """Hydrate one trace and reject it when it no longer resolves to the analysed span.
 
         Returns None when the query returns no usable conversation for the trace.
 
         Raises:
-            OrqSourceError: The load failed or its targeted scan stopped before covering the window.
+            OrqSourceError: The load failed, its targeted scan stopped before covering the window, or its span changed.
         """
         snapshot = await self.load_async(
             start, end, 1, facets=facets, numeric=numeric, target_trace_ids=frozenset({trace_id})
@@ -349,7 +354,12 @@ class OrqTraceSource:
         require_complete_targeted_load(
             snapshot, error_type=OrqSourceError, operation=f'targeted load of trace {trace_id}'
         )
-        return next((record for record in snapshot.traces if record.trace_id == trace_id), None)
+        record = next((record for record in snapshot.traces if record.trace_id == trace_id), None)
+        if record is not None and record.span_id != expected_span_id:
+            raise OrqSpanMismatchError(
+                f'trace {trace_id} reloaded as span {record.span_id!r}; the analysis used {expected_span_id!r}'
+            )
+        return record
 
     async def _load_with_lifecycle(
         self,

@@ -334,6 +334,16 @@ async def _trace_source(app: Any, run: InsightsRun) -> AsyncIterator[OrqTraceSou
                 logger.warning('Could not close the Insights trace source: {}', exc)
 
 
+@asynccontextmanager
+async def _opened_trace_source(source: OrqTraceSource | str) -> AsyncIterator[OrqTraceSource | str]:  # noqa: RUF029
+    """Let a source loader reuse the trace source already opened for this request.
+
+    Yields:
+        The already-open source or its unavailable reason.
+    """
+    yield source
+
+
 def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> tuple[Path, InsightsRun | str] | None:
     return loaded.get(run_id)
 
@@ -776,7 +786,6 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             _resolve_trace, run_id, trace_id=trace_id, span_id=req.query_params.get('span_id')
         )
         spans_url: str | None = None
-        notice = ''
         record: TraceRecord | str
         if isinstance(resolved, str):
             logger.warning('Insights run {} trace {} conversation unavailable: {}', run_id, trace_id, resolved)
@@ -789,38 +798,33 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             elif source_kind == 'unknown':
                 record = source_not_rereadable(run, trace)
             else:
-                spans_url = (
-                    f'/insights/{quote(run.run_id, safe="")}/trace-spans?{urlencode({"trace_id": trace.trace_id})}'
-                )
                 record = await load_orq_record(run, trace, open_source=lambda: _trace_source(req.app, run))
-                if not isinstance(record, str) and trace.span_id and record.span_id != trace.span_id:
-                    logger.warning(
-                        'Insights trace {} was analysed on span {} but Orq now selects span {}',
-                        trace.trace_id,
-                        trace.span_id,
-                        record.span_id,
-                    )
-                    notice = (
-                        '<p class="insights-muted" role="status">'
-                        f'Orq now selects span {esc(record.span_id)} for this trace; '
-                        f'the analysis used span {esc(trace.span_id)}.</p>'
-                    )
+                if not isinstance(record, str):
+                    spans_url = f'/insights/{quote(run.run_id, safe="")}/trace-spans?{urlencode({"trace_id": trace.trace_id, "span_id": trace.span_id or ""})}'
         if isinstance(record, str):
             body = unavailable_conversation(reason=record, spans_url=spans_url)
         else:
             with cli_slug_render_scope():
                 body = await asyncio.to_thread(trace_conversation, record, spans_url=spans_url)
-        return _html(f'<div class="fd-traces insights-trace-view">{notice}{body}</div>')
+        return _html(f'<div class="fd-traces insights-trace-view">{body}</div>')
 
     @app.get('/insights/{run_id}/trace-spans')
     async def insights_trace_spans(req: Request, run_id: str) -> Response:
         trace_id = req.query_params.get('trace_id', '')
-        run = await asyncio.to_thread(_load_run, run_id)
-        if run is None or not reads_orq(run.population) or not any(item.trace_id == trace_id for item in run.traces):
+        resolved = await asyncio.to_thread(
+            _resolve_trace, run_id, trace_id=trace_id, span_id=req.query_params.get('span_id')
+        )
+        if isinstance(resolved, str):
+            return _html('<p class="finder-empty">Span loading is unavailable.</p>', 404)
+        run, trace = resolved
+        if not reads_orq(run.population):
             return _html('<p class="finder-empty">Span loading is unavailable.</p>', 404)
         async with _trace_source(req.app, run) as source:
             if isinstance(source, str):
                 return _html(f'<p class="finder-empty" role="status">{esc(source)}</p>')
+            record = await load_orq_record(run, trace, open_source=lambda: _opened_trace_source(source))
+            if isinstance(record, str):
+                return _html(f'<p class="finder-empty" role="status">{esc(record)}</p>')
             return _html(
                 await span_tree_fragment(
                     trace_id, load_spans=source.list_spans, load_first_error_message=source.first_error_message

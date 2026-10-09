@@ -1157,10 +1157,10 @@ def drawer(
             else f'<p role="alert">Failed: {esc(result.error)}</p>'
         )
     )
-    messages, mini_html, _ = _thread_parts(trace, msg=msg)
+    messages, mini_html, has_conversation = _thread_parts(trace, msg=msg)
     payload = json.dumps(detail.projection.payload if detail.projection else {}, indent=2, ensure_ascii=False)
     raw = json.dumps(result.raw_result if result else {}, indent=2, ensure_ascii=False)
-    thread_html = messages or '<p class="finder-empty">No messages.</p>'
+    thread_html = messages if has_conversation else '<p class="finder-empty">No messages.</p>'
     row_header = ''
     if row is not None:
         models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.display_models)
