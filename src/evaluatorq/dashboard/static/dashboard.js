@@ -451,7 +451,11 @@
       return;
     }
     const option = evt.target.closest('.model-pick .model-option');
-    if (option) { pickModel(option, option.getAttribute('data-model')); return; }
+    if (option) {
+      if (option.hidden) return;
+      pickModel(option, option.getAttribute('data-model'));
+      return;
+    }
     const addFilter = evt.target.closest('.finder-controls .add, .model-pick-btn');
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
@@ -673,16 +677,22 @@
   document.body.addEventListener('input', function (evt) {
     const search = evt.target.closest('.finder-facets .facet-search');
     if (!search) return;
-    const sub = search.closest('.facet-sub');
     const query = search.value.trim().toLocaleLowerCase();
+    const richPick = search.closest('.rich-pick--filter');
+    const sub = search.closest('.facet-sub');
+    if (!richPick && !sub) return;
+    const list = richPick || sub;
     let visible = 0;
-    sub.querySelectorAll('.facet-values label, .facet-values .model-option').forEach(function (option) {
+    list.querySelectorAll('.facet-values .model-option, .facet-values label').forEach(function (option) {
       const label = option.querySelector('input + span');
       const matches = (label ? label.textContent : option.textContent).toLocaleLowerCase().includes(query);
       option.hidden = !matches;
       if (matches) visible += 1;
     });
-    sub.querySelector('.facet-no-results').hidden = visible !== 0;
+    list.querySelector('.facet-no-results').hidden = visible !== 0;
+  });
+  document.body.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Enter' && evt.target.matches('.rich-pick--filter .facet-search')) evt.preventDefault();
   });
 
   // Unticking a value in the menu must also drop the hidden input the chip row submits.

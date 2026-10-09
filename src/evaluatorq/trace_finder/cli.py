@@ -309,6 +309,10 @@ def find(
         'limit': limit,
         'parallelism': parallelism,
     })
+    # The dashboard's OAuth scope must not constrain this CLI command, which resolves
+    # its own environment or API-key profile credential.
+    if settings.orq_auth_method == 'cli_oauth':
+        settings = settings.model_copy(update={'orq_workspace': None, 'orq_project_id': None, 'orq_project_name': None})
     # Added on top of the root flags, which `set_cli_models` would discard.
     add_cli_models(
         overrides={

@@ -221,10 +221,9 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     are ignored with a warning.
     """
     values = load_settings().model_dump()
-    # Older Settings files may contain a saved workspace or project. Authentication
-    # now uses the selected credential's full scope; callers can still override
-    # these fields explicitly for a single invocation.
-    values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
+    # Legacy saved scope is ignored for API-key methods; OAuth explicitly selects its scope.
+    if values['orq_auth_method'] != 'cli_oauth':
+        values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
     for field, env_name, minimum, maximum in (
         ('window_days', 'EVALUATORQ_FINDER_WINDOW_DAYS', MIN_WINDOW_DAYS, MAX_WINDOW_DAYS),
         ('limit', 'EVALUATORQ_FINDER_LIMIT', MIN_LIMIT, MAX_LIMIT),
