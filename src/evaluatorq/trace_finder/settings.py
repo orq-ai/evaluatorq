@@ -22,6 +22,7 @@ MIN_PARALLELISM = 1
 MAX_PARALLELISM = 200
 # Pre-roles settings files saved these as plain fields, defaults included.
 _LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_model'})
+_RETIRED_TRACE_FINDER_KEYS = frozenset({'trace_input_chars'})
 _LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
 _LEGACY_CLASSIFIER_MODEL = 'typesafe/jev-latest'
 
@@ -72,6 +73,19 @@ class DashboardSettings(BaseModel):
         if isinstance(value, dict) and 'orq_auth_method' not in value and value.get('orq_profile'):
             return {**value, 'orq_auth_method': 'cli_profile'}
         return value
+
+    @model_validator(mode='before')
+    @classmethod
+    def discard_retired_trace_finder_settings(cls, value: object) -> object:
+        """Drop settings for trace-finder controls that no longer have a consumer."""
+
+        if not isinstance(value, dict) or not _RETIRED_TRACE_FINDER_KEYS & value.keys():
+            return value
+        migrated = dict(value)
+        for key in _RETIRED_TRACE_FINDER_KEYS & migrated.keys():
+            migrated.pop(key)
+            logger.warning('Ignoring retired dashboard setting {!r}; it has no current trace-finder consumer', key)
+        return migrated
 
     @model_validator(mode='before')
     @classmethod
