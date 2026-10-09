@@ -6,6 +6,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ## [Unreleased]
 
+- **Trace Insights keeps successful tool-span statuses, unsupported tool activity and results, and each Responses call's own tool schemas.** Signal reports retain their evidence when source coverage is incomplete, so missing measurements remain explainable.
 - **CLI OAuth workspace and project menus can be filtered by typing; the filter searches the loaded choices locally and leaves the selected scope intact.**
 - **`eq find` shows the plan and asks before classifying (RES-1716).** After the question is compiled and the population is loaded, the CLI prints the question, window, your filters, the filters generated from the question, each dimension with its keep rule and the trace count, then asks `Classify N traces?`. Answering no cancels the run with no classify calls. Interactive runs now wait for that answer. `--yes`/`-y` skips the prompt, and so does a non-terminal stdin, so scripts and CI do not block; a plan with no classifier dimensions also skips it because it makes no classify calls. The plan table is still printed ahead of the results. Ctrl-C at the prompt exits with status 130.
 - **Ctrl-C at the `eq redteam` and `eq sim` confirmation prompts exits right away.** The prompt used to read stdin in the default executor, so `asyncio.run` waited for Enter before the process could stop. The shared `ask_confirm` helper now reads on a daemon thread.
