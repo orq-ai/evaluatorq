@@ -327,15 +327,36 @@ function renderHeader() {
       : `${stageCost.is_partial ? 'Partial cost: ' : ''}$${stageCost.cost.toFixed(4)}`;
     return `<span class="${status === 'completed' ? 'ok' : 'na'}">${mark}</span><span>${esc(label)} · ${esc(status)}</span><span class="num" style="color:var(--text-muted)">${count}</span><span class="num">${esc(costText)}</span>`;
   }).join('') : '<span class="na">Stage history unavailable</span>';
-  const projectionKnown = p.projected_bytes != null && p.source_bytes != null;
-  const projectionText = projectionKnown
-    ? `${p.n_projection_truncated || 0} of ${N} traces were too long and were shortened. The models read ${pct(p.projected_bytes, p.source_bytes)}% of the original text (${(p.projected_bytes / 1e6).toFixed(1)} of ${(p.source_bytes / 1e6).toFixed(1)} MB). The traces themselves are unchanged.`
-    : 'Projection size is unavailable for this run.';
+  const projectionKnown = p.classifier_state_chars != null && p.source_chars != null;
+  const sourceChars = projectionKnown ? p.source_chars : 0;
+  const classifierChars = projectionKnown ? p.classifier_state_chars : 0;
+  const requestCoverageKnown = projectionKnown && p.classifier_question_chars != null && p.classifier_request_chars != null;
+  const questionChars = requestCoverageKnown ? p.classifier_question_chars : 0;
+  const requestChars = requestCoverageKnown ? p.classifier_request_chars : classifierChars;
+  const summaryAverage = projectionKnown ? Math.round((p.summary_input_chars || 0) / Math.max(N, 1)) : 0;
+  const classifierAverage = projectionKnown ? Math.round(classifierChars / Math.max(N, 1)) : 0;
+  const questionAverage = requestCoverageKnown ? Math.round(questionChars / Math.max(N, 1)) : 0;
+  const requestAverage = requestCoverageKnown ? Math.round(requestChars / Math.max(N, 1)) : 0;
+  let projectionText;
+  if (!projectionKnown) {
+    projectionText = 'Character-based input coverage is unavailable for this run.';
+  } else if (requestCoverageKnown) {
+    projectionText = `${p.n_projection_truncated || 0} of ${N} traces hit a summary or classifier character cap. Average summary prompt: ${summaryAverage.toLocaleString()} characters; classifier request: ${requestAverage.toLocaleString()} characters (state ${classifierAverage.toLocaleString()}, questions ${questionAverage.toLocaleString()}). The source traces are unchanged.`;
+  } else {
+    projectionText = `${p.n_projection_truncated || 0} of ${N} traces hit a summary or classifier character cap. Average summary prompt: ${summaryAverage.toLocaleString()} characters; classifier state: ${classifierAverage.toLocaleString()} characters. The source traces are unchanged.`;
+  }
+  let reserveText = '';
+  if (p.classifier_question_reserve === 'not_available') {
+    reserveText = ' Selected classifier questions were not included in this preview; the final request may reserve more of the input cap.';
+  } else if (p.classifier_question_reserve === 'applied') {
+    reserveText = ' Exact serialized question payloads share the configured cap with classifier state; Jev also applies its model-specific ceilings.';
+  }
+  const projectionPct = projectionKnown ? Math.min(100, pct(requestChars, sourceChars)) : 0;
   $('details').innerHTML = `<h4>Stages</h4><div class="stages">${stageHtml}</div>
     <h4>Models</h4><dl class="kv"><dt>Summary</dt><dd class="num">${esc(r.summary_model)}</dd><dt>Classifier</dt><dd class="num">${esc(r.classifier_model)}</dd><dt>Embeddings</dt><dd class="num">${esc(r.embedding_model)}</dd></dl>
     <h4>Questions asked</h4><dl class="kv">${LABELS.map(l => `<dt>${esc(human(l.name))}</dt><dd>${esc(l.instructions || '')}</dd>`).join('')}</dl>
-    <h4>What the models read</h4><div class="proj"><i style="width:${projectionKnown ? pct(p.projected_bytes, p.source_bytes) : 0}%"></i></div>
-    <p style="margin:0;color:var(--text-muted)">${esc(projectionText)}</p>`;
+    <h4>Classifier input coverage</h4><div class="proj"><i style="width:${projectionPct}%"></i></div>
+    <p style="margin:0;color:var(--text-muted)">${esc(projectionText + reserveText)}</p>`;
   $('detBtn').onclick = e => {
     e.stopPropagation();
     const b = e.target.getBoundingClientRect(), pop = $('details');

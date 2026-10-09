@@ -35,11 +35,13 @@ from evaluatorq.insights.population import describe_local_send
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.local_sessions import MAX_SESSION_TEXT_CHARS, SESSION_SOURCES
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, effective_settings
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from evaluatorq.common.model_catalogue import ModelKind
+    from evaluatorq.dashboard.insights_uploads import RecentTraceFile
     from evaluatorq.insights.models import InsightsRun
     from evaluatorq.local_sessions import SessionSource
 
@@ -292,6 +294,7 @@ class RunFormValues:
     custom_labels: tuple[LabelSpec, ...] = ()
     name: str = ''
     parallelism: int = 20
+    trace_input_chars: int = DEFAULT_TRACE_INPUT_CHARS
     trace_file: str = ''
     source_name: str = ''
     preset: str | None = None
@@ -314,6 +317,7 @@ class RunFormValues:
             coding_labels=preset.coding_labels,
             preset=preset.id,
             **_model_defaults(),
+            trace_input_chars=effective_settings().trace_input_chars,
         )
 
     @classmethod
@@ -348,6 +352,7 @@ class RunFormValues:
             classifier_model=run.config.classifier_model,
             embedding_model=run.config.embedding_model,
             compiler_model=run.config.compiler_model or _model_defaults()['compiler_model'],
+            trace_input_chars=run.config.trace_input_chars,
             trace_file=kept_path,
             source_name=str(population.get('source_name') or '') if kept_path else '',
             error=(
@@ -392,6 +397,9 @@ class RunFormValues:
             custom_labels=_custom_labels(str(form.get('custom_labels_json') or '[]')),
             name=str(form.get('name') or ''),
             parallelism=_whole_number(form, 'parallelism', 20, 'Parallel requests'),
+            trace_input_chars=_whole_number(
+                form, 'trace_input_chars', effective_settings().trace_input_chars, 'Model input cap'
+            ),
             trace_file=trace_file,
             source_name=str(form.get('source_name') or ''),
             preset=str(form.get('preset') or '') or None,
@@ -412,6 +420,7 @@ class RunFormValues:
             'limit': self.limit,
             'facets': {name: sorted(getattr(self.facets, name)) for name in FACET_NAMES},
             'parallelism': self.parallelism,
+            'trace_input_chars': self.trace_input_chars,
             'labels': list(self.labels),
             'coding_labels': list(self.coding_labels),
             'custom_labels': [spec.model_dump(mode='json') for spec in self.custom_labels],
@@ -544,7 +553,31 @@ def _file_source(values: RunFormValues) -> str:
         f'placeholder="No file chosen" value="{esc(shown)}">'
         '<button type="button" class="irf-btn" data-browse>Browse…</button>'
         '<input type="file" accept="application/json,.json" data-file hidden></div>'
-        f'<p class="irf-hint" role="status" data-file-status>{esc(status)}</p></div>'
+        f'<p class="irf-hint" role="status" data-file-status>{esc(status)}</p>'
+        '<h4>Recent trace files</h4>'
+        '<p class="irf-hint">Uploaded copies are kept for seven days after the last run. '
+        'Your browser shares the filename, not the original file location.</p>'
+        '<div data-recent-files aria-live="polite"><p class="insights-muted">Loading recent files…</p></div></div>'
+    )
+
+
+def render_recent_files(files: list[RecentTraceFile]) -> str:
+    """Render selectable approved files without exposing a fictional original path."""
+    if not files:
+        return '<p class="insights-muted">No recent trace files. Browse to upload a JSON file.</p>'
+    rows = ''.join(
+        '<tr><td data-label="Filename"><button type="button" class="irf-btn" data-recent-file '
+        f'data-path="{esc(item.path)}" data-kind="{item.kind}" data-display-name="{esc(item.display_name)}">'
+        f'{esc(item.display_name)}</button></td><td data-label="Saved / last used">{esc(item.date)}</td>'
+        f'<td data-label="Traces">{item.trace_count:,}</td>'
+        f'<td data-label="Kind">{"Finder export" if item.kind == "finder" else "Trace snapshot"}</td></tr>'
+        for item in files
+    )
+    return (
+        '<div class="insights-table-wrap"><table class="insights-table">'
+        '<caption class="irf-hint">Newest files first</caption>'
+        '<thead><tr><th scope="col">Filename</th><th scope="col">Saved / last used</th><th scope="col">Traces</th>'
+        f'<th scope="col">Kind</th></tr></thead><tbody>{rows}</tbody></table></div>'
     )
 
 
@@ -758,6 +791,7 @@ def render_run_form(values: RunFormValues, *, csrf: str, error: str | None = Non
         f'<input type="hidden" name="mount" value="{values.mount}">'
         f'<input type="hidden" name="preset" value="{esc(values.preset or "")}">'
         f'<input type="hidden" name="custom_labels_json" value="{esc(custom_json)}">'
+        f'<input type="hidden" name="trace_input_chars" value="{values.trace_input_chars}">'
         f'<input type="hidden" name="trace_file" value="{esc(values.trace_file)}" '
         f'data-kind="{("snapshot" if values.source == "sessions" else values.source) if values.trace_file else ""}">'
         f'<ol class="irf-steps" aria-label="Steps">{steps}</ol>'

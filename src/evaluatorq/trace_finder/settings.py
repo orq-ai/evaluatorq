@@ -20,6 +20,9 @@ MAX_LIMIT = 5000
 DEFAULT_LIMIT = 500
 MIN_PARALLELISM = 1
 MAX_PARALLELISM = 200
+MIN_TRACE_INPUT_CHARS = 4096
+MAX_TRACE_INPUT_CHARS = 5_000_000
+DEFAULT_TRACE_INPUT_CHARS = 500_000
 # Pre-roles settings files saved these as plain fields, defaults included.
 _LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_model'})
 _LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
@@ -39,6 +42,7 @@ class DashboardSettings(BaseModel):
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
+    trace_input_chars: int = Field(DEFAULT_TRACE_INPUT_CHARS, ge=MIN_TRACE_INPUT_CHARS, le=MAX_TRACE_INPUT_CHARS)
     ask_ai_mode: Literal['immediate', 'review'] = 'immediate'
     orq_auth_method: Literal['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'] = 'environment'
     orq_api_key_ciphertext: str | None = None

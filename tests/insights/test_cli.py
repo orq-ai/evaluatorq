@@ -102,21 +102,50 @@ def test_sessions_source_conflicts_are_usage_errors(options: list[str], message:
     assert message in result.output
 
 
-def test_sessions_preview_is_offline_and_does_not_start_pipeline(
-    monkeypatch: pytest.MonkeyPatch, claude_projects: Path
+@pytest.mark.parametrize('classifier_model', ['openai/gpt-6-luna', 'typesafe/jev-latest'])
+def test_sessions_preview_is_offline_and_uses_selected_model_inputs(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path, tmp_path: Path, classifier_model: str
 ) -> None:
     from tests.local_sessions.test_search import _claude
 
     _claude(claude_projects, 'session-preview')
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(settings_path))
+    save_settings(DashboardSettings(trace_input_chars=10_000), settings_path)
+    captured: dict[str, Any] = {}
+    original_preview = cli_module.preview_snapshot
+
+    def capture_preview(raw_path: str, **options: Any) -> dict[str, Any]:
+        captured.update(options)
+        captured['path'] = Path(raw_path)
+        captured['snapshot'] = Snapshot.model_validate_json(Path(raw_path).read_bytes())
+        coverage = original_preview(raw_path, **options)
+        captured['coverage'] = coverage
+        return coverage
+
+    monkeypatch.setattr(cli_module, 'preview_snapshot', capture_preview)
     monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
     monkeypatch.setattr(cli_module, 'insights', lambda *_args, **_kwargs: pytest.fail('preview must not run pipeline'))
 
     result = CliRunner().invoke(
-        _app(), ['insights', '--sessions', '--preview-input'], env={'COLUMNS': '120', 'ORQ_API_KEY': ''}
+        _app(),
+        [
+            'insights', '--sessions', '--preview-input', '--classifier-model', classifier_model,
+            '--label', 'concerning', '--coding',
+        ],
+        env={'COLUMNS': '120', 'ORQ_API_KEY': ''},
     )
 
     assert result.exit_code == 0, result.output
-    assert 'Model input projection:' in result.output
+    assert captured['trace_input_chars'] == 10_000
+    assert captured['classifier_model'] == classifier_model
+    assert set(captured['classifier_questions']) == {
+        'concerning', 'sentiment', *(spec.name for spec in cli_module.presets.CODING_CONVERSATION_LABELS)
+    }
+    assert len(captured['snapshot'].documents) == 1
+    assert captured['coverage']['n_traces'] == 1
+    assert captured['coverage']['classifier_question_reserve'] == 'applied'
+    assert not captured['path'].parent.exists()
     assert 'A run would send' in result.output
 
 
@@ -234,7 +263,7 @@ def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
 ) -> None:
     path = tmp_path / 'traces.json'
     trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 600_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': 'long trace body with stable context. ' * 20_000}, {'role': 'assistant', 'content': 'done'})}
     )
     path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
     monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
@@ -243,8 +272,8 @@ def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
     result = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
 
     assert result.exit_code == 0, result.output
-    assert '1 of 1 trace exceeds' in result.output
-    assert '1 of 2 whole messages omitted (50.0%)' in result.output
+    assert '1 of 1 traces hit a summary or classifier input cap' in result.output
+    assert 'characters' in result.output
 
 
 def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any) -> None:
@@ -269,7 +298,7 @@ def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     assert result.exit_code == 0, result.output
     assert captured['population'].snapshot_path == path
-    assert result.output.count('Model input projection:') == 1
+    assert result.output.count('Model input coverage:') == 1
 
 
 def test_snapshot_run_discloses_what_is_sent_to_which_models(

@@ -264,6 +264,9 @@ def test_snapshot_freezes_two_sessions_into_an_upload(client: TestClient, token:
     snapshot = Snapshot.model_validate_json(path.read_bytes())
     assert len(snapshot.documents) == 2
     assert is_uploaded_source(get_insights_runs_dir(), path)
+    metadata = json.loads(path.with_name(path.name + '.meta.json').read_text())
+    assert metadata['source'] == 'sessions'
+    assert metadata['trace_count'] == 2
 
 
 def test_snapshot_rejects_a_path_outside_the_session_folders(client: TestClient, token: str) -> None:

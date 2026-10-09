@@ -49,6 +49,8 @@ const visibleStep = form => form.querySelectorAll('[data-step]').filter(section 
 const checked = (form, name) => form.querySelectorAll('input[name="' + name + '"]:checked').map(input => input.value);
 const baseHandlers = () => ({
   '/insights/facets': () => response(FACET_MARKUP),
+  '/insights/files': () => response('<p class="insights-muted">No recent trace files.</p>'),
+  '/insights/finder-preview': () => response('<p>Finder export is ready.</p>'),
   '/insights/new/plan': () => response('<ol class="irf-stages"><li>Filter recent traces</li></ol>'),
 });
 
@@ -187,7 +189,7 @@ async function main() {
     const traceFile = app.form.querySelector('input[name="trace_file"]');
     assert.equal(traceFile.value, '/runs/.uploads/finder-1.json');
     assert.equal(traceFile.dataset.kind, 'finder', 'the upload route says which kind of file it read');
-    assert.ok(!app.calls.some(call => call.url === '/insights/snapshot-preview'), 'a Finder export is not measured');
+    assert.ok(app.calls.some(call => call.url === '/insights/finder-preview'), 'a Finder export is checked before use');
     assert.equal(app.form.querySelector('[data-file-name]').value, 'export.json');
     assert.equal(app.form.querySelector('[data-file-status]').textContent, 'Finder export is ready.');
     const upload = app.calls.find(call => call.url === '/insights/uploads');
@@ -215,6 +217,163 @@ async function main() {
     assert.equal(traceFile.dataset.kind, 'snapshot');
     assert.equal(app.form.querySelector('[data-file-status]').textContent, 'Trace snapshot is ready.');
     assert.ok(app.calls.some(call => call.url === '/insights/snapshot-preview'), 'a snapshot is measured');
+  }
+
+  {
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/files': () => response('<button type="button" data-recent-file data-path="/runs/.uploads/snapshot-kept.json" data-kind="snapshot" data-display-name="kept.json">kept.json</button>'),
+      '/insights/snapshot-preview': () => response('<p>2 traces</p>'),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    await tick();
+    app.form.querySelector('[data-recent-file]').click();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/runs/.uploads/snapshot-kept.json');
+    assert.equal(app.form.querySelector('[data-file-name]').value, 'kept.json');
+    assert.ok(app.calls.some(call => call.url === '/insights/snapshot-preview'), 'a retained snapshot is measured before launch');
+    assert.ok(!app.calls.some(call => call.url === '/insights/uploads'), 'choosing an existing file never uploads it again');
+  }
+
+  {
+    const previews = [];
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/files': () => response('<button type="button" data-recent-file data-path="/runs/.uploads/snapshot.json" data-kind="snapshot" data-display-name="snapshot.json">snapshot.json</button>'),
+      '/insights/snapshot-preview': (_url, options) => {
+        previews.push(options.body);
+        return response('<p>Measured</p>');
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    await tick();
+    app.form.querySelector('[data-recent-file]').click();
+    await tick();
+    assert.equal(previews.length, 1, 'the selected snapshot is measured once for its current settings');
+    const cap = app.form.querySelector('input[name="trace_input_chars"]');
+    cap.value = '250000';
+    cap.dispatchEvent({type: 'input', bubbles: true, target: cap});
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await tick();
+    assert.equal(previews.length, 2, 'changing the character cap remeasures a selected snapshot');
+    assert.equal(previews[1].get('trace_input_chars'), '250000');
+    const label = app.form.querySelector('input[name="labels"]:checked');
+    label.click();
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await tick();
+    assert.equal(previews.length, 3, 'changing a label remeasures a selected snapshot');
+    assert.deepEqual(previews[2].getAll('labels'), checked(app.form, 'labels'));
+    assert.deepEqual(previews[2].getAll('dimensions'), checked(app.form, 'dimensions'));
+    assert.equal(previews[2].get('custom_labels_json'), '[]');
+  }
+
+  {
+    let finishUpload;
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/files': () => response('<button type="button" data-recent-file data-path="/exports/kept.json" data-kind="finder" data-display-name="kept.json">kept.json</button>'),
+      '/insights/uploads': () => new Promise(resolve => { finishUpload = resolve; }),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    await tick();
+    const input = app.form.querySelector('input[data-file]');
+    input.files = [new File(['{}'], 'new.json', {type: 'application/json'})];
+    input.dispatchEvent({type: 'change', bubbles: true, target: input});
+    await tick();
+    app.form.querySelector('[data-recent-file]').click();
+    finishUpload(response(JSON.stringify({kind: 'finder', path: '/runs/.uploads/new.json'}), {status: 201}));
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/exports/kept.json', 'a late upload cannot overwrite a newer recent-file choice');
+    assert.equal(app.form.querySelector('[data-file-name]').value, 'kept.json');
+  }
+
+  {
+    let finishPreview;
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/files': () => response('<button type="button" data-recent-file data-path="/runs/.uploads/snapshot.json" data-kind="snapshot" data-display-name="snapshot.json">snapshot.json</button>'
+        + '<button type="button" data-recent-file data-path="/exports/finder.json" data-kind="finder" data-display-name="finder.json">finder.json</button>'),
+      '/insights/snapshot-preview': () => new Promise(resolve => { finishPreview = resolve; }),
+      '/insights/finder-preview': () => response('<p>Finder preview</p>'),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    await tick();
+    const buttons = app.form.querySelectorAll('[data-recent-file]');
+    buttons[0].click();
+    await tick();
+    buttons[1].click();
+    finishPreview(response('<p>STALE SNAPSHOT</p>'));
+    await tick();
+    assert.equal(app.form.querySelector('input[name="trace_file"]').value, '/exports/finder.json');
+    assert.equal(app.form.querySelector('#insights-snapshot-preview').textContent, 'Finder preview', 'a late snapshot preview cannot overwrite the newer Finder preview');
+  }
+
+  {
+    const pending = [];
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/files': () => response('<button type="button" data-recent-file data-path="/runs/.uploads/snapshot.json" data-kind="snapshot" data-display-name="snapshot.json">snapshot.json</button>'),
+      '/insights/snapshot-preview': (_url, options) => new Promise(resolve => { pending.push({resolve, options}); }),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    await tick();
+    app.form.querySelector('[data-recent-file]').click();
+    await tick();
+    const cap = app.form.querySelector('input[name="trace_input_chars"]');
+    cap.value = '250000';
+    cap.dispatchEvent({type: 'input', bubbles: true, target: cap});
+    await new Promise(resolve => setTimeout(resolve, 450));
+    assert.equal(pending.length, 2);
+    pending[1].resolve(response('<p>CURRENT BUDGET</p>'));
+    await tick();
+    pending[0].resolve(response('<p>STALE BUDGET</p>'));
+    await tick();
+    assert.equal(app.form.querySelector('#insights-snapshot-preview').textContent, 'CURRENT BUDGET');
+    assert.equal(pending[1].options.body.get('trace_input_chars'), '250000');
+  }
+
+  {
+    let finishPreview;
+    let previews = 0;
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/files': () => response('<button type="button" data-recent-file data-path="/exports/finder.json" data-kind="finder" data-display-name="finder.json">finder.json</button>'),
+      '/insights/finder-preview': () => {
+        if (++previews === 1) return new Promise(resolve => { finishPreview = resolve; });
+        return response('<p>CURRENT FINDER</p>');
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    await tick();
+    app.form.querySelector('[data-recent-file]').click();
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    app.form.querySelector('[data-recent-file]').click();
+    await tick();
+    finishPreview(response('<p>STALE FINDER</p>'));
+    await tick();
+    assert.equal(app.form.querySelector('#insights-snapshot-preview').textContent, 'CURRENT FINDER', 'source round trips cannot revive a cancelled Finder preview');
+    assert.equal(app.form.querySelector('[data-file-name="file"]').value, 'finder.json');
+    assert.equal(app.form.querySelector('[data-file-name="sessions"]').value, '');
+  }
+
+  {
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/files': () => response('unavailable', {status: 503}),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    await tick();
+    assert.ok(app.form.querySelector('[data-retry-files]'), 'a recent-file failure has a visible retry action');
   }
 
   {
@@ -363,6 +522,16 @@ async function main() {
     assert.equal(app.form.querySelector('input[name="trace_file"]').dataset.kind, 'snapshot');
     assert.equal(app.form.querySelector('[data-file-name="sessions"]').value, '2 local sessions');
     assert.deepEqual(visibleStep(app.form), ['2'], 'the frozen selection moves on to the next step');
+
+    const cap = app.form.querySelector('input[name="trace_input_chars"]');
+    cap.value = '250000';
+    cap.dispatchEvent({type: 'input', bubbles: true, target: cap});
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await tick();
+    const sessionPreviews = app.calls.filter(call => call.url === '/insights/snapshot-preview');
+    assert.equal(sessionPreviews.length, 2, 'budget changes remeasure frozen session snapshots too');
+    assert.equal(sessionPreviews[1].options.body.get('snapshot_path'), '/runs/.uploads/snapshot-7.json');
+    assert.equal(sessionPreviews[1].options.body.get('trace_input_chars'), '250000');
 
     app.form.querySelector('[data-irf-next]').click();
     await tick();
@@ -817,6 +986,24 @@ async function main() {
     await tick();
     assert.equal(app.form.querySelector('[data-folder-browser]').hidden, true, 'switching sources closes the folder browser');
     assert.equal(app.form.querySelector('[data-folder-list]').textContent, 'Loading folders…', 'a late listing cannot update the closed browser');
+  }
+
+  {
+    let finishEstimate;
+    let estimates = 0;
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/new/plan': () => {
+        if (++estimates === 1) return new Promise(resolve => { finishEstimate = resolve; });
+        return response('CURRENT SOURCE ESTIMATE');
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    app.form.querySelector('input[name="source"][value="orq"]').click();
+    finishEstimate(response('STALE SOURCE ESTIMATE'));
+    await tick();
+    assert.notEqual(app.form.querySelector('#insights-run-compact').textContent, 'STALE SOURCE ESTIMATE', 'an estimate from before a source round trip stays stale');
   }
 }
 

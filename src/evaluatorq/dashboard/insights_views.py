@@ -317,7 +317,7 @@ def failures(run: InsightsRun) -> str:
         if not (
             'n_projection_truncated' in run.population
             and (
-                warning.startswith('Projection budget: ')
+                warning.startswith(('Input character cap: ', 'Projection budget: '))
                 or (
                     warning.endswith('whole messages were omitted from classification and summaries.')
                     and ' exceeded the model projection budget; ' in warning
@@ -332,19 +332,28 @@ def failures(run: InsightsRun) -> str:
 
 
 def projection_notice(coverage: dict[str, Any]) -> str:
-    """Show budget omissions separately from all source-to-projection compression."""
-    traces = int(coverage.get('n_traces', coverage.get('n_scanned', 0)))
-    trimmed = int(coverage.get('n_projection_truncated', 0))
-    if 'n_source_messages' not in coverage:
+    """Show character-based model input coverage for a run or preview."""
+    if 'classifier_state_chars' not in coverage or 'source_chars' not in coverage:
         return (
-            '<section class="insights-projection" role="status"><b>Model input projection</b>'
-            f'<p>{trimmed:,} of {traces:,} traces exceeded the 50,000-byte budget this earlier run used. '
-            'Whole-message counts were not saved for it.</p></section>'
+            '<section class="insights-projection" role="status"><b>Model input coverage</b>'
+            '<p>Input character coverage was not recorded for this earlier run.</p></section>'
+        )
+    reserve_note = ''
+    if coverage.get('classifier_question_reserve') == 'not_available':
+        reserve_note = '<p>The preview did not include selected classifier questions; the final request may reserve more of the input cap for them.</p>'
+    elif coverage.get('classifier_question_reserve') == 'applied':
+        reserve_note = '<p>Exact serialized selected questions share the configured input cap with classifier state; Jev also applies its model-specific state and question ceilings.</p>'
+    if coverage.get('classifier_state_format') == 'jev':
+        excerpt_note = '<p>Text inside kept messages may also be shortened. Tool inputs and results retain bounded excerpts; source traces are not changed.</p>'
+    else:
+        excerpt_note = (
+            '<p>The full readable transcript may be shortened to fit the cap; source traces are not changed.</p>'
         )
     return (
-        '<section class="insights-projection" role="status"><b>Model input projection</b>'
+        '<section class="insights-projection" role="status"><b>Model input coverage</b>'
         f'<p>{esc(describe_projection_coverage(coverage))}</p>'
-        '<p>Text inside kept messages may also be shortened. Tool results use 1,024-byte excerpts; source traces are not changed.</p>'
+        f'{reserve_note}'
+        f'{excerpt_note}'
         '</section>'
     )
 

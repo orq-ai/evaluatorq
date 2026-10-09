@@ -1,4 +1,4 @@
-"""Pre-migration snapshots of classifier-facing trace renderings."""
+"""Characterization snapshots for the Insights classifier views and summary prompt."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import pytest
 
 from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.insights.summarize import _build_prompt
-from evaluatorq.insights.transcript import conversation_view, tool_activity_chunks, tool_inventory
+from evaluatorq.insights.transcript import tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.models import TraceRecord
-from evaluatorq.trace_finder.projection import project_trace
+
 
 FIXTURE = Path(__file__).parent / 'fixtures' / 'atif_characterization_expected.json'
 
@@ -84,22 +84,44 @@ def _fixtures() -> tuple[TraceRecord, TraceRecord]:
 
 
 @pytest.mark.parametrize('use_atif', [False, True], ids=['legacy-source', 'canonical-document'])
-def test_current_classifier_payloads_match_pre_migration_snapshots(use_atif: bool) -> None:
+def test_current_classifier_views_match_characterization_snapshots(use_atif: bool) -> None:
     expected = json.loads(FIXTURE.read_text(encoding='utf-8'))
+    expected.pop('finder_classifier_state', None)
+    expected.pop('summary_prompt', None)
     trace, long_trace = (ensure_trace_document(trace) if use_atif else trace for trace in _fixtures())
     full_long = tool_activity_chunks(long_trace, budget=10**6)[0]
 
     actual = {
-        'conversation_view': conversation_view(trace),
         'tool_inventory': tool_inventory(trace),
         'tool_activity_chunks': tool_activity_chunks(trace),
         'tool_activity_cut': tool_activity_chunks(long_trace, budget=int(len(full_long) * 0.85)),
         'tool_activity_chunks_small_budget': tool_activity_chunks(long_trace, budget=450),
-        'summary_prompt': _build_prompt(trace),
-        'finder_classifier_state': project_trace(trace).serialized,
     }
+    summary_prompt = _build_prompt(trace)
 
     assert actual == expected
     serialized = json.dumps(actual, ensure_ascii=False)
+    assert 'secret reminder' not in serialized
+    assert '<conversation>0 user: Inspect the deployment. [harness reminder omitted]' in summary_prompt
+    assert 'middle assistant details' in summary_prompt
+    assert 'credential=<API_KEY>' in summary_prompt
+    assert 'sk-live-secret-value' not in summary_prompt
+
+
+
+@pytest.mark.parametrize('use_atif', [False, True], ids=['legacy-source', 'canonical-document'])
+def test_classifier_state_uses_current_input_builder(use_atif: bool) -> None:
+    from evaluatorq.common.model_input import JEV_STATE_CHARS, serialized_chars
+    from evaluatorq.insights.labeling import prepare_classifier_state
+
+    trace = _fixtures()[0]
+    if use_atif:
+        trace = ensure_trace_document(trace)
+    state = prepare_classifier_state(trace, model='typesafe/jev-latest', char_cap=500_000)
+    serialized = json.dumps(state, ensure_ascii=False)
+
+    assert isinstance(state, dict)
+    assert 'Inspect the deployment.' in serialized
+    assert serialized_chars(state) <= JEV_STATE_CHARS
     assert 'sk-live-secret-value' not in serialized
-    assert 'secret reminder' not in actual['conversation_view']
+    assert 'secret reminder' not in serialized

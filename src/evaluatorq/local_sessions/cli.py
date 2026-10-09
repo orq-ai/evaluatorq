@@ -142,8 +142,7 @@ def _export(sessions: tuple[SessionSummary, ...], target: Path) -> None:
         emit_error(exc)
         raise typer.Exit(code=1) from None
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        write_private_atomic(target, frozen.data)
+        write_private_atomic(path=target, contents=frozen.data, private_directory=False)
     except OSError as exc:
         emit_error(f'could not write {target}: {exc.strerror or type(exc).__name__}')
         raise typer.Exit(code=_BAD_USAGE) from None

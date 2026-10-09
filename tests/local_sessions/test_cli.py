@@ -75,6 +75,7 @@ def test_export_writes_snapshot_with_documents(claude_projects: Path, tmp_path: 
 def test_export_over_an_existing_world_readable_file_leaves_it_private(claude_projects: Path, tmp_path: Path) -> None:
     _claude(claude_projects, 'c1')
     target = tmp_path / 'snap.json'
+    target.parent.chmod(0o755)
     target.write_text('old', encoding='utf-8')
     target.chmod(0o644)
 
@@ -82,6 +83,7 @@ def test_export_over_an_existing_world_readable_file_leaves_it_private(claude_pr
 
     assert result.exit_code == 0, result.output
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o755
     assert Snapshot.model_validate_json(target.read_text(encoding='utf-8')).documents
     assert [path.name for path in target.parent.iterdir() if path.name != 'session-roots'] == ['snap.json']
 

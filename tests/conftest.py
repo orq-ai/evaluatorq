@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 import socket
 import threading
 import traceback
@@ -12,6 +13,8 @@ from evaluatorq.common.judge import reset_responses_rejectors
 from evaluatorq.common.llm_call import reset_reasoning_rejectors
 from evaluatorq.common.model_catalogue import clear_model_overrides, reset_catalogue_cache
 from evaluatorq.common.model_roles import ROLE_ENV, set_cli_models
+# CrewAI starts import-time Scarf tracking unless telemetry is disabled.
+os.environ['CREWAI_DISABLE_TELEMETRY'] = 'true'
 
 
 class LeakedNetworkCall(AssertionError):

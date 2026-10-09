@@ -688,11 +688,12 @@ def test_dashboard_starts_local_snapshot_run_without_trace_lookup(tmp_path: Path
     assert launch.call_args.args[0].population().snapshot_path == path
 
 
-def test_local_snapshot_preview_reports_omissions_before_start(tmp_path: Path) -> None:
+def test_local_snapshot_preview_reports_character_coverage_before_start(tmp_path: Path) -> None:
     from evaluatorq.trace_finder.models import Snapshot
 
+    long_body = 'long trace body with stable context. ' * 10_000
     trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 600_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': long_body}, {'role': 'assistant', 'content': long_body}, {'role': 'user', 'content': long_body})}
     )
     path = tmp_path / 'traces.json'
     path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
@@ -702,12 +703,46 @@ def test_local_snapshot_preview_reports_omissions_before_start(tmp_path: Path) -
     assert token is not None
     assert 'insights-snapshot-preview' in page.text
 
-    preview = client.post('/insights/snapshot-preview', data={'csrf': token.group(1), 'snapshot_path': str(path)})
+    preview = client.post(
+        '/insights/snapshot-preview',
+        data={
+            'csrf': token.group(1),
+            'snapshot_path': str(path),
+            'classifier_model': 'typesafe/jev-latest',
+            'labels': 'made_errors',
+            'dimensions': 'intent',
+            'custom_labels_json': '[]',
+        },
+    )
 
     assert preview.status_code == 200
-    assert '1 of 1 trace exceeds' in preview.text
-    assert '1 of 2 whole messages omitted (50.0%)' in preview.text
-    assert 'Serialized source:' in preview.text
+    assert 'Model input coverage' in preview.text
+    assert '1 of 1 traces hit a summary or classifier input cap of 500,000 characters.' in preview.text
+    assert '1 of 3 source messages were omitted from the Jev classifier state.' in preview.text
+    assert 'Serialized source:' not in preview.text
+
+    invalid_custom_labels = client.post(
+        '/insights/snapshot-preview',
+        data={
+            'csrf': token.group(1),
+            'snapshot_path': str(path),
+            'classifier_model': 'typesafe/jev-latest',
+            'custom_labels_json': '{}',
+        },
+    )
+    assert invalid_custom_labels.status_code == 422
+    assert 'Could not read the selected classifier questions.' in invalid_custom_labels.text
+
+    unknown_questions = client.post(
+        '/insights/snapshot-preview',
+        data={
+            'csrf': token.group(1),
+            'snapshot_path': str(path),
+            'classifier_model': 'typesafe/jev-latest',
+        },
+    )
+    assert unknown_questions.status_code == 200
+    assert '500,000 characters' in unknown_questions.text
     assert client.post('/insights/snapshot-preview', data={'snapshot_path': str(path)}).status_code == 403
     assert client.post(
         '/insights/snapshot-preview', data={'csrf': token.group(1), 'snapshot_path': str(tmp_path / 'missing.json')}

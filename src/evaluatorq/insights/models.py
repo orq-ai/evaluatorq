@@ -21,6 +21,11 @@ from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic
 from evaluatorq.signals.config import SignalsConfig  # noqa: TC001 — Pydantic field type.
 from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic field type.
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+from evaluatorq.trace_finder.settings import (
+    MAX_TRACE_INPUT_CHARS,
+    MIN_TRACE_INPUT_CHARS,
+    effective_settings,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -309,6 +314,11 @@ class InsightsConfig(BaseModel):
     max_subclusters: int = Field(default=15, ge=1)
     outlier_zscore: FiniteFloat | None = Field(default=None, ge=0)
     parallelism: int = Field(default=100, ge=1)
+    trace_input_chars: int = Field(
+        default_factory=lambda: effective_settings().trace_input_chars,
+        ge=MIN_TRACE_INPUT_CHARS,
+        le=MAX_TRACE_INPUT_CHARS,
+    )
     priority_dimension: DimensionName = 'intent'
     cache: bool = True
     coding_analysis: bool = False

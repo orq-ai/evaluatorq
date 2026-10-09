@@ -153,16 +153,38 @@ def _validate_population_source(
         raise typer.Exit(code=2)
 
 
-def _print_snapshot_preview(path: Path) -> dict[str, int]:
+def _snapshot_classifier_questions(
+    *, labels: list[LabelSpec], dimensions: tuple[DimensionName, ...], coding: bool
+) -> dict[str, dict[str, Any]]:
+    coverage_specs = list(labels)
+    if 'sentiment' in dimensions and not any(spec.name == 'sentiment' for spec in coverage_specs):
+        coverage_specs.append(presets.SENTIMENT)
+    if coding:
+        coverage_specs.extend(presets.CODING_CONVERSATION_LABELS)
+    return {spec.name: spec.to_question({}).model_dump(mode='json') for spec in coverage_specs}
+
+
+def _print_snapshot_preview(
+    path: Path,
+    *,
+    trace_input_chars: int,
+    classifier_model: str | None,
+    classifier_questions: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     try:
-        coverage = preview_snapshot(str(path))
+        coverage = preview_snapshot(
+            str(path),
+            trace_input_chars=trace_input_chars,
+            classifier_model=classifier_model,
+            classifier_questions=classifier_questions,
+        )
     except PopulationError as exc:
         emit_error(exc)
         raise typer.Exit(code=2) from None
     if coverage['n_traces'] == 0:
         emit_error('local trace snapshot contains no traces')
         raise typer.Exit(code=2)
-    Console(file=sys.stdout).print(f'Model input projection: {describe_projection_coverage(coverage)}')
+    Console(file=sys.stdout).print(f'Model input coverage: {describe_projection_coverage(coverage)}')
     return coverage
 
 
@@ -197,7 +219,7 @@ def _print_local_send(
 def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_shown: bool = False) -> None:
     console = Console(file=sys.stdout)
     if 'n_source_messages' in run.population and not projection_already_shown:
-        console.print(f'Model input projection: {describe_projection_coverage(run.population)}')
+        console.print(f'Model input coverage: {describe_projection_coverage(run.population)}')
     for name, dimension in run.dimensions.items():
         table = Table(title=f'{name.title()} clusters (top 5)')
         table.add_column('Cluster')
@@ -274,7 +296,6 @@ def _run_local_sessions(
     project_dir: Path | None,
     text: str | None,
     limit: int | None,
-    preview_input: bool,
     options: dict[str, Any],
 ) -> None:
     """Freeze one bounded local search into a private snapshot for the standard pipeline path."""
@@ -311,21 +332,10 @@ def _run_local_sessions(
     with temp_directory as temp_dir:
         snapshot_path = Path(temp_dir) / 'sessions.json'
         try:
-            write_private_atomic(snapshot_path, frozen.data)
+            write_private_atomic(path=snapshot_path, contents=frozen.data)
         except OSError as exc:
             emit_error(f'could not write temporary local-session snapshot: {exc.strerror or type(exc).__name__}')
             raise typer.Exit(code=1) from None
-        if preview_input:
-            coverage = _print_snapshot_preview(snapshot_path)
-            _print_local_send(
-                snapshot_path,
-                n_traces=coverage['n_traces'],
-                summary_model=options['summary_model'],
-                classifier_model=options['classifier_model'],
-                embedding_model=options['embedding_model'],
-                preview=True,
-            )
-            return
         options.update(
             sessions=False,
             source=None,
@@ -501,7 +511,6 @@ def insights_cmd(
             project_dir=project_dir,
             text=session_text,
             limit=limit,
-            preview_input=preview_input,
             options=options,
         )
         return
@@ -542,18 +551,6 @@ def insights_cmd(
     if query is not None and not query.strip():
         emit_error('--query must not be empty')
         raise typer.Exit(code=2)
-    if from_snapshot is not None:
-        snapshot_traces = _print_snapshot_preview(from_snapshot)['n_traces']
-        if preview_input:
-            _print_local_send(
-                from_snapshot,
-                n_traces=snapshot_traces,
-                summary_model=summary_model,
-                classifier_model=classifier_model,
-                embedding_model=embedding_model,
-                preview=True,
-            )
-            return
     dimensions, selected_priority_dimension = _validated_dimensions(dimension, priority_dimension)
     try:
         labels = _resolve_labels(label)
@@ -564,6 +561,24 @@ def insights_cmd(
             duration_ms_max=duration_ms_max,
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
+        if from_snapshot is not None:
+            classifier_questions = _snapshot_classifier_questions(labels=labels, dimensions=dimensions, coding=coding)
+            snapshot_traces = _print_snapshot_preview(
+                from_snapshot,
+                trace_input_chars=settings.trace_input_chars,
+                classifier_model=classifier_model,
+                classifier_questions=classifier_questions,
+            )['n_traces']
+            if preview_input:
+                _print_local_send(
+                    from_snapshot,
+                    n_traces=snapshot_traces,
+                    summary_model=summary_model,
+                    classifier_model=classifier_model,
+                    embedding_model=embedding_model,
+                    preview=True,
+                )
+                return
         saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
         selected_profile = (
             resolve_cli_profile(profile if profile is not None else saved_profile)
@@ -628,6 +643,7 @@ def insights_cmd(
                 embedding_model=embedding_model,
                 priority_dimension=selected_priority_dimension,
                 parallelism=settings.parallelism,
+                trace_input_chars=settings.trace_input_chars,
                 cache=not no_cache,
                 _finder_export_source=from_finder.resolve() if from_finder is not None else None,
                 _on_saved=remember_run_path,

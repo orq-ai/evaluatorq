@@ -12,6 +12,7 @@ from loguru import logger
 
 from evaluatorq.common.judge import JudgeOutcome, judge_error_payload, run_classify_judges
 from evaluatorq.common.llm_call import classify_request_body
+from evaluatorq.common.model_input import effective_trace_input_chars, fit_classifier_input
 from evaluatorq.contracts import JuryRepetition, JuryResult, JuryVote, LLMCallConfig, TokenUsage
 from evaluatorq.evaluatorq import evaluatorq
 from evaluatorq.types import DataPoint, DataPointResult, EvaluationResult, Evaluator, ScorerParameter
@@ -40,7 +41,13 @@ def _question_key(index: int) -> str:
     return f'd{index}'
 
 
-def build_classifier_evaluator(dimensions: Sequence[CompiledQuery], *, model: str, client: AsyncOpenAI) -> Evaluator:
+def build_classifier_evaluator(
+    dimensions: Sequence[CompiledQuery],
+    *,
+    model: str,
+    client: AsyncOpenAI,
+    global_char_cap: int | None = None,
+) -> Evaluator:
     """Configure one EvaluatorQ judge that asks every dimension about the exact projected state.
 
     A classify model answers all dimensions in one call. The score's ``raw_output['dimensions']``
@@ -48,11 +55,19 @@ def build_classifier_evaluator(dimensions: Sequence[CompiledQuery], *, model: st
     """
 
     questions = {_question_key(index): dimension.task for index, dimension in enumerate(dimensions)}
+    question_payloads = {key: question.model_dump(mode='json') for key, question in questions.items()}
+    input_cap = global_char_cap if global_char_cap is not None else effective_trace_input_chars()
     cfg = LLMCallConfig(model=model, timeout_ms=90_000)
 
     async def score(params: ScorerParameter) -> EvaluationResult:
+        trace_id = str(params['data'].inputs.get('trace_id') or '')
         state = params['data'].inputs['classifier_state']
-        trace_id = params['data'].inputs['trace_id']
+        state = fit_classifier_input(
+            state,
+            model=model,
+            questions=question_payloads,
+            global_char_cap=input_cap,
+        )
         if debug_enabled():
             logger.debug(
                 'Trace finder trace classifier request trace_id={} model={} input={}',
@@ -344,6 +359,7 @@ async def run_classifier(
     client: AsyncOpenAI,
     parallelism: int,
     on_complete: Callable[[TraceClassification], Awaitable[None]],
+    trace_input_chars: int | None = None,
 ) -> list[TraceClassification]:
     """Evaluate all selected traces, forwarding each terminal result exactly once.
 
@@ -359,7 +375,12 @@ async def run_classifier(
             classifications.append(classification)
         return classifications
 
-    evaluator = build_classifier_evaluator(dimensions, model=model, client=client)
+    evaluator = build_classifier_evaluator(
+        dimensions,
+        model=model,
+        client=client,
+        global_char_cap=trace_input_chars,
+    )
 
     async def complete(result: DataPointResult) -> None:
         classification = parse_datapoint_result(result, dimensions)
