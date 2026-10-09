@@ -484,16 +484,15 @@ async def label_traces(
 ) -> list[LabelOutcome]:
     """Label every trace, bounded by `parallelism` concurrent `/classify` calls.
 
-        Per trace: prepare the classifier state from the full transcript or indexed Jev messages, ask
-    [src/evaluatorq/insights/presets.py#FBA7]
-        every label's question plus (when `compiled` is given) the population-match
-        question in a single request, and skip that call when neither is present.
-        With `coding` on, each trace also gets the coding-agent check and, when it
-        answers yes, the coding labels (see `_label_one`); the shell outputs those
-        labels read are scrubbed of credentials first. A
-        per-trace failure never raises — it comes back as a `LabelOutcome` with
-        `error` set and every answer failed, per the "per-trace failures never
-        fail a run" house rule.
+    Per trace: prepare the classifier state from the full transcript or indexed Jev messages, ask
+    every label's question plus (when `compiled` is given) the population-match
+    question in a single request, and skip that call when neither is present.
+    With `coding` on, each trace also gets the coding-agent check and, when it
+    answers yes, the coding labels (see `_label_one`); the shell outputs those
+    labels read are scrubbed of credentials first. A
+    per-trace failure never raises — it comes back as a `LabelOutcome` with
+    `error` set and every answer failed, per the "per-trace failures never
+    fail a run" house rule.
     """
     resolved_cfg = cfg if cfg is not None else _default_cfg(model)
     if parallelism <= 0:

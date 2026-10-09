@@ -23,6 +23,7 @@ from evaluatorq.common.model_input import (
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.contracts import ManifestStatus
 from evaluatorq.insights.summarize import SUMMARY_MAX_TOKENS
+from evaluatorq.trace_finder.settings import MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -212,6 +213,10 @@ def estimate_run(
     stages run from zero (label only) to every trace (every trace matches).
     """
     trace_input_chars = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
+    if not MIN_TRACE_INPUT_CHARS <= trace_input_chars <= MAX_TRACE_INPUT_CHARS:
+        raise ValueError(
+            f'trace_input_chars must be between {MIN_TRACE_INPUT_CHARS} and {MAX_TRACE_INPUT_CHARS} characters'
+        )
     n = bound.n
     unknowns: list[str] = []
     if n is None:

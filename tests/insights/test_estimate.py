@@ -28,6 +28,7 @@ from evaluatorq.insights.estimate import (
     trace_bound,
 )
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.settings import MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -165,6 +166,14 @@ def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling
 
     assert _row(result, 'label').tokens_in == JEV_STATE_ALL_QUESTIONS_CHARS // estimate.CHARS_PER_TOKEN
 
+
+@pytest.mark.parametrize(
+    'trace_input_chars',
+    [MIN_TRACE_INPUT_CHARS - 1, MAX_TRACE_INPUT_CHARS + 1],
+)
+def test_invalid_trace_input_cap_is_rejected(trace_input_chars: int) -> None:
+    with pytest.raises(ValueError, match='trace_input_chars'):
+        _estimate(trace_input_chars=trace_input_chars)
 
 def test_a_changed_cap_moves_the_estimate(monkeypatch: pytest.MonkeyPatch) -> None:
     before = _row(_estimate(), 'summary').cost_high

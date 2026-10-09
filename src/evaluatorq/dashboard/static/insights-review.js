@@ -337,16 +337,20 @@ function renderHeader() {
   const classifierAverage = projectionKnown ? Math.round(classifierChars / Math.max(N, 1)) : 0;
   const questionAverage = requestCoverageKnown ? Math.round(questionChars / Math.max(N, 1)) : 0;
   const requestAverage = requestCoverageKnown ? Math.round(requestChars / Math.max(N, 1)) : 0;
-  const projectionText = projectionKnown
-    ? requestCoverageKnown
-      ? `${p.n_projection_truncated || 0} of ${N} traces hit a summary or classifier character cap. Average summary prompt: ${summaryAverage.toLocaleString()} characters; classifier request: ${requestAverage.toLocaleString()} characters (state ${classifierAverage.toLocaleString()}, questions ${questionAverage.toLocaleString()}). The source traces are unchanged.`
-      : `${p.n_projection_truncated || 0} of ${N} traces hit a summary or classifier character cap. Average summary prompt: ${summaryAverage.toLocaleString()} characters; classifier state: ${classifierAverage.toLocaleString()} characters. The source traces are unchanged.`
-    : 'Character-based input coverage is unavailable for this run.';
-  const reserveText = p.classifier_question_reserve === 'not_available'
-    ? ' Selected classifier questions were not included in this preview; the final request may reserve more of the input cap.'
-    : p.classifier_question_reserve === 'applied'
-      ? ' Exact serialized question payloads share the configured cap with classifier state; Jev also applies its model-specific ceilings.'
-      : '';
+  let projectionText;
+  if (!projectionKnown) {
+    projectionText = 'Character-based input coverage is unavailable for this run.';
+  } else if (requestCoverageKnown) {
+    projectionText = `${p.n_projection_truncated || 0} of ${N} traces hit a summary or classifier character cap. Average summary prompt: ${summaryAverage.toLocaleString()} characters; classifier request: ${requestAverage.toLocaleString()} characters (state ${classifierAverage.toLocaleString()}, questions ${questionAverage.toLocaleString()}). The source traces are unchanged.`;
+  } else {
+    projectionText = `${p.n_projection_truncated || 0} of ${N} traces hit a summary or classifier character cap. Average summary prompt: ${summaryAverage.toLocaleString()} characters; classifier state: ${classifierAverage.toLocaleString()} characters. The source traces are unchanged.`;
+  }
+  let reserveText = '';
+  if (p.classifier_question_reserve === 'not_available') {
+    reserveText = ' Selected classifier questions were not included in this preview; the final request may reserve more of the input cap.';
+  } else if (p.classifier_question_reserve === 'applied') {
+    reserveText = ' Exact serialized question payloads share the configured cap with classifier state; Jev also applies its model-specific ceilings.';
+  }
   const projectionPct = projectionKnown ? Math.min(100, pct(requestChars, sourceChars)) : 0;
   $('details').innerHTML = `<h4>Stages</h4><div class="stages">${stageHtml}</div>
     <h4>Models</h4><dl class="kv"><dt>Summary</dt><dd class="num">${esc(r.summary_model)}</dd><dt>Classifier</dt><dd class="num">${esc(r.classifier_model)}</dd><dt>Embeddings</dt><dd class="num">${esc(r.embedding_model)}</dd></dl>
