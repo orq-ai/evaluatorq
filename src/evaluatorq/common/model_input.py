@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, SupportsIndex
 
 from typing_extensions import Self
 
@@ -34,7 +34,7 @@ class _CappedText(str):  # noqa: FURB189
         instance.source_suffix_chars = suffix_chars
         return instance
 
-    def __reduce_ex__(self, _protocol: int) -> tuple[Any, tuple[str, str, int, int]]:
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> tuple[Any, tuple[str, str, int, int]]:
         return type(self), (str(self), self.source_text, self.source_prefix_chars, self.source_suffix_chars)
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -23,6 +22,8 @@ from evaluatorq.trace_finder.settings import MAX_TRACE_INPUT_CHARS, MIN_TRACE_IN
 from .models import TraceProjection, TraceRecord
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from evaluatorq.common.trace_document import TraceDocument
 
 ERROR_STATUSES = frozenset({'error', 'failed', 'failure', 'cancelled', 'canceled'})

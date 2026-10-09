@@ -244,13 +244,17 @@ def _saved_source(population: Mapping[str, object]) -> Source:
     population_kind = population_source(population)
     if population_kind == 'snapshot':
         return 'snapshot'
-    source = SOURCE_BY_MODE.get(str(population.get('mode')))
-    if source is not None:
-        return source
     if population.get('finder_export'):
         return 'finder'
-    if population_kind == 'query' or population.get('query'):
+    if population.get('query'):
         return 'query'
+    source = SOURCE_BY_MODE.get(str(population.get('mode')))
+    if source == 'finder':
+        return 'recent'
+    if source is not None:
+        return source
+    if population.get('mode') == 'finder':
+        return 'finder'
     return 'recent'
 
 
@@ -328,6 +332,8 @@ class RunFormValues:
         """Prefill the form from a saved run; a file source that is gone is cleared and a fresh one requested."""
         population = dict(run.population)
         source = _saved_source(population)
+        if source == 'recent' and population_source(population) == 'export':
+            source = 'finder'
         saved_path = str(population.get('snapshot_path') or population.get('finder_export') or '')
         file_backed = source in ('finder', 'snapshot')
         usable = bool(saved_path) and _saved_file_usable(source, Path(saved_path).expanduser(), runs_dir)

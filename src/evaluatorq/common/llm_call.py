@@ -41,7 +41,7 @@ from evaluatorq.contracts import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Mapping
 
     from openai import AsyncOpenAI
     from openai.types.chat import ChatCompletion, ParsedChatCompletion
@@ -508,7 +508,7 @@ async def execute_response(
 def classify_request_body(
     model: str,
     state: dict[str, Any] | str | list[Any],
-    questions: dict[str, ClassifyQuestion],
+    questions: Mapping[str, ClassifyQuestion],
 ) -> dict[str, Any]:
     """Build the exact body sent to the Orq ``/classify`` endpoint."""
     return {'model': model, 'state': state, 'questions': classifier_question_wire_payloads(questions)}

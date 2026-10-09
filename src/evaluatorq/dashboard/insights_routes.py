@@ -103,12 +103,12 @@ from evaluatorq.local_sessions import (
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.orq_source import OrqTraceSource
 from evaluatorq.trace_finder.settings import (
     MAX_TRACE_INPUT_CHARS,
     MIN_TRACE_INPUT_CHARS,
     effective_settings,
 )
-from evaluatorq.trace_finder.orq_source import OrqTraceSource
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
