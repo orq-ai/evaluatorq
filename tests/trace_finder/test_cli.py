@@ -437,6 +437,29 @@ def test_find_ignores_legacy_saved_project_for_environment_credentials(
     assert store.request.population.facets.project_id is None
 
 
+def test_find_ignores_dashboard_oauth_project_with_environment_credentials(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    from evaluatorq.trace_finder import cli as find_cli
+    from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
+
+    save_settings(DashboardSettings.model_validate({
+        'orq_auth_method': 'cli_oauth', 'orq_oauth_server': 'https://oauth.example',
+        'orq_workspace': 'oauth-workspace', 'orq_project_id': 'oauth-project',
+    }), tmp_path / 'settings.json')
+    monkeypatch.setenv('ORQ_API_KEY', 'environment-key')
+    monkeypatch.setattr(find_cli, 'resolve_orq_client', lambda: object())
+    monkeypatch.setattr(find_cli, 'resolve_llm_client', lambda **_: SimpleNamespace(client=object()))
+    store = FakeStore()
+    monkeypatch.setattr(find_cli, 'build_run_store', lambda *args, **kwargs: store)
+
+    result = CliRunner().invoke(_app(), ['find', 'refund requests'])
+
+    assert result.exit_code == 0, result.output
+    assert store.request is not None
+    assert store.request.population.facets.project_id is None
+
+
 @pytest.mark.parametrize(
     ('profiles', 'expected_error'),
     [

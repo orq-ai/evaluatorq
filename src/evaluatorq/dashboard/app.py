@@ -40,7 +40,7 @@ from typing import Any, Literal
 import httpx
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
-from openai import APIError
+from openai import APIError, APIStatusError
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
@@ -50,7 +50,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
-from evaluatorq.common.cli_oauth import list_oauth_sessions
+from evaluatorq.common.cli_oauth import OrqCLIError, list_oauth_sessions
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
@@ -59,6 +59,7 @@ from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
+from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
 from evaluatorq.dashboard.shell import dashboard_css, dashboard_css_version, page
@@ -77,6 +78,7 @@ from evaluatorq.dashboard.view import (
     filter_fragment,
     landing_body,
     model_field_source,
+    oauth_scope_field,
     oauth_session_field,
     redteam_overview_body,
     render_filter_form,
@@ -190,9 +192,8 @@ def _settings_config(
     for label, var in (('ORQ API key', 'ORQ_API_KEY'), ('OpenAI API key', 'OPENAI_API_KEY')):
         value = os.environ.get(var)
         config.append((label, _mask_key(value) if value else 'not set'))
-    # Orq host/workspace are read-only here: deep-links derive them per-run from
-    # each run's experiment_url. These env values are only the fallback for runs
-    # with no experiment. See dashboard.orq_workspace.
+    # Runs with an experiment URL supply their own link scope. Otherwise use
+    # the selected OAuth workspace or the environment/CLI fallback.
     host = resolve_base_url()
     config.extend([
         ('Orq host', f'{host} ({classify_host(host)})'),
@@ -368,6 +369,21 @@ async def _settings_oauth_sessions(req: Request) -> NotStr:
     return NotStr(oauth_session_field(value, sessions))
 
 
+async def _settings_oauth_scope(req: Request) -> NotStr:
+    """Load the chosen OAuth server's workspaces and projects without blocking Settings."""
+    server = req.query_params.get('orq_oauth_server') or DEFAULT_ORQ_BASE_URL
+    sessions = await asyncio.to_thread(list_oauth_sessions)
+    if server.rstrip('/') not in {session.server.rstrip('/') for session in sessions if session.status != 'unreadable'}:
+        scope = OAuthScopes(error='Sign in to this Orq server to choose a workspace and project.')
+    else:
+        scope = await asyncio.to_thread(
+            discover_oauth_scopes, server, workspace=req.query_params.get('orq_workspace', '')
+        )
+    return NotStr(
+        oauth_scope_field(scope, req.query_params.get('orq_workspace', ''), req.query_params.get('orq_project_id', ''))
+    )
+
+
 _MODEL_FIELD_KINDS: dict[str, Literal['chat', 'classify', 'embedding']] = {
     'fast_model': 'chat',
     'smart_model': 'chat',
@@ -409,30 +425,57 @@ async def _settings_models(req: Request) -> NotStr:
             server = None
     update['orq_oauth_server'] = server
     settings = settings.model_copy(update=update)
-    if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
-        return NotStr(
-            settings_model_control(
-                field, value, {}, note=_join_notes(env_note, 'Choose a CLI profile to load its models.')
-            )
-        )
+    notice = ''
+    notice_html = '<p id="models-warning" hx-swap-oob="innerHTML"></p>' if field == 'fast_model' else ''
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
     try:
         auth = resolve_dashboard_auth(settings, profiles=profiles)
-        async with model_choices.catalogue_client(auth) as client:
-            groups = await model_choices.models_by_provider(client, kind=kind)
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.warning('Could not resolve dashboard credentials for {}: {}', field, exc)
         groups = {}
-        logger.warning('Could not load the model catalogue for {}: {}', field, exc)
-        if isinstance(exc, MissingLLMCredentialsError):
-            note = (
-                "No Orq API key for the chosen authentication method, so the model list can't load. "
-                'Set one under Authentication, or type a model id.'
-            )
-        else:
-            note = "Couldn't load the model list from Orq. Type a model id."
+        note = ''
+        if field == 'fast_model':
+            notice = _settings_model_auth_recovery(method=settings.orq_auth_method)
     else:
-        note = '' if groups else 'Orq returned no models for this field. Type a model id.'
-    return NotStr(settings_model_control(field, value, groups, note=_join_notes(env_note, note)))
+        try:
+            async with model_choices.catalogue_client(auth) as client:
+                groups = await model_choices.models_by_provider(client, kind=kind, strict=True)
+        except (ImportError, OSError, RuntimeError, ValueError, APIError, httpx.HTTPError) as exc:
+            groups = {}
+            logger.warning('Could not load the model catalogue for {}: {}', field, exc)
+            note = ''
+            if field == 'fast_model':
+                if _settings_model_auth_failure(exc):
+                    notice = _settings_model_auth_recovery(method=settings.orq_auth_method)
+                else:
+                    notice = 'The Orq model list is temporarily unavailable. Check your connection or Orq status, then try again; you can still type a model id.'
+        else:
+            note = '' if groups else 'Orq returned no models for this field. Type a model id.'
+    if field == 'fast_model':
+        notice_html = f'<p id="models-warning" hx-swap-oob="innerHTML">{notice}</p>'
+    return NotStr(settings_model_control(field, value, groups, note=_join_notes(env_note, note)) + notice_html)
+
+
+def _settings_model_auth_failure(exc: Exception) -> bool:
+    """Whether a catalogue error clearly means the selected credential needs attention."""
+    if isinstance(exc, MissingLLMCredentialsError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in (401, 403)
+    if getattr(exc, 'status_code', None) in (401, 403):
+        return True
+    return isinstance(exc, OrqCLIError) and exc.failure_kind in ('authentication', 'setup')
+
+
+def _settings_model_auth_recovery(*, method: str) -> str:
+    """Explain the shared credential failure and the recovery for the selected source."""
+    detail = {
+        'environment': 'Set ORQ_API_KEY in the environment.',
+        'stored_api_key': 'Update the saved API key under Authentication.',
+        'cli_profile': 'Choose or update a CLI API-key profile under Authentication.',
+        'cli_oauth': 'Install the Orq CLI if needed, then sign in with orq auth login and select its session.',
+    }.get(method, 'Choose a working credential under Authentication.')
+    return f'Orq credentials need attention, so the model list cannot load. {detail} You can still type a model id.'
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
@@ -493,8 +536,42 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
         errors.setdefault('orq_profile', 'Choose an Orq CLI API-key profile.')
     if selected_profile is not None and '*' in selected_profile.api_key:
         errors['orq_profile'] = 'The installed orq CLI masks this profile key; use Environment credentials.'
+    if settings is not None and settings.orq_auth_method == 'cli_oauth':
+        server = settings.orq_oauth_server or DEFAULT_ORQ_BASE_URL
+        if settings.orq_workspace or settings.orq_project_id:
+            sessions = await asyncio.to_thread(list_oauth_sessions)
+            if server.rstrip('/') not in {
+                session.server.rstrip('/') for session in sessions if session.status != 'unreadable'
+            }:
+                errors['orq_project_id'] = 'Sign in to this Orq server before choosing a workspace or project.'
+            else:
+                scopes = await asyncio.to_thread(discover_oauth_scopes, server, workspace=settings.orq_workspace or '')
+                if scopes.error:
+                    errors['orq_project_id'] = scopes.error
+                else:
+                    selected = next((item for item in scopes.workspaces if item.key == settings.orq_workspace), None)
+                    project = next((item for item in scopes.projects if item.id == settings.orq_project_id), None)
+                    if settings.orq_workspace and selected is None:
+                        errors['orq_workspace'] = 'Choose a workspace on the selected server.'
+                    elif settings.orq_project_id and (
+                        selected is None or project is None or project.workspace_id != selected.id
+                    ):
+                        errors['orq_project_id'] = 'Choose a project in the selected workspace.'
+                    else:
+                        settings = settings.model_copy(
+                            update={
+                                'orq_project_name': project.name if project else None,
+                            }
+                        )
     if settings is not None:
-        settings = settings.model_copy(update={'orq_workspace': None, 'orq_project_id': None, 'orq_project_name': None})
+        if settings.orq_auth_method != 'cli_oauth':
+            settings = settings.model_copy(
+                update={
+                    'orq_workspace': None,
+                    'orq_project_id': None,
+                    'orq_project_name': None,
+                }
+            )
         try:
             auth = resolve_dashboard_auth(settings, profiles=profiles)
         except ValueError:
@@ -601,8 +678,8 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_api_key_ciphertext'] = current.orq_api_key_ciphertext
     values['orq_oauth_server'] = form_data.get('orq_oauth_server', current.orq_oauth_server)
     values['orq_credential_fingerprint'] = current.orq_credential_fingerprint
-    values['orq_workspace'] = None
-    values['orq_project_id'] = None
+    values['orq_workspace'] = form_data.get('orq_workspace') if values['orq_auth_method'] == 'cli_oauth' else None
+    values['orq_project_id'] = form_data.get('orq_project_id') if values['orq_auth_method'] == 'cli_oauth' else None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
     raw_input_cap = form_data.get('trace_input_chars')
@@ -976,6 +1053,7 @@ def register_report_routes(app: FastHTML) -> None:
     app.post('/settings')(_save_settings)
     app.get('/settings/models')(_settings_models)
     app.get('/settings/oauth-sessions')(_settings_oauth_sessions)
+    app.get('/settings/oauth-scope')(_settings_oauth_scope)
     app.get('/search')(_search)
     app.get('/r/{rid}')(_report_view)
     app.get('/r/{rid}/sim/agent-card')(_sim_agent_card)

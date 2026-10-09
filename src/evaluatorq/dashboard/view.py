@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from evaluatorq.common.model_roles import Role
     from evaluatorq.dashboard.library import ReportCard
     from evaluatorq.dashboard.metrics import Landing, RedTeamOverview, RunRow, SimOverview
+    from evaluatorq.dashboard.orq_scope import OAuthScopes
 
 # Surface key → display label, used for run-list titles + kind badges.
 SURFACE_LABELS: dict[str, str] = {'redteam': 'Red Team', 'sim': 'Agent Sim', 'pairwise': 'Pairwise'}
@@ -868,6 +869,7 @@ def _rich_pick(
     current: str = '',
     describedby: str = '',
     compact: bool = False,
+    filterable: bool = False,
 ) -> str:
     """A menu of rich rows that submits *value* through a hidden input.
 
@@ -885,12 +887,21 @@ def _rich_pick(
     )
     rows_off = ''.join(f'<div class="rich-pick-disabled" aria-disabled="true">{row}</div>' for row in disabled)
     described = f' aria-describedby="{esc(describedby)}"' if describedby else ''
+    search_html = (
+        f'<input class="facet-search" type="search" placeholder="Search" aria-label="Search {esc(name.replace("_", " "))} options" autocomplete="off">'
+        '<div class="facet-values">'
+        if filterable
+        else ''
+    )
+    empty_html = '</div><p class="facet-no-results" hidden>No matches.</p>' if filterable else ''
     return (
-        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}">'
+        f'<span class="model-pick rich-pick{" rich-pick--compact" if compact else ""}{" rich-pick--filter" if filterable else ""}">'
         f'<input type="hidden" name="{esc(name)}" value="{esc(value)}">'
         f'<button type="button" id="{esc(name)}" class="model-pick-btn" aria-haspopup="true" aria-expanded="false"{described}>'
         f'{selected}</button>'
-        f'<div class="finder-facets"><div class="facet-list">{buttons}{rows_off}</div></div></span>'
+        f'<div class="finder-facets"><div class="facet-list">'
+        f'{search_html}{buttons}{rows_off}{empty_html}'
+        f'</div></div></span>'
     )
 
 
@@ -919,6 +930,38 @@ def oauth_session_field(value: str, sessions: Sequence[OAuthSession]) -> str:
             options.append((session.server, _pick_row(session.host, account, _OAUTH_BADGES[session.status])))
     return '<label class="settings-auth-detail-label" for="orq_oauth_server">CLI session</label>' + _rich_pick(
         'orq_oauth_server', value, options, disabled=disabled
+    )
+
+
+def oauth_scope_field(scope: OAuthScopes, workspace: str, project_id: str) -> str:
+    """Render CLI OAuth workspace and project choices from the selected server."""
+    if scope.error and not scope.workspaces:
+        return (
+            f'<p class="settings-error">{esc(scope.error)}</p>'
+            f'<input type="hidden" name="orq_workspace" value="{esc(workspace)}">'
+            f'<input type="hidden" name="orq_project_id" value="{esc(project_id)}">'
+        )
+    if not scope.workspaces:
+        return '<p class="settings-auth-hint">No workspaces available for this CLI session.</p>'
+    workspace_ids = {item.key: item.id for item in scope.workspaces}
+    if workspace not in workspace_ids:
+        workspace = ''
+    selected_id = workspace_ids.get(workspace)
+    workspaces = [(item.key, _pick_row(item.key)) for item in scope.workspaces]
+    projects = [('', _pick_row('All projects'))]
+    projects.extend(
+        (item.id, _pick_row(item.name, item.id)) for item in scope.projects if item.workspace_id == selected_id
+    )
+    if not scope.error and not any(option == project_id for option, _ in projects):
+        project_id = ''
+    project_current = _pick_row(project_id) if scope.error and project_id else projects[0][1]
+    error_html = f'<span class="settings-error" role="alert">{esc(scope.error)}</span>' if scope.error else ''
+    placeholder = '<span class="rich-pick-placeholder">Choose a workspace</span>'
+    return (
+        '<label class="settings-auth-detail-label" for="orq_workspace">Workspace</label>'
+        f'{_rich_pick("orq_workspace", workspace, workspaces, current=placeholder, filterable=True)}'
+        '<label class="settings-auth-detail-label" for="orq_project_id">Project</label>'
+        f'{_rich_pick("orq_project_id", project_id, projects, current=project_current, filterable=True)}{error_html}'
     )
 
 
@@ -1061,6 +1104,18 @@ def settings_body(
         f'<input type="hidden" name="orq_oauth_server" value="{esc(oauth_server)}">'
         '<span class="settings-auth-hint">Checking CLI sessions…</span></span>'
     )
+    oauth_scope = (
+        '<span class="settings-auth-scope" id="oauth-scope" hx-get="/settings/oauth-scope" '
+        "hx-trigger=\"load, change[['orq_oauth_server','orq_workspace'].includes(target.name)] "
+        'from:closest form delay:10ms" '
+        'hx-include="input[name=orq_oauth_server], #oauth-scope [name=orq_workspace], '
+        '#oauth-scope [name=orq_project_id]" hx-swap="innerHTML">'
+        f'<input type="hidden" name="orq_workspace" value="{esc(setting_value("orq_workspace"))}">'
+        f'<input type="hidden" name="orq_project_id" value="{esc(setting_value("orq_project_id"))}">'
+        '<span class="settings-auth-hint">Loading workspaces and projects…</span></span>'
+    )
+    scope_error = errors.get('orq_workspace') or errors.get('orq_project_id')
+    scope_error_html = f'<span class="settings-error" role="alert">{esc(scope_error)}</span>' if scope_error else ''
     cards = (
         ('environment', 'Environment', 'Use ORQ_API_KEY from the dashboard process.', ''),
         (
@@ -1079,6 +1134,7 @@ def settings_body(
             'Use the current Orq CLI sign-in and let the CLI refresh its session.',
             (
                 f'{oauth_control}'
+                f'{oauth_scope}{scope_error_html}'
                 '<span class="settings-auth-hint">Sign a session back in with '
                 '<code>orq auth login --server &lt;url&gt;</code>.</span>'
             ),
@@ -1136,7 +1192,8 @@ def settings_body(
     models_panel = _panel(
         'Models',
         'Window, limit and parallelism are set per run on the Trace search page',
-        f'<div class="config-list">{"".join(field_rows)}</div>',
+        f'<div class="config-list">{"".join(field_rows)}</div>'
+        '<p id="models-warning" class="settings-error settings-model-warning" role="alert"></p>',
     )
     auth_panel = _panel(
         'Authentication',

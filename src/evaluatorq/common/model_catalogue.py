@@ -34,15 +34,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import math
 import os
-from typing import TYPE_CHECKING, Literal, NamedTuple
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import httpx
 from loguru import logger
 
 from evaluatorq.common.env_config import env_float
-from evaluatorq.common.llm_client import orq_base_url, resolve_results_base_url
+from evaluatorq.common.llm_client import MissingLLMCredentialsError, orq_base_url, resolve_results_base_url
 from evaluatorq.contracts import DEFAULT_CLASSIFIER_MODEL
 
 if TYPE_CHECKING:
@@ -124,11 +125,20 @@ class ModelInfo(_ModelInfoFields):
         )
 
 
+class ModelCatalogueError(RuntimeError):
+    """The catalogue request failed; ``status_code`` is set for HTTP responses."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
 # (host, credential) -> (model_id -> ModelInfo). Absent until its first fetch, and
 # {} when the fetch failed or the account has no models. A long-lived process
 # (jobs runner, dashboard) can serve prod and staging in turn, and switch between
 # workspaces on one host; each workspace enables its own models.
 _catalogues: dict[tuple[str, str], dict[str, ModelInfo]] = {}
+_failed_catalogues: set[tuple[str, str]] = set()
 # Built lazily: a module-level asyncio.Lock() binds to the loop running at import
 # time, and the CLI and test suite both drive several asyncio.run() loops, where
 # a lock bound to a dead loop raises "attached to a different loop".
@@ -172,6 +182,27 @@ def _catalogue_lock() -> asyncio.Lock:
     return _lock
 
 
+async def _fetch_catalogue_payload(host: str, api_key: str | None, oauth_fetch: Any) -> object:
+    """Fetch via OAuth when available, otherwise via the authenticated HTTP client."""
+    if callable(oauth_fetch):
+        return await oauth_fetch()
+    if not api_key:
+        raise ValueError('No Orq API key or CLI OAuth session is available for the model catalogue.')
+    async with httpx.AsyncClient(timeout=_CATALOGUE_TIMEOUT_S) as http_client:
+        response = await http_client.get(
+            f'{host}/v2/models',
+            headers={'Authorization': f'Bearer {api_key}'},
+        )
+        response.raise_for_status()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ModelCatalogueError(
+                'Orq returned invalid JSON for the model catalogue.',
+                status_code=response.status_code,
+            ) from exc
+
+
 def reset_catalogue_cache() -> None:
     """Clear the process-lifetime catalogues; exists for test isolation.
 
@@ -180,6 +211,7 @@ def reset_catalogue_cache() -> None:
     """
     global _lock
     _catalogues.clear()
+    _failed_catalogues.clear()
     _fetch_failures.clear()
     _classify_fallback_warned.clear()
     _lock = None
@@ -365,14 +397,14 @@ def _parse_catalogue(payload: object) -> dict[str, ModelInfo]:
     return models
 
 
-async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelInfo]:
+async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = False) -> dict[str, ModelInfo]:
     """Fetch the Orq model catalogue once per process, per host and credential.
 
     The host is taken from ``client`` when it routes through the Orq router, so an
     injected staging/on-prem client is not priced against prod; otherwise
     ``ORQ_BASE_URL``.
 
-    Failures are cached as an empty table: a run makes dozens of judge calls and
+    Tolerant callers cache a final failure as an empty table: a run makes dozens of judge calls and
     must not re-pay a failing HTTP round-trip on each one. Cost simply stays
     unknown for the run, which is the honest reading — but note this also
     disables Responses routing for the run, so it is logged at WARNING with that
@@ -381,33 +413,59 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
     host = resolve_results_base_url(client) if client is not None else orq_base_url()
     # An injected client's own key matches its host; an ambient ORQ_API_KEY for a
     # different workspace would 401 (caching {}) or price against the wrong one.
-    api_key = (
-        (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
-        if client is not None
-        else os.environ.get('ORQ_API_KEY')
+    oauth_method = inspect.getattr_static(type(client), 'get_model_catalogue', None) if client is not None else None
+    oauth_fetch = (
+        getattr(client, 'get_model_catalogue')  # noqa: B009 — capability is confirmed statically above
+        if inspect.iscoroutinefunction(oauth_method)
+        else None
     )
-    cache_key = (host, hashlib.sha256(api_key.encode()).hexdigest()[:16] if isinstance(api_key, str) else '')
-    cached = _catalogues.get(cache_key)
-    if cached is not None:
-        return cached
-    async with _catalogue_lock():
+    api_key = (
+        None
+        if callable(oauth_fetch)
+        else (
+            (getattr(client, 'api_key', None) or os.environ.get('ORQ_API_KEY'))
+            if client is not None
+            else os.environ.get('ORQ_API_KEY')
+        )
+    )
+    credential = (
+        'cli-oauth'
+        if callable(oauth_fetch)
+        else hashlib.sha256(api_key.encode()).hexdigest()[:16]
+        if isinstance(api_key, str)
+        else ''
+    )
+    cache_key = (host, credential)
+    cacheable = not callable(oauth_fetch)
+    if cacheable:
         cached = _catalogues.get(cache_key)
-        if cached is not None:
+        if cached is not None and (not strict or cache_key not in _failed_catalogues):
             return cached
-        if not api_key:
+    async with _catalogue_lock():
+        if cacheable:
+            cached = _catalogues.get(cache_key)
+            if cached is not None and (not strict or cache_key not in _failed_catalogues):
+                return cached
+        if not callable(oauth_fetch) and not api_key:
             logger.debug('No ORQ_API_KEY and no client credential; model catalogue unavailable')
-            _catalogues[cache_key] = {}
-            return _catalogues[cache_key]
-        payload: object = None
-        try:
-            async with httpx.AsyncClient(timeout=_CATALOGUE_TIMEOUT_S) as http_client:
-                response = await http_client.get(
-                    f'{host}/v2/models',
-                    headers={'Authorization': f'Bearer {api_key}'},
+            if strict:
+                raise MissingLLMCredentialsError(
+                    'No Orq API key or CLI OAuth session is available for the model catalogue.'
                 )
-                response.raise_for_status()
-                payload = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
+            _catalogues[cache_key] = {}
+            _failed_catalogues.add(cache_key)
+            return _catalogues[cache_key]
+        try:
+            payload = await _fetch_catalogue_payload(host=host, api_key=api_key, oauth_fetch=oauth_fetch)
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+            if strict:
+                if isinstance(exc, httpx.HTTPError):
+                    response = getattr(exc, 'response', None)
+                    raise ModelCatalogueError(str(exc), status_code=getattr(response, 'status_code', None)) from exc
+                raise
+            if not cacheable:
+                logger.warning('Orq OAuth model catalogue unavailable ({}): {}', type(exc).__name__, exc)
+                return {}
             # Narrow on purpose: a bug inside _parse_catalogue must not be cached
             # away as "the network was down", so parsing happens outside the try.
             failures = _fetch_failures[cache_key] = _fetch_failures.get(cache_key, 0) + 1
@@ -425,29 +483,43 @@ async def _load_catalogue(client: AsyncOpenAI | None = None) -> dict[str, ModelI
             )
             if give_up:
                 _catalogues[cache_key] = {}
+                _failed_catalogues.add(cache_key)
                 return _catalogues[cache_key]
             # Not cached: a transient hiccup must not degrade the whole run.
             return {}
         _fetch_failures.pop(cache_key, None)
-        _catalogues[cache_key] = _parse_catalogue(payload)
-        logger.debug('Loaded catalogue for {} models from {}', len(_catalogues[cache_key]), host)
-        return _catalogues[cache_key]
+        parsed = _parse_catalogue(payload)
+        malformed = not isinstance(payload, list) or (bool(payload) and not parsed)
+        if strict and malformed:
+            raise ModelCatalogueError('Orq returned an unreadable model catalogue.')
+        if malformed:
+            _failed_catalogues.add(cache_key)
+        else:
+            _failed_catalogues.discard(cache_key)
+        if cacheable:
+            _catalogues[cache_key] = parsed
+        logger.debug('Loaded catalogue for {} models from {}', len(parsed), host)
+        return parsed
 
 
 ModelKind = Literal['chat', 'classify', 'embedding']
 
 
-async def models_by_provider(client: AsyncOpenAI | None = None, *, kind: ModelKind = 'chat') -> dict[str, list[str]]:
+async def models_by_provider(
+    client: AsyncOpenAI | None = None, *, kind: ModelKind = 'chat', strict: bool = False
+) -> dict[str, list[str]]:
     """Catalogue ids as ``provider/model``, grouped by provider, both levels sorted.
 
     ``kind='classify'`` lists the models that serve ``/classify``, ``'embedding'`` the
     embedding models and ``'chat'`` the chat models. Empty when the catalogue is unavailable, so a caller can fall back to
-    free text.
+    free text. Set ``strict=True`` to propagate request errors and raise ``ModelCatalogueError`` for malformed
+    payloads; strict calls reuse successful non-OAuth cache entries and retry failed ones. OAuth results are never cached.
     """
     # `_parse_catalogue` files each entry under its bare and its qualified key with
     # the same ModelInfo object; the qualified key is the longer of the two.
     qualified: dict[int, tuple[ModelInfo, str]] = {}
-    for key, info in (await _load_catalogue(client)).items():
+    catalogue = await _load_catalogue(client, strict=True) if strict else await _load_catalogue(client)
+    for key, info in catalogue.items():
         if key.startswith(f'{info.provider}/') and len(key) > len(qualified.get(id(info), (info, ''))[1]):
             qualified[id(info)] = (info, key)
     grouped: dict[str, list[str]] = {}
