@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import typing
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -439,6 +440,167 @@ async def test_transient_failure_then_success_prices_normally(monkeypatch: pytes
     priced = await pricing.price_usage(_usage(), 'gpt-5-mini')
     assert priced is not None and priced.total_cost is not None
     assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_strict_catalogue_failure_is_not_cached_and_can_recover(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_fetch_failures', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    calls: list[str] = []
+    responses = [
+        _FakeResponse(401),
+        _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'model_type': 'chat'}]),
+    ]
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: responses.pop(0)))
+
+    with pytest.raises(pricing.ModelCatalogueError) as error:
+        await pricing.models_by_provider(kind='chat', strict=True)
+    assert error.value.status_code == 401
+    assert pricing._fetch_failures == {}
+
+    recovered = await pricing.models_by_provider(kind='chat', strict=True)
+    assert recovered == {'openai': ['openai/gpt-5-mini']}
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_strict_catalogue_bypasses_tolerant_failure_cache(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_fetch_failures', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    calls: list[str] = []
+    responses = [
+        _FakeResponse(500),
+        _FakeResponse(500),
+        _FakeResponse(500),
+        _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'model_type': 'chat'}]),
+    ]
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: responses.pop(0)))
+
+    for _ in range(pricing._MAX_FETCH_FAILURES):
+        assert await pricing.models_by_provider(kind='chat') == {}
+    assert await pricing.models_by_provider(kind='chat') == {}
+    assert len(calls) == pricing._MAX_FETCH_FAILURES
+
+    assert await pricing.models_by_provider(kind='chat', strict=True) == {'openai': ['openai/gpt-5-mini']}
+    assert len(calls) == pricing._MAX_FETCH_FAILURES + 1
+
+
+@pytest.mark.asyncio
+async def test_strict_catalogue_reuses_successful_cache(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_fetch_failures', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    calls: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        'AsyncClient',
+        _FakeAsyncClient(
+            calls,
+            lambda: _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'model_type': 'chat'}]),
+        ),
+    )
+
+    expected = {'openai': ['openai/gpt-5-mini']}
+    assert await pricing.models_by_provider(kind='chat', strict=True) == expected
+    assert await pricing.models_by_provider(kind='chat', strict=True) == expected
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_strict_catalogue_retries_after_cached_missing_credentials(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        httpx,
+        'AsyncClient',
+        _FakeAsyncClient(
+            calls,
+            lambda: _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'model_type': 'chat'}]),
+        ),
+    )
+
+    assert await pricing.models_by_provider(kind='chat') == {}
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    assert await pricing.models_by_provider(kind='chat', strict=True) == {'openai': ['openai/gpt-5-mini']}
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_strict_catalogue_rejects_malformed_payload(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    calls: list[str] = []
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: _FakeResponse(200, {'models': []})))
+
+    with pytest.raises(pricing.ModelCatalogueError, match='unreadable model catalogue'):
+        await pricing.models_by_provider(kind='chat', strict=True)
+    assert pricing._catalogues == {}
+
+
+@pytest.mark.asyncio
+async def test_strict_catalogue_retries_after_tolerant_malformed_payload(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    calls: list[str] = []
+    responses = [
+        _FakeResponse(200, {'models': []}),
+        _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'model_type': 'chat'}]),
+    ]
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: responses.pop(0)))
+
+    assert await pricing.models_by_provider(kind='chat') == {}
+    assert await pricing.models_by_provider(kind='chat', strict=True) == {'openai': ['openai/gpt-5-mini']}
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_oauth_client_loads_catalogue_without_ambient_api_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv('ORQ_API_KEY', 'ambient-key-must-not-be-used')
+    calls: list[str] = []
+
+    class OAuthClient:
+        base_url = 'https://oauth.example/v3/router'
+
+        async def get_model_catalogue(self) -> list[dict[str, str]]:
+            calls.append('oauth')
+            model = 'gpt-5-mini' if len(calls) == 1 else 'gpt-5.6-luna'
+            return [{'model_id': model, 'provider': 'openai', 'model_type': 'chat'}]
+
+    async def forbidden_http(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError('OAuth catalogue loads must not use ambient HTTP credentials')
+
+    monkeypatch.setattr(httpx, 'AsyncClient', forbidden_http)
+    assert await pricing.models_by_provider(typing.cast(typing.Any, OAuthClient()), kind='chat', strict=True) == {
+        'openai': ['openai/gpt-5-mini']
+    }
+    assert await pricing.models_by_provider(typing.cast(typing.Any, OAuthClient()), kind='chat', strict=True) == {
+        'openai': ['openai/gpt-5.6-luna']
+    }
+    assert calls == ['oauth', 'oauth']
+    assert pricing._catalogues == {}
+
+
+@pytest.mark.asyncio
+async def test_tolerant_oauth_failure_does_not_populate_global_cache(monkeypatch: pytest.MonkeyPatch):
+    class OAuthClient:
+        base_url = 'https://oauth.example/v3/router'
+
+        async def get_model_catalogue(self) -> list[dict[str, str]]:
+            raise RuntimeError('signed out')
+
+    assert await pricing.models_by_provider(typing.cast(typing.Any, OAuthClient()), kind='chat') == {}
+    assert pricing._catalogues == {}
+    assert pricing._fetch_failures == {}
+
+
+@pytest.mark.asyncio
+async def test_magicmock_client_is_not_mistaken_for_oauth(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    assert await pricing.models_by_provider(MagicMock()) == {}
 
 
 @pytest.mark.asyncio

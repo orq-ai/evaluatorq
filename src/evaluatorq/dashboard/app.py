@@ -40,7 +40,7 @@ from typing import Any, Literal
 import httpx
 from fasthtml.core import FastHTML, NotStr
 from loguru import logger
-from openai import APIError
+from openai import APIError, APIStatusError
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import JSONResponse, RedirectResponse, Response
@@ -50,7 +50,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 # dashboard tests use build_app()+TestClient without ever calling serve(). See
 # evaluatorq/dashboard/_compat.py.
 import evaluatorq.dashboard._compat  # noqa: F401 — side-effect import
-from evaluatorq.common.cli_oauth import list_oauth_sessions
+from evaluatorq.common.cli_oauth import OrqCLIError, list_oauth_sessions
 from evaluatorq.common.llm_client import MissingLLMCredentialsError
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close_orq_client, list_orq_profiles
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
@@ -427,35 +427,68 @@ async def _settings_models(req: Request) -> NotStr:
     settings = settings.model_copy(update=update)
     notice = ''
     notice_html = '<p id="models-warning" hx-swap-oob="innerHTML"></p>' if field == 'fast_model' else ''
-    if settings.orq_auth_method == 'cli_profile' and not settings.orq_profile:
-        return NotStr(
-            settings_model_control(
-                field, value, {}, note=_join_notes(env_note, 'Choose a CLI profile to load its models.')
-            )
-            + notice_html
-        )
     profiles = await asyncio.to_thread(list_orq_profiles) if settings.orq_auth_method == 'cli_profile' else []
     try:
         auth = resolve_dashboard_auth(settings, profiles=profiles)
-        async with model_choices.catalogue_client(auth) as client:
-            groups = await model_choices.models_by_provider(client, kind=kind)
     except (ImportError, OSError, RuntimeError, ValueError) as exc:
+        logger.warning('Could not resolve dashboard credentials for {}: {}', field, exc)
         groups = {}
-        logger.warning('Could not load the model catalogue for {}: {}', field, exc)
-        if isinstance(exc, MissingLLMCredentialsError):
+        note = ''
+        if field == 'fast_model':
+            notice = _settings_model_auth_recovery(settings.orq_auth_method)
+    else:
+        try:
+            async with model_choices.catalogue_client(auth) as client:
+                groups = await model_choices.models_by_provider(client, kind=kind, strict=True)
+        except (ImportError, OSError, RuntimeError, ValueError, APIError, httpx.HTTPError) as exc:
+            groups = {}
+            logger.warning('Could not load the model catalogue for {}: {}', field, exc)
             note = ''
             if field == 'fast_model':
-                notice = (
-                    "No Orq API key for the chosen authentication method, so the model list can't load. "
-                    'Set one under Authentication, or type a model id.'
-                )
+                if _settings_model_auth_failure(exc):
+                    notice = _settings_model_auth_recovery(settings.orq_auth_method)
+                else:
+                    notice = 'The Orq model list is temporarily unavailable. Check your connection or Orq status, then try again; you can still type a model id.'
         else:
-            note = "Couldn't load the model list from Orq. Type a model id."
-    else:
-        note = '' if groups else 'Orq returned no models for this field. Type a model id.'
+            note = '' if groups else 'Orq returned no models for this field. Type a model id.'
     if field == 'fast_model':
         notice_html = f'<p id="models-warning" hx-swap-oob="innerHTML">{notice}</p>'
     return NotStr(settings_model_control(field, value, groups, note=_join_notes(env_note, note)) + notice_html)
+
+
+def _settings_model_auth_failure(exc: Exception) -> bool:
+    """Whether a catalogue error clearly means the selected credential needs attention."""
+    message = str(exc).casefold()
+    if isinstance(exc, MissingLLMCredentialsError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in (401, 403)
+    if getattr(exc, 'status_code', None) in (401, 403):
+        return True
+    return isinstance(exc, OrqCLIError) and any(
+        phrase in message
+        for phrase in (
+            'orq cli is not installed',
+            'install it and sign in before using cli oauth',
+            'sign-in needs attention',
+            'run orq auth login',
+            "run 'orq auth login'",
+            'not signed in',
+            'expired or was revoked',
+            'invalid refresh token',
+        )
+    )
+
+
+def _settings_model_auth_recovery(method: str) -> str:
+    """Explain the shared credential failure and the recovery for the selected source."""
+    detail = {
+        'environment': 'Set ORQ_API_KEY in the environment.',
+        'stored_api_key': 'Update the saved API key under Authentication.',
+        'cli_profile': 'Choose or update a CLI API-key profile under Authentication.',
+        'cli_oauth': 'Install the Orq CLI if needed, then sign in with orq auth login and select its session.',
+    }.get(method, 'Choose a working credential under Authentication.')
+    return f'Orq credentials need attention, so the model list cannot load. {detail} You can still type a model id.'
 
 
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901

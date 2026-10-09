@@ -1545,7 +1545,7 @@ def test_model_field_asks_for_a_cli_profile_before_fetching(client: TestClient, 
     ).text
 
     assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x"')
-    assert 'Choose a CLI profile' in html
+    assert 'Choose or update a CLI API-key profile under Authentication' in html
 
 
 def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1555,7 +1555,7 @@ def test_model_field_honours_the_form_field_names(client: TestClient, monkeypatc
         seen.append(settings)
         return SimpleNamespace(method='cli_profile', api_key='profile-key', base_url='https://profile.example')
 
-    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+    async def choices(_client: object, *, kind: str = 'chat', strict: bool = False) -> dict[str, list[str]]:
         return _CHOICES
 
     class FakeLLM:
@@ -1619,7 +1619,7 @@ def test_model_field_rejects_a_saved_oauth_server_the_cli_has_no_login_for(
 def test_model_field_offers_workspace_models_grouped_by_provider(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+    async def choices(_client: object, *, kind: str = 'chat', strict: bool = False) -> dict[str, list[str]]:
         return _CHOICES
 
     monkeypatch.setattr(model_choices, 'models_by_provider', choices)
@@ -1640,7 +1640,7 @@ def test_model_field_offers_workspace_models_grouped_by_provider(
 def test_model_field_ignores_a_missing_profile_rather_than_using_the_environment(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+    async def choices(_client: object, *, kind: str = 'chat', strict: bool = False) -> dict[str, list[str]]:
         return _CHOICES
 
     monkeypatch.setattr(model_choices, 'models_by_provider', choices)
@@ -1667,7 +1667,7 @@ def test_model_field_uses_selected_authentication(
         calls.append(settings.orq_auth_method)
         return SimpleNamespace(method=settings.orq_auth_method, api_key='selected-key', base_url='https://selected.example')
 
-    async def choices(chosen_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+    async def choices(chosen_client: object, *, kind: str = 'chat', strict: bool = False) -> dict[str, list[str]]:
         calls.append((chosen_client, kind))
         return _CHOICES
 
@@ -1713,6 +1713,241 @@ def test_model_field_stays_free_text_without_a_catalogue(client: TestClient, mon
     assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x/y"')
 
 
+@pytest.mark.parametrize(
+    ('method', 'error'),
+    [
+        ('environment', 'missing'),
+        ('stored_api_key', 'saved'),
+        ('cli_profile', 'profile'),
+        ('cli_oauth', 'oauth'),
+    ],
+)
+def test_model_catalogue_credential_failures_share_actionable_footer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str, error: str
+) -> None:
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError
+    from evaluatorq.common.orq_client import OrqProfile
+
+    if method == 'cli_profile':
+        monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [OrqProfile('work', 'key', None, True)])
+
+    def unavailable(*_args: object, **_kwargs: object) -> Any:
+        if error == 'missing':
+            raise MissingLLMCredentialsError('missing key')
+        if error == 'saved':
+            raise ValueError('No saved API key is available.')
+        if error == 'profile':
+            raise ValueError('Orq CLI profile work is unavailable.')
+        from evaluatorq.common.cli_oauth import OrqCLIError
+
+        raise OrqCLIError('The Orq CLI OAuth sign-in needs attention. Run orq auth login.')
+
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', unavailable)
+    params = {'field': 'fast_model', 'orq_auth_method': method, 'fast_model': 'custom/model'}
+    if method == 'cli_profile':
+        params['orq_profile'] = 'work'
+
+    html = client.get('/settings/models', params=params).text
+
+    assert 'Orq credentials need attention, so the model list cannot load.' in html
+    assert 'You can still type a model id.' in html
+    assert 'ORQ_API_KEY' in html if method == 'environment' else 'Authentication' in html or 'orq auth login' in html
+    assert 'settings-error' not in html
+
+
+@pytest.mark.parametrize('method', ['environment', 'stored_api_key', 'cli_profile', 'cli_oauth'])
+@pytest.mark.parametrize('status', [401, 403])
+def test_model_catalogue_rejected_credentials_are_not_shown_as_outages(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, status: int, method: str
+) -> None:
+    import httpx
+
+    from openai import APIStatusError
+
+    response = httpx.Response(status, request=httpx.Request('GET', 'https://example.test/v2/models'))
+
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', lambda *_args, **_kwargs: SimpleNamespace(method=method))
+    if method == 'cli_profile':
+        monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [OrqProfile('work', 'key', None, True)])
+
+    class CatalogueClient:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
+
+    async def rejected(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        raise APIStatusError('rejected', response=response, body=None)
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', rejected)
+
+    params = {'field': 'fast_model', 'orq_auth_method': method}
+    if method == 'cli_profile':
+        params['orq_profile'] = 'work'
+    html = client.get('/settings/models', params=params).text
+
+    assert 'Orq credentials need attention, so the model list cannot load.' in html
+    assert 'temporarily unavailable' not in html
+
+
+@pytest.mark.parametrize(
+    ('error', 'expected'),
+    [
+        ('The orq CLI is not installed. Install it and sign in before using CLI OAuth.', 'Install the Orq CLI'),
+        ('The Orq CLI OAuth sign-in needs attention. Run orq auth login.', 'orq auth login'),
+    ],
+)
+def test_cli_oauth_setup_failures_point_to_install_or_sign_in(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, error: str, expected: str
+) -> None:
+    from evaluatorq.common.cli_oauth import OrqCLIError
+
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', lambda *_args, **_kwargs: SimpleNamespace(method='cli_oauth'))
+
+    class CatalogueClient:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
+
+    async def cli_error(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        raise OrqCLIError(error)
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', cli_error)
+
+    html = client.get('/settings/models', params={'field': 'fast_model', 'orq_auth_method': 'cli_oauth'}).text
+
+    assert 'Orq credentials need attention, so the model list cannot load.' in html
+    assert expected in html
+    assert 'temporarily unavailable' not in html
+
+
+@pytest.mark.parametrize(
+    'error',
+    [
+        'The orq CLI returned an unreadable JSON response.',
+        'Could not start the orq CLI: network unreachable',
+    ],
+)
+def test_unreadable_or_unreachable_cli_oauth_stays_a_catalogue_outage(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, error: str
+) -> None:
+    from evaluatorq.common.cli_oauth import OrqCLIError
+
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', lambda *_args, **_kwargs: SimpleNamespace(method='cli_oauth'))
+
+    class CatalogueClient:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
+
+    async def cli_error(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        raise OrqCLIError(error)
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', cli_error)
+
+    html = client.get('/settings/models', params={'field': 'fast_model', 'orq_auth_method': 'cli_oauth'}).text
+
+    assert 'temporarily unavailable' in html
+    assert 'credentials need attention' not in html
+
+
+@pytest.mark.parametrize('method', ['environment', 'stored_api_key', 'cli_profile', 'cli_oauth'])
+def test_model_catalogue_outage_notice_clears_after_success(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', lambda *_args, **_kwargs: SimpleNamespace(method=method))
+    if method == 'cli_profile':
+        monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [OrqProfile('work', 'key', None, True)])
+
+    class CatalogueClient:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
+    calls = 0
+
+    async def choices(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError('offline')
+        return _CHOICES
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', choices)
+
+    params = {'field': 'fast_model', 'orq_auth_method': method}
+    if method == 'cli_profile':
+        params['orq_profile'] = 'work'
+    failed = client.get('/settings/models', params=params).text
+    recovered = client.get('/settings/models', params=params).text
+
+    assert 'temporarily unavailable' in failed
+    assert 'id="models-warning" hx-swap-oob="innerHTML"></p>' in recovered
+
+
+@pytest.mark.parametrize('method', ['environment', 'stored_api_key', 'cli_profile', 'cli_oauth'])
+def test_empty_model_catalogue_keeps_its_distinct_field_note(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, method: str
+) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    monkeypatch.setattr(app_module, 'resolve_dashboard_auth', lambda *_args, **_kwargs: SimpleNamespace(method=method))
+    if method == 'cli_profile':
+        monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: [OrqProfile('work', 'key', None, True)])
+
+    class CatalogueClient:
+        async def __aenter__(self) -> object:
+            return object()
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
+
+    async def empty(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        return {}
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', empty)
+
+    params = {'field': 'fast_model', 'orq_auth_method': method}
+    if method == 'cli_profile':
+        params['orq_profile'] = 'work'
+    html = client.get('/settings/models', params=params).text
+
+    assert 'Orq returned no models for this field. Type a model id.' in html
+    assert 'temporarily unavailable' not in html
+
+
+def test_non_fast_model_failure_does_not_duplicate_the_footer_notice(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+
+    async def unavailable(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        raise OSError('offline')
+
+    monkeypatch.setattr(model_choices, 'models_by_provider', unavailable)
+
+    html = client.get('/settings/models', params={'field': 'smart_model'}).text
+
+    assert 'temporarily unavailable' not in html
+    assert 'id="models-warning"' not in html
+
+
 @pytest.mark.asyncio
 async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.common import model_catalogue
@@ -1745,7 +1980,7 @@ async def test_models_by_provider_groups_chat_and_classify_models(monkeypatch: p
 def test_model_field_filters_the_catalogue_by_the_fields_kind(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     kinds: list[str] = []
 
-    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+    async def choices(_client: object, *, kind: str = 'chat', strict: bool = False) -> dict[str, list[str]]:
         kinds.append(kind)
         return _CHOICES
 
@@ -1766,7 +2001,7 @@ def test_model_field_filters_the_catalogue_by_the_fields_kind(client: TestClient
 def test_model_field_offers_use_default_and_labels_an_empty_value(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def choices(_client: object, *, kind: str = 'chat') -> dict[str, list[str]]:
+    async def choices(_client: object, *, kind: str = 'chat', strict: bool = False) -> dict[str, list[str]]:
         return _CHOICES
 
     class FakeLLM:

@@ -44,6 +44,10 @@ def _oauth_env() -> dict[str, str]:
 class OrqCLIError(RuntimeError):
     """The authenticated Orq CLI could not complete a request."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class _CLI:
     def __init__(self, *, server_url: str | None, workspace: str | None, project: str | None) -> None:
@@ -285,6 +289,22 @@ class _LLMClient:
         del options
         result = await self._cli.call(args, _json_value(body))
         if isinstance(result, dict) and 'body' in result and 'status' in result:
+            return result['body']
+        return result
+
+    async def get_model_catalogue(self) -> Any:
+        """Fetch the model catalogue through the CLI's OAuth session."""
+
+        result = await self._cli.call(['request', 'GET', '/v2/models', '--force'])
+        if isinstance(result, dict) and 'status' in result and 'body' in result:
+            status = result['status']
+            if isinstance(status, bool) or not isinstance(status, int) or status < 200 or status >= 300:
+                raise OrqCLIError(
+                    f'Orq CLI model catalogue request failed with HTTP {status}.',
+                    status_code=status if isinstance(status, int) and not isinstance(status, bool) else None,
+                )
+            if result.get('ok') is False:
+                raise OrqCLIError('Orq CLI model catalogue request failed.')
             return result['body']
         return result
 

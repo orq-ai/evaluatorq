@@ -76,6 +76,41 @@ async def test_cli_classify_post_uses_oauth_request_endpoint(monkeypatch: Any) -
     assert 'ORQ_API_KEY' not in seen['env']
 
 
+@pytest.mark.asyncio
+async def test_cli_model_catalogue_uses_oauth_and_unwraps_response(monkeypatch: Any) -> None:
+    seen: dict[str, Any] = {}
+
+    async def fake_create(*args: str, **kwargs: Any) -> _Process:
+        seen['args'] = args
+        seen['env'] = kwargs['env']
+        return _Process('{"body":[{"model_id":"gpt-6-luna"}],"ok":true,"status":200}')
+
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: '/usr/local/bin/orq')
+    monkeypatch.setattr(cli_oauth.asyncio, 'create_subprocess_exec', fake_create)
+    monkeypatch.setenv('ORQ_API_KEY', 'ambient-key-must-not-be-used')
+    _, llm = cli_oauth.build_cli_oauth_clients('https://my.orq.ai')
+
+    result = await llm.get_model_catalogue()
+
+    assert result == [{'model_id': 'gpt-6-luna'}]
+    assert seen['args'][-4:] == ('request', 'GET', '/v2/models', '--force')
+    assert 'ORQ_API_KEY' not in seen['env']
+
+
+@pytest.mark.asyncio
+async def test_cli_model_catalogue_preserves_auth_status(monkeypatch: Any) -> None:
+    async def fake_create(*_: str, **__: Any) -> _Process:
+        return _Process('{"body":{"error":"unauthorized"},"ok":false,"status":401}')
+
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
+    monkeypatch.setattr(cli_oauth.asyncio, 'create_subprocess_exec', fake_create)
+    _, llm = cli_oauth.build_cli_oauth_clients()
+
+    with pytest.raises(cli_oauth.OrqCLIError) as error:
+        await llm.get_model_catalogue()
+    assert error.value.status_code == 401
+
+
 @pytest.mark.parametrize('source', ['session', 'session-file', 'device-flow', 'future-cli-source'])
 def test_oauth_subject_accepts_authenticated_cli_source(monkeypatch: Any, source: str) -> None:
     monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
