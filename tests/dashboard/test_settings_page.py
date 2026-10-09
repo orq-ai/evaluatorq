@@ -688,7 +688,7 @@ def test_settings_page_offers_cli_profiles_in_authentication(client: TestClient,
     monkeypatch.setattr(app_module, 'list_orq_profiles', _profiles)
     html = client.get('/settings').text
     assert '<div class="panel-title">Authentication</div>' in html
-    assert '<summary>Advanced</summary>' not in html
+    assert html.index('<div class="panel-title">Authentication</div>') < html.index('<summary>Advanced</summary>')
     assert 'name="orq_auth_method" value="environment" checked' in html
     assert 'name="orq_auth_method" value="cli_profile"' in html
     options = _pick_options(html, 'orq_profile')

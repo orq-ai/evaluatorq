@@ -7,7 +7,7 @@ import html
 import json
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
@@ -291,7 +291,7 @@ async def compression_inspector_sessions_load(req: Request) -> Response:
     if not separator or source not in _LOCAL_SOURCES or not raw_path:
         return _page_response(notice=_SESSION_ERROR, status_code=422)
     try:
-        ref = SessionRef(source=cast('SessionSource', source), path=Path(raw_path))
+        ref = SessionRef(source=source, path=Path(raw_path))
         document = await asyncio.to_thread(load_session_document, ref=ref)
         cap = effective_settings().trace_input_chars
         preview = preview_document(document, global_char_cap=cap)
