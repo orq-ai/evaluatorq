@@ -354,7 +354,7 @@ def test_worker_retention_extends_seven_days_from_run_finish(tmp_path: Path) -> 
     finished = source.stat().st_mtime
     assert finished > old
     metadata = json.loads(source.with_name(source.name + '.meta.json').read_text())
-    assert datetime.fromisoformat(metadata['modified_at']).timestamp() == pytest.approx(finished, abs=1)
+    assert datetime.fromisoformat(metadata['modified_at'].replace('Z', '+00:00')).timestamp() == pytest.approx(finished, abs=1)
     assert cleanup_expired_uploads(tmp_path, now=finished + UPLOAD_RETENTION_SECONDS + 1) == 1
 
 
