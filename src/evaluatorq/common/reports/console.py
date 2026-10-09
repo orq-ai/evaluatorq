@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
+import os
+import sys
 import threading
 from typing import TYPE_CHECKING
 
@@ -51,11 +54,20 @@ async def ask_confirm(prompt: str) -> bool:
     cancels the awaiting task and then waits for its default executor, which would block on the
     unfinished stdin read until the user pressed Enter.
 
-    A blocking stdin read cannot be interrupted, so after cancellation the thread stays blocked
-    until a line arrives or the process exits, and that line is discarded. Call it only from
-    a CLI entry point that exits after the run, not from a long-lived process.
+    Before a POSIX terminal read, load the optional standard-library ``readline`` module when
+    available. Without it, CPython's stdio fallback can keep its stream lock held by the daemon
+    reader during interpreter shutdown after Ctrl-C. Call this only from a CLI entry point that
+    exits after the run, not from a long-lived process. If the awaiting task is cancelled without
+    interrupting the read, the daemon thread remains blocked until a line arrives, and discards it.
     """
     import typer
+
+    if os.name == 'posix' and sys.stdin.isatty():
+        # On CPython builds with GNU readline, builtin input's plain stdio
+        # fallback can leave its FILE lock held by the daemon reader when the
+        # CLI exits on Ctrl-C. That blocks interpreter finalization.
+        with contextlib.suppress(ImportError):
+            importlib.import_module('readline')
 
     loop = asyncio.get_running_loop()
     answer: asyncio.Future[bool] = loop.create_future()
