@@ -24,11 +24,18 @@ _REASONING = frozenset({'reasoning', 'reasoning_content', 'thinking'})
 # A `str` subclass stays JSON-serializable; `UserString` does not.
 class _CappedText(str):  # noqa: FURB189
     source_text: str
+    source_prefix_chars: int
+    source_suffix_chars: int
 
-    def __new__(cls, value: str, source_text: str) -> Self:
+    def __new__(cls, value: str, source_text: str, prefix_chars: int = 0, suffix_chars: int = 0) -> Self:
         instance = super().__new__(cls, value)
         instance.source_text = source_text
+        instance.source_prefix_chars = prefix_chars
+        instance.source_suffix_chars = suffix_chars
         return instance
+
+    def __reduce_ex__(self, _protocol: int) -> tuple[Any, tuple[str, str, int, int]]:
+        return type(self), (str(self), self.source_text, self.source_prefix_chars, self.source_suffix_chars)
 
 
 def cap_text(text: str, limit: int) -> tuple[str, int]:
@@ -54,12 +61,25 @@ def cap_text(text: str, limit: int) -> tuple[str, int]:
         marker = f'[... {omitted} chars left out ...]'
     if first + last + len(marker) > limit:
         raise ValueError('model input character cap is too small for an exact omission marker')
-    return _CappedText(f'{source[:first]}{marker}{source[-last:] if last else ""}', source), omitted
+    return _CappedText(f'{source[:first]}{marker}{source[-last:] if last else ""}', source, first, last), omitted
 
 
 def source_text_chars(text: str) -> int:
     """Return original text length from cap metadata, never marker-shaped content."""
     return len(text.source_text) if isinstance(text, _CappedText) else len(text)
+
+
+def source_text_ranges(text: str) -> tuple[tuple[int, int], ...]:
+    """Return the retained source ranges represented by a capped text value."""
+    if not isinstance(text, _CappedText):
+        return ((0, len(text)),)
+    source_length = len(text.source_text)
+    ranges: list[tuple[int, int]] = []
+    if text.source_prefix_chars:
+        ranges.append((0, text.source_prefix_chars))
+    if text.source_suffix_chars:
+        ranges.append((source_length - text.source_suffix_chars, source_length))
+    return tuple(ranges)
 
 
 def has_truncated_source_text(value: Any) -> bool:
@@ -604,7 +624,7 @@ def edge_text(text: str, total: int, side: int) -> str:
         return text
     source = text.source_text if isinstance(text, _CappedText) else text
     omitted = len(source) - side * 2
-    return _CappedText(f'{source[:side]}[... {omitted} chars left out ...]{source[-side:]}', source)
+    return _CappedText(f'{source[:side]}[... {omitted} chars left out ...]{source[-side:]}', source, side, side)
 
 
 def tool_result_metadata(message: dict[str, Any]) -> tuple[Any, Any, Any]:

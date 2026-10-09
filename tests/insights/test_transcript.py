@@ -12,6 +12,7 @@ from evaluatorq.common.model_input import serialized_question_chars
 from evaluatorq.insights.transcript import (
     first_command,
     full_conversation_view,
+    full_conversation_view_with_message_spans,
     is_risky_command,
     tool_activity_chunks,
     tool_inventory,
@@ -167,13 +168,16 @@ def _busy_trace(calls: int) -> TraceRecord:
     return _trace(*messages)
 
 
-def test_tool_activity_cuts_the_middle_when_at_most_30_percent_is_lost() -> None:
+def test_tool_activity_preserves_all_calls_when_middle_cut_would_omit_records() -> None:
     trace = _busy_trace(40)
     full = len(tool_activity_chunks(trace, budget=10**9)[0])
+    budget = int(full * 0.75)
 
-    [view] = tool_activity_chunks(trace, budget=int(full * 0.75))
+    chunks = tool_activity_chunks(trace, budget=budget)
 
-    assert 'lines omitted' in view
+    assert sum(chunk.count('CALL Read [completed]:') for chunk in chunks) == 40
+    assert all(any(f'f{index}.py' in chunk for chunk in chunks) for index in range(40))
+    assert all(len(chunk) <= budget for chunk in chunks)
 
 
 def test_tool_activity_splits_a_long_trace_into_chunks_that_each_keep_the_task() -> None:
@@ -319,3 +323,19 @@ def test_full_conversation_renders_structured_and_multimodal_message_content() -
     assert '"/records/7"' in rendered
     assert 'typed text' in rendered
     assert '[image]' in rendered
+
+
+def test_full_conversation_source_spans_keep_message_indexes() -> None:
+    literal_marker = '[... 100000 chars left out ...]'
+    trace = _trace(
+        {'role': 'user', 'content': literal_marker},
+        {'role': 'assistant', 'content': '   '},
+        {'role': 'assistant', 'content': 'final answer'},
+    )
+
+    rendered, spans, source_message_count = full_conversation_view_with_message_spans(trace)
+
+    assert source_message_count == 3
+    assert [index for _, _, index in spans] == [0, 2]
+    assert literal_marker in rendered[spans[0][0] : spans[0][1]]
+    assert 'final answer' in rendered[spans[1][0] : spans[1][1]]

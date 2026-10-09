@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 
 import pytest
@@ -15,6 +16,8 @@ from evaluatorq.common.model_input import (
     jev_state,
     serialized_chars,
     serialized_question_chars,
+    source_text_chars,
+    source_text_ranges,
 )
 
 
@@ -36,6 +39,19 @@ def test_literal_omission_marker_is_not_counted_as_prior_truncation() -> None:
 
     assert literal in bounded
     assert omitted < len(source)
+
+
+def test_capped_text_source_ranges_survive_deepcopy_and_recapping() -> None:
+    source = 'prefix ' + '[... 100000 chars left out ...]' + 'x' * 1_000 + ' suffix'
+    capped, _ = cap_text(source, 80)
+    copied = copy.deepcopy(capped)
+    recapped, _ = cap_text(copied, 50)
+
+    assert source_text_chars(copied) == len(source)
+    assert source_text_ranges(copied) == source_text_ranges(capped)
+    assert source_text_chars(recapped) == len(source)
+    assert source_text_ranges(recapped)[0][0] == 0
+    assert source_text_ranges(recapped)[-1][1] == len(source)
 
 
 def test_question_wire_payloads_count_exact_fields_and_are_idempotent() -> None:

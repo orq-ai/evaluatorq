@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from evaluatorq.common.model_input import (
     JEV_STATE_CHARS,
-    cap_text,
     effective_trace_input_chars,
+    fit_classifier_input,
     is_jev_model,
     jev_state,
+    source_text_ranges,
 )
 from evaluatorq.common.trace_document import prompt_messages
 from evaluatorq.contracts import tool_result_to_text
@@ -51,6 +53,7 @@ def project_trace(
     *,
     model: str = 'typesafe/jev-latest',
     trace_input_chars: int | None = None,
+    question_payloads: Mapping[str, Any] | None = None,
 ) -> TraceProjection:
     """Render complete readable source text within the persisted classifier-input cap."""
     character_cap = effective_trace_input_chars() if trace_input_chars is None else trace_input_chars
@@ -66,6 +69,16 @@ def project_trace(
         )
         state_cap = min(JEV_STATE_CHARS, character_cap - state_overhead)
         payload = {'trace_status': trace.status, **jev_state(source, global_char_cap=state_cap)}
+        if question_payloads is not None:
+            fitted_payload = fit_classifier_input(
+                payload,
+                model=model,
+                questions=question_payloads,
+                global_char_cap=character_cap,
+            )
+            if not isinstance(fitted_payload, dict):
+                raise TypeError('Jev classifier state must be an object')
+            payload = fitted_payload
         serialized = serialize_projection(payload)
         represented = {entry['index'] for entry in payload.get('messages', []) if isinstance(entry, dict)}
         for entry in payload.get('messages', []):
@@ -87,42 +100,38 @@ def project_trace(
             ),
         )
 
-    return _project_full_conversation(trace, character_cap)
+    return _project_full_conversation(trace, character_cap, model=model, question_payloads=question_payloads)
 
 
-def _project_full_conversation(trace: TraceRecord | TraceDocument, character_cap: int) -> TraceProjection:
+def _project_full_conversation(
+    trace: TraceRecord | TraceDocument,
+    character_cap: int,
+    *,
+    model: str,
+    question_payloads: Mapping[str, Any] | None,
+) -> TraceProjection:
     """Render the complete readable conversation for non-Jev classifiers under the saved cap."""
-    from evaluatorq.insights.transcript import full_conversation_view
+    from evaluatorq.insights.transcript import full_conversation_view_with_message_spans
 
-    conversation = full_conversation_view(trace, budget=character_cap)
-    original_conversation = conversation
-    payload = {'trace_status': trace.status, 'conversation': conversation}
+    original_conversation, message_spans, source_message_count = full_conversation_view_with_message_spans(trace)
+    payload = {'trace_status': trace.status, 'conversation': original_conversation}
+    fitted_payload = fit_classifier_input(
+        payload,
+        model=model,
+        questions=question_payloads if question_payloads is not None else {},
+        global_char_cap=character_cap,
+    )
+    if not isinstance(fitted_payload, dict):
+        raise TypeError('non-Jev classifier state must be an object')
+    payload = fitted_payload
+    conversation = payload['conversation']
     serialized = serialize_projection(payload)
-    if len(serialized) > character_cap:
-        empty_payload = {'trace_status': trace.status, 'conversation': ''}
-        empty_serialized = serialize_projection(empty_payload)
-        if len(empty_serialized) > character_cap:
-            raise ValueError('trace_input_chars is too small for required classifier state metadata')
-        best_conversation = ''
-        best_payload = empty_payload
-        best_serialized = empty_serialized
-        low = len('[... 0 chars left out ...]')
-        high = len(conversation)
-        while low <= high:
-            text_cap = (low + high) // 2
-            candidate = cap_text(conversation, text_cap)[0]
-            candidate_payload = {'trace_status': trace.status, 'conversation': candidate}
-            candidate_serialized = serialize_projection(candidate_payload)
-            if len(candidate_serialized) <= character_cap:
-                best_conversation = candidate
-                best_payload = candidate_payload
-                best_serialized = candidate_serialized
-                low = text_cap + 1
-            else:
-                high = text_cap - 1
-        conversation = best_conversation
-        payload = best_payload
-        serialized = best_serialized
+    represented_ranges = source_text_ranges(conversation)
+    represented = {
+        index
+        for line_start, line_end, index in message_spans
+        if any(line_start < range_end and line_end > range_start for range_start, range_end in represented_ranges)
+    }
     source = prompt_messages(trace)
     source_bytes = sum(_source_message_bytes(message) for message in source)
     if conversation != original_conversation:
@@ -135,7 +144,7 @@ def _project_full_conversation(trace: TraceRecord | TraceDocument, character_cap
         payload=payload,
         serialized=serialized,
         estimated_tokens=estimate_tokens(serialized),
-        omitted_messages=0,
+        omitted_messages=max(0, source_message_count - len(represented)),
         omitted_bytes=max(0, source_bytes - len(serialized.encode('utf-8'))),
     )
 

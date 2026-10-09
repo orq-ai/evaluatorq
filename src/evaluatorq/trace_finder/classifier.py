@@ -41,12 +41,17 @@ def _question_key(index: int) -> str:
     return f'd{index}'
 
 
+def classifier_questions(dimensions: Sequence[CompiledQuery]) -> dict[str, Any]:
+    """Return the keyed question objects used by every trace-classifier request."""
+    return {_question_key(index): dimension.task for index, dimension in enumerate(dimensions)}
+
 def build_classifier_evaluator(
     dimensions: Sequence[CompiledQuery],
     *,
     model: str,
     client: AsyncOpenAI,
     global_char_cap: int | None = None,
+    question_payloads: Mapping[str, Any] | None = None,
 ) -> Evaluator:
     """Configure one EvaluatorQ judge that asks every dimension about the exact projected state.
 
@@ -54,8 +59,7 @@ def build_classifier_evaluator(
     keeps one single-seat jury result per dimension, in dimension order.
     """
 
-    questions = {_question_key(index): dimension.task for index, dimension in enumerate(dimensions)}
-    question_payloads = {key: question.model_dump(mode='json') for key, question in questions.items()}
+    questions = classifier_questions(dimensions) if question_payloads is None else question_payloads
     input_cap = global_char_cap if global_char_cap is not None else effective_trace_input_chars()
     cfg = LLMCallConfig(model=model, timeout_ms=90_000)
 
@@ -65,7 +69,7 @@ def build_classifier_evaluator(
         state = fit_classifier_input(
             state,
             model=model,
-            questions=question_payloads,
+            questions=questions,
             global_char_cap=input_cap,
         )
         if debug_enabled():
@@ -360,6 +364,7 @@ async def run_classifier(
     parallelism: int,
     on_complete: Callable[[TraceClassification], Awaitable[None]],
     trace_input_chars: int | None = None,
+    question_payloads: Mapping[str, Any] | None = None,
 ) -> list[TraceClassification]:
     """Evaluate all selected traces, forwarding each terminal result exactly once.
 
@@ -380,6 +385,7 @@ async def run_classifier(
         model=model,
         client=client,
         global_char_cap=trace_input_chars,
+        question_payloads=question_payloads,
     )
 
     async def complete(result: DataPointResult) -> None:

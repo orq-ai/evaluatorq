@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from evaluatorq.common.model_input import fit_classifier_input, serialized_question_chars
+from evaluatorq.insights.transcript import full_conversation_view_with_message_spans
 from evaluatorq.trace_finder.models import TraceRecord
-from evaluatorq.trace_finder.projection import estimate_tokens, project_trace
+from evaluatorq.trace_finder.projection import estimate_tokens, project_trace, serialize_projection
 from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 
 
@@ -102,7 +104,57 @@ def test_non_jev_projection_fits_escaped_content_by_serialized_size() -> None:
     assert len(projection.serialized) <= 5_000
     assert 'ESCAPED-HEAD' in projection.payload['conversation']
     assert 'ESCAPED-TAIL' in projection.payload['conversation']
+    assert projection.omitted_messages == 0
     assert '[... ' in projection.payload['conversation']
+
+def test_non_jev_projection_counts_wholly_omitted_source_messages() -> None:
+    trace = _trace((
+        {'role': 'user', 'content': 'BEGIN-' + 'alpha ' * 1_000},
+        {'role': 'assistant', 'content': 'MIDDLE-ONLY-' + 'middle ' * 1_000},
+        {'role': 'user', 'content': 'END-' + 'omega ' * 1_000},
+    ))
+
+    projection = project_trace(trace, model='openai/gpt-6-luna', trace_input_chars=4_096)
+
+    assert 'BEGIN-' in projection.payload['conversation']
+    assert 'omega omega' in projection.payload['conversation']
+    assert 'MIDDLE-ONLY-' not in projection.payload['conversation']
+    assert projection.omitted_messages == 1
+
+
+def test_non_jev_projection_fits_state_and_selected_questions_under_global_cap() -> None:
+    character_cap = 4_096
+    base_questions = {'d0': {'kind': 'score', 'instructions': None}}
+    base_question_chars = serialized_question_chars(base_questions)
+    question_payloads = {
+        'd0': {'kind': 'score', 'instructions': 'q' * (1_042 - base_question_chars + len('""'))}
+    }
+    trace = _trace(({'role': 'user', 'content': 'SOURCE-HEAD' + 'x' * 10_000 + 'SOURCE-TAIL'},))
+    original_content = trace.messages[0]['content']
+    rendered, _, _ = full_conversation_view_with_message_spans(trace)
+    captured_state = fit_classifier_input(
+        {'trace_status': trace.status, 'conversation': rendered},
+        model='openai/gpt-6-luna',
+        questions=question_payloads,
+        global_char_cap=character_cap,
+    )
+    assert isinstance(captured_state, dict)
+
+    projection = project_trace(
+        trace,
+        model='openai/gpt-6-luna',
+        trace_input_chars=character_cap,
+        question_payloads=question_payloads,
+    )
+
+    assert serialized_question_chars(question_payloads) == 1_042
+    assert projection.payload == captured_state
+    assert projection.serialized == serialize_projection(captured_state)
+    assert len(projection.serialized) == 3_054
+    assert len(projection.serialized) + serialized_question_chars(question_payloads) == character_cap
+    assert 'SOURCE-HEAD' in projection.payload['conversation']
+    assert 'SOURCE-TAIL' in projection.payload['conversation']
+    assert trace.messages[0]['content'] == original_content
 
 def test_token_estimate_uses_four_characters_per_estimated_token() -> None:
     assert estimate_tokens('a' * 4_001) == 1_001

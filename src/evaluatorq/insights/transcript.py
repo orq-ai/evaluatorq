@@ -47,9 +47,6 @@ if TYPE_CHECKING:
     from evaluatorq.trace_finder.models import TraceRecord
 
 TOOL_INPUT_CHARS = 300
-OPENING_SHARE = 0.4
-# Cut at most this share of a non-Jev tool-activity view from the middle; longer views are split into chunks.
-MAX_CUT_SHARE = 0.3
 RISKY_COMMAND_CHARS = 300
 # Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
 SHELL_OUTPUT_CHARS = 300
@@ -198,10 +195,28 @@ def tool_inventory(trace: TraceRecord | TraceDocument) -> str:
     return '\n'.join(lines)
 
 
+def full_conversation_view_with_message_spans(
+    trace: TraceRecord | TraceDocument,
+) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
+    """Return complete rendered text, source-message spans and total source-message count."""
+    return _render_full_conversation(trace, capture_message_spans=True)
+
+
 def full_conversation_view(trace: TraceRecord | TraceDocument, budget: int | None = None) -> str:
     """Render source messages, tool inputs, and complete tool results for model input."""
+    rendered, _, _ = _render_full_conversation(trace, capture_message_spans=False)
+    cap = budget if budget is not None else effective_trace_input_chars()
+    return cap_text(rendered, cap)[0]
+
+
+def _render_full_conversation(
+    trace: TraceRecord | TraceDocument,
+    *,
+    capture_message_spans: bool,
+) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
     messages = prompt_messages(trace)
     lines: list[str] = []
+    line_indexes = [] if capture_message_spans else None
     for index, message in enumerate(messages):
         role = message.get('role', 'unknown')
         if role == 'tool':
@@ -210,18 +225,30 @@ def full_conversation_view(trace: TraceRecord | TraceDocument, budget: int | Non
             result = scrub_known_secrets(rendered)
             result = _REMINDER.sub('[harness reminder omitted]', result)
             lines.append(f'{index} tool result {message.get("tool_call_id", "")}: {result}')
+            if line_indexes is not None:
+                line_indexes.append(index)
         else:
             content = scrub_known_secrets(coerce_content_text(message.get('content')))
             content = _REMINDER.sub('[harness reminder omitted]', content)
             if content.strip():
                 lines.append(f'{index} {role}: {content}')
+                if line_indexes is not None:
+                    line_indexes.append(index)
         for call in message.get('tool_calls') or []:
             name = _call_name(call)
             arguments = _REMINDER.sub('[harness reminder omitted]', scrub_known_secrets(_raw_arguments(call)))
             lines.append(f'{index} tool input {name}: {arguments}')
-    cap = budget if budget is not None else effective_trace_input_chars()
-    return cap_text('\n'.join(lines), cap)[0]
-
+            if line_indexes is not None:
+                line_indexes.append(index)
+    conversation = '\n'.join(lines)
+    if line_indexes is None:
+        return conversation, (), len(messages)
+    spans = []
+    offset = 0
+    for line, index in zip(lines, line_indexes, strict=True):
+        spans.append((offset, offset + len(line), index))
+        offset += len(line) + 1
+    return conversation, tuple(spans), len(messages)
 
 @overload
 def tool_activity_chunks(
@@ -301,10 +328,9 @@ def tool_activity_chunks(
         if len('No tool calls.') > chunk_budget:
             raise ValueError('classifier questions leave no non-Jev state budget for tool activity')
         return ['No tool calls.']
-    if sum(len(line) + 1 for line in lines) * (1 - MAX_CUT_SHARE) <= chunk_budget:
-        fitted = _fit(lines, chunk_budget, keep_opening_users=True)
-        if len(fitted) <= chunk_budget:
-            return [fitted]
+    full_view_chars = sum(len(line) for line in lines) + len(lines) - 1
+    if full_view_chars <= chunk_budget:
+        return ['\n'.join(lines)]
     return _chunk(lines, chunk_budget)
 
 
@@ -559,34 +585,6 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
     return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
 
 
-def _fit(lines: list[str], budget: int, *, keep_opening_users: bool) -> str:
-    """Join `lines`, cutting from the middle when over `budget`; the opening user turns always survive."""
-    text = '\n'.join(lines)
-    if len(text) <= budget:
-        return text
-    opening: list[str] = []
-    index = 0
-    if keep_opening_users:
-        # Everything up to the first agent line: the task as the user stated it.
-        while index < len(lines) and lines[index].startswith('USER:'):
-            opening.append(lines[index])
-            index += 1
-    head_budget = max(int(budget * OPENING_SHARE), sum(len(line) + 1 for line in opening))
-    used = sum(len(line) + 1 for line in opening)
-    while index < len(lines) and used + len(lines[index]) + 1 <= head_budget:
-        opening.append(lines[index])
-        used += len(lines[index]) + 1
-        index += 1
-    closing: list[str] = []
-    remaining = budget - used - 60
-    for line in reversed(lines[index:]):
-        if len(line) + 1 > remaining:
-            break
-        closing.append(line)
-        remaining -= len(line) + 1
-    closing.reverse()
-    omitted = len(lines) - len(opening) - len(closing)
-    return '\n'.join([*opening, f'[... {omitted} lines omitted ...]', *closing])
 
 
 def _tool_calls(trace: TraceRecord | TraceDocument) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:

@@ -12,6 +12,7 @@ from loguru import logger
 
 from evaluatorq import DataPoint, DataPointResult, EvaluationResult, EvaluatorScore, JobResult
 from evaluatorq.common.judge import EvaluatorResponsePayload, JudgeOutcome
+from evaluatorq.common.model_input import serialized_chars, serialized_question_chars
 from evaluatorq.trace_finder import classifier
 from evaluatorq.trace_finder.classifier import (
     build_datapoint,
@@ -21,8 +22,8 @@ from evaluatorq.trace_finder.classifier import (
     run_classifier,
 )
 from evaluatorq.trace_finder.debug import cli_debug
-from evaluatorq.trace_finder.models import CompiledQuery, TraceProjection, TraceClassification, TraceRecord
-from evaluatorq.trace_finder.projection import serialize_projection
+from evaluatorq.trace_finder.models import CompiledQuery, TraceClassification, TraceProjection, TraceRecord
+from evaluatorq.trace_finder.projection import project_trace, serialize_projection
 
 
 def _compiled(kind: str = 'choice') -> CompiledQuery:
@@ -164,8 +165,75 @@ async def test_build_classifier_evaluator_passes_exact_question_and_state(
     assert result.value == {'d0': expected}
     assert calls[0]['model'] == 'typesafe/jev-latest'
     assert calls[0]['cfg'].timeout_ms == 90_000
+
     assert calls[0]['state'] == _projection().payload
     assert calls[0]['questions'] == {'d0': compiled.task}
+
+
+@pytest.mark.asyncio
+async def test_run_classifier_scores_the_same_question_fitted_state_that_was_projected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = 'openai/gpt-6-luna'
+    cap = 4_096
+    dimension = _compiled('noul')
+    dimension = dimension.model_copy(update={'task': dimension.task.model_copy(update={'instructions': 'Q' * 1_002})})
+    dimensions = (dimension,)
+    question_payloads = classifier.classifier_questions(dimensions)
+    question_chars = serialized_question_chars(question_payloads)
+    trace = _trace().model_copy(update={'messages': ({'role': 'user', 'content': 'x' * 20_000},)})
+    unfit_projection = project_trace(trace, model=model, trace_input_chars=cap)
+    assert len(unfit_projection.serialized) > cap - question_chars
+    projection = project_trace(
+        trace,
+        model=model,
+        trace_input_chars=cap,
+        question_payloads=question_payloads,
+    )
+    scorer_calls: list[dict[str, Any]] = []
+    completed: list[TraceClassification] = []
+
+    async def fake_run_classify_judges(**kwargs: Any) -> dict[str, JudgeOutcome]:
+        scorer_calls.append(kwargs)
+        return {
+            key: JudgeOutcome(
+                payload=EvaluatorResponsePayload(value=True, explanation='The customer asks to cancel.'),
+                raw_output={'type': 'noul', 'noul': True},
+                endpoint='classify',
+            )
+            for key in kwargs['questions']
+        }
+
+    async def fake_evaluatorq(name: str, **kwargs: Any) -> None:
+        assert name == 'classifier-trace-finder'
+        scorer = kwargs['evaluators'][0]['scorer']
+        for datapoint in kwargs['data']:
+            await scorer({'data': datapoint, 'output': 'classifier state prepared'})
+            await kwargs['on_datapoint_complete'](_result(dimensions=dimensions, values=[True]))
+
+    async def on_complete(classification: TraceClassification) -> None:
+        completed.append(classification)
+
+    monkeypatch.setattr(classifier, 'run_classify_judges', fake_run_classify_judges)
+    monkeypatch.setattr(classifier, 'evaluatorq', fake_evaluatorq)
+
+    await run_classifier(
+        (trace,),
+        {trace.trace_id: projection},
+        dimensions,
+        model=model,
+        client=cast(Any, 'client'),
+        parallelism=1,
+        on_complete=on_complete,
+        trace_input_chars=cap,
+        question_payloads=question_payloads,
+    )
+
+    assert completed[0].matched is True
+    assert scorer_calls[0]['questions'] is question_payloads
+    assert scorer_calls[0]['state'] == projection.payload
+    assert len(projection.serialized) == len(serialize_projection(scorer_calls[0]['state']))
+    assert serialized_chars(scorer_calls[0]['state']) + question_chars <= cap
 
 
 @pytest.mark.parametrize(
