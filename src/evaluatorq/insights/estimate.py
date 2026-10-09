@@ -1,7 +1,8 @@
 """Fixed-rate estimate of an Insights run's traces, cost and time, shown before the run starts.
 
-Every figure is a ceiling built from a cap the code already enforces, so the result is "up to". A
-count, price or rate that cannot be grounded stays unknown and is named in `RunEstimate.unknowns`.
+Cost estimates use configured input caps and named assumptions; some per-stage figures are
+baselines rather than ceilings. A count, price or rate that cannot be grounded stays unknown and
+is named in `RunEstimate.unknowns`.
 """
 
 from __future__ import annotations
@@ -13,10 +14,15 @@ from typing import TYPE_CHECKING, Literal
 
 from loguru import logger
 
+from evaluatorq.common.model_input import (
+    CHARS_PER_ESTIMATED_TOKEN,
+    JEV_STATE_ALL_QUESTIONS_CHARS,
+    effective_trace_input_chars,
+    is_jev_model,
+)
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.contracts import ManifestStatus
 from evaluatorq.insights.summarize import SUMMARY_MAX_TOKENS
-from evaluatorq.insights.transcript import VIEW_BUDGET
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -28,27 +34,11 @@ if TYPE_CHECKING:
 
 TraceSource = Literal['recent', 'query', 'finder', 'snapshot']
 
-# `transcript.py` sizes VIEW_BUDGET characters at about 25k tokens, "near 3 characters a token".
-CHARS_PER_TOKEN = 3
-# The classifier reads the conversation view; `labeling.py` makes one `/classify` call per trace.
-LABEL_INPUT_TOKENS = VIEW_BUDGET // CHARS_PER_TOKEN
-# One classify answer: the recorded usage in `tests/common/test_judge_classify.py::_usage` is
-# `output_tokens: 4` for a single-question reply. A trace's call carries one answer per question.
+# Character caps divided by four are estimates, not measurements from a model tokenizer.
+CHARS_PER_TOKEN = CHARS_PER_ESTIMATED_TOKEN
 LABEL_ANSWER_TOKENS = 4
-# `summarize.py::_build_prompt` sends `conversation_view(trace)` with the default VIEW_BUDGET, not the
-# `projection.MAX_TOKEN_BUDGET` projection. Prompt wording around the view is not counted.
-SUMMARY_INPUT_TOKENS = VIEW_BUDGET // CHARS_PER_TOKEN
-# `summarize.py` passes this as `max_tokens` for the summary call.
 SUMMARY_OUTPUT_TOKENS = SUMMARY_MAX_TOKENS
-# Each trace's summary is embedded once per selected dimension; the summary cap bounds its length.
 EMBEDDING_INPUT_TOKENS = SUMMARY_MAX_TOKENS
-
-# stage -> (input tokens, output tokens) per trace. Label output is per answer.
-TOKENS_PER_TRACE: Mapping[str, tuple[int, int]] = {
-    'label': (LABEL_INPUT_TOKENS, LABEL_ANSWER_TOKENS),
-    'summary': (SUMMARY_INPUT_TOKENS, SUMMARY_OUTPUT_TOKENS),
-    'embedding': (EMBEDDING_INPUT_TOKENS, 0),
-}
 
 EXCLUDED = ('trace selection (question compiling and filter choice)', 'cluster naming and merging')
 FIRST_RUN_NOTE = 'estimated after your first run'
@@ -210,6 +200,7 @@ def estimate_run(
     parallelism: int,
     query: bool,
     sentiment_selected: bool = False,
+    trace_input_chars: int | None = None,
 ) -> RunEstimate:
     """Cost and time ceilings per stage.
 
@@ -220,6 +211,7 @@ def estimate_run(
     A Question source labels every trace in range but only matches reach later stages, so those
     stages run from zero (label only) to every trace (every trace matches).
     """
+    trace_input_chars = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
     n = bound.n
     unknowns: list[str] = []
     if n is None:
@@ -227,21 +219,30 @@ def estimate_run(
     high = n or 0
     later_low = 0 if query else high
 
-    label_in, label_answer = TOKENS_PER_TRACE['label']
-    summary_in, summary_out = TOKENS_PER_TRACE['summary']
-    embed_in, embed_out = TOKENS_PER_TRACE['embedding']
+    label_chars = (
+        min(trace_input_chars, JEV_STATE_ALL_QUESTIONS_CHARS) if is_jev_model(models.classifier) else trace_input_chars
+    )
+    label_in = label_chars // CHARS_PER_TOKEN
+    label_answer = LABEL_ANSWER_TOKENS
+    summary_in = trace_input_chars // CHARS_PER_TOKEN
+    summary_out = SUMMARY_OUTPUT_TOKENS
+    embed_in, embed_out = EMBEDDING_INPUT_TOKENS, 0
     answers = question_count + (1 if 'sentiment' in dimensions and not sentiment_selected else 0) + (1 if query else 0)
+    if coding:
+        unknowns.append('cost: coding tool activity may require additional classifier chunks')
     label_basis = (
-        f'one classify call per trace: {label_in:,} input tokens (conversation view cap) and '
-        f'{answers} answer{"" if answers == 1 else "s"} of {label_answer} output tokens'
+        f'one classify call per trace: up to {label_in:,} estimated input tokens at four characters per token '
+        'for combined state and serialized questions, '
+        f'and {answers} answer{"s" if answers != 1 else ""} of {label_answer} output tokens'
         + (', including the population-match answer' if query else '')
     )
     coding_basis = (
-        f'upper bound: one more classify call per trace ({label_in:,} input tokens, {label_answer} output tokens), '
-        'timed at the whole label stage'
+        f'baseline: one tool-activity classify request per coding trace ({label_in:,} input tokens, '
+        f'{label_answer} output tokens); long activity can split into additional chunks'
     )
     summary_basis = (
-        f'{summary_in:,} input tokens (conversation view cap), up to {summary_out:,} output tokens (max_tokens)'
+        f'up to {summary_in:,} estimated input tokens at four characters per token, '
+        f'and up to {summary_out:,} output tokens (max_tokens)'
     )
     embed_basis = f'one embedding per trace, up to {embed_in:,} tokens (summary length cap)'
     # (name, model, tokens in, tokens out, traces low, basis)

@@ -31,8 +31,7 @@ from evaluatorq.dashboard.insights_launch import (
 )
 from evaluatorq.dashboard.insights_uploads import (
     MAX_INSIGHTS_UPLOAD_BYTES,
-    cleanup_uploaded_source,
-    is_uploaded_source,
+    retain_uploaded_source,
 )
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
@@ -393,6 +392,7 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             labels=spec.label_specs(),
             dimensions=spec.dimension_names(),
             parallelism=spec.parallelism,
+            trace_input_chars=spec.trace_input_chars,
             coding_labels=spec.coding_labels,
             run_name=payload.run_name,
             runs_dir=payload.runs_dir,
@@ -410,13 +410,14 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             await close()
 
 
-def _cleanup_consumed_upload(runs_dir: Path, source: str, finder_export: str, snapshot_path: str) -> None:
-    """Delete only a route-owned source artifact after its pipeline attempt."""
+def _retain_consumed_upload(runs_dir: Path, source: str, finder_export: str, snapshot_path: str) -> None:
+    """Extend the private source copy's seven-day retention after success or failure."""
     source_value = finder_export if source == 'finder' else snapshot_path
     if source_value:
-        source_path = Path(source_value)
-        if is_uploaded_source(runs_dir, source_path):
-            cleanup_uploaded_source(runs_dir, source_path)
+        try:
+            retain_uploaded_source(runs_dir=runs_dir, path=Path(source_value))
+        except (OSError, ValueError):
+            logger.warning('Could not extend retention of an Insights uploaded source.')
 
 
 def main() -> int:
@@ -472,7 +473,7 @@ def main() -> int:
         if payload is not None and payload.spec.source == 'finder':
             _cleanup_finder_reference(payload.runs_dir, payload.run_id)
         if payload is not None:
-            _cleanup_consumed_upload(
+            _retain_consumed_upload(
                 payload.runs_dir, payload.spec.source, payload.spec.finder_export, payload.spec.snapshot_path
             )
         elif payload is None and manifest_env:

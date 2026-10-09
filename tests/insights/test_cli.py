@@ -65,7 +65,7 @@ def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
 ) -> None:
     path = tmp_path / 'traces.json'
     trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 600_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': 'long trace body with stable context. ' * 20_000}, {'role': 'assistant', 'content': 'done'})}
     )
     path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
     monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
@@ -74,8 +74,8 @@ def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
     result = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
 
     assert result.exit_code == 0, result.output
-    assert '1 of 1 trace exceeds' in result.output
-    assert '1 of 2 whole messages omitted (50.0%)' in result.output
+    assert '1 of 1 traces hit a summary or classifier input cap' in result.output
+    assert 'characters' in result.output
 
 
 def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any) -> None:
@@ -100,7 +100,7 @@ def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     assert result.exit_code == 0, result.output
     assert captured['population'].snapshot_path == path
-    assert result.output.count('Model input projection:') == 1
+    assert result.output.count('Model input coverage:') == 1
 
 
 def test_snapshot_cli_rejects_empty_and_conflicting_sources(tmp_path: Path) -> None:

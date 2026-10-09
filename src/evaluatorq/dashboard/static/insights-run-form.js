@@ -69,6 +69,7 @@
       element.hidden = words(element.dataset.source).indexOf(active) < 0;
     });
     updateCompilerModel(ctx);
+    if (active === 'file') loadRecentFiles(ctx);
   }
 
   function updateCompilerModel(ctx) {
@@ -118,34 +119,81 @@
     return '';
   }
 
-  async function measureSnapshot(ctx) {
+  function filePreviewKey(form, path, kind) {
+    if (kind !== 'snapshot') return JSON.stringify([kind, path]);
+    return JSON.stringify([
+      kind, path, field(form, 'classifier_model').value, field(form, 'trace_input_chars').value,
+      checkedValues(form, 'dimensions'), checkedValues(form, 'labels'), checkedValues(form, 'coding_labels'),
+      field(form, 'custom_labels_json').value,
+    ]);
+  }
+
+  async function measureSelectedFile(ctx) {
+    clearTimeout(ctx.previewTimer);
+    ctx.previewTimer = null;
     const form = ctx.form;
     const traceFile = field(form, 'trace_file');
-    const path = traceFile.dataset.kind === 'snapshot' ? traceFile.value.trim() : '';
+    const kind = traceFile.dataset.kind;
+    const path = kind === 'snapshot' || kind === 'finder' ? traceFile.value.trim() : '';
     const host = form.querySelector('#insights-snapshot-preview');
     if (!path) {
+      if (ctx.snapshotAbort) ctx.snapshotAbort.abort();
+      ctx.snapshotAbort = null;
+      ctx.measuredKey = null;
+      ++ctx.previewSequence;
       host.textContent = '';
       return false;
     }
-    if (ctx.measuredPath === path) return true;
+    const key = filePreviewKey(form, path, kind);
+    if (ctx.measuredKey === key) return true;
     if (ctx.snapshotAbort) ctx.snapshotAbort.abort();
     const abort = new AbortController();
     ctx.snapshotAbort = abort;
-    host.textContent = 'Measuring the projected input…';
+    const selection = ctx.fileSelectionSequence;
+    const sequence = ++ctx.previewSequence;
+    host.textContent = kind === 'finder' ? 'Checking the Finder export…' : 'Measuring model input characters…';
     try {
-      const body = new URLSearchParams({csrf: field(form, 'csrf').value, snapshot_path: path});
-      const response = await fetch('/insights/snapshot-preview', {method: 'POST', body: body, signal: abort.signal});
+      const body = new URLSearchParams({csrf: field(form, 'csrf').value});
+      body.set(kind === 'finder' ? 'finder_path' : 'snapshot_path', path);
+      if (kind === 'snapshot') {
+        body.set('trace_input_chars', field(form, 'trace_input_chars').value);
+        body.set('classifier_model', field(form, 'classifier_model').value);
+        ['dimensions', 'labels', 'coding_labels'].forEach(function (name) {
+          checkedValues(form, name).forEach(function (value) { body.append(name, value); });
+        });
+        body.set('custom_labels_json', field(form, 'custom_labels_json').value);
+      }
+      const endpoint = kind === 'finder' ? '/insights/finder-preview' : '/insights/snapshot-preview';
+      const response = await fetch(endpoint, {method: 'POST', body: body, signal: abort.signal});
       const markup = await response.text();
-      if (ctx.snapshotAbort !== abort) return false;
+      if (ctx.snapshotAbort !== abort || selection !== ctx.fileSelectionSequence || sequence !== ctx.previewSequence
+          || key !== filePreviewKey(form, path, kind)) return false;
       host.innerHTML = markup;
-      if (response.ok) ctx.measuredPath = path;
+      if (response.ok) ctx.measuredKey = key;
       return response.ok;
     } catch (failure) {
-      if (failure.name !== 'AbortError' && ctx.snapshotAbort === abort) host.textContent = 'Could not measure this trace file.';
+      if (failure.name !== 'AbortError' && ctx.snapshotAbort === abort) host.textContent = 'Could not check this trace file.';
       return false;
     } finally {
       if (ctx.snapshotAbort === abort) ctx.snapshotAbort = null;
     }
+  }
+
+  function scheduleFilePreview(ctx) {
+    const traceFile = field(ctx.form, 'trace_file');
+    if (activeSource(ctx.form) !== 'file') return;
+    const kind = traceFile.dataset.kind;
+    const path = kind === 'snapshot' ? traceFile.value.trim() : '';
+    if (!path || ctx.measuredKey === filePreviewKey(ctx.form, path, kind)) return;
+    if (ctx.snapshotAbort) ctx.snapshotAbort.abort();
+    ctx.snapshotAbort = null;
+    ++ctx.previewSequence;
+    ctx.form.querySelector('#insights-snapshot-preview').textContent = 'Updating model input characters…';
+    clearTimeout(ctx.previewTimer);
+    ctx.previewTimer = setTimeout(function () {
+      ctx.previewTimer = null;
+      measureSelectedFile(ctx);
+    }, REFRESH_DELAY_MS);
   }
 
   function facetKey(form) {
@@ -288,6 +336,7 @@
       return '<span class="tg on" data-custom="' + name + '"><span class="tg-title">' + name + '</span><small>custom</small>'
         + '<button type="button" data-cq-remove="' + name + '" aria-label="Remove question ' + name + '">&times;</button></span>';
     }).join('');
+    scheduleFilePreview(ctx);
   }
 
   function editor(ctx) {
@@ -342,10 +391,50 @@
     resetEditor(ctx);
   }
 
+  async function loadRecentFiles(ctx, force) {
+    if (ctx.recentFilesLoaded && !force) return;
+    ctx.recentFilesLoaded = true;
+    const sequence = ++ctx.recentFilesSequence;
+    const host = ctx.form.querySelector('[data-recent-files]');
+    try {
+      const response = await fetch('/insights/files');
+      if (!response.ok) throw new Error('Recent trace files could not be loaded.');
+      const markup = await response.text();
+      if (sequence === ctx.recentFilesSequence) host.innerHTML = markup;
+    } catch (failure) {
+      if (sequence === ctx.recentFilesSequence) {
+        ctx.recentFilesLoaded = false;
+        host.innerHTML = '<p class="insights-muted" role="status">Recent trace files could not be loaded. '
+          + '<button type="button" class="irf-btn" data-retry-files>Retry</button></p>';
+      }
+    }
+  }
+
+  function chooseFile(ctx, path, kind, name) {
+    ++ctx.fileSelectionSequence;
+    if (ctx.snapshotAbort) ctx.snapshotAbort.abort();
+    ctx.snapshotAbort = null;
+    ctx.measuredKey = null;
+    clearTimeout(ctx.previewTimer);
+    ctx.previewTimer = null;
+    ++ctx.previewSequence;
+    const form = ctx.form;
+    const traceFile = field(form, 'trace_file');
+    traceFile.value = path;
+    traceFile.dataset.kind = kind;
+    form.querySelector('[data-file-name]').value = name;
+    form.querySelector('[data-file-status]').textContent = kind === 'finder' ? 'Finder export is ready.' : 'Trace snapshot is ready.';
+    form.querySelector('#insights-snapshot-preview').textContent = '';
+    showError(ctx, '');
+    scheduleRefresh(ctx);
+    measureSelectedFile(ctx);
+  }
+
   async function upload(ctx, input) {
     const form = ctx.form;
     const file = input.files && input.files[0];
     if (!file) return;
+    const selection = ++ctx.fileSelectionSequence;
     const status = form.querySelector('[data-file-status]');
     status.textContent = 'Uploading…';
     try {
@@ -353,21 +442,14 @@
       body.set('csrf', field(form, 'csrf').value);
       body.set('file', file);
       const response = await fetch('/insights/uploads', {method: 'POST', body: body});
-      const result = await response.json();
+      let result;
+      try { result = await response.json(); } catch (failure) { throw new Error('Upload failed.'); }
+      if (selection !== ctx.fileSelectionSequence) return;
       if (!response.ok) throw new Error(result.error || 'Upload failed.');
-      const finder = result.kind === 'finder';
-      const traceFile = field(form, 'trace_file');
-      traceFile.value = result.path;
-      traceFile.dataset.kind = result.kind;
-      form.querySelector('[data-file-name]').value = file.name;
-      status.textContent = finder ? 'Finder export is ready.' : 'Trace snapshot is ready.';
-      showError(ctx, '');
-      scheduleRefresh(ctx);
-      ctx.measuredPath = null;
-      if (finder) form.querySelector('#insights-snapshot-preview').textContent = '';
-      else await measureSnapshot(ctx);
+      chooseFile(ctx, result.path, result.kind, file.name);
+      loadRecentFiles(ctx, true);
     } catch (failure) {
-      status.textContent = failure.message || 'Upload failed.';
+      if (selection === ctx.fileSelectionSequence) status.textContent = failure.message || 'Upload failed.';
     } finally {
       input.value = '';
     }
@@ -379,13 +461,13 @@
       showError(ctx, message);
       return;
     }
-    if (ctx.step === 1 && activeSource(ctx.form) === 'file' && field(ctx.form, 'trace_file').dataset.kind === 'snapshot') {
+    if (ctx.step === 1 && activeSource(ctx.form) === 'file') {
       const next = ctx.form.querySelector('[data-irf-next]');
       next.disabled = true;
-      const measured = await measureSnapshot(ctx);
+      const measured = await measureSelectedFile(ctx);
       next.disabled = false;
       if (!measured) {
-        showError(ctx, 'Could not measure this trace file. Browse to choose a valid snapshot.');
+        showError(ctx, 'Could not check this trace file. Browse to choose a valid file.');
         return;
       }
     }
@@ -432,6 +514,8 @@
     else if (hit('[data-irf-back]')) showStep(ctx, Math.max(1, ctx.step - 1));
     else if ((element = hit('[data-preset]'))) applyPreset(ctx, element);
     else if ((element = hit('[data-browse]'))) ctx.form.querySelector('input[data-file]').click();
+    else if ((element = hit('[data-recent-file]'))) chooseFile(ctx, element.dataset.path, element.dataset.kind, element.dataset.displayName);
+    else if (hit('[data-retry-files]')) loadRecentFiles(ctx, true);
     else if (hit('[data-cq-open]')) {
       const e = editor(ctx);
       e.box.hidden = false;
@@ -450,11 +534,18 @@
   function onChange(ctx, event) {
     const target = event.target;
     if (target.closest('#insights-run-models')) {
+      if (target.name === 'classifier_model') scheduleFilePreview(ctx);
       loadPlan(ctx);
       return;
     }
     if (affectsEstimate(target)) scheduleRefresh(ctx);
     if (target.name === 'source') {
+      ++ctx.fileSelectionSequence;
+      if (ctx.snapshotAbort) ctx.snapshotAbort.abort();
+      ctx.snapshotAbort = null;
+      clearTimeout(ctx.previewTimer);
+      ctx.previewTimer = null;
+      ++ctx.previewSequence;
       showError(ctx, '');
       updateSource(ctx);
       refreshFacets(ctx);
@@ -470,6 +561,7 @@
       e.criteriaField.hidden = target.value === 'noul';
       e.criteria.setAttribute('placeholder', target.value === 'score' ? '1: Lowest\n2: Low\n3: Moderate\n4: High\n5: Highest' : 'option_one\noption_two');
     }
+    if (['dimensions', 'labels', 'coding_labels', 'trace_input_chars'].includes(target.name)) scheduleFilePreview(ctx);
   }
 
   function onKeydown(ctx, event) {
@@ -487,14 +579,16 @@
     if (!form) return null;
     if (contexts.has(form)) return contexts.get(form);
     const ctx = {
-      form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null,
-      planSequence: 0, compactSequence: 0, refreshTimer: null,
+      form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredKey: null,
+      planSequence: 0, compactSequence: 0, refreshTimer: null, previewTimer: null, previewSequence: 0,
+      fileSelectionSequence: 0, recentFilesLoaded: false, recentFilesSequence: 0,
     };
     contexts.set(form, ctx);
     form.addEventListener('click', function (event) { onClick(ctx, event); });
     form.addEventListener('change', function (event) { onChange(ctx, event); });
     form.addEventListener('input', function (event) {
       if (event.target.name === 'query') updateCompilerModel(ctx);
+      if (event.target.name === 'trace_input_chars') scheduleFilePreview(ctx);
       if (affectsEstimate(event.target)) scheduleRefresh(ctx);
     });
     form.addEventListener('keydown', function (event) { onKeydown(ctx, event); });

@@ -17,6 +17,7 @@ from .facets import load_facet_catalogue
 from .filter_selector import FilterSelectionResult, select_filters_with_response
 from .models import FacetSelection
 from .orq_source import OrqTraceSource
+from .projection import project_trace
 from .run_store import RunStore
 
 if TYPE_CHECKING:
@@ -80,7 +81,17 @@ def build_run_store(
         compiler=partial(compile_query, client, role_model('fast', task='finder.compiler')),
         filter_selector=filter_selector,
         population_loader=population_loader,
-        run_classifier=partial(run_classifier, model=classifier_model, client=client),
+        run_classifier=partial(
+            run_classifier,
+            model=classifier_model,
+            client=client,
+            trace_input_chars=settings.trace_input_chars,
+        ),
+        project_trace=partial(
+            project_trace,
+            model=classifier_model,
+            trace_input_chars=settings.trace_input_chars,
+        ),
         close=close,
         explorer=explorer,
         classifier_model=classifier_model,

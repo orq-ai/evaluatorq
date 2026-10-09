@@ -448,8 +448,8 @@ async def test_run_classifier_uses_matching_parallelism_and_calls_terminal_callb
     received: list[tuple[str, dict[str, Any]]] = []
     completed: list[object] = []
     parse_calls = 0
+    builder_kwargs: dict[str, object] = {}
     original_parser = classifier.parse_datapoint_result
-
     def count_parse(result: DataPointResult, dims: Sequence[CompiledQuery]) -> TraceClassification:
         nonlocal parse_calls
         parse_calls += 1
@@ -457,7 +457,8 @@ async def test_run_classifier_uses_matching_parallelism_and_calls_terminal_callb
 
     monkeypatch.setattr(classifier, 'parse_datapoint_result', count_parse)
 
-    def fake_build_classifier_evaluator(*_: object, **__: object) -> dict[str, str]:
+    def fake_build_classifier_evaluator(*_: object, **kwargs: object) -> dict[str, str]:
+        builder_kwargs.update(kwargs)
         return {'name': 'classifier'}
 
     monkeypatch.setattr(classifier, 'build_classifier_evaluator', fake_build_classifier_evaluator)
@@ -481,11 +482,13 @@ async def test_run_classifier_uses_matching_parallelism_and_calls_terminal_callb
         client=cast(Any, 'client'),
         parallelism=3,
         on_complete=on_complete,
+        trace_input_chars=1_234,
     )
 
     assert len(completed) == 1
     assert parse_calls == 1
     assert classifications[0].trace_id == 'trace-1'
+    assert builder_kwargs['global_char_cap'] == 1_234
     assert received[0][0] == 'classifier-trace-finder'
     kwargs = received[0][1]
     assert kwargs['data'] == [build_datapoint(_trace(), _projection())]

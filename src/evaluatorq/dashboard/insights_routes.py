@@ -25,7 +25,13 @@ from evaluatorq.dashboard.insights_estimate_views import (
     render_estimate,
     render_estimate_unavailable,
 )
-from evaluatorq.dashboard.insights_launch import InsightsLaunchSpec, launch_insights, reconcile_stale_worker
+from evaluatorq.dashboard.insights_launch import (
+    InsightsLaunchSpec,
+    _read_approved_finder_export,
+    get_finder_exports_dir,
+    launch_insights,
+    reconcile_stale_worker,
+)
 from evaluatorq.dashboard.insights_review_data import build_review_payload, build_signal_detail_payload
 from evaluatorq.dashboard.insights_review_views import review_page
 from evaluatorq.dashboard.insights_run_form import (
@@ -33,6 +39,7 @@ from evaluatorq.dashboard.insights_run_form import (
     RunFormValues,
     facet_options,
     render_plan,
+    render_recent_files,
     render_run_form,
     render_run_page,
 )
@@ -40,8 +47,11 @@ from evaluatorq.dashboard.insights_uploads import (
     UploadRequestTooLargeError,
     UploadTooLargeError,
     cleanup_expired_uploads,
+    is_uploaded_source,
     limit_request_body,
+    read_uploaded_source,
     receive_upload,
+    recent_trace_files,
     store_upload,
 )
 from evaluatorq.dashboard.insights_views import (
@@ -60,12 +70,18 @@ from evaluatorq.dashboard.security import csrf_token, request_rejected
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.estimate import StageModels, estimate_run, stage_seconds, trace_bound
-from evaluatorq.insights.models import InsightsRun, label_key
-from evaluatorq.insights.population import PopulationError, preview_snapshot
+from evaluatorq.insights.models import InsightsRun, LabelSpec, label_key
+from evaluatorq.insights.population import PopulationError, preview_snapshot, projection_coverage
+from evaluatorq.insights.presets import CODING_CONVERSATION_LABELS, CODING_LABELS, LABEL_PRESETS, SENTIMENT
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
+from evaluatorq.trace_finder.settings import (
+    MAX_TRACE_INPUT_CHARS,
+    MIN_TRACE_INPUT_CHARS,
+    effective_settings,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -74,6 +90,24 @@ if TYPE_CHECKING:
     from evaluatorq.contracts import RunManifest
     from evaluatorq.dashboard.auth import DashboardAuth
     from evaluatorq.insights.estimate import RunEstimate
+
+
+def _snapshot_classifier_questions(form: Any) -> dict[str, dict[str, Any]] | None:
+    """Build the selected question mapping whose serialized payload shares the request cap."""
+    if not any(name in form for name in ('labels', 'dimensions', 'coding_labels', 'custom_labels_json')):
+        return None
+    selected = [LABEL_PRESETS[name] for name in form.getlist('labels')]
+    if 'sentiment' in form.getlist('dimensions') and not any(spec.name == 'sentiment' for spec in selected):
+        selected.append(SENTIMENT)
+    custom = json.loads(str(form.get('custom_labels_json') or '[]'))
+    if not isinstance(custom, list):
+        raise TypeError('custom label questions must be a list')
+    selected.extend(LabelSpec.model_validate(item) for item in custom)
+    coding_by_name = {spec.name: spec for spec in CODING_LABELS[1:]}
+    selected.extend(
+        spec for name in form.getlist('coding_labels') if (spec := coding_by_name[name]) in CODING_CONVERSATION_LABELS
+    )
+    return {spec.name: spec.to_question({}).model_dump(mode='json') for spec in selected}
 
 
 def _entries(
@@ -182,6 +216,7 @@ async def _estimate(app: Any, spec: InsightsLaunchSpec) -> RunEstimate:
         parallelism=spec.parallelism,
         query=spec.source == 'query',
         sentiment_selected='sentiment' in spec.labels,
+        trace_input_chars=spec.trace_input_chars,
     )
 
 
@@ -440,6 +475,16 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             )
         )
 
+    @app.get('/insights/files')
+    async def insights_files() -> Response:
+        try:
+            files = await asyncio.to_thread(
+                recent_trace_files, runs_dir=get_insights_runs_dir(), finder_dir=get_finder_exports_dir()
+            )
+        except (OSError, ValueError):
+            return _html('<p class="insights-error" role="status">Recent trace files could not be loaded.</p>', 422)
+        return _html(render_recent_files(files))
+
     @app.post('/insights/uploads')
     async def insights_upload(req: Request) -> Response:
         cleanup_expired_uploads(get_insights_runs_dir())
@@ -468,7 +513,13 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 )
             try:
                 kind, contents = await receive_upload(upload)
-                path = await asyncio.to_thread(store_upload, get_insights_runs_dir(), contents, kind)
+                path = await asyncio.to_thread(
+                    store_upload,
+                    runs_dir=get_insights_runs_dir(),
+                    contents=contents,
+                    kind=kind,
+                    display_name=upload.filename or '',
+                )
             except UploadTooLargeError as exc:
                 return Response(json.dumps({'error': str(exc)}), status_code=413, media_type='application/json')
             except (OSError, ValueError) as exc:
@@ -489,12 +540,76 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if not raw_path or len(raw_path) > 4096:
             return _html('<p class="insights-error" role="alert">Enter a trace snapshot JSON path.</p>', 422)
         try:
-            coverage = await asyncio.to_thread(preview_snapshot, raw_path)
-        except PopulationError:
+            trace_input_chars = int(str(form.get('trace_input_chars') or effective_settings().trace_input_chars))
+            if not MIN_TRACE_INPUT_CHARS <= trace_input_chars <= MAX_TRACE_INPUT_CHARS:
+                raise ValueError
+        except ValueError:
+            return _html('<p class="insights-error" role="alert">Enter a valid model input character cap.</p>', 422)
+        classifier_model = str(form.get('classifier_model') or '') or None
+        try:
+            classifier_questions = _snapshot_classifier_questions(form)
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return _html(
+                '<p class="insights-error" role="alert">Could not read the selected classifier questions.</p>', 422
+            )
+        try:
+
+            def preview() -> dict[str, Any]:
+                from pathlib import Path
+
+                from evaluatorq.trace_finder.models import Snapshot
+
+                path = Path(raw_path).expanduser()
+                if is_uploaded_source(get_insights_runs_dir(), path):
+                    contents = read_uploaded_source(runs_dir=get_insights_runs_dir(), path=path, kind='snapshot')
+                    return projection_coverage(
+                        Snapshot.model_validate_json(contents).traces,
+                        trace_input_chars=trace_input_chars,
+                        classifier_model=classifier_model,
+                        classifier_questions=classifier_questions,
+                    )
+                return preview_snapshot(
+                    raw_path,
+                    trace_input_chars=trace_input_chars,
+                    classifier_model=classifier_model,
+                    classifier_questions=classifier_questions,
+                )
+
+            coverage = await asyncio.to_thread(preview)
+        except (PopulationError, OSError, ValueError):
             return _html('<p class="insights-error" role="alert">Could not read a valid local trace snapshot.</p>', 422)
         if coverage['n_traces'] == 0:
             return _html('<p class="insights-error" role="alert">This trace snapshot contains no traces.</p>', 422)
         return _html(projection_notice(coverage))
+
+    @app.post('/insights/finder-preview')
+    async def insights_finder_preview(req: Request) -> Response:
+        form = await req.form()
+        rejected = request_rejected(req, form)
+        if rejected:
+            return _html(f'<p class="insights-error" role="alert">{rejected}</p>', 403)
+        raw_path = str(form.get('finder_path', '')).strip()
+        if not raw_path or len(raw_path) > 4096:
+            return _html('<p class="insights-error" role="alert">Choose a Finder export.</p>', 422)
+        try:
+
+            def preview() -> int:
+                from pathlib import Path
+
+                runs_dir = get_insights_runs_dir()
+                path = Path(raw_path).expanduser()
+                if is_uploaded_source(runs_dir, path):
+                    contents = read_uploaded_source(runs_dir=runs_dir, path=path, kind='finder')
+                else:
+                    contents = _read_approved_finder_export(root=get_finder_exports_dir(), path=path)
+                return len(RunExport.model_validate_json(contents).matched_trace_ids)
+
+            matched_count = await asyncio.to_thread(preview)
+        except (OSError, ValueError, RuntimeError):
+            return _html('<p class="insights-error" role="alert">Could not read a valid Finder export.</p>', 422)
+        return _html(
+            f'<p class="insights-projection" role="status">Finder export is ready with {matched_count:,} matched traces.</p>'
+        )
 
     @app.get('/insights/models')
     async def insights_models(req: Request) -> Response:

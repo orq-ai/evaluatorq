@@ -8,19 +8,23 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from evaluatorq.common.model_input import (
+    CHARS_PER_ESTIMATED_TOKEN,
+    JEV_STATE_ALL_QUESTIONS_CHARS,
+    effective_trace_input_chars,
+)
 from evaluatorq.common.model_catalogue import ModelInfo
 from evaluatorq.common.run_manifest import list_manifests, start_manifest
 from evaluatorq.contracts import ManifestStatus, StageRecord
-from evaluatorq.insights import estimate, summarize, transcript
+from evaluatorq.insights import estimate, summarize
 from evaluatorq.insights.estimate import (
-    TOKENS_PER_TRACE,
     RunEstimate,
     StageEstimate,
     StageModels,
+    StageTiming,
     TraceBound,
     estimate_run,
     stage_seconds,
-    StageTiming,
     trace_bound,
 )
 from evaluatorq.trace_finder.models import FacetCatalogue, FacetSelection
@@ -72,18 +76,21 @@ def _estimate(
     parallelism: int = 10,
     query: bool = False,
     sentiment_selected: bool = False,
+    models: StageModels = MODELS,
+    trace_input_chars: int | None = None,
 ) -> RunEstimate:
     return estimate_run(
         bound=bound or TraceBound(n=100, exact=True, basis='x'),
         dimensions=dimensions,
         question_count=question_count,
         coding=coding,
-        models=MODELS,
+        models=models,
         prices=_prices() if prices is None else prices,
         seconds=seconds or {},
         parallelism=parallelism,
         query=query,
         sentiment_selected=sentiment_selected,
+        trace_input_chars=trace_input_chars,
     )
 
 
@@ -140,14 +147,23 @@ def test_finder_and_snapshot_counts_are_exact() -> None:
     assert (snapshot.n, snapshot.exact) == (44, True)
 
 
-def test_token_constants_follow_the_caps_they_derive_from() -> None:
-    assert estimate.LABEL_INPUT_TOKENS == transcript.VIEW_BUDGET // estimate.CHARS_PER_TOKEN
-    assert estimate.SUMMARY_INPUT_TOKENS == transcript.VIEW_BUDGET // estimate.CHARS_PER_TOKEN
-    assert estimate.SUMMARY_OUTPUT_TOKENS == summarize.SUMMARY_MAX_TOKENS
-    assert estimate.EMBEDDING_INPUT_TOKENS == summarize.SUMMARY_MAX_TOKENS
-    assert TOKENS_PER_TRACE['label'] == (estimate.LABEL_INPUT_TOKENS, estimate.LABEL_ANSWER_TOKENS)
-    assert TOKENS_PER_TRACE['summary'] == (estimate.SUMMARY_INPUT_TOKENS, estimate.SUMMARY_OUTPUT_TOKENS)
-    assert TOKENS_PER_TRACE['embedding'] == (estimate.EMBEDDING_INPUT_TOKENS, 0)
+def test_token_estimates_follow_character_caps_and_stage_output_caps() -> None:
+    result = _estimate()
+    input_chars = effective_trace_input_chars()
+    assert estimate.CHARS_PER_TOKEN == CHARS_PER_ESTIMATED_TOKEN == 4
+    assert _row(result, 'label').tokens_in == input_chars // estimate.CHARS_PER_TOKEN
+    assert _row(result, 'summary').tokens_in == input_chars // estimate.CHARS_PER_TOKEN
+    assert _row(result, 'summary').tokens_out == summarize.SUMMARY_MAX_TOKENS
+    assert _row(result, 'dimension:intent').tokens_in == summarize.SUMMARY_MAX_TOKENS
+
+
+def test_jev_classifier_estimate_observes_its_combined_request_character_ceiling() -> None:
+    result = _estimate(
+        models=StageModels(summary='summary-m', classifier='typesafe/jev-latest', embedding='embedding-m'),
+        trace_input_chars=500_000,
+    )
+
+    assert _row(result, 'label').tokens_in == JEV_STATE_ALL_QUESTIONS_CHARS // estimate.CHARS_PER_TOKEN
 
 
 def test_a_changed_cap_moves_the_estimate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,7 +189,7 @@ def test_a_changed_cap_moves_the_estimate(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_the_sentiment_dimension_adds_one_label_answer_unless_already_selected() -> None:
-    _, answer = TOKENS_PER_TRACE['label']
+    answer = estimate.LABEL_ANSWER_TOKENS
     plain = _row(_estimate(dimensions=('intent',)), 'label')
     added = _row(_estimate(dimensions=('sentiment',)), 'label')
     selected = _row(_estimate(dimensions=('sentiment',), sentiment_selected=True), 'label')
@@ -182,15 +198,17 @@ def test_the_sentiment_dimension_adds_one_label_answer_unless_already_selected()
 
 
 def test_a_question_source_counts_the_population_match_answer() -> None:
-    _, answer = TOKENS_PER_TRACE['label']
+    answer = estimate.LABEL_ANSWER_TOKENS
     assert _row(_estimate(query=True), 'label').tokens_out == _row(_estimate(), 'label').tokens_out + answer
     only_match = _row(_estimate(query=True, question_count=0), 'label')
     assert only_match.tokens_out == answer
 
 
-def test_the_coding_label_row_says_it_is_an_upper_bound() -> None:
-    row = _row(_estimate(coding=True), 'label_coding')
-    assert 'upper bound' in row.basis
+def test_the_coding_label_row_names_its_baseline_and_unknown_extra_chunks() -> None:
+    result = _estimate(coding=True)
+    row = _row(result, 'label_coding')
+    assert 'baseline' in row.basis
+    assert 'additional classifier chunks' in result.unknowns[0]
 
 
 def test_no_earlier_manifests_leaves_time_unknown_but_cost_given(tmp_path: Path) -> None:
@@ -266,14 +284,12 @@ def test_a_recorded_parallelism_survives_the_manifest_round_trip(tmp_path: Path)
 
 def test_cost_is_traces_times_tokens_times_each_stages_own_price() -> None:
     result = _estimate(dimensions=('intent',), question_count=2)
-    label_in, label_out = TOKENS_PER_TRACE['label']
-    summary_in, summary_out = TOKENS_PER_TRACE['summary']
-    embed_in, _ = TOKENS_PER_TRACE['embedding']
-    assert _row(result, 'label').cost_high == pytest.approx(100 * (label_in * 0.002 + 2 * label_out * 0.004) / 1000)
-    assert _row(result, 'summary').cost_high == pytest.approx(
-        100 * (summary_in * 0.01 + summary_out * 0.03) / 1000
-    )
-    assert _row(result, 'dimension:intent').cost_high == pytest.approx(100 * embed_in * 0.0001 / 1000)
+    label = _row(result, 'label')
+    summary = _row(result, 'summary')
+    embed = _row(result, 'dimension:intent')
+    assert label.cost_high == pytest.approx(100 * (label.tokens_in * 0.002 + label.tokens_out * 0.004) / 1000)
+    assert summary.cost_high == pytest.approx(100 * (summary.tokens_in * 0.01 + summary.tokens_out * 0.03) / 1000)
+    assert embed.cost_high == pytest.approx(100 * embed.tokens_in * 0.0001 / 1000)
     assert result.cost_high == pytest.approx(sum(_f(row.cost_high) for row in result.rows))
     assert result.unknowns == ()
 
@@ -288,9 +304,11 @@ def test_embedding_cost_scales_with_dimension_count() -> None:
 def test_a_coding_question_adds_one_label_call_per_trace() -> None:
     plain = _estimate(coding=False)
     coding = _estimate(coding=True)
-    label_in, label_out = TOKENS_PER_TRACE['label']
     extra = _row(coding, 'label_coding')
-    assert extra.cost_high == pytest.approx(100 * (label_in * 0.002 + label_out * 0.004) / 1000)
+    plain_label = _row(plain, 'label')
+    assert extra.cost_high == pytest.approx(
+        100 * (plain_label.tokens_in * 0.002 + extra.tokens_out * 0.004) / 1000
+    )
     assert _f(coding.cost_high) == pytest.approx(_f(plain.cost_high) + _f(extra.cost_high))
 
 

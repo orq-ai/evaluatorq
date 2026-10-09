@@ -7,10 +7,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
+from evaluatorq.common.model_input import serialized_question_chars
 
 from evaluatorq.insights.transcript import (
-    conversation_view,
     first_command,
+    full_conversation_view,
     is_risky_command,
     tool_activity_chunks,
     tool_inventory,
@@ -106,40 +107,6 @@ def test_tool_stats_read_a_skill_from_arguments_cut_mid_string() -> None:
 
     assert tool_stats(trace).skills == {'hate': 1}
 
-
-def test_conversation_view_drops_outputs_and_reminders_and_shows_risky_commands_in_full() -> None:
-    view = conversation_view(CODING_TRACE)
-
-    assert view.startswith('USER: Fix the failing parser test.')
-    assert 'injected context' not in view
-    assert '1 failed' not in view  # tool output
-    assert 'Bash: pytest' in view
-    assert 'Bash: `git push --force origin main`' in view
-    assert 'Skill: systematic-debugging' in view
-    assert 'Edit: src/parser.py' in view
-    assert view.endswith('ASSISTANT: Fixed and pushed.')
-
-
-def test_conversation_view_keeps_the_opening_request_and_cuts_the_middle() -> None:
-    turns: list[dict[str, Any]] = [{'role': 'user', 'content': 'THE ORIGINAL TASK'}]
-    for index in range(200):
-        turns.append({'role': 'assistant', 'content': f'step {index} ' + 'x' * 200})
-        turns.append({'role': 'user', 'content': f'reply {index}'})
-    view = conversation_view(_trace(*turns), budget=5_000)
-
-    assert len(view) <= 5_000
-    assert view.startswith('USER: THE ORIGINAL TASK')
-    assert 'lines omitted' in view
-    assert view.rstrip().endswith('reply 199')
-
-
-def test_conversation_view_keeps_a_long_opening_request_over_budget() -> None:
-    request = 'please ' * 500
-    view = conversation_view(
-        _trace({'role': 'user', 'content': request}, {'role': 'assistant', 'content': 'ok'}), budget=1_000
-    )
-
-    assert view.startswith('USER: please please')
 
 
 def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:
@@ -314,3 +281,41 @@ def test_failure_markers_only_apply_to_shell_calls() -> None:
 
     assert 'output shows' not in view
     assert 'result body omitted' in view
+
+
+@pytest.mark.parametrize(
+    ('result', 'expected'),
+    [({'records': [{'name': 'alpha'}]}, '"name": "alpha"'), ([{'id': 7}, 'beta'], '"id": 7')],
+)
+def test_full_conversation_renders_structured_tool_results(result: Any, expected: str) -> None:
+    trace = _trace(
+        {'role': 'user', 'content': 'Find the record.'},
+        {'role': 'assistant', 'tool_calls': [_call('lookup-1', 'lookup', {'query': 'record'})]},
+        {'role': 'tool', 'tool_call_id': 'lookup-1', 'content': result},
+    )
+
+    rendered = full_conversation_view(trace)
+
+    assert 'tool result lookup-1:' in rendered
+    assert expected in rendered
+
+def test_full_conversation_renders_structured_and_multimodal_message_content() -> None:
+    structured = {'text': 'label', 'data': {'records': [{'id': 7}]}, 'url': '/records/7'}
+    trace = _trace(
+        {'role': 'user', 'content': structured},
+        {
+            'role': 'user',
+            'content': [
+                {'type': 'input_text', 'text': 'typed text'},
+                {'type': 'input_image', 'image_url': 'https://example.test/image.png'},
+            ],
+        },
+    )
+
+    rendered = full_conversation_view(trace)
+
+    assert '"label"' in rendered
+    assert '"records"' in rendered
+    assert '"/records/7"' in rendered
+    assert 'typed text' in rendered
+    assert '[image]' in rendered

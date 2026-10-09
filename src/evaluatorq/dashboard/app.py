@@ -605,6 +605,14 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    raw_input_cap = form_data.get('trace_input_chars')
+    if raw_input_cap is None:
+        values['trace_input_chars'] = current.trace_input_chars
+    else:
+        try:
+            values['trace_input_chars'] = int(str(raw_input_cap).strip())
+        except ValueError:
+            values['trace_input_chars'] = raw_input_cap
     # Finder limits are per-run controls, so the settings form keeps their saved defaults.
     values.update(
         window_days=current.window_days,

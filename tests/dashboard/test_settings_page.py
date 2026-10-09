@@ -74,8 +74,8 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
             'classifier_model': 'classifier/custom',
             'smart_model': 'smart/custom',
             'window_days': '14',
-            'limit': '42',
             'parallelism': '7',
+            'trace_input_chars': '230000',
             'ask_ai_mode': 'review',
         }),
     )
@@ -86,6 +86,7 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     saved = json.loads(settings_file.read_text())
     assert saved['limit'] == DashboardSettings.model_fields['limit'].default
     assert saved['parallelism'] == DashboardSettings.model_fields['parallelism'].default
+    assert saved['trace_input_chars'] == 230000
     assert saved['ask_ai_mode'] == 'review'
 
 

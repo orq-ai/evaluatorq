@@ -69,7 +69,7 @@ Above the table, **Ask AI** plans a natural-language question and creates zero t
 3. The finder merges those selections with any filters you chose explicitly and builds an OQL query. The base filter excludes `generate_content` operations, so the compiler and classifier traces do not crowd the population being searched. A model or provider filter drops the base filter, because a bare model call is itself a `generate_content` trace and would otherwise never match.
 4. The classifier judges each projected trace through evaluatorq, asking every dimension in one classify call per trace. A trace is included only when it matches every dimension. Results stream into one table column per dimension as each trace finishes, including the final poll after the run ends. With zero dimensions, every trace the filters keep is included without a classifier call.
 
-Each trace is projected into a bounded classifier state before judgment: the projection keeps the newest conversation suffix, preserves tool-call arguments and completion status, removes reasoning fields and tool-result bodies, and truncates text from the front when necessary. Ask AI does not upload evaluation result rows. Trace retrieval and model inference call Orq, and OpenTelemetry tracing may export spans when configured through environment variables. Selecting a CLI profile alone does not enable tracing. Set `ORQ_DISABLE_TRACING=1` before starting the command or dashboard to disable that tracing.
+Each trace is prepared for the selected classifier model without changing the stored source. The configurable trace-input cap is 500,000 characters by default and covers classifier state plus the exact serialized selected questions. `typesafe/jev` receives indexed structured messages with paired tool results and recorded status/error metadata. Its state is capped at 112,000 characters, with state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. Other classifiers receive the full readable conversation, including tool inputs and results, shortened as needed to leave room for their questions. Known media parts render as placeholders, while unrelated structured content remains JSON. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
 
 On **Traces**, Ask AI can classify traces already loaded in the table or search a new population. The finder creates zero to three dimensions; when dimensions exist, each selected trace gets one call that evaluates them all.
 
@@ -128,13 +128,14 @@ The finder merges the generated filters with any you chose explicitly and builds
 
 ### 3. Project each trace
 
-Each trace becomes a bounded classifier state of at most 500,000 serialized UTF-8 bytes. This is a conservative upper bound on tokenizer tokens, not a count from the selected model tokenizer. The projection keeps the **newest** conversation suffix and truncates text from the front when it has to.
+The classifier's exact serialized questions share the trace-input cap from Dashboard Settings with its state, defaulting to 500,000 total characters. Jev state is additionally capped at 112,000 characters, and reduced as needed to keep state plus the longest question within 128,000 characters and state plus all questions within 256,000 characters. For rough cost estimates, character counts are divided by about four to estimate tokens; this is not the model tokenizer or an exact token-count guarantee.
 
-??? info "What the projection keeps and drops"
-    - **Keeps** tool-call arguments, completion status, and a fixed diagnostic category for a failed paired tool result.
-    - **Drops** reasoning fields and tool-result bodies.
-    - At most 32 tool calls per assistant turn; tool-call IDs and names beyond 128 UTF-8 bytes are shortened.
-    - An oversized structural unit that cannot fit becomes an omission marker. Its `omitted_bytes` count measures content dropped to fit the byte budget; it excludes fields the projection schema removes or shortens.
+??? info "What the Jev state keeps and drops"
+    - **Keeps** indexed role/type entries, full tool names, paired tool inputs/results, and recorded status and exit/error codes.
+    - Tool input and result excerpts keep up to 100 source-text characters at each end; assistant text keeps 500 per edge, user text 1,000 per edge, and system/developer text 4,000 per edge. A generated omission marker is added beyond those retained characters; its count is omitted source text, and the marker's own characters count toward the serialized Jev-state cap.
+    - **Drops** reasoning content and known `<system-reminder>` harness sections; arbitrary XML remains untouched. Credentials are scrubbed before excerpting.
+    - Images become `[image, N KB]` when their size is known or `[image, size unknown]`; remote media is never fetched.
+    - Omitted messages use explicit `[... N messages left out ...]` markers. The full trace remains unchanged.
 
 ### 4. Classify
 
@@ -270,13 +271,13 @@ The facet and numeric options are explicit OQL constraints. The question supplie
 
 ## Limits and cost
 
-The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. Each projected trace is capped at 500,000 serialized UTF-8 bytes, a conservative upper bound on tokenizer tokens rather than a count from the selected model's tokenizer; older conversation units are omitted first when the cap is reached.
+The finder searches at most 5000 usable traces per run, even if a larger limit is supplied elsewhere; the default is 500. The default lookback is seven days, the default classifier parallelism is 100, and parallelism is capped at 200. The configured global character cap bounds classifier state plus exact serialized questions. Jev receives an indexed structured state with paired tool results, also subject to a 112,000-character state cap and its 128,000/256,000-character state-plus-question ceilings.
 
 | Limit | Value |
 |---|---|
 | Traces per search | 500 by default, up to 5000 usable traces; Traces can load up to 5000 rows |
 | Search lookback | 7 days by default, 1–90 days |
 | Classifier parallelism | 100 by default, at most 200 |
-| Projection budget | 500,000 serialized UTF-8 bytes per trace, a conservative upper bound on tokenizer tokens; older conversation units go first |
+| Model-input cap | 500,000 characters by default, configurable in Dashboard Settings and saved in the dashboard settings file |
 
 Loading the Traces table makes no model calls. Ask AI within results classifies up to the configured AI trace limit (default 500). A search makes one compiler call, at most one facet-selection call, and one classification call per selected trace when the plan has dimensions; a zero-dimension plan makes no per-trace calls. A 500-trace run therefore makes up to 502 model calls before retries. Narrow the limit and window when exploring a large workspace. If a facet lookup fails, the run warns and skips generated categorical filters; explicit filters and semantic classification still run. When Orq reports more facet values than the fetched limit, the finder warns and uses the returned values ranked by frequency.

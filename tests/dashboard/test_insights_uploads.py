@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import os
 import re
@@ -168,11 +169,11 @@ async def test_request_body_limit_stops_consuming_oversized_stream() -> None:
     assert calls == 3
 
 
-def test_expired_abandoned_uploads_are_removed_safely(tmp_path: Path) -> None:
+def test_expired_retained_uploads_and_metadata_are_removed_safely(tmp_path: Path) -> None:
     import os
 
     from evaluatorq.dashboard.insights_uploads import (
-        ABANDONED_UPLOAD_TTL_SECONDS,
+        UPLOAD_RETENTION_SECONDS,
         cleanup_expired_uploads,
         store_upload,
         uploads_dir,
@@ -185,9 +186,11 @@ def test_expired_abandoned_uploads_are_removed_safely(tmp_path: Path) -> None:
     unrelated = uploads_dir(runs_dir) / 'keep-me.txt'
     unrelated.write_text('keep')
 
-    assert cleanup_expired_uploads(runs_dir, now=100 + ABANDONED_UPLOAD_TTL_SECONDS + 1) == 1
+    assert cleanup_expired_uploads(runs_dir, now=100 + UPLOAD_RETENTION_SECONDS + 1) == 1
     assert live.exists()
     assert not stale.exists()
+    assert not stale.with_name(stale.name + '.meta.json').exists()
+    assert live.with_name(live.name + '.meta.json').exists()
     assert unrelated.exists()
 
 
@@ -203,7 +206,7 @@ def test_uploaded_snapshot_path_is_revalidated_if_removed_before_worker_opens_it
         InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
 
 
-def test_worker_removes_route_upload_after_success_and_failure(tmp_path: Path, monkeypatch) -> None:
+def test_worker_retains_route_upload_after_success_and_failure(tmp_path: Path, monkeypatch) -> None:
     from evaluatorq.dashboard.insights_launch import InsightsLaunchPayload, InsightsLaunchSpec
     from evaluatorq.dashboard.insights_uploads import store_upload
     from evaluatorq.dashboard.insights_worker import main
@@ -220,7 +223,8 @@ def test_worker_removes_route_upload_after_success_and_failure(tmp_path: Path, m
         patch('evaluatorq.dashboard.insights_worker.insights', side_effect=_completed_run),
     ):
         assert main() == 0
-    assert not source.exists()
+    assert source.exists()
+    assert source.with_name(source.name + '.meta.json').exists()
 
     source = store_upload(runs_dir, Snapshot(traces=(make_trace('two'),)).model_dump_json().encode(), 'snapshot')
     spec = InsightsLaunchSpec(source='snapshot', snapshot_path=str(source))
@@ -230,7 +234,8 @@ def test_worker_removes_route_upload_after_success_and_failure(tmp_path: Path, m
         patch('evaluatorq.dashboard.insights_worker.insights', side_effect=_failed_run),
     ):
         assert main() == 1
-    assert not source.exists()
+    assert source.exists()
+    assert source.with_name(source.name + '.meta.json').exists()
 
 
 async def _completed_run(*args, **kwargs):
@@ -239,3 +244,214 @@ async def _completed_run(*args, **kwargs):
 
 async def _failed_run(*args, **kwargs):
     raise RuntimeError('pipeline failed')
+
+
+def test_recent_files_lists_original_names_counts_kinds_and_newest_first(tmp_path: Path, monkeypatch) -> None:
+    import time
+
+    from evaluatorq.dashboard.insights_launch import get_finder_exports_dir
+    from evaluatorq.dashboard.insights_uploads import store_upload
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    runs_dir = get_insights_runs_dir()
+    snapshot = store_upload(
+        runs_dir=runs_dir, contents=Snapshot(traces=(make_trace('one'), make_trace('two'))).model_dump_json().encode(),
+        kind='snapshot', display_name='sessions.json',
+    )
+    uploaded_finder = store_upload(
+        runs_dir=runs_dir, contents=_run_export(['one']).model_dump_json().encode(),
+        kind='finder', display_name='upload-export.json',
+    )
+    finder_dir = get_finder_exports_dir()
+    finder_dir.mkdir(parents=True, exist_ok=True)
+    finder = finder_dir / 'finder-export.json'
+    finder.write_text(_run_export(['a', 'b', 'c']).model_dump_json())
+    now = time.time()
+    for path, age in ((snapshot, 300), (uploaded_finder, 200), (finder, 100)):
+        modified = now - age
+        os.utime(path, (modified, modified))
+        if path in (snapshot, uploaded_finder):
+            metadata_path = path.with_name(path.name + '.meta.json')
+            metadata = json.loads(metadata_path.read_text())
+            metadata['modified_at'] = datetime.fromtimestamp(modified).astimezone().isoformat()
+            metadata_path.write_text(json.dumps(metadata))
+
+    client = TestClient(build_app())
+    page = client.get('/insights/files')
+    assert page.status_code == 200
+    assert page.text.index('finder-export.json') < page.text.index('upload-export.json') < page.text.index('sessions.json')
+    assert f'data-path="{snapshot}"' in page.text
+    assert 'Trace snapshot' in page.text and 'Finder export' in page.text
+    assert 'data-label="Traces">2</td>' in page.text and 'data-label="Traces">3</td>' in page.text
+    assert 'UTC' in page.text
+    assert not re.search(r'data-display-name="snapshot-[a-f0-9]{32}', page.text)
+    assert client.get('/insights/new').text.count('data-recent-files') == 1
+
+
+def test_upload_persists_private_display_metadata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    response = client.post(
+        '/insights/uploads', data={'csrf': _token(client)},
+        files={'file': ('C:\\fakepath\\<session>.json', Snapshot(traces=(make_trace('one'),)).model_dump_json())},
+    )
+    assert response.status_code == 201
+    stored = Path(response.json()['path'])
+    metadata = stored.with_name(stored.name + '.meta.json')
+    metadata_data = json.loads(metadata.read_text())
+    assert metadata_data['display_name'] == '<session>.json'
+    assert metadata_data['trace_count'] == 1
+    assert metadata_data['kind'] == 'snapshot'
+    assert metadata_data['modified_at']
+    if os.name == 'posix':
+        assert metadata.stat().st_mode & 0o777 == 0o600
+        assert stored.parent.stat().st_mode & 0o777 == 0o700
+    files = client.get('/insights/files').text
+    assert '&lt;session&gt;.json' in files
+    assert 'fakepath' not in files
+
+
+def test_recent_files_prunes_expired_uploads_but_not_finder_exports(tmp_path: Path, monkeypatch) -> None:
+    import time
+
+    from evaluatorq.dashboard.insights_launch import get_finder_exports_dir
+    from evaluatorq.dashboard.insights_uploads import UPLOAD_RETENTION_SECONDS, store_upload
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    upload = store_upload(
+        runs_dir=get_insights_runs_dir(), contents=Snapshot(traces=(make_trace('one'),)).model_dump_json().encode(),
+        kind='snapshot', display_name='expired.json',
+    )
+    finder_dir = get_finder_exports_dir()
+    finder_dir.mkdir(parents=True, exist_ok=True)
+    finder = finder_dir / 'older-finder.json'
+    finder.write_text(_run_export(['one']).model_dump_json())
+    old = time.time() - UPLOAD_RETENTION_SECONDS - 1
+    for path in (upload, finder):
+        os.utime(path, (old, old))
+    page = TestClient(build_app()).get('/insights/files')
+    assert 'expired.json' not in page.text
+    assert 'older-finder.json' in page.text
+    assert not upload.exists()
+    assert not upload.with_name(upload.name + '.meta.json').exists()
+    assert finder.exists()
+
+
+def test_worker_retention_extends_seven_days_from_run_finish(tmp_path: Path) -> None:
+    import time
+
+    from evaluatorq.dashboard.insights_uploads import UPLOAD_RETENTION_SECONDS, cleanup_expired_uploads, store_upload
+    from evaluatorq.dashboard.insights_worker import _retain_consumed_upload
+
+    source = store_upload(
+        runs_dir=tmp_path, contents=Snapshot(traces=(make_trace('one'),)).model_dump_json().encode(), kind='snapshot',
+    )
+    old = time.time() - UPLOAD_RETENTION_SECONDS + 10
+    os.utime(source, (old, old))
+    _retain_consumed_upload(tmp_path, 'snapshot', '', str(source))
+    finished = source.stat().st_mtime
+    assert finished > old
+    metadata = json.loads(source.with_name(source.name + '.meta.json').read_text())
+    assert datetime.fromisoformat(metadata['modified_at']).timestamp() == pytest.approx(finished, abs=1)
+    assert cleanup_expired_uploads(tmp_path, now=finished + UPLOAD_RETENTION_SECONDS + 1) == 1
+
+
+def test_recent_files_skip_symlinks_unsafe_metadata_and_foreign_paths(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_launch import get_finder_exports_dir
+    from evaluatorq.dashboard.insights_uploads import read_uploaded_source, store_upload, uploads_dir
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    runs_dir = get_insights_runs_dir()
+    contents = Snapshot(traces=(make_trace('one'),)).model_dump_json().encode()
+    source = store_upload(runs_dir=runs_dir, contents=contents, kind='snapshot', display_name='hidden.json')
+    outside = tmp_path / 'outside.json'
+    outside.write_bytes(contents)
+    symlink = uploads_dir(runs_dir) / ('snapshot-' + 'a' * 32 + '.json')
+    try:
+        symlink.symlink_to(outside)
+    except OSError:
+        pytest.skip('symlink creation unavailable')
+    metadata = source.with_name(source.name + '.meta.json')
+    metadata.unlink()
+    metadata.symlink_to(outside)
+    finder_dir = get_finder_exports_dir()
+    finder_dir.mkdir(parents=True, exist_ok=True)
+    (finder_dir / 'linked.json').symlink_to(outside)
+    page = TestClient(build_app()).get('/insights/files')
+    assert 'data-recent-file ' not in page.text
+    assert 'No recent trace files' in page.text
+    with pytest.raises(ValueError):
+        read_uploaded_source(runs_dir=runs_dir, path=symlink, kind='snapshot')
+    with pytest.raises(ValueError):
+        read_uploaded_source(runs_dir=runs_dir, path=outside, kind='snapshot')
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX permission checks')
+def test_recent_files_skip_nonprivate_uploads(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_uploads import store_upload
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    source = store_upload(
+        runs_dir=get_insights_runs_dir(), contents=Snapshot(traces=(make_trace('one'),)).model_dump_json().encode(),
+        kind='snapshot', display_name='unsafe.json',
+    )
+    source.chmod(0o644)
+    assert 'unsafe.json' not in TestClient(build_app()).get('/insights/files').text
+
+
+def test_uploaded_snapshot_preview_rejects_replaced_symlink(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_uploads import store_upload
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    contents = Snapshot(traces=(make_trace('one'),)).model_dump_json().encode()
+    source = store_upload(runs_dir=get_insights_runs_dir(), contents=contents, kind='snapshot')
+    outside = tmp_path / 'outside.json'
+    outside.write_bytes(contents)
+    source.unlink()
+    try:
+        source.symlink_to(outside)
+    except OSError:
+        pytest.skip('symlink creation unavailable')
+    client = TestClient(build_app())
+    preview = client.post('/insights/snapshot-preview', data={'csrf': _token(client), 'snapshot_path': str(source)})
+    assert preview.status_code == 422
+
+def test_finder_preview_accepts_retained_upload_and_approved_export_only(tmp_path: Path, monkeypatch) -> None:
+    from evaluatorq.dashboard.insights_launch import get_finder_exports_dir
+    from evaluatorq.dashboard.insights_uploads import store_upload
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    token = _token(client)
+    raw = _run_export(['one', 'two']).model_dump_json().encode()
+    uploaded = store_upload(
+        runs_dir=get_insights_runs_dir(), contents=raw, kind='finder', display_name='retained.json'
+    )
+    export_dir = get_finder_exports_dir()
+    export_dir.mkdir(parents=True, exist_ok=True)
+    approved = export_dir / 'saved.json'
+    approved.write_bytes(raw)
+    outside = tmp_path / 'outside.json'
+    outside.write_bytes(raw)
+
+    for path in (uploaded, approved):
+        preview = client.post('/insights/finder-preview', data={'csrf': token, 'finder_path': str(path)})
+        assert preview.status_code == 200
+        assert '2 matched traces' in preview.text
+    rejected = client.post('/insights/finder-preview', data={'csrf': token, 'finder_path': str(outside)})
+    assert rejected.status_code == 422
+    linked = export_dir / 'linked.json'
+    try:
+        linked.symlink_to(outside)
+    except OSError:
+        pytest.skip('symlink creation unavailable')
+    rejected_link = client.post('/insights/finder-preview', data={'csrf': token, 'finder_path': str(linked)})
+    assert rejected_link.status_code == 422
+
+

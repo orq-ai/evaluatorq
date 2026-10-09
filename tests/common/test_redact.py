@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 
 from evaluatorq.common.redact import normalize_placeholders, scrub_known_secrets
@@ -52,6 +55,16 @@ def test_scrub_is_idempotent() -> None:
     assert scrub_known_secrets(once) == once
 
 
+
+def test_long_hyphenated_text_preserves_a_later_secret_without_quadratic_scan() -> None:
+    script = """
+from evaluatorq.common.redact import scrub_known_secrets
+prefix = 'raw-source-' * 51_000
+scrubbed = scrub_known_secrets(prefix + ' API_TOKEN=Abcd1234Efgh5678')
+assert scrubbed.startswith(prefix)
+assert scrubbed.endswith('API_TOKEN=<SECRET>')
+"""
+    subprocess.run([sys.executable, '-c', script], check=True, capture_output=True, text=True, timeout=8)
 @pytest.mark.parametrize(
     'text',
     [

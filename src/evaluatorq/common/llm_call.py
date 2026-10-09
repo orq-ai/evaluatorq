@@ -24,6 +24,7 @@ from openai import BadRequestError
 
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
+from evaluatorq.common.model_input import classifier_question_wire_payloads
 from evaluatorq.common.responses import responses_text_config
 from evaluatorq.common.thread_context import pipeline_metadata
 from evaluatorq.common.tracing import (
@@ -510,13 +511,7 @@ def classify_request_body(
     questions: dict[str, ClassifyQuestion],
 ) -> dict[str, Any]:
     """Build the exact body sent to the Orq ``/classify`` endpoint."""
-    wire_questions: dict[str, dict[str, Any]] = {}
-    for name, current in questions.items():
-        wire_question: dict[str, Any] = {'type': current.kind, 'instructions': current.instructions}
-        if current.criteria is not None:
-            wire_question['criteria'] = current.criteria
-        wire_questions[name] = wire_question
-    return {'model': model, 'state': state, 'questions': wire_questions}
+    return {'model': model, 'state': state, 'questions': classifier_question_wire_payloads(questions)}
 
 
 async def execute_classify(

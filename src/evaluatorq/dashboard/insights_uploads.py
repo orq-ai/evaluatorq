@@ -9,10 +9,13 @@ import re
 import stat
 import time
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal, cast
 
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
+from evaluatorq.common.private_files import write_private_atomic
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import Snapshot
 
@@ -25,10 +28,29 @@ if TYPE_CHECKING:
 MAX_INSIGHTS_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
 MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
-ABANDONED_UPLOAD_TTL_SECONDS = 24 * 60 * 60
+UPLOAD_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _UPLOAD_DIRECTORY = '.uploads'
 UploadKind = Literal['finder', 'snapshot']
 _UPLOAD_NAME = re.compile(r'^(finder|snapshot)-[0-9a-f]{32}\.json$')
+_METADATA_SUFFIX = '.meta.json'
+
+
+class UploadMetadata(BaseModel):
+    """Private display details, never a claimed original filesystem path."""
+
+    display_name: str = Field(max_length=255)
+    modified_at: datetime | None = None
+    trace_count: int = Field(ge=0)
+    kind: UploadKind | None = None
+
+
+@dataclass(frozen=True)
+class RecentTraceFile:
+    path: str
+    display_name: str
+    date: str
+    trace_count: int
+    kind: UploadKind
 
 
 def uploads_dir(runs_dir: Path) -> Path:
@@ -37,20 +59,31 @@ def uploads_dir(runs_dir: Path) -> Path:
 
 
 def cleanup_expired_uploads(runs_dir: Path, *, now: float | None = None) -> int:
-    """Remove stale route-owned uploads that were never consumed by a worker."""
+    """Prune route-owned copies seven days after upload or the latest completed run attempt."""
     directory = uploads_dir(runs_dir)
     if directory.is_symlink() or not directory.exists():
         return 0
     _ensure_private_directory(directory)
-    cutoff = (time.time() if now is None else now) - ABANDONED_UPLOAD_TTL_SECONDS
+    cutoff = (time.time() if now is None else now) - UPLOAD_RETENTION_SECONDS
     removed = 0
     for path in directory.iterdir():
         if _UPLOAD_NAME.fullmatch(path.name) is None or path.is_symlink():
             continue
         try:
             info = path.lstat()
-            if stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff:
+            if (
+                stat.S_ISREG(info.st_mode)
+                and (not hasattr(os, 'getuid') or info.st_uid == os.getuid())
+                and info.st_mtime < cutoff
+            ):
                 path.unlink()
+                metadata = path.with_name(path.name + _METADATA_SUFFIX)
+                if metadata.exists() and not metadata.is_symlink():
+                    metadata_info = metadata.lstat()
+                    if stat.S_ISREG(metadata_info.st_mode) and (
+                        not hasattr(os, 'getuid') or metadata_info.st_uid == os.getuid()
+                    ):
+                        metadata.unlink()
                 removed += 1
         except FileNotFoundError:
             continue
@@ -134,25 +167,42 @@ def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKi
     return kind
 
 
-def store_upload(runs_dir: Path, contents: bytes, kind: UploadKind) -> Path:
-    """Atomically store an upload that `validate_upload` accepted, under a route-owned random name."""
+def store_upload(runs_dir: Path, contents: bytes, kind: UploadKind, *, display_name: str = '') -> Path:
+    """Store a validated copy and its private display metadata under a random name."""
     directory = uploads_dir(runs_dir)
     _ensure_private_directory(directory)
     path = directory / f'{kind}-{uuid.uuid4().hex}.json'
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    metadata = UploadMetadata(
+        display_name=_display_name(display_name) or path.name,
+        modified_at=datetime.now(timezone.utc),
+        trace_count=_trace_count(contents, kind),
+        kind=kind,
+    )
+    metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
     try:
-        with os.fdopen(descriptor, 'wb') as handle:
-            handle.write(contents)
-            handle.flush()
-            os.fsync(handle.fileno())
+        write_private_atomic(path=path, contents=contents)
+        write_private_atomic(path=metadata_path, contents=metadata.model_dump_json())
     except BaseException:
         path.unlink(missing_ok=True)
+        metadata_path.unlink(missing_ok=True)
         raise
     return path
 
 
-def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
-    """Read only a route-named regular upload from the private Insights directory."""
+def _display_name(name: str) -> str:
+    return ''.join(character for character in name.replace('\\', '/').rsplit('/', 1)[-1] if character.isprintable())[
+        :255
+    ]
+
+
+def _trace_count(contents: bytes, kind: UploadKind) -> int:
+    if kind == 'finder':
+        return len(RunExport.model_validate_json(contents).matched_trace_ids)
+    return len(Snapshot.model_validate_json(contents).traces)
+
+
+def _read_private_upload_file(runs_dir: Path, path: Path, *, limit: int, refresh_retention: bool = False) -> bytes:
+    """Open a private regular file without following a symlink, including metadata sidecars."""
     directory = uploads_dir(runs_dir)
     if path.is_symlink() or directory.is_symlink():
         raise ValueError('Uploaded source must be inside private Insights upload storage.')
@@ -163,9 +213,6 @@ def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
         raise ValueError('Uploaded source must be inside private Insights upload storage.') from exc
     if path.parent != directory:
         raise ValueError('Uploaded source must be inside private Insights upload storage.')
-    match = _UPLOAD_NAME.fullmatch(path.name)
-    if match is None or match.group(1) != kind:
-        raise ValueError('Uploaded source has the wrong file type.')
     directory_info = directory.lstat()
     if (
         not stat.S_ISDIR(directory_info.st_mode)
@@ -191,7 +238,9 @@ def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
                 or stat.S_IMODE(directory_opened.st_mode) != 0o700
             ):
                 raise ValueError('Insights upload storage changed while opening the file.')
-            descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            descriptor = os.open(
+                path.name, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd
+            )
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or (
             os.name != 'nt' and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o600)
@@ -199,12 +248,25 @@ def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
             raise ValueError('Uploaded source must be a private regular file.')
         with os.fdopen(descriptor, 'rb') as handle:
             descriptor = None
-            contents = handle.read(MAX_INSIGHTS_UPLOAD_BYTES + 1)
+            if refresh_retention:
+                if os.utime in os.supports_fd:
+                    os.utime(handle.fileno(), None)
+                else:
+                    os.utime(path, None)
+            contents = handle.read(limit + 1)
     finally:
         if descriptor is not None:
             os.close(descriptor)
         if directory_fd is not None:
             os.close(directory_fd)
+    return contents
+
+
+def read_uploaded_source(runs_dir: Path, path: Path, kind: UploadKind) -> bytes:
+    """Read and validate only a route-named private upload of the requested kind."""
+    if upload_kind(path) != kind:
+        raise ValueError('Uploaded source has the wrong file type.')
+    contents = _read_private_upload_file(runs_dir=runs_dir, path=path, limit=MAX_INSIGHTS_UPLOAD_BYTES)
     validate_upload(contents, kind)
     return contents
 
@@ -218,23 +280,98 @@ def upload_kind(path: Path) -> UploadKind | None:
 def is_uploaded_source(runs_dir: Path, path: Path) -> bool:
     """Return whether a path has the unambiguous route-owned upload shape."""
     directory = uploads_dir(runs_dir)
-    if path.is_symlink() or directory.is_symlink() or _UPLOAD_NAME.fullmatch(path.name) is None:
+    if _UPLOAD_NAME.fullmatch(path.name) is None:
         return False
     try:
-        return path.resolve().parent == directory.resolve()
+        return path.parent.absolute() == directory.absolute() or path.parent.resolve() == directory.resolve()
     except (OSError, RuntimeError):
         return False
 
 
-def cleanup_uploaded_source(runs_dir: Path, path: Path) -> None:
-    """Delete a valid upload file after worker consumption, leaving other files alone."""
-    if not is_uploaded_source(runs_dir, path):
+def retain_uploaded_source(runs_dir: Path, path: Path) -> None:
+    """Keep a valid route-owned copy for seven days after a worker attempt finishes."""
+    kind = upload_kind(path)
+    if kind is None or not is_uploaded_source(runs_dir, path):
         return
+    _read_private_upload_file(runs_dir=runs_dir, path=path, limit=0, refresh_retention=True)
+    metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
     try:
-        read_uploaded_source(runs_dir, path, upload_kind(path) or 'snapshot')
-        path.unlink(missing_ok=True)
-    except (FileNotFoundError, OSError, ValueError):
+        raw = _read_private_upload_file(runs_dir=runs_dir, path=metadata_path, limit=4096)
+        metadata = UploadMetadata.model_validate_json(raw)
+        if metadata.kind == kind:
+            write_private_atomic(
+                path=metadata_path,
+                contents=metadata.model_copy(update={'modified_at': datetime.now(timezone.utc)}).model_dump_json(),
+            )
+    except (OSError, ValueError, RuntimeError):
         return
+
+
+def _recent_upload_entry(runs_dir: Path, path: Path, kind: UploadKind) -> tuple[float, RecentTraceFile] | None:
+    try:
+        _read_private_upload_file(runs_dir=runs_dir, path=path, limit=0)
+        metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
+        if metadata_path.exists() or metadata_path.is_symlink():
+            raw = _read_private_upload_file(runs_dir=runs_dir, path=metadata_path, limit=4096)
+            metadata = UploadMetadata.model_validate_json(raw)
+        else:
+            contents = read_uploaded_source(runs_dir=runs_dir, path=path, kind=kind)
+            metadata = UploadMetadata(display_name=path.name, trace_count=_trace_count(contents, kind), kind=kind)
+        if metadata.kind is not None and metadata.kind != kind:
+            return None
+        modified = metadata.modified_at.timestamp() if metadata.modified_at is not None else path.stat().st_mtime
+        return modified, RecentTraceFile(
+            path=str(path),
+            display_name=metadata.display_name,
+            date=_file_date(modified),
+            trace_count=metadata.trace_count,
+            kind=kind,
+        )
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _recent_finder_entry(finder_dir: Path, path: Path) -> tuple[float, RecentTraceFile] | None:
+    from evaluatorq.dashboard.insights_launch import _read_approved_finder_export
+
+    try:
+        contents = _read_approved_finder_export(root=finder_dir, path=path)
+        validate_upload(contents, 'finder')
+        modified = path.stat().st_mtime
+        return modified, RecentTraceFile(
+            path=str(path),
+            display_name=path.name,
+            date=_file_date(modified),
+            trace_count=_trace_count(contents, 'finder'),
+            kind='finder',
+        )
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def recent_trace_files(runs_dir: Path, finder_dir: Path) -> list[RecentTraceFile]:
+    """List safe retained uploads and approved Finder exports, newest first."""
+    cleanup_expired_uploads(runs_dir)
+    entries: list[tuple[float, RecentTraceFile]] = []
+    directory = uploads_dir(runs_dir)
+    if directory.exists() and not directory.is_symlink():
+        for path in directory.iterdir():
+            kind = upload_kind(path)
+            if kind is None:
+                continue
+            entry = _recent_upload_entry(runs_dir, path, kind)
+            if entry is not None:
+                entries.append(entry)
+    if finder_dir.exists() and not finder_dir.is_symlink():
+        for path in finder_dir.glob('*.json'):
+            entry = _recent_finder_entry(finder_dir, path)
+            if entry is not None:
+                entries.append(entry)
+    return [entry for _, entry in sorted(entries, key=lambda item: (item[0], item[1].path), reverse=True)]
+
+
+def _file_date(modified: float) -> str:
+    return datetime.fromtimestamp(modified, tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
 
 
 async def receive_upload(upload: UploadFile) -> tuple[UploadKind, bytes]:
