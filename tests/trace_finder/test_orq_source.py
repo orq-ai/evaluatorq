@@ -12,6 +12,7 @@ import pytest
 
 from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.formats.responses import ResponsesConversation
+from evaluatorq.signals import compute_signals
 from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot
 from evaluatorq.trace_finder.orq_source import (
@@ -255,8 +256,46 @@ def test_selected_response_associates_multiple_assistant_message_orders() -> Non
     assert set(selected['output_items_by_order']) == {'0', '1'}
 
 
+def test_selected_response_preserves_ambiguous_assistant_message_evidence() -> None:
+    response_item = {
+        'type': 'message',
+        'role': 'assistant',
+        'content': [{'type': 'output_text', 'text': 'same answer'}],
+    }
+    messages = [
+        {'role': 'assistant', 'content': 'same answer'},
+        {'role': 'assistant', 'content': 'same answer'},
+    ]
+
+    selected = _selected_span_signal_data(
+        {'attributes': {'openresponses.response': json.dumps({'output': [response_item]})}},
+        messages,
+    )
+
+    assert selected['step_orders'] == []
+    assert selected['unmapped_output_items'] == [response_item]
+
+
 @pytest.mark.asyncio
-async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_into_atif() -> None:
+@pytest.mark.parametrize(
+    ('tool_status', 'status_code', 'attribute_status', 'expected_status', 'expected_error_count'),
+    [
+        ('error', None, None, 'error', 1),
+        ('error', None, 'success', 'error', 1),
+        ('completed', None, None, 'completed', 0),
+        ({'code': 'OK'}, None, None, 'OK', 0),
+        ({'code': 1}, None, None, 'ok', 0),
+        (None, 'OK', None, 'OK', 0),
+        ('Unset', None, None, None, None),
+    ],
+)
+async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_into_atif(
+    tool_status: Any,
+    status_code: str | None,
+    attribute_status: str | None,
+    expected_status: str | None,
+    expected_error_count: int | None,
+) -> None:
     source_messages = [
         {'role': 'user', 'content': 'find the invoice'},
         {'role': 'assistant', 'content': 'first\nsecond', 'tool_calls': [
@@ -295,8 +334,13 @@ async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_in
     }
     tool_detail = span('matching-tool', minute=2, span_type='span.tool')
     tool_detail.parent_span_id = 'selected-span'
-    tool_detail.attributes = {'gen_ai': {'tool': {'call': {'id': 'call-1'}}}}
-    tool_detail.status = 'error'
+    tool_attributes: dict[str, Any] = {'gen_ai': {'tool': {'call': {'id': 'call-1'}}}}
+    if attribute_status is not None:
+        tool_attributes['tool.status'] = attribute_status
+    tool_detail.attributes = tool_attributes
+    tool_detail.status = tool_status
+    if status_code is not None:
+        tool_detail.status_code = status_code
     sibling = span('sibling', minute=3)
     sibling.attributes = {'gen_ai': {'tool': {'call': {'id': 'other-call'}}}}
     sibling.status = 'error'
@@ -331,13 +375,72 @@ async def test_selected_span_enrichment_is_scoped_and_moves_raw_response_data_in
     observation = step.observation
     assert observation is not None
     assert observation.results[0].extra is not None
-    assert observation.results[0].extra['status'] == 'error'
+    if expected_status is None:
+        assert 'status' not in observation.results[0].extra
+    else:
+        assert observation.results[0].extra['status'] == expected_status
+    error_signal = compute_signals(document.trajectory, only=['tool_error_count']).results['tool_error_count']
+    assert error_signal.value == expected_error_count
     assert document.metadata.capture_metadata['signal_span_coverage']['matched_call_ids'] == ['call-1']
     assert document.metadata.capture_metadata['signal_span_coverage']['selected_data_correlated'] is True
     assert 'signal_selected_span' not in document.metadata.capture_metadata
     assert 'signal_tool_spans' not in document.metadata.capture_metadata
     assert traces.get_span_calls
     assert {call['span_id'] for call in traces.get_span_calls} <= {'selected-span', 'matching-tool'}
+
+
+@pytest.mark.asyncio
+async def test_correlated_unsupported_builtin_call_is_retained_and_invalidates_signal_coverage() -> None:
+    messages = [
+        {
+            'role': 'assistant',
+            'content': 'starting',
+            'tool_calls': [{'id': 'call-1', 'type': 'function', 'function': {'name': 'computer', 'arguments': '{}'}}],
+        },
+        {'role': 'assistant', 'content': 'done'},
+    ]
+    source_summary = summary('unsupported-call', messages=messages)
+    source_summary.leading_span_id = 'selected-span'
+    selected_detail = span('selected-span', minute=1)
+    selected_detail.attributes = {
+        'openresponses.response': json.dumps({
+            'output': [
+                {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'starting'}]},
+                {'type': 'computer_call', 'call_id': 'call-1', 'action': {'type': 'click', 'x': 1, 'y': 2}},
+                {'type': 'message', 'role': 'assistant', 'content': [{'type': 'output_text', 'text': 'done'}]},
+            ],
+            'usage': {'input_tokens': 5, 'output_tokens': 3},
+        })
+    }
+    traces = FakeTraces(
+        {None: ([source_summary], False, None)},
+        spans={'unsupported-call': [span('selected-span', minute=1)]},
+        details={('unsupported-call', 'selected-span'): selected_detail},
+    )
+    source = make_source(FakeOrq(traces))
+    try:
+        snapshot = await source.load_async(START, END, 1, facets=FacetSelection(), numeric=NumericFilters())
+        (enriched,) = await source.enrich_selected_signal_spans(snapshot.traces)
+    finally:
+        source.close()
+
+    document = ensure_trace_document(enriched)
+    agent_steps = [step for step in document.trajectory.steps if step.source == 'agent']
+    assert [step.llm_call_count for step in agent_steps] == [1, 0]
+    assert sum(step.llm_call_count or 0 for step in agent_steps) == 1
+    step = agent_steps[0]
+    assert step.metrics is not None
+    assert step.metrics.prompt_tokens == 5
+    assert step.extra is not None
+    assert {
+        'type': 'computer_call',
+        'call_id': 'call-1',
+        'action': {'type': 'click', 'x': 1, 'y': 2},
+    } in step.extra['evaluatorq.responses_output_items']
+    assert agent_steps[1].metrics is None
+    count = compute_signals(document.trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert count.value is None
+    assert 'unrepresented: computer_call' in (count.no_basis or '')
 
 
 @pytest.mark.asyncio

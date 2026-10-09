@@ -30,7 +30,7 @@ from .models import FacetSelection, NumericFilters, Snapshot, TraceRecord
 from .progress import report_load_progress
 from .rows import TraceRow, _models, _response_models, row_from_summary
 from .rows import parse_time as _parse_time
-from .span_status import is_error_span
+from .span_status import is_error_span, span_status_text
 
 if TYPE_CHECKING:
     from orq_ai_sdk import Orq
@@ -1720,8 +1720,7 @@ def _selected_span_signal_data(span: Any, messages: Sequence[dict[str, Any]]) ->
                 ):
                     candidates_order.add(index)
         if len(candidates_order) != 1:
-            if item_type != 'message':
-                unmapped_items.append(item)
+            unmapped_items.append(item)
             continue
         order = next(iter(candidates_order))
         matched_orders.add(order)
@@ -1737,6 +1736,10 @@ def _selected_span_signal_data(span: Any, messages: Sequence[dict[str, Any]]) ->
                 for key in ('id', 'call_id', 'type', 'name', 'status', 'error_type', 'finish_reason')
                 if key in item
             })
+        else:
+            # Keep uniquely correlated output whose semantics ATIF cannot represent.
+            # Signals inspect this sidecar to mark tool-dependent results incomplete.
+            item_sidecars.setdefault(str(order), []).append(item)
     selected_orders = sorted(matched_orders)
     selected_order = selected_orders[0] if len(selected_orders) == 1 else None
     input_details = _mapping(usage.get('input_tokens_details') or usage.get('prompt_tokens_details'))
@@ -1810,15 +1813,31 @@ def _signal_status(span: Any) -> dict[str, Any]:
         result['start_timestamp'] = start.timestamp()
     if end is not None:
         result['end_timestamp'] = end.timestamp()
-    if is_error_span(raw):
+    if is_error_span(raw) or (status is not None and any(word in status.casefold() for word in ('error', 'fail'))):
         result['status'] = 'error'
         error_type = attributes.get('error.type') or attributes.get('error_type')
         if isinstance(error_type, str) and error_type:
             result['error_type'] = error_type
         return result
-    if status:
-        lowered = status.casefold()
-        result['status'] = 'error' if 'error' in lowered or 'fail' in lowered else status
+    successful_statuses = {
+        'ok',
+        'success',
+        'succeeded',
+        'completed',
+        'passed',
+        'status_code_ok',
+        '1',
+    }
+    observed_status = next(
+        (
+            candidate
+            for candidate in (status, span_status_text(raw))
+            if isinstance(candidate, str) and candidate.casefold() in successful_statuses
+        ),
+        None,
+    )
+    if observed_status is not None:
+        result['status'] = 'ok' if observed_status.casefold() in {'status_code_ok', '1'} else observed_status
     return result
 
 

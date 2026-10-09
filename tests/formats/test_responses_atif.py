@@ -155,6 +155,38 @@ def test_response_tool_definitions_are_kept_with_their_response() -> None:
     ]
 
 
+def test_placeholder_response_preserves_nonempty_tool_definitions() -> None:
+    item = {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'}
+    tool = {'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object'}}
+    placeholder = Response.model_validate({
+        **_response('', None).model_dump(mode='json'),
+        'created_at': 0,
+        'output': [item],
+        'tools': [tool],
+    })
+
+    trajectory = ResponsesConversation(items=[item], responses=[placeholder]).to_atif()
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_tools'] == [tool]
+    back = trajectory.to_responses()
+    assert back.responses is not None and back.responses[0].tools[0].model_dump().get('name') == 'lookup'
+
+
+def test_real_response_preserves_explicit_empty_tool_definitions() -> None:
+    item = {'type': 'function_call', 'call_id': 'c', 'name': 'lookup', 'arguments': '{}'}
+    response = Response.model_validate({
+        **_response('gpt-x', None).model_dump(mode='json'),
+        'output': [item],
+        'tools': [],
+    })
+
+    trajectory = ResponsesConversation(items=[item], responses=[response]).to_atif()
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_tools'] == []
+    back = trajectory.to_responses()
+    assert back.responses is not None and back.responses[0].tools == []
+
+
 def test_response_output_that_disagrees_with_items_is_rejected() -> None:
     conv = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', None), _response('gpt-y', None)])
     assert conv.responses is not None
@@ -396,8 +428,12 @@ def test_response_timing_status_and_final_metrics() -> None:
     conv = ResponsesConversation(items=_ITEMS, responses=[_response('gpt-x', usage), failed])
     traj = conv.to_atif()
     assert traj.steps[1].timestamp == '2026-04-20T10:00:00+00:00'
-    assert traj.steps[1].extra == {'fc_item_ids': {'c1': 'fc_1'}, 'response_id': 'resp_1'}
-    assert traj.steps[2].extra == {'response_id': 'resp_2', 'status': 'incomplete'}
+    assert traj.steps[1].extra == {
+        'fc_item_ids': {'c1': 'fc_1'}, 'response_id': 'resp_1', 'evaluatorq.responses_tools': [],
+    }
+    assert traj.steps[2].extra == {
+        'response_id': 'resp_2', 'status': 'incomplete', 'evaluatorq.responses_tools': [],
+    }
     assert traj.final_metrics is not None
     assert (traj.final_metrics.total_prompt_tokens, traj.final_metrics.total_cached_tokens) == (20, 8)
     back = traj.to_responses().responses
@@ -538,6 +574,7 @@ def test_failed_response_round_trips_without_duplicating_its_outcome() -> None:
     assert traj.steps[2].extra == {
         'response_id': 'resp_2', 'error_type': 'rate_limit_exceeded',
         'error': {'code': 'rate_limit_exceeded', 'message': 'slow down'},
+        'evaluatorq.responses_tools': [],
     }
     back = traj.to_responses().responses
     assert back is not None
@@ -685,6 +722,63 @@ def test_builtin_tool_call_roundtrips_and_is_reported_as_unmapped_activity() -> 
     signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
     assert signal.value is None
     assert 'file_search_call' in (signal.no_basis or '')
+
+
+def test_builtin_tool_result_roundtrips_and_invalidates_tool_coverage() -> None:
+    from evaluatorq.signals import compute_signals
+
+    call = {
+        'type': 'computer_call', 'id': 'cc_1', 'call_id': 'c1', 'pending_safety_checks': [],
+        'status': 'completed', 'action': {'type': 'screenshot'},
+    }
+    result = {
+        'type': 'computer_call_output', 'id': 'cco_1', 'call_id': 'c1', 'status': 'completed',
+        'output': {'type': 'computer_screenshot'},
+    }
+    trajectory = ResponsesConversation(items=[call, result]).to_atif()
+
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_result_items'] == [result]
+    assert trajectory.to_responses().items == [call, result]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'computer_call_output' in (signal.no_basis or '')
+
+
+def test_orphan_builtin_tool_result_is_preserved_and_invalidates_coverage() -> None:
+    from evaluatorq.signals import compute_signals
+
+    result = {'type': 'computer_call_output', 'call_id': 'orphan', 'output': {'type': 'screenshot'}}
+    trajectory = ResponsesConversation(items=[result]).to_atif()
+
+    assert trajectory.steps[0].extra is not None
+    assert trajectory.steps[0].extra['evaluatorq.responses_result_items'] == [result]
+    assert trajectory.to_responses().items == [result]
+    signal = compute_signals(trajectory, only=['tool_call_count']).results['tool_call_count']
+    assert signal.value is None
+    assert 'computer_call_output' in (signal.no_basis or '')
+
+
+def test_builtin_custom_and_function_results_keep_source_order() -> None:
+    builtin_call = {
+        'type': 'computer_call', 'id': 'cc_1', 'call_id': 'computer-1', 'pending_safety_checks': [],
+        'status': 'completed', 'action': {'type': 'screenshot'},
+    }
+    custom_call = {'type': 'custom_tool_call', 'call_id': 'custom-1', 'name': 'lookup', 'input': 'query'}
+    function_call = {'type': 'function_call', 'call_id': 'function-1', 'name': 'lookup', 'arguments': '{}'}
+    builtin_result = {
+        'type': 'computer_call_output', 'id': 'cco_1', 'call_id': 'computer-1', 'status': 'completed',
+        'output': {'type': 'computer_screenshot'},
+    }
+    function_result = {'type': 'function_call_output', 'call_id': 'function-1', 'output': 'function result'}
+    custom_result = {'type': 'custom_tool_call_output', 'call_id': 'custom-1', 'output': 'custom result'}
+    items = [builtin_call, custom_call, function_call, builtin_result, function_result, custom_result]
+
+    back = ResponsesConversation(items=items).to_atif().to_responses()
+
+    assert [item for item in back.items if item.get('type', '').endswith('_call_output')] == [
+        builtin_result, function_result, custom_result,
+    ]
 
 
 def test_function_call_without_valid_call_id_is_preserved_and_invalidates_tool_coverage() -> None:
