@@ -27,6 +27,7 @@ from evaluatorq.dashboard.insights_launch import (
 )
 from evaluatorq.dashboard.insights_uploads import is_uploaded_source, upload_kind
 from evaluatorq.dashboard.insights_views import _back_to_runs
+from evaluatorq.dashboard.native_dates import date_input, date_row
 from evaluatorq.dashboard.shell import icon, page
 from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.models import DimensionName, LabelSpec, default_insights_models
@@ -558,23 +559,49 @@ assert set(_SESSION_SOURCE_TITLES) == set(SESSION_SOURCES)  # noqa: S101 — imp
 
 def _sessions_source(values: RunFormValues) -> str:
     """The Local sessions picker: filters, a Search button, and the results the controller fills in."""
-    # The dates stay empty here: the controller fills them from the browser's local date, which the server cannot know.
     boxes = ''.join(
-        f'<label><input type="checkbox" name="session_source" value="{source}" checked> {esc(title)}</label>'
+        f'<label><input type="checkbox" name="session_source" value="{source}" checked><span>{esc(title)}</span></label>'
         for source, title in _SESSION_SOURCE_TITLES.items()
     )
     kept = values.trace_file if values.source == 'sessions' else ''
     status = f'Using the sessions selected earlier ({values.source_name}). Search again to change them.' if kept else ''
+    from_date = date_row(
+        'From',
+        date_input(control_id='session-from', name='session_from', label='From date'),
+        css_class='xr-range irf-session-date-row',
+        label_tag='label',
+    )
+    to_date = date_row(
+        'To',
+        date_input(control_id='session-to', name='session_to', label='To date'),
+        css_class='xr-range irf-session-date-row',
+        label_tag='label',
+    )
     return (
         '<div class="irf-field" data-source="sessions"><span class="irf-label">Local sessions</span>'
-        f'<div class="irf-row">{boxes}</div>'
-        '<div class="irf-row">'
-        '<label>From <input type="date" name="session_from"></label>'
-        '<label>To <input type="date" name="session_to"></label></div>'
-        '<label class="irf-field"><span class="irf-label">Project directory</span>'
-        '<input type="text" name="session_project_dir" placeholder="/path/to/project"></label>'
+        f'<div class="seg irf-session-sources" role="group" aria-label="Session sources">{boxes}</div>'
+        '<details class="xr-time-menu irf-session-time-menu"><summary><span class="xr-time-label" data-session-range-label>Last 7 days</span></summary>'
+        '<div class="xr-time-options"><div class="xr-presets" role="group" aria-label="Session date range">'
+        '<button type="button" class="xr-preset" data-session-preset="7" aria-pressed="true">Last 7 days</button>'
+        '<button type="button" class="xr-preset" data-session-preset="30" aria-pressed="false">Last 30 days</button>'
+        '<button type="button" class="xr-preset" data-session-preset="all" aria-pressed="false">All dates</button></div>'
+        '<details class="xr-exact"><summary>Custom range</summary>'
+        f'{from_date}{to_date}<button type="button" class="xr-apply" data-session-apply>Apply range</button></details></div></details>'
+        '<div class="irf-field"><label class="irf-label" for="session-project-dir">Project directory</label>'
+        '<div class="irf-directory-row"><input id="session-project-dir" type="text" name="session_project_dir" placeholder="All recorded projects" aria-describedby="session-directory-hint">'
+        '<button type="button" class="irf-btn" data-folder-open>Browse…</button></div>'
+        '<p class="irf-hint" id="session-directory-hint">Includes projects below this directory and linked worktrees. Blank searches every recorded project; ~ means your home directory. Browsing uses the dashboard machine.</p></div>'
+        '<section class="irf-folder-browser" data-folder-browser aria-label="Browse project directories" aria-busy="false" hidden>'
+        '<nav class="irf-folder-crumbs" aria-label="Directory path" data-folder-breadcrumbs></nav>'
+        '<div class="irf-folder-toolbar"><button type="button" class="irf-btn" data-folder-home>Home</button>'
+        '<button type="button" class="irf-btn" data-folder-parent disabled>Parent</button><span class="irf-folder-current" data-folder-current></span></div>'
+        '<div class="irf-folder-list" role="list" data-folder-list></div>'
+        '<button type="button" class="irf-btn" data-folder-more hidden>Load more folders</button>'
+        '<p class="irf-folder-error" data-folder-error role="status" hidden></p>'
+        '<div class="irf-editor-actions"><button type="button" class="irf-btn" data-folder-cancel>Cancel</button>'
+        '<button type="button" class="irf-btn" data-folder-use disabled>Use this folder</button></div></section>'
         '<label class="irf-field"><span class="irf-label">Contains text</span>'
-        f'<input type="text" name="session_text" maxlength="{MAX_SESSION_TEXT_CHARS}"></label>'
+        f'<input type="text" name="session_text" maxlength="{MAX_SESSION_TEXT_CHARS}"><span class="irf-hint">Case-insensitive literal text, not a regular expression. Limit {MAX_SESSION_TEXT_CHARS} characters.</span></label>'
         '<div class="irf-editor-actions"><button type="button" class="irf-btn" data-sessions-search>Search</button></div>'
         '<div id="insights-sessions" aria-live="polite" aria-busy="false"></div>'
         f'<p class="irf-hint" data-sessions-status role="status">{esc(status)}</p>'

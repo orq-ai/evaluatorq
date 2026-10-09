@@ -216,12 +216,22 @@
     ctx.form.querySelector('[data-sessions-status]').textContent = message;
   }
 
+  function closeFolderBrowser(ctx) {
+    if (ctx.folderAbort) ctx.folderAbort.abort();
+    ctx.folderAbort = null;
+    ctx.folderToken += 1;
+    const browser = ctx.form.querySelector('[data-folder-browser]');
+    browser.hidden = true;
+    browser.setAttribute('aria-busy', 'false');
+  }
+
   function cancelSourceWork(ctx) {
     if (ctx.sessionsAbort) ctx.sessionsAbort.abort();
     ctx.sessionsAbort = null;
     const sessions = ctx.form.querySelector('#insights-sessions');
     sessions.setAttribute('aria-busy', 'false');
     sessionsStatus(ctx, '');
+    closeFolderBrowser(ctx);
     if (ctx.freezeAbort) ctx.freezeAbort.abort();
     ctx.freezeAbort = null;
     ctx.uploadSequence += 1;
@@ -349,12 +359,159 @@
     return when.getFullYear() + '-' + pad(when.getMonth() + 1) + '-' + pad(when.getDate());
   }
 
-  function defaultSessionDates(form) {
+  function updateSessionRangeLabel(ctx) {
+    const form = ctx.form;
+    const label = form.querySelector('[data-session-range-label]');
+    const preset = form.querySelector('.irf-session-time-menu').dataset.sessionRange || '7';
+    if (preset === 'all') label.textContent = 'All dates';
+    else if (preset === '7') label.textContent = 'Last 7 days';
+    else if (preset === '30') label.textContent = 'Last 30 days';
+    else {
+      const from = field(form, 'session_from').value;
+      const to = field(form, 'session_to').value;
+      label.textContent = from || to ? (from || 'Any start') + ' – ' + (to || 'Any end') : 'Custom range';
+    }
+  }
+
+  function setSessionPreset(ctx, preset) {
+    const form = ctx.form;
+    const menu = form.querySelector('.irf-session-time-menu');
+    menu.dataset.sessionRange = preset;
+    form.querySelectorAll('[data-session-preset]').forEach(function (button) {
+      button.setAttribute('aria-pressed', String(button.dataset.sessionPreset === preset));
+    });
     const from = field(form, 'session_from');
     const to = field(form, 'session_to');
-    if (!from.value) from.value = localDate(6);
-    if (!to.value) to.value = localDate(0);
+    if (preset === 'all') {
+      from.value = '';
+      to.value = '';
+    } else if (preset === '7' || preset === '30') {
+      from.value = localDate(Number(preset) - 1);
+      to.value = localDate(0);
+    }
+    updateSessionRangeLabel(ctx);
   }
+
+  function defaultSessionDates(ctx) {
+    const menu = ctx.form.querySelector('.irf-session-time-menu');
+    if (!menu.dataset.sessionRange) setSessionPreset(ctx, '7');
+    else updateSessionRangeLabel(ctx);
+  }
+  function folderCurrent(ctx, sourceToken, folderToken, abort) {
+    return ctx.folderAbort === abort && ctx.folderToken === folderToken
+      && isCurrentSource(ctx, 'sessions', sourceToken)
+      && !ctx.form.querySelector('[data-folder-browser]').hidden;
+  }
+
+  function renderFolderPage(ctx, result, append) {
+    const form = ctx.form;
+    const browser = form.querySelector('[data-folder-browser]');
+    const crumbs = result.breadcrumbs.map(function (crumb) {
+      return '<button type="button" class="irf-folder-crumb" data-folder-nav data-path="' + esc(crumb.path) + '">' + esc(crumb.name) + '</button>';
+    }).join('<span aria-hidden="true">/</span>');
+    const rows = result.directories.map(function (directory) {
+      return '<div role="listitem"><button type="button" class="irf-folder-entry" data-folder-nav data-path="' + esc(directory.path) + '">'
+        + '<span aria-hidden="true">▸</span><span>' + esc(directory.name) + '</span></button></div>';
+    }).join('');
+    form.querySelector('[data-folder-breadcrumbs]').innerHTML = crumbs;
+    form.querySelector('[data-folder-current]').textContent = result.path;
+    const list = form.querySelector('[data-folder-list]');
+    list.innerHTML = append ? list.innerHTML + rows : rows || '<p class="irf-folder-empty">No subfolders in this directory.</p>';
+    const parent = form.querySelector('[data-folder-parent]');
+    parent.disabled = !result.parent;
+    parent.dataset.path = result.parent || '';
+    const more = form.querySelector('[data-folder-more]');
+    more.hidden = !result.has_more;
+    more.dataset.offset = String(result.offset + result.limit);
+    const use = form.querySelector('[data-folder-use]');
+    use.disabled = false;
+    use.dataset.path = result.path;
+    browser.dataset.loaded = 'true';
+    browser.dataset.parent = result.parent || '';
+    form.querySelector('[data-folder-error]').hidden = true;
+  }
+
+  async function loadFolderPage(ctx, path, offset, append) {
+    const form = ctx.form;
+    const browser = form.querySelector('[data-folder-browser]');
+    if (ctx.folderAbort) ctx.folderAbort.abort();
+    const abort = new AbortController();
+    const sourceToken = ctx.sourceToken;
+    const folderToken = ++ctx.folderToken;
+    ctx.folderAbort = abort;
+    browser.hidden = false;
+    browser.setAttribute('aria-busy', 'true');
+    const error = form.querySelector('[data-folder-error]');
+    error.hidden = true;
+    const use = form.querySelector('[data-folder-use]');
+    if (!append) {
+      use.disabled = true;
+      browser.dataset.loaded = 'false';
+      form.querySelector('[data-folder-current]').textContent = path || 'Your home directory';
+      form.querySelector('[data-folder-list]').textContent = 'Loading folders…';
+      form.querySelector('[data-folder-breadcrumbs]').textContent = '';
+      form.querySelector('[data-folder-more]').hidden = true;
+      form.querySelector('[data-folder-parent]').disabled = true;
+    }
+    const body = new URLSearchParams({
+      csrf: field(form, 'csrf').value,
+      path: path || '',
+      offset: String(offset),
+    });
+    try {
+      const response = await fetch('/insights/sessions/directories', {method: 'POST', body: body, signal: abort.signal});
+      let result;
+      try {
+        result = await response.json();
+      } catch (failure) {
+        result = {};
+      }
+      if (!folderCurrent(ctx, sourceToken, folderToken, abort)) return;
+      if (!response.ok) throw new Error(result.error || 'Directory listing failed.');
+      if (!result.path || !Array.isArray(result.directories) || !Array.isArray(result.breadcrumbs)) {
+        throw new Error('The directory response was incomplete.');
+      }
+      renderFolderPage(ctx, result, append);
+    } catch (failure) {
+      if (failure.name !== 'AbortError' && folderCurrent(ctx, sourceToken, folderToken, abort)) {
+        error.textContent = (failure.message || 'Could not list this directory.')
+          + ' Check the path, try another folder, or cancel to keep the typed filter.';
+        error.hidden = false;
+        if (!append) {
+          use.disabled = true;
+          browser.dataset.loaded = 'false';
+        }
+        if (!append) form.querySelector('[data-folder-list]').textContent = 'No folder loaded.';
+      }
+    } finally {
+      if (ctx.folderAbort === abort) {
+        ctx.folderAbort = null;
+        browser.setAttribute('aria-busy', 'false');
+      }
+    }
+  }
+
+  function openFolderBrowser(ctx) {
+    const typed = field(ctx.form, 'session_project_dir').value;
+    ctx.form.querySelector('[data-folder-browser]').hidden = false;
+    loadFolderPage(ctx, typed || '', 0, false);
+  }
+
+  function useFolder(ctx) {
+    const browser = ctx.form.querySelector('[data-folder-browser]');
+    const use = ctx.form.querySelector('[data-folder-use]');
+    if (browser.dataset.loaded !== 'true' || use.disabled || !use.dataset.path) return;
+    const input = field(ctx.form, 'session_project_dir');
+    input.value = use.dataset.path;
+    input.dispatchEvent(new global.Event('input', {bubbles: true}));
+    input.dispatchEvent(new global.Event('change', {bubbles: true}));
+    closeFolderBrowser(ctx);
+  }
+
+  function selectSessionDateRange(ctx) {
+    setSessionPreset(ctx, 'custom');
+  }
+
 
   function facetKey(form) {
     const selected = Array.from(form.querySelectorAll('input[name^="facet_"]:checked')).map(function (input) {
@@ -665,6 +822,23 @@
     if (hit('[data-irf-next]')) goNext(ctx);
     else if (hit('[data-irf-back]')) showStep(ctx, Math.max(1, ctx.step - 1));
     else if ((element = hit('[data-preset]'))) applyPreset(ctx, element);
+    else if ((element = hit('[data-session-preset]'))) setSessionPreset(ctx, element.dataset.sessionPreset);
+    else if (hit('[data-session-apply]')) {
+      selectSessionDateRange(ctx);
+      ctx.form.querySelector('.irf-session-time-menu').open = false;
+    } else if (hit('[data-folder-open]')) openFolderBrowser(ctx);
+    else if (hit('[data-folder-cancel]')) closeFolderBrowser(ctx);
+    else if (hit('[data-folder-use]')) useFolder(ctx);
+    else if (hit('[data-folder-home]')) loadFolderPage(ctx, '', 0, false);
+    else if ((element = hit('[data-folder-parent]'))) {
+      if (!element.disabled) loadFolderPage(ctx, element.dataset.path, 0, false);
+    } else if ((element = hit('[data-folder-more]'))) {
+      if (!element.hidden && !element.disabled) {
+        element.disabled = true;
+        loadFolderPage(ctx, ctx.form.querySelector('[data-folder-current]').textContent, Number(element.dataset.offset), true)
+          .finally(function () { element.disabled = false; });
+      }
+    } else if ((element = hit('[data-folder-nav]'))) loadFolderPage(ctx, element.dataset.path, 0, false);
     else if ((element = hit('[data-browse]'))) ctx.form.querySelector('input[data-file]').click();
     else if (hit('[data-cq-open]')) {
       const e = editor(ctx);
@@ -698,6 +872,8 @@
       refreshFacets(ctx);
     } else if (target.name === 'window_days') {
       refreshFacets(ctx);
+    } else if (target.name === 'session_from' || target.name === 'session_to') {
+      selectSessionDateRange(ctx);
     } else if (target.matches('[data-sessions-all]')) {
       ctx.form.querySelectorAll('input[name="session"]').forEach(function (input) { input.checked = target.checked; });
       selectionChanged(ctx);
@@ -736,6 +912,7 @@
       form: form, step: 1, facetKey: null, facetAbort: null, snapshotAbort: null, measuredPath: null,
       tabId: randomId(), sessionsAbort: null, freezeAbort: null, uploadAbort: null, uploadSequence: 0,
       sessionsDirty: false, selectionToken: 0, sourceToken: 0, traceFileOwner: null,
+      folderAbort: null, folderToken: 0,
       planSequence: 0, compactSequence: 0, refreshTimer: null,
     };
     contexts.set(form, ctx);
@@ -743,6 +920,7 @@
     form.addEventListener('change', function (event) { onChange(ctx, event); });
     form.addEventListener('input', function (event) {
       if (event.target.name === 'query') updateCompilerModel(ctx);
+      if (event.target.name === 'session_from' || event.target.name === 'session_to') selectSessionDateRange(ctx);
       if (affectsEstimate(event.target)) scheduleRefresh(ctx);
     });
     form.addEventListener('keydown', function (event) { onKeydown(ctx, event); });
@@ -755,7 +933,7 @@
     form.classList.add('irf-ready');
     const mountedSource = activeSource(form);
     if (field(form, 'trace_file').value.trim() && (mountedSource === 'file' || mountedSource === 'sessions')) ctx.traceFileOwner = mountedSource;
-    defaultSessionDates(form);
+    defaultSessionDates(ctx);
     showStep(ctx, step || 1, keepError);
     refreshFacets(ctx);
     if (ctx.step !== 3) loadCompact(ctx);

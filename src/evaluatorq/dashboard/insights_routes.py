@@ -63,6 +63,7 @@ from evaluatorq.dashboard.insights_views import (
     unreadable_page,
 )
 from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
+from evaluatorq.dashboard.project_browser import list_project_directories
 from evaluatorq.dashboard.security import csrf_token, request_rejected
 from evaluatorq.dashboard.trace_finder.routes import browser_offset_zone, selected_dashboard_auth
 from evaluatorq.dashboard.view import model_control
@@ -421,7 +422,7 @@ def _session_query(form: Any) -> SessionQuery:
         except ValueError:
             raise ValueError('From and To must be dates like 2026-10-07.') from None
         start, end = day_window(*days, zone)
-    project_dir = str(form.get('session_project_dir') or '').strip() or None
+    project_dir = str(form.get('session_project_dir') or '') or None
     if project_dir is not None:
         expanded = Path(project_dir).expanduser()
         if not expanded.is_absolute():
@@ -646,6 +647,34 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             {'path': str(path), 'n_sessions': frozen.n_sessions, 'bytes': len(frozen.data), 'failed': failed},
             status_code=201,
         )
+
+    async def insights_sessions_directories(req: Request) -> Response:
+        try:
+            form = await req.form(max_fields=10)
+        except Exception:  # noqa: BLE001 — malformed request form is a client error
+            return JSONResponse({'error': 'Could not read the directory request.'}, status_code=422)
+        try:
+            rejected = request_rejected(req, form)
+            if rejected:
+                return JSONResponse({'error': rejected}, status_code=403)
+            raw_path = form.get('path', '')
+            raw_offset = form.get('offset', '0')
+            try:
+                if not isinstance(raw_path, str) or len(raw_path) > 4096:
+                    raise ValueError('Enter a valid directory path.')
+                if not isinstance(raw_offset, str) or not raw_offset.strip():
+                    raise ValueError('Directory page offset must be a nonnegative integer.')
+                offset = int(raw_offset)
+                if offset < 0:
+                    raise ValueError('Directory page offset must be a nonnegative integer.')
+                result = await asyncio.to_thread(list_project_directories, raw_path, offset=offset)
+            except (TypeError, ValueError) as exc:
+                return JSONResponse({'error': str(exc)}, status_code=422)
+            return JSONResponse(result)
+        finally:
+            await form.close()
+
+    app.add_route(Route('/insights/sessions/directories', endpoint=insights_sessions_directories, methods=['POST']))
 
     app.add_route(Route('/insights/sessions/search', endpoint=insights_sessions_search, methods=['POST']))
     app.add_route(Route('/insights/sessions/snapshot', endpoint=insights_sessions_snapshot, methods=['POST']))

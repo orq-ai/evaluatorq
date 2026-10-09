@@ -189,7 +189,13 @@ eq insights --sessions --project-dir . --from 2026-10-01 --preview-input
 
 ### Analyze sessions from the dashboard
 
-In **Insights → New run**, choose the **Local sessions** tab, the third next to **Orq traces** and **Trace file**. Tick the tools, then set the dates, a project directory (an absolute path, or one starting with `~`) or text, and press **Search**. The dates start as the last seven days, so widen them to see older sessions. Tick the sessions you want, or the header box for all of them, up to 1000, and press **Continue**. That freezes the selection into a snapshot in the dashboard's Insights folder. The **Review** step shows the same `Sending N traces` sentence as the CLI. A snapshot over the 100 MiB upload limit is rejected with a message to select fewer sessions.
+In **Insights → New run**, choose **Local sessions**, the third tab next to **Orq traces** and **Trace file**. Select any combination of Claude Code, Claude desktop, Codex and omp. Open the **Last 7 days** menu to choose **Last 30 days** or **All dates**, or expand **Custom range** inside that menu. Set From and To with the native calendar controls, then press **Apply range**. These dates use your browser's local timezone, include the whole To day, and can be left open-ended.
+
+**Project directory** includes projects below that directory and linked Git worktrees. Enter `~` for projects under the home directory of the dashboard user, or leave it blank for every recorded project location. **Browse** opens a folder browser on the machine running the dashboard, with breadcrumbs, Home, Parent and more folders when needed. Navigate, then press **Use this folder**; **Cancel** keeps the path you typed. Browsing lists folder names without uploading or reading file contents. The filter matches project locations recorded in sessions; it does not scan project files or look for session stores in that directory.
+
+**Contains text** is a case-insensitive literal substring, not a regular expression. For example, `error` matches `ERROR`, but `error|timeout` searches for those exact characters rather than either word.
+
+Press **Search**, tick the sessions you want, or the header box for all of them, up to 1000, and press **Continue**. That freezes the selection into a snapshot in the dashboard's Insights folder. The **Review** step shows the same `Sending N traces` sentence as the CLI. A snapshot over the 100 MiB upload limit is rejected with a message to select fewer sessions.
 
 When the 20-second deadline passes, the results say `Searched N of M session files before the 20-second limit. Narrow the dates or text to see the rest.`
 
@@ -211,7 +217,7 @@ Cowork is Claude desktop's agent mode, which runs sessions in a virtual machine.
 | `--source` | `claude-code`, `claude-desktop`, `codex` or `omp`; repeat the flag for several. Default: all four |
 | `--from`, `--to` | Sessions whose time span overlaps the window. Both are `YYYY-MM-DD` in local time, and `--to` includes that whole day |
 | `--project-dir` | Sessions run in that directory, below it, or in a linked git worktree of it, so `--project-dir .` also finds sessions from sibling worktrees of the same repository. A deleted worktree and a Cowork VM path match only when written the same way as the session's own path |
-| `--text` | Case-insensitive text in any message, including system notices and Claude's thinking, up to 500 characters. Tool calls and tool output are not searched |
+| `--text` | Case-insensitive literal substring in any message, including system notices and Claude's thinking, up to 500 characters; not a regular expression. Tool calls and tool output are not searched |
 | `--limit` | Maximum sessions, 1 to 1000. `eq agent-sessions` defaults to 50, or 1000 with `--export`; `eq insights --sessions` defaults to 1000 |
 | `--json` | On `eq agent-sessions`, print the matches as a JSON array on stdout instead of the table |
 | `--export` | On `eq agent-sessions`, write the listed sessions as a snapshot file |

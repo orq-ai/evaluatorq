@@ -15,6 +15,7 @@ from loguru import logger
 
 from evaluatorq.common.reports import esc
 from evaluatorq.dashboard.facet_picker import render_facet_chips
+from evaluatorq.dashboard.native_dates import date_input, date_row
 from evaluatorq.trace_finder.columns import COLUMNS, MATCH, Column, fmt_cost, fmt_duration, fmt_time, fmt_tokens
 from evaluatorq.trace_finder.explorer import (
     CONVERSATION_METRICS,
@@ -93,6 +94,40 @@ def range_inputs(
         f'aria-pressed="{str(int(span.total_seconds()) == range_seconds).lower()}">{label}</button>'
         for label, span in PRESETS
     )
+    start_value = _local_value(start)
+    end_value = _local_value(end)
+    from_row = date_row(
+        'From',
+        date_input(
+            control_id='explorer-from',
+            name='from',
+            label='From date',
+            css_class='xr-date',
+            required=True,
+            preserve=True,
+            form='explorer-load-form',
+            utc=start_value,
+            value=start_value[:10],
+        )
+        + f'<input id="explorer-from-time" class="xr-time" aria-label="From time" hx-preserve form="explorer-load-form" name="from_time" type="time" step="1" required data-utc="{start_value}" value="{start_value[11:]}">',
+        css_class='xr-range',
+    )
+    to_row = date_row(
+        'To',
+        date_input(
+            control_id='explorer-to',
+            name='to',
+            label='To date',
+            css_class='xr-date',
+            required=True,
+            preserve=True,
+            form='explorer-load-form',
+            utc=end_value,
+            value=end_value[:10],
+        )
+        + f'<input id="explorer-to-time" class="xr-time" aria-label="To time" hx-preserve form="explorer-load-form" name="to_time" type="time" step="1" required data-utc="{end_value}" value="{end_value[11:]}">',
+        css_class='xr-range',
+    )
     controls = (
         f'<form id="explorer-load-form" hidden hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace" hx-include="#finder-controls, #finder-scope">{_csrf()}</form>'
         f'<input id="explorer-range-mode" type="hidden" name="range_mode" value="{range_mode}" form="explorer-load-form" hx-preserve data-explorer-range-mode>'
@@ -100,8 +135,7 @@ def range_inputs(
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
         f'<details class="xr-time-menu"><summary><span class="xr-time-label" data-explorer-range-label>Custom range</span></summary><div class="xr-time-options"><span class="xr-presets" role="group" aria-label="Relative range">{presets}</span>'
         '<details class="xr-exact"><summary>Custom range</summary>'
-        f'<span class="xr-range"><b>From</b><input id="explorer-from" class="xr-date" aria-label="From date" hx-preserve form="explorer-load-form" name="from" type="date" required data-utc="{_local_value(start)}" value="{_local_value(start)[:10]}"><input id="explorer-from-time" class="xr-time" aria-label="From time" hx-preserve form="explorer-load-form" name="from_time" type="time" step="1" required data-utc="{_local_value(start)}" value="{_local_value(start)[11:]}"></span>'
-        f'<span class="xr-range"><b>To</b><input id="explorer-to" class="xr-date" aria-label="To date" hx-preserve form="explorer-load-form" name="to" type="date" required data-utc="{_local_value(end)}" value="{_local_value(end)[:10]}"><input id="explorer-to-time" class="xr-time" aria-label="To time" hx-preserve form="explorer-load-form" name="to_time" type="time" step="1" required data-utc="{_local_value(end)}" value="{_local_value(end)[11:]}"></span>'
+        f'{from_row}{to_row}'
         '<small class="xr-tz" data-explorer-tz-label>Local time</small>'
         '<button type="button" class="xr-apply" data-explorer-apply>Apply range</button></details></div></details>'
         f'<label class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="{MAX_LIVE_TRACES}" value="{row_limit}" style="width:72px"></label>'

@@ -23,9 +23,12 @@ function response(body, {status = 200, redirected = false, url = ''} = {}) {
 function boot(handlers) {
   const document = new Document(fixtures.form);
   const calls = [];
-  const location = {assigned: null, assign(url) { this.assigned = url; }};
   const processed = [];
-  const window = {location, htmx: {process: element => processed.push(element)}};
+  const location = {assigned: null, assign(url) { this.assigned = url; }};
+  const window = {location, htmx: {process: element => processed.push(element)}, Event: function (type, options) {
+    this.type = type;
+    this.bubbles = options && options.bubbles;
+  }};
   const fetch = async (url, options = {}) => {
     calls.push({url: String(url), options});
     const pathname = String(url).split('?')[0];
@@ -709,6 +712,111 @@ async function main() {
     assert.equal(app.form.querySelector('[data-file-name="file"]').value, 'owned-file.json');
     assert.equal(app.form.querySelector('[data-file-name="sessions"]').value, '');
     assert.deepEqual(visibleStep(app.form), ['1'], 'the stale freeze cannot advance the form');
+  }
+  {
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': () => response(fixtures.sessions),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('[data-session-preset="all"]').click();
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    assert.equal(app.form.querySelector('input[name="session_from"]').value, '', 'All dates clears the lower bound');
+    assert.equal(app.form.querySelector('input[name="session_to"]').value, '', 'All dates clears the upper bound after tab switches');
+    app.form.querySelector('[data-sessions-search]').click();
+    await tick();
+    const search = app.calls.find(call => call.url === '/insights/sessions/search');
+    const body = new URLSearchParams(search.options.body);
+    assert.equal(body.get('session_from'), '');
+    assert.equal(body.get('session_to'), '');
+  }
+
+  {
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/search': () => response(fixtures.sessions),
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    const from = app.form.querySelector('input[name="session_from"]');
+    const to = app.form.querySelector('input[name="session_to"]');
+    from.value = '2026-09-01';
+    to.value = '2026-09-12';
+    from.dispatchEvent({type: 'input', bubbles: true, target: from});
+    to.dispatchEvent({type: 'change', bubbles: true, target: to});
+    app.form.querySelector('[data-sessions-search]').click();
+    await tick();
+    const search = app.calls.find(call => call.url === '/insights/sessions/search');
+    const body = new URLSearchParams(search.options.body);
+    assert.equal(body.get('session_from'), '2026-09-01');
+    assert.equal(body.get('session_to'), '2026-09-12');
+  }
+
+  {
+    const directoryResult = path => ({
+      path, parent: '/typed', breadcrumbs: [{name: 'root', path: '/'}, {name: 'typed', path: '/typed'}],
+      directories: [{name: '<unsafe> \"folder\" & more', path: '/typed/<unsafe> \"folder\" & more'}],
+      offset: 0, limit: 200, has_more: false,
+    });
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/directories': (_url, options) => {
+        const request = new URLSearchParams(options.body);
+        return response(JSON.stringify(directoryResult(request.get('path') || '/home/user')));
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    const project = app.form.querySelector('input[name="session_project_dir"]');
+    project.value = '/typed';
+    app.form.querySelector('[data-folder-open]').click();
+    await tick();
+    await tick();
+    const folder = app.form.querySelectorAll('[data-folder-nav]').find(button => button.dataset.path.indexOf('/typed/<unsafe>') === 0);
+    assert.ok(folder, 'folder names and paths containing markup characters remain usable');
+    folder.click();
+    await tick();
+    await tick();
+    app.form.querySelector('[data-folder-use]').click();
+    assert.equal(project.value, '/typed/<unsafe> "folder" & more');
+    assert.equal(app.form.querySelector('[data-folder-browser]').hidden, true);
+
+    project.value = '/keep-this-filter';
+    app.form.querySelector('[data-folder-open]').click();
+    await tick();
+    await tick();
+    app.form.querySelector('[data-folder-cancel]').click();
+    assert.equal(project.value, '/keep-this-filter', 'cancelling leaves the typed path unchanged');
+  }
+
+  {
+    let release;
+    let started;
+    const gate = new Promise(resolve => { release = resolve; });
+    const requestStarted = new Promise(resolve => { started = resolve; });
+    const app = boot({
+      ...baseHandlers(),
+      '/insights/sessions/directories': async () => {
+        started();
+        await gate;
+        return response(JSON.stringify({
+          path: '/late', parent: null, breadcrumbs: [{name: '/', path: '/'}],
+          directories: [{name: 'Late result', path: '/late/result'}], offset: 0, limit: 200, has_more: false,
+        }));
+      },
+    });
+    await tick();
+    app.form.querySelector('input[name="source"][value="sessions"]').click();
+    app.form.querySelector('[data-folder-open]').click();
+    await requestStarted;
+    app.form.querySelector('input[name="source"][value="file"]').click();
+    release();
+    await tick();
+    await tick();
+    assert.equal(app.form.querySelector('[data-folder-browser]').hidden, true, 'switching sources closes the folder browser');
+    assert.equal(app.form.querySelector('[data-folder-list]').textContent, 'Loading folders…', 'a late listing cannot update the closed browser');
   }
 }
 
