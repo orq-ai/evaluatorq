@@ -2176,7 +2176,7 @@ def test_traces_drawer_hides_raw_classifier_explanation_but_find_keeps_it() -> N
     assert 'CLASSIFIER_REASON_SENTINEL' in find_html
 
 
-def test_drawer_labels_empty_conversation_state() -> None:
+def test_drawer_empty_messages() -> None:
     from evaluatorq.dashboard.trace_finder.views import drawer
     from evaluatorq.trace_finder import TraceDetail
 
@@ -2195,8 +2195,9 @@ def test_drawer_labels_empty_conversation_state() -> None:
     )
     html = drawer(TraceDetail(trace=trace, projection=None, classification=None), traces_layout=True)
 
-    assert 'class="fd-no-messages" role="status"' in html
+    assert '<div class="fd-no-messages" role="status">' in html
     assert '<b>No messages available</b>' in html
+    assert '<div class="fd-msg-content"></div>' not in html
 
 
 def test_missing_trace_reason_is_escaped_and_wrapped() -> None:

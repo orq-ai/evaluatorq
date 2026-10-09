@@ -13,6 +13,7 @@ from evaluatorq.insights.models import population_source, reads_orq
 from evaluatorq.insights.population import TARGETED_RELOAD_MARGIN, PopulationError, read_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+from evaluatorq.trace_finder.orq_source import OrqSpanMismatchError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -28,6 +29,7 @@ SNAPSHOT_UNREADABLE = 'The snapshot file this run read is no longer available or
 UPLOAD_DELETED = (
     'The dashboard deletes uploaded snapshot files after the run, so this conversation is no longer available.'
 )
+SPAN_MISMATCH = 'The conversation span analyzed by this run is no longer the span returned by Orq.'
 
 
 def _gone_snapshot_reason(path: Path) -> str:
@@ -82,11 +84,14 @@ async def load_orq_record(
         try:
             record = await source.load_trace(
                 trace.trace_id,
+                span_id=trace.span_id,
                 start=timestamp - TARGETED_RELOAD_MARGIN,
                 end=timestamp + TARGETED_RELOAD_MARGIN,
                 facets=FacetSelection.model_validate(run.population.get('facets') or {}),
                 numeric=NumericFilters.model_validate(run.population.get('numeric') or {}),
             )
+        except OrqSpanMismatchError as error:
+            return _unavailable(trace, SPAN_MISMATCH, error)
         except Exception as error:  # noqa: BLE001 — Orq and SDK failures vary; the tab must degrade visibly.
             return _unavailable(
                 trace,

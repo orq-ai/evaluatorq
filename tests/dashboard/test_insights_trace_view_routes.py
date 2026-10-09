@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import re
+import asyncio
 from contextlib import asynccontextmanager
+import re
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from loguru import logger
@@ -21,7 +22,7 @@ from evaluatorq.trace_finder.orq_source import OrqTraceSource
 from tests.dashboard.insights_trace_helpers import snapshot_run, write_snapshot
 from tests.dashboard.test_insights_page import _write_run, minimal_run  # noqa: F401 — fixture reused
 from tests.insights.test_population import make_trace
-from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, span
+from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, detail, span, summary
 
 TRACE_PAGE = '/insights/run-1/trace?trace_id=trace-1&span_id=span-1'
 CONVERSATION = '/insights/run-1/trace-conversation?trace_id=trace-1&span_id=span-1'
@@ -121,25 +122,53 @@ def test_orq_run_shows_the_transcript_and_a_spans_url(
     assert 'now selects span' not in response.text
 
 
-def test_orq_run_with_a_different_span_shows_a_mismatch_notice(
+def test_orq_run_with_a_different_span_never_shows_substituted_conversation(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run)
-    _fake_source(monkeypatch, make_trace('trace-1', span_id='span-other', content='hello from orq'))
+    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+
+    @asynccontextmanager
+    async def source(app: Any, run: InsightsRun):
+        traces = FakeTraces(
+            pages={None: ([summary('trace-1', messages=[])], False, None)},
+            spans={'trace-1': [span('span-other', minute=1)]},
+            details={('trace-1', 'span-other'): detail('span-other', 'substituted transcript secret', minute=1)},
+        )
+        yield OrqTraceSource(cast(Any, FakeOrq(traces)))
+
+    monkeypatch.setattr(insights_routes, '_trace_source', source)
     warnings: list[str] = []
     sink = logger.add(lambda message: warnings.append(str(message)), level='WARNING', format='{message}')
-
     try:
         response = TestClient(build_app()).get(CONVERSATION)
     finally:
         logger.remove(sink)
 
-    assert 'Orq now selects span span-other' in response.text
-    assert 'the analysis used span span-1' in response.text
-    assert 'hello from orq' in response.text
-    assert [message for message in warnings if 'span-other' in message] == [
-        'Insights trace trace-1 was analysed on span span-1 but Orq now selects span span-other\n'
-    ]
+    assert 'substituted transcript secret' not in response.text
+    assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' in response.text
+    assert len([message for message in warnings if 'conversation unavailable' in message]) == 1
+    assert 'trace-spans?trace_id=trace-1' in response.text
+
+
+
+@pytest.mark.asyncio
+async def test_unavailable_source_does_not_swallow_consumer_errors(monkeypatch: pytest.MonkeyPatch, minimal_run: InsightsRun) -> None:
+    run = _scoped_run(minimal_run, {**_recorded_scope(), 'account_version': '2'})
+    auth = DashboardAuth(method='environment', api_key='key', base_url='https://my.orq.ai')
+    orq = FakeOrq(FakeTraces({}))
+
+    class FailingWorkspaces:
+        async def list_async(self) -> Any:
+            raise RuntimeError('verification unavailable')
+
+    orq.workspaces = FailingWorkspaces()
+    monkeypatch.setattr(insights_routes, 'selected_dashboard_auth', lambda app: auth)
+    monkeypatch.setattr(insights_routes, 'build_orq_client', lambda *args, **kwargs: orq)
+
+    with pytest.raises(RuntimeError, match='consumer failure'):
+        async with insights_routes._trace_source(build_app(), run) as unavailable:
+            assert unavailable == 'Could not verify the Orq account selected in Settings to load this conversation.'
+            raise RuntimeError('consumer failure')
 
 
 def test_orq_run_without_credentials_degrades_visibly(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -106,6 +107,51 @@ def account_identity(auth: DashboardAuth) -> str:
     """Hash only the selected account, without workspace, project, or any secret."""
 
     return _hash_fields(_account_fields(auth))
+
+
+async def verified_account_identity(auth: DashboardAuth, client: Any) -> str:
+    """Hash an Orq-verified user, workspace, or project principal without credential secrets."""
+    parsed = urlparse(auth.base_url)
+    base_url = f'{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path.rstrip("/")}'
+    if auth.method == 'cli_oauth':
+        from evaluatorq.common.cli_oauth import oauth_subject
+
+        subject = await asyncio.to_thread(oauth_subject, auth.base_url)
+        user_id = subject.get('user_id') if isinstance(subject, dict) else None
+        if not isinstance(user_id, str) or not user_id:
+            raise ValueError('Orq OAuth did not return a verified user ID.')
+        principal = {'user_id': user_id}
+    else:
+        try:
+            response = await client.workspaces.list_async()
+        except Exception as exc:
+            if getattr(exc, 'status_code', None) != 403:
+                raise
+            response = None
+        if response is not None:
+            data = getattr(response, 'data', None)
+            ids = {getattr(item, 'id', None) for item in data or ()}
+            ids = {value for value in ids if isinstance(value, str) and value}
+            if getattr(response, 'has_more', False):
+                raise ValueError('Orq credential can access multiple workspaces; cannot verify one workspace.')
+            if len(ids) != 1:
+                raise ValueError('Orq credential did not verify exactly one workspace.')
+            workspace_id = next(iter(ids))
+            principal = {'workspace_id': workspace_id}
+        else:
+            page = await client.projects.list_async(limit=100)
+            rows = list(getattr(page, 'data', None) or ())
+            project_ids = {
+                value
+                for value in (getattr(item, 'project_id', None) for item in rows)
+                if isinstance(value, str) and value
+            }
+            if getattr(page, 'has_more', False):
+                raise ValueError('Orq credential can access multiple projects; cannot verify one project.')
+            if len(project_ids) != 1:
+                raise ValueError('Orq credential did not verify exactly one project.')
+            principal = {'project_id': next(iter(project_ids))}
+    return _hash_fields({'version': 2, 'base_url': base_url, **principal})
 
 
 def account_label(auth: DashboardAuth) -> str:

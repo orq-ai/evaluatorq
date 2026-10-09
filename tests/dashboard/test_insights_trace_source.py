@@ -138,8 +138,8 @@ async def test_orq_run_hydrates_the_conversation(orq_run: InsightsRun) -> None:
         details={('trace-1', 'span-9'): detail('span-9', 'hello from orq', minute=1)},
     )
     source = OrqTraceSource(cast(Any, FakeOrq(traces)))
-
-    result = await load_orq_record(orq_run, orq_run.traces[0], open_source=_opened(source))
+    trace = orq_run.traces[0].model_copy(update={'span_id': 'span-9'})
+    result = await load_orq_record(orq_run, trace, open_source=_opened(source))
 
     assert isinstance(result, TraceRecord)
     assert result.span_id == 'span-9'
@@ -216,6 +216,19 @@ async def test_orq_run_reads_the_same_span_the_pipeline_analysed(orq_run: Insigh
     assert isinstance(result, TraceRecord)
     assert result.span_id == analysed.span_id
     assert [message['content'] for message in result.messages] == ['q', 'a']
+
+
+@pytest.mark.asyncio
+async def test_orq_run_does_not_return_a_different_analyzed_span(
+    orq_run: InsightsRun, logged_warnings: list[str]
+) -> None:
+    trace = orq_run.traces[0].model_copy(update={'span_id': 'analysed-span'})
+    source = OrqTraceSource(cast(Any, FakeOrq(_summary_with_transcript_and_child_llm_span())))
+
+    result = await load_orq_record(orq_run, trace, open_source=_opened(source))
+
+    assert result == 'The conversation span analyzed by this run is no longer the span returned by Orq.'
+    assert len([message for message in logged_warnings if 'conversation unavailable' in message]) == 1
 
 
 @pytest.mark.parametrize(

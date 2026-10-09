@@ -22,6 +22,7 @@ from evaluatorq.dashboard.auth import (
     auth_identity,
     build_auth_clients,
     resolve_dashboard_auth,
+    verified_account_identity,
 )
 from evaluatorq.dashboard.insights_launch import (
     _MANIFEST_ENV,
@@ -393,14 +394,28 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
         and await asyncio.to_thread(auth_identity, auth, settings) != payload.auth_identity
     ):
         raise ValueError('Dashboard authentication or scope changed after this run started. Start the run again.')
-    orq_scope = {
-        'account': account,
-        'account_label': account_label(auth),
-        'workspace': settings.orq_workspace,
-        'project': settings.orq_project_id,
-    }
     orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
     try:
+        verified_account = None
+        if spec.source != 'snapshot':
+            try:
+                verified_account = await verified_account_identity(auth, orq)
+            except Exception as exc:  # noqa: BLE001 — run remains launchable, but retains legacy credential identity
+                logger.warning(
+                    'Could not verify the Orq account for this Insights run; retaining legacy credential identity: {}',
+                    exc,
+                )
+        orq_scope = (
+            {
+                'account': verified_account or account,
+                'account_version': '2' if verified_account else None,
+                'account_label': account_label(auth),
+                'workspace': settings.orq_workspace,
+                'project': settings.orq_project_id,
+            }
+            if spec.source != 'snapshot'
+            else None
+        )
         run = await insights(
             population,
             labels=spec.label_specs(),

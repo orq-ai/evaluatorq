@@ -20,7 +20,7 @@ from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.reports import esc
 from evaluatorq.common.run_manifest import list_manifests
 from evaluatorq.dashboard import library
-from evaluatorq.dashboard.auth import account_identity, auth_identity, build_orq_client
+from evaluatorq.dashboard.auth import account_identity, auth_identity, build_orq_client, verified_account_identity
 from evaluatorq.dashboard.insights_estimate_views import (
     render_compact_estimate,
     render_estimate,
@@ -242,8 +242,8 @@ def _resolve_trace(run_id: str, trace_id: str | None, span_id: str | None) -> tu
     return run, trace
 
 
-def _recorded_orq_scope(run: InsightsRun) -> dict[str, str | None] | None:
-    """Return the Orq account and scope a dashboard run recorded, or None when absent or malformed (logged)."""
+def _recorded_orq_scope(run: InsightsRun) -> dict[str, Any] | None:
+    """Return a recorded Orq identity and scope, or None when absent or malformed (logged)."""
     scope = run.population.get('orq_scope')
     if scope is None:
         return None
@@ -252,6 +252,7 @@ def _recorded_orq_scope(run: InsightsRun) -> dict[str, str | None] | None:
         and isinstance(scope.get('account'), str)
         and isinstance(scope.get('account_label'), str)
         and all(isinstance(scope.get(key), str | None) for key in ('workspace', 'project'))
+        and scope.get('account_version') in (None, '2')
     ):
         return scope
     logger.warning('Insights run {} has a malformed orq_scope; using the Settings scope', run.run_id)
@@ -298,7 +299,7 @@ async def _trace_source(app: Any, run: InsightsRun) -> AsyncIterator[OrqTraceSou
         yield 'Connect an Orq account in Settings to load this conversation.'
         return
     scope = _recorded_orq_scope(run)
-    if scope is not None:
+    if scope is not None and scope.get('account_version') != '2':
         try:
             account = await asyncio.to_thread(account_identity, auth)
         except Exception as exc:  # noqa: BLE001 — an unreadable login renders a visible unavailable state
@@ -318,8 +319,32 @@ async def _trace_source(app: Any, run: InsightsRun) -> AsyncIterator[OrqTraceSou
             return
     async with AsyncExitStack() as stack:
         try:
-            source = OrqTraceSource(await stack.enter_async_context(_orq_client(app, auth, scope=scope)))
+            orq = await stack.enter_async_context(_orq_client(app, auth, scope=scope))
         except Exception as exc:  # noqa: BLE001 — client construction failures render a visible unavailable state
+            logger.warning('Insights trace source could not be created: {}', exc)
+            yield 'Could not connect to Orq with the account selected in Settings.'
+            return
+        if scope is not None and scope.get('account_version') == '2':
+            try:
+                account = await verified_account_identity(auth, orq)
+            except Exception as exc:  # noqa: BLE001 — verification failure must not read trace data
+                logger.warning('Insights trace source could not verify the selected Orq account: {}', exc)
+                yield 'Could not verify the Orq account selected in Settings to load this conversation.'
+                return
+            if account != scope['account']:
+                logger.warning(
+                    'Insights run {} read Orq as {}, but Settings selects {}',
+                    run.run_id,
+                    scope['account_label'],
+                    auth.label,
+                )
+                yield (
+                    f'This run read Orq as {scope["account_label"]}. Select that account in Settings to load this conversation.'
+                )
+                return
+        try:
+            source = OrqTraceSource(orq)
+        except Exception as exc:  # noqa: BLE001 — source construction failures still close the client
             logger.warning('Insights trace source could not be created: {}', exc)
             source = None
         if source is None:
@@ -776,7 +801,6 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
             _resolve_trace, run_id, trace_id=trace_id, span_id=req.query_params.get('span_id')
         )
         spans_url: str | None = None
-        notice = ''
         record: TraceRecord | str
         if isinstance(resolved, str):
             logger.warning('Insights run {} trace {} conversation unavailable: {}', run_id, trace_id, resolved)
@@ -793,24 +817,12 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                     f'/insights/{quote(run.run_id, safe="")}/trace-spans?{urlencode({"trace_id": trace.trace_id})}'
                 )
                 record = await load_orq_record(run, trace, open_source=lambda: _trace_source(req.app, run))
-                if not isinstance(record, str) and trace.span_id and record.span_id != trace.span_id:
-                    logger.warning(
-                        'Insights trace {} was analysed on span {} but Orq now selects span {}',
-                        trace.trace_id,
-                        trace.span_id,
-                        record.span_id,
-                    )
-                    notice = (
-                        '<p class="insights-muted" role="status">'
-                        f'Orq now selects span {esc(record.span_id)} for this trace; '
-                        f'the analysis used span {esc(trace.span_id)}.</p>'
-                    )
         if isinstance(record, str):
             body = unavailable_conversation(reason=record, spans_url=spans_url)
         else:
             with cli_slug_render_scope():
                 body = await asyncio.to_thread(trace_conversation, record, spans_url=spans_url)
-        return _html(f'<div class="fd-traces insights-trace-view">{notice}{body}</div>')
+        return _html(f'<div class="fd-traces insights-trace-view">{body}</div>')
 
     @app.get('/insights/{run_id}/trace-spans')
     async def insights_trace_spans(req: Request, run_id: str) -> Response:

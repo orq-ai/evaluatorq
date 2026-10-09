@@ -118,6 +118,10 @@ class OrqSourceError(ValueError):
     """Live trace acquisition could not produce a valid snapshot."""
 
 
+class OrqSpanMismatchError(OrqSourceError):
+    """The live query selected a different span than the caller analyzed."""
+
+
 def require_complete_targeted_load(snapshot: Snapshot, *, error_type: type[Exception], operation: str) -> None:
     """Raise ``error_type`` when a targeted load stopped before covering its window.
 
@@ -331,6 +335,7 @@ class OrqTraceSource:
         self,
         trace_id: str,
         *,
+        span_id: str | None = None,
         start: datetime | None,
         end: datetime | None,
         facets: FacetSelection,
@@ -338,10 +343,11 @@ class OrqTraceSource:
     ) -> TraceRecord | None:
         """Hydrate one trace from its query summary, selecting the span a targeted ``load_async`` selects.
 
+        When ``span_id`` is nonempty, a different selected span is an unavailable analyzed conversation.
         Returns None when the query returns no usable conversation for the trace.
 
         Raises:
-            OrqSourceError: The load failed or its targeted scan stopped before covering the window.
+            OrqSourceError: The load failed, its targeted scan stopped early, or the selected span differs.
         """
         snapshot = await self.load_async(
             start, end, 1, facets=facets, numeric=numeric, target_trace_ids=frozenset({trace_id})
@@ -349,7 +355,13 @@ class OrqTraceSource:
         require_complete_targeted_load(
             snapshot, error_type=OrqSourceError, operation=f'targeted load of trace {trace_id}'
         )
-        return next((record for record in snapshot.traces if record.trace_id == trace_id), None)
+        record = next((record for record in snapshot.traces if record.trace_id == trace_id), None)
+        if record is not None and span_id and record.span_id != span_id:
+            raise OrqSpanMismatchError(
+                f'The conversation span analyzed by this run is no longer the span returned by Orq '
+                f'(expected {span_id}, returned {record.span_id})'
+            )
+        return record
 
     async def _load_with_lifecycle(
         self,

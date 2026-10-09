@@ -1157,52 +1157,62 @@ def drawer(
             else f'<p role="alert">Failed: {esc(result.error)}</p>'
         )
     )
-    messages, mini_html, _ = _thread_parts(trace, msg=msg)
-    payload = json.dumps(detail.projection.payload if detail.projection else {}, indent=2, ensure_ascii=False)
-    raw = json.dumps(result.raw_result if result else {}, indent=2, ensure_ascii=False)
-    thread_html = messages or '<p class="finder-empty">No messages.</p>'
-    row_header = ''
-    if row is not None:
-        models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.display_models)
-        reasoning = f' ({esc(fmt_tokens(row.reasoning_tokens))} reasoning)' if row.reasoning_tokens else ''
-        row_header = (
-            f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
-            f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
-            f'<div class="fd-row-meta">Started {esc(fmt_time(row.started_at))} · {esc(fmt_tokens(row.tokens_in))} in → '
-            f'{esc(fmt_tokens(row.tokens_out))} out{reasoning} · {esc(fmt_tokens(row.cached_tokens))} cache · '
-            f'Duration {esc(fmt_duration(row.duration_ms))} · '
-            f'{fmt_cost(row.cost_total, row.currency)}</div>'
-        )
-    technical_html = (
-        f'{row_header}<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
-        f'<dt>project</dt><dd>{esc(trace.project)}</dd><dt>model</dt><dd>{esc(trace.model)}</dd><dt>time</dt><dd>{esc(trace.timestamp.isoformat())}</dd></dl>'
-        f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
-        '<div class="fd-tabs">'
-        '<button type="button" data-panel="fd-input" onclick="eqFinderTab(this,\'fd-input\')">Classifier input</button>'
-        '</div>'
-        f'<div id="fd-input" class="fd-panel" hidden><div class="fd-panel-title">Classifier input</div><pre>{esc(payload)}</pre></div>'
-    )
     if traces_layout:
-        identity_html = ''
+        payload = json.dumps(detail.projection.payload if detail.projection else {}, indent=2, ensure_ascii=False)
+        row_header = ''
+        row_meta = ''
         if row is not None:
             models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.display_models)
-            identity_html = (
+            reasoning = f' ({esc(fmt_tokens(row.reasoning_tokens))} reasoning)' if row.reasoning_tokens else ''
+            row_header = (
                 f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
                 f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
             )
+            row_meta = (
+                f'<div class="fd-row-meta">Started {esc(fmt_time(row.started_at))} · {esc(fmt_tokens(row.tokens_in))} in → '
+                f'{esc(fmt_tokens(row.tokens_out))} out{reasoning} · {esc(fmt_tokens(row.cached_tokens))} cache · '
+                f'Duration {esc(fmt_duration(row.duration_ms))} · {fmt_cost(row.cost_total, row.currency)}</div>'
+            )
+        technical_html = (
+            f'{row_header}<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
+            f'<dt>project</dt><dd>{esc(trace.project)}</dd><dt>model</dt><dd>{esc(trace.model)}</dd><dt>time</dt><dd>{esc(trace.timestamp.isoformat())}</dd></dl>'
+            f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
+            '<div class="fd-tabs">'
+            '<button type="button" data-panel="fd-input" onclick="eqFinderTab(this,\'fd-input\')">Classifier input</button>'
+            '</div>'
+            f'<div id="fd-input" class="fd-panel" hidden><div class="fd-panel-title">Classifier input</div><pre>{esc(payload)}</pre></div>'
+        )
+        identity_html = row_header
         body_html = (
             '<div class="fd-traces">'
-            f'{identity_html}'
+            f'{identity_html}{row_meta}'
             f'<div class="fd-verdict"><span class="sw" style="background:{esc(_result_color(result, detail.dimensions))}"></span>{result_html}</div>'
             + trace_conversation(trace, spans_url=_find_spans_url(trace.trace_id), msg=msg)
             + f'<details class="fd-technical"><summary>Technical details</summary>{technical_html}</details></div>'
         )
         title = 'Trace conversation'
-        footer = (
-            trace_link_button(trace_span_url(trace.trace_id, trace.span_id, experiment_url), 'Open in Orq ↗')
-            + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
-        )
     else:
+        messages, mini_html, has_conversation = _thread_parts(trace, msg=msg)
+        payload = json.dumps(detail.projection.payload if detail.projection else {}, indent=2, ensure_ascii=False)
+        raw = json.dumps(result.raw_result if result else {}, indent=2, ensure_ascii=False)
+        thread_html = messages or (
+            '<p class="finder-empty">No messages.</p>'
+            if not has_conversation
+            else '<div class="fd-no-messages" role="status"><b>No messages available</b>'
+            '<span>This trace has no conversation text to display.</span></div>'
+        )
+        row_header = ''
+        if row is not None:
+            models = ''.join(f'<span class="tv pill">{esc(model)}</span>' for model in row.display_models)
+            reasoning = f' ({esc(fmt_tokens(row.reasoning_tokens))} reasoning)' if row.reasoning_tokens else ''
+            row_header = (
+                f'<div class="fd-row-head"><span class="tv dot {"err" if row.is_error else "ok"}"></span>'
+                f'<b>{esc(row.agent_name or row.name or "Unknown agent")}</b>{models}</div>'
+                f'<div class="fd-row-meta">Started {esc(fmt_time(row.started_at))} · {esc(fmt_tokens(row.tokens_in))} in → '
+                f'{esc(fmt_tokens(row.tokens_out))} out{reasoning} · {esc(fmt_tokens(row.cached_tokens))} cache · '
+                f'Duration {esc(fmt_duration(row.duration_ms))} · '
+                f'{fmt_cost(row.cost_total, row.currency)}</div>'
+            )
         body_html = (
             f'{row_header}{mini_html}'
             f'<dl class="fd-meta"><dt>trace</dt><dd>{esc(trace.trace_id)}</dd><dt>span</dt><dd>{esc(trace.span_id)}</dd>'
@@ -1216,10 +1226,10 @@ def drawer(
             f'<div id="fd-raw" class="fd-panel" hidden><div class="fd-panel-title">Raw result</div><pre>{esc(raw)}</pre></div>'
         )
         title = f'Trace {esc(trace.trace_id)}'
-        footer = (
-            trace_link_button(trace_span_url(trace.trace_id, trace.span_id, experiment_url), 'Open in Orq ↗')
-            + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
-        )
+    footer = (
+        trace_link_button(trace_span_url(trace.trace_id, trace.span_id, experiment_url), 'Open in Orq ↗')
+        + f'<button class="btn-secondary" type="button" data-trace-id="{esc(trace.trace_id)}" onclick="navigator.clipboard.writeText(this.dataset.traceId)">Copy trace id</button>'
+    )
     return drawer_shell(title, body_html, footer, dismiss_route='/find/dismiss', drawer_id='finder-drawer')
 
 

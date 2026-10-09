@@ -689,7 +689,7 @@ async def test_load_trace_raises_when_its_targeted_scan_is_incomplete(monkeypatc
 
     with pytest.raises(OrqSourceError, match='scan_limit'):
         await make_source(FakeOrq(traces)).load_trace(
-            'target', start=START, end=END, facets=FacetSelection(), numeric=NumericFilters()
+            'target', span_id=None, start=START, end=END, facets=FacetSelection(), numeric=NumericFilters()
         )
 
 
