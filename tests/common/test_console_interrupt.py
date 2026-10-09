@@ -15,12 +15,22 @@ def test_ctrl_c_exits_confirmation_without_waiting_for_enter() -> None:
     """Ctrl-C at the shared run-plan prompt exits while its stdin read is pending."""
     import pty
 
-    program = """
+    program = r"""
 import asyncio
+import os
 import signal
 import sys
+import termios
 from rich.console import Console
 from evaluatorq.common.reports import confirm_run_plan
+
+terminal = termios.tcgetattr(0)
+terminal[3] |= termios.ISIG
+terminal[6][termios.VINTR] = b'\x03'
+termios.tcsetattr(0, termios.TCSANOW, terminal)
+assert os.tcgetpgrp(0) == os.getpgrp()
+signal.signal(signal.SIGINT, signal.default_int_handler)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
 
 async def main():
     await confirm_run_plan(
@@ -31,7 +41,6 @@ async def main():
         skip_confirm=False,
     )
 
-signal.signal(signal.SIGINT, signal.default_int_handler)
 try:
     asyncio.run(main())
 except KeyboardInterrupt:
@@ -62,13 +71,27 @@ except KeyboardInterrupt:
         os.write(master_fd, b'\x03')
         deadline = time.monotonic() + 10
         returncode = None
+        master_open = True
         while time.monotonic() < deadline:
+            if master_open:
+                ready, _, _ = select.select([master_fd], [], [], 0.05)
+                if ready:
+                    try:
+                        chunk = os.read(master_fd, 4096)
+                    except OSError:
+                        master_open = False
+                    else:
+                        if chunk:
+                            output.extend(chunk)
+                        else:
+                            master_open = False
             waited_pid, status = os.waitpid(child_pid, os.WNOHANG)
             if waited_pid:
                 child_reaped = True
                 returncode = os.waitstatus_to_exitcode(status)
                 break
-            time.sleep(0.05)
+            if not master_open:
+                time.sleep(0.05)
         if returncode is None:
             pytest.fail(f'child did not exit after Ctrl-C; output: {output!r}')
         assert returncode == 130, f'expected Ctrl-C exit status 130, got {returncode}; output: {output!r}'
