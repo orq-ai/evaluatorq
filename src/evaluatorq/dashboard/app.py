@@ -56,6 +56,7 @@ from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile, close
 from evaluatorq.dashboard import library, metrics, model_choices, report_tabs
 from evaluatorq.dashboard.apply_ui import register_apply_routes
 from evaluatorq.dashboard.auth import build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.compression_inspector import register_compression_inspector_routes
 from evaluatorq.dashboard.filter_request import parse_selections
 from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
@@ -682,6 +683,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = form_data.get('orq_project_id') if values['orq_auth_method'] == 'cli_oauth' else None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    values['compression_inspector_enabled'] = form_data.get('compression_inspector_enabled') in ('on', 'true')
     raw_input_cap = form_data.get('trace_input_chars')
     if raw_input_cap is None:
         values['trace_input_chars'] = current.trace_input_chars
@@ -1145,6 +1147,7 @@ def build_app(roots: list[Path] | None = None) -> FastHTML:
     # Routes: /insights — read-only trace intelligence review
     # ------------------------------------------------------------------
     register_insights_routes(app)
+    register_compression_inspector_routes(app)
 
     # Register static file handler LAST so its catch-all /{fname}.{ext} does not
     # intercept the download routes above. Serve under /static/ to match the page

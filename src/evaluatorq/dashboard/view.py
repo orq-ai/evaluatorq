@@ -1201,9 +1201,21 @@ def settings_body(
         f'<div class="config-list">{"".join(auth_rows)}</div>',
         cls='settings-auth-panel',
     )
+    inspector_checked = ' checked' if setting_value('compression_inspector_enabled').lower() == 'true' else ''
+    advanced_panel = (
+        '<details class="settings-advanced"><summary>Advanced</summary>'
+        '<div class="config-list"><div class="config-row settings-field">'
+        '<span class="config-key">Compression inspector</span>'
+        '<span class="config-val"><label><input id="compression_inspector_enabled" '
+        f'name="compression_inspector_enabled" type="checkbox" value="true"{inspector_checked}> '
+        'Enable compression inspector</label>'
+        '<span class="settings-auth-hint">Local previews may expose sensitive original content. '
+        'Previews do not call models.</span></span></div></div></details>'
+    )
+
     form = (
         '<form class="settings-form" method="post" action="/settings">'
-        f'{csrf_field()}{saved_html}{form_error}{models_panel}{auth_panel}'
+        f'{csrf_field()}{saved_html}{form_error}{models_panel}{auth_panel}{advanced_panel}'
         '<button type="submit" class="rt-apply-btn settings-save">Save settings</button>'
         '</form>'
     )

@@ -6,6 +6,7 @@ All notable changes to `evaluatorq` are documented here.
 
 ## [Unreleased]
 
+- Added: **a Settings-gated compression inspector** compares the readable Orq trace or Claude Code, Claude desktop, and Codex session with the actual structured Jev state. It applies the configured global cap, shows exact character and omission counts, makes no model call, and accepts explicit Orq dates for traces older than the default seven-day window.
 - **The Insights trace sidebar now presents Open full trace as its primary action, with an icon-only ↗ link to Orq beside it when a live Orq trace link is available (RES-1734).**
 - **Insights and Finder exports now reload selected Orq traces using their original query window and an exact trace-ID filter.** This avoids missing long-running traces whose root timestamps differ from the selected span timestamp. New Finder exports record the effective query window; older exports without one must be exported again before Insights can reload their matches.
 - **New dashboard Insights runs identify Orq accounts from the authenticated provider principal, so rotating an API key within the same workspace or project no longer blocks trace access.** Workspace-bound keys use the single workspace ID; project keys use the single visible project ID when the workspace endpoint rejects the key. Ambiguous or truncated metadata falls back to the strict legacy credential fingerprint with a warning; older fingerprint-only scopes remain strict, and absent scope uses the current Settings scope.
