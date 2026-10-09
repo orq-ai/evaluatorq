@@ -17,6 +17,16 @@ from evaluatorq.trace_finder.models import Snapshot
 from tests.insights.test_population import _run_export, make_trace
 
 
+def test_validate_upload_accepts_documents_only_snapshot_and_rejects_empty() -> None:
+    from evaluatorq.dashboard.insights_uploads import validate_upload
+    from tests.insights.test_population import make_document
+
+    documents_only = Snapshot(traces=(), documents=(make_document('s1'),)).model_dump_json().encode()
+    assert validate_upload(documents_only) == 'snapshot'
+    with pytest.raises(ValueError, match='contains no traces'):
+        validate_upload(Snapshot(traces=(), documents=()).model_dump_json().encode())
+
+
 def _token(client: TestClient) -> str:
     page = client.get('/insights/new')
     match = re.search(r'name="csrf" value="([^"]+)"', page.text)
@@ -238,6 +248,93 @@ def test_worker_retains_route_upload_after_success_and_failure(tmp_path: Path, m
     assert source.with_name(source.name + '.meta.json').exists()
 
 
+@pytest.mark.parametrize('completed', [True, False])
+def test_worker_removes_frozen_sessions_but_not_reusable_snapshot_files(
+    tmp_path: Path, monkeypatch, completed: bool
+) -> None:
+    from evaluatorq.dashboard.insights_launch import InsightsLaunchPayload, InsightsLaunchSpec
+    from evaluatorq.dashboard.insights_uploads import store_upload
+    from evaluatorq.dashboard.insights_worker import main
+    from tests.insights.test_population import make_document
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    monkeypatch.delenv('EVALUATORQ_INSIGHTS_MANIFEST', raising=False)
+    runs_dir = tmp_path / 'insights-runs'
+    contents = Snapshot(traces=(), documents=(make_document('session'),)).model_dump_json().encode()
+    frozen = store_upload(runs_dir=runs_dir, contents=contents, kind='snapshot', source='sessions')
+    reusable = store_upload(runs_dir=runs_dir, contents=contents, kind='snapshot', display_name='local sessions.json')
+    spec = InsightsLaunchSpec(source='snapshot', snapshot_path=str(frozen), source_name='ordinary.json')
+    payload = InsightsLaunchPayload(run_id='sessions-run', run_name='test', runs_dir=runs_dir, spec=spec)
+
+    async def run_with_auth(*args, **kwargs):
+        if not completed:
+            raise RuntimeError('pipeline failed')
+        return True
+
+    with (
+        patch('evaluatorq.dashboard.insights_worker.read_launch_payload', return_value=payload),
+        patch('evaluatorq.dashboard.insights_worker._run_with_selected_auth', side_effect=run_with_auth),
+    ):
+        assert main() == (0 if completed else 1)
+    assert not frozen.exists()
+    assert not frozen.with_name(frozen.name + '.meta.json').exists()
+    assert reusable.exists()
+    assert reusable.with_name(reusable.name + '.meta.json').exists()
+
+
+def test_documents_upload_preview_and_recent_count_include_local_session_documents(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from evaluatorq.dashboard.insights_routes import projection_coverage
+    from tests.insights.test_population import make_document
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    client = TestClient(build_app())
+    token = _token(client)
+    contents = Snapshot(traces=(), documents=(make_document('session'),)).model_dump_json()
+    uploaded = client.post(
+        '/insights/uploads',
+        data={'csrf': token},
+        files={'file': ('session.json', contents, 'application/json')},
+    )
+    assert uploaded.status_code == 201
+    path = Path(uploaded.json()['path'])
+    metadata = json.loads(path.with_name(path.name + '.meta.json').read_text())
+    assert metadata['trace_count'] == 1
+    assert metadata['source'] == 'file'
+    with patch('evaluatorq.dashboard.insights_routes.projection_coverage', wraps=projection_coverage) as coverage:
+        preview = client.post(
+            '/insights/snapshot-preview',
+            data={
+                'csrf': token,
+                'snapshot_path': str(path),
+                'trace_input_chars': '4096',
+                'classifier_model': 'typesafe/jev-latest',
+                'labels': 'made_errors',
+                'custom_labels_json': '[]',
+            },
+        )
+    assert preview.status_code == 200
+    assert 'Model input coverage' in preview.text
+    assert len(coverage.call_args.args[0]) == 1
+    assert coverage.call_args.kwargs['trace_input_chars'] == 4096
+    assert coverage.call_args.kwargs['classifier_model'] == 'typesafe/jev-latest'
+    assert 'made_errors' in coverage.call_args.kwargs['classifier_questions']
+
+
+def test_recent_files_do_not_expose_frozen_session_snapshots(tmp_path: Path) -> None:
+    from evaluatorq.dashboard.insights_uploads import recent_trace_files, store_upload
+    from tests.insights.test_population import make_document
+
+    contents = Snapshot(traces=(), documents=(make_document('session'),)).model_dump_json().encode()
+    frozen = store_upload(runs_dir=tmp_path, contents=contents, kind='snapshot', source='sessions')
+    reusable = store_upload(runs_dir=tmp_path, contents=contents, kind='snapshot', display_name='sessions.json')
+    entries = recent_trace_files(runs_dir=tmp_path, finder_dir=tmp_path / 'exports')
+    assert [entry.path for entry in entries] == [str(reusable)]
+    assert entries[0].trace_count == 1
+    assert frozen.exists()
+
+
 async def _completed_run(*args, **kwargs):
     return type('Run', (), {'status': 'completed'})()
 
@@ -343,14 +440,14 @@ def test_worker_retention_extends_seven_days_from_run_finish(tmp_path: Path) -> 
     import time
 
     from evaluatorq.dashboard.insights_uploads import UPLOAD_RETENTION_SECONDS, cleanup_expired_uploads, store_upload
-    from evaluatorq.dashboard.insights_worker import _retain_consumed_upload
+    from evaluatorq.dashboard.insights_worker import _finish_consumed_upload
 
     source = store_upload(
         runs_dir=tmp_path, contents=Snapshot(traces=(make_trace('one'),)).model_dump_json().encode(), kind='snapshot',
     )
     old = time.time() - UPLOAD_RETENTION_SECONDS + 10
     os.utime(source, (old, old))
-    _retain_consumed_upload(tmp_path, 'snapshot', '', str(source))
+    _finish_consumed_upload(runs_dir=tmp_path, source='snapshot', finder_export='', snapshot_path=str(source))
     finished = source.stat().st_mtime
     assert finished > old
     metadata = json.loads(source.with_name(source.name + '.meta.json').read_text())
@@ -458,3 +555,24 @@ def test_finder_preview_accepts_retained_upload_and_approved_export_only(tmp_pat
     assert rejected_link.status_code == 422
 
 
+
+
+def test_store_upload_does_not_clean_foreign_files_when_private_storage_is_rejected(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from evaluatorq.dashboard.insights_uploads import store_upload, uploads_dir
+
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    contents = Snapshot(traces=(make_trace('one'),)).model_dump_json().encode()
+    filename = f'snapshot-{"a" * 32}.json'
+    protected = outside / filename
+    protected.write_bytes(contents)
+    try:
+        uploads_dir(tmp_path).symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip('symlink creation unavailable')
+    with patch('evaluatorq.dashboard.insights_uploads.uuid.uuid4', return_value=SimpleNamespace(hex='a' * 32)):
+        with pytest.raises(OSError):
+            store_upload(runs_dir=tmp_path, contents=contents, kind='snapshot')
+    assert protected.read_bytes() == contents

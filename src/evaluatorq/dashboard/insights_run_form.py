@@ -20,16 +20,20 @@ from evaluatorq.dashboard.insights_launch import (
     DEFAULT_WINDOW_DAYS,
     SOURCE_BY_MODE,
     SOURCES,
+    FormSource,
     InsightsLaunchSpec,
     Source,
     get_finder_exports_dir,
 )
 from evaluatorq.dashboard.insights_uploads import is_uploaded_source, upload_kind
 from evaluatorq.dashboard.insights_views import _back_to_runs
+from evaluatorq.dashboard.native_dates import date_input, date_row
 from evaluatorq.dashboard.shell import icon, page
 from evaluatorq.dashboard.view import model_control
-from evaluatorq.insights.models import DimensionName, LabelSpec, population_source
+from evaluatorq.insights.models import DimensionName, LabelSpec, default_insights_models, population_source
+from evaluatorq.insights.population import describe_local_send
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
+from evaluatorq.local_sessions import MAX_SESSION_TEXT_CHARS, SESSION_SOURCES
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
 from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, effective_settings
 
@@ -39,6 +43,7 @@ if TYPE_CHECKING:
     from evaluatorq.common.model_catalogue import ModelKind
     from evaluatorq.dashboard.insights_uploads import RecentTraceFile
     from evaluatorq.insights.models import InsightsRun
+    from evaluatorq.local_sessions import SessionSource
 
 Mount = Literal['page', 'dialog']
 
@@ -78,7 +83,7 @@ RUN_PRESETS: tuple[RunPreset, ...] = (
         description='Frustration, outcome, risky actions',
         dimensions=('intent', 'failure'),
         labels=('user_frustration',),
-        coding_labels=('task_type', 'outcome', 'unfixed_error', 'risky_action'),
+        coding_labels=tuple(spec.name for spec in CODING_LABELS[1:]),
     ),
 )
 
@@ -106,9 +111,9 @@ _DIMENSION_TEXT: MappingProxyType[DimensionName, tuple[str, str]] = MappingProxy
     'sentiment': ('Sentiment', 'how users felt'),
 })
 
-FormTab = Literal['orq', 'file']  # the `tab` of each `SOURCES` entry
+FormTab = Literal['orq', 'file', 'sessions']  # the `tab` of each `SOURCES` entry
 _FILE_HINT = 'A Finder export or a local trace file (JSON).'
-# Each tab maps onto the launch spec's four-valued `Source` in `RunFormValues.from_form`.
+# Each tab maps onto a `SOURCES` entry in `RunFormValues.from_form`.
 _SOURCES: tuple[tuple[FormTab, str, str, str], ...] = (
     (
         'orq',
@@ -130,10 +135,22 @@ _SOURCES: tuple[tuple[FormTab, str, str, str], ...] = (
             size=14,
         ),
     ),
+    (
+        'sessions',
+        'Local sessions',
+        'Claude Code, Claude desktop, Codex and omp sessions on this computer.',
+        icon(
+            '<path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62'
+            'a1 1 0 0 1-.9-1.45L4 16"/>',
+            cls='irf-tab-icon',
+            size=14,
+        ),
+    ),
 )
+_FORM_TABS = frozenset(tab for tab, *_ in _SOURCES)
 
 
-def _form_tab(source: Source) -> FormTab:
+def _form_tab(source: FormSource) -> FormTab:
     return SOURCES[source].tab
 
 
@@ -260,10 +277,11 @@ INSIGHTS_MODEL_FIELDS: MappingProxyType[str, tuple[ModelKind, str]] = MappingPro
 
 def _model_defaults() -> dict[str, str]:
     """What a run uses when the form does not choose: each Insights task's model role."""
+    models = default_insights_models()
     return {
-        'summary_model': role_model('smart', task='insights.summary'),
-        'classifier_model': role_model('classifier', task='insights.labels'),
-        'embedding_model': role_model('embedding', task='insights.embedding'),
+        'summary_model': models['summary'],
+        'classifier_model': models['classifier'],
+        'embedding_model': models['embedding'],
         'compiler_model': role_model('fast', task='finder.compiler'),
     }
 
@@ -272,7 +290,7 @@ def _model_defaults() -> dict[str, str]:
 class RunFormValues:
     """Everything the run form shows, so a rejected submission re-renders exactly what the user entered."""
 
-    source: Source = 'recent'
+    source: FormSource = 'recent'
     query: str = ''
     window_days: int = DEFAULT_WINDOW_DAYS
     limit: int = DEFAULT_TRACE_LIMIT
@@ -358,15 +376,20 @@ class RunFormValues:
         """Parse the form fields from `FormData` or query parameters; raises `ValueError` on malformed numbers or JSON."""
         mount: Mount = 'dialog' if form.get('mount') == 'dialog' else 'page'
         tab = form.get('source') or 'orq'
-        if tab not in ('orq', 'file'):
-            raise ValueError('Choose Orq traces or Trace file.')
+        if tab not in _FORM_TABS:
+            raise ValueError('Choose Orq traces, Trace file or Local sessions.')
         # Fields of the tab that is not chosen are still in the submitted form; drop them so they are never saved.
         orq = tab == 'orq'
         orq_form: Mapping[str, object] = form if orq else {}
         file_form: Mapping[str, object] = {} if orq else form
         query = str(orq_form.get('query') or '').strip()
         trace_file = str(file_form.get('trace_file') or '').strip()
-        source: Source = ('query' if query else 'recent') if orq else _trace_file_source(trace_file)
+        source: FormSource
+        if orq:
+            source = 'query' if query else 'recent'
+        else:
+            # The Local sessions tab freezes its selection into a snapshot upload in the same `trace_file` field.
+            source = 'sessions' if tab == 'sessions' else _trace_file_source(trace_file)
         defaults = _model_defaults()
         models = {name: str(form.get(name) or '').strip() or default for name, default in defaults.items()}
         if source != 'query':
@@ -397,10 +420,10 @@ class RunFormValues:
         """The fields `InsightsLaunchSpec.model_validate` reads."""
         return {
             'name': self.name,
-            'source': self.source,
+            'source': 'snapshot' if self.source == 'sessions' else self.source,
             'query': self.query,
             'finder_export': self.trace_file if self.source == 'finder' else '',
-            'snapshot_path': self.trace_file if self.source == 'snapshot' else '',
+            'snapshot_path': self.trace_file if self.source in ('snapshot', 'sessions') else '',
             'source_name': self.source_name,
             'window_days': self.window_days,
             'limit': self.limit,
@@ -524,7 +547,8 @@ def _preset_buttons(values: RunFormValues) -> str:
 
 
 def _file_source(values: RunFormValues) -> str:
-    chosen = values.trace_file
+    # The Local sessions tab freezes into the same trace_file field; only the Trace file tab shows it here.
+    chosen = values.trace_file if _form_tab(values.source) == 'file' else ''
     shown = (values.source_name or Path(chosen).name) if chosen else ''
     if not chosen:
         status = _FILE_HINT
@@ -534,7 +558,7 @@ def _file_source(values: RunFormValues) -> str:
         status = 'Trace snapshot is ready.'
     return (
         '<div class="irf-field" data-source="file"><span class="irf-label">Trace file</span>'
-        '<div class="irf-file"><input type="text" readonly data-file-name aria-label="Selected trace file" '
+        '<div class="irf-file"><input type="text" readonly data-file-name="file" aria-label="Selected trace file" '
         f'placeholder="No file chosen" value="{esc(shown)}">'
         '<button type="button" class="irf-btn" data-browse>Browse…</button>'
         '<input type="file" accept="application/json,.json" data-file hidden></div>'
@@ -566,6 +590,67 @@ def render_recent_files(files: list[RecentTraceFile]) -> str:
     )
 
 
+_SESSION_SOURCE_TITLES: MappingProxyType[SessionSource, str] = MappingProxyType({
+    'claude-code': 'Claude Code',
+    'claude-desktop': 'Claude desktop',
+    'codex': 'Codex',
+    'omp': 'omp',
+})
+assert set(_SESSION_SOURCE_TITLES) == set(SESSION_SOURCES)  # noqa: S101 — import-time registry check
+
+
+def _sessions_source(values: RunFormValues) -> str:
+    """The Local sessions picker: filters, a Search button, and the results the controller fills in."""
+    boxes = ''.join(
+        f'<label class="filter-checkbox"><input type="checkbox" name="session_source" value="{source}" checked><span>{esc(title)}</span></label>'
+        for source, title in _SESSION_SOURCE_TITLES.items()
+    )
+    kept = values.trace_file if values.source == 'sessions' else ''
+    status = f'Using the sessions selected earlier ({values.source_name}). Search again to change them.' if kept else ''
+    from_date = date_row(
+        'From',
+        date_input(control_id='session-from', name='session_from', label='From date'),
+        css_class='xr-range irf-session-date-row',
+        label_tag='label',
+    )
+    to_date = date_row(
+        'To',
+        date_input(control_id='session-to', name='session_to', label='To date'),
+        css_class='xr-range irf-session-date-row',
+        label_tag='label',
+    )
+    return (
+        '<div class="irf-field" data-source="sessions"><span class="irf-label">Local sessions</span>'
+        f'<div class="irf-session-sources" role="group" aria-label="Session sources">{boxes}</div>'
+        '<details class="xr-time-menu irf-session-time-menu"><summary><span class="xr-time-label" data-session-range-label>Last 7 days</span></summary>'
+        '<div class="xr-time-options"><div class="xr-presets" role="group" aria-label="Session date range">'
+        '<button type="button" class="xr-preset" data-session-preset="7" aria-pressed="true">Last 7 days</button>'
+        '<button type="button" class="xr-preset" data-session-preset="30" aria-pressed="false">Last 30 days</button>'
+        '<button type="button" class="xr-preset" data-session-preset="all" aria-pressed="false">All dates</button></div>'
+        '<details class="xr-exact"><summary>Custom range</summary><div class="xr-range-fields">'
+        f'{from_date}{to_date}<button type="button" class="xr-apply" data-session-apply>Apply range</button></div></details></div></details>'
+        '<div class="irf-field"><label class="irf-label" for="session-project-dir">Project directory</label>'
+        '<div class="irf-directory-row"><input id="session-project-dir" type="text" name="session_project_dir" placeholder="All recorded projects" aria-describedby="session-directory-hint">'
+        '<button type="button" class="irf-btn" data-folder-open>Browse…</button></div>'
+        '<p class="irf-hint" id="session-directory-hint">Includes projects below this directory and linked worktrees. Blank searches every recorded project; ~ means your home directory. Browsing uses the dashboard machine.</p></div>'
+        '<section class="irf-folder-browser" data-folder-browser aria-label="Browse project directories" aria-busy="false" hidden>'
+        '<nav class="irf-folder-crumbs" aria-label="Directory path" data-folder-breadcrumbs></nav>'
+        '<div class="irf-folder-toolbar"><button type="button" class="irf-btn" data-folder-home>Home</button>'
+        '<button type="button" class="irf-btn" data-folder-parent disabled>Parent</button><span class="irf-folder-current" data-folder-current></span></div>'
+        '<div class="irf-folder-list" role="list" data-folder-list></div>'
+        '<button type="button" class="irf-btn" data-folder-more hidden>Load more folders</button>'
+        '<p class="irf-folder-error" data-folder-error role="status" hidden></p>'
+        '<div class="irf-editor-actions"><button type="button" class="irf-btn" data-folder-cancel>Cancel</button>'
+        '<button type="button" class="irf-btn" data-folder-use disabled>Use this folder</button></div></section>'
+        '<label class="irf-field"><span class="irf-label">Contains text</span>'
+        f'<input type="text" name="session_text" maxlength="{MAX_SESSION_TEXT_CHARS}"><span class="irf-hint">Case-insensitive literal text, not a regular expression. Limit {MAX_SESSION_TEXT_CHARS} characters.</span></label>'
+        '<div class="irf-editor-actions"><button type="button" class="irf-btn" data-sessions-search>Search</button></div>'
+        '<div id="insights-sessions" aria-live="polite" aria-busy="false"></div>'
+        f'<p class="irf-hint" data-sessions-status role="status">{esc(status)}</p>'
+        f'<input type="hidden" data-file-name="sessions" value="{esc(values.source_name if kept else "")}"></div>'
+    )
+
+
 def _facet_picker(values: RunFormValues) -> str:
     if any(getattr(values.facets, name) for name in FACET_NAMES):
         return facet_options(FacetCatalogue(), values.facets, window_days=values.window_days)
@@ -587,8 +672,8 @@ def _step_one(values: RunFormValues) -> str:
         f'{esc(values.query)}</textarea>'
         '<span class="irf-hint">The classifier reads each trace in the window and keeps only the ones that match. '
         'Leave it blank to analyze every trace in the window.</span></label>'
-        f'{_file_source(values)}'
-        '<div id="insights-snapshot-preview" data-source="file" aria-live="polite"></div>'
+        f'{_file_source(values)}{_sessions_source(values)}'
+        '<div id="insights-snapshot-preview" data-source="file sessions" aria-live="polite"></div>'
         '<div class="irf-row" data-source="orq">'
         f'<label>Last <input name="window_days" type="number" min="1" max="90" value="{values.window_days}"> days, up to</label>'
         f'<label><input name="limit" type="number" min="1" max="5000" value="{values.limit}"> traces</label></div>'
@@ -717,7 +802,7 @@ def render_run_form(values: RunFormValues, *, csrf: str, error: str | None = Non
         f'<input type="hidden" name="custom_labels_json" value="{esc(custom_json)}">'
         f'<input type="hidden" name="trace_input_chars" value="{values.trace_input_chars}">'
         f'<input type="hidden" name="trace_file" value="{esc(values.trace_file)}" '
-        f'data-kind="{values.source if values.trace_file else ""}">'
+        f'data-kind="{("snapshot" if values.source == "sessions" else values.source) if values.trace_file else ""}">'
         f'<ol class="irf-steps" aria-label="Steps">{steps}</ol>'
         '<p id="insights-run-compact" class="irf-compact" role="status" aria-live="polite">Estimating traces, cost and time…</p>'
         f'<p id="insights-run-error" class="insights-error" role="alert"{"" if message else " hidden"}>{esc(message or "")}</p>'
@@ -751,7 +836,7 @@ def render_run_page(values: RunFormValues, *, csrf: str, error: str | None = Non
     return page('New Insights run', body, active_nav='insights', back_html=_back_to_runs())
 
 
-def _source_summary(spec: InsightsLaunchSpec) -> str:
+def _source_summary(spec: InsightsLaunchSpec, source: FormSource) -> str:
     days = f'{spec.window_days} day{"" if spec.window_days == 1 else "s"}'
     filtered = sum(len(getattr(spec.facets, name)) for name in FACET_NAMES)
     filters = f', {filtered} filter value{"" if filtered == 1 else "s"}' if filtered else ''
@@ -760,17 +845,48 @@ def _source_summary(spec: InsightsLaunchSpec) -> str:
     if spec.source == 'finder':
         return f'Trace file {spec.source_name or Path(spec.finder_export).name} (Finder export)'
     if spec.source == 'snapshot':
+        if source == 'sessions':
+            return f'{spec.source_name or SOURCES["sessions"].label} from this computer'
         return f'Trace file {spec.source_name or Path(spec.snapshot_path).name}'
     return f'Orq traces from the last {days}, up to {spec.limit}{filters}'
 
 
-def render_plan(spec: InsightsLaunchSpec, stages: list[tuple[str, str]]) -> str:
-    """Summarize what the run will do and list its expected stages, as the worker will report them."""
+def _local_send_note(spec: InsightsLaunchSpec, *, n_traces: int, n_bytes: int) -> str:
+    """The disclosure of what a local-file run sends, and to which models."""
+    return describe_local_send(
+        n_traces=n_traces,
+        n_bytes=n_bytes,
+        file_name=spec.source_name or Path(spec.snapshot_path).name,
+        models={
+            'summary': spec.summary_model,
+            'classifier': spec.classifier_model,
+            'embedding': spec.embedding_model,
+        },
+    )
+
+
+def render_plan(
+    spec: InsightsLaunchSpec,
+    stages: list[tuple[str, str]],
+    *,
+    source: FormSource | None = None,
+    n_traces: int | None = None,
+    n_bytes: int | None = None,
+) -> str:
+    """Summarize what the run will do and list its expected stages, as the worker will report them.
+
+    `source` is the form source when it differs from the launch spec's (Local sessions launch as a snapshot). A
+    local-file source also states how many traces and bytes leave the machine and the models they go to, when
+    `n_traces` and `n_bytes` are known.
+    """
     questions = len(spec.labels) + len(spec.custom_labels) + len(spec.coding_labels)
     groupings = len(spec.dimensions)
     summary = (
-        f'{_source_summary(spec)}. {questions} question{"" if questions == 1 else "s"}, '
+        f'{_source_summary(spec, source or spec.source)}. {questions} question{"" if questions == 1 else "s"}, '
         f'{groupings} grouping{"" if groupings == 1 else "s"}.'
     )
+    send = ''
+    if spec.source == 'snapshot' and n_traces is not None and n_bytes is not None:
+        send = f'<p class="irf-summary" data-local-send>{esc(_local_send_note(spec, n_traces=n_traces, n_bytes=n_bytes))}</p>'
     items = ''.join(f'<li>{esc(title)}</li>' for _, title in stages)
-    return f'<p class="irf-summary">{esc(summary)}</p><h4>Expected stages</h4><ol class="irf-stages">{items}</ol>'
+    return f'<p class="irf-summary">{esc(summary)}</p>{send}<h4>Expected stages</h4><ol class="irf-stages">{items}</ol>'
