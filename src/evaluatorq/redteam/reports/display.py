@@ -87,6 +87,15 @@ def _build_stats_table(report: RedTeamReport, summary: ReportSummary) -> Table:
             )
         stats.add_row('Jury Agreement', value)
 
+    # Panel-of-judges health (RES-1649) — only present for multi-judge runs.
+    health = summary.jury_health
+    if health is not None:
+        clause = health.issue_summary()
+        value = Text(
+            f'{clause}; {health.samples} multi-judge samples', style='green' if clause == 'clean' else 'yellow'
+        )
+        stats.add_row('Jury Health', value)
+
     # Datapoint breakdown (hybrid runs)
     breakdown = summary.datapoint_breakdown
     if breakdown:

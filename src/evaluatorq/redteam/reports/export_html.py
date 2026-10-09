@@ -37,6 +37,7 @@ from evaluatorq.common.reports.palette import SEVERITY_ORDER as _SEVERITY_ORDER
 from evaluatorq.common.reports.vega import render_svg as _render_svg
 from evaluatorq.common.reports.vega import vl_bar_h as _vl_bar_h
 from evaluatorq.common.reports.vega import vl_donut as _vl_donut
+from evaluatorq.redteam.contracts import JuryHealth
 from evaluatorq.redteam.reports.sections import build_report_sections
 
 if TYPE_CHECKING:
@@ -302,6 +303,18 @@ def _render_kpi_cards(data: dict[str, Any]) -> str:
             f'<div class="kpi-value">{_esc(alpha_text)}</div>'
             f'<div class="kpi-label">Jury Agreement (Krippendorff alpha)</div>'
             f'<div class="kpi-subtitle">{_esc(str(samples))} multi-judge samples</div>'
+            f'</div>'
+        )
+
+    # Panel-of-judges health (RES-1649) — the operational counts, as a matching KPI card.
+    health = data.get('jury_health')
+    if health:
+        h = JuryHealth.model_validate(health)
+        cards.append(
+            f'<div class="kpi-card">'
+            f'<div class="kpi-value">{_esc(h.issue_summary())}</div>'
+            f'<div class="kpi-label">Jury Health</div>'
+            f'<div class="kpi-subtitle">{_esc(str(h.samples))} multi-judge samples</div>'
             f'</div>'
         )
 

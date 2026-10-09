@@ -31,6 +31,7 @@ from evaluatorq.redteam.contracts import (
     Framework,
     FrameworkSummary,
     JobOutputPayload,
+    JuryHealth,
     JuryReliability,
     JuryResult,
     Pipeline,
@@ -989,6 +990,44 @@ def _compute_jury_reliability(results: list[RedTeamResult]) -> JuryReliability |
     return JuryReliability(krippendorff_alpha=alpha, samples=samples)
 
 
+def _compute_jury_health(results: list[RedTeamResult]) -> JuryHealth | None:
+    """Roll per-sample jury panel health up into a run-level count (RES-1649).
+
+    Counts over samples that carried a multi-judge jury (``judges_configured >= 2``).
+    Returns None when no such sample exists (single-judge runs), mirroring
+    ``_compute_jury_reliability`` so the field stays absent on the common path.
+    """
+    samples = 0
+    judge_failure = replacements = ties = inconclusive = repetition_failure = abstention = 0
+    for r in results:
+        jury = r.evaluation.jury if r.evaluation else None
+        if jury is None or jury.judges_configured < 2:
+            continue
+        samples += 1
+        if jury.judges_failed > 0:
+            judge_failure += 1
+        replacements += jury.replacements_used
+        if jury.tie:
+            ties += 1
+        if jury.inconclusive:
+            inconclusive += 1
+        if any(v.repetitions_failed > 0 for v in jury.votes):
+            repetition_failure += 1
+        if any(v.abstained for v in jury.votes):
+            abstention += 1
+    if samples == 0:
+        return None
+    return JuryHealth(
+        samples=samples,
+        samples_with_judge_failure=judge_failure,
+        replacements_used=replacements,
+        ties=ties,
+        inconclusive=inconclusive,
+        samples_with_repetition_failure=repetition_failure,
+        samples_with_abstention=abstention,
+    )
+
+
 @dataclass
 class GroupCounts:
     total: int = 0
@@ -1228,6 +1267,7 @@ def compute_report_summary(
         by_domain=by_domain,
         by_framework=by_framework,
         jury_reliability=_compute_jury_reliability(results),
+        jury_health=_compute_jury_health(results),
     )
 
 

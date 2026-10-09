@@ -14,6 +14,7 @@ from evaluatorq.redteam.contracts import (
     CategorySummary,
     DeliveryMethod,
     Framework,
+    JuryHealth,
     Pipeline,
     RedTeamReport,
     RedTeamResult,
@@ -169,3 +170,36 @@ def test_print_report_summary_prints_earlier_section_before_later_builder_failur
     output = console.export_text()
     assert 'Per-Vulnerability Breakdown:' in output
     assert 'Goal Hijacking' in output
+
+
+def test_print_report_summary_renders_jury_health_issues() -> None:
+    console = Console(record=True, width=200)  # wide so the value cell does not wrap tokens
+    summary = ReportSummary(
+        jury_health=JuryHealth(samples=5, samples_with_judge_failure=2, ties=1, replacements_used=3)
+    )
+
+    print_report_summary(_make_report(summary), console=console)
+
+    output = console.export_text()
+    assert 'Jury Health' in output
+    assert 'judge-fail' in output
+    assert 'replacement' in output  # replacement judges reported, not folded into the sample count
+    assert 'samples' in output
+
+
+def test_print_report_summary_renders_jury_health_clean() -> None:
+    console = Console(record=True, width=120)
+
+    print_report_summary(_make_report(ReportSummary(jury_health=JuryHealth(samples=4))), console=console)
+
+    output = console.export_text()
+    assert 'Jury Health' in output
+    assert 'clean' in output
+
+
+def test_print_report_summary_omits_jury_health_when_absent() -> None:
+    console = Console(record=True, width=120)
+
+    print_report_summary(_make_report(ReportSummary()), console=console)
+
+    assert 'Jury Health' not in console.export_text()

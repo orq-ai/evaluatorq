@@ -280,7 +280,15 @@ for result in report.results:
 reliability = report.summary.jury_reliability
 if reliability:
     print(reliability.krippendorff_alpha)  # 1.0 = perfect, ~0 = chance, <0 = systematic disagreement
+
+health = report.summary.jury_health
+if health:
+    # Panel operational health across multi-judge samples: judge failures,
+    # replacements, ties, inconclusive panels, repetition failures, abstentions.
+    print(health.samples_with_judge_failure, health.replacements_used, health.ties)
 ```
+
+The red-team report renders `jury_health` as a `Jury Health` line alongside `Jury Agreement`: a count of how many multi-judge samples had a judge fail, used a replacement, tied, went inconclusive, had a repetition fail to produce a verdict, or had a judge abstain. It is `None` for single-judge runs.
 
 ## Reliability, in short
 
