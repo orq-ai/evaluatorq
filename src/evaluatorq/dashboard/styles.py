@@ -3640,6 +3640,49 @@ _INSIGHTS_CSS = """
 }
 """
 
+_COMPRESSION_INSPECTOR_CSS = """
+.compression-inspector { min-width:0; max-width:1440px; margin:0 auto; }
+.compression-intro { max-width:760px; margin-bottom:20px; }
+.compression-intro h2,.compression-source h3,.compression-limits h3,.compression-preview h2 { margin:0; color:var(--text-strong); font-size:16px; font-weight:650; }
+.compression-intro p,.compression-source p,.compression-limits p,.compression-preview-heading p { margin:6px 0 0; color:var(--text-muted); font-size:13px; line-height:1.5; }
+.compression-sources { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; align-items:start; }
+.compression-source,.compression-limits,.compression-preview { min-width:0; padding:16px; border:1px solid var(--border-subtle); border-radius:var(--radius-lg); background:var(--surface-card); }
+.compression-source form { display:grid; gap:8px; margin-top:14px; }
+.compression-source label { color:var(--text-body); font-size:12px; font-weight:600; }
+.compression-source input { box-sizing:border-box; width:100%; min-width:0; min-height:38px; padding:7px 9px; border:1px solid var(--border-default); border-radius:6px; background:var(--surface-card); color:var(--text-strong); font:inherit; }
+.compression-source input:focus-visible,.compression-source button:focus-visible,.compression-session button:focus-visible { outline:2px solid var(--teal-600); outline-offset:2px; }
+.compression-date-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+.compression-date-fields > div { min-width:0; display:grid; gap:5px; }
+.compression-source button,.compression-session button { justify-self:start; min-height:38px; padding:7px 12px; border:1px solid var(--teal-600); border-radius:6px; background:var(--teal-600); color:#fff; font:600 13px var(--font-sans); cursor:pointer; }
+.compression-source button:hover,.compression-session button:hover { background:var(--teal-700); border-color:var(--teal-700); }
+.compression-limits { margin-top:16px; background:var(--surface-sunken); }
+.compression-notice,.compression-empty { margin:12px 0; color:var(--red-700); font-size:13px; line-height:1.5; }
+.compression-result-count { margin:16px 0 0; color:var(--text-strong); font-size:13px; font-weight:650; }
+.compression-search-note { margin-top:4px !important; }
+.compression-session-list { display:grid; gap:0; margin:12px 0 0; padding:0; list-style:none; }
+.compression-session { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; min-width:0; padding:10px 0; border-top:1px solid var(--border-subtle); }
+.compression-session-description { display:grid; gap:3px; min-width:0; }
+.compression-session-description strong { color:var(--teal-700); font-size:11px; }
+.compression-session-description span { overflow-wrap:anywhere; color:var(--text-body); font-size:13px; }
+.compression-session-description time { color:var(--text-muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.compression-session form { margin:0; }
+.compression-preview { margin-top:18px; }
+.compression-preview-heading { display:flex; flex-wrap:wrap; align-items:start; justify-content:space-between; gap:12px; }
+.compression-preview-heading > div { min-width:0; }
+.compression-question-note { flex:none; padding:4px 8px; border:1px solid var(--border-subtle); border-radius:999px; color:var(--text-body) !important; font-size:12px !important; }
+.compression-metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(135px,1fr)); gap:1px; margin:16px 0; background:var(--border-subtle); border:1px solid var(--border-subtle); }
+.compression-metrics > div { min-width:0; padding:10px 12px; background:var(--surface-sunken); }
+.compression-metrics dt { color:var(--text-muted); font-size:11px; line-height:1.35; }
+.compression-metrics dd { margin:4px 0 0; color:var(--text-strong); font:600 14px var(--font-mono); font-variant-numeric:tabular-nums; overflow-wrap:anywhere; }
+.compression-panels { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.compression-panel { min-width:0; }
+.compression-panel h3 { margin:0 0 7px; color:var(--text-strong); font-size:13px; font-weight:650; }
+.compression-panel pre { box-sizing:border-box; width:100%; max-width:100%; max-height:70vh; min-height:170px; overflow:auto; overscroll-behavior:contain; margin:0; padding:12px; border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-sunken); color:var(--text-body); font:12px/1.5 var(--font-mono); white-space:pre; }
+.compression-count-note { margin:6px 0 0; color:var(--text-muted); font-size:11px; line-height:1.45; }
+@media (max-width:760px) { .compression-sources,.compression-panels { grid-template-columns:minmax(0,1fr); } }
+@media (max-width:480px) { .compression-source,.compression-limits,.compression-preview { padding:12px; }.compression-date-fields { grid-template-columns:minmax(0,1fr); }.compression-session { grid-template-columns:minmax(0,1fr); align-items:start; }.compression-session button { width:100%; }.compression-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.compression-source input,.compression-source button,.compression-session button { min-height:44px; }.compression-source input { font-size:16px; } }
+"""
+
 DASHBOARD_CSS = (
     _DASHBOARD_CSS_HEAD
     + _TAB_RULES
@@ -3654,4 +3697,5 @@ DASHBOARD_CSS = (
     + _FINDER_CSS
     + _TRACES_DENSITY_CSS
     + _INSIGHTS_CSS
+    + _COMPRESSION_INSPECTOR_CSS
 )

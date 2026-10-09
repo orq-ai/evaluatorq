@@ -25,6 +25,7 @@ from evaluatorq.common.reports import esc, load_css
 from evaluatorq.dashboard.styles import DASHBOARD_CSS
 from evaluatorq.dashboard.theme import EDITORIAL_CSS
 from evaluatorq.dashboard.view import PAIRWISE_ICON_PATH, SURFACE_LABELS, head_assets
+from evaluatorq.trace_finder.settings import load_settings
 
 
 @functools.cache
@@ -189,13 +190,19 @@ def icon(path_data: str, *, cls: str = 'nav-icon', size: int = 16) -> str:
     )
 
 
-def _sidebar_html(active_nav: str) -> str:
+def _sidebar_html(active_nav: str, *, compression_inspector_enabled: bool) -> str:
     # The v1 brand lockup is the orq mark (not the full wordmark) + the
     # "evaluatorq" wordmark with an orange "q".
     mark = _load_mark()
     logo_html = f'<span class="nav-mark">{mark}</span>' if mark else ''
     items: list[str] = []
     for key, label, href, icon_path in _NAV:
+        if key == 'settings' and compression_inspector_enabled:
+            inspector_active = ' active' if active_nav == 'compression-inspector' else ''
+            items.append(
+                f'<a class="nav-item{inspector_active}" href="/compression-inspector">'
+                f'{icon(TRACE_ICON)}<span>Compression inspector</span></a>'
+            )
         active = ' active' if key == active_nav else ''
         items.append(f'<a class="nav-item{active}" href="{href}">{icon(icon_path)}<span>{esc(label)}</span></a>')
     return (
@@ -256,7 +263,7 @@ def page(
     """
     css_link = f'<link rel="stylesheet" href="{dashboard_css_href()}">\n'
     nav_key = _resolve_nav(active_surface, active_nav)
-    sidebar = _sidebar_html(nav_key)
+    sidebar = _sidebar_html(nav_key, compression_inspector_enabled=load_settings().compression_inspector_enabled)
     scripts = ''.join(str(a) for a in head_assets(charts='data-vega-for' in body_html))
     # On report pages the run name is the hero H1, so the topbar carries the
     # back link instead of repeating the title.
