@@ -1490,6 +1490,9 @@
   document.addEventListener('click', function (evt) {
     const menu = document.getElementById('explorer-cols');
     if (menu?.open && !menu.contains(evt.target)) menu.open = false;
+    document.querySelectorAll('.xr-time-menu[open]').forEach(function (dateMenu) {
+      if (!dateMenu.contains(evt.target)) dateMenu.open = false;
+    });
   });
 
   // Poll renders (data-poll) of #explorer-results and #explorer-toolbar: drop one older than the

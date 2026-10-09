@@ -366,6 +366,27 @@ test('open filter dropdown survives a fragment swap', () => {
   assert.equal(replacement.open, false);
 });
 
+for (const pathname of ['/traces', '/insights/new']) {
+  test(`date menus on ${pathname} stay open inside and close outside, including after replacement`, () => {
+    const inside = { closest() { return null; }, matches() { return false; } };
+    const outside = { closest() { return null; }, matches() { return false; } };
+    let menu = { open: true, contains(target) { return target === inside; } };
+    const app = loadDashboard({
+      pathname,
+      queryAll(selector) {
+        return selector === '.xr-time-menu[open]' && menu.open ? [menu] : [];
+      },
+    });
+    app.documentEvents.emit('click', { target: inside });
+    assert.equal(menu.open, true, 'interacting with a date field must not dismiss its menu');
+    app.documentEvents.emit('click', { target: outside });
+    assert.equal(menu.open, false, 'clicks anywhere outside dismiss the menu');
+    menu = { open: true, contains(target) { return target === inside; } };
+    app.documentEvents.emit('click', { target: outside });
+    assert.equal(menu.open, false, 'delegation also dismisses a freshly rendered menu');
+  });
+}
+
 test('overlapping explorer OOB swaps restore each captured table state in order', () => {
   function resultsRoot({ open, left, top, selected, version, sequence, renderKey }) {
     const detail = { className: 'xr-exact', open };
