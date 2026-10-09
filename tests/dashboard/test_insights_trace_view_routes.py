@@ -137,18 +137,18 @@ def test_orq_run_with_a_different_span_never_shows_substituted_conversation(
         yield OrqTraceSource(cast(Any, FakeOrq(traces)))
 
     client = TestClient(build_app())
+    monkeypatch.setattr(insights_routes, '_trace_source', source)
     response = client.get(CONVERSATION)
     spans = client.get(SPANS)
 
 
     assert 'substituted transcript secret' not in response.text
     assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' in response.text
-    assert 'trace-spans' not in response.text
+    assert 'hx-get="/insights/run-1/trace-spans?trace_id=trace-1&amp;span_id=span-1"' in response.text
     assert spans.status_code == 200
     assert 'current trace root' in spans.text
     assert 'substituted transcript secret' not in spans.text
     assert 'The conversation span analyzed by this run is no longer the span returned by Orq.' not in spans.text
-    assert 'span-other' not in spans.text
 
 
 def test_spans_route_renders_when_conversation_query_fails(

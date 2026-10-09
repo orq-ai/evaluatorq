@@ -359,8 +359,6 @@ async def _trace_source(app: Any, run: InsightsRun) -> AsyncIterator[OrqTraceSou
                 logger.warning('Could not close the Insights trace source: {}', exc)
 
 
-
-
 def _resolve(run_id: str, loaded: dict[str, tuple[Path, InsightsRun | str]]) -> tuple[Path, InsightsRun | str] | None:
     return loaded.get(run_id)
 
@@ -832,7 +830,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         )
         if isinstance(resolved, str):
             return _html('<p class="finder-empty">Span loading is unavailable.</p>', 404)
-        run, trace = resolved
+        run, _ = resolved
         if not reads_orq(run.population):
             return _html('<p class="finder-empty">Span loading is unavailable.</p>', 404)
         async with _trace_source(req.app, run) as source:
