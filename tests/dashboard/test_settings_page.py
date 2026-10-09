@@ -1810,13 +1810,15 @@ def test_model_catalogue_rejected_credentials_are_not_shown_as_outages(
     [
         ('The orq CLI is not installed. Install it and sign in before using CLI OAuth.', 'setup', 'Install the Orq CLI'),
         ('The Orq CLI OAuth sign-in needs attention. Run orq auth login.', 'authentication', 'orq auth login'),
+        ('The Orq CLI OAuth sign-in needs attention. Run orq auth login.', None, 'orq auth login'),
+        ('Error: missing API key; configure a profile with auth setup or set ORQ_API_KEY', None, 'orq auth login'),
     ],
 )
 def test_cli_oauth_setup_failures_point_to_install_or_sign_in(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     error: str,
-    failure_kind: Literal['authentication', 'setup'],
+    failure_kind: Literal['authentication', 'setup'] | None,
     expected: str,
 ) -> None:
     from evaluatorq.common.cli_oauth import OrqCLIError
@@ -1833,6 +1835,8 @@ def test_cli_oauth_setup_failures_point_to_install_or_sign_in(
     monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
 
     async def cli_error(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
+        if failure_kind is None:
+            raise OrqCLIError(error)
         raise OrqCLIError(error, failure_kind=failure_kind)
 
     monkeypatch.setattr(model_choices, 'models_by_provider', cli_error)
@@ -1845,14 +1849,18 @@ def test_cli_oauth_setup_failures_point_to_install_or_sign_in(
 
 
 @pytest.mark.parametrize(
-    'error',
+    ('error', 'failure_kind'),
     [
-        'The orq CLI returned an unreadable JSON response.',
-        'Could not start the orq CLI: network unreachable',
+        ('The orq CLI returned an unreadable JSON response.', 'unavailable'),
+        ('Could not start the orq CLI: network unreachable', 'unavailable'),
+        ('missing API key; configure a profile with auth setup', 'unavailable'),
     ],
 )
 def test_unreadable_or_unreachable_cli_oauth_stays_a_catalogue_outage(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, error: str
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    error: str,
+    failure_kind: Literal['unavailable'],
 ) -> None:
     from evaluatorq.common.cli_oauth import OrqCLIError
 
@@ -1868,7 +1876,7 @@ def test_unreadable_or_unreachable_cli_oauth_stays_a_catalogue_outage(
     monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
 
     async def cli_error(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
-        raise OrqCLIError(error)
+        raise OrqCLIError(error, failure_kind=failure_kind)
 
     monkeypatch.setattr(model_choices, 'models_by_provider', cli_error)
 

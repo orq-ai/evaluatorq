@@ -49,11 +49,11 @@ class OrqCLIError(RuntimeError):
         message: str,
         *,
         status_code: int | None = None,
-        failure_kind: Literal['authentication', 'setup', 'unavailable'] = 'unavailable',
+        failure_kind: Literal['authentication', 'setup', 'unavailable'] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
-        self.failure_kind = failure_kind
+        self.failure_kind = failure_kind or _infer_failure_kind(message)
 
 
 class _CLI:
@@ -385,22 +385,28 @@ def oauth_subject(server_url: str) -> dict[str, str | None]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise OrqCLIError('Could not check the Orq CLI OAuth sign-in.') from exc
     if result.returncode:
+        detail = _safe_error(result.stderr)
+        if _is_authentication_error(detail):
+            raise OrqCLIError(
+                'The Orq CLI OAuth sign-in needs attention. Run orq auth login.', failure_kind='authentication'
+            )
         raise OrqCLIError(
-            'The Orq CLI OAuth sign-in needs attention. Run orq auth login.', failure_kind='authentication'
+            f'Could not check the Orq CLI OAuth sign-in: {detail or "the CLI request failed"}. Try again shortly.',
+            failure_kind='unavailable',
         )
     try:
         data = json.loads(result.stdout)
     except ValueError as exc:
         raise OrqCLIError('The Orq CLI returned an unreadable OAuth identity.') from exc
-    if not isinstance(data, dict) or not data.get('authenticated'):
+    if isinstance(data, dict) and data.get('authenticated') is False:
         raise OrqCLIError(
             'The Orq CLI OAuth sign-in needs attention. Run orq auth login.', failure_kind='authentication'
         )
+    if not isinstance(data, dict) or data.get('authenticated') is not True:
+        raise OrqCLIError('The Orq CLI returned an unreadable OAuth identity. Try again shortly.')
     user_id = data.get('user_id')
     if not isinstance(user_id, str) or not user_id:
-        raise OrqCLIError(
-            'The Orq CLI did not identify the signed-in user. Run orq auth login.', failure_kind='authentication'
-        )
+        raise OrqCLIError('The Orq CLI did not identify the signed-in user. Try again shortly.')
     return {key: data.get(key) for key in ('user_id', 'workspace', 'project')}
 
 
@@ -545,9 +551,10 @@ _SECRET = re.compile(
     r'(?i)(bearer\s+)[A-Za-z0-9._~+/-]+=*|((?:api[_-]?key|access[_-]?token|refresh[_-]?token)["\' :=]+)[^\s,;]+'
 )
 _AUTHENTICATION_ERROR = re.compile(
-    r'(?i)missing api key|authentication required|unauthori[sz]ed|not authenticated|expired or was revoked|'
-    r"invalid refresh token|run ['\"]orq auth login['\"]"
+    r'(?i)missing api key|authentication required|unauthori[sz]ed|not authenticated|not signed in|'
+    r'sign-in needs attention|expired or was revoked|invalid refresh token|run\s+[\'\"]?orq auth login[\'\"]?'
 )
+_SETUP_ERROR = re.compile(r'(?i)orq cli is not installed|install it and sign in before using cli oauth')
 
 
 def _safe_error(value: str) -> str:
@@ -559,3 +566,13 @@ def _safe_error(value: str) -> str:
 def _is_authentication_error(value: str) -> bool:
     """Whether the CLI's sanitized error says its API/OAuth credential was rejected or is absent."""
     return bool(_AUTHENTICATION_ERROR.search(value))
+
+
+def _infer_failure_kind(message: str) -> Literal['authentication', 'setup', 'unavailable']:
+    """Classify legacy error messages at the CLI adapter boundary."""
+    sanitized = _safe_error(message)
+    if _SETUP_ERROR.search(sanitized):
+        return 'setup'
+    if _is_authentication_error(sanitized):
+        return 'authentication'
+    return 'unavailable'

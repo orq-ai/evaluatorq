@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from pydantic import BaseModel
@@ -117,13 +117,11 @@ async def test_cli_model_catalogue_preserves_auth_status(monkeypatch: Any) -> No
     [
         'Error: missing API key; configure a profile with auth setup or set ORQ_API_KEY',
         'Error: authentication required',
-        'Error: OAuth refresh token expired or was revoked; run \'orq auth login\'',
+        "Error: OAuth refresh token expired or was revoked; run 'orq auth login'",
     ],
 )
 @pytest.mark.asyncio
-async def test_cli_catalogue_classifies_missing_or_expired_authentication(
-    monkeypatch: Any, stderr: str
-) -> None:
+async def test_cli_catalogue_classifies_missing_or_expired_authentication(monkeypatch: Any, stderr: str) -> None:
     async def fake_create(*_: str, **__: Any) -> _Process:
         return _Process('', returncode=1, stderr=stderr)
 
@@ -157,13 +155,17 @@ def test_oauth_subject_accepts_authenticated_cli_source(monkeypatch: Any, source
         cli_oauth.subprocess,
         'run',
         lambda *_args, **_kwargs: cli_oauth.subprocess.CompletedProcess(
-            args=['orq'], returncode=0,
-            stdout=json.dumps({'authenticated': True, 'source': source, 'user_id': 'user-1'}), stderr='',
+            args=['orq'],
+            returncode=0,
+            stdout=json.dumps({'authenticated': True, 'source': source, 'user_id': 'user-1'}),
+            stderr='',
         ),
     )
 
     assert cli_oauth.oauth_subject('https://my.orq.ai') == {
-        'user_id': 'user-1', 'workspace': None, 'project': None,
+        'user_id': 'user-1',
+        'workspace': None,
+        'project': None,
     }
 
 
@@ -173,13 +175,83 @@ def test_oauth_subject_rejects_unauthenticated_cli(monkeypatch: Any) -> None:
         cli_oauth.subprocess,
         'run',
         lambda *_args, **_kwargs: cli_oauth.subprocess.CompletedProcess(
-            args=['orq'], returncode=0,
-            stdout=json.dumps({'authenticated': False, 'source': 'device-flow', 'user_id': 'user-1'}), stderr='',
+            args=['orq'],
+            returncode=0,
+            stdout=json.dumps({'authenticated': False, 'source': 'device-flow', 'user_id': 'user-1'}),
+            stderr='',
         ),
     )
 
     with pytest.raises(cli_oauth.OrqCLIError, match='sign-in needs attention'):
         cli_oauth.oauth_subject('https://my.orq.ai')
+
+
+@pytest.mark.parametrize(
+    ('stderr', 'failure_kind', 'message'),
+    [
+        ('OAuth refresh token expired or was revoked; run orq auth login', 'authentication', 'sign-in needs attention'),
+        ('HTTP 503 service unavailable', 'unavailable', 'Try again shortly'),
+    ],
+)
+def test_oauth_subject_classifies_nonzero_whoami_from_sanitized_stderr(
+    monkeypatch: Any, stderr: str, failure_kind: Literal['authentication', 'unavailable'], message: str
+) -> None:
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
+    monkeypatch.setattr(
+        cli_oauth.subprocess,
+        'run',
+        lambda *_args, **_kwargs: cli_oauth.subprocess.CompletedProcess(
+            args=['orq'],
+            returncode=1,
+            stdout='',
+            stderr=stderr,
+        ),
+    )
+
+    with pytest.raises(cli_oauth.OrqCLIError, match=message) as error:
+        cli_oauth.oauth_subject('https://my.orq.ai')
+    assert error.value.failure_kind == failure_kind
+
+
+@pytest.mark.parametrize('stdout', ['{}', '{"authenticated":true}', '{"authenticated":"yes","user_id":"u"}'])
+def test_oauth_subject_keeps_unknown_identity_shape_unavailable(monkeypatch: Any, stdout: str) -> None:
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
+    monkeypatch.setattr(
+        cli_oauth.subprocess,
+        'run',
+        lambda *_args, **_kwargs: cli_oauth.subprocess.CompletedProcess(
+            args=['orq'],
+            returncode=0,
+            stdout=stdout,
+            stderr='',
+        ),
+    )
+
+    with pytest.raises(cli_oauth.OrqCLIError) as error:
+        cli_oauth.oauth_subject('https://my.orq.ai')
+    assert error.value.failure_kind == 'unavailable'
+    assert 'Try again shortly' in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ('message', 'expected'),
+    [
+        ('The Orq CLI OAuth sign-in needs attention.', 'authentication'),
+        ('not signed in; run orq auth login', 'authentication'),
+        ('missing API key', 'authentication'),
+        ('The orq CLI is not installed.', 'setup'),
+        ('connection refused', 'unavailable'),
+    ],
+)
+def test_legacy_orq_cli_error_infers_failure_kind(message: str, expected: str) -> None:
+    assert cli_oauth.OrqCLIError(message).failure_kind == expected
+
+
+@pytest.mark.parametrize('failure_kind', ['setup', 'unavailable'])
+def test_explicit_orq_cli_error_failure_kind_wins(failure_kind: Literal['setup', 'unavailable']) -> None:
+    error = cli_oauth.OrqCLIError('not signed in; run orq auth login', failure_kind=failure_kind)
+
+    assert error.failure_kind == failure_kind
 
 
 @pytest.mark.asyncio
@@ -202,6 +274,7 @@ async def test_cli_trace_query_uses_json_stdin_and_does_not_pass_environment_cre
     client.sdk_configuration._hooks.register_after_success_hook(  # noqa: SLF001
         lambda context, response: captured.append((context.operation_id, response.json()))
     )
+
     class SDKHook:
         def after_success(self, context: Any, response: Any) -> None:
             captured.append((context.operation_id, response.json()))
