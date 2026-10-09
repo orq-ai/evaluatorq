@@ -630,6 +630,19 @@ def _range_values(form: Any) -> tuple[str, str]:
     return values[0], values[1]
 
 
+def browser_offset_zone(value: str | None) -> timezone:
+    """The fixed zone for a browser `getTimezoneOffset()` value (minutes west of UTC); raises `ValueError` if unusable."""
+    try:
+        return timezone(timedelta(minutes=-int(value or '')))
+    except OverflowError as exc:
+        raise ValueError(f'{value!r} is not a usable timezone offset') from exc
+
+
+def local_to_utc(value: str, zone: timezone) -> datetime:
+    """Read an ISO local timestamp in *zone* and return it in UTC; raises `ValueError` on a malformed timestamp."""
+    return datetime.fromisoformat(value).replace(tzinfo=zone).astimezone(timezone.utc)
+
+
 def parse_range(
     from_value: str,
     to_value: str,
@@ -641,8 +654,8 @@ def parse_range(
 
     def zone_for(value: str | None) -> timezone:
         try:
-            return timezone(timedelta(minutes=-int(value or '')))
-        except (OverflowError, ValueError):
+            return browser_offset_zone(value)
+        except ValueError:
             logger.warning('Explorer time range has no usable browser offset {!r}; reading it as UTC', value)
             return timezone.utc
 
@@ -653,8 +666,8 @@ def parse_range(
     try:
         if 'T' not in from_value or 'T' not in to_value:
             raise ValueError('A time is required at each end.')
-        start = datetime.fromisoformat(from_value).replace(tzinfo=start_zone).astimezone(timezone.utc)
-        end = datetime.fromisoformat(to_value).replace(tzinfo=end_zone).astimezone(timezone.utc)
+        start = local_to_utc(from_value, start_zone)
+        end = local_to_utc(to_value, end_zone)
     except ValueError as exc:
         raise ValueError('From and To must be full dates and times.') from exc
     if start >= end:

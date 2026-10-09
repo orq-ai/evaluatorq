@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tempfile
 from pathlib import Path
 from typing import Annotated, Any, cast
 
@@ -26,8 +27,8 @@ from evaluatorq.trace_finder.models import NumericFilters
 from evaluatorq.trace_finder.settings import effective_settings
 
 from . import presets
-from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec
-from .population import PopulationError, describe_projection_coverage, preview_snapshot
+from .models import DimensionName, InsightsPopulation, InsightsRun, LabelSpec, default_insights_models
+from .population import PopulationError, describe_local_send, describe_projection_coverage, preview_snapshot
 
 _DIMENSIONS: tuple[DimensionName, ...] = ('intent', 'failure', 'sentiment')
 
@@ -92,6 +93,29 @@ def _validate_finder_export(path: Path) -> RunExport:
         raise ValueError(f'could not read a valid finder export from {path}: {exc}') from exc
 
 
+def _validated_dimensions(
+    requested: list[str] | None, priority_dimension: str | None
+) -> tuple[tuple[DimensionName, ...], str]:
+    """The dimensions to run and the priority one; exits with code 2 and a message on an invalid choice."""
+    raw_dimensions = tuple(requested or _DIMENSIONS)
+    invalid_dimensions = sorted(set(raw_dimensions) - set(_DIMENSIONS))
+    if invalid_dimensions:
+        emit_error(f'unknown dimension(s): {", ".join(invalid_dimensions)}')
+        raise typer.Exit(code=2)
+    duplicate_dimensions = _duplicate_dimensions(raw_dimensions)
+    if duplicate_dimensions:
+        emit_error(f'--dimension cannot be repeated: {", ".join(sorted(duplicate_dimensions))}')
+        raise typer.Exit(code=2)
+    dimensions = cast('tuple[DimensionName, ...]', raw_dimensions)
+    if priority_dimension is not None and priority_dimension not in _DIMENSIONS:
+        emit_error(f'unknown priority dimension: {priority_dimension!r}')
+        raise typer.Exit(code=2)
+    if priority_dimension is not None and priority_dimension not in dimensions:
+        emit_error(f'--priority-dimension {priority_dimension!r} must also be included with --dimension')
+        raise typer.Exit(code=2)
+    return dimensions, priority_dimension or ('intent' if 'intent' in dimensions else dimensions[0])
+
+
 def _duplicate_dimensions(names: tuple[str, ...]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -129,9 +153,31 @@ def _validate_population_source(
         raise typer.Exit(code=2)
 
 
-def _print_snapshot_preview(path: Path) -> None:
+def _snapshot_classifier_questions(
+    *, labels: list[LabelSpec], dimensions: tuple[DimensionName, ...], coding: bool
+) -> dict[str, dict[str, Any]]:
+    coverage_specs = list(labels)
+    if 'sentiment' in dimensions and not any(spec.name == 'sentiment' for spec in coverage_specs):
+        coverage_specs.append(presets.SENTIMENT)
+    if coding:
+        coverage_specs.extend(presets.CODING_CONVERSATION_LABELS)
+    return {spec.name: spec.to_question({}).model_dump(mode='json') for spec in coverage_specs}
+
+
+def _print_snapshot_preview(
+    path: Path,
+    *,
+    trace_input_chars: int,
+    classifier_model: str | None,
+    classifier_questions: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     try:
-        coverage = preview_snapshot(str(path))
+        coverage = preview_snapshot(
+            str(path),
+            trace_input_chars=trace_input_chars,
+            classifier_model=classifier_model,
+            classifier_questions=classifier_questions,
+        )
     except PopulationError as exc:
         emit_error(exc)
         raise typer.Exit(code=2) from None
@@ -139,6 +185,35 @@ def _print_snapshot_preview(path: Path) -> None:
         emit_error('local trace snapshot contains no traces')
         raise typer.Exit(code=2)
     Console(file=sys.stdout).print(f'Model input coverage: {describe_projection_coverage(coverage)}')
+    return coverage
+
+
+def _print_local_send(
+    path: Path,
+    *,
+    n_traces: int,
+    summary_model: str | None,
+    classifier_model: str | None,
+    embedding_model: str | None,
+    preview: bool = False,
+) -> None:
+    """State what a local-snapshot run sends to which models; explicit options win, else the role defaults."""
+    try:
+        n_bytes = path.expanduser().stat().st_size
+    except OSError as exc:
+        emit_error(exc)
+        raise typer.Exit(code=2) from None
+    Console(file=sys.stdout).print(
+        describe_local_send(
+            n_traces=n_traces,
+            n_bytes=n_bytes,
+            file_name=path.name,
+            models=default_insights_models(summary_model, classifier_model, embedding_model),
+            preview=preview,
+        ),
+        markup=False,
+        highlight=False,
+    )
 
 
 def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_shown: bool = False) -> None:
@@ -192,8 +267,110 @@ def _print_run(run: InsightsRun, run_path: Path | None, *, projection_already_sh
     console.print(f'Run file: {run_path}' if run_path else 'Run file: unavailable.')
 
 
+def _validate_sessions_population_source(
+    query: str | None,
+    from_finder: Path | None,
+    from_snapshot: Path | None,
+    population_options: tuple[tuple[str, bool], ...],
+) -> None:
+    if query is not None:
+        emit_error('--sessions cannot be combined with --query')
+        raise typer.Exit(code=2)
+    if from_finder is not None:
+        emit_error('--sessions cannot be combined with --from-finder')
+        raise typer.Exit(code=2)
+    if from_snapshot is not None:
+        emit_error('--sessions cannot be combined with --from-snapshot')
+        raise typer.Exit(code=2)
+    conflicting = [name for name, used in population_options if used]
+    if conflicting:
+        emit_error(f'--sessions cannot be combined with population options: {", ".join(conflicting)}')
+        raise typer.Exit(code=2)
+
+
+def _run_local_sessions(
+    *,
+    sources: list[str] | None,
+    start: str | None,
+    end: str | None,
+    project_dir: Path | None,
+    text: str | None,
+    limit: int | None,
+    options: dict[str, Any],
+) -> None:
+    """Freeze one bounded local search into a private snapshot for the standard pipeline path."""
+    from evaluatorq.common.private_files import write_private_atomic
+    from evaluatorq.local_sessions.cli import search_session_options
+    from evaluatorq.local_sessions.models import MAX_SELECTED_SESSIONS, SessionLoadError
+    from evaluatorq.local_sessions.search import build_session_snapshot
+
+    if limit is not None and limit > MAX_SELECTED_SESSIONS:
+        emit_error(f'--limit must be at most {MAX_SELECTED_SESSIONS} with --sessions')
+        raise typer.Exit(code=2)
+    result = search_session_options(
+        sources,
+        start=start,
+        end=end,
+        project_dir=project_dir,
+        text=text,
+        limit=limit if limit is not None else MAX_SELECTED_SESSIONS,
+    )
+    try:
+        frozen = build_session_snapshot([session.ref() for session in result.sessions])
+    except SessionLoadError as exc:
+        emit_error(exc)
+        raise typer.Exit(code=1) from None
+    for _ref, reason in frozen.failed:
+        typer.echo(f'Skipped {reason}', err=True)
+
+    try:
+        temp_directory = tempfile.TemporaryDirectory(prefix='evaluatorq-insights-sessions-')
+    except OSError as exc:
+        reason = exc.strerror or type(exc).__name__
+        emit_error(f'could not create temporary local-session snapshot directory: {reason}')
+        raise typer.Exit(code=1) from None
+    with temp_directory as temp_dir:
+        snapshot_path = Path(temp_dir) / 'sessions.json'
+        try:
+            write_private_atomic(path=snapshot_path, contents=frozen.data)
+        except OSError as exc:
+            emit_error(f'could not write temporary local-session snapshot: {exc.strerror or type(exc).__name__}')
+            raise typer.Exit(code=1) from None
+        options.update(
+            sessions=False,
+            source=None,
+            start=None,
+            end=None,
+            project_dir=None,
+            session_text=None,
+            limit=None,
+            from_snapshot=snapshot_path,
+        )
+        insights_cmd(**options)
+
+
 def insights_cmd(
     query: Annotated[str | None, typer.Option('--query', help='Optional semantic question to select traces.')] = None,
+    sessions: Annotated[  # noqa: FBT002
+        bool, typer.Option('--sessions', help='Use local coding-agent sessions as the population.')
+    ] = False,
+    source: Annotated[
+        list[str] | None,
+        typer.Option(
+            '--source',
+            help='Session source: claude-code, claude-desktop, codex or omp; repeatable. Defaults to all.',
+        ),
+    ] = None,
+    start: Annotated[str | None, typer.Option('--from', help='First local day to include, YYYY-MM-DD.')] = None,
+    end: Annotated[str | None, typer.Option('--to', help='Last local day to include, YYYY-MM-DD.')] = None,
+    project_dir: Annotated[
+        Path | None,
+        typer.Option('--project-dir', help='Only sessions from this directory, its descendants, or its worktrees.'),
+    ] = None,
+    session_text: Annotated[
+        str | None,
+        typer.Option('--text', help='Only sessions whose messages contain this text (case-insensitive).'),
+    ] = None,
     profile: Annotated[
         str | None,
         typer.Option('--profile', help='Orq CLI profile for traces and model calls; overrides saved settings.'),
@@ -204,11 +381,17 @@ def insights_cmd(
     ] = None,
     from_snapshot: Annotated[
         Path | None,
-        typer.Option('--from-snapshot', help='Use traces and messages from a local snapshot JSON file.'),
+        typer.Option(
+            '--from-snapshot',
+            help='Use traces and messages from a local snapshot JSON file, including `eq agent-sessions --export` files.',
+        ),
     ] = None,
     preview_input: Annotated[  # noqa: FBT002
         bool,
-        typer.Option('--preview-input', help='Show local snapshot truncation without starting a run.'),
+        typer.Option(
+            '--preview-input',
+            help='Preview local-session or snapshot input truncation without starting a run.',
+        ),
     ] = False,
     label: Annotated[
         list[str] | None,
@@ -267,7 +450,15 @@ def insights_cmd(
     window_days: Annotated[
         int | None, typer.Option('--window-days', min=1, max=90, help='Recent days to scan.')
     ] = None,
-    limit: Annotated[int | None, typer.Option('--limit', min=1, max=5000, help='Maximum traces to scan.')] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(
+            '--limit',
+            min=1,
+            max=5000,
+            help='Maximum traces to scan (up to 5000); with --sessions, maximum 1000 (default 1000).',
+        ),
+    ] = None,
     parallelism: Annotated[
         int | None,
         typer.Option('--parallelism', min=1, max=200, help='Concurrent model calls.'),
@@ -291,7 +482,49 @@ def insights_cmd(
         typer.Option('--duration-ms-max', min=0, help='Maximum trace duration in milliseconds.'),
     ] = None,
 ) -> None:
-    """Discover trace dimensions and answer fixed label questions."""
+    options = locals().copy()
+    if sessions:
+        _validate_sessions_population_source(
+            query,
+            from_finder,
+            from_snapshot,
+            (
+                ('--window-days', window_days is not None),
+                ('--project', bool(project)),
+                ('--model', bool(model)),
+                ('--provider', bool(provider)),
+                ('--status', bool(status)),
+                ('--product', bool(product)),
+                ('--trace-type', bool(trace_type)),
+                ('--agent', bool(agent)),
+                ('--tool', bool(tool)),
+                ('--tokens-min', tokens_min is not None),
+                ('--tokens-max', tokens_max is not None),
+                ('--duration-ms-min', duration_ms_min is not None),
+                ('--duration-ms-max', duration_ms_max is not None),
+            ),
+        )
+        _run_local_sessions(
+            sources=source,
+            start=start,
+            end=end,
+            project_dir=project_dir,
+            text=session_text,
+            limit=limit,
+            options=options,
+        )
+        return
+    session_only = (
+        ('--source', bool(source)),
+        ('--from', start is not None),
+        ('--to', end is not None),
+        ('--project-dir', project_dir is not None),
+        ('--text', session_text is not None),
+    )
+    for option, used in session_only:
+        if used:
+            emit_error(f'{option} requires --sessions')
+            raise typer.Exit(code=2)
     _validate_population_source(
         from_finder,
         from_snapshot,
@@ -314,30 +547,11 @@ def insights_cmd(
         ),
         preview_input=preview_input,
     )
+    snapshot_traces = 0
     if query is not None and not query.strip():
         emit_error('--query must not be empty')
         raise typer.Exit(code=2)
-    if from_snapshot is not None:
-        _print_snapshot_preview(from_snapshot)
-        if preview_input:
-            return
-    raw_dimensions = tuple(dimension or _DIMENSIONS)
-    invalid_dimensions = sorted(set(raw_dimensions) - set(_DIMENSIONS))
-    if invalid_dimensions:
-        emit_error(f'unknown dimension(s): {", ".join(invalid_dimensions)}')
-        raise typer.Exit(code=2)
-    duplicate_dimensions = _duplicate_dimensions(raw_dimensions)
-    if duplicate_dimensions:
-        emit_error(f'--dimension cannot be repeated: {", ".join(sorted(duplicate_dimensions))}')
-        raise typer.Exit(code=2)
-    dimensions = cast('tuple[DimensionName, ...]', raw_dimensions)
-    if priority_dimension is not None and priority_dimension not in _DIMENSIONS:
-        emit_error(f'unknown priority dimension: {priority_dimension!r}')
-        raise typer.Exit(code=2)
-    if priority_dimension is not None and priority_dimension not in dimensions:
-        emit_error(f'--priority-dimension {priority_dimension!r} must also be included with --dimension')
-        raise typer.Exit(code=2)
-    selected_priority_dimension = priority_dimension or ('intent' if 'intent' in dimensions else dimensions[0])
+    dimensions, selected_priority_dimension = _validated_dimensions(dimension, priority_dimension)
     try:
         labels = _resolve_labels(label)
         numeric = NumericFilters(
@@ -347,6 +561,24 @@ def insights_cmd(
             duration_ms_max=duration_ms_max,
         )
         settings = effective_settings({'window_days': window_days, 'limit': limit, 'parallelism': parallelism})
+        if from_snapshot is not None:
+            classifier_questions = _snapshot_classifier_questions(labels=labels, dimensions=dimensions, coding=coding)
+            snapshot_traces = _print_snapshot_preview(
+                from_snapshot,
+                trace_input_chars=settings.trace_input_chars,
+                classifier_model=classifier_model,
+                classifier_questions=classifier_questions,
+            )['n_traces']
+            if preview_input:
+                _print_local_send(
+                    from_snapshot,
+                    n_traces=snapshot_traces,
+                    summary_model=summary_model,
+                    classifier_model=classifier_model,
+                    embedding_model=embedding_model,
+                    preview=True,
+                )
+                return
         saved_profile = settings.orq_profile if settings.orq_auth_method == 'cli_profile' else None
         selected_profile = (
             resolve_cli_profile(profile if profile is not None else saved_profile)
@@ -388,6 +620,14 @@ def insights_cmd(
         nonlocal run_path
         run_path = path
 
+    if from_snapshot is not None:
+        _print_local_send(
+            from_snapshot,
+            n_traces=snapshot_traces,
+            summary_model=summary_model,
+            classifier_model=classifier_model,
+            embedding_model=embedding_model,
+        )
     try:
         run = asyncio.run(
             _run_insights_with_profile(
@@ -403,6 +643,7 @@ def insights_cmd(
                 embedding_model=embedding_model,
                 priority_dimension=selected_priority_dimension,
                 parallelism=settings.parallelism,
+                trace_input_chars=settings.trace_input_chars,
                 cache=not no_cache,
                 _finder_export_source=from_finder.resolve() if from_finder is not None else None,
                 _on_saved=remember_run_path,

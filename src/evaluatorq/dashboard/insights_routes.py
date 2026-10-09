@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import json
+from collections import OrderedDict
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlencode
 
 from loguru import logger
 from pydantic import ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.routing import Route
 
 from evaluatorq.common.orq_client import close_orq_client, resolve_orq_client
 from evaluatorq.common.reports import esc
@@ -43,7 +47,10 @@ from evaluatorq.dashboard.insights_run_form import (
     render_run_form,
     render_run_page,
 )
+from evaluatorq.dashboard.insights_sessions_views import render_session_results
 from evaluatorq.dashboard.insights_uploads import (
+    MAX_INSIGHTS_UPLOAD_BYTES,
+    SNAPSHOT_TOO_LARGE_MESSAGE,
     UploadRequestTooLargeError,
     UploadTooLargeError,
     cleanup_expired_uploads,
@@ -66,14 +73,29 @@ from evaluatorq.dashboard.insights_views import (
     unreadable_page,
 )
 from evaluatorq.dashboard.model_choices import catalogue_entry, model_groups
+from evaluatorq.dashboard.project_browser import list_project_directories
 from evaluatorq.dashboard.security import csrf_token, request_rejected
-from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
+from evaluatorq.dashboard.trace_finder.routes import browser_offset_zone, selected_dashboard_auth
 from evaluatorq.dashboard.view import model_control
 from evaluatorq.insights.estimate import StageModels, estimate_run, stage_seconds, trace_bound
 from evaluatorq.insights.models import InsightsRun, LabelSpec, label_key
-from evaluatorq.insights.population import PopulationError, preview_snapshot, projection_coverage
+from evaluatorq.insights.population import PopulationError, preview_snapshot, projection_coverage, snapshot_documents
 from evaluatorq.insights.presets import CODING_CONVERSATION_LABELS, CODING_LABELS, LABEL_PRESETS, SENTIMENT
 from evaluatorq.insights.store import get_insights_runs_dir, list_run_paths
+from evaluatorq.local_sessions import (
+    MAX_SELECTED_SESSIONS,
+    MAX_SESSION_TEXT_CHARS,
+    SESSION_FAMILIES,
+    SESSION_SOURCES,
+    SessionLoadError,
+    SessionQuery,
+    SessionRef,
+    SnapshotTooLarge,
+    build_session_snapshot,
+    day_window,
+    search_sessions,
+    session_roots,
+)
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.models import FACET_NAMES, FacetCatalogue, FacetSelection
@@ -84,11 +106,10 @@ from evaluatorq.trace_finder.settings import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from evaluatorq.common.model_catalogue import ModelInfo
     from evaluatorq.contracts import RunManifest
     from evaluatorq.dashboard.auth import DashboardAuth
+    from evaluatorq.dashboard.insights_launch import FormSource
     from evaluatorq.insights.estimate import RunEstimate
 
 
@@ -401,8 +422,83 @@ def _is_unauthorized(error: Exception) -> bool:
     return status == 401
 
 
+# Starlette caps a form at 1000 fields; a full selection is MAX_SELECTED_SESSIONS fields plus the filters and token.
+_SESSION_FORM_FIELDS = MAX_SELECTED_SESSIONS + 50
+
+
+def _file_size(raw_path: str) -> int | None:
+    """The size of a local file, or `None` (with a warning) when it cannot be read."""
+    try:
+        return Path(raw_path).expanduser().stat().st_size
+    except OSError as exc:
+        logger.warning('Could not read the size of the local file for the plan: {}', type(exc).__name__)
+        return None
+
+
+_MAX_SEARCH_TABS = 64
+_TAB_ID_CHARS = 64
+
+
+def _session_query(form: Any) -> SessionQuery:
+    """Read the picker's filters; raises `ValueError` with a user-facing message for a bad source, date or offset."""
+    chosen = set(form.getlist('session_source'))
+    sources = tuple(source for source in SESSION_SOURCES if source in chosen)
+    if not sources or chosen - set(SESSION_SOURCES):
+        raise ValueError('Choose at least one valid session source.')
+    first, last = (str(form.get(name) or '').strip() for name in ('session_from', 'session_to'))
+    start = end = None
+    if first or last:
+        try:
+            zone = browser_offset_zone(str(form.get('tz_offset') or ''))
+        except ValueError:
+            raise ValueError('The browser timezone offset is not usable.') from None
+        try:
+            days = (date.fromisoformat(first) if first else None, date.fromisoformat(last) if last else None)
+        except ValueError:
+            raise ValueError('From and To must be dates like 2026-10-07.') from None
+        start, end = day_window(*days, zone)
+    project_dir = str(form.get('session_project_dir') or '') or None
+    if project_dir is not None:
+        expanded = Path(project_dir).expanduser()
+        if not expanded.is_absolute():
+            raise ValueError('Enter an absolute project directory, such as ~/code/repo.')
+        project_dir = str(expanded)
+    text = str(form.get('session_text') or '').strip() or None
+    if text is not None and len(text) > MAX_SESSION_TEXT_CHARS:
+        raise ValueError(f'Search text is limited to {MAX_SESSION_TEXT_CHARS} characters.')
+    return SessionQuery(
+        sources=sources,
+        start=start,
+        end=end,
+        project_dir=project_dir,
+        text=text,
+        limit=MAX_SELECTED_SESSIONS,
+    )
+
+
+def _session_refs(values: list[str]) -> list[SessionRef]:
+    """Decode `{source}:{path}` values; the path is only trusted after `build_session_snapshot` resolves it."""
+    if not values:
+        raise ValueError('Select at least one session.')
+    if len(values) > MAX_SELECTED_SESSIONS:
+        raise ValueError(f'Select at most {MAX_SELECTED_SESSIONS} sessions.')
+    refs: list[SessionRef] = []
+    for value in values:
+        source, _, path = value.partition(':')
+        try:
+            refs.append(SessionRef.model_validate({'source': source, 'path': path}))
+        except ValidationError:
+            raise ValueError('A selected session is not valid.') from None
+    return refs
+
+
 def register_insights_routes(app: Any) -> None:  # noqa: C901
     """Attach Insights page, fragment, and export routes to *app*."""
+
+    # A search is cancelled only by a newer search from the same browser tab; the dict is bounded by dropping the
+    # least recently searching tabs.
+    latest_search: OrderedDict[str, int] = OrderedDict()
+    search_generations = itertools.count(1)
 
     @app.get('/insights')
     def insights_home() -> Response:
@@ -431,24 +527,30 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
     async def insights_new_plan(req: Request) -> Response:
         compact = req.query_params.get('compact') == '1'
 
-        def validated() -> tuple[InsightsLaunchSpec, list[tuple[str, str]]]:
-            spec = InsightsLaunchSpec.model_validate(RunFormValues.from_form(req.query_params).launch_fields())
-            return spec, [] if compact else spec.stages()
+        def validated() -> tuple[FormSource, InsightsLaunchSpec, list[tuple[str, str]]]:
+            values = RunFormValues.from_form(req.query_params)
+            spec = InsightsLaunchSpec.model_validate(values.launch_fields())
+            return values.source, spec, [] if compact else spec.stages()
 
         try:
-            spec, stages = await asyncio.to_thread(validated)
+            source, spec, stages = await asyncio.to_thread(validated)
         except (ValidationError, ValueError, TypeError) as exc:
-            message = _validation_message(exc)
+            if req.query_params.get('source') == 'sessions' and not req.query_params.get('trace_file'):
+                message = 'Select local sessions and press Continue.'
+            else:
+                message = _validation_message(exc)
             if compact:
                 return _html(render_estimate_unavailable(message))
             return _html(f'<p class="insights-error" role="alert">{esc(message)}</p>', 422)
         estimate = await _estimate(req.app, spec)
         if compact:
             return _html(render_compact_estimate(estimate))
+        n_bytes = await asyncio.to_thread(_file_size, spec.snapshot_path) if spec.source == 'snapshot' else None
         return _html(
             f'<div data-part="estimate">{render_estimate(estimate, stages)}</div>'
             f'<div data-part="compact">{render_compact_estimate(estimate)}</div>'
-            f'<div data-part="plan">{render_plan(spec, stages)}</div>'
+            f'<div data-part="plan">'
+            f'{render_plan(spec, stages, source=source, n_traces=estimate.bound.n, n_bytes=n_bytes)}</div>'
         )
 
     @app.get('/insights/facets')
@@ -563,7 +665,7 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 if is_uploaded_source(get_insights_runs_dir(), path):
                     contents = read_uploaded_source(runs_dir=get_insights_runs_dir(), path=path, kind='snapshot')
                     return projection_coverage(
-                        Snapshot.model_validate_json(contents).traces,
+                        snapshot_documents(Snapshot.model_validate_json(contents)),
                         trace_input_chars=trace_input_chars,
                         classifier_model=classifier_model,
                         classifier_questions=classifier_questions,
@@ -581,6 +683,89 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
         if coverage['n_traces'] == 0:
             return _html('<p class="insights-error" role="alert">This trace snapshot contains no traces.</p>', 422)
         return _html(projection_notice(coverage))
+
+    # Plain Starlette routes, not `@app.post`: FastHTML parses every form with Starlette's 1000-field cap before the
+    # handler runs, and a full selection is 1000 `session` fields plus the token.
+    async def insights_sessions_search(req: Request) -> Response:
+        form = await req.form(max_fields=_SESSION_FORM_FIELDS)
+        rejected = request_rejected(req, form)
+        if rejected:
+            return _html(f'<p class="insights-error" role="alert">{esc(rejected)}</p>', 403)
+        try:
+            query = _session_query(form)
+        except ValueError as exc:
+            return _html(f'<p class="insights-error" role="alert">{esc(str(exc))}</p>', 422)
+        tab = str(form.get('session_tab') or '')[:_TAB_ID_CHARS]
+        mine = next(search_generations)
+        latest_search[tab] = mine
+        latest_search.move_to_end(tab)
+        while len(latest_search) > _MAX_SEARCH_TABS:
+            latest_search.popitem(last=False)
+        result = await asyncio.to_thread(search_sessions, query, cancelled=lambda: latest_search.get(tab) != mine)
+        roots_found = any(session_roots(family) for family in SESSION_FAMILIES)
+        return _html(
+            render_session_results(result, selected=frozenset(form.getlist('selected')), roots_found=roots_found)
+        )
+
+    async def insights_sessions_snapshot(req: Request) -> Response:
+        form = await req.form(max_fields=_SESSION_FORM_FIELDS)
+        rejected = request_rejected(req, form)
+        if rejected:
+            return JSONResponse({'error': rejected}, status_code=403)
+        try:
+            refs = _session_refs([str(value) for value in form.getlist('session')])
+        except ValueError as exc:
+            return JSONResponse({'error': str(exc)}, status_code=422)
+        directory = get_insights_runs_dir()
+        cleanup_expired_uploads(directory)
+        try:
+            frozen = await asyncio.to_thread(build_session_snapshot, refs, max_bytes=MAX_INSIGHTS_UPLOAD_BYTES)
+        except SnapshotTooLarge:
+            return JSONResponse({'error': f'{SNAPSHOT_TOO_LARGE_MESSAGE} Select fewer sessions.'}, status_code=413)
+        except SessionLoadError as exc:
+            return JSONResponse({'error': str(exc)}, status_code=422)
+        try:
+            path = await asyncio.to_thread(
+                store_upload, runs_dir=directory, contents=frozen.data, kind='snapshot', source='sessions'
+            )
+        except (OSError, ValueError) as exc:
+            return JSONResponse({'error': str(exc)}, status_code=422)
+        failed = [{'path': str(ref.path), 'error': error} for ref, error in frozen.failed]
+        return JSONResponse(
+            {'path': str(path), 'n_sessions': frozen.n_sessions, 'bytes': len(frozen.data), 'failed': failed},
+            status_code=201,
+        )
+
+    async def insights_sessions_directories(req: Request) -> Response:
+        try:
+            form = await req.form(max_fields=10)
+        except Exception:  # noqa: BLE001 — malformed request form is a client error
+            return JSONResponse({'error': 'Could not read the directory request.'}, status_code=422)
+        try:
+            rejected = request_rejected(req, form)
+            if rejected:
+                return JSONResponse({'error': rejected}, status_code=403)
+            raw_path = form.get('path', '')
+            raw_offset = form.get('offset', '0')
+            try:
+                if not isinstance(raw_path, str) or len(raw_path) > 4096:
+                    raise ValueError('Enter a valid directory path.')
+                if not isinstance(raw_offset, str) or not raw_offset.strip():
+                    raise ValueError('Directory page offset must be a nonnegative integer.')
+                offset = int(raw_offset)
+                if offset < 0:
+                    raise ValueError('Directory page offset must be a nonnegative integer.')
+                result = await asyncio.to_thread(list_project_directories, raw_path, offset=offset)
+            except (TypeError, ValueError) as exc:
+                return JSONResponse({'error': str(exc)}, status_code=422)
+            return JSONResponse(result)
+        finally:
+            await form.close()
+
+    app.add_route(Route('/insights/sessions/directories', endpoint=insights_sessions_directories, methods=['POST']))
+
+    app.add_route(Route('/insights/sessions/search', endpoint=insights_sessions_search, methods=['POST']))
+    app.add_route(Route('/insights/sessions/snapshot', endpoint=insights_sessions_snapshot, methods=['POST']))
 
     @app.post('/insights/finder-preview')
     async def insights_finder_preview(req: Request) -> Response:

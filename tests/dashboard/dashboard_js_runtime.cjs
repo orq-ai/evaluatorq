@@ -12,12 +12,14 @@ const source = fs.readFileSync(
 function emitter() {
   const listeners = new Map();
   return {
-    addEventListener(name, callback) {
+    addEventListener(name, callback, options = false) {
       if (!listeners.has(name)) listeners.set(name, []);
-      listeners.get(name).push(callback);
+      listeners.get(name).push({ callback, capture: options === true || !!options.capture });
     },
-    emit(name, event = { detail: { target: null } }) {
-      for (const callback of listeners.get(name) || []) callback(event);
+    emit(name, event = { detail: { target: null } }, capture = null) {
+      for (const listener of listeners.get(name) || []) {
+        if (capture === null || listener.capture === capture) listener.callback(event);
+      }
     },
   };
 }
@@ -124,7 +126,16 @@ function loadDashboard({
     FormData: class {}, Date: dateClass, CSS: { escape: value => value },
     Event: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
   });
-  return { body, document, documentEvents, window, history, entries, scheduled, intervals };
+  return { body, document, documentEvents, windowEvents, window, history, entries, scheduled, intervals };
+}
+
+function click(app, target, { stopBubbling = false } = {}) {
+  const event = { target };
+  app.windowEvents.emit('click', event, true);
+  app.documentEvents.emit('click', event, true);
+  if (stopBubbling) return;
+  app.documentEvents.emit('click', event, false);
+  app.windowEvents.emit('click', event, false);
 }
 
 function frozenDate(now) {
@@ -365,6 +376,44 @@ test('open filter dropdown survives a fragment swap', () => {
   app.body.emit('htmx:afterSwap', { detail: { target: null } });
   assert.equal(replacement.open, false);
 });
+
+for (const pathname of ['/traces', '/insights/new']) {
+  test(`date menus on ${pathname} stay open inside and close outside, including after replacement`, () => {
+    const inside = { closest() { return null; }, matches() { return false; } };
+    const trigger = { closest() { return null; }, matches() { return false; } };
+    const outside = { closest() { return null; }, matches() { return false; } };
+    function dateMenu() {
+      return {
+        open: true,
+        closest() { return null; },
+        matches() { return false; },
+        contains(target) { return target === this || target === inside || target === trigger; },
+        querySelector(selector) {
+          return { contains(target) { return target === (selector === 'summary' ? trigger : inside); } };
+        },
+      };
+    }
+    let menu = dateMenu();
+    const app = loadDashboard({
+      pathname,
+      queryAll(selector) {
+        return selector === '.xr-time-menu[open]' && menu.open ? [menu] : [];
+      },
+    });
+    click(app, inside);
+    assert.equal(menu.open, true, 'interacting with a date field must not dismiss its menu');
+    click(app, trigger);
+    assert.equal(menu.open, true, 'the trigger must keep its native toggle behavior');
+    click(app, menu);
+    assert.equal(menu.open, false, 'blank wrapper space outside the visible controls dismisses');
+    menu = dateMenu();
+    click(app, outside, { stopBubbling: true });
+    assert.equal(menu.open, false, 'outside controls cannot block dismissal by stopping bubbling');
+    menu = dateMenu();
+    click(app, outside);
+    assert.equal(menu.open, false, 'delegation also dismisses a freshly rendered menu');
+  });
+}
 
 test('overlapping explorer OOB swaps restore each captured table state in order', () => {
   function resultsRoot({ open, left, top, selected, version, sequence, renderKey }) {

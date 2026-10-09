@@ -651,6 +651,18 @@ def test_wizard_accepts_local_snapshot_and_rejects_raw_sessions(tmp_path: Path) 
         InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
 
 
+def test_wizard_accepts_documents_only_snapshot(tmp_path: Path) -> None:
+    from tests.insights.test_population import make_document
+    from evaluatorq.trace_finder.models import Snapshot
+
+    path = tmp_path / 'sessions.json'
+    path.write_text(Snapshot(traces=(), documents=(make_document('s1'),)).model_dump_json(), encoding='utf-8')
+    assert InsightsLaunchSpec(source='snapshot', snapshot_path=str(path)).population().snapshot_path == path
+    path.write_text(Snapshot(traces=(), documents=()).model_dump_json(), encoding='utf-8')
+    with pytest.raises(ValidationError, match='contains no traces'):
+        InsightsLaunchSpec(source='snapshot', snapshot_path=str(path))
+
+
 def test_dashboard_starts_local_snapshot_run_without_trace_lookup(tmp_path: Path) -> None:
     from evaluatorq.trace_finder.models import Snapshot
 

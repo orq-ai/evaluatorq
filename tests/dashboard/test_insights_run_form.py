@@ -669,8 +669,8 @@ def test_file_tab_takes_the_kind_from_the_stored_upload_name_or_the_exports_fold
 
 
 @pytest.mark.parametrize('stale', ['recent', 'query', 'finder', 'snapshot', 'bogus'])
-def test_only_the_two_tabs_are_accepted(stale: str) -> None:
-    with pytest.raises(ValueError, match='Choose Orq traces or Trace file'):
+def test_only_the_three_tabs_are_accepted(stale: str) -> None:
+    with pytest.raises(ValueError, match='Choose Orq traces, Trace file or Local sessions'):
         RunFormValues.from_form({'source': stale})
 
 
@@ -725,3 +725,60 @@ def test_rerun_of_each_stored_mode_opens_the_right_tab(
     assert f'name="source" value="{checked_tab}" checked' in html
     if source == 'query':
         assert 'refunds</textarea>' in html
+
+
+def test_sessions_source_launches_as_a_snapshot() -> None:
+    values = RunFormValues.from_form({'source': 'sessions', 'trace_file': '/runs/.uploads/snapshot-1.json', 'source_name': '2 local sessions', 'query': 'stale'})
+
+    assert (values.source, values.query) == ('sessions', '')
+    fields = values.launch_fields()
+    assert fields['source'] == 'snapshot'
+    assert fields['snapshot_path'] == '/runs/.uploads/snapshot-1.json'
+    html = render_run_form(RunFormValues.defaults(), csrf='t')
+    assert 'name="source" value="sessions"' in html
+    assert 'data-sessions-search' in html and 'id="insights-sessions"' in html
+
+
+def test_a_frozen_sessions_file_is_not_reported_as_the_selected_trace_snapshot() -> None:
+    path = '/runs/.uploads/snapshot-1.json'
+    sessions = render_run_form(
+        replace(RunFormValues.defaults(), source='sessions', trace_file=path, source_name='2 local sessions'), csrf='t'
+    )
+    snapshot = render_run_form(replace(RunFormValues.defaults(), source='snapshot', trace_file=path), csrf='t')
+
+    assert 'Trace snapshot is ready.' not in sessions
+    assert 'Using the sessions selected earlier (2 local sessions)' in sessions
+    assert 'name="source" value="sessions" checked' in sessions
+    assert 'data-kind="snapshot"' in sessions
+    assert 'Trace snapshot is ready.' in snapshot
+
+
+def test_plan_for_a_snapshot_states_what_is_sent_and_to_which_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from evaluatorq.trace_finder.models import Snapshot
+    from tests.insights.test_population import make_trace
+
+    monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
+    _patch_estimate_inputs(monkeypatch, price=None)
+    path = tmp_path / 'traces.json'
+    path.write_text(Snapshot(traces=(make_trace('a'), make_trace('b'))).model_dump_json(), encoding='utf-8')
+    client = TestClient(build_app())
+
+    response = client.get(
+        '/insights/new/plan',
+        params={
+            'source': 'sessions',
+            'trace_file': str(path),
+            'source_name': '2 local sessions',
+            'dimensions': 'intent',
+            'summary_model': 'acme/s',
+            'classifier_model': 'acme/c',
+            'embedding_model': 'acme/e',
+        },
+    )
+
+    assert response.status_code == 200
+    assert '2 local sessions from this computer.' in response.text
+    assert 'Sending 2 traces (' in response.text
+    assert 'from 2 local sessions to models: summary acme/s, classifier acme/c, embedding acme/e.' in response.text

@@ -44,24 +44,28 @@ from evaluatorq.trace_finder.models import FacetSelection, Snapshot
 from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
 
 Source = Literal['recent', 'query', 'finder', 'snapshot']
+FormSource = Source | Literal['sessions']
+"""A source the run form offers: a launch `Source`, or `sessions`, which the form freezes into a `snapshot`."""
 
 
 class SourceInfo(NamedTuple):
-    """How one launch `Source` shows up: its run form tab, its stored `population.mode`, and its label."""
+    """How one form source shows up: its run form tab, its stored `population.mode`, and its label."""
 
-    tab: Literal['orq', 'file']
+    tab: Literal['orq', 'file', 'sessions']
     mode: str
     label: str
 
 
-SOURCES: MappingProxyType[Source, SourceInfo] = MappingProxyType({
+SOURCES: MappingProxyType[FormSource, SourceInfo] = MappingProxyType({
     'recent': SourceInfo('orq', 'filter', 'Orq traces'),
     'query': SourceInfo('orq', 'query', 'Orq traces matching a question'),
     'finder': SourceInfo('file', 'export', 'Trace file (Finder export)'),
     'snapshot': SourceInfo('file', 'snapshot', 'Trace file'),
+    'sessions': SourceInfo('sessions', 'snapshot', 'Local sessions'),
 })
+# A sessions run launches as a snapshot run, so a stored `snapshot` mode reads back as the `snapshot` source.
 SOURCE_BY_MODE: MappingProxyType[str, Source] = MappingProxyType({
-    info.mode: source for source, info in SOURCES.items()
+    info.mode: source for source, info in SOURCES.items() if source != 'sessions'
 })
 Preset = str
 _CODING_PRESETS = {spec.name: spec for spec in CODING_LABELS[1:]}
@@ -896,7 +900,7 @@ class InsightsLaunchSpec(BaseModel):
                 snapshot = Snapshot.model_validate_json(path.read_text(encoding='utf-8'))
         except (OSError, ValueError) as exc:
             raise ValueError(f'Could not read a valid local trace snapshot: {exc}') from exc
-        if not snapshot.traces:
+        if snapshot.is_empty:
             raise ValueError('The local trace snapshot contains no traces.')
 
     @model_validator(mode='after')

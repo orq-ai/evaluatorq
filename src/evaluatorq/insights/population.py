@@ -13,7 +13,7 @@ Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
   and keep only the traces whose ids are in `matched_trace_ids`. No compile, no match
   question — the export already pins the matched population.
 - **Local snapshot path** (`pop.snapshot_path` set): validate a `Snapshot` JSON and
-  use its embedded trace messages directly. No Orq trace fetch or match question.
+  use its embedded trace messages and ATIF session documents directly. No Orq trace fetch or match question.
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
   compile, no match question.
 
@@ -49,7 +49,7 @@ from evaluatorq.common.model_input import (
     serialized_question_chars,
 )
 from evaluatorq.common.model_roles import role_model
-from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
 from evaluatorq.insights.labeling import MATCH_KEY, prepare_classifier_state
 from evaluatorq.insights.models import ensure_unique_trace_ids
 from evaluatorq.insights.summarize import _build_prompt_with_coverage
@@ -118,10 +118,11 @@ def projection_coverage(
         'classifier_question_reserve': reserve,
     }
     questions = classifier_questions
+    question_chars = serialized_question_chars(questions) if questions is not None else 0
     for trace in traces:
+        messages = prompt_messages(trace)
         prompt, summary_truncated = _build_prompt_with_coverage(trace, input_char_cap=cap)
         state = prepare_classifier_state(trace, model=model, char_cap=cap)
-        question_chars = serialized_question_chars(questions) if questions is not None else 0
         if questions is not None:
             state = fit_classifier_input(
                 state,
@@ -144,15 +145,14 @@ def projection_coverage(
                         for result in entry.get('results', [])
                         if isinstance(result, dict) and isinstance(result.get('index'), int)
                     )
-            omitted = max(0, len(trace.messages) - len(represented))
+            omitted = max(0, len(messages) - len(represented))
         state_truncated = omitted > 0 or has_truncated_source_text(state)
         coverage['n_summary_truncated'] += int(summary_truncated)
+        coverage['n_classifier_truncated'] += int(state_truncated)
         coverage['n_projection_truncated'] += int(summary_truncated or state_truncated)
-        coverage['n_source_messages'] += len(trace.messages)
+        coverage['n_source_messages'] += len(messages)
         coverage['n_omitted_messages'] += omitted
-        coverage['source_chars'] += len(
-            serialize_projection({'trace_status': trace.status, 'messages': trace.messages})
-        )
+        coverage['source_chars'] += len(serialize_projection({'trace_status': trace.status, 'messages': messages}))
         coverage['classifier_state_chars'] += state_chars
         coverage['classifier_question_chars'] += question_chars
         coverage['classifier_request_chars'] += request_chars
@@ -182,6 +182,33 @@ def describe_projection_coverage(coverage: dict[str, Any]) -> str:
     )
 
 
+def snapshot_documents(snapshot: Snapshot) -> list[TraceDocument]:
+    """Every trace of a snapshot as a `TraceDocument`: its trace records first, then its ATIF documents."""
+    return [*(ensure_trace_document(trace) for trace in snapshot.traces), *snapshot.documents]
+
+
+def format_size(n_bytes: int) -> str:
+    """Render a byte count with one decimal in KB or MB."""
+    if n_bytes >= 1024 * 1024:
+        return f'{n_bytes / (1024 * 1024):.1f} MB'
+    return f'{n_bytes / 1024:.1f} KB'
+
+
+def describe_local_send(
+    *, n_traces: int, n_bytes: int, file_name: str, models: Mapping[str, str], preview: bool = False
+) -> str:
+    """State what a local-snapshot run sends to which models; `models` maps summary/classifier/embedding to ids.
+
+    `preview` words it as what a run would send, for output printed without starting one.
+    """
+    noun = 'trace' if n_traces == 1 else 'traces'
+    verb = 'A run would send' if preview else 'Sending'
+    return (
+        f'{verb} {n_traces:,} {noun} ({format_size(n_bytes)}) from {file_name} to models: '
+        f'summary {models["summary"]}, classifier {models["classifier"]}, embedding {models["embedding"]}.'
+    )
+
+
 def preview_snapshot(
     raw_path: str,
     *,
@@ -194,7 +221,7 @@ def preview_snapshot(
     try:
         snapshot = Snapshot.model_validate_json(path.read_bytes())
         return projection_coverage(
-            snapshot.traces,
+            snapshot_documents(snapshot),
             trace_input_chars=trace_input_chars,
             classifier_model=classifier_model,
             classifier_questions=classifier_questions,
@@ -211,7 +238,7 @@ def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
         snapshot = Snapshot.model_validate_json(raw)
     except (OSError, ValueError) as error:
         raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
-    traces = [ensure_trace_document(trace) for trace in snapshot.traces]
+    traces = snapshot_documents(snapshot)
     return ResolvedPopulation(
         traces=traces,
         compiled=None,

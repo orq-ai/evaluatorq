@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from loguru import logger
 from openai.types.responses import Response, ResponseError
 
 from evaluatorq.formats.atif import AtifTrajectory
@@ -812,3 +813,17 @@ def test_custom_tool_result_round_trips_with_its_call() -> None:
     step = traj.steps[1]
     assert step.extra is not None and step.extra['evaluatorq.responses_result_items'] == [result]
     assert traj.to_responses().items[-2:] == [call, result]
+
+
+def test_invalid_item_warning_does_not_leak_item_text() -> None:
+    seen: list[str] = []
+    sink = logger.add(lambda message: seen.append(str(message)), level='WARNING')
+    try:
+        ResponsesConversation(
+            items=[{'type': 'function_call_output', 'call_id': 'c', 'output': {'text': 'SECRET-PROMPT-TEXT'}}]
+        )
+    finally:
+        logger.remove(sink)
+    assert seen, 'an item that fails validation must warn'
+    assert not any('SECRET-PROMPT-TEXT' in line for line in seen)
+    assert any('ValidationError' in line for line in seen)
