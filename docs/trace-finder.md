@@ -225,9 +225,9 @@ The dashboard command accepts `--compiler-model`, `--classifier-model`, `--windo
 
 ## CLI reference
 
-`eq find` runs an immediate finder query with a terminal activity indicator, then prints a newest-first table of matched traces and a summary of the full run. The CLI has no explorer table, trajectories view, or drawer. Add `--json PATH` to write the completed run export, and pass `--positive-only` to keep only matched trace records in that JSON export; the counts still describe the full run. Pass `--debug` to print progress and the compiler, filter, and classifier requests and responses. For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. Debug output includes projected conversation content for every classified trace, even with `--positive-only`, so treat saved logs as trace data. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.
+`eq find` first plans the question and loads the population, then prints the plan: the question, the search window, your filters, the filters the question generated, each classifier dimension with the answer that includes a trace, and the trace count, marked when it reached `--limit`. It then asks `Classify N traces?` (default yes) and starts classification only on yes; answering no cancels the run without any classify calls, and Ctrl-C exits with status 130. Pass `--yes` (`-y`) to skip the prompt; it is also skipped when stdin is not a terminal, and for a zero-dimension plan, which makes no per-trace calls. After classification it prints a newest-first table of matched traces and a summary of the full run. The CLI has no explorer table, trajectories view, or drawer. Add `--json PATH` to write the completed run export, and pass `--positive-only` to keep only matched trace records in that JSON export; the counts still describe the full run. Pass `--debug` to print progress and the compiler, filter, and classifier requests and responses. For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`. Debug output includes projected conversation content for every classified trace, even with `--positive-only`, so treat saved logs as trace data. `EVALUATORQ_LOG_LEVEL=DEBUG` enables the same diagnostics in CLI and dashboard runs.
 
-The command cancels a run that has not finished after two hours. If any trace classification fails, it exits with status 1 and does not write the JSON file. Pass `--profile NAME` to use an Orq CLI API-key profile for trace retrieval and model calls. It overrides the saved profile and environment credentials. Without the flag, the saved profile applies only when **CLI API-key profile** is selected in Settings; choose **Environment** to use `ORQ_API_KEY` and `ORQ_BASE_URL`. Saved project IDs from older dashboard settings are ignored. Use `--project` to choose a project facet for one run.
+The command cancels a run that has not finished after two hours of planning and classification; time spent at the prompt does not count. If any trace classification fails, it exits with status 1 and does not write the JSON file. Pass `--profile NAME` to use an Orq CLI API-key profile for trace retrieval and model calls. It overrides the saved profile and environment credentials. Without the flag, the saved profile applies only when **CLI API-key profile** is selected in Settings; choose **Environment** to use `ORQ_API_KEY` and `ORQ_BASE_URL`. Saved project IDs from older dashboard settings are ignored. Use `--project` to choose a project facet for one run.
 
 ```bash
 export ORQ_API_KEY=...
@@ -240,10 +240,11 @@ For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`
     Debug output includes projected conversation content for every classified trace, even with `--positive-only`. Treat saved logs as trace data.
 
 !!! failure "Exit status"
-    The command cancels a run that has not finished after two hours. If any trace classification fails, it exits with status 1 and does not write the JSON file.
+    The command cancels a run that has not finished after two hours of planning and classification; time spent at the prompt does not count. If any trace classification fails, it exits with status 1 and does not write the JSON file.
 
 | Option | Meaning |
 |---|---|
+| `--yes`, `-y` | Skip the plan confirmation prompt. |
 | `--debug` | Print changed progress and compiler and classifier request and response data, including trace content. |
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
 | `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |

@@ -50,6 +50,7 @@ from .models import (
     TraceProjection,
     TraceRecord,
     ValueSelection,
+    selection_rule_text,
     validate_compiled_query,
 )
 from .orq_source import OrqTraceSource, build_oql
@@ -128,6 +129,7 @@ __all__ = [
     'run_classifier',
     'save_settings',
     'select_filters',
+    'selection_rule_text',
     'serialize_projection',
     'settings_path',
     'validate_compiled_query',

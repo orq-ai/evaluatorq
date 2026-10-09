@@ -352,6 +352,16 @@ class TraceDetail:
     dimensions: tuple[CompiledQuery, ...] | None = None
 
 
+def selection_rule_text(compiled: CompiledQuery) -> tuple[str, str]:
+    """When a dimension includes a trace, in plain words as ``(lead, value)``, e.g. ``('Answer is', 'yes')``."""
+    selection = compiled.selection
+    if selection.kind == 'threshold':
+        return f'Score {"at least" if selection.operator == "gte" else "at most"}', f'{selection.value:g}'
+    if compiled.task.kind == 'noul':
+        return 'Answer is', ' or '.join('yes' if value else 'no' for value in selection.values)
+    return 'Verdict', ' or '.join(str(value) for value in selection.values)
+
+
 def validate_compiled_query(task: ClassifyQuestion, selection: SelectionRule) -> None:
     """Reject match rules that cannot be evaluated against their classifier task."""
 

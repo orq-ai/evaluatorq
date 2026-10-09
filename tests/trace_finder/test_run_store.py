@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -291,6 +292,47 @@ async def test_filter_response_survives_review_start_and_is_detached() -> None:
     runner.release.set()
     assert store._task is not None
     await asyncio.wait_for(store._task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_find_cli_classifies_the_reviewed_population_without_reloading() -> None:
+    from rich.console import Console
+
+    from evaluatorq.trace_finder import cli as find_cli
+
+    store, planner, loader, runner, _ = make_store()
+    runner.release.set()
+
+    snapshot = await find_cli._run(store, request(mode='review'), Console(file=io.StringIO()), yes=True)
+
+    assert snapshot is not None
+    assert snapshot.state == 'completed'
+    assert len(planner.calls) == 1
+    assert len(loader.calls) == 1
+    assert runner.calls == 1
+    assert snapshot.total == 3
+
+
+@pytest.mark.asyncio
+async def test_find_cli_declined_plan_classifies_nothing_and_close_cancels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from rich.console import Console
+
+    from evaluatorq.trace_finder import cli as find_cli
+
+    async def decline(*args: Any, **kwargs: Any) -> bool:
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(find_cli, 'confirm_run_plan', decline)
+    store, _, loader, runner, _ = make_store()
+
+    snapshot = await find_cli._run(store, request(mode='review'), Console(file=io.StringIO()))
+    await store.close()
+
+    assert snapshot is None
+    assert len(loader.calls) == 1
+    assert runner.calls == 0
+    assert (await store.snapshot()).state == 'cancelled'
 
 
 @pytest.mark.asyncio

@@ -360,7 +360,7 @@ def _echo_generate_plan(
     prompts — generation is cheap and approval is file-mediated (edit the JSONL),
     so a confirm gate here would be friction, not clarity.
     """
-    from evaluatorq.common.reports import confirm_run_plan
+    from evaluatorq.common.reports import render_plan_table
 
     total = num_personas * num_scenarios
     rows = [
@@ -369,7 +369,7 @@ def _echo_generate_plan(
         ('Building', f'{num_personas} personas x {num_scenarios} scenarios = {total} datapoints'),
         ('Output', str(output)),
     ]
-    asyncio.run(confirm_run_plan(console, title='Generate Plan', rows=rows, prompt='', skip_confirm=True))
+    render_plan_table(console, title='Generate Plan', rows=rows)
 
 
 def _dashboard_command(directory: Path) -> str:
