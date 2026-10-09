@@ -43,7 +43,7 @@ import httpx
 from loguru import logger
 
 from evaluatorq.common.env_config import env_float
-from evaluatorq.common.llm_client import orq_base_url, resolve_results_base_url
+from evaluatorq.common.llm_client import MissingLLMCredentialsError, orq_base_url, resolve_results_base_url
 from evaluatorq.contracts import DEFAULT_CLASSIFIER_MODEL
 
 if TYPE_CHECKING:
@@ -194,7 +194,13 @@ async def _fetch_catalogue_payload(host: str, api_key: str | None, oauth_fetch: 
             headers={'Authorization': f'Bearer {api_key}'},
         )
         response.raise_for_status()
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise ModelCatalogueError(
+                'Orq returned invalid JSON for the model catalogue.',
+                status_code=response.status_code,
+            ) from exc
 
 
 def reset_catalogue_cache() -> None:
@@ -443,7 +449,9 @@ async def _load_catalogue(client: AsyncOpenAI | None = None, *, strict: bool = F
         if not callable(oauth_fetch) and not api_key:
             logger.debug('No ORQ_API_KEY and no client credential; model catalogue unavailable')
             if strict:
-                raise ValueError('No Orq API key or CLI OAuth session is available for the model catalogue.')
+                raise MissingLLMCredentialsError(
+                    'No Orq API key or CLI OAuth session is available for the model catalogue.'
+                )
             _catalogues[cache_key] = {}
             _failed_catalogues.add(cache_key)
             return _catalogues[cache_key]

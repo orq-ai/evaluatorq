@@ -6,7 +6,7 @@ import os
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from starlette.requests import Request
@@ -1713,6 +1713,18 @@ def test_model_field_stays_free_text_without_a_catalogue(client: TestClient, mon
     assert html.startswith('<input id="fast_model" name="fast_model" type="text" value="x/y"')
 
 
+def test_real_environment_auth_chain_reports_missing_key_before_catalogue_fetch(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    html = client.get('/settings/models', params={'field': 'fast_model', 'orq_auth_method': 'environment'}).text
+
+    assert 'Orq credentials need attention, so the model list cannot load.' in html
+    assert 'Set ORQ_API_KEY in the environment.' in html
+    assert 'temporarily unavailable' not in html
+
+
 @pytest.mark.parametrize(
     ('method', 'error'),
     [
@@ -1794,14 +1806,18 @@ def test_model_catalogue_rejected_credentials_are_not_shown_as_outages(
 
 
 @pytest.mark.parametrize(
-    ('error', 'expected'),
+    ('error', 'failure_kind', 'expected'),
     [
-        ('The orq CLI is not installed. Install it and sign in before using CLI OAuth.', 'Install the Orq CLI'),
-        ('The Orq CLI OAuth sign-in needs attention. Run orq auth login.', 'orq auth login'),
+        ('The orq CLI is not installed. Install it and sign in before using CLI OAuth.', 'setup', 'Install the Orq CLI'),
+        ('The Orq CLI OAuth sign-in needs attention. Run orq auth login.', 'authentication', 'orq auth login'),
     ],
 )
 def test_cli_oauth_setup_failures_point_to_install_or_sign_in(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, error: str, expected: str
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    error: str,
+    failure_kind: Literal['authentication', 'setup'],
+    expected: str,
 ) -> None:
     from evaluatorq.common.cli_oauth import OrqCLIError
 
@@ -1817,7 +1833,7 @@ def test_cli_oauth_setup_failures_point_to_install_or_sign_in(
     monkeypatch.setattr(model_choices, 'catalogue_client', lambda _auth: CatalogueClient())
 
     async def cli_error(*_args: object, **_kwargs: object) -> dict[str, list[str]]:
-        raise OrqCLIError(error)
+        raise OrqCLIError(error, failure_kind=failure_kind)
 
     monkeypatch.setattr(model_choices, 'models_by_provider', cli_error)
 

@@ -366,6 +366,11 @@ class _FakeResponse:
         return self._payload
 
 
+class _InvalidJSONResponse(_FakeResponse):
+    def json(self) -> object:
+        raise ValueError('invalid JSON from test server')
+
+
 class _FakeAsyncClient:
     """Stand-in for httpx.AsyncClient that records GET calls and returns a canned response."""
 
@@ -538,6 +543,56 @@ async def test_strict_catalogue_rejects_malformed_payload(monkeypatch: pytest.Mo
     with pytest.raises(pricing.ModelCatalogueError, match='unreadable model catalogue'):
         await pricing.models_by_provider(kind='chat', strict=True)
     assert pricing._catalogues == {}
+
+
+@pytest.mark.asyncio
+async def test_strict_invalid_json_reports_catalogue_error_and_recovers(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    calls: list[str] = []
+    responses = [
+        _InvalidJSONResponse(200),
+        _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'model_type': 'chat'}]),
+    ]
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: responses.pop(0)))
+
+    with pytest.raises(pricing.ModelCatalogueError, match='invalid JSON') as error:
+        await pricing.models_by_provider(kind='chat', strict=True)
+    assert error.value.status_code == 200
+    assert await pricing.models_by_provider(kind='chat', strict=True) == {'openai': ['openai/gpt-5-mini']}
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_tolerant_invalid_json_falls_back_and_retries(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_fetch_failures', {})
+    monkeypatch.setenv('ORQ_API_KEY', 'test-key')
+    calls: list[str] = []
+    responses = [
+        _InvalidJSONResponse(200),
+        _FakeResponse(200, [{'model_id': 'gpt-5-mini', 'provider': 'openai', 'model_type': 'chat'}]),
+    ]
+    monkeypatch.setattr(httpx, 'AsyncClient', _FakeAsyncClient(calls, lambda: responses.pop(0)))
+
+    assert await pricing.models_by_provider(kind='chat') == {}
+    assert any('invalid JSON' in record.getMessage() for record in caplog.records)
+    assert await pricing.models_by_provider(kind='chat') == {'openai': ['openai/gpt-5-mini']}
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_strict_missing_credentials_uses_typed_error(monkeypatch: pytest.MonkeyPatch):
+    from evaluatorq.common.llm_client import MissingLLMCredentialsError
+
+    monkeypatch.setattr(pricing, '_catalogues', {})
+    monkeypatch.setattr(pricing, '_failed_catalogues', set())
+    monkeypatch.delenv('ORQ_API_KEY', raising=False)
+
+    with pytest.raises(MissingLLMCredentialsError, match='No Orq API key'):
+        await pricing.models_by_provider(kind='chat', strict=True)
 
 
 @pytest.mark.asyncio

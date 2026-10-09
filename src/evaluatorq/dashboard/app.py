@@ -435,7 +435,7 @@ async def _settings_models(req: Request) -> NotStr:
         groups = {}
         note = ''
         if field == 'fast_model':
-            notice = _settings_model_auth_recovery(settings.orq_auth_method)
+            notice = _settings_model_auth_recovery(method=settings.orq_auth_method)
     else:
         try:
             async with model_choices.catalogue_client(auth) as client:
@@ -446,7 +446,7 @@ async def _settings_models(req: Request) -> NotStr:
             note = ''
             if field == 'fast_model':
                 if _settings_model_auth_failure(exc):
-                    notice = _settings_model_auth_recovery(settings.orq_auth_method)
+                    notice = _settings_model_auth_recovery(method=settings.orq_auth_method)
                 else:
                     notice = 'The Orq model list is temporarily unavailable. Check your connection or Orq status, then try again; you can still type a model id.'
         else:
@@ -458,29 +458,16 @@ async def _settings_models(req: Request) -> NotStr:
 
 def _settings_model_auth_failure(exc: Exception) -> bool:
     """Whether a catalogue error clearly means the selected credential needs attention."""
-    message = str(exc).casefold()
     if isinstance(exc, MissingLLMCredentialsError):
         return True
     if isinstance(exc, APIStatusError):
         return exc.status_code in (401, 403)
     if getattr(exc, 'status_code', None) in (401, 403):
         return True
-    return isinstance(exc, OrqCLIError) and any(
-        phrase in message
-        for phrase in (
-            'orq cli is not installed',
-            'install it and sign in before using cli oauth',
-            'sign-in needs attention',
-            'run orq auth login',
-            "run 'orq auth login'",
-            'not signed in',
-            'expired or was revoked',
-            'invalid refresh token',
-        )
-    )
+    return isinstance(exc, OrqCLIError) and exc.failure_kind in ('authentication', 'setup')
 
 
-def _settings_model_auth_recovery(method: str) -> str:
+def _settings_model_auth_recovery(*, method: str) -> str:
     """Explain the shared credential failure and the recovery for the selected source."""
     detail = {
         'environment': 'Set ORQ_API_KEY in the environment.',

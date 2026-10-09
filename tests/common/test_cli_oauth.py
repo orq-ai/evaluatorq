@@ -109,6 +109,45 @@ async def test_cli_model_catalogue_preserves_auth_status(monkeypatch: Any) -> No
     with pytest.raises(cli_oauth.OrqCLIError) as error:
         await llm.get_model_catalogue()
     assert error.value.status_code == 401
+    assert error.value.failure_kind == 'authentication'
+
+
+@pytest.mark.parametrize(
+    'stderr',
+    [
+        'Error: missing API key; configure a profile with auth setup or set ORQ_API_KEY',
+        'Error: authentication required',
+        'Error: OAuth refresh token expired or was revoked; run \'orq auth login\'',
+    ],
+)
+@pytest.mark.asyncio
+async def test_cli_catalogue_classifies_missing_or_expired_authentication(
+    monkeypatch: Any, stderr: str
+) -> None:
+    async def fake_create(*_: str, **__: Any) -> _Process:
+        return _Process('', returncode=1, stderr=stderr)
+
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
+    monkeypatch.setattr(cli_oauth.asyncio, 'create_subprocess_exec', fake_create)
+    _, llm = cli_oauth.build_cli_oauth_clients()
+
+    with pytest.raises(cli_oauth.OrqCLIError) as error:
+        await llm.get_model_catalogue()
+    assert error.value.failure_kind == 'authentication'
+
+
+@pytest.mark.asyncio
+async def test_cli_catalogue_keeps_unreadable_response_as_unavailable(monkeypatch: Any) -> None:
+    async def fake_create(*_: str, **__: Any) -> _Process:
+        return _Process('', returncode=1, stderr='connection refused')
+
+    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: 'orq')
+    monkeypatch.setattr(cli_oauth.asyncio, 'create_subprocess_exec', fake_create)
+    _, llm = cli_oauth.build_cli_oauth_clients()
+
+    with pytest.raises(cli_oauth.OrqCLIError) as error:
+        await llm.get_model_catalogue()
+    assert error.value.failure_kind == 'unavailable'
 
 
 @pytest.mark.parametrize('source', ['session', 'session-file', 'device-flow', 'future-cli-source'])
