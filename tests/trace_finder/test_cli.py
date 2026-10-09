@@ -409,7 +409,7 @@ async def test_find_polling_timeout_cancels_store(monkeypatch: Any) -> None:
     store = StalledStore()
     monkeypatch.setattr(find_cli, 'MAX_FIND_WAIT_SECONDS', 0.01)
 
-    with pytest.raises(TimeoutError, match='wait limit'):
+    with pytest.raises(TimeoutError, match='combined planning and classification limit'):
         await find_cli._run(store, cast(Any, object()), Console())
 
     assert store.cancelled

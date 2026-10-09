@@ -70,6 +70,35 @@ def test_ask_confirm_returns_the_answer_and_keeps_the_loop_running(monkeypatch: 
     assert asyncio.run(main()) is False
 
 
+def test_ask_confirm_cancellation_returns_at_once_and_drops_the_late_answer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    import typer
+
+    release = threading.Event()
+    finished = threading.Event()
+
+    def confirm(*_a: object, **_kw: object) -> bool:
+        release.wait(timeout=5)
+        finished.set()
+        return True
+
+    monkeypatch.setattr(typer, "confirm", confirm)
+
+    async def main() -> None:
+        pending = asyncio.ensure_future(ask_confirm("Go?"))
+        await asyncio.sleep(0)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+
+    asyncio.run(main())
+    release.set()
+    assert finished.wait(timeout=5)
+
+
 def test_ask_confirm_reraises_the_prompt_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import click
     import typer

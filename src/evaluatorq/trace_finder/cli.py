@@ -272,7 +272,9 @@ async def _poll(
             await asyncio.wait_for(store.cancel(), timeout=10)
         except asyncio.TimeoutError:
             logger.warning('Trace finder cancellation did not complete within 10 seconds after the CLI wait limit')
-        raise TimeoutError(f'Find run exceeded the {MAX_FIND_WAIT_SECONDS}-second wait limit.') from error
+        raise TimeoutError(
+            f'Find run exceeded the combined planning and classification limit of {MAX_FIND_WAIT_SECONDS:,} seconds.'
+        ) from error
 
 
 async def _run(store: Any, request: RunRequest, console: Console, *, yes: bool = False) -> RunSnapshot | None:

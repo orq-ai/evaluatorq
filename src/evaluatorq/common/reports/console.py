@@ -37,6 +37,10 @@ async def ask_confirm(prompt: str) -> bool:
     The read runs on a daemon thread rather than ``asyncio.to_thread``: on Ctrl-C ``asyncio.run``
     cancels the awaiting task and then waits for its default executor, which would block on the
     unfinished stdin read until the user pressed Enter.
+
+    A blocking stdin read cannot be interrupted, so after cancellation the thread stays blocked
+    until a line arrives or the process exits, and that line is discarded. Call it only from
+    a CLI entry point that exits after the run, not from a long-lived process.
     """
     import typer
 
