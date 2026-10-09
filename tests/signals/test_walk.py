@@ -188,6 +188,17 @@ def test_response_local_tool_schemas_remain_authoritative_without_legacy_fallbac
     assert call_tool_schemas(child_call_record, root) == {'local_only': {'type': 'function', 'name': 'local_only'}}
 
 
+def test_empty_response_local_tool_schemas_do_not_fall_back_to_root() -> None:
+    child = traj(
+        [agent(calls=[call('root_only')], extra={'evaluatorq.responses_tools': []})],
+        trajectory_id='child',
+    )
+    root = traj([agent('root')], subagents=[child], tool_definitions=[{'name': 'root_only'}])
+    child_call_record = next(record for record in calls(walk(root)) if record.step.agent_path)
+
+    assert call_tool_schemas(child_call_record, root) == {}
+
+
 @pytest.mark.parametrize(
     ('result', 'expected'),
     [
