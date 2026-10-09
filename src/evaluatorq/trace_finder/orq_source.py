@@ -118,6 +118,21 @@ class OrqSourceError(ValueError):
     """Live trace acquisition could not produce a valid snapshot."""
 
 
+class OrqSpanMismatchError(OrqSourceError):
+    """The live query selected a different span than the caller analyzed."""
+
+
+def require_complete_targeted_load(snapshot: Snapshot, *, error_type: type[Exception], operation: str) -> None:
+    """Raise ``error_type`` when a targeted load stopped before covering its window.
+
+    Raises:
+        Exception: An ``error_type`` naming ``operation`` and the snapshot's ``incomplete_reason``.
+    """
+    incomplete_reason = snapshot.capture_metadata.get('incomplete_reason')
+    if incomplete_reason:
+        raise error_type(f'{operation} was incomplete: {incomplete_reason}')
+
+
 @dataclass
 class _Scan:
     """Counters and completion state one paging pass shares with its consumer."""
@@ -316,6 +331,37 @@ class OrqTraceSource:
         except Exception as error:
             raise OrqSourceError(f'live Orq trace loading failed: {error}') from error
 
+    async def load_trace(
+        self,
+        trace_id: str,
+        *,
+        expected_span_id: str | None,
+        start: datetime | None,
+        end: datetime | None,
+        facets: FacetSelection,
+        numeric: NumericFilters,
+    ) -> TraceRecord | None:
+        """Hydrate one trace and reject it when it no longer resolves to the analysed span.
+
+        The selected span must exactly match ``expected_span_id``, including when it is None. Returns None when
+        the query returns no usable conversation for the trace.
+
+        Raises:
+            OrqSourceError: The load failed, its targeted scan stopped before covering the window, or its span changed.
+        """
+        snapshot = await self.load_async(
+            start, end, 1, facets=facets, numeric=numeric, target_trace_ids=frozenset({trace_id})
+        )
+        require_complete_targeted_load(
+            snapshot, error_type=OrqSourceError, operation=f'targeted load of trace {trace_id}'
+        )
+        record = next((record for record in snapshot.traces if record.trace_id == trace_id), None)
+        if record is not None and record.span_id != expected_span_id:
+            raise OrqSpanMismatchError(
+                f'trace {trace_id} reloaded as span {record.span_id!r}; the analysis used {expected_span_id!r}'
+            )
+        return record
+
     async def _load_with_lifecycle(
         self,
         start: datetime | None,
@@ -363,7 +409,7 @@ class OrqTraceSource:
                 TARGET_RELOAD_PAGE_BUDGET_SECONDS,
             )
             return _empty_target_snapshot(start, end)
-        oql = build_oql(facets, numeric, project_names)
+        oql = build_oql(facets, numeric, project_names, trace_ids=target_ids)
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
         records: list[TraceRecord] = []
         dropped_count = 0
@@ -424,6 +470,18 @@ class OrqTraceSource:
             )
         if dropped_count:
             logger.warning('dropped {} trace(s) because messages or timestamps were unusable', dropped_count)
+        records = [
+            record.model_copy(
+                update={
+                    'capture_metadata': {
+                        **record.capture_metadata,
+                        'population_start': start.isoformat(),
+                        'population_end': end.isoformat(),
+                    }
+                }
+            )
+            for record in records
+        ]
         records.sort(key=lambda record: (record.timestamp, record.trace_id), reverse=True)
         capture_metadata = {'source': 'orq-oql', 'start': start.isoformat(), 'end': end.isoformat()}
         incomplete_reason = scan.incomplete_reason
@@ -1069,7 +1127,13 @@ def _matching_targets(summaries: list[tuple[Any, Any, bool]], targets: set[str] 
     return [item for item in summaries if str(_field(item[0], 'trace_id') or _field(item[0], 'id')) in targets]
 
 
-def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Mapping[str, str]) -> str:
+def build_oql(
+    facets: FacetSelection,
+    numeric: NumericFilters,
+    project_names: Mapping[str, str],
+    *,
+    trace_ids: set[str] | frozenset[str] | None = None,
+) -> str:
     """Compile selected categorical and numeric filters into deterministic OQL."""
 
     # A bare model call (jev, the compiler, any router call) is a generate_content trace, so the base filter
@@ -1094,6 +1158,10 @@ def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Ma
     # silently ignore a later categorical clause (including ``project_id``).
     # Numeric comparisons also require their own stages to avoid parser errors.
     stages = [f'filter {clause}' for clause in clauses]
+    if trace_ids is not None:
+        if not trace_ids:
+            raise OrqSourceError('targeted OQL reload requires at least one trace ID')
+        stages.append(f'filter trace_id in ({_oql_values(sorted(trace_ids))})')
     for field, minimum, maximum in (
         ('total_tokens', numeric.tokens_min, numeric.tokens_max),
         ('duration_ms', numeric.duration_ms_min, numeric.duration_ms_max),

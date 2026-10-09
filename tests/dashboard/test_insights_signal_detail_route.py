@@ -72,7 +72,7 @@ def test_signal_detail_route_reads_saved_report_only(tmp_path, monkeypatch) -> N
     def unexpected_source_request(*args, **kwargs):
         raise AssertionError('signal details must come from the saved run')
 
-    monkeypatch.setattr('evaluatorq.dashboard.insights_routes.resolve_orq_client', unexpected_source_request)
+    monkeypatch.setattr('evaluatorq.dashboard.insights_routes.build_orq_client', unexpected_source_request)
     client = TestClient(build_app())
 
     response = client.get(

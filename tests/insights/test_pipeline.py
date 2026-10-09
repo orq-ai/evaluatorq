@@ -219,6 +219,41 @@ async def test_happy_path_persists_completed_manifest(monkeypatch: pytest.Monkey
     assert run.cost_by_stage == {}
 
 
+_ORQ_SCOPE = {
+    'account': 'account-hash',
+    'account_label': 'ORQ_API_KEY on my.orq.ai',
+    'workspace': 'ws',
+    'project': None,
+}
+
+
+@pytest.mark.asyncio
+async def test_an_orq_read_records_the_scope_it_was_given(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _patch_clients(monkeypatch)
+    monkeypatch.setattr(pipeline, 'resolve_population', _resolve([_trace(0)]))
+
+    await pipeline.insights(_population(), dimensions=(), labels=(), runs_dir=tmp_path, _orq_scope=_ORQ_SCOPE)
+
+    saved = load_run(next(tmp_path.glob('insights_*.json')))
+    assert saved.population['orq_scope'] == _ORQ_SCOPE
+
+
+@pytest.mark.asyncio
+async def test_a_snapshot_read_does_not_record_an_orq_scope(tmp_path: Path) -> None:
+    snapshot_path = tmp_path / 'snapshot.json'
+    snapshot_path.write_text(Snapshot(traces=(_trace(0),)).model_dump_json(), encoding='utf-8')
+
+    run = await pipeline.insights(
+        InsightsPopulation.from_snapshot(snapshot_path),
+        dimensions=(),
+        labels=(),
+        runs_dir=tmp_path / 'runs',
+        _orq_scope=_ORQ_SCOPE,
+    )
+
+    assert 'orq_scope' not in run.population
+
+
 @pytest.mark.asyncio
 async def test_pipeline_preserves_dataset_identity_and_outcome_for_trace_without_orq_metadata(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path

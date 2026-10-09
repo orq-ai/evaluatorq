@@ -17,6 +17,7 @@ from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.models import Snapshot
 from evaluatorq.trace_finder.orq_source import (
     MAX_SPAN_PAGES,
+    OrqSpanMismatchError,
     OrqSourceError,
     OrqTraceSource,
     _conversation_messages,
@@ -180,6 +181,12 @@ def test_build_oql_keeps_the_base_filter_unless_a_model_or_provider_is_picked() 
 def test_build_oql_rejects_a_project_name_that_cannot_be_resolved() -> None:
     with pytest.raises(OrqSourceError, match='cannot resolve selected project names'):
         build_oql(FacetSelection(project=frozenset({'Missing'})), NumericFilters(), {})
+
+
+def test_build_oql_can_constrain_a_targeted_reload_to_exact_trace_ids() -> None:
+    oql = build_oql(FacetSelection(), NumericFilters(), {}, trace_ids={'trace-b', 'trace-a'})
+
+    assert 'filter trace_id in ("trace-a", "trace-b")' in oql
 
 
 def test_selected_response_text_correlation_matches_responses_normalization() -> None:
@@ -783,6 +790,37 @@ async def test_targeted_scan_limit_marks_snapshot_incomplete(monkeypatch: pytest
     assert snapshot.traces == ()
     assert snapshot.capture_metadata['incomplete_reason'] == 'scan_limit'
     assert len(traces.query_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_load_trace_raises_when_its_targeted_scan_is_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.trace_finder.orq_source.MAX_LIVE_TRACES', 1)
+    traces = FakeTraces({None: ([summary('other', messages=user_messages('other'))], True, 'next')})
+
+    with pytest.raises(OrqSourceError, match='scan_limit'):
+        await make_source(FakeOrq(traces)).load_trace(
+            'target', expected_span_id='span-1', start=START, end=END, facets=FacetSelection(), numeric=NumericFilters()
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('expected_span_id', ['span-other', None])
+async def test_load_trace_rejects_a_different_selected_span(expected_span_id: str | None) -> None:
+    selected = summary('trace-1', messages=user_messages('current conversation'))
+    selected.root_span_id = 'span-current'
+    traces = FakeTraces({None: ([selected], False, None)})
+
+    with pytest.raises(OrqSpanMismatchError, match='analysis used'):
+        await make_source(FakeOrq(traces)).load_trace(
+            'trace-1',
+            expected_span_id=expected_span_id,
+            start=START,
+            end=END,
+            facets=FacetSelection(),
+            numeric=NumericFilters(),
+        )
+    assert 'filter trace_id in ("trace-1")' in traces.query_calls[0]['oql']
+
 
 
 @pytest.mark.asyncio

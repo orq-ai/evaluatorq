@@ -651,8 +651,16 @@ def test_cluster_panel_has_description_and_example_trace_link(tmp_path, minimal_
 
 
 def test_trace_id_opens_its_saved_insights_detail(tmp_path, minimal_run, monkeypatch):
+    from evaluatorq.dashboard import insights_routes
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError('the Analysis tab must not load the conversation')
+
     monkeypatch.setenv('EVALUATORQ_DIR', str(tmp_path))
     monkeypatch.setenv('ORQ_WORKSPACE', 'example-workspace')
+    monkeypatch.setattr(insights_routes, 'load_orq_record', forbidden)
+    monkeypatch.setattr(insights_routes, 'load_snapshot_record', forbidden)
+    monkeypatch.setattr(insights_routes, 'build_orq_client', forbidden)
     _write_run(tmp_path, minimal_run)
     client = TestClient(build_app())
 
@@ -667,6 +675,15 @@ def test_trace_id_opens_its_saved_insights_detail(tmp_path, minimal_run, monkeyp
     assert 'General requests' in detail.text
     assert 'Open full trace in Orq' in detail.text
     assert 'href="/insights/run-1/tab/traces"' in detail.text
+    assert (
+        '<a class="insights-tab active" href="/insights/run-1/trace?trace_id=trace-1&amp;span_id=span-1" '
+        'aria-current="page">Analysis</a>'
+    ) in detail.text
+    assert (
+        '<a class="insights-tab" href="/insights/run-1/trace?trace_id=trace-1&amp;span_id=span-1&amp;view=trace">'
+        'Trace</a>'
+    ) in detail.text
+    assert 'trace-conversation' not in detail.text
     assert missing.status_code == 404
 
 

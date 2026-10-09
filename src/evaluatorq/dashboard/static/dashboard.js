@@ -1705,16 +1705,18 @@
     root.querySelectorAll('.fd-msg').forEach((el) => { el.open = el.getAttribute('data-msg') === String(index); });
     drawerScrollTo(root, index);
   }
+  const isTranscriptRoot = (el) => !!el && (el.id === 'finder-drawer' || !!(el.classList && el.classList.contains('fd-traces')));
   document.body.addEventListener('htmx:afterSwap', function (evt) {
-    if (evt.detail.target && evt.detail.target.id === 'finder-drawer') {
-      const on = evt.detail.target.querySelector('.fd-msg.on');
-      if (on) drawerScrollTo(evt.detail.target, on.getAttribute('data-msg'));
+    const swapped = isTranscriptRoot(evt.target) ? evt.target : evt.detail.target;
+    if (isTranscriptRoot(swapped)) {
+      const on = swapped.querySelector('.fd-msg.on');
+      if (on) drawerScrollTo(swapped, on.getAttribute('data-msg'));
     }
   });
   document.addEventListener('click', function (evt) {
     const mini = evt.target.closest('.fd-mini i[data-mini-msg]');
     const summary = evt.target.closest('.fd-msg > summary');
-    const root = document.getElementById('finder-drawer');
+    const root = evt.target.closest('#finder-drawer, .fd-traces');
     if (!root || (!mini && !summary)) return;
     if (mini) {
       drawerSelect(root, mini.getAttribute('data-mini-msg'));

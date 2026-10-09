@@ -103,7 +103,7 @@ def test_review_payload_provides_safe_server_built_trace_links(monkeypatch):
 
     assert row['trace_url'] == (
         '/insights/review-test/trace?'
-        + urlencode({'trace_id': 'trace /?&', 'span_id': 'span ?&'})
+        + urlencode({'trace_id': 'trace /?&', 'span_id': 'span ?&', 'view': 'trace'})
     )
     assert row['orq_url'] is None
     safe_trace = _trace('span_a-~').model_copy(update={'trace_id': 'trace.a-~'})
@@ -114,6 +114,38 @@ def test_review_payload_provides_safe_server_built_trace_links(monkeypatch):
     )
     snapshot_row = _trace_rows(build_review_payload(_run([trace])))[0]
     assert snapshot_row['orq_url'] is None
+
+
+def test_review_payload_lands_on_analysis_when_the_conversation_cannot_be_re_read(tmp_path):
+    from evaluatorq.dashboard.insights_uploads import uploads_dir
+    from evaluatorq.insights.store import get_insights_runs_dir
+
+    kept = tmp_path / 'kept.json'
+    kept.write_text('{}', encoding='utf-8')
+    upload = uploads_dir(get_insights_runs_dir()) / f'snapshot-{"0" * 32}.json'
+    populations = {
+        'filter': {'mode': 'filter'},
+        'kept snapshot': {'mode': 'snapshot', 'snapshot_path': str(kept)},
+        'deleted snapshot': {'mode': 'snapshot', 'snapshot_path': str(tmp_path / 'gone.json')},
+        'deleted upload': {'mode': 'snapshot', 'snapshot_path': str(upload)},
+        'dataset': {'mode': 'dataset'},
+    }
+    landings = {
+        name: _trace_rows(build_review_payload(_run([_trace('s')]).model_copy(update={'population': population})))[0][
+            'trace_url'
+        ]
+        for name, population in populations.items()
+    }
+
+    trace_tab = '/insights/review-test/trace?trace_id=same-trace&span_id=s&view=trace'
+    analysis_tab = '/insights/review-test/trace?trace_id=same-trace&span_id=s'
+    assert landings == {
+        'filter': trace_tab,
+        'kept snapshot': trace_tab,
+        'deleted snapshot': analysis_tab,
+        'deleted upload': analysis_tab,
+        'dataset': analysis_tab,
+    }
 
 
 def test_review_payload_preserves_ui_trace_identity_scores_errors_and_tool_stats():

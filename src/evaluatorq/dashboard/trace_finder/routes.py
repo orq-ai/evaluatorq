@@ -63,6 +63,8 @@ from evaluatorq.trace_finder import (
 from evaluatorq.trace_finder.export import export_filename
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Sequence
+
     from evaluatorq.trace_finder import FacetCatalogue
 from evaluatorq.trace_finder.columns import COLUMNS, resolve_columns
 from evaluatorq.trace_finder.explorer import QUICK_VIEWS, ExplorerView, matches_first_view
@@ -813,6 +815,29 @@ def _html(content: str, *, status_code: int = 200) -> Response:
     return Response(content, status_code=status_code, media_type='text/html')
 
 
+async def span_tree_fragment(
+    trace_id: str,
+    *,
+    load_spans: Callable[[str], Awaitable[Sequence[Any]]],
+    load_first_error_message: Callable[[str, Sequence[Any]], Awaitable[str | None]],
+) -> str:
+    try:
+        spans = await load_spans(trace_id)
+    except Exception as error:  # noqa: BLE001 - the conversation drawer remains usable if span lookup fails
+        logger.warning('Span lookup failed for trace {}: {}', trace_id, error)
+        return '<p class="finder-empty" role="status">Could not load spans. Try again.</p>'
+    try:
+        error_message = await load_first_error_message(trace_id, spans)
+    except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
+        logger.warning('Span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
+        error_message = None
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    with cli_slug_render_scope():
+        return await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
+
+
 def register_finder_routes(app: Any) -> None:  # noqa: C901
     """Register the Trace search and Traces pages with shared HTMX endpoints."""
     initialize_finder_settings(app)
@@ -1394,22 +1419,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             return _html('<p class="finder-empty">Span loading is unavailable.</p>', status_code=404)
         if await store.explorer.row(trace_id) is None:
             return _html('<p class="finder-empty">This trace is not in the loaded table.</p>', status_code=404)
-        try:
-            spans = await store.explorer.spans(trace_id)
-        except Exception as error:  # noqa: BLE001 - the conversation drawer remains usable if span lookup fails
-            logger.warning('Find span lookup failed for trace {}: {}', trace_id, error)
-            return _html('<p class="finder-empty" role="status">Could not load spans. Try again.</p>', status_code=200)
-        try:
-            error_message = await store.explorer.first_error_message(trace_id, spans)
-        except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
-            logger.warning('Find span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
-            error_message = None
-        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
-        from evaluatorq.dashboard.trace_finder.views import span_tree
-
-        with cli_slug_render_scope():
-            html = await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
-        return _html(html)
+        return _html(
+            await span_tree_fragment(
+                trace_id,
+                load_spans=store.explorer.spans,
+                load_first_error_message=store.explorer.first_error_message,
+            )
+        )
 
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:

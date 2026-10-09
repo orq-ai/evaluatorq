@@ -9,9 +9,9 @@ Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
   `merge_numeric`), then
   load with `OrqTraceSource`.
 - **Finder export path** (`pop.finder_export` set): read a `RunExport` JSON, reload
-  its merged filters and the pinned matches' timestamp range through `OrqTraceSource`,
-  and keep only the traces whose ids are in `matched_trace_ids`. No compile, no match
-  question — the export already pins the matched population.
+  its merged filters and original query window through `OrqTraceSource`, constrained
+  by the pinned trace IDs, and keep only the traces whose ids are in `matched_trace_ids`.
+  No compile, no match question — the export already pins the matched population.
 - **Local snapshot path** (`pop.snapshot_path` set): validate a `Snapshot` JSON and
   use its embedded trace messages directly. No Orq trace fetch or match question.
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
@@ -47,7 +47,7 @@ from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.filter_selector import select_filters_with_response
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters, Snapshot
-from evaluatorq.trace_finder.orq_source import OrqTraceSource
+from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_targeted_load
 from evaluatorq.trace_finder.projection import MAX_TOKEN_BUDGET, project_trace, serialize_projection
 from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
 
@@ -123,14 +123,20 @@ def preview_snapshot(raw_path: str) -> dict[str, int]:
         raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
 
 
+def read_snapshot(path: Path) -> tuple[Snapshot, str]:
+    """Read and validate a local snapshot, returning it with the sha256 of its bytes."""
+    try:
+        raw = path.read_bytes()
+        snapshot = Snapshot.model_validate_json(raw)
+    except (OSError, ValueError) as error:
+        raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
+    return snapshot, hashlib.sha256(raw).hexdigest()
+
+
 def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
     """Read a complete local snapshot; this path makes no Orq or model calls."""
     assert pop.snapshot_path is not None  # noqa: S101 - guarded by the caller's dispatch
-    try:
-        raw = pop.snapshot_path.read_bytes()
-        snapshot = Snapshot.model_validate_json(raw)
-    except (OSError, ValueError) as error:
-        raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
+    snapshot, digest = read_snapshot(pop.snapshot_path)
     traces = [ensure_trace_document(trace) for trace in snapshot.traces]
     return ResolvedPopulation(
         traces=traces,
@@ -138,7 +144,7 @@ def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
         echo={
             'mode': 'snapshot',
             'snapshot_path': str(pop.snapshot_path),
-            'snapshot_sha256': hashlib.sha256(raw).hexdigest(),
+            'snapshot_sha256': digest,
             'limit': len(traces),
         },
         n_scanned=len(traces),
@@ -198,10 +204,8 @@ async def _load_traces(
             source.close()
         except Exception as close_error:  # noqa: BLE001 - cleanup must not mask the load result or error
             logger.warning('Insights population trace source cleanup failed: {}', close_error)
-    if target_trace_ids is not None and snapshot.capture_metadata.get('incomplete_reason'):
-        raise PopulationError(
-            f'reloading Finder export traces was incomplete: {snapshot.capture_metadata["incomplete_reason"]}'
-        )
+    if target_trace_ids is not None:
+        require_complete_targeted_load(snapshot, error_type=PopulationError, operation='reloading Finder export traces')
     documents = tuple(ensure_trace_document(trace) for trace in traces)
     try:
         ensure_unique_trace_ids(documents)
@@ -307,16 +311,12 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
         NumericFilters(**export.numeric.model_dump()), NumericFilters(**export.generated_numeric.model_dump())
     )
 
-    # Restrict the reload to the exported matches' timestamps. A rolling window
-    # or later arrivals must not push those pinned IDs past the source's limit.
     matched_ids = set(export.matched_trace_ids)
-    matched_times = [trace.timestamp for trace in export.traces if trace.trace_id in matched_ids]
     start, end = export.start, export.end
-    if matched_times:
-        first = min(matched_times) - timedelta(seconds=1)
-        last = max(matched_times) + timedelta(seconds=1)
-        start = max(start, first) if start is not None else first
-        end = min(end, last) if end is not None else last
+    if matched_ids and (start is None or end is None):
+        raise PopulationError(
+            'Finder export does not record its original time window; re-export the run before using it in Insights.'
+        )
 
     traces = (
         await _load_traces(

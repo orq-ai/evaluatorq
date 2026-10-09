@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -23,7 +24,7 @@ from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic f
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from evaluatorq.trace_finder.export import RunExport
 
@@ -35,6 +36,34 @@ FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 class _TraceIdentity(Protocol):
     @property
     def trace_id(self) -> str: ...
+
+
+PopulationSource = Literal['snapshot', 'query', 'export', 'filter', 'unknown']
+
+
+_ORQ_POPULATION_SOURCES: Mapping[str, PopulationSource] = MappingProxyType({
+    'query': 'query',
+    'export': 'export',
+    'filter': 'filter',
+})
+
+
+def population_source(population: Mapping[str, object]) -> PopulationSource:
+    """Classify a saved population echo by the mode population.py wrote; a recorded snapshot path means a snapshot."""
+    mode = population.get('mode')
+    if mode == 'snapshot' or population.get('snapshot_path'):
+        return 'snapshot'
+    return _ORQ_POPULATION_SOURCES.get(mode, 'unknown') if isinstance(mode, str) else 'unknown'
+
+
+def reads_snapshot(population: Mapping[str, object]) -> bool:
+    """Whether a saved population echo describes a run read from a local snapshot file."""
+    return population_source(population) == 'snapshot'
+
+
+def reads_orq(population: Mapping[str, object]) -> bool:
+    """Whether a saved population echo describes a run that read its traces from Orq, by a mode the pipeline writes."""
+    return population_source(population) in _ORQ_POPULATION_SOURCES
 
 
 def ensure_unique_trace_ids(traces: Iterable[_TraceIdentity]) -> None:

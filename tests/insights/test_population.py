@@ -37,13 +37,13 @@ from evaluatorq.trace_finder.models import (
 )
 
 
-def make_trace(trace_id: str) -> TraceRecord:
+def make_trace(trace_id: str, *, span_id: str | None = None, content: str = 'hello') -> TraceRecord:
     return TraceRecord(
         schema_version=1,
         trace_id=trace_id,
-        span_id=f'span-{trace_id}',
+        span_id=span_id or f'span-{trace_id}',
         timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
-        messages=({'role': 'user', 'content': 'hello'},),
+        messages=({'role': 'user', 'content': content},),
         project='default',
         model='gpt-5',
         provider='openai',
@@ -461,7 +461,7 @@ async def test_export_path_echo_records_an_absolute_path(tmp_path: Any, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_export_path_reloads_merged_filters_and_pinned_time_range(
+async def test_export_path_reloads_merged_filters_and_original_time_range(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     export = _run_export(['t1'], filters=ExportFilters(agent_name=('explicit-bot',)))
@@ -469,8 +469,6 @@ async def test_export_path_reloads_merged_filters_and_pinned_time_range(
         update={
             'generated_filters': ExportFilters(agent_name=('generated-bot',), model=('gpt-5',)),
             'generated_numeric': ExportNumericFilters(tokens_min=20, tokens_max=300),
-            'start': None,
-            'end': None,
         }
     )
     export_path = tmp_path / 'export.json'
@@ -491,10 +489,32 @@ async def test_export_path_reloads_merged_filters_and_pinned_time_range(
     assert call['facets'].model == frozenset({'gpt-5'})
     assert call['numeric'].tokens_min == 5
     assert call['numeric'].tokens_max == 300
-    assert call['start'] < export.traces[0].timestamp < call['end']
+    assert call['start'] == export.start
+    assert call['end'] == export.end
     assert call['limit'] == export.limit
     assert call['target_trace_ids'] == {'t1'}
     assert [trace.trace_id for trace in resolved.traces] == ['t1']
+
+
+@pytest.mark.asyncio
+async def test_export_without_original_window_fails_instead_of_guessing_a_recent_range(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export = _run_export(['t1']).model_copy(update={'start': None, 'end': None})
+    export_path = tmp_path / 'legacy-export.json'
+    export_path.write_text(export.model_dump_json())
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+
+    with pytest.raises(PopulationError, match='does not record its original time window'):
+        await resolve_population(
+            InsightsPopulation.from_finder_export(export_path),
+            orq=_orq(),
+            client=_client(),
+            compiler_model='compiler',
+            classifier_model='classifier',
+        )
+
+    assert FakeSource.calls == []
 
 
 @pytest.mark.asyncio
