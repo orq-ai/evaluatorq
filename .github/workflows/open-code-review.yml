@@ -68,11 +68,14 @@ jobs:
           # three times. true appends only comments whose (path, line range) does
           # not overlap one the bot already left; it deletes nothing.
           incremental: 'true'
+          # Route medium and low findings to the updated summary; keep high and critical inline.
+          route_severity_below: 'medium'
+          sticky_summary: 'true'
           # The next run reviews <last reviewed head>..<new head> rather than
           # <merge-base>..<new head>, so a re-push is not re-reviewed at all.
           # Fail-closed: a missing or unreadable checkpoint, a moved base or a
           # config change all fall back to the full range. Relies on
-          # sticky_summary, which defaults to true. Set full_review: 'true' for
+          # sticky_summary enabled above. Set full_review: 'true' for
           # one deliberate re-review from the merge-base.
           checkpoint_range: 'true'
           llm_protocol: 'openai-responses'
