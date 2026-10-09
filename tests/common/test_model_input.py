@@ -317,6 +317,33 @@ def test_jev_inline_base64_media_reports_decoded_size_without_copying_payload() 
     assert state['messages'][0]['media'] == [f'[image, {len(payload) // 1024} KB]']
     assert encoded not in str(state)
 
+
+def test_jev_message_and_tool_results_preserve_multimodal_order() -> None:
+    content = [
+        {'type': 'text', 'text': 'refer to'},
+        {'type': 'image_url', 'image_url': {'url': 'https://example.test/image.png'}},
+        {'type': 'text', 'text': 'above'},
+    ]
+    source = [
+        {'role': 'user', 'content': content},
+        {
+            'role': 'assistant',
+            'tool_calls': [{'id': 'call-ordered', 'function': {'name': 'read', 'arguments': '{}'}}],
+        },
+        {'role': 'tool', 'tool_call_id': 'call-ordered', 'content': content},
+    ]
+
+    state = jev_state(source, global_char_cap=500_000)
+    message = next(entry for entry in state['messages'] if entry['role'] == 'user')
+    call = next(entry for entry in state['messages'] if entry['type'] == 'tool_call')
+    expected = 'refer to\n[image, size unknown]\nabove'
+
+    assert message['text'] == expected
+    assert message['media'] == ['[image, size unknown]']
+    assert call['results'][0]['text'] == expected
+
+
+
 def test_question_limited_jev_state_preserves_and_counts_top_level_metadata() -> None:
     state = {
         'trace_status': 'completed',

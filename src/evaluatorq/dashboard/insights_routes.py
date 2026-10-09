@@ -597,11 +597,15 @@ def register_insights_routes(app: Any) -> None:  # noqa: C901
                 from pathlib import Path
 
                 runs_dir = get_insights_runs_dir()
-                path = Path(raw_path).expanduser()
+                root = get_finder_exports_dir().resolve()
+                requested = Path(raw_path).expanduser()
+                path = (requested if requested.is_absolute() else root / requested).resolve()
                 if is_uploaded_source(runs_dir, path):
                     contents = read_uploaded_source(runs_dir=runs_dir, path=path, kind='finder')
                 else:
-                    contents = _read_approved_finder_export(root=get_finder_exports_dir(), path=path)
+                    if path.parent != root:
+                        raise ValueError('Finder exports must be in the approved directory or use a validated upload.')
+                    contents = _read_approved_finder_export(root=root, path=path)
                 return len(RunExport.model_validate_json(contents).matched_trace_ids)
 
             matched_count = await asyncio.to_thread(preview)

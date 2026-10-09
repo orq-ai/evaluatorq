@@ -513,14 +513,16 @@ def _omission_count(marker: Any) -> int:
 
 
 def _content(value: Any) -> tuple[str, list[str]]:
-    text: list[str] = []
+    text_parts: list[str] = []
     media: list[str] = []
     for part in iter_content_parts(value):
         if isinstance(part, MediaContent):
-            media.append(_image_marker(part.value) if part.kind == 'image' else f'[{part.kind}]')
+            marker = _image_marker(part.value) if part.kind == 'image' else f'[{part.kind}]'
+            media.append(marker)
+            text_parts.append(marker)
         else:
-            text.append(clean_model_text(part))
-    return '\n'.join(text), media
+            text_parts.append(clean_model_text(part))
+    return '\n'.join(text_parts), media
 
 
 def _image_marker(block: Any) -> str:
@@ -557,9 +559,8 @@ def _result(message: dict[str, Any], char_cap: int) -> dict[str, Any]:
 
 
 def _result_entry(message: dict[str, Any], index: int | None, char_cap: int) -> dict[str, Any]:
-    body, media = _content(message.get('content'))
-    text = body + (('\n' if body else '') + ' '.join(media) if media else '')
-    result: dict[str, Any] = {'text': cap_text(text, char_cap)[0]}
+    body, _ = _content(message.get('content'))
+    result: dict[str, Any] = {'text': cap_text(body, char_cap)[0]}
     if index is not None:
         result['index'] = index
     status, exit_code, error_code = tool_result_metadata(message)

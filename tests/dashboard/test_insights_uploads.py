@@ -444,6 +444,9 @@ def test_finder_preview_accepts_retained_upload_and_approved_export_only(tmp_pat
         preview = client.post('/insights/finder-preview', data={'csrf': token, 'finder_path': str(path)})
         assert preview.status_code == 200
         assert '2 matched traces' in preview.text
+    relative = client.post('/insights/finder-preview', data={'csrf': token, 'finder_path': 'saved.json'})
+    assert relative.status_code == 200
+    assert '2 matched traces' in relative.text
     rejected = client.post('/insights/finder-preview', data={'csrf': token, 'finder_path': str(outside)})
     assert rejected.status_code == 422
     linked = export_dir / 'linked.json'
