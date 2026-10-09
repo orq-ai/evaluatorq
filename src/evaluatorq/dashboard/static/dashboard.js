@@ -1501,6 +1501,13 @@
     const menu = document.getElementById('explorer-cols');
     if (menu?.open && !menu.contains(evt.target)) menu.open = false;
   });
+  window.addEventListener('click', function (evt) {
+    document.querySelectorAll('.xr-time-menu[open]').forEach(function (dateMenu) {
+      const trigger = dateMenu.querySelector('summary');
+      const popup = dateMenu.querySelector('.xr-time-options');
+      if (!trigger?.contains(evt.target) && !popup?.contains(evt.target)) dateMenu.open = false;
+    });
+  }, true);
 
   // Poll renders (data-poll) of #explorer-results and #explorer-toolbar: drop one older than the
   // table on screen or identical to it; otherwise keep what the user had open, scrolled, selected

@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 MAX_INSIGHTS_UPLOAD_BYTES = 100 * 1024 * 1024
 MAX_FINDER_EXPORT_BYTES = 10 * 1024 * 1024
+SNAPSHOT_TOO_LARGE_MESSAGE = f'Upload exceeds the {MAX_INSIGHTS_UPLOAD_BYTES // (1024 * 1024)} MB size limit.'
 MAX_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 UPLOAD_RETENTION_SECONDS = 7 * 24 * 60 * 60
 _UPLOAD_DIRECTORY = '.uploads'
@@ -42,6 +43,7 @@ class UploadMetadata(BaseModel):
     modified_at: datetime | None = None
     trace_count: int = Field(ge=0)
     kind: UploadKind | None = None
+    source: Literal['file', 'sessions'] = 'file'
 
 
 @dataclass(frozen=True)
@@ -111,7 +113,7 @@ def limit_request_body(request: Request) -> None:
             body = message.get('body', b'')
             consumed += len(body)
             if consumed > limit:
-                raise UploadRequestTooLargeError('Upload exceeds the 100 MB size limit.')
+                raise UploadRequestTooLargeError(SNAPSHOT_TOO_LARGE_MESSAGE)
         return message
 
     request._receive = limited_receive  # noqa: SLF001 — install the bounded ASGI receive wrapper.
@@ -149,7 +151,7 @@ def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKi
         keys = set(document) if isinstance(document, dict) else set()
         if 'matched_trace_ids' in keys:  # a Finder export also carries `traces`, so this key decides
             kind = 'finder'
-        elif 'traces' in keys:
+        elif 'traces' in keys or 'documents' in keys:
             kind = 'snapshot'
         else:
             raise ValueError('This file is neither a Finder export nor a trace snapshot.')
@@ -160,31 +162,40 @@ def validate_upload(contents: bytes, kind: UploadKind | None = None) -> UploadKi
     try:
         if kind == 'finder':
             RunExport.model_validate_json(contents)
-        elif not Snapshot.model_validate_json(contents).traces:
+        elif Snapshot.model_validate_json(contents).is_empty:
             raise ValueError('The trace snapshot contains no traces.')
     except ValidationError as exc:
         raise ValueError(f'Upload is not a valid {kind} JSON file.') from exc
     return kind
 
 
-def store_upload(runs_dir: Path, contents: bytes, kind: UploadKind, *, display_name: str = '') -> Path:
+def store_upload(
+    runs_dir: Path,
+    contents: bytes,
+    kind: UploadKind,
+    *,
+    display_name: str = '',
+    source: Literal['file', 'sessions'] = 'file',
+) -> Path:
     """Store a validated copy and its private display metadata under a random name."""
     directory = uploads_dir(runs_dir)
-    _ensure_private_directory(directory)
     path = directory / f'{kind}-{uuid.uuid4().hex}.json'
     metadata = UploadMetadata(
         display_name=_display_name(display_name) or path.name,
         modified_at=datetime.now(timezone.utc),
         trace_count=_trace_count(contents, kind),
         kind=kind,
+        source=source,
     )
     metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
+    stored = False
     try:
         write_private_atomic(path=path, contents=contents)
+        stored = True
         write_private_atomic(path=metadata_path, contents=metadata.model_dump_json())
     except BaseException:
-        path.unlink(missing_ok=True)
-        metadata_path.unlink(missing_ok=True)
+        if stored:
+            path.unlink(missing_ok=True)
         raise
     return path
 
@@ -198,7 +209,8 @@ def _display_name(name: str) -> str:
 def _trace_count(contents: bytes, kind: UploadKind) -> int:
     if kind == 'finder':
         return len(RunExport.model_validate_json(contents).matched_trace_ids)
-    return len(Snapshot.model_validate_json(contents).traces)
+    snapshot = Snapshot.model_validate_json(contents)
+    return len(snapshot.traces) + len(snapshot.documents)
 
 
 def _read_private_upload_file(runs_dir: Path, path: Path, *, limit: int, refresh_retention: bool = False) -> bytes:
@@ -307,6 +319,24 @@ def retain_uploaded_source(runs_dir: Path, path: Path) -> None:
         return
 
 
+def cleanup_session_upload(runs_dir: Path, path: Path) -> bool:
+    """Delete a frozen session copy only when its private metadata records that source."""
+    if upload_kind(path) != 'snapshot' or not is_uploaded_source(runs_dir, path):
+        return False
+    metadata_path = path.with_name(path.name + _METADATA_SUFFIX)
+    try:
+        raw = _read_private_upload_file(runs_dir=runs_dir, path=metadata_path, limit=4096)
+        metadata = UploadMetadata.model_validate_json(raw)
+    except (OSError, ValueError, RuntimeError):
+        return False
+    if metadata.kind != 'snapshot' or metadata.source != 'sessions':
+        return False
+    _read_private_upload_file(runs_dir=runs_dir, path=path, limit=0)
+    path.unlink(missing_ok=True)
+    metadata_path.unlink(missing_ok=True)
+    return True
+
+
 def _recent_upload_entry(runs_dir: Path, path: Path, kind: UploadKind) -> tuple[float, RecentTraceFile] | None:
     try:
         _read_private_upload_file(runs_dir=runs_dir, path=path, limit=0)
@@ -318,6 +348,8 @@ def _recent_upload_entry(runs_dir: Path, path: Path, kind: UploadKind) -> tuple[
             contents = read_uploaded_source(runs_dir=runs_dir, path=path, kind=kind)
             metadata = UploadMetadata(display_name=path.name, trace_count=_trace_count(contents, kind), kind=kind)
         if metadata.kind is not None and metadata.kind != kind:
+            return None
+        if metadata.source == 'sessions':
             return None
         modified = metadata.modified_at.timestamp() if metadata.modified_at is not None else path.stat().st_mtime
         return modified, RecentTraceFile(

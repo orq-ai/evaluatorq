@@ -46,6 +46,20 @@ def _reset_cli_model_flags(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_local_session_roots(tmp_path, monkeypatch):
+    """Point every local-session root at an absent directory under the test's tmp_path, so no test reads real sessions.
+
+    Nothing is created here: `tmp_path_factory.mktemp` per test rescans every earlier numbered directory, which made
+    the whole suite time out on Windows runners.
+    """
+    base = tmp_path / "session-roots"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(base / "claude"))
+    monkeypatch.setenv("CODEX_HOME", str(base / "codex"))
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(base / "omp-agent"))
+    monkeypatch.setattr("evaluatorq.local_sessions.roots.claude_desktop_dir", lambda: base / "claude-desktop")
+
+
+@pytest.fixture(autouse=True)
 def _hide_ambient_credentials(request, monkeypatch):
     """Unset real API keys so unit tests cannot reach a live service.
 
