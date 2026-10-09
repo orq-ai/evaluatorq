@@ -409,7 +409,7 @@ class OrqTraceSource:
                 TARGET_RELOAD_PAGE_BUDGET_SECONDS,
             )
             return _empty_target_snapshot(start, end)
-        oql = build_oql(facets, numeric, project_names)
+        oql = build_oql(facets, numeric, project_names, trace_ids=target_ids)
         semaphore = asyncio.Semaphore(self._hydration_concurrency)
         records: list[TraceRecord] = []
         dropped_count = 0
@@ -470,6 +470,18 @@ class OrqTraceSource:
             )
         if dropped_count:
             logger.warning('dropped {} trace(s) because messages or timestamps were unusable', dropped_count)
+        records = [
+            record.model_copy(
+                update={
+                    'capture_metadata': {
+                        **record.capture_metadata,
+                        'population_start': start.isoformat(),
+                        'population_end': end.isoformat(),
+                    }
+                }
+            )
+            for record in records
+        ]
         records.sort(key=lambda record: (record.timestamp, record.trace_id), reverse=True)
         capture_metadata = {'source': 'orq-oql', 'start': start.isoformat(), 'end': end.isoformat()}
         incomplete_reason = scan.incomplete_reason
@@ -1115,7 +1127,13 @@ def _matching_targets(summaries: list[tuple[Any, Any, bool]], targets: set[str] 
     return [item for item in summaries if str(_field(item[0], 'trace_id') or _field(item[0], 'id')) in targets]
 
 
-def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Mapping[str, str]) -> str:
+def build_oql(
+    facets: FacetSelection,
+    numeric: NumericFilters,
+    project_names: Mapping[str, str],
+    *,
+    trace_ids: set[str] | frozenset[str] | None = None,
+) -> str:
     """Compile selected categorical and numeric filters into deterministic OQL."""
 
     # A bare model call (jev, the compiler, any router call) is a generate_content trace, so the base filter
@@ -1140,6 +1158,10 @@ def build_oql(facets: FacetSelection, numeric: NumericFilters, project_names: Ma
     # silently ignore a later categorical clause (including ``project_id``).
     # Numeric comparisons also require their own stages to avoid parser errors.
     stages = [f'filter {clause}' for clause in clauses]
+    if trace_ids is not None:
+        if not trace_ids:
+            raise OrqSourceError('targeted OQL reload requires at least one trace ID')
+        stages.append(f'filter trace_id in ({_oql_values(sorted(trace_ids))})')
     for field, minimum, maximum in (
         ('total_tokens', numeric.tokens_min, numeric.tokens_max),
         ('duration_ms', numeric.duration_ms_min, numeric.duration_ms_max),

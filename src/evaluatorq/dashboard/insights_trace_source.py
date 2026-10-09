@@ -10,9 +10,9 @@ from loguru import logger
 
 from evaluatorq.dashboard.insights_uploads import is_uploaded_source
 from evaluatorq.insights.models import population_source, reads_orq
-from evaluatorq.insights.population import TARGETED_RELOAD_MARGIN, PopulationError, read_snapshot
+from evaluatorq.insights.population import PopulationError, read_snapshot
 from evaluatorq.insights.store import get_insights_runs_dir
-from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+from evaluatorq.trace_finder.models import FacetSelection, NumericFilters, PopulationRequest
 from evaluatorq.trace_finder.orq_source import OrqSpanMismatchError
 
 if TYPE_CHECKING:
@@ -30,6 +30,9 @@ UPLOAD_DELETED = (
     'The dashboard deletes uploaded snapshot files after the run, so this conversation is no longer available.'
 )
 ORQ_SPAN_CHANGED = 'The conversation span analyzed by this run is no longer the span returned by Orq.'
+ORQ_WINDOW_MISSING = (
+    'This run does not record the Orq time window it analyzed, so its conversation cannot be re-read safely.'
+)
 
 
 def _gone_snapshot_reason(path: Path) -> str:
@@ -70,15 +73,27 @@ async def load_orq_record(
 ) -> TraceRecord | str:
     """Re-run the pipeline's query for this one trace, or return a user-facing reason it cannot be shown.
 
-    The query keeps the run's filters and a window around the analysed timestamp. The result is returned only when
-    Orq selects the saved span; a changed selection becomes an unavailable reason. ``open_source`` is entered only
-    once the trace has a timestamp; a string it yields is a reason it has logged.
+    The query keeps the run's filters and recorded time window. The result is returned only when Orq selects the
+    saved span; a changed selection becomes an unavailable reason. ``open_source`` is entered only once the trace
+    has a timestamp; a string it yields is a reason it has logged.
     """
     timestamp = trace.timestamp
     if timestamp is None:
         return _unavailable(
             trace, 'This run did not record when the trace ran, so its conversation cannot be re-read from Orq.'
         )
+    try:
+        if run.population.get('start') is None or run.population.get('end') is None:
+            raise ValueError('the saved population is missing its original time window')
+        window = PopulationRequest.model_validate({
+            'start': run.population['start'],
+            'end': run.population['end'],
+        })
+        start, end = window.start, window.end
+        if start is None or end is None:
+            raise ValueError('the saved population is missing its original time window')
+    except (KeyError, TypeError, ValueError) as error:
+        return _unavailable(trace, ORQ_WINDOW_MISSING, error)
     async with open_source() as source:
         if isinstance(source, str):
             return source
@@ -86,8 +101,8 @@ async def load_orq_record(
             record = await source.load_trace(
                 trace.trace_id,
                 expected_span_id=trace.span_id,
-                start=timestamp - TARGETED_RELOAD_MARGIN,
-                end=timestamp + TARGETED_RELOAD_MARGIN,
+                start=start,
+                end=end,
                 facets=FacetSelection.model_validate(run.population.get('facets') or {}),
                 numeric=NumericFilters.model_validate(run.population.get('numeric') or {}),
             )

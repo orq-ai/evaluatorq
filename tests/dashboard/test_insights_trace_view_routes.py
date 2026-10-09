@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,6 +26,17 @@ from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, detail, span
 
 TRACE_PAGE = '/insights/run-1/trace?trace_id=trace-1&span_id=span-1'
 CONVERSATION = '/insights/run-1/trace-conversation?trace_id=trace-1&span_id=span-1'
+
+
+def _query_run(run: InsightsRun, **population_updates: Any) -> InsightsRun:
+    """Give route fixtures a complete saved Orq population window."""
+    population = {
+        'mode': 'query',
+        'start': datetime(2026, 8, 25, tzinfo=timezone.utc).isoformat(),
+        'end': datetime(2026, 9, 1, tzinfo=timezone.utc).isoformat(),
+        **population_updates,
+    }
+    return run.model_copy(update={'population': population})
 
 
 @pytest.fixture
@@ -124,7 +136,7 @@ def test_orq_run_shows_the_transcript_and_a_spans_url(
 def test_orq_run_with_a_different_span_never_shows_substituted_conversation(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+    _write_run(env, _query_run(minimal_run))
 
     @asynccontextmanager
     async def source(app: Any, run: InsightsRun):
@@ -153,7 +165,7 @@ def test_orq_run_with_a_different_span_never_shows_substituted_conversation(
 def test_spans_route_renders_when_conversation_query_fails(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+    _write_run(env, _query_run(minimal_run))
     _api_key_auth(monkeypatch)
 
     class FailingQuery(FakeTraces):
@@ -182,7 +194,7 @@ def test_spans_route_renders_when_conversation_timestamp_is_missing(
 ) -> None:
     run = minimal_run.model_copy(
         update={
-            'population': {'mode': 'query'},
+            'population': _query_run(minimal_run).population,
             'traces': [minimal_run.traces[0].model_copy(update={'timestamp': None}), *minimal_run.traces[1:]],
         }
     )
@@ -278,7 +290,7 @@ def _named_span(span_id: str, *, name: str, minute: int, parent_span_id: str | N
 def test_spans_route_renders_the_span_tree_from_orq(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+    _write_run(env, _query_run(minimal_run))
     selected = summary('trace-1', messages=[{'role': 'user', 'content': 'analysed'}])
     selected.root_span_id = 'span-1'
     traces = FakeTraces(
@@ -306,7 +318,7 @@ def _api_key_auth(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_spans_route_closes_the_source_and_the_client(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+    _write_run(env, _query_run(minimal_run))
     _api_key_auth(monkeypatch)
     selected = summary('trace-1', messages=[{'role': 'user', 'content': 'analysed'}])
     selected.root_span_id = 'span-1'
@@ -384,7 +396,7 @@ def test_a_run_without_a_valid_recorded_scope_reads_with_the_settings_workspace(
 def test_a_run_read_by_the_selected_account_uses_its_recorded_workspace(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query', 'orq_scope': _recorded_scope()}}))
+    _write_run(env, _query_run(minimal_run, orq_scope=_recorded_scope()))
     built = _cli_oauth(monkeypatch, account='account-a')
     client = TestClient(build_app())
 
@@ -451,7 +463,7 @@ def test_source_construction_failure_still_closes_the_client(
 def test_span_load_failure_is_the_only_spans_panel_that_says_try_again(
     env: Path, minimal_run: InsightsRun, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _write_run(env, minimal_run.model_copy(update={'population': {'mode': 'query'}}))
+    _write_run(env, _query_run(minimal_run))
     _api_key_auth(monkeypatch)
 
     class FailingSpans(FakeTraces):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from datetime import datetime  # noqa: TC003
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictStr
@@ -184,6 +184,20 @@ def build_export(run: RunSnapshot, *, matched_only: bool = False) -> RunExport:
     if matched_only:
         traces = tuple(trace for trace in traces if trace.matched and trace.error is None)
 
+    start = run.request.population.start
+    end = run.request.population.end
+    if selected and (start is None or end is None):
+        windows = {
+            (trace.capture_metadata.get('population_start'), trace.capture_metadata.get('population_end'))
+            for trace in selected
+        }
+        if len(windows) == 1:
+            recorded_start, recorded_end = next(iter(windows))
+            if start is None and isinstance(recorded_start, str):
+                start = datetime.fromisoformat(recorded_start)
+            if end is None and isinstance(recorded_end, str):
+                end = datetime.fromisoformat(recorded_end)
+
     return RunExport(
         query=run.request.query,
         dimensions=tuple(
@@ -194,8 +208,8 @@ def build_export(run: RunSnapshot, *, matched_only: bool = False) -> RunExport:
         filters=_export_filters(run.request.population.facets),
         generated_numeric=_export_numeric(run.generated_numeric),
         numeric=_export_numeric(run.request.population.numeric),
-        start=run.request.population.start,
-        end=run.request.population.end,
+        start=start,
+        end=end,
         limit=run.request.population.limit,
         parallelism=run.request.parallelism,
         times=ExportTimes(

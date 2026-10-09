@@ -9,9 +9,9 @@ Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
   `merge_numeric`), then
   load with `OrqTraceSource`.
 - **Finder export path** (`pop.finder_export` set): read a `RunExport` JSON, reload
-  its merged filters and the pinned matches' timestamp range through `OrqTraceSource`,
-  and keep only the traces whose ids are in `matched_trace_ids`. No compile, no match
-  question — the export already pins the matched population.
+  its merged filters and original query window through `OrqTraceSource`, constrained
+  by the pinned trace IDs, and keep only the traces whose ids are in `matched_trace_ids`.
+  No compile, no match question — the export already pins the matched population.
 - **Local snapshot path** (`pop.snapshot_path` set): validate a `Snapshot` JSON and
   use its embedded trace messages directly. No Orq trace fetch or match question.
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
@@ -60,9 +60,6 @@ if TYPE_CHECKING:
     from evaluatorq.insights.models import InsightsPopulation
     from evaluatorq.trace_finder.export import ExportFilters
     from evaluatorq.trace_finder.models import CompiledQuery, TraceRecord
-
-# A targeted reload queries this far either side of a trace's recorded start, absorbing timestamp rounding.
-TARGETED_RELOAD_MARGIN = timedelta(seconds=1)
 
 
 class PopulationError(RuntimeError):
@@ -314,16 +311,12 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
         NumericFilters(**export.numeric.model_dump()), NumericFilters(**export.generated_numeric.model_dump())
     )
 
-    # Restrict the reload to the exported matches' timestamps. A rolling window
-    # or later arrivals must not push those pinned IDs past the source's limit.
     matched_ids = set(export.matched_trace_ids)
-    matched_times = [trace.timestamp for trace in export.traces if trace.trace_id in matched_ids]
     start, end = export.start, export.end
-    if matched_times:
-        first = min(matched_times) - TARGETED_RELOAD_MARGIN
-        last = max(matched_times) + TARGETED_RELOAD_MARGIN
-        start = max(start, first) if start is not None else first
-        end = min(end, last) if end is not None else last
+    if matched_ids and (start is None or end is None):
+        raise PopulationError(
+            'Finder export does not record its original time window; re-export the run before using it in Insights.'
+        )
 
     traces = (
         await _load_traces(

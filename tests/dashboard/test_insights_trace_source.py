@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,7 +34,11 @@ from tests.trace_finder.test_orq_source import FakeOrq, FakeTraces, detail, span
 @pytest.fixture
 def orq_run(minimal_run: InsightsRun) -> InsightsRun:
     """An Orq query run without project facets, which the fake client cannot resolve to project ids."""
-    return minimal_run.model_copy(update={'population': {'mode': 'query'}})
+    return minimal_run.model_copy(update={'population': {
+        'mode': 'query',
+        'start': datetime(2026, 8, 25, tzinfo=timezone.utc).isoformat(),
+        'end': datetime(2026, 9, 1, tzinfo=timezone.utc).isoformat(),
+    }})
 
 
 @pytest.fixture
@@ -167,18 +171,21 @@ async def test_orq_run_reports_a_changed_span_without_returning_its_conversation
 
 
 @pytest.mark.asyncio
-async def test_orq_run_queries_with_the_run_filters_around_the_analysed_time(minimal_run: InsightsRun) -> None:
-    run = minimal_run.model_copy(update={'population': {'mode': 'filter', 'facets': {'status': ['error']}}})
+async def test_orq_run_queries_with_the_recorded_window_and_filters(minimal_run: InsightsRun) -> None:
+    start = datetime(2026, 8, 25, tzinfo=timezone.utc)
+    end = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    run = minimal_run.model_copy(update={'population': {
+        'mode': 'filter', 'facets': {'status': ['error']}, 'start': start.isoformat(), 'end': end.isoformat(),
+    }})
     traces = FakeTraces(pages={None: ([summary('trace-1')], False, None)})
-    analysed_at = run.traces[0].timestamp
-    assert analysed_at is not None
 
     await load_orq_record(run, run.traces[0], open_source=_opened(OrqTraceSource(cast(Any, FakeOrq(traces)))))
 
     [query] = traces.query_calls
-    assert query['from_'] == analysed_at - timedelta(seconds=1)
-    assert query['to'] == analysed_at + timedelta(seconds=1)
+    assert query['from_'] == start
+    assert query['to'] == end
     assert 'filter status in ("error")' in query['oql']
+    assert 'filter trace_id in ("trace-1")' in query['oql']
 
 
 @pytest.mark.asyncio
@@ -249,6 +256,17 @@ async def test_orq_run_does_not_return_a_different_analyzed_span(
 
     assert result == 'The conversation span analyzed by this run is no longer the span returned by Orq.'
     assert len([message for message in logged_warnings if 'conversation unavailable' in message]) == 1
+
+
+@pytest.mark.asyncio
+async def test_legacy_orq_run_without_saved_window_has_visible_reason(orq_run: InsightsRun) -> None:
+    run = orq_run.model_copy(update={'population': {'mode': 'query'}})
+
+    result = await load_orq_record(run, run.traces[0], open_source=lambda: pytest.fail('must not open Orq'))
+
+    assert result == (
+        'This run does not record the Orq time window it analyzed, so its conversation cannot be re-read safely.'
+    )
 
 
 @pytest.mark.parametrize(

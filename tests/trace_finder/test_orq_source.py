@@ -182,6 +182,12 @@ def test_build_oql_rejects_a_project_name_that_cannot_be_resolved() -> None:
         build_oql(FacetSelection(project=frozenset({'Missing'})), NumericFilters(), {})
 
 
+def test_build_oql_can_constrain_a_targeted_reload_to_exact_trace_ids() -> None:
+    oql = build_oql(FacetSelection(), NumericFilters(), {}, trace_ids={'trace-b', 'trace-a'})
+
+    assert 'filter trace_id in ("trace-a", "trace-b")' in oql
+
+
 def test_selected_response_text_correlation_matches_responses_normalization() -> None:
     response_items = [{
         'type': 'message',
@@ -710,6 +716,7 @@ async def test_load_trace_rejects_a_different_selected_span(expected_span_id: st
             facets=FacetSelection(),
             numeric=NumericFilters(),
         )
+    assert 'filter trace_id in ("trace-1")' in traces.query_calls[0]['oql']
 
 
 
