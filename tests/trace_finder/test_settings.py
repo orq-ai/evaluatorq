@@ -212,6 +212,53 @@ def test_legacy_settings_load_without_defaults_warning(
     assert settings.classifier_model == 'custom/classifier'
 
 
+def test_retired_trace_input_limit_preserves_saved_settings_and_is_removed_on_save(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(
+        json.dumps(
+            {
+                'trace_input_chars': 180000,
+                'fast_model': 'saved/fast',
+                'window_days': 12,
+                'limit': 64,
+                'ask_ai_mode': 'review',
+                'orq_auth_method': 'cli_oauth',
+                'orq_workspace': 'saved-workspace',
+                'orq_project_id': 'saved-project',
+                'orq_project_name': 'Saved project',
+            }
+        )
+    )
+
+    with caplog.at_level('WARNING'):
+        settings = load_settings(path)
+
+    assert 'using defaults' not in caplog.text
+    assert 'trace_input_chars' in caplog.text
+    assert '180000' not in caplog.text
+    assert settings.fast_model == 'saved/fast'
+    assert settings.window_days == 12
+    assert settings.limit == 64
+    assert settings.ask_ai_mode == 'review'
+    assert settings.orq_auth_method == 'cli_oauth'
+    assert (settings.orq_workspace, settings.orq_project_id, settings.orq_project_name) == (
+        'saved-workspace',
+        'saved-project',
+        'Saved project',
+    )
+
+    save_settings(settings, path)
+
+    assert 'trace_input_chars' not in json.loads(path.read_text())
+
+
+def test_retired_trace_input_limit_does_not_allow_other_unknown_settings() -> None:
+    with pytest.raises(ValueError, match='extra_forbidden'):
+        DashboardSettings.model_validate({'trace_input_chars': 180000, 'limt': 64})
+
+
 def test_explorer_columns_round_trip_and_unknown_keys_drop(tmp_path: Path) -> None:
     path = tmp_path / 'settings.json'
     save_settings(DashboardSettings.model_validate({'explorer_columns': ('model', 'cost')}), path)
