@@ -134,10 +134,10 @@ def range_inputs(
         f'<input id="explorer-range-seconds" type="hidden" name="range_seconds" value="{range_seconds}" form="explorer-load-form" hx-preserve data-explorer-range-seconds>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
         f'<details class="xr-time-menu"><summary><span class="xr-time-label" data-explorer-range-label>Custom range</span></summary><div class="xr-time-options"><span class="xr-presets" role="group" aria-label="Relative range">{presets}</span>'
-        '<details class="xr-exact"><summary>Custom range</summary>'
+        '<details class="xr-exact"><summary>Custom range</summary><div class="xr-range-fields">'
         f'{from_row}{to_row}'
         '<small class="xr-tz" data-explorer-tz-label>Local time</small>'
-        '<button type="button" class="xr-apply" data-explorer-apply>Apply range</button></details></div></details>'
+        '<button type="button" class="xr-apply" data-explorer-apply>Apply range</button></div></details></div></details>'
         f'<label class="quiet"><b>Rows</b><input id="explorer-rows" hx-preserve form="explorer-load-form" name="rows" type="number" min="1" max="{MAX_LIVE_TRACES}" value="{row_limit}" style="width:72px"></label>'
     )
     load = '<button class="btn-secondary" type="submit" form="explorer-load-form">Load</button>' if include_load else ''

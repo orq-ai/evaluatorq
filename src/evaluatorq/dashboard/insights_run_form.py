@@ -560,7 +560,7 @@ assert set(_SESSION_SOURCE_TITLES) == set(SESSION_SOURCES)  # noqa: S101 — imp
 def _sessions_source(values: RunFormValues) -> str:
     """The Local sessions picker: filters, a Search button, and the results the controller fills in."""
     boxes = ''.join(
-        f'<label><input type="checkbox" name="session_source" value="{source}" checked><span>{esc(title)}</span></label>'
+        f'<label class="filter-checkbox"><input type="checkbox" name="session_source" value="{source}" checked><span>{esc(title)}</span></label>'
         for source, title in _SESSION_SOURCE_TITLES.items()
     )
     kept = values.trace_file if values.source == 'sessions' else ''
@@ -579,14 +579,14 @@ def _sessions_source(values: RunFormValues) -> str:
     )
     return (
         '<div class="irf-field" data-source="sessions"><span class="irf-label">Local sessions</span>'
-        f'<div class="seg irf-session-sources" role="group" aria-label="Session sources">{boxes}</div>'
+        f'<div class="irf-session-sources" role="group" aria-label="Session sources">{boxes}</div>'
         '<details class="xr-time-menu irf-session-time-menu"><summary><span class="xr-time-label" data-session-range-label>Last 7 days</span></summary>'
         '<div class="xr-time-options"><div class="xr-presets" role="group" aria-label="Session date range">'
         '<button type="button" class="xr-preset" data-session-preset="7" aria-pressed="true">Last 7 days</button>'
         '<button type="button" class="xr-preset" data-session-preset="30" aria-pressed="false">Last 30 days</button>'
         '<button type="button" class="xr-preset" data-session-preset="all" aria-pressed="false">All dates</button></div>'
-        '<details class="xr-exact"><summary>Custom range</summary>'
-        f'{from_date}{to_date}<button type="button" class="xr-apply" data-session-apply>Apply range</button></details></div></details>'
+        '<details class="xr-exact"><summary>Custom range</summary><div class="xr-range-fields">'
+        f'{from_date}{to_date}<button type="button" class="xr-apply" data-session-apply>Apply range</button></div></details></div></details>'
         '<div class="irf-field"><label class="irf-label" for="session-project-dir">Project directory</label>'
         '<div class="irf-directory-row"><input id="session-project-dir" type="text" name="session_project_dir" placeholder="All recorded projects" aria-describedby="session-directory-hint">'
         '<button type="button" class="irf-btn" data-folder-open>Browse…</button></div>'
