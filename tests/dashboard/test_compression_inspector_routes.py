@@ -294,19 +294,21 @@ def test_incomplete_empty_session_search_does_not_claim_no_matches_or_folders(
     assert 'no local sessions matched' not in response.text.lower()
 
 
-def test_preview_explains_when_original_has_no_readable_messages() -> None:
-    preview = CompressionPreview(
-        original='',
-        compressed={'messages': []},
-        original_chars=0,
-        compressed_chars=15,
-        message_count=0,
-        omitted_messages=0,
-        global_cap=500_000,
-    )
-
+def test_preview_explains_when_original_has_no_readable_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Create a Claude session with empty messages using the same helper as other route tests
+    path = _claude_session('empty-content', prompt=' ', answer=' ')
+    
+    # Load real session with empty content and generate preview using the real reader -> preview_document -> _preview_html path
+    document = load_session_document(SessionRef(source='claude-code', path=path))
+    from evaluatorq.dashboard.compression_inspector_data import preview_document
+    preview = preview_document(document, global_char_cap=500_000)
+    
+    # Verify the preview's original is truly empty
+    assert preview.original == ''
+    
+    # Verify the rendered HTML shows the empty-state explanation
     rendered = compression_inspector._preview_html(preview)
-
+    
     assert 'No readable input or output is available for this source.' in rendered
     assert '<h3 id="compression-original-title">Original readable trace</h3><p' in rendered
     assert '<h3 id="compression-original-title">Original readable trace</h3><pre></pre>' not in rendered
