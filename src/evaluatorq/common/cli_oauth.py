@@ -44,12 +44,25 @@ def _oauth_env() -> dict[str, str]:
 class OrqCLIError(RuntimeError):
     """The authenticated Orq CLI could not complete a request."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        failure_kind: Literal['authentication', 'setup', 'unavailable'] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.failure_kind = failure_kind or _infer_failure_kind(message)
+
 
 class _CLI:
     def __init__(self, *, server_url: str | None, workspace: str | None, project: str | None) -> None:
         binary = shutil.which('orq')
         if binary is None:
-            raise OrqCLIError('The orq CLI is not installed. Install it and sign in before using CLI OAuth.')
+            raise OrqCLIError(
+                'The orq CLI is not installed. Install it and sign in before using CLI OAuth.', failure_kind='setup'
+            )
         self.binary = binary
         self.server_url = server_url
         self.workspace = workspace
@@ -94,7 +107,10 @@ class _CLI:
             raise OrqCLIError(f'Could not start the orq CLI: {exc}') from exc
         if process.returncode:
             detail = _safe_error(stderr.decode(errors='replace'))
-            raise OrqCLIError(detail or f'orq CLI exited with status {process.returncode}')
+            raise OrqCLIError(
+                detail or f'orq CLI exited with status {process.returncode}',
+                failure_kind='authentication' if _is_authentication_error(detail) else 'unavailable',
+            )
         try:
             result = _attribute_value(json.loads(stdout))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -288,6 +304,23 @@ class _LLMClient:
             return result['body']
         return result
 
+    async def get_model_catalogue(self) -> Any:
+        """Fetch the model catalogue through the CLI's OAuth session."""
+
+        result = await self._cli.call(['request', 'GET', '/v2/models', '--force'])
+        if isinstance(result, dict) and 'status' in result and 'body' in result:
+            status = result['status']
+            if isinstance(status, bool) or not isinstance(status, int) or status < 200 or status >= 300:
+                raise OrqCLIError(
+                    f'Orq CLI model catalogue request failed with HTTP {status}.',
+                    status_code=status if isinstance(status, int) and not isinstance(status, bool) else None,
+                    failure_kind='authentication' if status in (401, 403) else 'unavailable',
+                )
+            if result.get('ok') is False:
+                raise OrqCLIError('Orq CLI model catalogue request failed.')
+            return result['body']
+        return result
+
     async def close(self) -> None:
         """No persistent transport is held by the CLI adapter."""
 
@@ -344,22 +377,36 @@ def oauth_subject(server_url: str) -> dict[str, str | None]:
 
     binary = shutil.which('orq')
     if binary is None:
-        raise OrqCLIError('The orq CLI is not installed. Install it and sign in before using CLI OAuth.')
+        raise OrqCLIError(
+            'The orq CLI is not installed. Install it and sign in before using CLI OAuth.', failure_kind='setup'
+        )
     try:
         result = _whoami(binary, server_url, timeout=10)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise OrqCLIError('Could not check the Orq CLI OAuth sign-in.') from exc
     if result.returncode:
-        raise OrqCLIError('The Orq CLI OAuth sign-in needs attention. Run orq auth login.')
+        detail = _safe_error(result.stderr)
+        if _is_authentication_error(detail):
+            raise OrqCLIError(
+                'The Orq CLI OAuth sign-in needs attention. Run orq auth login.', failure_kind='authentication'
+            )
+        raise OrqCLIError(
+            f'Could not check the Orq CLI OAuth sign-in: {detail or "the CLI request failed"}. Try again shortly.',
+            failure_kind='unavailable',
+        )
     try:
         data = json.loads(result.stdout)
     except ValueError as exc:
         raise OrqCLIError('The Orq CLI returned an unreadable OAuth identity.') from exc
-    if not isinstance(data, dict) or not data.get('authenticated'):
-        raise OrqCLIError('The Orq CLI OAuth sign-in needs attention. Run orq auth login.')
+    if isinstance(data, dict) and data.get('authenticated') is False:
+        raise OrqCLIError(
+            'The Orq CLI OAuth sign-in needs attention. Run orq auth login.', failure_kind='authentication'
+        )
+    if not isinstance(data, dict) or data.get('authenticated') is not True:
+        raise OrqCLIError('The Orq CLI returned an unreadable OAuth identity. Try again shortly.')
     user_id = data.get('user_id')
     if not isinstance(user_id, str) or not user_id:
-        raise OrqCLIError('The Orq CLI did not identify the signed-in user. Run orq auth login.')
+        raise OrqCLIError('The Orq CLI did not identify the signed-in user. Try again shortly.')
     return {key: data.get(key) for key in ('user_id', 'workspace', 'project')}
 
 
@@ -503,9 +550,29 @@ def _schema_format(model: Any) -> dict[str, Any]:
 _SECRET = re.compile(
     r'(?i)(bearer\s+)[A-Za-z0-9._~+/-]+=*|((?:api[_-]?key|access[_-]?token|refresh[_-]?token)["\' :=]+)[^\s,;]+'
 )
+_AUTHENTICATION_ERROR = re.compile(
+    r'(?i)missing api key|authentication required|unauthori[sz]ed|not authenticated|not signed in|'
+    r'sign-in needs attention|expired or was revoked|invalid refresh token|run\s+[\'\"]?orq auth login[\'\"]?'
+)
+_SETUP_ERROR = re.compile(r'(?i)orq cli is not installed|install it and sign in before using cli oauth')
 
 
 def _safe_error(value: str) -> str:
     """Keep a useful CLI error while masking any credential-shaped text."""
     cleaned = _SECRET.sub(lambda match: (match.group(1) or match.group(2) or '') + '[redacted]', value.strip())
     return cleaned[:1200]
+
+
+def _is_authentication_error(value: str) -> bool:
+    """Whether the CLI's sanitized error says its API/OAuth credential was rejected or is absent."""
+    return bool(_AUTHENTICATION_ERROR.search(value))
+
+
+def _infer_failure_kind(message: str) -> Literal['authentication', 'setup', 'unavailable']:
+    """Classify legacy error messages at the CLI adapter boundary."""
+    sanitized = _safe_error(message)
+    if _SETUP_ERROR.search(sanitized):
+        return 'setup'
+    if _is_authentication_error(sanitized):
+        return 'authentication'
+    return 'unavailable'

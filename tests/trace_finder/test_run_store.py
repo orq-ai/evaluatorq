@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import pytest
+
+from evaluatorq.common.model_input import fit_classifier_input, serialized_question_chars
+from evaluatorq.trace_finder.classifier import classifier_questions
 
 from evaluatorq.common.judge import ClassifyAnswer, ClassifyResponse
 from evaluatorq.trace_finder.compiler import CompiledPlan
@@ -23,6 +28,7 @@ from evaluatorq.trace_finder.models import (
     TraceClassification,
     TraceRecord,
 )
+from evaluatorq.trace_finder.projection import project_trace
 from evaluatorq.trace_finder.run_store import RunStore
 from evaluatorq.trace_finder.explorer import ExplorerStore
 from evaluatorq.trace_finder.rows import TraceRow
@@ -106,8 +112,9 @@ class Runner:
         *,
         parallelism: int,
         on_complete: Any,
+        question_payloads: Any,
     ) -> list[TraceClassification]:
-        del projections, dimensions, parallelism
+        del projections, dimensions, parallelism, question_payloads
         self.calls += 1
         self.on_complete = on_complete
         self.entered.set()
@@ -130,8 +137,9 @@ class RaisingRunner(Runner):
         *,
         parallelism: int,
         on_complete: Any,
+        question_payloads: Any,
     ) -> list[TraceClassification]:
-        del projections, dimensions, parallelism
+        del projections, dimensions, parallelism, question_payloads
         self.calls += 1
         self.on_complete = on_complete
         self.entered.set()
@@ -232,6 +240,54 @@ def make_store(
 
 
 @pytest.mark.asyncio
+async def test_run_store_projection_matches_question_fitted_classifier_state() -> None:
+    classifier_model = 'openai/gpt-6-luna'
+    cap = 4_096
+    dimension = compiled_query().model_copy(
+        update={'task': compiled_query().task.model_copy(update={'instructions': 'Q' * 1_000})}
+    )
+    planner = Planner()
+    planner.plan = CompiledPlan(dimensions=(dimension,), numeric=NumericFilters())
+    runner = Runner()
+    long_trace = trace(1).model_copy(update={'messages': ({'role': 'user', 'content': 'x' * 20_000},)})
+
+
+    async def select_filters(query: str, population: PopulationRequest) -> FacetSelection:
+        del query, population
+        return FacetSelection()
+
+    async def load_traces() -> tuple[TraceRecord, ...]:
+        return (long_trace,)
+
+
+    store = RunStore(
+        compiler=planner,
+        population_loader=Loader(),
+        run_classifier=runner,
+        filter_selector=select_filters,
+        project_trace=partial(project_trace, model=classifier_model, trace_input_chars=cap),
+    )
+    await store.compile(request(), traces=load_traces)
+    await runner.entered.wait()
+    runner.release.set()
+    assert store._task is not None
+    await asyncio.wait_for(store._task, timeout=1)
+
+    snapshot = await store.snapshot()
+    projection = snapshot.projections['trace-1']
+    questions = classifier_questions((dimension,))
+    question_chars = serialized_question_chars(questions)
+    classifier_state = fit_classifier_input(
+        projection.payload,
+        model=classifier_model,
+        questions=questions,
+        global_char_cap=cap,
+    )
+    assert projection.payload == classifier_state
+    assert len(projection.serialized) + question_chars <= cap
+
+
+@pytest.mark.asyncio
 async def test_compile_merges_generated_filters_and_numeric_constraints_with_manual_values_winning() -> None:
     manual = PopulationRequest(
         facets=FacetSelection(provider=frozenset({'anthropic'}), status=frozenset({'failed'})),
@@ -291,6 +347,47 @@ async def test_filter_response_survives_review_start_and_is_detached() -> None:
     runner.release.set()
     assert store._task is not None
     await asyncio.wait_for(store._task, timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_find_cli_classifies_the_reviewed_population_without_reloading() -> None:
+    from rich.console import Console
+
+    from evaluatorq.trace_finder import cli as find_cli
+
+    store, planner, loader, runner, _ = make_store()
+    runner.release.set()
+
+    snapshot = await find_cli._run(store, request(mode='review'), Console(file=io.StringIO()), yes=True)
+
+    assert snapshot is not None
+    assert snapshot.state == 'completed'
+    assert len(planner.calls) == 1
+    assert len(loader.calls) == 1
+    assert runner.calls == 1
+    assert snapshot.total == 3
+
+
+@pytest.mark.asyncio
+async def test_find_cli_declined_plan_classifies_nothing_and_close_cancels(monkeypatch: pytest.MonkeyPatch) -> None:
+    from rich.console import Console
+
+    from evaluatorq.trace_finder import cli as find_cli
+
+    async def decline(*args: Any, **kwargs: Any) -> bool:
+        del args, kwargs
+        return False
+
+    monkeypatch.setattr(find_cli, 'confirm_run_plan', decline)
+    store, _, loader, runner, _ = make_store()
+
+    snapshot = await find_cli._run(store, request(mode='review'), Console(file=io.StringIO()))
+    await store.close()
+
+    assert snapshot is None
+    assert len(loader.calls) == 1
+    assert runner.calls == 0
+    assert (await store.snapshot()).state == 'cancelled'
 
 
 @pytest.mark.asyncio

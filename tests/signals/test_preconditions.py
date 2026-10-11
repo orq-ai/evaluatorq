@@ -55,6 +55,15 @@ def test_source_tool_coverage_finds_unsupported_output_without_raw_call_item() -
     assert 'function_call_output' not in coverage.detail
 
 
+def test_source_tool_coverage_finds_builtin_output_in_result_sidecar() -> None:
+    extra = {'evaluatorq.responses_result_items': [
+        {'type': 'computer_call_output', 'call_id': 'c', 'output': {'type': 'screenshot'}},
+    ]}
+    coverage = pre.source_tool_coverage(context(traj([agent(extra=extra)])))
+    assert coverage.met is False
+    assert 'computer_call_output @step 1' in coverage.detail
+
+
 def test_explicit_error_status_is_required_only_for_status_detection() -> None:
     recs = context(traj([agent(calls=[call('A')], results=[bare()])]))
     assert pre.explicit_error_status(context(recs.trajectory)).met is False

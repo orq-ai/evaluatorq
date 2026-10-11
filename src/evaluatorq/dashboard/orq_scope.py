@@ -35,8 +35,31 @@ class OrqScope:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class OrqWorkspace:
+    """A workspace visible to a CLI OAuth session."""
+
+    id: str
+    key: str
+
+
+@dataclass(frozen=True)
+class OAuthScopes:
+    """Selectable workspaces and projects on one signed-in Orq server."""
+
+    workspaces: tuple[OrqWorkspace, ...] = ()
+    projects: tuple[OrqProject, ...] = ()
+    error: str | None = None
+
+
 def _cli_json(
-    args: list[str], *, profile: str | None, timeout: float, use_cli_session: bool = False
+    args: list[str],
+    *,
+    profile: str | None,
+    timeout: float,
+    use_cli_session: bool = False,
+    server: str | None = None,
+    workspace: str | None = None,
 ) -> dict[str, Any] | None:
     binary = shutil.which('orq')
     if binary is None:
@@ -45,9 +68,9 @@ def _cli_json(
     environment = os.environ.copy()
     environment.pop('ORQ_VERBOSE', None)
     environment.pop('ORQ_JMESPATH', None)
-    if profile:
+    if profile is not None:
         command.extend(('--profile', profile))
-        # The named profile must determine scope, even when this shell has an unrelated key.
+        # An explicit empty profile selects OAuth rather than the CLI's current API-key profile.
         for name in ('ORQ_API_KEY', 'ORQ_BASE_URL', 'ORQ_SERVER', 'ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'):
             environment.pop(name, None)
     elif use_cli_session:
@@ -61,6 +84,10 @@ def _cli_json(
         for name in ('ORQ_WORKSPACE', 'ORQ_WORKSPACE_SLUG', 'ORQ_PROJECT'):
             environment.pop(name, None)
         environment['ORQ_SERVER'] = os.environ.get('ORQ_BASE_URL', DEFAULT_ORQ_BASE_URL)
+    if server:
+        command.extend(('--server', server))
+    if workspace:
+        command.extend(('--workspace', workspace))
     command.extend((*args, '-o', 'json', '--no-input'))
     try:
         result = subprocess.run(
@@ -186,3 +213,64 @@ def discover_orq_scope(profile: str | None = None, *, timeout: float = 5.0, use_
     if workspace_id and not workspace_key:
         logger.warning('The orq CLI listed projects but could not resolve their workspace slug')
     return OrqScope(workspace_key, workspace_id, tuple(sorted(projects, key=lambda project: project.name.casefold())))
+
+
+def discover_oauth_scopes(server: str, *, workspace: str = '', timeout: float = 5.0) -> OAuthScopes:
+    """List OAuth workspaces, then projects in the selected workspace."""
+    deadline = monotonic() + 3 * timeout
+    try:
+        listing = _cli_json(
+            ['workspace', 'list'], profile='', server=server, timeout=_remaining_timeout(deadline, timeout)
+        )
+    except TimeoutError as exc:
+        return OAuthScopes(error=str(exc))
+    rows = listing.get('workspaces') if listing else None
+    if not isinstance(rows, list):
+        return OAuthScopes(error='The orq CLI could not list workspaces for this session.')
+    workspaces = tuple(
+        sorted(
+            (
+                OrqWorkspace(row['id'], row['key'])
+                for row in rows
+                if isinstance(row, dict)
+                and isinstance(row.get('id'), str)
+                and row.get('id')
+                and isinstance(row.get('key'), str)
+                and row.get('key')
+            ),
+            key=lambda item: item.key.casefold(),
+        )
+    )
+    if not workspace or workspace not in {item.key for item in workspaces}:
+        return OAuthScopes(workspaces=workspaces)
+    projects: list[OrqProject] = []
+    cursor: str | None = None
+    seen: set[str] = set()
+    for _ in range(50):
+        args = ['projects', 'list', '--limit', '200']
+        if cursor:
+            args.extend(('--starting-after', cursor))
+        try:
+            page = _cli_json(
+                args, profile='', server=server, workspace=workspace, timeout=_remaining_timeout(deadline, timeout)
+            )
+        except TimeoutError as exc:
+            return OAuthScopes(workspaces=workspaces, error=str(exc))
+        data = page.get('data') if page else None
+        if not isinstance(data, list):
+            return OAuthScopes(workspaces=workspaces, error='The orq CLI could not list projects for this workspace.')
+        projects.extend(
+            OrqProject(row['project_id'], row['name'], row['workspace_id'])
+            for row in data
+            if isinstance(row, dict)
+            and all(isinstance(row.get(key), str) and row[key] for key in ('project_id', 'name', 'workspace_id'))
+        )
+        if not page.get('has_more'):
+            break
+        cursor = data[-1].get('project_id') if data and isinstance(data[-1], dict) else None
+        if not isinstance(cursor, str) or not cursor or cursor in seen:
+            return OAuthScopes(workspaces=workspaces, error='The orq CLI returned an invalid project page cursor.')
+        seen.add(cursor)
+    else:
+        return OAuthScopes(workspaces=workspaces, error='The orq CLI returned too many project pages.')
+    return OAuthScopes(workspaces, tuple(sorted(projects, key=lambda item: item.name.casefold())))

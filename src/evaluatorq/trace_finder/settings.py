@@ -20,8 +20,12 @@ MAX_LIMIT = 5000
 DEFAULT_LIMIT = 500
 MIN_PARALLELISM = 1
 MAX_PARALLELISM = 200
+MIN_TRACE_INPUT_CHARS = 4096
+MAX_TRACE_INPUT_CHARS = 5_000_000
+DEFAULT_TRACE_INPUT_CHARS = 500_000
 # Pre-roles settings files saved these as plain fields, defaults included.
 _LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_model'})
+_RETIRED_TRACE_FINDER_KEYS = frozenset({'trace_input_chars'})
 _LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
 _LEGACY_CLASSIFIER_MODEL = 'typesafe/jev-latest'
 
@@ -39,6 +43,7 @@ class DashboardSettings(BaseModel):
     window_days: int = Field(7, ge=MIN_WINDOW_DAYS, le=MAX_WINDOW_DAYS)
     limit: int = Field(DEFAULT_LIMIT, ge=MIN_LIMIT, le=MAX_LIMIT)
     parallelism: int = Field(100, ge=MIN_PARALLELISM, le=MAX_PARALLELISM)
+    trace_input_chars: int = Field(DEFAULT_TRACE_INPUT_CHARS, ge=MIN_TRACE_INPUT_CHARS, le=MAX_TRACE_INPUT_CHARS)
     ask_ai_mode: Literal['immediate', 'review'] = 'immediate'
     orq_auth_method: Literal['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'] = 'environment'
     orq_api_key_ciphertext: str | None = None
@@ -72,6 +77,19 @@ class DashboardSettings(BaseModel):
         if isinstance(value, dict) and 'orq_auth_method' not in value and value.get('orq_profile'):
             return {**value, 'orq_auth_method': 'cli_profile'}
         return value
+
+    @model_validator(mode='before')
+    @classmethod
+    def discard_retired_trace_finder_settings(cls, value: object) -> object:
+        """Drop settings for trace-finder controls that no longer have a consumer."""
+
+        if not isinstance(value, dict) or not _RETIRED_TRACE_FINDER_KEYS & value.keys():
+            return value
+        migrated = dict(value)
+        for key in _RETIRED_TRACE_FINDER_KEYS & migrated.keys():
+            migrated.pop(key)
+            logger.warning('Ignoring retired dashboard setting {!r}; it has no current trace-finder consumer', key)
+        return migrated
 
     @model_validator(mode='before')
     @classmethod
@@ -221,10 +239,9 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     are ignored with a warning.
     """
     values = load_settings().model_dump()
-    # Older Settings files may contain a saved workspace or project. Authentication
-    # now uses the selected credential's full scope; callers can still override
-    # these fields explicitly for a single invocation.
-    values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
+    # Legacy saved scope is ignored for API-key methods; OAuth explicitly selects its scope.
+    if values['orq_auth_method'] != 'cli_oauth':
+        values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
     for field, env_name, minimum, maximum in (
         ('window_days', 'EVALUATORQ_FINDER_WINDOW_DAYS', MIN_WINDOW_DAYS, MAX_WINDOW_DAYS),
         ('limit', 'EVALUATORQ_FINDER_LIMIT', MIN_LIMIT, MAX_LIMIT),

@@ -36,7 +36,12 @@ def run() -> RunSnapshot:
             trace_type='conversation',
             agent_name='support',
             tool_names=('lookup', 'refund'),
-            capture_metadata={'source': 'orq', 'content': 'secret'},
+            capture_metadata={
+                'source': 'orq',
+                'content': 'secret',
+                'population_start': '2026-09-01T00:00:00+00:00',
+                'population_end': '2026-09-21T00:00:00+00:00',
+            },
         )
         for index in range(3)
     )
@@ -119,6 +124,8 @@ def test_build_export_is_conversation_free_and_contains_all_filters() -> None:
     assert exported.generated_filters.agent_name == ('support',)
     assert exported.numeric.tokens_min == 100
     assert exported.numeric.duration_ms_max == 500
+    assert exported.start == datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert exported.end == datetime(2026, 9, 21, tzinfo=timezone.utc)
     assert exported.generated_numeric.tokens_min == 50
     assert exported.traces[0].trace_id == 'trace-2'
     assert exported.traces[0].agent_name == 'support'

@@ -206,7 +206,11 @@ class ResponsesConversation(BaseModel):
                 else:
                     _INPUT_ITEM.validate_python(item)
             except (ValueError, ValidationError) as exc:
-                logger.warning('Responses {!r} item does not validate as a Responses item; keeping it. ({})', kind, exc)
+                logger.warning(
+                    'Responses {!r} item does not validate as a Responses item; keeping it. ({})',
+                    kind,
+                    type(exc).__name__,
+                )
         return items
 
     @field_validator('responses')

@@ -17,25 +17,56 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
-from typing import Literal
+from types import MappingProxyType
+from typing import Literal, NamedTuple
 
 from loguru import logger
 from pydantic import BaseModel, Field, PrivateAttr, field_validator, model_validator
 from typing_extensions import Self
 
 from evaluatorq.common.orq_client import DEFAULT_ORQ_BASE_URL, OrqProfile
+from evaluatorq.common.private_files import write_private_atomic
 from evaluatorq.common.run_manifest import fail_if_running, start_manifest
 from evaluatorq.common.run_store_dir import get_store_dir
 from evaluatorq.contracts import ManifestStatus, RunManifest
-from evaluatorq.dashboard.insights_uploads import MAX_FINDER_EXPORT_BYTES, is_uploaded_source, read_uploaded_source
+from evaluatorq.dashboard.insights_uploads import (
+    MAX_FINDER_EXPORT_BYTES,
+    is_uploaded_source,
+    read_uploaded_source,
+    upload_size_error,
+)
 from evaluatorq.insights.models import DimensionName, InsightsPopulation, LabelSpec
 from evaluatorq.insights.presets import CODING_LABELS, LABEL_PRESETS
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import get_insights_runs_dir
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.models import FacetSelection, Snapshot
+from evaluatorq.trace_finder.settings import DEFAULT_TRACE_INPUT_CHARS, MAX_TRACE_INPUT_CHARS, MIN_TRACE_INPUT_CHARS
 
 Source = Literal['recent', 'query', 'finder', 'snapshot']
+FormSource = Source | Literal['sessions']
+"""A source the run form offers: a launch `Source`, or `sessions`, which the form freezes into a `snapshot`."""
+
+
+class SourceInfo(NamedTuple):
+    """How one form source shows up: its run form tab, its stored `population.mode`, and its label."""
+
+    tab: Literal['orq', 'file', 'sessions']
+    mode: str
+    label: str
+
+
+SOURCES: MappingProxyType[FormSource, SourceInfo] = MappingProxyType({
+    'recent': SourceInfo('orq', 'filter', 'Orq traces'),
+    'query': SourceInfo('orq', 'query', 'Orq traces matching a question'),
+    'finder': SourceInfo('file', 'export', 'Trace file (Finder export)'),
+    'snapshot': SourceInfo('file', 'snapshot', 'Trace file'),
+    'sessions': SourceInfo('sessions', 'snapshot', 'Local sessions'),
+})
+# A sessions run launches as a snapshot run, so a stored `snapshot` mode reads back as the `snapshot` source.
+SOURCE_BY_MODE: MappingProxyType[str, Source] = MappingProxyType({
+    info.mode: source for source, info in SOURCES.items() if source != 'sessions'
+})
 Preset = str
 _CODING_PRESETS = {spec.name: spec for spec in CODING_LABELS[1:]}
 _REQUEST_ENV = 'EVALUATORQ_INSIGHTS_LAUNCH_REQUEST'
@@ -45,22 +76,12 @@ FINDER_EXPORT_REFERENCE_DIR = '.finder-export-leases'
 INSIGHTS_WORKER_STATE_DIR = '.insights-workers'
 INSIGHTS_WORKER_STALE_SECONDS = 90
 INSIGHTS_WORKER_HEARTBEAT_SECONDS = 10
+DEFAULT_WINDOW_DAYS = 7
+DEFAULT_TRACE_LIMIT = 200
 
 
 def _default_dimensions() -> list[DimensionName]:
     return ['intent']
-
-
-def _set_private_file_mode(descriptor: int, mode: int) -> None:
-    """Apply POSIX file permissions; Windows uses the containing directory ACL.
-
-    Windows does not expose ``os.fchmod`` and does not implement POSIX mode
-    bits as access control. Windows access therefore depends on the ACL
-    inherited from the containing application or temporary directory; this
-    helper does not set or inspect that ACL.
-    """
-    if os.name != 'nt':
-        os.fchmod(descriptor, mode)
 
 
 def worker_state_path(runs_dir: Path, run_id: str) -> Path:
@@ -70,26 +91,7 @@ def worker_state_path(runs_dir: Path, run_id: str) -> Path:
 
 
 def _write_worker_state(path: Path, state: dict[str, object]) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory_info = path.parent.lstat()
-    if (
-        path.parent.is_symlink()
-        or not stat.S_ISDIR(directory_info.st_mode)
-        or (hasattr(os, 'getuid') and directory_info.st_uid != os.getuid())
-    ):
-        raise OSError(f'Insights worker state directory is not a private directory: {path.parent}')
-    Path(path.parent).chmod(0o700)
-    descriptor, temporary = tempfile.mkstemp(prefix=f'.{path.stem}.', suffix='.tmp', dir=path.parent)
-    try:
-        with os.fdopen(descriptor, 'w', encoding='utf-8') as handle:
-            _set_private_file_mode(handle.fileno(), 0o600)
-            json.dump(state, handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        Path(temporary).replace(path)
-    finally:
-        if Path(temporary).exists():
-            Path(temporary).unlink()
+    write_private_atomic(path=path, contents=json.dumps(state))
 
 
 def start_worker_heartbeat(manifest_path: Path) -> tuple[threading.Event, threading.Thread]:
@@ -748,18 +750,6 @@ def _read_approved_finder_export(root: Path, path: Path) -> bytes:
             os.close(directory_fd)
 
 
-def _write_private_finder_snapshot(path: Path, contents: str) -> None:
-    """Write a new private snapshot and close the raw descriptor if wrapping fails."""
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        snapshot_file = os.fdopen(descriptor, 'wb')
-    except OSError:
-        os.close(descriptor)
-        raise
-    with snapshot_file:
-        snapshot_file.write(contents.encode('utf-8'))
-
-
 def finder_export_reference_path(runs_dir: Path, run_id: str) -> Path:
     """Return the private lease path for a running Finder-sourced Insights run."""
     if re.fullmatch(r'[A-Za-z0-9_-]+', run_id) is None:
@@ -873,10 +863,13 @@ class InsightsLaunchSpec(BaseModel):
     snapshot_path: str = Field(default='', max_length=4096)
     # Original name of an uploaded source file; the stored upload has a random name.
     source_name: str = Field(default='', max_length=255)
-    window_days: int = Field(default=7, ge=1, le=90)
-    limit: int = Field(default=100, ge=1, le=5000)
+    window_days: int = Field(default=DEFAULT_WINDOW_DAYS, ge=1, le=90)
+    limit: int = Field(default=DEFAULT_TRACE_LIMIT, ge=1, le=5000)
     facets: FacetSelection = FacetSelection()
     parallelism: int = Field(default=20, ge=1, le=200)
+    trace_input_chars: int = Field(
+        default=DEFAULT_TRACE_INPUT_CHARS, ge=MIN_TRACE_INPUT_CHARS, le=MAX_TRACE_INPUT_CHARS
+    )
     labels: list[Preset] = Field(default_factory=list, max_length=len(LABEL_PRESETS))
     custom_labels: list[LabelSpec] = Field(default_factory=list, max_length=10)
     coding_labels: list[str] = Field(default_factory=list, max_length=len(_CODING_PRESETS))
@@ -897,7 +890,7 @@ class InsightsLaunchSpec(BaseModel):
         if self.facets != FacetSelection():
             raise ValueError('A local trace file already fixes the trace population; remove the facet filters.')
         if not self.snapshot_path.strip():
-            raise ValueError('Enter the path to a local trace snapshot.')
+            raise ValueError('Browse to choose a trace file first.')
         path = Path(self.snapshot_path).expanduser()
         try:
             if is_uploaded_source(get_insights_runs_dir(), path):
@@ -907,7 +900,7 @@ class InsightsLaunchSpec(BaseModel):
                 snapshot = Snapshot.model_validate_json(path.read_text(encoding='utf-8'))
         except (OSError, ValueError) as exc:
             raise ValueError(f'Could not read a valid local trace snapshot: {exc}') from exc
-        if not snapshot.traces:
+        if snapshot.is_empty:
             raise ValueError('The local trace snapshot contains no traces.')
 
     @model_validator(mode='after')
@@ -932,10 +925,9 @@ class InsightsLaunchSpec(BaseModel):
                     raw = read_uploaded_source(get_insights_runs_dir(), path, 'finder')
                 else:
                     raw = _read_approved_finder_export(root, path)
-                if len(raw) > MAX_FINDER_EXPORT_BYTES:
-                    raise ValueError(
-                        f'Finder export exceeds the {MAX_FINDER_EXPORT_BYTES // (1024 * 1024)} MiB size limit.'
-                    )
+                too_large = upload_size_error('finder', len(raw))
+                if too_large:
+                    raise ValueError(too_large)
                 RunExport.model_validate_json(raw)
                 self._finder_export_snapshot = raw.decode('utf-8')
             except (OSError, ValueError) as exc:
@@ -1064,26 +1056,16 @@ def launch_insights(
     )
     snapshot_path: Path | None = None
     reference_path: Path | None = None
-    reference_temporary: Path | None = None
     state_path = worker_state_path(runs_dir, run_id)
     try:
         if finder_snapshot is not None:
             reference_path = finder_export_reference_path(runs_dir, run_id)
             ensure_private_finder_reference_dir(reference_path.parent)
-            with tempfile.NamedTemporaryFile(
-                mode='w', encoding='utf-8', dir=reference_path.parent, prefix=f'.{run_id}.', suffix='.tmp', delete=False
-            ) as reference_file:
-                reference_temporary = Path(reference_file.name)
-                _set_private_file_mode(reference_file.fileno(), 0o600)
-                reference_file.write(json.dumps({'finder_export': spec.finder_export}))
-                reference_file.flush()
-                os.fsync(reference_file.fileno())
-            reference_temporary.replace(reference_path)
-            reference_temporary = None
+            write_private_atomic(path=reference_path, contents=json.dumps({'finder_export': spec.finder_export}))
             validate_private_finder_reference(reference_path)
             snapshot_directory = Path(tempfile.mkdtemp(prefix='evaluatorq-finder-snapshot-'))
             snapshot_path = snapshot_directory / 'finder-export.json'
-            _write_private_finder_snapshot(snapshot_path, finder_snapshot)
+            write_private_atomic(path=snapshot_path, contents=finder_snapshot)
         # Serialize the already validated spec without asking Pydantic to validate
         # the mutable Finder path a second time.
         worker_request = json.dumps({
@@ -1144,12 +1126,11 @@ def launch_insights(
         try:
             writer.fail(f'Could not start Insights worker: {exc}', stage='start')
         finally:
-            for path in (reference_path, reference_temporary):
-                if path is not None:
-                    try:
-                        path.unlink(missing_ok=True)
-                    except OSError as cleanup_error:
-                        logger.warning('Could not remove Finder export reference {}: {}', path, cleanup_error)
+            if reference_path is not None:
+                try:
+                    reference_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    logger.warning('Could not remove Finder export reference {}: {}', reference_path, cleanup_error)
             try:
                 state_path.unlink(missing_ok=True)
             except OSError as cleanup_error:

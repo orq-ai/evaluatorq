@@ -133,7 +133,7 @@ _RULES: tuple[_Rule, ...] = (
     # `NAME=value` or `"name": "value"` where the name says secret: PGPASSWORD, API_TOKEN, AccountKey, cookies, ...
     _Rule(
         re.compile(
-            r'\b[A-Z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key'
+            r'(?<![A-Z0-9_.-])[A-Z0-9_.-]*(?:pass(?:word|wd)?|secret|token|api[_-]?key|access[_-]?key|private[_-]?key'
             r'|credentials?|accountkey|session(?:id)?|cookie|sid)[A-Z0-9_.-]*["\']?\s*[=:]\s*["\']?'
             rf'{_PLACEHOLDED}([^\s"\',;\\]{{6,}})',
             re.IGNORECASE,

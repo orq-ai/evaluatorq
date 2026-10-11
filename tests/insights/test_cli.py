@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from evaluatorq import cli as cli_root
 from evaluatorq.common.orq_client import OrqProfile
 from evaluatorq.insights import cli as cli_module
+from evaluatorq.insights import models as models_module
 from evaluatorq.insights.models import LabelResult, LabelSpec
 from evaluatorq.insights.presets import CONCERNING, USER_FRUSTRATION
 from evaluatorq.trace_finder.export import (
@@ -31,6 +32,7 @@ from evaluatorq.trace_finder import cli as finder_cli
 from evaluatorq.trace_finder.settings import DashboardSettings, save_settings
 from evaluatorq.trace_finder.models import Snapshot
 from tests.insights.test_population import make_trace
+from tests.local_sessions.conftest import claude_projects, codex_home
 
 
 def _app() -> typer.Typer:
@@ -39,12 +41,29 @@ def _app() -> typer.Typer:
     return app
 
 
-def test_help_lists_population_and_clustering_options() -> None:
+def test_help_lists_population_session_and_clustering_options() -> None:
     result = CliRunner().invoke(_app(), ['insights', '--help'], env={'COLUMNS': '120'})
 
     assert result.exit_code == 0, result.output
     help_text = unstyle(result.output)
-    for option in ('--query', '--profile', '--label', '--dimension', '--from-finder', '--from-snapshot', '--preview-input', '--max-clusters', '--classifier-model'):
+    for option in (
+        '--query',
+        '--profile',
+        '--label',
+        '--dimension',
+        '--from-finder',
+        '--from-snapshot',
+        '--preview-input',
+        '--sessions',
+        '--source',
+        '--from',
+        '--to',
+        '--project-dir',
+        '--text',
+        '--limit',
+        '--max-clusters',
+        '--classifier-model',
+    ):
         assert option in help_text
 
 
@@ -60,12 +79,191 @@ def test_score_preset_display_does_not_repeat_level_index(minimal_run: Any, caps
     description = spec.criteria[0].split(':', 1)[0].removeprefix('0 ')
     assert f'0 · {description}' in output
     assert '0 · 0 ' not in output
+
+
+@pytest.mark.parametrize(
+    ('options', 'message'),
+    [
+        (['--sessions', '--query', 'refunds'], '--sessions cannot be combined with --query'),
+        (['--sessions', '--from-snapshot', 'snapshot.json'], '--sessions cannot be combined with --from-snapshot'),
+        (['--sessions', '--from-finder', 'finder.json'], '--sessions cannot be combined with --from-finder'),
+        (['--sessions', '--window-days', '2'], '--sessions cannot be combined with population options: --window-days'),
+        (['--sessions', '--project', 'demo'], '--sessions cannot be combined with population options: --project'),
+        (['--sessions', '--source', 'claude'], "unknown --source 'claude'; choose from"),
+        (['--project-dir', '.'], '--project-dir requires --sessions'),
+        (['--source', 'codex'], '--source requires --sessions'),
+        (['--from', '2026-10-01'], '--from requires --sessions'),
+    ],
+)
+def test_sessions_source_conflicts_are_usage_errors(options: list[str], message: str) -> None:
+    result = CliRunner().invoke(_app(), ['insights', *options])
+
+    assert result.exit_code == 2
+    assert message in result.output
+
+
+@pytest.mark.parametrize('classifier_model', ['openai/gpt-6-luna', 'typesafe/jev-latest'])
+def test_sessions_preview_is_offline_and_uses_selected_model_inputs(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path, tmp_path: Path, classifier_model: str
+) -> None:
+    from tests.local_sessions.test_search import _claude
+
+    _claude(claude_projects, 'session-preview')
+    settings_path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(settings_path))
+    save_settings(DashboardSettings(trace_input_chars=10_000), settings_path)
+    captured: dict[str, Any] = {}
+    original_preview = cli_module.preview_snapshot
+
+    def capture_preview(raw_path: str, **options: Any) -> dict[str, Any]:
+        captured.update(options)
+        captured['path'] = Path(raw_path)
+        captured['snapshot'] = Snapshot.model_validate_json(Path(raw_path).read_bytes())
+        coverage = original_preview(raw_path, **options)
+        captured['coverage'] = coverage
+        return coverage
+
+    monkeypatch.setattr(cli_module, 'preview_snapshot', capture_preview)
+    monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
+    monkeypatch.setattr(cli_module, 'insights', lambda *_args, **_kwargs: pytest.fail('preview must not run pipeline'))
+
+    result = CliRunner().invoke(
+        _app(),
+        [
+            'insights', '--sessions', '--preview-input', '--classifier-model', classifier_model,
+            '--label', 'concerning', '--coding',
+        ],
+        env={'COLUMNS': '120', 'ORQ_API_KEY': ''},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured['trace_input_chars'] == 10_000
+    assert captured['classifier_model'] == classifier_model
+    assert set(captured['classifier_questions']) == {
+        'concerning', 'sentiment', *(spec.name for spec in cli_module.presets.CODING_CONVERSATION_LABELS)
+    }
+    assert len(captured['snapshot'].documents) == 1
+    assert captured['coverage']['n_traces'] == 1
+    assert captured['coverage']['classifier_question_reserve'] == 'applied'
+    assert not captured['path'].parent.exists()
+    assert 'A run would send' in result.output
+
+
+def test_sessions_freeze_search_results_and_pass_local_content_to_pipeline(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path, minimal_run: Any
+) -> None:
+    from tests.local_sessions.test_search import _claude
+
+    _claude(claude_projects, 'session-content', text='the session prompt appears')
+    received: dict[str, Any] = {}
+    snapshot_paths: list[Path] = []
+
+    async def fake_insights(population: Any, **kwargs: Any) -> Any:
+        from evaluatorq.insights.population import resolve_population
+
+        assert population.snapshot_path is not None
+        snapshot_paths.append(population.snapshot_path)
+        resolved = await resolve_population(
+            population,
+            orq=None,
+            client=None,
+            compiler_model='unused',
+            classifier_model='unused',
+        )
+        received['documents'] = resolved.traces
+        return minimal_run
+
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    result = CliRunner().invoke(
+        _app(), ['insights', '--sessions', '--text', 'session prompt', '--limit', '1']
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(received['documents']) == 1
+    assert 'the session prompt appears' in str(received['documents'][0].trajectory)
+    assert len(snapshot_paths) == 1
+    assert not snapshot_paths[0].exists()
+    assert not snapshot_paths[0].parent.exists()
+
+
+def test_sessions_source_and_inclusive_local_day_filter_reach_the_pipeline(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path, codex_home: Path, minimal_run: Any
+) -> None:
+    from tests.local_sessions.test_search import _claude, _codex, _utc
+
+    _claude(claude_projects, 'matching-claude', text='shared text', start=_utc(2))
+    _codex(codex_home, 'matching-codex', text='shared text', start=_utc(2))
+    received: dict[str, Any] = {}
+
+    async def fake_insights(population: Any, **kwargs: Any) -> Any:
+        from evaluatorq.insights.population import resolve_population
+
+        resolved = await resolve_population(
+            population,
+            orq=None,
+            client=None,
+            compiler_model='unused',
+            classifier_model='unused',
+        )
+        received['documents'] = resolved.traces
+        return minimal_run
+
+    monkeypatch.setattr(cli_module, 'insights', fake_insights)
+    local_day = _utc(2).astimezone().date().isoformat()
+    result = CliRunner().invoke(
+        _app(),
+        [
+            'insights',
+            '--sessions',
+            '--source',
+            'codex',
+            '--from',
+            local_day,
+            '--to',
+            local_day,
+            '--text',
+            'shared text',
+            '--limit',
+            '1',
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(received['documents']) == 1
+    assert received['documents'][0].metadata.project == '/work/codex'
+    assert 'shared text' in str(received['documents'][0].trajectory)
+
+
+def test_sessions_snapshot_is_removed_when_pipeline_fails(
+    monkeypatch: pytest.MonkeyPatch, claude_projects: Path
+) -> None:
+    from evaluatorq.insights.models import InsightsPopulation
+    from tests.local_sessions.test_search import _claude
+
+    _claude(claude_projects, 'session-error')
+    snapshot_paths: list[Path] = []
+
+    async def fail_pipeline(population: Any, **kwargs: Any) -> Any:
+        assert isinstance(population, InsightsPopulation)
+        assert population.snapshot_path is not None
+        snapshot_paths.append(population.snapshot_path)
+        raise RuntimeError('expected pipeline failure')
+
+    monkeypatch.setattr(cli_module, 'insights', fail_pipeline)
+    result = CliRunner().invoke(_app(), ['insights', '--sessions'])
+
+    assert result.exit_code == 1, result.output
+    assert len(snapshot_paths) == 1
+    assert not snapshot_paths[0].exists()
+    assert not snapshot_paths[0].parent.exists()
+
+
 def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     path = tmp_path / 'traces.json'
     trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': 'long trace body with stable context. ' * 20_000}, {'role': 'assistant', 'content': 'done'})}
     )
     path.write_text(Snapshot(traces=(trace,)).model_dump_json(), encoding='utf-8')
     monkeypatch.setattr(cli_module, 'resolve_cli_profile', lambda *_args: pytest.fail('preview must not resolve credentials'))
@@ -74,8 +272,8 @@ def test_snapshot_preview_reports_truncation_without_credentials_or_model_calls(
     result = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
 
     assert result.exit_code == 0, result.output
-    assert '1 of 1 trace exceeds' in result.output
-    assert '1 of 2 whole messages omitted (50.0%)' in result.output
+    assert '1 of 1 traces hit a summary or classifier input cap' in result.output
+    assert 'characters' in result.output
 
 
 def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any) -> None:
@@ -100,7 +298,46 @@ def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path
 
     assert result.exit_code == 0, result.output
     assert captured['population'].snapshot_path == path
-    assert result.output.count('Model input projection:') == 1
+    assert result.output.count('Model input coverage:') == 1
+
+
+def test_snapshot_run_discloses_what_is_sent_to_which_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any
+) -> None:
+    from tests.insights.test_population import make_document
+
+    path = tmp_path / 'sessions.json'
+    path.write_text(Snapshot(traces=(), documents=(make_document('s1'),)).model_dump_json(), encoding='utf-8')
+    roles = {'insights.summary': 'p/summary', 'insights.labels': 'p/classifier', 'insights.embedding': 'p/embed'}
+    monkeypatch.setattr(models_module, 'role_model', lambda _role, *, task: roles[task])
+    monkeypatch.setattr(cli_module, 'insights', AsyncMock(return_value=minimal_run))
+
+    result = CliRunner().invoke(
+        _app(), ['insights', '--from-snapshot', str(path), '--dimension', 'intent', '--classifier-model', 'x/mine']
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        f'Sending 1 trace ({path.stat().st_size / 1024:.1f} KB) from sessions.json to models: '
+        'summary p/summary, classifier x/mine, embedding p/embed.'
+    ) in result.output
+
+    preview = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
+    assert preview.exit_code == 0, preview.output
+    assert 'Sending' not in preview.output
+    assert 'A run would send 1 trace (' in preview.output
+    insights_mock = cli_module.insights
+    assert isinstance(insights_mock, AsyncMock)
+    assert insights_mock.await_count == 1
+
+
+def test_local_send_reports_an_unreadable_snapshot_instead_of_a_traceback(tmp_path: Path) -> None:
+    with pytest.raises(typer.Exit) as raised:
+        cli_module._print_local_send(
+            tmp_path / 'missing.json', n_traces=1, summary_model=None, classifier_model=None, embedding_model=None
+        )
+
+    assert raised.value.exit_code == 2
 
 
 def test_snapshot_cli_rejects_empty_and_conflicting_sources(tmp_path: Path) -> None:

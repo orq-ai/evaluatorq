@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime  # noqa: TC003
 from pathlib import Path  # noqa: TC003
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -21,9 +22,14 @@ from evaluatorq.insights.transcript import ToolStats  # noqa: TC001 — Pydantic
 from evaluatorq.signals.config import SignalsConfig  # noqa: TC001 — Pydantic field type.
 from evaluatorq.signals.models import SignalReport  # noqa: TC001 — Pydantic field type.
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters
+from evaluatorq.trace_finder.settings import (
+    MAX_TRACE_INPUT_CHARS,
+    MIN_TRACE_INPUT_CHARS,
+    effective_settings,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     from evaluatorq.trace_finder.export import RunExport
 
@@ -32,9 +38,48 @@ BoundedRatio = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
 
 
+def default_insights_models(
+    summary: str | None = None, classifier: str | None = None, embedding: str | None = None
+) -> dict[str, str]:
+    """The summary/classifier/embedding ids an Insights run uses: explicit values win, else each task's model role."""
+    return {
+        'summary': summary or role_model('smart', task='insights.summary'),
+        'classifier': classifier or role_model('classifier', task='insights.labels'),
+        'embedding': embedding or role_model('embedding', task='insights.embedding'),
+    }
+
+
 class _TraceIdentity(Protocol):
     @property
     def trace_id(self) -> str: ...
+
+
+PopulationSource = Literal['snapshot', 'query', 'export', 'filter', 'unknown']
+
+
+_ORQ_POPULATION_SOURCES: Mapping[str, PopulationSource] = MappingProxyType({
+    'query': 'query',
+    'export': 'export',
+    'filter': 'filter',
+})
+
+
+def population_source(population: Mapping[str, object]) -> PopulationSource:
+    """Classify a saved population echo by the mode population.py wrote; a recorded snapshot path means a snapshot."""
+    mode = population.get('mode')
+    if mode == 'snapshot' or population.get('snapshot_path'):
+        return 'snapshot'
+    return _ORQ_POPULATION_SOURCES.get(mode, 'unknown') if isinstance(mode, str) else 'unknown'
+
+
+def reads_snapshot(population: Mapping[str, object]) -> bool:
+    """Whether a saved population echo describes a run read from a local snapshot file."""
+    return population_source(population) == 'snapshot'
+
+
+def reads_orq(population: Mapping[str, object]) -> bool:
+    """Whether a saved population echo describes a run that read its traces from Orq, by a mode the pipeline writes."""
+    return population_source(population) in _ORQ_POPULATION_SOURCES
 
 
 def ensure_unique_trace_ids(traces: Iterable[_TraceIdentity]) -> None:
@@ -290,14 +335,19 @@ class InsightsConfig(BaseModel):
 
     labels: list[LabelSpec]
     dimensions: list[DimensionName]
-    summary_model: str = Field(default_factory=lambda: role_model('smart', task='insights.summary'))
-    classifier_model: str = Field(default_factory=lambda: role_model('classifier', task='insights.labels'))
+    summary_model: str = Field(default_factory=lambda: default_insights_models()['summary'])
+    classifier_model: str = Field(default_factory=lambda: default_insights_models()['classifier'])
     compiler_model: str | None = None
-    embedding_model: str = Field(default_factory=lambda: role_model('embedding', task='insights.embedding'))
+    embedding_model: str = Field(default_factory=lambda: default_insights_models()['embedding'])
     max_clusters: int = Field(default=15, ge=1)
     max_subclusters: int = Field(default=15, ge=1)
     outlier_zscore: FiniteFloat | None = Field(default=None, ge=0)
     parallelism: int = Field(default=100, ge=1)
+    trace_input_chars: int = Field(
+        default_factory=lambda: effective_settings().trace_input_chars,
+        ge=MIN_TRACE_INPUT_CHARS,
+        le=MAX_TRACE_INPUT_CHARS,
+    )
     priority_dimension: DimensionName = 'intent'
     cache: bool = True
     coding_analysis: bool = False

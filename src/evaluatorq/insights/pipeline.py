@@ -35,11 +35,19 @@ from evaluatorq.insights.models import (
     LabelSpec,
     StageFailure,
     TraceInsight,
+    default_insights_models,
     label_key,
+    reads_orq,
     real_assistant_errors,
 )
 from evaluatorq.insights.population import PopulationError, resolve_population
-from evaluatorq.insights.presets import CODING_LABELS, DIMENSION_FIELDS, LABEL_PRESETS, SENTIMENT
+from evaluatorq.insights.presets import (
+    CODING_CONVERSATION_LABELS,
+    CODING_LABELS,
+    DIMENSION_FIELDS,
+    LABEL_PRESETS,
+    SENTIMENT,
+)
 from evaluatorq.insights.priority import priority_points
 from evaluatorq.insights.progress import stage_plan
 from evaluatorq.insights.store import get_insights_runs_dir, save_run
@@ -52,7 +60,7 @@ MIN_CLUSTER_SIZE = 5
 LOW_CONFIDENCE = 0.6
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
 
     from openai import AsyncOpenAI
@@ -415,6 +423,7 @@ async def insights(  # noqa: C901
     embedding_model: str | None = None,
     priority_dimension: DimensionName = 'intent',
     parallelism: int = 100,
+    trace_input_chars: int | None = None,
     cache: bool = True,
     coding_analysis: bool = False,
     coding_labels: Sequence[str] | None = None,
@@ -425,6 +434,7 @@ async def insights(  # noqa: C901
     _finder_export_source: Path | None = None,
     _finder_export_sha256: str | None = None,
     _source_name: str | None = None,
+    _orq_scope: Mapping[str, str | None] | None = None,
     _on_saved: Callable[[Path], None] | None = None,
     llm_client: AsyncOpenAI | None = None,
     orq_client: Orq | None = None,
@@ -459,9 +469,14 @@ async def insights(  # noqa: C901
     # An explicit classifier_model covers both stages; otherwise population search
     # follows finder.classifier and labelling follows insights.labels.
     finder_classifier_model = classifier_model or role_model('classifier', task='finder.classifier')
-    classifier_model = classifier_model or role_model('classifier', task='insights.labels')
-    summary_model = summary_model or role_model('smart', task='insights.summary')
-    embedding_model = embedding_model or role_model('embedding', task='insights.embedding')
+    resolved = default_insights_models(summary_model, classifier_model, embedding_model)
+    classifier_model = resolved['classifier']
+    summary_model = resolved['summary']
+    embedding_model = resolved['embedding']
+    if trace_input_chars is None:
+        from evaluatorq.trace_finder.settings import effective_settings
+
+        trace_input_chars = effective_settings().trace_input_chars
     run_id = _run_id or str(uuid.uuid4())
     name = run_name or f'insights-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}'
     directory = runs_dir or get_insights_runs_dir()
@@ -477,6 +492,7 @@ async def insights(  # noqa: C901
         max_subclusters=max_subclusters,
         outlier_zscore=outlier_zscore,
         parallelism=parallelism,
+        trace_input_chars=trace_input_chars,
         priority_dimension=priority_dimension,
         cache=cache,
         coding_analysis=coding_analysis,
@@ -549,6 +565,8 @@ async def insights(  # noqa: C901
         if resolved_orq is None and population.snapshot_path is None:
             resolved_orq = resolve_orq_client()
         _stage(writer, 'population')
+        coverage_specs = [*specs, *(spec for spec in selected_coding if spec in CODING_CONVERSATION_LABELS)]
+        classifier_questions = {spec.name: spec.to_question({}).model_dump(mode='json') for spec in coverage_specs}
         try:
             resolved = await resolve_population(
                 population,
@@ -556,6 +574,9 @@ async def insights(  # noqa: C901
                 client=resolved_llm,
                 compiler_model=compiler_model,
                 classifier_model=finder_classifier_model,
+                trace_input_chars=trace_input_chars,
+                label_classifier_model=classifier_model,
+                classifier_questions=classifier_questions,
             )
             measured = []
             for source_trace in resolved.traces:
@@ -578,14 +599,23 @@ async def insights(  # noqa: C901
                     run.population['finder_export_sha256'] = _finder_export_sha256
             if _source_name:
                 run.population['source_name'] = _source_name
+            if _orq_scope is not None and reads_orq(run.population):
+                run.population['orq_scope'] = dict(_orq_scope)
             truncated = resolved.echo.get('n_projection_truncated', 0)
             if truncated:
-                trace_noun = 'trace' if len(resolved.traces) == 1 else 'traces'
-                run.warnings.append(
-                    f'Projection budget: {truncated} of {len(resolved.traces)} {trace_noun} exceeded the model projection budget; '
-                    f'{resolved.echo.get("n_omitted_messages", 0)} of '
-                    f'{resolved.echo.get("n_source_messages", 0)} whole messages were omitted from classification and summaries.'
+                trace_count = len(resolved.traces)
+                trace_noun = 'trace' if trace_count == 1 else 'traces'
+                warning = (
+                    f'Input character cap: {truncated} of {trace_count} {trace_noun} exceeded the model projection '
+                    'budget for summary or classifier input.'
                 )
+                omitted = int(resolved.echo.get('n_omitted_messages', 0))
+                if omitted:
+                    warning += (
+                        f' {omitted} of {resolved.echo.get("n_source_messages", 0)} whole messages were omitted '
+                        'from the Jev classifier state.'
+                    )
+                run.warnings.append(warning)
             run.traces = [
                 TraceInsight(
                     trace_id=trace.trace_id,
@@ -636,6 +666,7 @@ async def insights(  # noqa: C901
                 on_progress=lambda done, total: writer.stage_progress('label', done, total),
                 coding=coding_enabled,
                 coding_labels=selected_coding,
+                trace_input_chars=trace_input_chars,
             )
             original_by_id = {trace.trace_id: trace for trace in run.traces}
             retained_trace_ids: set[str] = set()
@@ -701,6 +732,7 @@ async def insights(  # noqa: C901
                     cache=cache_store,
                     parallelism=parallelism,
                     usage=ledger,
+                    input_char_cap=trace_input_chars,
                     on_progress=lambda done, total: writer.stage_progress('summary', done, total),
                 )
                 for trace_id, summary in summaries.items():

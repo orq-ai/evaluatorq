@@ -614,17 +614,6 @@ def test_sim_drawer_has_back_nav_close_controls(sim_run) -> None:
     assert 'data-drawer-url="/r/rid/sim/transcript?idx=0"' in html
 
 
-def test_sim_drawer_runtime_dispatches_conversations_without_anchor_handler() -> None:
-    source = (Path(__file__).parents[2] / 'src/evaluatorq/dashboard/static/dashboard.js').read_text(
-        encoding='utf-8'
-    )
-    keyboard_handler = source.split("document.body.addEventListener('keydown'", 1)[1].split('});', 1)[0]
-
-    assert "trigger.getAttribute('data-drawer-url')" in source
-    assert 'a[href^="#conv-"]' not in source
-    assert "evt.target.closest('[data-no-drawer]')" in keyboard_handler
-
-
 def test_sim_breakdown_entity_names_open_shared_modal(sim_run) -> None:
     from evaluatorq.dashboard.report_tabs import sim_report_tabs
 

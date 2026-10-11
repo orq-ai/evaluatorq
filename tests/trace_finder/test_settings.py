@@ -28,8 +28,8 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
         embedding_model='embedding/model',
         model_overrides={'apply': 'apply/model'},
         window_days=14,
-        limit=42,
         parallelism=7,
+        trace_input_chars=320_000,
     )
 
     save_settings(settings, path)
@@ -37,6 +37,15 @@ def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
     assert load_settings(path) == settings
     assert json.loads(path.read_text()) == settings.model_dump()
 
+
+
+def test_older_settings_files_inherit_default_trace_input_cap(tmp_path: Path) -> None:
+    path = tmp_path / 'dashboard-settings.json'
+    path.write_text(json.dumps({'window_days': 9}), encoding='utf-8')
+
+    settings = load_settings(path)
+
+    assert settings.trace_input_chars == 500_000
 
 def test_save_keeps_original_error_if_temporary_cleanup_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def fail_replace(self: Path, target: Path) -> None:
@@ -212,6 +221,53 @@ def test_legacy_settings_load_without_defaults_warning(
     assert settings.classifier_model == 'custom/classifier'
 
 
+def test_retired_trace_input_limit_preserves_saved_settings_and_is_removed_on_save(
+    caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(
+        json.dumps(
+            {
+                'trace_input_chars': 180000,
+                'fast_model': 'saved/fast',
+                'window_days': 12,
+                'limit': 64,
+                'ask_ai_mode': 'review',
+                'orq_auth_method': 'cli_oauth',
+                'orq_workspace': 'saved-workspace',
+                'orq_project_id': 'saved-project',
+                'orq_project_name': 'Saved project',
+            }
+        )
+    )
+
+    with caplog.at_level('WARNING'):
+        settings = load_settings(path)
+
+    assert 'using defaults' not in caplog.text
+    assert 'trace_input_chars' in caplog.text
+    assert '180000' not in caplog.text
+    assert settings.fast_model == 'saved/fast'
+    assert settings.window_days == 12
+    assert settings.limit == 64
+    assert settings.ask_ai_mode == 'review'
+    assert settings.orq_auth_method == 'cli_oauth'
+    assert (settings.orq_workspace, settings.orq_project_id, settings.orq_project_name) == (
+        'saved-workspace',
+        'saved-project',
+        'Saved project',
+    )
+
+    save_settings(settings, path)
+
+    assert 'trace_input_chars' not in json.loads(path.read_text())
+
+
+def test_retired_trace_input_limit_does_not_allow_other_unknown_settings() -> None:
+    with pytest.raises(ValueError, match='extra_forbidden'):
+        DashboardSettings.model_validate({'trace_input_chars': 180000, 'limt': 64})
+
+
 def test_explorer_columns_round_trip_and_unknown_keys_drop(tmp_path: Path) -> None:
     path = tmp_path / 'settings.json'
     save_settings(DashboardSettings.model_validate({'explorer_columns': ('model', 'cost')}), path)
@@ -229,7 +285,7 @@ def test_old_profile_config_migrates_to_cli_profile_but_explicit_auth_wins() -> 
     assert explicit.orq_auth_method == 'environment'
 
 
-@pytest.mark.parametrize('method', ['environment', 'cli_profile', 'cli_oauth', 'stored_api_key'])
+@pytest.mark.parametrize('method', ['environment', 'cli_profile', 'stored_api_key'])
 def test_legacy_scope_is_ignored_by_effective_settings(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, method: str
 ) -> None:

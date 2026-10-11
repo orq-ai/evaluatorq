@@ -118,7 +118,7 @@ FAILURE_TAXONOMY = LabelSpec(
 
 # Coding-agent labels: asked only when a run enables coding analysis, and only for the
 # traces the `CODING_AGENT` check answers yes for. The conversation labels read
-# `transcript.conversation_view`; the tool labels read `transcript.tool_activity_chunks`.
+# `transcript.full_conversation_view`; the tool labels read `transcript.tool_activity_chunks`.
 CODING_AGENT = LabelSpec(
     name='coding_agent',
     kind='noul',

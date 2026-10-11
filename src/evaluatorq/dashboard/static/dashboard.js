@@ -451,7 +451,11 @@
       return;
     }
     const option = evt.target.closest('.model-pick .model-option');
-    if (option) { pickModel(option, option.getAttribute('data-model')); return; }
+    if (option) {
+      if (option.hidden) return;
+      pickModel(option, option.getAttribute('data-model'));
+      return;
+    }
     const addFilter = evt.target.closest('.finder-controls .add, .model-pick-btn');
     if (addFilter) {
       const ownMenu = addFilter.parentElement.querySelector('.finder-facets');
@@ -673,16 +677,22 @@
   document.body.addEventListener('input', function (evt) {
     const search = evt.target.closest('.finder-facets .facet-search');
     if (!search) return;
-    const sub = search.closest('.facet-sub');
     const query = search.value.trim().toLocaleLowerCase();
+    const richPick = search.closest('.rich-pick--filter');
+    const sub = search.closest('.facet-sub');
+    if (!richPick && !sub) return;
+    const list = richPick || sub;
     let visible = 0;
-    sub.querySelectorAll('.facet-values label, .facet-values .model-option').forEach(function (option) {
+    list.querySelectorAll('.facet-values .model-option, .facet-values label').forEach(function (option) {
       const label = option.querySelector('input + span');
       const matches = (label ? label.textContent : option.textContent).toLocaleLowerCase().includes(query);
       option.hidden = !matches;
       if (matches) visible += 1;
     });
-    sub.querySelector('.facet-no-results').hidden = visible !== 0;
+    list.querySelector('.facet-no-results').hidden = visible !== 0;
+  });
+  document.body.addEventListener('keydown', function (evt) {
+    if (evt.key === 'Enter' && evt.target.matches('.rich-pick--filter .facet-search')) evt.preventDefault();
   });
 
   // Unticking a value in the menu must also drop the hidden input the chip row submits.
@@ -1491,6 +1501,13 @@
     const menu = document.getElementById('explorer-cols');
     if (menu?.open && !menu.contains(evt.target)) menu.open = false;
   });
+  window.addEventListener('click', function (evt) {
+    document.querySelectorAll('.xr-time-menu[open]').forEach(function (dateMenu) {
+      const trigger = dateMenu.querySelector('summary');
+      const popup = dateMenu.querySelector('.xr-time-options');
+      if (!trigger?.contains(evt.target) && !popup?.contains(evt.target)) dateMenu.open = false;
+    });
+  }, true);
 
   // Poll renders (data-poll) of #explorer-results and #explorer-toolbar: drop one older than the
   // table on screen or identical to it; otherwise keep what the user had open, scrolled, selected
@@ -1695,16 +1712,18 @@
     root.querySelectorAll('.fd-msg').forEach((el) => { el.open = el.getAttribute('data-msg') === String(index); });
     drawerScrollTo(root, index);
   }
+  const isTranscriptRoot = (el) => !!el && (el.id === 'finder-drawer' || !!(el.classList && el.classList.contains('fd-traces')));
   document.body.addEventListener('htmx:afterSwap', function (evt) {
-    if (evt.detail.target && evt.detail.target.id === 'finder-drawer') {
-      const on = evt.detail.target.querySelector('.fd-msg.on');
-      if (on) drawerScrollTo(evt.detail.target, on.getAttribute('data-msg'));
+    const swapped = isTranscriptRoot(evt.target) ? evt.target : evt.detail.target;
+    if (isTranscriptRoot(swapped)) {
+      const on = swapped.querySelector('.fd-msg.on');
+      if (on) drawerScrollTo(swapped, on.getAttribute('data-msg'));
     }
   });
   document.addEventListener('click', function (evt) {
     const mini = evt.target.closest('.fd-mini i[data-mini-msg]');
     const summary = evt.target.closest('.fd-msg > summary');
-    const root = document.getElementById('finder-drawer');
+    const root = evt.target.closest('#finder-drawer, .fd-traces');
     if (!root || (!mini && !summary)) return;
     if (mini) {
       drawerSelect(root, mini.getAttribute('data-mini-msg'));

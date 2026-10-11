@@ -9,11 +9,11 @@ Four mutually exclusive paths, matching `InsightsPopulation`'s own fields:
   `merge_numeric`), then
   load with `OrqTraceSource`.
 - **Finder export path** (`pop.finder_export` set): read a `RunExport` JSON, reload
-  its merged filters and the pinned matches' timestamp range through `OrqTraceSource`,
-  and keep only the traces whose ids are in `matched_trace_ids`. No compile, no match
-  question — the export already pins the matched population.
+  its merged filters and original query window through `OrqTraceSource`, constrained
+  by the pinned trace IDs, and keep only the traces whose ids are in `matched_trace_ids`.
+  No compile, no match question — the export already pins the matched population.
 - **Local snapshot path** (`pop.snapshot_path` set): validate a `Snapshot` JSON and
-  use its embedded trace messages directly. No Orq trace fetch or match question.
+  use its embedded trace messages and ATIF session documents directly. No Orq trace fetch or match question.
 - **Filter-only path** (neither set): load `pop.facets`/`pop.numeric` directly. No
   compile, no match question.
 
@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,16 +41,27 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document
+from evaluatorq.common.model_input import (
+    fit_classifier_input,
+    has_truncated_source_text,
+    is_jev_model,
+    serialized_chars,
+    serialized_question_chars,
+)
+from evaluatorq.common.model_roles import role_model
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
+from evaluatorq.insights.labeling import MATCH_KEY, prepare_classifier_state
 from evaluatorq.insights.models import ensure_unique_trace_ids
+from evaluatorq.insights.summarize import _build_prompt_with_coverage
 from evaluatorq.trace_finder.compiler import compile_query
 from evaluatorq.trace_finder.export import RunExport
 from evaluatorq.trace_finder.facets import load_facet_catalogue
 from evaluatorq.trace_finder.filter_selector import select_filters_with_response
 from evaluatorq.trace_finder.models import FacetSelection, NumericFilters, Snapshot
-from evaluatorq.trace_finder.orq_source import OrqTraceSource
-from evaluatorq.trace_finder.projection import MAX_TOKEN_BUDGET, project_trace, serialize_projection
+from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_targeted_load
+from evaluatorq.trace_finder.projection import serialize_projection
 from evaluatorq.trace_finder.run_store import merge_facets, merge_numeric
+from evaluatorq.trace_finder.settings import effective_settings
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -76,69 +88,170 @@ class ResolvedPopulation:
     n_scanned: int
 
 
-def projection_coverage(traces: Sequence[TraceRecord | TraceDocument]) -> dict[str, int]:
-    """Count budget omissions and source-to-projection bytes for loaded traces."""
-    coverage = {
+def projection_coverage(
+    traces: Sequence[TraceRecord | TraceDocument],
+    *,
+    trace_input_chars: int | None = None,
+    classifier_model: str | None = None,
+    classifier_questions: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Measure the summary prompt and the same classifier state the Insights run prepares."""
+    settings = effective_settings()
+    cap = trace_input_chars if trace_input_chars is not None else settings.trace_input_chars
+    model = classifier_model or role_model('classifier', task='insights.labels')
+    state_format = 'jev' if is_jev_model(model) else 'text'
+    reserve = 'applied' if classifier_questions is not None else 'not_available'
+    coverage: dict[str, Any] = {
         'n_traces': len(traces),
         'n_projection_truncated': 0,
+        'n_summary_truncated': 0,
+        'n_classifier_truncated': 0,
         'n_source_messages': 0,
         'n_omitted_messages': 0,
-        'source_bytes': 0,
-        'projected_bytes': 0,
+        'source_chars': 0,
+        'classifier_state_chars': 0,
+        'classifier_question_chars': 0,
+        'classifier_request_chars': 0,
+        'trace_input_chars': cap,
+        'summary_input_chars': 0,
+        'classifier_state_format': state_format,
+        'classifier_question_reserve': reserve,
     }
+    questions = classifier_questions
+    question_chars = serialized_question_chars(questions) if questions is not None else 0
     for trace in traces:
-        projection = project_trace(trace)
-        coverage['n_projection_truncated'] += int(projection.omitted_messages > 0 or projection.omitted_bytes > 0)
-        coverage['n_source_messages'] += len(trace.messages)
-        coverage['n_omitted_messages'] += projection.omitted_messages
-        coverage['source_bytes'] += len(
-            serialize_projection({'trace_status': trace.status, 'messages': trace.messages}).encode('utf-8')
-        )
-        coverage['projected_bytes'] += projection.estimated_tokens
+        messages = prompt_messages(trace)
+        prompt, summary_truncated = _build_prompt_with_coverage(trace, input_char_cap=cap)
+        state = prepare_classifier_state(trace, model=model, char_cap=cap)
+        if questions is not None:
+            state = fit_classifier_input(
+                state,
+                model=model,
+                questions=questions,
+                global_char_cap=cap,
+            )
+        state_chars = serialized_chars(state) if isinstance(state, dict) else len(state)
+        request_chars = state_chars + question_chars
+        omitted = 0
+        if isinstance(state, dict):
+            represented: set[int] = set()
+            for entry in state.get('messages', []):
+                index = entry.get('index') if isinstance(entry, dict) else None
+                if isinstance(index, int):
+                    represented.add(index)
+                if isinstance(entry, dict):
+                    represented.update(
+                        result['index']
+                        for result in entry.get('results', [])
+                        if isinstance(result, dict) and isinstance(result.get('index'), int)
+                    )
+            omitted = max(0, len(messages) - len(represented))
+        state_truncated = omitted > 0 or has_truncated_source_text(state)
+        coverage['n_summary_truncated'] += int(summary_truncated)
+        coverage['n_classifier_truncated'] += int(state_truncated)
+        coverage['n_projection_truncated'] += int(summary_truncated or state_truncated)
+        coverage['n_source_messages'] += len(messages)
+        coverage['n_omitted_messages'] += omitted
+        coverage['source_chars'] += len(serialize_projection({'trace_status': trace.status, 'messages': messages}))
+        coverage['classifier_state_chars'] += state_chars
+        coverage['classifier_question_chars'] += question_chars
+        coverage['classifier_request_chars'] += request_chars
+        coverage['summary_input_chars'] += len(prompt)
     return coverage
 
 
 def describe_projection_coverage(coverage: dict[str, Any]) -> str:
-    """Explain budget omissions and total compression in one source-neutral sentence."""
-    messages = int(coverage['n_source_messages'])
-    omitted = int(coverage['n_omitted_messages'])
+    """Describe measured rendered character sizes without presenting estimates as tokenizer counts."""
     traces = int(coverage['n_traces'])
-    trace_phrase = 'trace exceeds' if traces == 1 else 'traces exceed'
-    percentage = 100 * omitted / messages if messages else 0
+    affected = int(coverage['n_projection_truncated'])
+    input_cap = int(coverage.get('trace_input_chars', effective_settings().trace_input_chars))
+    avg_summary = int(coverage.get('summary_input_chars', 0)) // max(traces, 1)
+    avg_classifier = int(coverage.get('classifier_state_chars', 0)) // max(traces, 1)
+    avg_classifier_questions = int(coverage.get('classifier_question_chars', 0)) // max(traces, 1)
+    avg_classifier_request = int(coverage.get('classifier_request_chars', 0)) // max(traces, 1)
+    detail = (
+        f'{int(coverage.get("n_omitted_messages", 0)):,} of {int(coverage.get("n_source_messages", 0)):,} '
+        'source messages were omitted from the Jev classifier state.'
+        if coverage.get('classifier_state_format') == 'jev'
+        else 'The non-Jev classifier receives a readable transcript shortened as needed to fit its questions.'
+    )
     return (
-        f'{int(coverage["n_projection_truncated"]):,} of {traces:,} {trace_phrase} the '
-        f'{MAX_TOKEN_BUDGET:,}-byte budget. {omitted:,} of {messages:,} whole messages omitted '
-        f'({percentage:.1f}%). Serialized source: {int(coverage["source_bytes"]):,} bytes → '
-        f'projected input: {int(coverage["projected_bytes"]):,} bytes.'
+        f'{affected:,} of {traces:,} traces hit a summary or classifier input cap of {input_cap:,} characters. '
+        f'Average rendered inputs: summary {avg_summary:,} characters; classifier request {avg_classifier_request:,} '
+        f'(state {avg_classifier:,}, questions {avg_classifier_questions:,}). {detail}'
     )
 
 
-def preview_snapshot(raw_path: str) -> dict[str, int]:
-    """Return the same projection counts the run will compute for a local file."""
+def snapshot_documents(snapshot: Snapshot) -> list[TraceDocument]:
+    """Every trace of a snapshot as a `TraceDocument`: its trace records first, then its ATIF documents."""
+    return [*(ensure_trace_document(trace) for trace in snapshot.traces), *snapshot.documents]
+
+
+def format_size(n_bytes: int) -> str:
+    """Render a byte count with one decimal in KB or MB."""
+    if n_bytes >= 1024 * 1024:
+        return f'{n_bytes / (1024 * 1024):.1f} MB'
+    return f'{n_bytes / 1024:.1f} KB'
+
+
+def describe_local_send(
+    *, n_traces: int, n_bytes: int, file_name: str, models: Mapping[str, str], preview: bool = False
+) -> str:
+    """State what a local-snapshot run sends to which models; `models` maps summary/classifier/embedding to ids.
+
+    `preview` words it as what a run would send, for output printed without starting one.
+    """
+    noun = 'trace' if n_traces == 1 else 'traces'
+    verb = 'A run would send' if preview else 'Sending'
+    return (
+        f'{verb} {n_traces:,} {noun} ({format_size(n_bytes)}) from {file_name} to models: '
+        f'summary {models["summary"]}, classifier {models["classifier"]}, embedding {models["embedding"]}.'
+    )
+
+
+def preview_snapshot(
+    raw_path: str,
+    *,
+    trace_input_chars: int | None = None,
+    classifier_model: str | None = None,
+    classifier_questions: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Return coverage from the same summary and classifier renderers used by a run."""
     path = Path(raw_path).expanduser()
     try:
         snapshot = Snapshot.model_validate_json(path.read_bytes())
-        return projection_coverage(snapshot.traces)
+        return projection_coverage(
+            snapshot_documents(snapshot),
+            trace_input_chars=trace_input_chars,
+            classifier_model=classifier_model,
+            classifier_questions=classifier_questions,
+        )
     except (OSError, KeyError, TypeError, ValueError) as error:
         raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
+
+
+def read_snapshot(path: Path) -> tuple[Snapshot, str]:
+    """Read and validate a local snapshot, returning it with the sha256 of its bytes."""
+    try:
+        raw = path.read_bytes()
+        snapshot = Snapshot.model_validate_json(raw)
+    except (OSError, ValueError) as error:
+        raise PopulationError(f'loading local trace snapshot {path} failed: {error}') from error
+    return snapshot, hashlib.sha256(raw).hexdigest()
 
 
 def _resolve_from_snapshot(pop: InsightsPopulation) -> ResolvedPopulation:
     """Read a complete local snapshot; this path makes no Orq or model calls."""
     assert pop.snapshot_path is not None  # noqa: S101 - guarded by the caller's dispatch
-    try:
-        raw = pop.snapshot_path.read_bytes()
-        snapshot = Snapshot.model_validate_json(raw)
-    except (OSError, ValueError) as error:
-        raise PopulationError(f'loading local trace snapshot {pop.snapshot_path} failed: {error}') from error
-    traces = [ensure_trace_document(trace) for trace in snapshot.traces]
+    snapshot, digest = read_snapshot(pop.snapshot_path)
+    traces = snapshot_documents(snapshot)
     return ResolvedPopulation(
         traces=traces,
         compiled=None,
         echo={
             'mode': 'snapshot',
             'snapshot_path': str(pop.snapshot_path),
-            'snapshot_sha256': hashlib.sha256(raw).hexdigest(),
+            'snapshot_sha256': digest,
             'limit': len(traces),
         },
         n_scanned=len(traces),
@@ -198,10 +311,8 @@ async def _load_traces(
             source.close()
         except Exception as close_error:  # noqa: BLE001 - cleanup must not mask the load result or error
             logger.warning('Insights population trace source cleanup failed: {}', close_error)
-    if target_trace_ids is not None and snapshot.capture_metadata.get('incomplete_reason'):
-        raise PopulationError(
-            f'reloading Finder export traces was incomplete: {snapshot.capture_metadata["incomplete_reason"]}'
-        )
+    if target_trace_ids is not None:
+        require_complete_targeted_load(snapshot, error_type=PopulationError, operation='reloading Finder export traces')
     documents = tuple(ensure_trace_document(trace) for trace in traces)
     try:
         ensure_unique_trace_ids(documents)
@@ -307,16 +418,12 @@ async def _resolve_from_export(pop: InsightsPopulation, *, orq: Orq) -> Resolved
         NumericFilters(**export.numeric.model_dump()), NumericFilters(**export.generated_numeric.model_dump())
     )
 
-    # Restrict the reload to the exported matches' timestamps. A rolling window
-    # or later arrivals must not push those pinned IDs past the source's limit.
     matched_ids = set(export.matched_trace_ids)
-    matched_times = [trace.timestamp for trace in export.traces if trace.trace_id in matched_ids]
     start, end = export.start, export.end
-    if matched_times:
-        first = min(matched_times) - timedelta(seconds=1)
-        last = max(matched_times) + timedelta(seconds=1)
-        start = max(start, first) if start is not None else first
-        end = min(end, last) if end is not None else last
+    if matched_ids and (start is None or end is None):
+        raise PopulationError(
+            'Finder export does not record its original time window; re-export the run before using it in Insights.'
+        )
 
     traces = (
         await _load_traces(
@@ -389,6 +496,9 @@ async def resolve_population(
     client: AsyncOpenAI | None,
     compiler_model: str,
     classifier_model: str,
+    trace_input_chars: int | None = None,
+    label_classifier_model: str | None = None,
+    classifier_questions: Sequence[dict[str, Any]] | Mapping[str, dict[str, Any]] | None = None,
 ) -> ResolvedPopulation:
     """Resolve `pop` into traces via a local file or the Orq-backed paths — see module docstring.
 
@@ -418,15 +528,36 @@ async def resolve_population(
         ensure_unique_trace_ids(resolved.traces)
     except ValueError as error:
         raise PopulationError(str(error)) from error
+    questions = (
+        dict(classifier_questions)
+        if isinstance(classifier_questions, Mapping)
+        else (
+            {f'question_{index}': question for index, question in enumerate(classifier_questions)}
+            if classifier_questions is not None
+            else None
+        )
+    )
+    if questions is not None and resolved.compiled:
+        dimension_count = len(resolved.compiled)
+        for index, dimension in enumerate(resolved.compiled):
+            key = MATCH_KEY if dimension_count == 1 else f'{MATCH_KEY[:-2]}_{index}__'
+            questions[key] = dimension.task.model_dump(mode='json')
     try:
-        resolved.echo.update(projection_coverage(resolved.traces))
+        resolved.echo.update(
+            projection_coverage(
+                resolved.traces,
+                trace_input_chars=trace_input_chars,
+                classifier_model=label_classifier_model,
+                classifier_questions=questions,
+            )
+        )
     except (KeyError, TypeError, ValueError) as error:
         raise PopulationError(f'projecting loaded traces failed: {error}') from error
     truncated = resolved.echo['n_projection_truncated']
     if truncated:
         trace_noun = 'trace' if len(resolved.traces) == 1 else 'traces'
         logger.warning(
-            'Insights {} population has {} of {} {} exceeding the projection budget',
+            'Insights {} population has {} of {} {} with shortened summary or classifier input',
             resolved.echo['mode'],
             truncated,
             len(resolved.traces),

@@ -63,6 +63,8 @@ from evaluatorq.trace_finder import (
 from evaluatorq.trace_finder.export import export_filename
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Sequence
+
     from evaluatorq.trace_finder import FacetCatalogue
 from evaluatorq.trace_finder.columns import COLUMNS, resolve_columns
 from evaluatorq.trace_finder.explorer import QUICK_VIEWS, ExplorerView, matches_first_view
@@ -630,6 +632,19 @@ def _range_values(form: Any) -> tuple[str, str]:
     return values[0], values[1]
 
 
+def browser_offset_zone(value: str | None) -> timezone:
+    """The fixed zone for a browser `getTimezoneOffset()` value (minutes west of UTC); raises `ValueError` if unusable."""
+    try:
+        return timezone(timedelta(minutes=-int(value or '')))
+    except OverflowError as exc:
+        raise ValueError(f'{value!r} is not a usable timezone offset') from exc
+
+
+def local_to_utc(value: str, zone: timezone) -> datetime:
+    """Read an ISO local timestamp in *zone* and return it in UTC; raises `ValueError` on a malformed timestamp."""
+    return datetime.fromisoformat(value).replace(tzinfo=zone).astimezone(timezone.utc)
+
+
 def parse_range(
     from_value: str,
     to_value: str,
@@ -641,8 +656,8 @@ def parse_range(
 
     def zone_for(value: str | None) -> timezone:
         try:
-            return timezone(timedelta(minutes=-int(value or '')))
-        except (OverflowError, ValueError):
+            return browser_offset_zone(value)
+        except ValueError:
             logger.warning('Explorer time range has no usable browser offset {!r}; reading it as UTC', value)
             return timezone.utc
 
@@ -653,8 +668,8 @@ def parse_range(
     try:
         if 'T' not in from_value or 'T' not in to_value:
             raise ValueError('A time is required at each end.')
-        start = datetime.fromisoformat(from_value).replace(tzinfo=start_zone).astimezone(timezone.utc)
-        end = datetime.fromisoformat(to_value).replace(tzinfo=end_zone).astimezone(timezone.utc)
+        start = local_to_utc(from_value, start_zone)
+        end = local_to_utc(to_value, end_zone)
     except ValueError as exc:
         raise ValueError('From and To must be full dates and times.') from exc
     if start >= end:
@@ -811,6 +826,29 @@ def _compiled_from_form(current: CompiledQuery, form: Any, *, prefix: str) -> Co
 
 def _html(content: str, *, status_code: int = 200) -> Response:
     return Response(content, status_code=status_code, media_type='text/html')
+
+
+async def span_tree_fragment(
+    trace_id: str,
+    *,
+    load_spans: Callable[[str], Awaitable[Sequence[Any]]],
+    load_first_error_message: Callable[[str, Sequence[Any]], Awaitable[str | None]],
+) -> str:
+    try:
+        spans = await load_spans(trace_id)
+    except Exception as error:  # noqa: BLE001 - the conversation drawer remains usable if span lookup fails
+        logger.warning('Span lookup failed for trace {}: {}', trace_id, error)
+        return '<p class="finder-empty" role="status">Could not load spans. Try again.</p>'
+    try:
+        error_message = await load_first_error_message(trace_id, spans)
+    except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
+        logger.warning('Span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
+        error_message = None
+    from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
+    from evaluatorq.dashboard.trace_finder.views import span_tree
+
+    with cli_slug_render_scope():
+        return await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
 
 
 def register_finder_routes(app: Any) -> None:  # noqa: C901
@@ -1394,22 +1432,13 @@ def register_finder_routes(app: Any) -> None:  # noqa: C901
             return _html('<p class="finder-empty">Span loading is unavailable.</p>', status_code=404)
         if await store.explorer.row(trace_id) is None:
             return _html('<p class="finder-empty">This trace is not in the loaded table.</p>', status_code=404)
-        try:
-            spans = await store.explorer.spans(trace_id)
-        except Exception as error:  # noqa: BLE001 - the conversation drawer remains usable if span lookup fails
-            logger.warning('Find span lookup failed for trace {}: {}', trace_id, error)
-            return _html('<p class="finder-empty" role="status">Could not load spans. Try again.</p>', status_code=200)
-        try:
-            error_message = await store.explorer.first_error_message(trace_id, spans)
-        except Exception as error:  # noqa: BLE001 - raw status text is optional and must not block summaries
-            logger.warning('Find span status lookup failed for trace {}: {}', trace_id, type(error).__name__)
-            error_message = None
-        from evaluatorq.dashboard.orq_workspace import cli_slug_render_scope
-        from evaluatorq.dashboard.trace_finder.views import span_tree
-
-        with cli_slug_render_scope():
-            html = await asyncio.to_thread(span_tree, trace_id, spans, first_error_message=error_message)
-        return _html(html)
+        return _html(
+            await span_tree_fragment(
+                trace_id,
+                load_spans=store.explorer.spans,
+                load_first_error_message=store.explorer.first_error_message,
+            )
+        )
 
     @app.get('/find/trace/{trace_id:path}')
     async def find_trace(trace_id: str, req: Request) -> Response:

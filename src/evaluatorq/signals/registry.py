@@ -145,13 +145,7 @@ def _require_source_tool_coverage(computed: SignalResult, ctx: SignalContext) ->
     coverage = pre.source_tool_coverage(ctx)
     pcs = [*computed.preconditions, coverage]
     if coverage.met is False:
-        return SignalResult(
-            name=computed.name,
-            group=computed.group,
-            approximate=computed.approximate,
-            no_basis=coverage.detail,
-            preconditions=pcs,
-        )
+        return computed.model_copy(update={'value': None, 'no_basis': coverage.detail, 'preconditions': pcs})
     return computed.model_copy(update={'preconditions': pcs})
 
 
@@ -167,10 +161,4 @@ def _inherit_source_tool_coverage(computed: SignalResult, name: str, prior: dict
     detail = f'tool-dependent metrics unavailable: {", ".join(unavailable)}'
     coverage = Precondition(name='source tool activity represented', met=False, detail=detail)
     pcs = [*computed.preconditions, coverage]
-    return SignalResult(
-        name=computed.name,
-        group=computed.group,
-        approximate=computed.approximate,
-        no_basis=detail,
-        preconditions=pcs,
-    )
+    return computed.model_copy(update={'value': None, 'no_basis': detail, 'preconditions': pcs})

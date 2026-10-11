@@ -16,7 +16,14 @@ from loguru import logger
 from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.run_manifest import fail_if_running
 from evaluatorq.contracts import RunManifest
-from evaluatorq.dashboard.auth import auth_identity, build_auth_clients, resolve_dashboard_auth
+from evaluatorq.dashboard.auth import (
+    account_identity,
+    account_label,
+    auth_identity,
+    build_auth_clients,
+    resolve_dashboard_auth,
+    verified_account_identity,
+)
 from evaluatorq.dashboard.insights_launch import (
     _MANIFEST_ENV,
     _SNAPSHOT_ENV,
@@ -31,8 +38,8 @@ from evaluatorq.dashboard.insights_launch import (
 )
 from evaluatorq.dashboard.insights_uploads import (
     MAX_INSIGHTS_UPLOAD_BYTES,
-    cleanup_uploaded_source,
-    is_uploaded_source,
+    cleanup_session_upload,
+    retain_uploaded_source,
 )
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.pipeline import insights
@@ -381,6 +388,7 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
     if payload.auth_method is not None and settings.orq_auth_method != payload.auth_method:
         raise ValueError('Dashboard authentication changed after this run started. Start the run again.')
     auth = resolve_dashboard_auth(settings)
+    account = await asyncio.to_thread(account_identity, auth)
     if (
         payload.auth_identity is not None
         and await asyncio.to_thread(auth_identity, auth, settings) != payload.auth_identity
@@ -388,16 +396,38 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
         raise ValueError('Dashboard authentication or scope changed after this run started. Start the run again.')
     orq, llm = build_auth_clients(auth, workspace=settings.orq_workspace, project=settings.orq_project_id)
     try:
+        verified_account = None
+        if spec.source != 'snapshot':
+            try:
+                verified_account = await verified_account_identity(auth, orq)
+            except Exception as exc:  # noqa: BLE001 — run remains launchable, but retains legacy credential identity
+                logger.warning(
+                    'Could not verify the Orq account for this Insights run; retaining legacy credential identity: {}',
+                    exc,
+                )
+        orq_scope = (
+            {
+                'account': verified_account or account,
+                'account_version': '2' if verified_account else None,
+                'account_label': account_label(auth),
+                'workspace': settings.orq_workspace,
+                'project': settings.orq_project_id,
+            }
+            if spec.source != 'snapshot'
+            else None
+        )
         run = await insights(
             population,
             labels=spec.label_specs(),
             dimensions=spec.dimension_names(),
             parallelism=spec.parallelism,
+            trace_input_chars=spec.trace_input_chars,
             coding_labels=spec.coding_labels,
             run_name=payload.run_name,
             runs_dir=payload.runs_dir,
             **spec.model_overrides(),
             _run_id=payload.run_id,
+            _orq_scope=orq_scope,
             llm_client=llm,
             orq_client=orq,
             **extra,
@@ -410,13 +440,16 @@ async def _run_with_selected_auth(payload: InsightsLaunchPayload, population: In
             await close()
 
 
-def _cleanup_consumed_upload(runs_dir: Path, source: str, finder_export: str, snapshot_path: str) -> None:
-    """Delete only a route-owned source artifact after its pipeline attempt."""
+def _finish_consumed_upload(runs_dir: Path, source: str, finder_export: str, snapshot_path: str) -> None:
+    """Remove ephemeral session copies and retain reusable uploads after either run outcome."""
     source_value = finder_export if source == 'finder' else snapshot_path
     if source_value:
-        source_path = Path(source_value)
-        if is_uploaded_source(runs_dir, source_path):
-            cleanup_uploaded_source(runs_dir, source_path)
+        try:
+            path = Path(source_value)
+            if not cleanup_session_upload(runs_dir=runs_dir, path=path):
+                retain_uploaded_source(runs_dir=runs_dir, path=path)
+        except (OSError, ValueError, RuntimeError):
+            logger.warning('Could not finish cleanup or retention of an Insights uploaded source.')
 
 
 def main() -> int:
@@ -472,8 +505,11 @@ def main() -> int:
         if payload is not None and payload.spec.source == 'finder':
             _cleanup_finder_reference(payload.runs_dir, payload.run_id)
         if payload is not None:
-            _cleanup_consumed_upload(
-                payload.runs_dir, payload.spec.source, payload.spec.finder_export, payload.spec.snapshot_path
+            _finish_consumed_upload(
+                runs_dir=payload.runs_dir,
+                source=payload.spec.source,
+                finder_export=payload.spec.finder_export,
+                snapshot_path=payload.spec.snapshot_path,
             )
         elif payload is None and manifest_env:
             _cleanup_finder_reference_for_manifest(Path(manifest_env))

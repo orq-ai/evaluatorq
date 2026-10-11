@@ -73,15 +73,17 @@ def _discover_cli_slug(profile: str | None, fingerprint: str | None, *, use_cli_
 
 
 def resolve_slug() -> str | None:
-    """Workspace slug from the environment or active Orq CLI credential."""
+    """Workspace slug from the selected OAuth scope, environment, or active CLI credential."""
+    from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
+
+    settings = load_settings()
+    if settings.orq_auth_method == 'cli_oauth' and settings.orq_workspace:
+        return settings.orq_workspace
     env = os.environ.get('ORQ_WORKSPACE') or os.environ.get('ORQ_WORKSPACE_SLUG')
     if env and env.strip():
         return env.strip()
     if not shutil.which('orq'):
         return None
-    from evaluatorq.trace_finder.settings import credential_fingerprint, load_settings
-
-    settings = load_settings()
     if settings.orq_auth_method == 'cli_profile' and settings.orq_profile:
         return _cli_slug(settings.orq_profile, settings.orq_credential_fingerprint)
     api_key = os.environ.get('ORQ_API_KEY', '').strip()
@@ -95,9 +97,15 @@ def resolve_base_url() -> str:
     from evaluatorq.trace_finder.settings import load_settings
 
     saved = load_settings()
-    host = saved.orq_profile_host if saved.orq_profile else None
+    host = (
+        saved.orq_oauth_server
+        if saved.orq_auth_method == 'cli_oauth'
+        else saved.orq_profile_host
+        if saved.orq_profile
+        else None
+    )
     for source, candidate in (
-        ('saved profile', host),
+        ('selected credential', host),
         ('ORQ_BASE_URL', os.environ.get('ORQ_BASE_URL')),
         ('default', DEFAULT_BASE_URL),
     ):

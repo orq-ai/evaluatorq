@@ -13,10 +13,12 @@ Every subcommand group is registered at startup regardless of which extras are i
 !!! note "The UI — `eq dashboard`"
     The way to browse saved runs is the multi-run FastHTML dashboard, `eq dashboard`. The canonical invocation scans a run directory — `eq dashboard` browses both default stores (red team + simulation), and `eq dashboard .evaluatorq/sim-runs` scopes to simulation. Passing a single JSON report file is an optional direct deep-link. See [Dashboard](../dashboard.md) and [Simulation](simulation.md).
 
-Two command groups have their own pages:
+`redteam` and `sim` have their own pages; `insights` and `sessions` are documented in the Trace Insights guide:
 
 - **[Red Teaming](redteam.md)** — adversarial testing (`eq redteam`).
 - **[Simulation](simulation.md)** — multi-turn user simulation (`eq sim`; `sim` is shorthand).
+- **[`eq insights`](../insights.md#run-from-the-cli)** — cluster and label a population of traces.
+- **[`eq agent-sessions`](../insights.md#local-coding-agent-sessions)** — inspect local Claude Code, Claude desktop, Codex and omp sessions by date, project directory or text, and export them as a snapshot. Use `eq insights --sessions` to analyze them directly.
 
 ## Model flags
 

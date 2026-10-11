@@ -38,6 +38,7 @@ _PROVIDER_PREFIXES: tuple[tuple[str, str], ...] = (
 )
 _RESPONSES_TOOLS_KEY = 'evaluatorq.responses_tools'
 _RESPONSES_OUTPUT_ITEMS_KEY = 'evaluatorq.responses_output_items'
+_RESPONSES_RESULT_ITEMS_KEY = 'evaluatorq.responses_result_items'
 
 
 @dataclass(frozen=True)
@@ -289,9 +290,13 @@ def has_unmapped_tool_activity(walked: list[WalkedStep]) -> list[str]:
     """Describe Responses tool calls kept outside ATIF `tool_calls` because their semantics are unsupported."""
     activity: list[str] = []
     for entry in walked:
-        items = (entry.step.extra or {}).get(_RESPONSES_OUTPUT_ITEMS_KEY)
-        if not isinstance(items, list):
-            continue
+        extra = entry.step.extra or {}
+        items = [
+            item
+            for key in (_RESPONSES_OUTPUT_ITEMS_KEY, _RESPONSES_RESULT_ITEMS_KEY)
+            if isinstance((sidecar := extra.get(key)), list)
+            for item in sidecar
+        ]
         represented_call_ids = {
             call.tool_call_id for call in entry.step.tool_calls or [] if isinstance(call.tool_call_id, str)
         }

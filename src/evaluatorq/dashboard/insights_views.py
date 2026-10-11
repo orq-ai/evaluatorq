@@ -12,6 +12,7 @@ from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.palette import COLORS, ORQ_SCALE_GOOD_BAD, ORQ_SCALE_HEAT, QUALITATIVE
 from evaluatorq.common.reports.vega import render_embed
 from evaluatorq.common.structured_output import sum_structured_usage
+from evaluatorq.dashboard.insights_trace_source import conversation_unavailable_reason
 from evaluatorq.dashboard.shell import page
 from evaluatorq.dashboard.trace_links import trace_link_button, trace_span_url
 from evaluatorq.dashboard.ui_components import component_assets, script_asset, stylesheet_asset
@@ -20,7 +21,7 @@ from evaluatorq.insights.population import describe_projection_coverage
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from typing import Any
+    from typing import Any, Literal
 
     from evaluatorq.contracts import RunManifest
     from evaluatorq.insights.models import Cluster, InsightsRun, TraceInsight
@@ -247,7 +248,7 @@ def header(run: InsightsRun) -> str:
     facets = facets if isinstance(facets, dict) else {}
     numeric = population.get('numeric', {})
     numeric = numeric if isinstance(numeric, dict) else {}
-    chips = [_chip('source', 'local snapshot' if population.get('mode') == 'snapshot' else None), _chip('query', query)]
+    chips = [_chip('source', 'trace file' if population.get('mode') == 'snapshot' else None), _chip('query', query)]
     for name, values in facets.items():
         if isinstance(values, (list, tuple, set, frozenset)):
             chips.extend(_chip(name, value) for value in values)
@@ -317,7 +318,7 @@ def failures(run: InsightsRun) -> str:
         if not (
             'n_projection_truncated' in run.population
             and (
-                warning.startswith('Projection budget: ')
+                warning.startswith(('Input character cap: ', 'Projection budget: '))
                 or (
                     warning.endswith('whole messages were omitted from classification and summaries.')
                     and ' exceeded the model projection budget; ' in warning
@@ -332,19 +333,28 @@ def failures(run: InsightsRun) -> str:
 
 
 def projection_notice(coverage: dict[str, Any]) -> str:
-    """Show budget omissions separately from all source-to-projection compression."""
-    traces = int(coverage.get('n_traces', coverage.get('n_scanned', 0)))
-    trimmed = int(coverage.get('n_projection_truncated', 0))
-    if 'n_source_messages' not in coverage:
+    """Show character-based model input coverage for a run or preview."""
+    if 'classifier_state_chars' not in coverage or 'source_chars' not in coverage:
         return (
-            '<section class="insights-projection" role="status"><b>Model input projection</b>'
-            f'<p>{trimmed:,} of {traces:,} traces exceeded the 50,000-byte budget. '
-            'Whole-message counts were not saved for this earlier run.</p></section>'
+            '<section class="insights-projection" role="status"><b>Model input coverage</b>'
+            '<p>Input character coverage was not recorded for this earlier run.</p></section>'
+        )
+    reserve_note = ''
+    if coverage.get('classifier_question_reserve') == 'not_available':
+        reserve_note = '<p>The preview did not include selected classifier questions; the final request may reserve more of the input cap for them.</p>'
+    elif coverage.get('classifier_question_reserve') == 'applied':
+        reserve_note = '<p>Exact serialized selected questions share the configured input cap with classifier state; Jev also applies its model-specific state and question ceilings.</p>'
+    if coverage.get('classifier_state_format') == 'jev':
+        excerpt_note = '<p>Text inside kept messages may also be shortened. Tool inputs and results retain bounded excerpts; source traces are not changed.</p>'
+    else:
+        excerpt_note = (
+            '<p>The full readable transcript may be shortened to fit the cap; source traces are not changed.</p>'
         )
     return (
-        '<section class="insights-projection" role="status"><b>Model input projection</b>'
+        '<section class="insights-projection" role="status"><b>Model input coverage</b>'
         f'<p>{esc(describe_projection_coverage(coverage))}</p>'
-        '<p>Text inside kept messages may also be shortened. Tool results use 1,024-byte excerpts; source traces are not changed.</p>'
+        f'{reserve_note}'
+        f'{excerpt_note}'
         '</section>'
     )
 
@@ -430,9 +440,10 @@ def _find_cluster(run: InsightsRun, cluster_id: str) -> tuple[str, Cluster] | No
     return None
 
 
-def _trace_href(run: InsightsRun, trace: TraceInsight) -> str:
+def _trace_href(run: InsightsRun, trace: TraceInsight, *, view: Literal['analysis', 'trace'] = 'analysis') -> str:
     locator = urlencode({'trace_id': trace.trace_id, 'span_id': trace.span_id or ''})
-    return f'/insights/{quote(run.run_id, safe="")}/trace?{locator}'
+    suffix = '&view=trace' if view == 'trace' else ''
+    return f'/insights/{quote(run.run_id, safe="")}/trace?{locator}{suffix}'
 
 
 def _trace_id_link(run: InsightsRun, trace: TraceInsight) -> str:
@@ -581,8 +592,8 @@ def _tool_counts(title: str, counts: dict[str, int], empty: str) -> str:
     return f'<h4>{esc(title)}</h4>{body}'
 
 
-def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
-    """Show the saved analysis for one trace, including traces from a local snapshot."""
+def trace_detail_page(run: InsightsRun, trace: TraceInsight, *, view: Literal['analysis', 'trace'] = 'analysis') -> str:
+    """Show the saved analysis for one trace, or its source conversation, including traces from a local snapshot."""
 
     def field(name: str, value: str | None) -> str:
         return f'<dt>{esc(name)}</dt><dd>{esc(value)}</dd>' if value else ''
@@ -640,24 +651,61 @@ def trace_detail_page(run: InsightsRun, trace: TraceInsight) -> str:
     signal_html = (
         f'<div data-saved-signals="{esc(json.dumps(signal_options, ensure_ascii=False, separators=(",", ":")))}"></div>'
     )
-    body = (
-        '<div class="insights-layout"><div class="insights-main insights-trace-detail">'
+    header = (
         '<div class="insights-detail-kicker">Trace analysis</div>'
         f'<h2><code>{esc(trace.trace_id)}</code></h2>'
         f'<p class="insights-muted">{esc(trace.timestamp.isoformat(timespec="minutes") if trace.timestamp else "Time unavailable")}'
         f'{" · span " + esc(trace.span_id) if trace.span_id else ""}'
         f'{" · " + esc(trace.agent_name) if trace.agent_name else ""}'
         f'{" · " + esc(trace.project) if trace.project else ""}</p>{orq_link}'
-        f'{signal_html}'
-        '<section><h3>Summary</h3>'
-        f'<p>{esc(summary.summary) if summary is not None else "No summary was saved for this trace."}</p>'
-        f'{context_html}</section>'
-        f'<section><h3>Labels</h3>{labels_html}</section>'
-        f'<section><h3>Dimensions</h3>{dimensions_html}</section>'
-        f'<section><h3>Tool use</h3>{tools_html}</section>'
-        f'{errors_html}'
-        '</div></div>'
     )
+
+    unavailable_reason = conversation_unavailable_reason(run)
+    if unavailable_reason is not None:
+        view = 'analysis'
+
+    def tab_link(name: Literal['analysis', 'trace'], label: str) -> str:
+        current = ' aria-current="page"' if view == name else ''
+        active = ' active' if view == name else ''
+        return f'<a class="insights-tab{active}" href="{esc(_trace_href(run, trace, view=name))}"{current}>{label}</a>'
+
+    trace_tab = (
+        tab_link('trace', 'Trace')
+        if unavailable_reason is None
+        else (
+            f'<span class="insights-tab disabled" aria-disabled="true" title="{esc(unavailable_reason)}">Trace</span>'
+            f'<span class="insights-muted insights-trace-tab-reason">{esc(unavailable_reason)}</span>'
+        )
+    )
+    tab_nav = (
+        f'<nav class="insights-trace-tabs" aria-label="Trace views">{tab_link("analysis", "Analysis")}{trace_tab}</nav>'
+    )
+    if view == 'trace':
+        conversation_url = (
+            f'/insights/{quote(run.run_id, safe="")}/trace-conversation?'
+            f'{urlencode({"trace_id": trace.trace_id, "span_id": trace.span_id or ""})}'
+        )
+        show_send_error = (
+            'this.innerHTML = \'<p class="finder-empty" role="status">'
+            "Could not load the conversation. Reload to try again.</p>'"
+        )
+        content = (
+            f'<div class="fd-traces insights-trace-view" hx-get="{esc(conversation_url)}" hx-trigger="load" '
+            f'hx-swap="outerHTML" hx-on::send-error="{esc(show_send_error)}">'
+            '<p class="finder-empty" role="status">Loading conversation…</p></div>'
+        )
+    else:
+        content = (
+            f'{signal_html}'
+            '<section><h3>Summary</h3>'
+            f'<p>{esc(summary.summary) if summary is not None else "No summary was saved for this trace."}</p>'
+            f'{context_html}</section>'
+            f'<section><h3>Labels</h3>{labels_html}</section>'
+            f'<section><h3>Dimensions</h3>{dimensions_html}</section>'
+            f'<section><h3>Tool use</h3>{tools_html}</section>'
+            f'{errors_html}'
+        )
+    body = f'<div class="insights-layout"><div class="insights-main insights-trace-detail">{header}{tab_nav}{content}</div></div>'
     back = f'<a class="report-back" href="/insights/{quote(run.run_id, safe="")}/tab/traces">← Traces in this run</a>'
     return page(
         'Insights trace',

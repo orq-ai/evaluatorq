@@ -30,6 +30,7 @@ from .filter_selector import NO_FILTER_LABEL, FilterSelectionError, select_filte
 from .models import (
     FACET_NAMES,
     MAX_DIMENSIONS,
+    MAX_INPUT_CHAR_BUDGET,
     CompiledQuery,
     DimensionAnswer,
     FacetCatalogue,
@@ -49,11 +50,12 @@ from .models import (
     TraceProjection,
     TraceRecord,
     ValueSelection,
+    selection_rule_text,
     validate_compiled_query,
 )
 from .orq_source import OrqTraceSource, build_oql
 from .pipeline import build_run_store
-from .projection import MAX_TOKEN_BUDGET, OMISSION_MARKER, estimate_tokens, project_trace, serialize_projection
+from .projection import estimate_tokens, project_trace, serialize_projection
 from .rows import TraceRow
 from .run_store import RunStore
 from .settings import (
@@ -68,9 +70,8 @@ from .settings import (
 __all__ = [
     'FACET_NAMES',
     'MAX_DIMENSIONS',
-    'MAX_TOKEN_BUDGET',
+    'MAX_INPUT_CHAR_BUDGET',
     'NO_FILTER_LABEL',
-    'OMISSION_MARKER',
     'SETTINGS_PATH_ENV',
     'CompileError',
     'CompiledPlan',
@@ -128,6 +129,7 @@ __all__ = [
     'run_classifier',
     'save_settings',
     'select_filters',
+    'selection_rule_text',
     'serialize_projection',
     'settings_path',
     'validate_compiled_query',

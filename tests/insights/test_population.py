@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.common.trace_document import TraceDocument
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document
 from evaluatorq.insights import population as population_module
 from evaluatorq.insights.models import InsightsPopulation
 from evaluatorq.insights.population import PopulationError, resolve_population
@@ -37,13 +38,13 @@ from evaluatorq.trace_finder.models import (
 )
 
 
-def make_trace(trace_id: str) -> TraceRecord:
+def make_trace(trace_id: str, *, span_id: str | None = None, content: str = 'hello') -> TraceRecord:
     return TraceRecord(
         schema_version=1,
         trace_id=trace_id,
-        span_id=f'span-{trace_id}',
+        span_id=span_id or f'span-{trace_id}',
         timestamp=datetime(2026, 9, 1, tzinfo=timezone.utc),
-        messages=({'role': 'user', 'content': 'hello'},),
+        messages=({'role': 'user', 'content': content},),
         project='default',
         model='gpt-5',
         provider='openai',
@@ -55,6 +56,76 @@ def make_trace(trace_id: str) -> TraceRecord:
 
 def _client() -> Any:
     return object()
+
+
+def make_document(trace_id: str) -> TraceDocument:
+    """A session-style ATIF document that is not a `TraceRecord`."""
+    return ensure_trace_document(make_trace(trace_id))
+
+
+@pytest.mark.asyncio
+async def test_local_snapshot_resolves_records_and_session_documents(tmp_path: Path) -> None:
+    path = tmp_path / 'traces.json'
+    path.write_text(
+        Snapshot(traces=(make_trace('record-1'),), documents=(make_document('session-1'),)).model_dump_json(),
+        encoding='utf-8',
+    )
+    resolved = await resolve_population(
+        InsightsPopulation.from_snapshot(path),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+    )
+    assert [trace.metadata.trace_id for trace in resolved.traces] == ['record-1', 'session-1']
+    assert resolved.echo['mode'] == 'snapshot'
+    assert resolved.echo['snapshot_sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert resolved.n_scanned == 2
+
+
+@pytest.mark.parametrize('classifier_model', ['openai/gpt-6-luna', 'typesafe/jev-latest'])
+def test_preview_snapshot_counts_documents_and_uses_selected_renderers(
+    tmp_path: Path, classifier_model: str
+) -> None:
+    path = tmp_path / 'traces.json'
+    document = ensure_trace_document(
+        make_trace('session-1').model_copy(
+            update={'messages': ({'role': 'user', 'content': 'session request ' * 10_000},)}
+        )
+    )
+    snapshot = Snapshot(traces=(make_trace('record-1'),), documents=(document,))
+    path.write_text(snapshot.model_dump_json(), encoding='utf-8')
+    questions = {'label': {'kind': 'noul', 'instructions': 'q' * 3_000}}
+    options: dict[str, Any] = {
+        'trace_input_chars': 10_000,
+        'classifier_model': classifier_model,
+        'classifier_questions': questions,
+    }
+
+    coverage = population_module.preview_snapshot(str(path), **options)
+
+    assert coverage == population_module.projection_coverage(
+        population_module.snapshot_documents(snapshot), **options
+    )
+    assert coverage['n_traces'] == 2
+    assert coverage['classifier_question_reserve'] == 'applied'
+    assert coverage['n_classifier_truncated'] == 1
+    assert coverage['classifier_request_chars'] <= 2 * options['trace_input_chars']
+
+
+def test_describe_local_send_names_count_size_file_and_models() -> None:
+    text = population_module.describe_local_send(
+        n_traces=3,
+        n_bytes=1536,
+        file_name='s.json',
+        models={'summary': 'a/s', 'classifier': 'a/c', 'embedding': 'a/e'},
+    )
+    assert text == 'Sending 3 traces (1.5 KB) from s.json to models: summary a/s, classifier a/c, embedding a/e.'
+    big = population_module.describe_local_send(
+        n_traces=1, n_bytes=3 * 1024 * 1024, file_name='s.json', models={'summary': 'a', 'classifier': 'b', 'embedding': 'c'}
+    )
+    assert '(3.0 MB)' in big
+
 
 
 def _orq() -> Any:
@@ -179,8 +250,9 @@ async def test_local_snapshot_uses_messages_without_orq(monkeypatch: pytest.Monk
 @pytest.mark.asyncio
 async def test_local_snapshot_reports_truncated_projection(tmp_path: Path) -> None:
     path = tmp_path / 'traces.json'
+    long_body = 'long trace body with stable context. ' * 10_000
     long_trace = make_trace('long').model_copy(
-        update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+        update={'messages': ({'role': 'user', 'content': long_body}, {'role': 'assistant', 'content': long_body}, {'role': 'user', 'content': long_body})}
     )
     path.write_text(Snapshot(traces=(long_trace,)).model_dump_json(), encoding='utf-8')
 
@@ -190,25 +262,32 @@ async def test_local_snapshot_reports_truncated_projection(tmp_path: Path) -> No
         client=_client(),
         compiler_model='compiler',
         classifier_model='classifier',
+        label_classifier_model='typesafe/jev-latest',
     )
 
     assert resolved.echo['n_projection_truncated'] == 1
-    assert resolved.echo['n_source_messages'] == 2
+    assert resolved.echo['n_source_messages'] == 3
     assert resolved.echo['n_omitted_messages'] == 1
-    assert resolved.echo['source_bytes'] > resolved.echo['projected_bytes']
+    assert resolved.echo['source_chars'] > resolved.echo['classifier_state_chars']
 
 
 @pytest.mark.asyncio
 async def test_live_population_reports_the_same_projection_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+    long_body = 'long trace body with stable context. ' * 10_000
     FakeSource.snapshot = Snapshot(traces=(
         make_trace('long').model_copy(
-            update={'messages': ({'role': 'user', 'content': 'a' * 60_000}, {'role': 'assistant', 'content': 'done'})}
+            update={'messages': ({'role': 'user', 'content': long_body}, {'role': 'assistant', 'content': long_body}, {'role': 'user', 'content': long_body})}
         ),
     ))
 
     resolved = await resolve_population(
-        InsightsPopulation(), orq=_orq(), client=_client(), compiler_model='compiler', classifier_model='classifier'
+        InsightsPopulation(),
+        orq=_orq(),
+        client=_client(),
+        compiler_model='compiler',
+        classifier_model='classifier',
+        label_classifier_model='typesafe/jev-latest',
     )
 
     assert resolved.echo['mode'] == 'filter'
@@ -216,6 +295,104 @@ async def test_live_population_reports_the_same_projection_coverage(monkeypatch:
     assert resolved.echo['n_omitted_messages'] == 1
 
 
+
+
+def test_projection_coverage_uses_the_actual_non_jev_insights_classifier_state() -> None:
+    from evaluatorq.insights.labeling import prepare_classifier_state
+
+    trace = make_trace('input').model_copy(
+        update={
+            'messages': (
+                {'role': 'user', 'content': 'REQUEST-START'},
+                {'role': 'assistant', 'tool_calls': [{'id': 'call-1', 'function': {'name': 'lookup', 'arguments': '{}'}}]},
+                {'role': 'tool', 'tool_call_id': 'call-1', 'content': 'FULL-TOOL-RESULT ' + 'r' * 8_000},
+            )
+        }
+    )
+    cap = 20_000
+
+    coverage = population_module.projection_coverage(
+        [trace], trace_input_chars=cap, classifier_model='openai/gpt-6-luna'
+    )
+    state = prepare_classifier_state(trace, model='openai/gpt-6-luna', char_cap=cap)
+
+    assert isinstance(state, str)
+    assert 'REQUEST-START' in state
+    assert 'FULL-TOOL-RESULT' not in state  # tool results are left out by default
+    assert coverage['classifier_state_chars'] == len(state)
+    assert coverage['classifier_state_format'] == 'text'
+    assert coverage['classifier_question_reserve'] == 'not_available'
+
+
+@pytest.mark.parametrize('classifier_model', ['openai/gpt-6-luna', 'typesafe/jev-latest'])
+def test_projection_coverage_does_not_mistake_literal_markers_for_truncation(classifier_model: str) -> None:
+    from evaluatorq.common.model_input import serialized_chars, serialized_question_chars
+
+    trace = make_trace('literal-marker').model_copy(
+        update={'messages': ({'role': 'user', 'content': 'Literal [... 123 chars left out ...] text.'},)}
+    )
+    cap = 20_000
+    questions = {
+        'marker_check': {
+            'kind': 'noul',
+            'instructions': 'Classify the request.',
+            'criteria': None,
+            'state': {'must_not_count': True},
+            'noul_threshold': 0.5,
+        }
+    }
+
+    coverage = population_module.projection_coverage(
+        [trace],
+        trace_input_chars=cap,
+        classifier_model=classifier_model,
+        classifier_questions=questions,
+    )
+
+    assert coverage['n_summary_truncated'] == 0
+    assert coverage['n_classifier_truncated'] == 0
+    assert coverage['n_projection_truncated'] == 0
+    assert coverage['classifier_request_chars'] == coverage['classifier_state_chars'] + serialized_question_chars(
+        questions
+    )
+    assert coverage['classifier_request_chars'] <= cap
+
+
+def test_projection_coverage_applies_available_jev_question_reserve() -> None:
+    from evaluatorq.common.model_input import (
+        JEV_STATE_ALL_QUESTIONS_CHARS,
+        JEV_STATE_CHARS,
+        JEV_STATE_QUESTION_CHARS,
+        fit_classifier_input,
+        serialized_chars,
+        serialized_question_chars,
+    )
+    from evaluatorq.insights.labeling import prepare_classifier_state
+
+    trace = make_trace('question-reserve').model_copy(
+        update={'messages': ({'role': 'user', 'content': 'request ' + 'x' * 100_000},)}
+    )
+    questions = {'label': {'kind': 'noul', 'instructions': 'q' * 20_000}}
+
+    coverage = population_module.projection_coverage(
+        [trace], trace_input_chars=500_000, classifier_model='typesafe/jev-latest', classifier_questions=questions
+    )
+    state = fit_classifier_input(
+        prepare_classifier_state(trace, model='typesafe/jev-latest', char_cap=500_000),
+        model='typesafe/jev-latest',
+        questions=questions,
+        global_char_cap=500_000,
+    )
+
+    state_chars = serialized_chars(state)
+    question_chars = serialized_question_chars(questions)
+    longest_question = max(serialized_chars(question) for question in questions.values())
+    assert coverage['classifier_question_reserve'] == 'applied'
+    assert coverage['classifier_state_chars'] == state_chars
+    assert state_chars <= JEV_STATE_CHARS
+    assert state_chars + longest_question <= JEV_STATE_QUESTION_CHARS
+    assert state_chars + question_chars <= JEV_STATE_ALL_QUESTIONS_CHARS
+    assert state_chars + question_chars <= 500_000
 @pytest.mark.asyncio
 async def test_live_population_rejects_duplicate_trace_ids_before_analysis(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
@@ -461,7 +638,7 @@ async def test_export_path_echo_records_an_absolute_path(tmp_path: Any, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_export_path_reloads_merged_filters_and_pinned_time_range(
+async def test_export_path_reloads_merged_filters_and_original_time_range(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     export = _run_export(['t1'], filters=ExportFilters(agent_name=('explicit-bot',)))
@@ -469,8 +646,6 @@ async def test_export_path_reloads_merged_filters_and_pinned_time_range(
         update={
             'generated_filters': ExportFilters(agent_name=('generated-bot',), model=('gpt-5',)),
             'generated_numeric': ExportNumericFilters(tokens_min=20, tokens_max=300),
-            'start': None,
-            'end': None,
         }
     )
     export_path = tmp_path / 'export.json'
@@ -491,10 +666,32 @@ async def test_export_path_reloads_merged_filters_and_pinned_time_range(
     assert call['facets'].model == frozenset({'gpt-5'})
     assert call['numeric'].tokens_min == 5
     assert call['numeric'].tokens_max == 300
-    assert call['start'] < export.traces[0].timestamp < call['end']
+    assert call['start'] == export.start
+    assert call['end'] == export.end
     assert call['limit'] == export.limit
     assert call['target_trace_ids'] == {'t1'}
     assert [trace.trace_id for trace in resolved.traces] == ['t1']
+
+
+@pytest.mark.asyncio
+async def test_export_without_original_window_fails_instead_of_guessing_a_recent_range(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    export = _run_export(['t1']).model_copy(update={'start': None, 'end': None})
+    export_path = tmp_path / 'legacy-export.json'
+    export_path.write_text(export.model_dump_json())
+    monkeypatch.setattr(population_module, 'OrqTraceSource', FakeSource)
+
+    with pytest.raises(PopulationError, match='does not record its original time window'):
+        await resolve_population(
+            InsightsPopulation.from_finder_export(export_path),
+            orq=_orq(),
+            client=_client(),
+            compiler_model='compiler',
+            classifier_model='classifier',
+        )
+
+    assert FakeSource.calls == []
 
 
 @pytest.mark.asyncio

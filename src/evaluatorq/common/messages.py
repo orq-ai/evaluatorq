@@ -8,6 +8,8 @@ judge then scores. Use these helpers or ``contracts.content_to_text``.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -16,69 +18,126 @@ if TYPE_CHECKING:
 
 _TEXT_PART_TYPES = frozenset({'text', 'input_text', 'output_text', 'summary_text', 'refusal'})
 
+_REASONING_PART_TYPES = frozenset({'reasoning', 'reasoning_content', 'thinking'})
+_MEDIA_PART_TYPES = {
+    'image': 'image',
+    'image_url': 'image',
+    'input_image': 'image',
+    'file': 'file',
+    'input_file': 'file',
+    'audio': 'audio',
+    'input_audio': 'audio',
+    'output_audio': 'audio',
+    'video': 'video',
+    'input_video': 'video',
+}
+
+
+@dataclass(frozen=True)
+class MediaContent:
+    """A recognized non-text content part that renderers can safely summarize."""
+
+    kind: str
+    value: Any
+
+
+def _field(part: Any, key: str) -> Any:
+    return part.get(key) if isinstance(part, Mapping) else getattr(part, key, None)
+
 
 def content_part_text(part: Any) -> str | None:
-    """The text a content part carries, or ``None`` when it is not a text part.
-
-    One table for every provider shape: Chat Completions ``text``, Responses
-    ``input_text`` / ``output_text``, reasoning ``summary_text``, and ``refusal``,
-    which is the model's real answer (for red teaming, the resistant one). OTel
-    GenAI parts put the text under ``content`` rather than ``text``.
-    """
-
-    def field(key: str) -> Any:
-        return part.get(key) if isinstance(part, dict) else getattr(part, key, None)
-
-    part_type = field('type')
-    if part_type not in _TEXT_PART_TYPES:
+    """Read text only from a recognized provider text-part type."""
+    part_type = _field(part, 'type')
+    if not isinstance(part_type, str) or part_type not in _TEXT_PART_TYPES:
         return None
-    for key in ('refusal', 'text', 'content') if part_type == 'refusal' else ('text', 'content'):
-        if isinstance(value := field(key), str):
+    keys = ('refusal', 'text', 'content') if part_type == 'refusal' else ('text', 'content')
+    for key in keys:
+        if isinstance(value := _field(part, key), str):
             return value
     return ''
 
 
-def coerce_content_text(content: Any) -> str:
-    """Flatten message content to a plain text string.
-
-    Multi-part content (e.g. tool/result messages shaped like
-    ``[{"type": "text", "text": "..."}]``) surfaces the joined text rather than a
-    Python ``repr`` of the list. ``None`` becomes ``""``; plain strings (and anything
-    else) pass through ``str``.
-
-    Unlike `evaluatorq.contracts.content_to_text`, this best-effort helper
-    does not raise on non-text parts (it is used in report/transcript rendering).
-    Image and file parts are surfaced as a ``[image]`` / ``[file]`` placeholder,
-    and any other (unknown/future) part type as ``[<type>]``, so every part is
-    visibly accounted for rather than silently dropped.
-    """
-    if isinstance(content, list):
-        texts: list[str] = []
-        for part in content:
-            part_type = part.get('type') if isinstance(part, dict) else getattr(part, 'type', None)
-            if (text := content_part_text(part)) is not None:
-                texts.append(text)
-            elif part_type in ('image_url', 'input_image'):
-                texts.append('[image]')
-            elif part_type in ('file', 'input_file'):
-                texts.append('[file]')
-            else:
-                # Unknown/future part shapes (e.g. audio) are still
-                # surfaced as a placeholder rather than vanishing silently.
-                texts.append(f'[{part_type or "unknown"}]')
-        return '\n'.join(texts)
-    return str(content or '')
-
-
 def _json_or_text(value: Any) -> str:
-    """Render a value as text, using JSON for mappings.
-
-    ``str()`` on a dict renders a Python repr that a judge then scores as the
-    agent's words, so structured values go through ``json.dumps``.
-    """
-    if isinstance(value, dict):
+    """Render mappings and typed models as JSON instead of a Python repr."""
+    if isinstance(value, Mapping):
+        return json.dumps(dict(value), default=str)
+    if isinstance(value, (list, tuple)):
         return json.dumps(value, default=str)
-    return coerce_content_text(value)
+    model_dump = getattr(value, 'model_dump', None)
+    if callable(model_dump):
+        return json.dumps(model_dump(), default=str)
+    return '' if value is None else str(value)
+
+
+def _media_kind(part: Any) -> str | None:
+    part_type = _field(part, 'type')
+    kind = _MEDIA_PART_TYPES.get(part_type) if isinstance(part_type, str) else None
+    if kind:
+        return kind
+    image_url = _field(part, 'image_url')
+    return 'image' if part_type is None and _is_image_url_shape(image_url) else None
+
+
+def _render_part(part: Any) -> Iterator[str | MediaContent]:
+    part_type = _field(part, 'type')
+    if isinstance(part_type, str) and part_type in _REASONING_PART_TYPES:
+        return
+    if (text := content_part_text(part)) is not None:
+        yield text
+        return
+    if kind := _media_kind(part):
+        yield MediaContent(kind, part)
+        return
+    yield _json_or_text(part)
+
+
+def _is_image_url_shape(image_url: Any) -> bool:
+    if isinstance(image_url, str):
+        return bool(image_url)
+    if isinstance(image_url, Mapping):
+        return any(isinstance(image_url.get(key), str) and image_url[key] for key in ('url', 'data'))
+    return any(isinstance(value := getattr(image_url, key, None), str) and value for key in ('url', 'data'))
+
+
+def _is_content_part(part: Any) -> bool:
+    if isinstance(part, str):
+        return True
+    part_type = _field(part, 'type')
+    return (
+        isinstance(part_type, str)
+        and (part_type in _TEXT_PART_TYPES or part_type in _REASONING_PART_TYPES or part_type in _MEDIA_PART_TYPES)
+    ) or _media_kind(part) is not None
+
+
+def iter_content_parts(content: Any) -> Iterator[str | MediaContent]:
+    """Yield text and recognized media parts in source order for every renderer.
+
+    Yields:
+        Text strings and typed media parts in source order.
+    """
+    if content is None:
+        return
+    if isinstance(content, (list, tuple)):
+        if not all(_is_content_part(part) for part in content if part is not None):
+            yield _json_or_text(content)
+            return
+        for part in content:
+            if part is not None:
+                yield from _render_part(part)
+        return
+    yield from _render_part(content)
+
+
+def contains_media_content(content: Any) -> bool:
+    """Whether content contains a recognized media part rather than structured business data."""
+    parts = content if isinstance(content, (list, tuple)) else (content,)
+    return any(_media_kind(part) is not None for part in parts if part is not None)
+
+
+def coerce_content_text(content: Any) -> str:
+    """Flatten content, preserving structured values as JSON and marking known media."""
+    rendered = (f'[{part.kind}]' if isinstance(part, MediaContent) else part for part in iter_content_parts(content))
+    return '\n'.join(rendered)
 
 
 def _tool_call_text(call: Any) -> str:
