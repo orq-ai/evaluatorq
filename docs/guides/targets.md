@@ -708,6 +708,42 @@ if __name__ == "__main__":
 
 A runnable variant of this pattern ships as [`15_tool_chaining.py`](../examples/redteam/15_tool_chaining.md).
 
+### Backends and `register_backend`
+
+`evaluatorq.redteam` also exports `register_backend`. A backend is a factory one level above a target: given an agent key it builds an `AgentTarget`, and it owns memory cleanup and error mapping for every target it builds. The built-in ones are registered as `orq`, `openresponses` and `openai`.
+
+You do not need a backend to test your own agent. `red_team()` and `simulate()` never look a backend up by a name you choose; they resolve the built-in `orq` and `openresponses` backends internally for `agent:` and `deployment:` targets. Pass your `AgentTarget` as `target=` instead.
+
+A backend earns its place when one piece of code has to build targets for many agent keys, the way the built-in Orq backend does. Subclass `Backend`, register a factory, and resolve it by name:
+
+```python
+from evaluatorq.contracts import AgentContext
+from evaluatorq.integrations.callable_integration import CallableTarget
+from evaluatorq.redteam import red_team, register_backend
+from evaluatorq.redteam.backends.base import Backend
+from evaluatorq.redteam.backends.registry import resolve_backend
+
+
+class MyBackend(Backend):
+    def __init__(self) -> None:
+        super().__init__(name="my-backend")
+
+    def create_target(self, agent_key: str) -> CallableTarget:
+        return CallableTarget(lambda messages: call_my_service(agent_key, messages))
+
+    async def cleanup_memory(self, ctx: AgentContext, entity_ids: list[str]) -> None:
+        pass  # nothing stored between runs
+
+
+# resolve_backend() calls the factory with llm_client, target_config and pipeline_config.
+register_backend("my-backend", lambda **_: MyBackend())
+
+target = resolve_backend("my-backend").create_target("billing-agent")
+report = await red_team(target, max_dynamic_datapoints=5)
+```
+
+Names are matched case-insensitively and registering an existing name replaces it, including the built-ins. Override `map_error()` to turn your service's exceptions into `(error_code, message)` pairs; the default returns `"target_error"` and the exception text.
+
 ## Where to next
 
 - [Red Teaming](red-teaming.md) — modes, categories and reading a report.
