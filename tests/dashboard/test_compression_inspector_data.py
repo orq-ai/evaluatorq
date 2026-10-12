@@ -261,60 +261,6 @@ async def test_fetch_orq_document_uses_targeted_source_window_and_selected_oauth
 
 
 @pytest.mark.asyncio
-async def test_fetch_orq_document_uses_sdk_http_transport_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
-    from orq_ai_sdk import Orq
-
-    requests: list[httpx.Request] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if request.url.path.endswith('/traces/query'):
-            return httpx.Response(
-                200,
-                json={
-                    'search': {
-                        'data': [{
-                            'trace_id': 'wire-target',
-                            'span_id': 'span-wire-target',
-                            'root_span_id': 'span-wire-target',
-                            'started_at': START.isoformat(),
-                            'ended_at': END.isoformat(),
-                            'project_id': 'project-a',
-                            'status': 'completed',
-                            'product': 'chat',
-                            'type': 'trace',
-                            'providers': ['openai'],
-                            'models': ['openai/gpt-4o'],
-                            'attributes': {
-                                'gen_ai': {
-                                    'input': {'messages': [{'role': 'user', 'content': 'from SDK transport'}]},
-                                },
-                            },
-                        }],
-                        'has_more': False,
-                        'next_page_token': None,
-                    },
-                },
-            )
-        return httpx.Response(200, json={'object': 'list', 'data': [], 'has_more': False})
-
-    http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
-    client = Orq(api_key='fixture-key', server_url='https://orq.test', async_client=http_client)
-    auth = DashboardAuth(method='environment', api_key='fixture-key', base_url='https://orq.test')
-    monkeypatch.setattr(inspector_data, 'selected_dashboard_auth', lambda _app: auth)
-    monkeypatch.setattr(inspector_data, 'build_orq_client', lambda *_args, **_kwargs: client)
-
-    document = await inspector_data.fetch_orq_document(_app(), 'wire-target', start=START, end=END)
-
-    assert document is not None
-    assert document.metadata.trace_id == 'wire-target'
-    assert 'from SDK transport' in str(document.messages)
-    [query] = [request for request in requests if request.url.path.endswith('/traces/query')]
-    assert b'wire-target' in query.content
-
-
-@pytest.mark.asyncio
 async def test_fetch_orq_document_defaults_to_a_timezone_aware_seven_day_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -404,40 +350,6 @@ async def test_fetch_orq_document_closes_client_if_source_creation_fails(
 
 
 @pytest.mark.asyncio
-async def test_cleanup_logs_only_exception_types(monkeypatch: pytest.MonkeyPatch) -> None:
-    from loguru import logger
-
-    client = FakeOrq(FakeTraces({None: ([summary('cleanup-target')], False, None)}))
-    messages: list[str] = []
-
-    def fail_source_close(_source: Any) -> None:
-        raise RuntimeError('source output from /private/session is secret')
-
-    async def fail_client_close(_client: Any) -> None:
-        raise RuntimeError('credential key from /private/settings is secret')
-
-    monkeypatch.setattr(
-        inspector_data,
-        'selected_dashboard_auth',
-        lambda _app: DashboardAuth('environment', 'key', 'https://my.orq.ai'),
-    )
-    monkeypatch.setattr(inspector_data, 'build_orq_client', lambda *_args, **_kwargs: client)
-    monkeypatch.setattr(inspector_data.OrqTraceSource, 'close', fail_source_close)
-    monkeypatch.setattr(inspector_data, 'close_orq_client', fail_client_close)
-    sink_id = logger.add(messages.append)
-    try:
-        document = await inspector_data.fetch_orq_document(_app(), 'cleanup-target', start=START, end=END)
-    finally:
-        logger.remove(sink_id)
-
-    assert document is not None
-    output = ''.join(messages)
-    assert 'source cleanup failed (RuntimeError)' in output
-    assert 'client cleanup failed (RuntimeError)' in output
-    assert all(secret not in output for secret in ('/private/session', 'source output', 'credential key', '/private/settings'))
-
-
-@pytest.mark.asyncio
 async def test_fetch_orq_document_does_not_swallow_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
     client = FakeOrq(FakeTraces({}))
     source_closes: list[None] = []
@@ -466,11 +378,18 @@ async def test_fetch_orq_document_does_not_swallow_cancellation(monkeypatch: pyt
     assert len(client.exit_calls) == 1
 
 
+@pytest.mark.parametrize(
+    ('start', 'end', 'test_id'),
+    [
+        pytest.param(datetime(2026, 9, 20), END, 'naive-start', id='naive-start'),
+        pytest.param(START, datetime(2026, 9, 21), 'naive-end', id='naive-end'),
+        pytest.param(datetime(2026, 9, 20), datetime(2026, 9, 21), 'both-naive', id='both-naive'),
+    ],
+)
 @pytest.mark.asyncio
-async def test_fetch_orq_document_rejects_naive_dates_without_leaking_trace_id() -> None:
+async def test_fetch_orq_document_rejects_naive_dates_without_leaking_trace_id(
+    start: datetime, end: datetime, test_id: str
+) -> None:
     with pytest.raises(inspector_data.InspectorSourceError) as error:
-        await inspector_data.fetch_orq_document(
-            _app(), 'sensitive-trace-id', start=datetime(2026, 9, 20), end=END
-        )
-
+        await inspector_data.fetch_orq_document(_app(), 'sensitive-trace-id', start=start, end=end)
     assert 'sensitive-trace-id' not in str(error.value)

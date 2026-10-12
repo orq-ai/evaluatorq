@@ -776,9 +776,21 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-error { color: var(--red-600, #dc2626); font-family: var(--font-sans); font-size: 12px; }
 .settings-model-warning { margin: 12px 0 0; }
 .settings-model-warning:empty { display: none; }
-.settings-saved { margin: 0 0 12px; color: var(--green-600, #16a34a); font-size: 13px; }
+.settings-toast { position: fixed; right: 20px; bottom: 20px; z-index: 50; max-width: min(360px, calc(100vw - 40px)); padding: 10px 14px; border-radius: 8px; background: var(--text, #0f172a); color: #fff; font-size: 13px; line-height: 1.4; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.25); opacity: 0; transform: translateY(8px); pointer-events: none; transition: opacity 0.18s ease, transform 0.18s ease; }
+.settings-toast.show { opacity: 1; transform: none; }
+.settings-toast.is-error { background: #b91c1c; }
+@media (prefers-reduced-motion: reduce) { .settings-toast { transition: none; } }
 .settings-advanced { margin: 12px 0; }
 .settings-advanced > summary { cursor: pointer; color: var(--text-muted); font-size: 13px; }
+.settings-auth-choices.settings-advanced-choices { grid-template-columns: minmax(0, 1fr); }
+.settings-auth-card.settings-switch-card { justify-content: space-between; align-items: center; }
+.settings-switch-card input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.settings-switch { position: relative; flex: 0 0 auto; width: 44px; height: 24px; border-radius: 12px; background: var(--border-strong, #c9c5bd); transition: background .15s ease; }
+.settings-switch::before { content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(20,20,30,.3); transition: transform .15s ease; }
+.settings-switch-card input:checked ~ .settings-switch { background: var(--teal-600); }
+.settings-switch-card input:checked ~ .settings-switch::before { transform: translateX(20px); }
+.settings-switch-card input:focus-visible ~ .settings-switch { outline: 2px solid var(--teal-600); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .settings-switch, .settings-switch::before { transition: none; } }
 .model-pick { position: relative; display: block; }
 .model-pick-btn { width: 100%; text-align: left; border: 1px solid var(--border-default, #d8d5cf); border-radius: 6px; padding: 7px 9px; color: var(--text-strong); background: var(--surface-card, #fff); font: inherit; font-family: var(--font-mono); cursor: pointer; }
 .model-pick-btn::after { content: "▾"; float: right; color: var(--text-faint); }
@@ -812,7 +824,7 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .settings-auth-step { margin: 10px 0 0; color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .settings-auth-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-rows: 1fr; gap: 10px; padding: 12px 0 2px; }
 .settings-auth-choice { min-width: 0; height: 100%; border: 1px solid var(--border-default); border-radius: 12px; background: var(--surface-card); overflow: hidden; }
-.settings-auth-choice:has(input[type="radio"]:checked) { border-color: var(--teal-600); box-shadow: 0 0 0 1px var(--teal-600); }
+.settings-auth-choice:has(input[type="radio"]:checked), .settings-auth-choice:has(input[type="checkbox"]:checked) { border-color: var(--teal-600); box-shadow: 0 0 0 1px var(--teal-600); }
 .settings-auth-card { display: flex; align-items: flex-start; gap: 11px; min-height: 82px; height: 100%; padding: 15px; cursor: pointer; }
 .settings-auth-card input { margin: 3px 0 0; flex: 0 0 auto; accent-color: var(--teal-600); }
 .settings-auth-card-copy { display: grid; gap: 4px; min-width: 0; }
@@ -845,7 +857,6 @@ html.sidebar-collapsed .sidebar-toggle .nav-icon { transform: rotate(180deg); }
 .eq-auth-toast a { color: var(--teal-600); font-weight: 650; white-space: nowrap; }
 .eq-auth-toast button { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 18px; line-height: 1; }
 .settings-auth-note { margin: 2px 0 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-.settings-save { align-self: flex-start; }
 @media (max-width: 600px) {
   body.eq-dashboard:has(.settings-auth-panel) .config-row { flex-direction: column; align-items: stretch; gap: 6px; }
   body.eq-dashboard:has(.settings-auth-panel) .config-key { flex-basis: auto; }

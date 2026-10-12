@@ -15,6 +15,7 @@ from starlette.testclient import TestClient
 
 from evaluatorq.common.trace_document import TraceDocument
 from evaluatorq.dashboard import compression_inspector
+from evaluatorq.dashboard.compression_inspector import TRACE_ID_MAX_LENGTH, SESSION_REF_MAX_LENGTH
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.compression_inspector_data import CompressionPreview
 from evaluatorq.local_sessions import SessionRef, SessionSearchResult, load_session_document
@@ -269,7 +270,7 @@ def test_local_search_empty_and_invalid_selection_are_safe(client: TestClient) -
     )
 
     assert empty.status_code == 200
-    assert 'No Claude Code' in empty.text
+    assert 'no local sessions were found' in empty.text.lower()
     assert invalid.status_code == 200
     assert private_path not in invalid.text
     assert 'local session could not be loaded' in invalid.text.lower()
@@ -295,20 +296,12 @@ def test_incomplete_empty_session_search_does_not_claim_no_matches_or_folders(
 
 
 def test_preview_explains_when_original_has_no_readable_messages(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Create a Claude session with empty messages using the same helper as other route tests
     path = _claude_session('empty-content', prompt=' ', answer=' ')
-    
-    # Load real session with empty content and generate preview using the real reader -> preview_document -> _preview_html path
     document = load_session_document(SessionRef(source='claude-code', path=path))
     from evaluatorq.dashboard.compression_inspector_data import preview_document
     preview = preview_document(document, global_char_cap=500_000)
-    
-    # Verify the preview's original is truly empty
     assert preview.original == ''
-    
-    # Verify the rendered HTML shows the empty-state explanation
     rendered = compression_inspector._preview_html(preview)
-    
     assert 'No readable input or output is available for this source.' in rendered
     assert '<h3 id="compression-original-title">Original readable trace</h3><p' in rendered
     assert '<h3 id="compression-original-title">Original readable trace</h3><pre></pre>' not in rendered
@@ -331,3 +324,112 @@ def test_rendered_preview_uses_exact_backend_counts_and_structured_state(client:
     assert f'{preview.compressed_chars:,}' in response.text
     assert str(preview.omitted_messages) in response.text
     assert state in response.text
+
+
+@pytest.mark.parametrize(
+    ('form_data', 'expected_notice'),
+    [
+        pytest.param(
+            {'csrf': None, 'trace_id': 'valid-id', 'start_date': '2026-01-01'},
+            'Enter both valid dates',
+            id='only-start-date',
+        ),
+        pytest.param(
+            {'csrf': None, 'trace_id': 'valid-id', 'end_date': '2026-01-31'},
+            'Enter both valid dates',
+            id='only-end-date',
+        ),
+        pytest.param(
+            {'csrf': None, 'trace_id': 'valid-id', 'start_date': 'not-a-date', 'end_date': '2026-01-31'},
+            'Enter both valid dates',
+            id='malformed-start-date',
+        ),
+        pytest.param(
+            {'csrf': None, 'trace_id': 'valid-id', 'start_date': '2026-01-01', 'end_date': 'not-a-date'},
+            'Enter both valid dates',
+            id='malformed-end-date',
+        ),
+        pytest.param(
+            {'csrf': None, 'trace_id': 'valid-id', 'start_date': '2026-01-31', 'end_date': '2026-01-01'},
+            'Enter both valid dates',
+            id='reversed-dates',
+        ),
+    ],
+)
+def test_orq_one_sided_or_invalid_dates_reject_before_loader(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, form_data: dict[str, str | None], expected_notice: str
+) -> None:
+    loader_called = []
+    async def track_fetch(*_args: Any, **_kwargs: Any) -> None:
+        loader_called.append(True)
+        return None
+    monkeypatch.setattr('evaluatorq.dashboard.compression_inspector.fetch_orq_document', track_fetch)
+    form_data['csrf'] = _csrf(client)
+    response = client.post('/compression-inspector/source/orq', data=form_data)
+    assert expected_notice.lower() in response.text.lower()
+    assert response.status_code == 422
+    assert not loader_called
+
+
+@pytest.mark.parametrize(
+    ('form_data', 'test_id'),
+    [
+        pytest.param({'csrf': None, 'trace_id': '   '}, 'whitespace-only', id='whitespace-trace-id'),
+        pytest.param({'csrf': None, 'trace_id': ''}, 'empty', id='empty-trace-id'),
+        pytest.param({'csrf': None, 'trace_id': 'x' * (TRACE_ID_MAX_LENGTH + 1)}, 'over-length', id='over-length-trace-id'),
+    ],
+)
+def test_orq_invalid_trace_id_rejected_before_loader(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, form_data: dict[str, str | None], test_id: str
+) -> None:
+    loader_called = []
+    async def track_fetch(*_args: Any, **_kwargs: Any) -> None:
+        loader_called.append(True)
+        return None
+    monkeypatch.setattr('evaluatorq.dashboard.compression_inspector.fetch_orq_document', track_fetch)
+    form_data['csrf'] = _csrf(client)
+    response = client.post('/compression-inspector/source/orq', data=form_data)
+    assert response.status_code == 422
+    assert not loader_called
+
+
+def test_empty_session_ref_rejected_before_loader(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    loader_called = []
+    def track_load(_ref: Any) -> None:
+        loader_called.append(True)
+        raise RuntimeError('Should not be called')
+    monkeypatch.setattr('evaluatorq.dashboard.compression_inspector.load_session_document', track_load)
+    response = client.post(
+        '/compression-inspector/sessions/load',
+        data={'csrf': _csrf(client), 'session': 'claude-code:'},
+    )
+    assert response.status_code == 422
+    assert 'local session could not be loaded' in response.text.lower()
+    assert not loader_called
+
+
+def test_over_length_session_ref_rejected_before_loader(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    loader_called = []
+    def track_load(_ref: Any) -> None:
+        loader_called.append(True)
+        raise RuntimeError('Should not be called')
+    monkeypatch.setattr('evaluatorq.dashboard.compression_inspector.load_session_document', track_load)
+    ref = 'claude-code:' + 'x' * (SESSION_REF_MAX_LENGTH - len('claude-code:') + 1)
+    response = client.post(
+        '/compression-inspector/sessions/load',
+        data={'csrf': _csrf(client), 'session': ref},
+    )
+    assert response.status_code == 422
+    assert 'local session could not be loaded' in response.text.lower()
+    assert not loader_called
+
+
+def test_no_session_roots_message_names_searched_folders(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr('evaluatorq.dashboard.compression_inspector.session_roots', lambda _family: [])
+    response = client.post('/compression-inspector/sessions/search', data={'csrf': _csrf(client)})
+    assert response.status_code == 200
+    text_lower = response.text.lower()
+    assert 'claude code' in text_lower
+    assert 'claude desktop' in text_lower
+    assert 'codex' in text_lower
+    assert 'session folders' in text_lower

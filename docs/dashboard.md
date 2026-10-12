@@ -68,7 +68,7 @@ The dashboard has separate **Traces** (`/traces`) and **Trace search** (`/find`)
 
 The **Compression inspector** compares a trace's complete readable conversation with the structured Jev state derived from its canonical ATIF document. Use it to understand what the existing compression reducer keeps or omits; it does not answer a question, run inference, or change the source document.
 
-The setting is off by default. Enable **Compression inspector** under **Settings → Advanced**, then open it from the dashboard navigation. Start the dashboard with:
+The setting is off by default. Turn on **Compression inspector** under **Settings → Advanced**; every Settings change saves as soon as you make it, a small notice in the corner confirms it, and the navigation link appears without a page reload. Then open it from the dashboard navigation. Start the dashboard with:
 
 ```bash
 eq dashboard

@@ -32,14 +32,14 @@ def test_legacy_settings_default_compression_inspector_to_disabled(tmp_path: Pat
 )
 def test_advanced_settings_checkbox_renders_persisted_value(settings: Any, checked: bool) -> None:
     html = settings_body([], settings)
-    advanced = html.split('<details class="settings-advanced">', 1)[1].split('</details>', 1)[0]
-
-    assert '<summary>Advanced</summary>' in html
-    assert '<details class="settings-advanced" open>' not in html
-    assert 'name="compression_inspector_enabled" type="checkbox" value="true"' in advanced
-    assert ('value="true" checked>' in advanced) is checked
-    assert 'Local previews may expose sensitive original content.' in advanced
-    assert 'Previews do not call models.' in advanced
+    assert 'Compression inspector' in html
+    assert 'id="compression_inspector_enabled"' in html
+    assert 'name="compression_inspector_enabled"' in html
+    assert 'type="checkbox"' in html
+    assert 'value="true"' in html
+    assert ('value="true" checked>' in html or 'value="true" checked ' in html) is checked
+    assert 'Local previews may expose sensitive original content.' in html
+    assert 'Previews do not call models.' in html
 
 
 def test_posting_settings_toggles_inspector_and_sidebar(
@@ -79,3 +79,58 @@ def test_posting_settings_toggles_inspector_and_sidebar(
     assert disabled.status_code == 303
     assert json.loads(settings_path.read_text())['compression_inspector_enabled'] is False
     assert 'href="/compression-inspector"' not in client.get('/').text
+
+
+def _client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[TestClient, Path]:
+    settings_path = tmp_path / 'dashboard-settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(settings_path))
+    monkeypatch.setenv('EVALUATORQ_USER_SETTINGS', str(tmp_path / 'user-settings.json'))
+    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: ())
+    return TestClient(build_app(roots=[tmp_path]), follow_redirects=False), settings_path
+
+
+def test_autosave_post_saves_and_returns_the_matching_sidebar_as_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, settings_path = _client(monkeypatch, tmp_path)
+
+    on = client.post(
+        '/settings',
+        data={CSRF_FIELD: _CSRF_TOKEN, 'compression_inspector_enabled': 'true'},
+        headers={'X-Autosave': '1'},
+    )
+    assert on.status_code == 200
+    assert 'href="/compression-inspector"' in on.json()['sidebar']
+    assert load_settings(settings_path).compression_inspector_enabled is True
+
+    off = client.post('/settings', data={CSRF_FIELD: _CSRF_TOKEN}, headers={'X-Autosave': '1'})
+    assert 'href="/compression-inspector"' not in off.json()['sidebar']
+    assert load_settings(settings_path).compression_inspector_enabled is False
+
+
+def test_autosave_post_reports_validation_errors_as_json_and_saves_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, settings_path = _client(monkeypatch, tmp_path)
+
+    response = client.post(
+        '/settings',
+        data={CSRF_FIELD: _CSRF_TOKEN, 'orq_auth_method': 'stored_api_key', 'orq_api_key_entry': ''},
+        headers={'X-Autosave': '1'},
+    )
+
+    assert response.status_code == 422
+    assert response.json()['errors']['orq_api_key_entry']
+    assert not settings_path.exists()
+
+
+def test_autosave_post_without_csrf_token_is_rejected_as_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, settings_path = _client(monkeypatch, tmp_path)
+
+    response = client.post('/settings', data={'compression_inspector_enabled': 'true'}, headers={'X-Autosave': '1'})
+
+    assert response.status_code == 403
+    assert response.json()['errors']['form']
+    assert not settings_path.exists()

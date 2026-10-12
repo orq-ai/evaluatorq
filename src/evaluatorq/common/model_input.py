@@ -285,7 +285,7 @@ def fit_jev_state(
     """Fit the complete Jev state object to the global and question-aware ceilings."""
     limit = jev_state_char_limit(questions, global_char_cap=global_char_cap)
     original = state.get('messages', [])
-    omitted_before = _omission_count(state.get('omission'))
+    omitted_before = omission_count(state.get('omission'))
     metadata = {key: value for key, value in state.items() if key not in {'messages', 'omission'}}
     return _cap_messages(original, limit, omitted_before=omitted_before, metadata=metadata)
 
@@ -541,7 +541,8 @@ def _represented_indexes(entries: list[dict[str, Any]]) -> set[int]:
     return indexes
 
 
-def _omission_count(marker: Any) -> int:
+def omission_count(marker: Any) -> int:
+    """Parse the omitted-message count from a Jev omission marker string."""
     if not isinstance(marker, str):
         return 0
     match = re.fullmatch(r'\[\.\.\. (\d+) messages left out \.\.\.\]', marker)

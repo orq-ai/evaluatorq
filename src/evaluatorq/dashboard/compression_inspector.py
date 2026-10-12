@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -22,6 +22,7 @@ from evaluatorq.dashboard.compression_inspector_data import (
 from evaluatorq.dashboard.security import csrf_field, request_rejected
 from evaluatorq.dashboard.shell import page
 from evaluatorq.local_sessions import SessionQuery, SessionRef, load_session_document, search_sessions
+from evaluatorq.local_sessions.models import day_window
 from evaluatorq.local_sessions.roots import session_roots
 from evaluatorq.trace_finder.settings import effective_settings, load_settings
 
@@ -30,22 +31,23 @@ if TYPE_CHECKING:
 
 
 _BASE = '/compression-inspector'
-_LOCAL_SOURCES: tuple[SessionSource, ...] = ('claude-code', 'claude-desktop', 'codex')
+TRACE_ID_MAX_LENGTH = 512
+SESSION_REF_MAX_LENGTH = 4096
+
 _SOURCE_LABELS: dict[SessionSource, str] = {
     'claude-code': 'Claude Code',
     'claude-desktop': 'Claude desktop',
     'codex': 'Codex',
 }
+_LOCAL_SOURCES: tuple[SessionSource, ...] = tuple(_SOURCE_LABELS.keys())
+
 _SESSION_SEARCH_ERROR = 'The local-session search could not be completed.'
 _ORQ_ERROR = 'The Orq trace could not be loaded. Check the ID, selected dates, and dashboard access.'
 _SESSION_ERROR = 'That local session could not be loaded from the configured session folders.'
 
 
-def _escape(value: object) -> str:
-    return html.escape(str(value), quote=True)
-
-
 def _date_bounds(form: Any) -> tuple[datetime | None, datetime | None]:
+    """Parse and validate date form fields using day_window; both-or-neither, valid ISO, end >= start."""
     start_text = str(form.get('start_date') or '').strip()
     end_text = str(form.get('end_date') or '').strip()
     if not start_text and not end_text:
@@ -56,16 +58,13 @@ def _date_bounds(form: Any) -> tuple[datetime | None, datetime | None]:
     end_day = date.fromisoformat(end_text)
     if start_day > end_day:
         raise ValueError
-    return (
-        datetime.combine(start_day, time.min, tzinfo=timezone.utc),
-        datetime.combine(end_day + timedelta(days=1), time.min, tzinfo=timezone.utc),
-    )
+    return day_window(start_day, end_day, zone=timezone.utc)
 
 
 def _preview_html(preview: CompressionPreview) -> str:
     state = json.dumps(preview.compressed, ensure_ascii=False, indent=2)
     original_html = (
-        f'<pre>{_escape(preview.original)}</pre>'
+        f'<pre>{html.escape(str(preview.original), quote=True)}</pre>'
         if preview.original
         else '<p class="compression-count-note" role="status">No readable input or output is available for this source.</p>'
     )
@@ -89,7 +88,7 @@ def _preview_html(preview: CompressionPreview) -> str:
         '</section>'
         '<section class="compression-panel" aria-labelledby="compression-jev-title">'
         '<h3 id="compression-jev-title">Jev state</h3>'
-        f'<pre>{_escape(state)}</pre>'
+        f'<pre>{html.escape(str(state), quote=True)}</pre>'
         '<p class="compression-count-note">The state character count uses compact serialization; this readable display adds formatting whitespace.</p>'
         '</section>'
         '</div></section>'
@@ -106,7 +105,8 @@ def _session_results_html(result: SessionSearchResult) -> str:
         else:
             roots_exist = any(session_roots(family) for family in ('claude', 'codex'))
             empty = (
-                'No Claude Code, Claude desktop, or Codex session folders were found on this computer.'
+                'No local sessions were found. Sessions are looked for in the configured Claude Code, '
+                'Claude desktop, and Codex session folders.'
                 if not roots_exist
                 else 'No local sessions matched the available source folders.'
             )
@@ -121,12 +121,13 @@ def _session_results_html(result: SessionSearchResult) -> str:
         items.append(
             '<li class="compression-session">'
             '<div class="compression-session-description">'
-            f'<strong>{_escape(_SOURCE_LABELS[session.source])}</strong>'
-            f'<span>{_escape(title)}</span>'
-            f'<time datetime="{_escape(updated.isoformat())}">{_escape(updated_text)}</time>'
+            f'<strong>{html.escape(str(_SOURCE_LABELS[session.source]), quote=True)}</strong>'
+            f'<span>{html.escape(str(title), quote=True)}</span>'
+            f'<time datetime="{html.escape(str(updated.isoformat()), quote=True)}">{html.escape(str(updated_text), quote=True)}</time>'
             '</div>'
-            f'<form method="post" action="{_BASE}/sessions/load" autocomplete="off">'
-            f'{csrf_field()}<input type="hidden" name="session" value="{_escape(ref)}">'
+            f'<form method="post" action="{_BASE}/sessions/load" autocomplete="off" '
+            "onsubmit=\"this.querySelector('button').disabled=true;this.querySelector('button').textContent='Loading...';\">"
+            f'{csrf_field()}<input type="hidden" name="session" value="{html.escape(str(ref), quote=True)}">'
             '<button type="submit">Preview session</button></form>'
             '</li>'
         )
@@ -148,7 +149,9 @@ def _body_html(
     preview: CompressionPreview | None = None,
     sessions: SessionSearchResult | None = None,
 ) -> str:
-    notice_html = f'<p class="compression-notice" role="alert">{_escape(notice)}</p>' if notice else ''
+    notice_html = (
+        f'<p class="compression-notice" role="alert">{html.escape(str(notice), quote=True)}</p>' if notice else ''
+    )
     sessions_html = _session_results_html(sessions) if sessions is not None else ''
     preview_html = _preview_html(preview) if preview is not None else ''
     return (
@@ -164,11 +167,12 @@ def _body_html(
         '<h3 id="compression-orq-title">Orq trace ID</h3>'
         '<p>Search the most recent 7 days by default. Set both dates to find an older trace; '
         'the end date includes that full day.</p>'
-        f'<form method="post" action="{_BASE}/source/orq" autocomplete="off">'
+        f'<form method="post" action="{_BASE}/source/orq" autocomplete="off" '
+        "onsubmit=\"this.querySelector('button').disabled=true;this.querySelector('button').textContent='Loading...';\">"
         f'{csrf_field()}'
         '<label for="compression-trace-id">Trace ID</label>'
         '<input id="compression-trace-id" name="trace_id" type="text" '
-        'maxlength="512" autocomplete="off" required>'
+        f'maxlength="{TRACE_ID_MAX_LENGTH}" autocomplete="off" required>'
         '<div class="compression-date-fields">'
         '<div><label for="compression-start-date">Start date (optional)</label>'
         '<input id="compression-start-date" name="start_date" type="date"></div>'
@@ -181,7 +185,8 @@ def _body_html(
         '<h3 id="compression-local-title">Local sessions</h3>'
         '<p>Search up to 50 sessions from Claude Code, Claude desktop, and Codex. '
         'The selected session is validated under its configured local session roots before reading.</p>'
-        f'<form method="post" action="{_BASE}/sessions/search" autocomplete="off">'
+        f'<form method="post" action="{_BASE}/sessions/search" autocomplete="off" '
+        "onsubmit=\"this.querySelector('button').disabled=true;this.querySelector('button').textContent='Loading...';\">"
         f'{csrf_field()}<button type="submit">Search local sessions</button></form>'
         f'{sessions_html}</section>'
         '</div>'
@@ -226,6 +231,17 @@ def _enabled() -> bool:
     return load_settings().compression_inspector_enabled
 
 
+async def _check_request(req: Request) -> tuple[Any, None] | tuple[None, Response]:
+    """Check feature-enabled and CSRF; return (form, None) or (None, error_response)."""
+    if not _enabled():
+        return None, _disabled()
+    form = await req.form()
+    rejected = request_rejected(req, form)
+    if rejected:
+        return None, _page_response(notice=rejected, status_code=403)
+    return form, None
+
+
 def compression_inspector_page(_req: Request) -> Response:
     if not _enabled():
         return _disabled()
@@ -233,14 +249,11 @@ def compression_inspector_page(_req: Request) -> Response:
 
 
 async def compression_inspector_orq(req: Request) -> Response:
-    if not _enabled():
-        return _disabled()
-    form = await req.form()
-    rejected = request_rejected(req, form)
-    if rejected:
-        return _page_response(notice=rejected, status_code=403)
+    form, error = await _check_request(req)
+    if error:
+        return error
     trace_id = str(form.get('trace_id') or '').strip()
-    if not trace_id or len(trace_id) > 512:
+    if not trace_id or len(trace_id) > TRACE_ID_MAX_LENGTH:
         return _page_response(notice='Enter a valid Orq trace ID.', status_code=422)
     try:
         start, end = _date_bounds(form)
@@ -263,12 +276,9 @@ async def compression_inspector_orq(req: Request) -> Response:
 
 
 async def compression_inspector_sessions_search(req: Request) -> Response:
-    if not _enabled():
-        return _disabled()
-    form = await req.form()
-    rejected = request_rejected(req, form)
-    if rejected:
-        return _page_response(notice=rejected, status_code=403)
+    _form, error = await _check_request(req)
+    if error:
+        return error
     query = SessionQuery(sources=_LOCAL_SOURCES, limit=50)
     try:
         result = await asyncio.to_thread(search_sessions, query=query)
@@ -278,14 +288,11 @@ async def compression_inspector_sessions_search(req: Request) -> Response:
 
 
 async def compression_inspector_sessions_load(req: Request) -> Response:
-    if not _enabled():
-        return _disabled()
-    form = await req.form()
-    rejected = request_rejected(req, form)
-    if rejected:
-        return _page_response(notice=rejected, status_code=403)
+    form, error = await _check_request(req)
+    if error:
+        return error
     raw_ref = str(form.get('session') or '')
-    if len(raw_ref) > 4096:
+    if len(raw_ref) > SESSION_REF_MAX_LENGTH:
         return _page_response(notice=_SESSION_ERROR, status_code=422)
     source, separator, raw_path = raw_ref.partition(':')
     if not separator or source not in _LOCAL_SOURCES or not raw_path:

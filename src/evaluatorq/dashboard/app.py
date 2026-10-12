@@ -63,7 +63,7 @@ from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
 from evaluatorq.dashboard.security import request_rejected
-from evaluatorq.dashboard.shell import dashboard_css, dashboard_css_version, page
+from evaluatorq.dashboard.shell import current_sidebar_html, dashboard_css, dashboard_css_version, page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
 from evaluatorq.dashboard.surfaces import ADAPTERS
@@ -479,11 +479,18 @@ def _settings_model_auth_recovery(*, method: str) -> str:
     return f'Orq credentials need attention, so the model list cannot load. {detail} You can still type a model id.'
 
 
+def _autosaving(req: Request) -> bool:
+    """Whether the settings page is saving in place (a fetch) rather than submitting the form."""
+    return req.headers.get('x-autosave') == '1'
+
+
 async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     """Validate and persist the settings form, or render field errors."""
     form_data = await req.form()
     rejected = request_rejected(req, form_data)
     if rejected:
+        if _autosaving(req):
+            return JSONResponse({'errors': {'form': rejected}}, status_code=403)
         roots = _roots(req)
         config = await asyncio.to_thread(_settings_config, roots)
         body = settings_body(config, effective_settings(), errors={'form': rejected})
@@ -591,6 +598,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
             }
         )
     if settings is None or errors:
+        if _autosaving(req):
+            return JSONResponse({'errors': errors}, status_code=422)
         body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
@@ -620,6 +629,8 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     # Retire stores after removing them from app state so new requests cannot acquire them.
     await _close_finder_stores(*old_session_stores, old_legacy_store, old_search_store)
     req.app.state.finder_unavailable_reason = None
+    if _autosaving(req):
+        return JSONResponse({'sidebar': current_sidebar_html('settings')})
     return RedirectResponse('/settings?saved=1', status_code=303)
 
 

@@ -221,6 +221,11 @@ def _sidebar_html(active_nav: str, *, compression_inspector_enabled: bool) -> st
     )
 
 
+def current_sidebar_html(active_nav: str) -> str:
+    """Render the sidebar for the saved settings, for pages that change them in place."""
+    return _sidebar_html(active_nav, compression_inspector_enabled=load_settings().compression_inspector_enabled)
+
+
 def _resolve_nav(active_surface: str | None, active_nav: str | None) -> str:
     if active_nav:
         return active_nav

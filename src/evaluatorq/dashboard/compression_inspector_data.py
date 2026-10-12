@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from loguru import logger
 
-from evaluatorq.common.model_input import jev_state, serialized_chars
+from evaluatorq.common.model_input import jev_state, omission_count, serialized_chars
 from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
 from evaluatorq.dashboard.auth import build_orq_client
@@ -19,7 +18,6 @@ from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_targeted_load
 
 _SAFE_ORQ_ERROR = 'The selected Orq trace could not be loaded.'
-_OMISSION_MARKER = re.compile(r'\[\.\.\. (\d+) messages left out \.\.\.\]')
 
 
 @dataclass(frozen=True)
@@ -52,9 +50,7 @@ def preview_document(document: TraceDocument, *, global_char_cap: int) -> Compre
     messages = prompt_messages(document)
     compressed = jev_state(messages, global_char_cap=global_char_cap)
     original, _, message_count = full_conversation_view_with_message_spans(document)
-    marker = compressed.get('omission')
-    omission = _OMISSION_MARKER.fullmatch(marker) if isinstance(marker, str) else None
-    omitted_messages = int(omission.group(1)) if omission else 0
+    omitted_messages = omission_count(compressed.get('omission'))
     return CompressionPreview(
         original=original,
         compressed=compressed,
