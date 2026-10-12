@@ -18,57 +18,64 @@ A **scenario** is the situation and goal the persona brings. A **datapoint** is 
 
 The SDK does not save by default and the CLI does. The `.evaluatorq/sim-runs/` files are what `evaluatorq sim runs`, the dashboard and `previous_run=` read.
 
-## The shape
+## Data model
 
-```yaml
-SimulationRun:
-  run_name, created_at, mode, run_id, experiment_url
-  target_kind, target, target_model, agent_info, orq_base_url, max_turns
-  evaluator_names, total_results
-  scorer_averages: dict[str, float]       # mean of each evaluator over the run
-  token_usage_total                       # whole run, including generation and summary
-  executive_summary, recommendations, applied_suggestions
-  datapoints: list[SimulationDatapoint]   # the exact cases, for replay
-  replay_version
-  results: list[SimulationResult]         # one per conversation
-    messages                              # the transcript
-    terminated_by, reason, turn_count
-    goal_achieved, goal_completion_score
-    criteria_results, criteria_verified, rules_broken
-    turn_metrics: list[TurnMetrics]       # per-turn judge scores and tokens
-    token_usage, token_usage_known
-    evaluator_details                     # structured evaluator output
-    metadata                              # persona, scenario, criteria, evaluator scores
-    thread_id, response_traces
+A saved JSON file contains one `SimulationRun` object. Its `results` field is a list of `SimulationResult` objects, one per conversation. `simulate()` returns that list directly, without the run wrapper; a JSONL export writes one `SimulationResult` per line.
+
+The Python declarations below describe field types, not sample values. Each class name labels a type; it is not an extra key in the saved JSON. `list[T]` means a list of objects of type `T`, `dict[str, T]` means a mapping from string keys to values of type `T`, and `T | None` means the value can be `None`. Python's `None` is written as `null` in JSON. Definitions of the named types are in the [Python API reference](../reference/evaluatorq/simulation.md). The map covers the fields used on this page, not every nested model.
+
+### SimulationRun: the whole saved run
+
+```python
+class SimulationRun:
+    run_name: str
+    created_at: datetime
+    mode: str
+    run_id: str | None
+    experiment_url: str | None
+    target_kind: str
+    target: str | None
+    target_model: str | None
+    agent_info: AgentInfoSnapshot | None
+    orq_base_url: str | None
+    max_turns: int | None
+    evaluator_names: list[str]
+    total_results: int
+    scorer_averages: dict[str, float]
+    token_usage_total: TokenUsage | None
+    executive_summary: str | None
+    recommendations: list[SimulationRecommendation] | None
+    applied_suggestions: list[str]
+    datapoints: list[SimulationDatapoint] | None
+    replay_version: int | None
+    results: list[SimulationResult]
+```
+
+### SimulationResult: one conversation in `results`
+
+Each item in `SimulationRun.results` has this structure. These fields belong to the conversation, not to the run wrapper.
+
+```python
+class SimulationResult:
+    messages: list[Message]
+    terminated_by: TerminatedBy
+    reason: str
+    turn_count: int
+    goal_achieved: bool
+    goal_completion_score: float
+    criteria_results: dict[str, bool] | None
+    criteria_verified: bool | None
+    rules_broken: list[str]
+    turn_metrics: list[TurnMetrics]
+    token_usage: TokenUsage
+    token_usage_known: bool
+    evaluator_details: dict[str, dict[str, Any]]
+    metadata: dict[str, Any]
+    thread_id: str | None
+    response_traces: list[ResponseTrace]
 ```
 
 ## Reading one result
-
-This result is trimmed from a saved run. The transcript, turn metrics and token counts are cut. The run predates `audited` and `thread_id`, so those two are filled in by hand to show what a current run writes.
-
-```json
-{
-  "terminated_by": "max_turns",
-  "reason": "Maximum turns (4) reached",
-  "goal_achieved": false,
-  "goal_completion_score": 0.0,
-  "rules_broken": [],
-  "turn_count": 4,
-  "criteria_results": {"Agent greets the user politely and responds to the greeting": true, "Agent asks for unnecessary personal information": true},
-  "criteria_verified": true,
-  "metadata": {
-    "persona": "Curious Office Receptionist",
-    "scenario": "Friendly Greeting and Weather Check",
-    "datapoint_id": "dp_3e44c06b57af",
-    "criteria_meta": [
-      {"id": "criteria_0", "description": "Agent greets the user politely and responds to the greeting", "type": "must_happen", "passed": true, "audited": true},
-      {"id": "criteria_2", "description": "Agent asks for unnecessary personal information", "type": "must_not_happen", "passed": true, "audited": true}
-    ],
-    "evaluator_scores": {"goal_achieved": 0.0, "criteria_met": 1.0}
-  },
-  "thread_id": "<run_id>:0"
-}
-```
 
 `terminated_by` says why the conversation stopped:
 
@@ -81,7 +88,7 @@ This result is trimmed from a saved run. The transcript, turn metrics and token 
 
 The criteria verdicts come in three places. `metadata["criteria_meta"]` is the one to read: one entry per criterion, keyed by a stable id (`criteria_0`, `criteria_1`, and so on), with its text, type, pass or fail, and the judge's evidence. `criteria_results` maps each criterion's *description* to pass or fail, so two criteria with the same description collapse into one key. `rules_broken` lists the ids of criteria that failed when `criteria_verified` is true; otherwise it is the judge's own free-text list, passed through.
 
-`passed: true` means the criterion was met, whatever its type. For a must-happen criterion, the behaviour occurred. For a must-not-happen criterion, the behaviour did not occur. In the example, `"Agent asks for unnecessary personal information": true` means the agent did not ask.
+`passed: true` means the criterion was met, whatever its type. For a must-happen criterion, the behaviour occurred. For a must-not-happen criterion, the behaviour did not occur.
 
 Check `criteria_verified` before trusting `criteria_results`. When it is `false`, the judge never returned a per-criterion audit, and every verdict fell back to the free-text `rules_broken` list. That fallback cannot fail a must-happen criterion, so an agent that never did the required thing still shows it as passed. Treat those verdicts as unknown. The same applies to one criterion whose `criteria_meta` entry has `"audited": false` and `"passed": true`. `audited` is missing on runs saved before the field existed; that means "not recorded", not "unaudited".
 
