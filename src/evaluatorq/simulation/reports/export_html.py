@@ -57,7 +57,7 @@ from evaluatorq.simulation.reports.token_usage import build_token_usage_rows
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import ReportSection, Usage
-    from evaluatorq.simulation.types import SimulationRecommendation, SimulationResult
+    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationResult
 
 # Heatmap colour direction:
 # ``ORQ_SCALE_GOOD_BAD`` is green at 0.0 -> red at 1.0 (i.e. good == low).

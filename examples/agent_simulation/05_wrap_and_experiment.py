@@ -46,7 +46,7 @@ load_dotenv()
 
 from evaluatorq import DataPoint, evaluatorq
 from evaluatorq.simulation import wrap_simulation_agent
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Criterion,
     EmotionalArc,

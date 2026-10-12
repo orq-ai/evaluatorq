@@ -18,7 +18,7 @@ from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.agents.base import AgentConfig, BaseAgent
 from evaluatorq.simulation.agents.judge import JudgeAgentConfig
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgentConfig
-from evaluatorq.simulation.types import Message
+from evaluatorq.simulation.contracts import Message
 
 
 class _ConcreteAgent(BaseAgent):

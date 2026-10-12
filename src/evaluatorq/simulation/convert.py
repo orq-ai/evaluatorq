@@ -33,7 +33,7 @@ from evaluatorq.openresponses.input_items import responses_function_call_item_id
 _ContentList = list[InputTextContent | InputImageContent | InputFileContent | OutputTextContent]
 
 if TYPE_CHECKING:
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.contracts import SimulationResult
 
 
 def _generate_item_id(prefix: str) -> str:

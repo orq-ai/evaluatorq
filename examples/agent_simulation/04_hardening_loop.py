@@ -2,7 +2,7 @@
 """Example: Iterative agent instruction improvement with the hardening loop.
 
 NOTE: This example uses two packages:
-- evaluatorq.simulation.types - production SDK types (Persona, Scenario, Criterion, enums)
+- evaluatorq.simulation.contracts - production SDK types (Persona, Scenario, Criterion, enums)
 - agent_simulation - research package for HardeningLoop (not in production evaluatorq yet)
 
 String literals (e.g. communication_style="casual") are used instead of enum values

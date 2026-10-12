@@ -26,7 +26,7 @@ from evaluatorq.simulation.generators import (
     ScenarioGenerator,
 )
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
 
 def _persona() -> Persona:
@@ -585,7 +585,7 @@ async def test_simulate_hands_its_config_to_the_run(monkeypatch: pytest.MonkeyPa
         return []
 
     async def fake_datapoints(*_a: Any, **_kw: Any) -> list[Any]:
-        from evaluatorq.simulation.types import SimulationDatapoint
+        from evaluatorq.simulation.contracts import SimulationDatapoint
 
         return [
             SimulationDatapoint(
@@ -623,7 +623,7 @@ async def test_generate_and_simulate_hands_its_config_to_the_run(monkeypatch: py
         return []
 
     async def fake_inner(*_a: Any, **_kw: Any) -> tuple[Any, ...]:
-        from evaluatorq.simulation.types import SimulationDatapoint
+        from evaluatorq.simulation.contracts import SimulationDatapoint
 
         datapoints = [
             SimulationDatapoint(

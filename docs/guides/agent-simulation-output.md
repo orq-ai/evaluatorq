@@ -6,6 +6,11 @@ Read this page when you parse simulation output in code, in CI or from an agent.
 
 A **scenario** is the situation and goal the persona brings. A **datapoint** is one persona paired with one scenario. A **criterion** is a behaviour the scenario says must happen or must not happen. An **evaluator** turns a finished conversation into a numeric score.
 
+
+## Python imports
+
+Import simulation data models from `evaluatorq.simulation.contracts`. The former `evaluatorq.simulation.types` module remains available for compatibility and emits a `DeprecationWarning`; update imports to the canonical path.
+
 ## Where the output lands
 
 | You ran | What you get | Model |

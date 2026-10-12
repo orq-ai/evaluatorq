@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-from evaluatorq.simulation.types import Persona, Scenario, SimulationDatapoint
+from evaluatorq.simulation.contracts import Persona, Scenario, SimulationDatapoint
 
 if TYPE_CHECKING:
     from evaluatorq.types import DataPoint

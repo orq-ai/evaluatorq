@@ -22,7 +22,7 @@ from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.openresponses.input_items import messages_to_responses_input
 from evaluatorq.simulation.agents.base import BaseAgent
 from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
-from evaluatorq.simulation.types import Criterion, Message
+from evaluatorq.simulation.contracts import Criterion, Message
 
 _ORQ_ROUTER_BASE_URL = 'https://my.orq.ai/v3/router'
 _EPHEMERAL = {'type': 'ephemeral'}

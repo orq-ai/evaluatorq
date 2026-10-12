@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 def _sim_run(target_kind: str = 'orq_agent', target: str | None = 'agent-sim'):
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         SimulationRecommendation,
         SimulationResult,
         SimulationRun,

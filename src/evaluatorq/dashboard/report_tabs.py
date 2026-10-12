@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from evaluatorq.redteam.contracts import RedTeamReport, RedTeamResult
-    from evaluatorq.simulation.types import SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRun
 
 
 def _render_sections(

@@ -27,7 +27,7 @@ from evaluatorq.simulation.cli import (
     _write_report,
     app,
 )
-from evaluatorq.simulation.types import DEFAULT_MODEL
+from evaluatorq.simulation.contracts import DEFAULT_MODEL
 from evaluatorq.simulation.utils.run_store import auto_save_run as _auto_save_run
 from evaluatorq.simulation.utils.run_store import build_simulation_run as _build_simulation_run
 
@@ -184,7 +184,7 @@ def _make_result(
     scorer_scores: dict[str, float] | None = None,
 ) -> Any:
     from evaluatorq.contracts import TokenUsage
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         SimulationResult,
         TerminatedBy,
     )
@@ -204,7 +204,7 @@ def _make_result(
 
 
 def _make_datapoints(count: int = 2) -> list[Any]:
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         CommunicationStyle,
         Persona,
         Scenario,
@@ -2158,7 +2158,7 @@ def test_export_md_includes_stored_recommendations(tmp_path):
     import json as _json
 
     from evaluatorq.contracts import Message, TokenUsage
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         SimulationRecommendation,
         SimulationResult,
         SimulationRun,
@@ -2216,7 +2216,7 @@ def test_export_html_format(tmp_path):
     """eq sim export --format html writes a self-contained HTML report."""
     results = tmp_path / "results.jsonl"
     from evaluatorq.contracts import Message, TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, TerminatedBy
 
     r = SimulationResult(
         messages=[Message(role="user", content="hi")],
@@ -2269,7 +2269,7 @@ def test_run_recommendations_flag_attaches_to_saved_run(
         patch("evaluatorq.simulation.cli._run_impl", new_callable=AsyncMock) as mock_impl,
     ):
         mock_target.return_value = MagicMock()
-        from evaluatorq.simulation.types import SimulationRecommendation
+        from evaluatorq.simulation.contracts import SimulationRecommendation
 
         stub_run = _stub_run([_make_result()], mode="run")
         stub_run.recommendations = [SimulationRecommendation.model_validate(r) for r in fake_recs]

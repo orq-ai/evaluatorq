@@ -1,6 +1,6 @@
-"""The data-shaped keyword arguments of `red_team`, as one model a JSON file can carry.
+"""The data-shaped keyword arguments of `red_team`, as one JSON configuration model.
 
-``eq redteam run --config`` validates its file against `RedTeamRunConfig` and ``eq redteam schema`` prints
+``eq redteam run --config`` validates its input against `RedTeamCliConfig` and ``eq redteam schema`` prints
 its JSON schema. Python objects (an ``AgentTarget``, ``hooks``, ``llm_client``) and the deprecated
 ``parallelism`` alias have no field here; ``tests/test_cli_config_parity.py`` keeps the two in step.
 """

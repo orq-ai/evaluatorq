@@ -70,7 +70,7 @@ def test_index_does_not_crash_on_mixed_naive_and_aware_timestamps(tmp_path: Path
 
 def _sim_run_with_xss_criterion():
     from evaluatorq.contracts import Message, TokenUsage
-    from evaluatorq.simulation.types import SimulationResult, SimulationRun, TerminatedBy
+    from evaluatorq.simulation.contracts import SimulationResult, SimulationRun, TerminatedBy
 
     result = SimulationResult(
         messages=[Message(role='user', content='hi')],

@@ -18,7 +18,7 @@ import pytest
 
 from evaluatorq.contracts import LLMCallConfig, TokenUsage
 from evaluatorq.simulation.runner.simulation import SimulationRunner
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     Message,
     Persona,
@@ -390,7 +390,7 @@ class TestInjectedJudgeReceivesScenarioContext:
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
         from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
-        from evaluatorq.simulation.types import Criterion
+        from evaluatorq.simulation.contracts import Criterion
 
         judge = JudgeAgent(JudgeAgentConfig(model="test-model"))
         assert "No specific criteria defined" in judge.system_prompt
@@ -412,7 +412,7 @@ class TestInjectedJudgeReceivesScenarioContext:
         monkeypatch.setenv("ORQ_API_KEY", "test-key")
 
         from evaluatorq.simulation.agents.judge import JudgeAgent, JudgeAgentConfig
-        from evaluatorq.simulation.types import Criterion
+        from evaluatorq.simulation.contracts import Criterion
 
         judged: list[JudgeAgent] = []
 

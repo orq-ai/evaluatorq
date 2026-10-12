@@ -1,13 +1,14 @@
-"""Structured input and output for the run commands: ``--config``, JSON-valued flags, ``--json`` and ``schema``.
+"""Structured input and output for run commands: ``--config``, JSON-valued flags, ``--json`` and ``schema``.
 
-``eq redteam run``, ``eq sim simulate`` and ``eq sim run`` accept their SDK keyword arguments as one JSON
-document (``--config``), and print their result model as JSON (``--json``). Each surface owns the pydantic
-model naming its keyword arguments and a table of `Flag` rows saying which field each flag sets; this module
-turns the two into one validated model with `resolve_config`.
+``eq redteam run``, ``eq sim simulate`` and ``eq sim run`` accept current canonical SDK keyword arguments through
+``--config``; deprecated aliases are excluded. They print their result model as JSON (``--json``). Each surface
+owns the pydantic model naming its keyword arguments and a table of `Flag` rows saying which field each flag sets;
+this module turns the two into one validated model with `resolve_config`.
 
-Precedence is the same everywhere: a flag passed on the command line beats the config file, which beats the
-model's default. "Passed on the command line" is read from click's parameter source, never by comparing the
-value with a default, so ``--max-turns 5`` beats a config's ``"max_turns": 8`` even when 5 is the default.
+Precedence is the same everywhere: a flag passed on the command line beats inline JSON, a config file or stdin,
+and that source beats the model's default. "Passed on the command line" is read from click's parameter source,
+never by comparing the value with a default, so ``--max-turns 5`` beats a config's ``"max_turns": 8`` even when 5
+is the default.
 Config-backed flags therefore declare no default of their own: the model's default is the only one.
 """
 
@@ -39,7 +40,7 @@ _IMPLICIT_SOURCES = frozenset({ParameterSource.DEFAULT, ParameterSource.DEFAULT_
 def config_option_help(function: str, schema_command: str) -> str:
     """Help text for a ``--config`` option that carries ``function``'s keyword arguments."""
     return (
-        f'JSON file of {function} keyword arguments, or "-" to read it from stdin. '
+        f'Inline JSON object, path to a JSON file, or "-" for stdin, holding {function} keyword arguments. '
         f'Flags passed on the command line override it, field by field. Unknown keys are rejected; '
         f'print the accepted shape with `{schema_command}`.'
     )
@@ -99,7 +100,7 @@ def resolve_config(
     *,
     config_source: str | None,
 ) -> ModelT:
-    """Build ``model`` from the ``--config`` file with every flag passed on the command line merged on top.
+    """Build ``model`` from inline JSON, a ``--config`` file or stdin, with explicit flags merged on top.
 
     Flags apply in ``flags`` order and deep-merge into their own path, so ``--attack-model`` keeps the rest of
     a configured ``llm_config``, and a narrow flag listed after ``--llm-config`` wins over it for its field.
@@ -164,7 +165,9 @@ def parse_json_config(raw: str, model: type[BaseModel], *, flag: str, origin: st
 
 
 def load_config(source: str, model: type[BaseModel], *, flag: str = '--config') -> dict[str, Any]:
-    """Read ``source`` (a path, or ``-`` for stdin), validate it against ``model`` and return its parsed JSON."""
+    """Read inline JSON, a path or ``-`` for stdin; validate the JSON and return its parsed object."""
+    if source.lstrip().startswith('{'):
+        return parse_json_config(source, model, flag=flag, origin='inline JSON')
     raw, origin = _read_source(source, flag=flag)
     return parse_json_config(raw, model, flag=flag, origin=origin)
 

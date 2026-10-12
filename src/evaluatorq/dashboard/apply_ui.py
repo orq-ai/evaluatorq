@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
     from evaluatorq.redteam.contracts import FocusAreaRecommendation, RedTeamReport
     from evaluatorq.redteam.reports.apply import ApplyRecommendationsResult
-    from evaluatorq.simulation.types import SimulationRecommendation, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationRecommendation, SimulationRun
 
 DRAWER_ID = 'rt-apply-drawer'
 AGENT_FIELD_ID = 'rt-apply-agent-field'

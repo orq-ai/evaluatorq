@@ -52,7 +52,7 @@ eq redteam run --target agent:<key> [OPTIONS]
 | `--yes` / `-y` | `bool` / `False` | Skip confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` per-attack progress + info logs; `-vv` debug logs. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress progress bars and non-error output. |
-| `--config` | `PATH \| -` / `None` | JSON file of `red_team()` keyword arguments, or `-` to read it from stdin. See [Driving the CLI from a config file](#driving-the-cli-from-a-config-file). |
+| `--config` | `JSON \| PATH \| -` / `None` | JSON object (shell-quote it), file path, or `-` to read JSON from stdin. See [Driving the CLI from a config file or inline JSON](#driving-the-cli-from-a-config-file-or-inline-json). |
 | `--llm-config` | JSON / `None` | `LLMConfig` as a JSON object. Merged field by field into `"llm_config"` from `--config`. Each of `--attack-model`, `--evaluator-model`, `--min-evaluation-coverage`, `--target-timeout-ms`, `--max-target-retries`, `--retry-count`, `--max-tool-continuations` and `--target-reasoning-effort` wins over it for its own field when passed. |
 | `--json` | `bool` / `False` | Print the final `RedTeamReport` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
@@ -67,9 +67,10 @@ eq redteam run --target agent:<key> [OPTIONS]
 
 Both cases print the dominant failure cause with a sample message before exiting: an `evaluation/<code>` (timeout / parse / api_connection / api_status / scorer_exception) when the judge failed, or an `execution/<code>` when the target failed and there was nothing to judge. Either way a systematically blocked run is diagnosable from the CLI output alone.
 
-### Driving the CLI from a config file
+### Driving the CLI from a config file or inline JSON
 
-`--config` takes the keyword arguments of the Python `red_team()` function as one JSON object, so every data-shaped parameter is reachable from the CLI, including the ones without a flag (`datapoints`, `attack_techniques`, `description`, the full `llm_config`, a tuned `recommendations` object). Pass a path, or `-` to read it from stdin. YAML is not accepted.
+`--config` takes the keyword arguments of the Python `red_team()` function as one JSON object, so every data-shaped parameter is reachable from the CLI, including the ones without a flag (`datapoints`, `attack_techniques`, `description`, the full `llm_config`, a tuned `recommendations` object). Pass a JSON file path, a shell-quoted inline JSON object, or `-` to read JSON from stdin. YAML is not accepted. Inline JSON is recognized after leading whitespace is stripped; a filename beginning with `{` can be passed as `./{name}.json` to disambiguate it. Malformed inline JSON is reported as a JSON usage error and is not retried as a file path.
+For sensitive values, prefer a config file or stdin instead of placing them in shell history or process arguments.
 
 ```json
 {
@@ -89,11 +90,13 @@ Both cases print the dominant failure cause with a sample message before exiting
 ```bash
 eq redteam run --config run.json --json > report.json
 cat run.json | eq redteam run --config - --max-turns 5 --json
+eq redteam run --config '{"target":"agent:my-agent","max_turns":3,"save":"none"}' --json
 ```
 
-A flag passed on the command line beats the file, and the file beats the default. The command checks where a value came from, not what it is, so `--max-turns 5` wins over `"max_turns": 3` even if 5 were the default. A `null` in the file means "not set" and falls back to the default. `--llm-config` and `--system-prompt` merge into the file's `llm_config` and `target_config` rather than replacing them.
+A flag passed on the command line beats the config, and the config beats the default. The command checks where a value came from, not what it is, so `--max-turns 5` wins over `"max_turns": 3` even if 5 were the default. A `null` in the config means "not set" and falls back to the default. `--llm-config` and `--system-prompt` merge into the config's `llm_config` and `target_config` rather than replacing them.
 
-Unknown keys fail the run before anything executes, at every depth: `"max_turn"` at the top level and `"temprature"` inside `llm_config` are both rejected with the field path. `"target"` takes only the string forms; an `AgentTarget` object, `hooks` and `llm_client` stay Python-only.
+Unknown keys fail the run before anything executes, at every depth: `"max_turn"` at the top level and `"temprature"` inside `llm_config` are both rejected with the field path, whether the config came from inline JSON, a file, or stdin. `"target"` takes only the string forms; an `AgentTarget` object, `hooks` and `llm_client` stay Python-only.
+
 
 With `--json`, stdout carries the `RedTeamReport` and nothing else, so it pipes straight into `jq` or a file. The coverage gates above still apply: a run below the floor prints its report and then exits `1`.
 

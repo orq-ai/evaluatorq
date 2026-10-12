@@ -1,10 +1,11 @@
-"""The data-shaped keyword arguments of `simulate` and `generate_and_simulate`, as models a JSON file can carry.
+"""The data-shaped keyword arguments of `simulate` and `generate_and_simulate`, accepted through CLI config.
 
-``eq sim simulate --config`` validates against `SimulateRunConfig` and ``eq sim run --config`` against
-`GenerateAndSimulateRunConfig`; ``eq sim schema`` prints either. Fields use the public keyword names.
-Python objects (a callable or ``AgentTarget`` target, ``user_simulator``, ``judge``, ``hooks``,
-``generation_client``, ``emit_datapoints``), the deprecated ``parallelism`` alias and the older spelling of
-each renamed keyword have no field here; ``tests/test_cli_config_parity.py`` keeps the models in step.
+``eq sim simulate --config`` validates against `SimulateCliConfig` and ``eq sim run --config`` against
+`GenerateAndSimulateCliConfig`; ``eq sim schema`` prints either accepted shape. Fields use current canonical public
+keyword names, excluding deprecated aliases such as ``evaluation_name`` and ``parallelism``.
+Python objects (a callable or ``AgentTarget`` target, ``user_simulator``, ``judge``, ``hooks``, ``generation_client``,
+``emit_datapoints``) and deprecated alias spellings have no field here; ``tests/test_cli_config_parity.py`` keeps
+the models in step.
 
 The internal ``SimulationConfig`` is not reused: it carries the Python objects this file has to exclude.
 """
@@ -23,9 +24,9 @@ from evaluatorq.simulation._config import (
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TARGET_AGENT_TIMEOUT_MS,
 )
+from evaluatorq.simulation.contracts import Persona, Scenario, SimulationDatapoint  # noqa: TC001
 from evaluatorq.simulation.evaluators.scorers import SimulationScoringConfig  # noqa: TC001
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig  # noqa: TC001
-from evaluatorq.simulation.types import Persona, Scenario, SimulationDatapoint  # noqa: TC001
 
 
 class _SharedRunConfig(BaseModel):
@@ -58,7 +59,7 @@ class _SharedRunConfig(BaseModel):
 
 
 class SimulateRunConfig(_SharedRunConfig):
-    """Keyword arguments of `simulate` that JSON can express. ``target`` takes the string forms only."""
+    """Keyword arguments of `simulate` accepted by the CLI config. ``target`` takes the string forms only."""
 
     personas: list[Persona] | None = None
     scenarios: list[Scenario] | None = None
@@ -70,7 +71,7 @@ class SimulateRunConfig(_SharedRunConfig):
 
 
 class GenerateAndSimulateRunConfig(_SharedRunConfig):
-    """Keyword arguments of `generate_and_simulate` that JSON can express. ``target`` takes the string forms only."""
+    """Keyword arguments of `generate_and_simulate` accepted by the CLI config. ``target`` takes the string forms only."""
 
     agent_description: str | None = None
     num_personas: int = Field(default=5, ge=1)

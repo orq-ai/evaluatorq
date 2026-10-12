@@ -41,7 +41,7 @@ Rules:
 
 if TYPE_CHECKING:
     from evaluatorq.contracts import LLMCallConfig
-    from evaluatorq.simulation.types import SimulationResult
+    from evaluatorq.simulation.contracts import SimulationResult
 
 
 def build_sim_facts(results: list[SimulationResult]) -> str:

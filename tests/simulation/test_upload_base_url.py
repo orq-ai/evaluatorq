@@ -14,7 +14,7 @@ import evaluatorq.evaluatorq  # noqa: F401  populate sys.modules; the package at
 _EQ_MOD = sys.modules["evaluatorq.evaluatorq"]
 
 from evaluatorq.contracts import LLMCallConfig
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CommunicationStyle,
     SimulationDatapoint,
     Message,

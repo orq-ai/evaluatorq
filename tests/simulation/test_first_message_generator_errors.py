@@ -23,7 +23,7 @@ from evaluatorq.simulation.generators.first_message_generator import (
     FirstMessageGenerationError,
     FirstMessageGenerator,
 )
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario
 
 
 @pytest.fixture(autouse=True)

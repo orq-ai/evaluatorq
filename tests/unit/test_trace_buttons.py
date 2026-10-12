@@ -32,7 +32,7 @@ from evaluatorq.redteam.contracts import (
 )
 from evaluatorq.contracts import ResponseTrace
 from evaluatorq.redteam.reports.converters import compute_report_summary
-from evaluatorq.simulation.types import SimulationRun
+from evaluatorq.simulation.contracts import SimulationRun
 
 
 @pytest.fixture(autouse=True)
@@ -152,7 +152,7 @@ class TestRedteamConversationTraceButton:
 
 
 def _make_entry(thread_id: str | None, last_trace_id: str | None = None) -> Any:
-    from evaluatorq.simulation.types import SimulationEntry
+    from evaluatorq.simulation.contracts import SimulationEntry
 
     return SimulationEntry(
         index=0,

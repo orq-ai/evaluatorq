@@ -33,8 +33,8 @@ from evaluatorq.simulation._config import (
     sim_llm_config,
     sim_role_config,
 )
+from evaluatorq.simulation.contracts import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.reports.recommendations import SimulationRecommendationConfig
-from evaluatorq.simulation.types import DEFAULT_EVALUATOR_NAMES, DEFAULT_MAX_TURNS, DEFAULT_RUN_NAME
 from evaluatorq.simulation.utils.run_store import auto_save_run, build_simulation_run, fetch_agent_info, write_report
 
 if TYPE_CHECKING:
@@ -46,11 +46,7 @@ if TYPE_CHECKING:
     from evaluatorq.common.run_manifest import ManifestWriter
     from evaluatorq.contracts import AgentResponse, AgentTarget, LLMCallConfig, TokenUsage
     from evaluatorq.simulation.agents.base import BaseAgent
-    from evaluatorq.simulation.evaluators.scorers import SimulationScorer, SimulationScoringConfig
-    from evaluatorq.simulation.generators import FirstMessageGenerator
-    from evaluatorq.simulation.hooks import SimulationHooks, SimulationRunMeta
-    from evaluatorq.simulation.replay import SimulationReplay
-    from evaluatorq.simulation.types import (
+    from evaluatorq.simulation.contracts import (
         Message,
         Persona,
         Scenario,
@@ -58,6 +54,10 @@ if TYPE_CHECKING:
         SimulationResult,
         SimulationRun,
     )
+    from evaluatorq.simulation.evaluators.scorers import SimulationScorer, SimulationScoringConfig
+    from evaluatorq.simulation.generators import FirstMessageGenerator
+    from evaluatorq.simulation.hooks import SimulationHooks, SimulationRunMeta
+    from evaluatorq.simulation.replay import SimulationReplay
     from evaluatorq.types import DataPoint, DataPointResult, Evaluator, EvaluatorScore
 
     EmitDatapoints = Callable[[list[SimulationDatapoint]], None]
@@ -2662,8 +2662,8 @@ def _sim_evaluation_details(name: str, result: SimulationResult) -> tuple[str | 
                 ),
                 False,
             )
+        from evaluatorq.simulation.contracts import CriteriaMeta
         from evaluatorq.simulation.evaluators.scorers import read_criteria_meta
-        from evaluatorq.simulation.types import CriteriaMeta
 
         entries, invalid = read_criteria_meta(result)
         if invalid:
@@ -2720,8 +2720,8 @@ def _sim_evaluation_raw_output(name: str, result: SimulationResult, value: objec
     `ConversationQualityScore`. A user-supplied scorer registered under that name returns a plain
     ``float`` with nothing to report, so it degrades to ``None`` and logs at debug level.
     """
+    from evaluatorq.simulation.contracts import parse_criteria_meta
     from evaluatorq.simulation.evaluators.scorers import ConversationQualityScore, unverified_reason
-    from evaluatorq.simulation.types import parse_criteria_meta
 
     if name == 'criteria_met':
         # `parse_criteria_meta`, not `read_criteria_meta`: the latter logs and records the invalid

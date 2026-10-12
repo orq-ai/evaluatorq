@@ -121,6 +121,65 @@ def test_config_is_read_from_stdin() -> None:
     assert fake.call_args.kwargs['max_turns'] == 2
 
 
+def test_inline_json_config_reaches_red_team_and_explicit_flags_win() -> None:
+    payload = {
+        'target': 'agent:from-config',
+        'generated_strategy_count': 4,
+        'generate_strategies': False,
+        'llm_config': {'attacker': {'model': 'config/model', 'temperature': 0.4}},
+    }
+
+    result, fake = _invoke(
+        [
+            '--config',
+            '  ' + json.dumps(payload),
+            '--generated-strategy-count',
+            '2',
+            '--generate-strategies',
+            '--attack-model',
+            'flag/model',
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    kwargs = fake.call_args.kwargs
+    assert kwargs['target'] == 'agent:from-config'
+    assert kwargs['generated_strategy_count'] == 2
+    assert kwargs['generate_strategies'] is True
+    assert kwargs['llm_config'].attacker.model == 'flag/model'
+    assert kwargs['llm_config'].attacker.temperature == 0.4
+
+
+def test_malformed_inline_json_is_a_usage_error_without_running() -> None:
+    result, fake = _invoke(['--config', '{not json'])
+
+    assert result.exit_code == 2
+    assert 'inline JSON:' in _flat(result.output)
+    fake.assert_not_called()
+
+
+def test_inline_json_rejects_nested_unknown_keys_before_running() -> None:
+    payload = {'target': 'agent:x', 'llm_config': {'attacker': {'temprature': 0.2}}}
+
+    result, fake = _invoke(['--config', json.dumps(payload)])
+
+    assert result.exit_code == 2
+    assert 'llm_config.attacker.temprature' in _flat(result.output)
+    fake.assert_not_called()
+
+
+def test_config_path_starting_with_brace_can_be_disambiguated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / '{run}.json'
+    path.write_text(json.dumps({'target': 'agent:from-file', 'max_turns': 3}), encoding='utf-8')
+
+    result, fake = _invoke(['--config', './{run}.json'])
+
+    assert result.exit_code == 0, result.output
+    assert fake.call_args.kwargs['target'] == 'agent:from-file'
+    assert fake.call_args.kwargs['max_turns'] == 3
+
+
 def test_an_explicit_flag_beats_the_config_even_at_its_default_value(tmp_path: Path) -> None:
     # 2 is --generated-strategy-count's default: precedence must come from where the value came from,
     # not from comparing it with the default.

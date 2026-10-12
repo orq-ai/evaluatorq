@@ -24,8 +24,7 @@ from evaluatorq.contracts import (
 from evaluatorq.integrations.callable_integration import CallableTarget
 from evaluatorq.simulation.agents.judge import JudgeAgent
 from evaluatorq.simulation.agents.user_simulator import UserSimulatorAgent
-from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
-from evaluatorq.simulation.types import (
+from evaluatorq.simulation.contracts import (
     CriteriaMeta,
     CriterionVerdict,
     Judgment,
@@ -38,6 +37,7 @@ from evaluatorq.simulation.types import (
     TurnMetrics,
     criterion_id_for,
 )
+from evaluatorq.simulation.tracing import span_message_text, with_simulation_span
 from evaluatorq.simulation.utils.prompt_builders import (
     build_datapoint_system_prompt,
     build_persona_system_prompt,

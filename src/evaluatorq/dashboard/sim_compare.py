@@ -43,7 +43,7 @@ from evaluatorq.dashboard.view import _panel, report_back_link
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from evaluatorq.simulation.types import SimulationEntry, SimulationRun
+    from evaluatorq.simulation.contracts import SimulationEntry, SimulationRun
 
 _UP = COLORS['success_400']  # improved / higher in B
 _DOWN = COLORS['red_400']  # regressed / lower in B

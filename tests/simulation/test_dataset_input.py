@@ -15,7 +15,7 @@ from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.simulation.api import _resolve_or_generate_datapoints
 from evaluatorq.simulation.datasets import datapoints_from_dataset, extend_from_dataset
 from evaluatorq.simulation.generators import DatapointGenerator
-from evaluatorq.simulation.types import CommunicationStyle, Persona, Scenario, SimulationDatapoint
+from evaluatorq.simulation.contracts import CommunicationStyle, Persona, Scenario, SimulationDatapoint
 from evaluatorq.types import DataPoint
 
 

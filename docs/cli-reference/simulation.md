@@ -53,7 +53,7 @@ Targets — provide **exactly one**:
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. `-v` info; `-vv` debug. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
-| `--config` | `PATH \| -` / `None` | JSON file of `generate_and_simulate()` keyword arguments, or `-` to read it from stdin. See [Driving the CLI from a config file](#driving-the-cli-from-a-config-file); `eq sim schema --command run` prints the accepted shape. |
+| `--config` | `JSON \| PATH \| -` / `None` | JSON object (shell-quote it), file path, or `-` to read JSON from stdin. See [Driving the CLI from a config file or inline JSON](#driving-the-cli-from-a-config-file-or-inline-json); `eq sim schema --command run` prints the accepted shape. |
 | `--llm-config` | JSON / `None` | `LLMCallConfig` for every simulation-side LLM call as a JSON object. Merged field by field into `"llm_config"` from `--config`. `--sim-model` wins over its `"model"` when passed. |
 | `--json` | `bool` / `False` | Print the final `SimulationRun` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
@@ -95,13 +95,14 @@ There is no `--target-reasoning-effort` flag here — it is a `eq sim run` flag 
 | `--yes` / `-y` | `bool` / `False` | Skip interactive confirmation prompt. |
 | `--verbose` / `-v` | count / `0` | Increase verbosity. |
 | `--quiet` / `-q` | `bool` / `False` | Suppress non-error output. |
-| `--config` | `PATH \| -` / `None` | JSON file of `simulate()` keyword arguments, or `-` to read it from stdin. See [Driving the CLI from a config file](#driving-the-cli-from-a-config-file); `eq sim schema` prints the accepted shape. |
+| `--config` | `JSON \| PATH \| -` / `None` | JSON object (shell-quote it), file path, or `-` to read JSON from stdin. See [Driving the CLI from a config file or inline JSON](#driving-the-cli-from-a-config-file-or-inline-json); `eq sim schema` prints the accepted shape. |
 | `--llm-config` | JSON / `None` | `LLMCallConfig` for every simulation-side LLM call as a JSON object. Merged field by field into `"llm_config"` from `--config`. `--sim-model` wins over its `"model"` when passed. |
 | `--json` | `bool` / `False` | Print the final `SimulationRun` as JSON on stdout. Progress and messages go to stderr; exit codes are unchanged. |
 
-### Driving the CLI from a config file
+### Driving the CLI from a config file or inline JSON
 
-`--config` on `eq sim simulate` and `eq sim run` takes the keyword arguments of the Python `simulate()` and `generate_and_simulate()` functions as one JSON object, under their public names (`run_name`, `experiment_description`, `raise_on_execution_failure`). That reaches every data-shaped parameter, including the ones without a flag: inline `personas` and `scenarios` or `datapoints`, `scoring`, `target_agent_timeout_ms`, `max_tool_result_chars`, `per_simulation_timeout_s`, `upload_results`, the full `llm_config`, and on `sim run` `edge_case_percentage`. Pass a path, or `-` to read it from stdin. YAML is not accepted.
+`--config` on `eq sim simulate` and `eq sim run` takes the keyword arguments of the Python `simulate()` and `generate_and_simulate()` functions as one JSON object, under their public names (`run_name`, `experiment_description`, `raise_on_execution_failure`). That reaches every data-shaped parameter, including the ones without a flag: inline `personas` and `scenarios` or `datapoints`, `scoring`, `target_agent_timeout_ms`, `max_tool_result_chars`, `per_simulation_timeout_s`, `upload_results`, the full `llm_config`, and on `sim run` `edge_case_percentage`. Pass a JSON file path, a shell-quoted inline JSON object, or `-` to read JSON from stdin. YAML is not accepted. Inline JSON is recognized after leading whitespace is stripped; a filename beginning with `{` can be passed as `./{name}.json` to disambiguate it. Malformed inline JSON is reported as a JSON usage error and is not retried as a file path.
+For sensitive values, prefer a config file or stdin instead of placing them in shell history or process arguments.
 
 Inline `datapoints`, or `personas` with `scenarios`, count as the input source of `eq sim simulate`, so the file below needs no `--input`:
 
@@ -135,6 +136,7 @@ Inline `datapoints`, or `personas` with `scenarios`, count as the input source o
 
 ```bash
 eq sim simulate --config sim.json --json > run.json
+eq sim simulate --input dp.jsonl --config '{"target":"agent:my-agent","max_turns":6,"save":false}' --json
 ```
 
 `eq sim run` takes the generation keywords the same way:
@@ -151,13 +153,16 @@ eq sim simulate --config sim.json --json > run.json
 
 ```bash
 eq sim run --config gen.json --num-scenarios 3 --json
+cat gen.json | eq sim run --config -
+eq sim run --config '{"target":"agent:my-agent","num_personas":4,"num_scenarios":3,"save":false}' --json
 ```
 
-A flag passed on the command line beats the file, and the file beats the CLI default. The command checks where a value came from, not what it is, so `--max-turns 10` wins over `"max_turns": 6` even though 10 is the default. A `null` in the file means "not set" and is accepted only on fields that allow `None`, such as `run_name`, `max_turns` or `datapoint_parallelism`; the SDK default then applies. A value nobody sets (no flag, no file entry) is never sent: `max_turns`, `datapoint_parallelism` and `run_name` reach the SDK only when you pass them, so `--from-run` can still restore the replayed cap. `"save": false` in the file has the effect of `--no-save`. `--llm-config` and the file's `"llm_config"` merge field by field, and `--sim-model` wins for `model`.
+A flag passed on the command line beats the config, and the config beats the default. The command checks where a value came from, not what it is, so `--max-turns 10` wins over `"max_turns": 6` even though 10 is the default. A `null` in the config means "not set" and is accepted only on fields that allow `None`, such as `run_name`, `max_turns` or `datapoint_parallelism`; the SDK default then applies. A value nobody sets (no flag, no config entry) is never sent: `max_turns`, `datapoint_parallelism` and `run_name` reach the SDK only when you pass them, so `--from-run` can still restore the replayed cap. `"save": false` in the config has the effect of `--no-save`. `--llm-config` and the config's `"llm_config"` merge field by field, and `--sim-model` wins for `model`.
 
-The target and the input source are each one choice, so a command-line flag replaces the file's whole choice rather than adding a second one. `--target`, `--vercel-url` or `--openai-model` drops the file's `"target"`. On `eq sim simulate`, `--input`, `--dataset-id`, `--experiment-id` or `--from-run` drops the file's `"datapoints"`, `"personas"`, `"scenarios"`, `"dataset_id"`, `"experiment_id"`, `"experiment_run_id"` and `"previous_run"`. `--experiment-run-id` alone narrows the file's `"experiment_id"` instead. Two flags for the same choice on the command line are still rejected.
+The target and the input source are each one choice, so a command-line flag replaces the config's whole choice rather than adding a second one. `--target`, `--vercel-url` or `--openai-model` drops the config's `"target"`. On `eq sim simulate`, `--input`, `--dataset-id`, `--experiment-id` or `--from-run` drops the config's `"datapoints"`, `"personas"`, `"scenarios"`, `"dataset_id"`, `"experiment_id"`, `"experiment_run_id"` and `"previous_run"`. `--experiment-run-id` alone narrows the config's `"experiment_id"` instead. Two flags for the same choice on the command line are still rejected.
 
-Unknown keys fail the command before anything runs, at every depth, so `"num_personas"` in a `sim simulate` file or `"patiense"` inside a persona is rejected with the field path. `"target"` takes only the `agent:<key>` and `deployment:<key>` string forms; a callable or `AgentTarget`, `user_simulator`, `judge`, `hooks` and `generation_client` stay Python-only.
+Unknown keys fail the command before anything runs, at every depth, so `"num_personas"` in a `sim simulate` config or `"patiense"` inside a persona is rejected with the field path, regardless of whether the config came from inline JSON, a file, or stdin. `"target"` takes only the `agent:<key>` and `deployment:<key>` string forms; a callable or `AgentTarget`, `user_simulator`, `judge`, `hooks` and `generation_client` stay Python-only.
+
 
 With `--json`, stdout carries the `SimulationRun` and nothing else; the run-store save, the report files and every progress line still happen, on stderr.
 
@@ -173,8 +178,8 @@ eq sim schema [--input | --output] [--command simulate|run]
 
 | Flag | Type / Default | Description |
 |---|---|---|
-| `--input` / `--output` | `bool` / `--input` | `--input` prints the config file schema. `--output` prints the `SimulationRun` schema, which both commands share. |
-| `--command` | `simulate \| run` / `simulate` | Which command's config file `--input` describes: `SimulateRunConfig` for `eq sim simulate`, `GenerateAndSimulateRunConfig` for `eq sim run`. |
+| `--input` / `--output` | `bool` / `--input` | `--input` prints the `--config` input schema. `--output` prints the `SimulationRun` schema, which both commands share. |
+| `--command` | `simulate \| run` / `simulate` | Which command's config `--input` describes: `SimulateCliConfig` for `eq sim simulate`, `GenerateAndSimulateCliConfig` for `eq sim run`. |
 
 ---
 

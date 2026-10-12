@@ -1,8 +1,6 @@
-"""Every data-shaped SDK keyword argument is reachable from the CLI's ``--config`` file.
+"""Current canonical SDK keyword arguments are reachable from each CLI's ``--config`` model.
 
-``eq redteam run``, ``eq sim simulate`` and ``eq sim run`` validate ``--config`` against a model that mirrors
-the SDK signature. A keyword added to the SDK without a field there is unreachable from the CLI, so this
-test fails until the field is added or the keyword is named below with the reason it cannot be JSON.
+Deprecated aliases such as ``evaluation_name`` and ``parallelism`` are deliberately excluded from parity.
 """
 
 from __future__ import annotations
