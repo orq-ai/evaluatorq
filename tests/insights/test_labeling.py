@@ -978,6 +978,5 @@ async def test_classifier_uses_jev_state_only_for_jev_and_the_conversation_view_
         )
     else:
         assert isinstance(state, str)
-        for phrase in ('REQUEST-START', '1 tools: search: middle-input', 'FINAL-ANSWER'):
+        for phrase in ('REQUEST-START', '#1 tool input search (call 1.1): ', 'middle-input', 'MIDDLE-RESULT', 'FINAL-ANSWER'):
             assert phrase in state
-        assert 'MIDDLE-RESULT' not in state  # tool results are left out by default

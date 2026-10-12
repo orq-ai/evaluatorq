@@ -271,7 +271,8 @@ def prompt_messages(document: TraceDocument | TraceRecord, *, include_reasoning:
     """Rebuild the historical message dictionaries from ATIF native fields and rendering annotations.
 
     `include_reasoning` copies a step's native `reasoning_content` onto its message when the message has none of its
-    own, so a converted OTel trace keeps the reasoning a renderer can opt into.
+    own, so a converted OTel trace keeps the reasoning a renderer can opt into. It is off by default because
+    Insights coverage serializes these messages verbatim to count source characters.
     """
     doc = ensure_trace_document(document)
     ordered: list[tuple[int, dict[str, Any]]] = []

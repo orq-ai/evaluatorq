@@ -136,7 +136,7 @@ async def test_summarize_traces_calls_generate_structured_and_caches(
     content = captured_messages[0][0]['content']
     assert '<conversation>' in content
     assert '</conversation>' in content
-    for phrase in ('REQUEST-START ', ' REQUEST-END', '1 tool input shell.exec: run tests', '2 tool result call-1: tool result payload', 'FINAL-ANSWER'):
+    for phrase in ('REQUEST-START ', ' REQUEST-END', '#1 tool input shell.exec (call 1.1): run tests', '#2 tool result shell.exec (call 1.1): tool result payload', 'FINAL-ANSWER'):
         assert phrase in content
 
     cached = cache.get_summary(

@@ -318,7 +318,9 @@ def test_projection_coverage_uses_the_actual_non_jev_insights_classifier_state()
 
     assert isinstance(state, str)
     assert 'REQUEST-START' in state
-    assert 'FULL-TOOL-RESULT' not in state  # tool results are left out by default
+    assert 'FULL-TOOL-RESULT' in state  # each result keeps its start and end
+    assert '[... 7717 chars left out ...]' in state
+    assert coverage['n_classifier_truncated'] == 1
     assert coverage['classifier_state_chars'] == len(state)
     assert coverage['classifier_state_format'] == 'text'
     assert coverage['classifier_question_reserve'] == 'not_available'
