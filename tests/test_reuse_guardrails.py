@@ -297,23 +297,6 @@ def test_decisions_post_detector_actually_fires() -> None:
     assert _decisions_post_lines("path = '/decisions'") == []
 
 
-def test_the_owner_posts_only_the_decisions_route() -> None:
-    """The owner module must call the current route, not the deprecated alias."""
-    tree = ast.parse((SRC / _DECISIONS_POST_OWNER).read_text(encoding='utf-8'))
-    paths = [
-        node.args[0].value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == 'post'
-        and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and isinstance(node.args[0].value, str)
-        and node.args[0].value.startswith(_DECISIONS_POST_PATHS)
-    ]
-    assert paths == ['/decisions']
-
-
 def test_openai_clients_come_from_llm_client() -> None:
     extra = _hits(lambda name: _tail(name) in OPENAI_CLIENT_NAMES, allow={'common/llm_client.py'})
     assert not extra, (

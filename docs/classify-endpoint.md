@@ -2,6 +2,8 @@
 
 `run_classify()` sends one piece of state and several typed questions about it to the Orq router's Decisions endpoint, `POST /v3/router/decisions`, and returns every answer from one round trip. The older `/classify` route is a deprecated alias of it with the same request and response, and evaluatorq no longer calls it.
 
+"Classify" is the name of the operation in evaluatorq's API and in the Orq catalogue and API-key permission; `/decisions` is the route it calls.
+
 Reach for it when you want typed labels over state you already have — a trace, a transcript, a row of a dataset — and you do not want a judge panel around them. If you want a verdict aggregated over several models, with repetitions and abstentions, you want a [jury](llm-as-a-jury.md), and [classify judges](classify-judges.md) is how a classify model takes a seat on one.
 
 `run_classify`, `ClassifyQuestion`, `ClassifyRequest`, `ClassifyOutcome` and `llm_concurrency_limit` import from top-level `evaluatorq` and are the supported surface. Five names on this page do not: `with_retry`, `models_by_provider`, `classify_request_body`, `ClassifyResponse` and `JudgeError` are reachable only under `evaluatorq.common.*`, which carries no stability promise. `ClassifyAnswer` is in the same position — you receive one, so you rarely need to import it.
@@ -318,7 +320,7 @@ Because the wrapper above hands back the last outcome instead of raising, a row 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `error_kind` is `api_status`, message `Model '<id>' in model does not support classify` | The model's catalogue entry does not set `supports_classify`. `openai/gpt-6-sol` is one such id; being a chat model is not what decides it. | Check the id against the listing above, or use `typesafe/jev-latest`. |
-| A 404, or an authentication error | The client's `base_url` is not the Orq router, only `OPENAI_API_KEY` is set, or the router suffix was appended twice. | Set `ORQ_API_KEY` and make `base_url` exactly `<host>/v3/router`. |
+| A 404, or an authentication error | The client's `base_url` is not the Orq router, only `OPENAI_API_KEY` is set, the router suffix was appended twice, or the gateway is older than Orq 4.16 and does not serve `/decisions`. | Set `ORQ_API_KEY` and make `base_url` exactly `<host>/v3/router`; on an older gateway, upgrade it. |
 | `error_kind` is `timeout` and no retry happened | `with_retry` re-raises `asyncio.TimeoutError` without retrying. | Raise `timeout_ms`; a short deadline is not recovered by the retry budget. |
 | `error_kind` is `parse` and `error_exc` is `None` | The reply did not validate. There is nothing to re-raise, so a retry wrapper sees success-shaped control flow. | Branch on `error_kind`, never on `error_exc` alone. Read `raw_content` for what arrived. |
 | `pydantic.ValidationError` before any request | `criteria` disagrees with `kind` — a `choice` without a label dict, or a `score` without 2 to 10 levels. | Match the `criteria` column in the table above. |

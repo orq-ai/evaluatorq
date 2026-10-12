@@ -176,9 +176,10 @@ class ClassifyQuestion(BaseModel):
 
 
 class ClassifyAnswer(BaseModel):
-    """One answer from ``/decisions``; ``type`` is ``noul``, ``choice``, ``score`` or ``refusal``, and only the field matching it is filled.
+    """One answer from ``/decisions``; only the field matching ``type`` is filled.
 
-    ``extra='allow'`` because the endpoint's answer shape is the provider's to
+    ``type`` is ``noul``, ``choice``, ``score`` or ``refusal``; a refusal carries no other
+    field. ``extra='allow'`` because the endpoint's answer shape is the provider's to
     extend — an unknown field is kept in `raw_content` rather than dropped.
     """
 

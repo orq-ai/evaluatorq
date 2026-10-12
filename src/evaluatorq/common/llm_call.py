@@ -529,7 +529,7 @@ async def execute_classify(
     Pass exactly one of ``question`` for the single-question form or ``request``
     for the multi-question form. The request's state is used for every question.
 
-    The classify endpoint has no SDK method, so this is the one sanctioned
+    The decisions endpoint has no SDK method, so this is the one sanctioned
     ``client.post`` in the package — it owns the same things the chat and
     Responses executors own and nothing more: the bounded call, trace-header
     injection, span input/output recording and usage extraction. The reply is
@@ -563,9 +563,8 @@ async def execute_classify(
         request = cast('ClassifyRequest', request)
         questions = request.questions
         state = request.state
-    # No `apply_pipeline_metadata` here: the /decisions wire contract this module sends accepts only
-    # model, state and questions, so a metadata block is an unknown key on a body
-    # the router validates strictly.
+    # No `apply_pipeline_metadata` here: the wire contract accepts only model, state and
+    # questions, so a metadata block is an unknown key on a body the router validates strictly.
     body = classify_request_body(model, state, questions)
     wire_questions = body['questions']
 

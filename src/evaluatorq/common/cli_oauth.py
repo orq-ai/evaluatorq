@@ -290,7 +290,7 @@ class _LLMClient:
         self._cli = cli
 
     async def post(self, path: str, *, cast_to: Any = object, body: dict[str, Any], options: Any = None) -> Any:
-        """Route Orq's classify endpoint through the CLI OAuth session."""
+        """Route Orq's decisions endpoint through the CLI OAuth session."""
 
         del cast_to
         if path != '/decisions':

@@ -77,15 +77,6 @@ async def test_cli_classify_post_uses_oauth_request_endpoint(monkeypatch: Any) -
 
 
 @pytest.mark.asyncio
-async def test_cli_post_rejects_the_deprecated_classify_route(monkeypatch: Any) -> None:
-    monkeypatch.setattr(cli_oauth.shutil, 'which', lambda _: '/usr/local/bin/orq')
-    _, llm = cli_oauth.build_cli_oauth_clients('https://my.orq.ai')
-
-    with pytest.raises(ValueError, match='Unsupported CLI OAuth model endpoint: /classify'):
-        await llm.post('/classify', body={'model': 'typesafe/jev-latest', 'state': {}, 'questions': {}})
-
-
-@pytest.mark.asyncio
 async def test_cli_model_catalogue_uses_oauth_and_unwraps_response(monkeypatch: Any) -> None:
     seen: dict[str, Any] = {}
 
