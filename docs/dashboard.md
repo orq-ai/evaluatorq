@@ -68,6 +68,8 @@ The dashboard has separate **Traces** (`/traces`) and **Trace search** (`/find`)
 
 The **Compression inspector** compares a trace's complete readable conversation with the structured Jev state derived from its canonical ATIF document. Use it to understand what the existing compression reducer keeps or omits; it does not answer a question, run inference, or change the source document.
 
+The preview reports plaintext and Jev percentage reductions against the complete trace document serialized as compact JSON, including metadata and null fields. The baseline is uncapped and independent of the selected Original view. Jev uses compact serialization rather than the pretty-printed display; plaintext counts the rendered text. A negative percentage means expansion. These character reductions are not token savings.
+
 The setting is off by default. Turn on **Compression inspector** under **Settings → Advanced**; every Settings change saves as soon as you make it, a small notice in the corner confirms it, and the navigation link appears without a page reload. Then open it from the dashboard navigation. Start the dashboard with:
 
 ```bash

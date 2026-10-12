@@ -235,6 +235,7 @@ class CompressionPreview:
     original_note: str
     compressed: dict[str, Any]
     original_chars: int
+    full_json_chars: int
     transcript_chars: int
     readable_chars: int
     compressed_chars: int
@@ -242,6 +243,16 @@ class CompressionPreview:
     omitted_messages: int
     global_cap: int
     readable_body_present: bool = True
+
+    @property
+    def readable_reduction_percent(self) -> float:
+        """Character reduction against the complete compact trace JSON; negative means expansion."""
+        return 100 * (1 - self.readable_chars / self.full_json_chars)
+
+    @property
+    def jev_reduction_percent(self) -> float:
+        """Character reduction against the complete compact trace JSON; negative means expansion."""
+        return 100 * (1 - self.compressed_chars / self.full_json_chars)
 
 
 class InspectorSourceError(ValueError):
@@ -297,6 +308,7 @@ def preview_document(
         original_note=note,
         compressed=compressed,
         original_chars=len(original),
+        full_json_chars=len(document.model_dump_json()),
         transcript_chars=len(full),
         readable_chars=len(readable),
         compressed_chars=serialized_chars(compressed),

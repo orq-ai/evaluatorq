@@ -398,3 +398,32 @@ async def test_fetch_orq_document_rejects_naive_dates_without_leaking_trace_id(
     with pytest.raises(inspector_data.InspectorSourceError) as error:
         await inspector_data.fetch_orq_document(_app(), 'sensitive-trace-id', start=start, end=end)
     assert 'sensitive-trace-id' not in str(error.value)
+
+
+def test_reduction_uses_full_json_independent_of_display_and_compression_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _document_with_messages(['A readable message. ' * 200, 'A long response. ' * 200])
+    baseline = len(document.model_dump_json())
+    monkeypatch.setattr(inspector_data, 'ORIGINAL_CHARS', 100)
+    knobs = CompressionKnobs.defaults(10_000)
+    initial = inspector_data.preview_document(document, knobs=knobs)
+    reduced = inspector_data.preview_document(
+        document, knobs=replace(knobs, original_view='readable', budget=1_000,
+                                jev=replace(knobs.jev, state_chars=1_500)),
+    )
+    assert initial.original_chars <= 100
+    assert initial.full_json_chars == reduced.full_json_chars == baseline
+    assert reduced.readable_reduction_percent > initial.readable_reduction_percent
+    assert reduced.jev_reduction_percent > initial.jev_reduction_percent
+    assert reduced.readable_reduction_percent == pytest.approx(100 * (baseline - reduced.readable_chars) / baseline)
+    assert reduced.jev_reduction_percent == pytest.approx(100 * (baseline - reduced.compressed_chars) / baseline)
+
+
+def test_reduction_can_be_negative_when_formatting_expands_the_trace() -> None:
+    document = _document_with_messages(['short'])
+    preview = inspector_data.preview_document(document, knobs=CompressionKnobs.defaults(10_000))
+    expanded = replace(preview, readable_chars=preview.full_json_chars * 2,
+                       compressed_chars=preview.full_json_chars * 3)
+    assert expanded.readable_reduction_percent == -100
+    assert expanded.jev_reduction_percent == -200
