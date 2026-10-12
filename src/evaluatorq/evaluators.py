@@ -140,14 +140,16 @@ def orq_evaluator(
     The scorer sends the latest user turn as ``query``, evaluatorq's job output
     as ``output``, ``expected_output`` as the optional human/reference answer,
     and preserves prior assistant/tool trajectory messages. When the datapoint
-    carries neither ``messages`` nor a string ``query`` and the job output is a
-    simulation's OpenResponses transcript, the scorer reads the conversation
+    inputs carry no ``messages`` and no string ``query`` and the job output is
+    a simulation's OpenResponses transcript, the scorer reads the conversation
     from it instead: the final simulated-user turn is ``query``, earlier turns
     are ``messages`` and the agent's final turn (tool calls included) is
-    ``output``. Orq invocation trace
-    IDs remain in ``EvaluationResult.raw_output`` for local use; evaluatorq's
-    Experiment uploader intentionally strips raw evaluator output. The Orq SDK
-    owns retries for this call; evaluatorq does not add another retry layer.
+    ``output``. When the simulated conversation ends on a customer turn (error
+    or timeout), ``output`` is empty because the agent never replied. Orq
+    invocation trace IDs remain in ``EvaluationResult.raw_output`` for local
+    use; evaluatorq's Experiment uploader intentionally strips raw evaluator
+    output. The Orq SDK owns retries for this call; evaluatorq does not add
+    another retry layer.
     """
 
     cached_client: _OrqClient | None = client

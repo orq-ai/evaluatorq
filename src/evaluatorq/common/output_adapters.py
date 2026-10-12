@@ -293,7 +293,9 @@ def responses_transcript(output: Any) -> list[Message] | None:
     unless ``output`` is a dict with ``object == 'response'`` whose
     ``metadata[RESPONSES_ITEM_ORDER_KEY]`` is a list of ``'input'``/``'output'``
     strings whose counts match ``len(input)`` and ``len(output)``. A malformed
-    order (or item) also logs a warning and returns ``None``.
+    order (or item) also logs a warning and returns ``None``. An assistant text
+    turn directly followed by a tool-only assistant turn decodes as one
+    assistant message, because the encoded form cannot tell them apart.
     """
     if not isinstance(output, dict) or output.get('object') != 'response':
         return None
