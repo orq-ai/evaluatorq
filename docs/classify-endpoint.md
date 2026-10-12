@@ -122,7 +122,7 @@ Three things in that snippet are not obvious and bite later if you change them:
 | Field | What it holds |
 |---|---|
 | `response.answers` | One `ClassifyAnswer` per question. The keys are the provider's echo of yours; nothing checks parity, so index with `.get()` when it matters. `response` itself is `None` on any failure. |
-| `response.model` | The id the router echoes — the qualified id you sent, such as `typesafe/jev-latest`. It is not a bare id, and it does not reveal a substitution. |
+| `response.model` | Whatever the reply carried, passed through unchanged — nothing normalises it. The current Orq router echoes the qualified id you sent, such as `typesafe/jev-latest`, but that is an observation and not a contract: the library's own test fixtures use a bare `jev-latest`. Do not split it or compare it to a qualified string, and do not read it as proof against a substitution. |
 | `token_usage` | Tokens and cost for the one call — but `None` on a `timeout`, `api_connection`, `api_status` or `unknown` failure, and a `calls=1, priced_calls=0` marker with `total_cost=None` when the reply carried no readable usage block. |
 | `raw_content` | The validated response as JSON on success, and the raw wire payload on a `parse` failure, which is the case where you most need it. |
 | `error_kind` | `None` on success; otherwise one of `timeout`, `parse`, `api_connection`, `api_status`, `unknown`. |
