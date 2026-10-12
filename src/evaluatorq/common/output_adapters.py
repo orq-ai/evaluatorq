@@ -14,9 +14,11 @@ from loguru import logger
 from evaluatorq.common.messages import coerce_content_text, messages_to_text
 from evaluatorq.contracts import (
     AgentResponse,
+    FunctionCall,
     Message,
     OutputMessage,
     ReasoningOutputItem,
+    StrategyToolCall,
     TextOutputItem,
     ToolCallOutputItem,
 )
@@ -268,3 +270,75 @@ def output_to_messages(output: Output) -> list[OutputMessage]:
     # dict / number / bool → reuse the static-output adapter, else text
     adapted = _adapt_static_output(output)
     return adapted or [TextOutputItem(text=output_to_text(output), annotations=[])]
+
+
+RESPONSES_ITEM_ORDER_KEY = 'item_order'
+"""``metadata`` key under which ``simulation.convert.to_open_responses`` records,
+one entry per emitted item, whether it went to ``input[]`` or ``output[]``."""
+
+
+def _responses_item_text(item: dict[str, Any]) -> str:
+    content = item.get('content')
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ''
+    return ''.join(part['text'] for part in content if isinstance(part, dict) and isinstance(part.get('text'), str))
+
+
+def responses_transcript(output: Any) -> list[Message] | None:
+    """Rebuild the ordered chat transcript from a simulation OpenResponses dict.
+
+    Exact inverse of ``simulation.convert.to_open_responses``. Returns ``None``
+    unless ``output`` is a dict with ``object == 'response'`` whose
+    ``metadata[RESPONSES_ITEM_ORDER_KEY]`` is a list of ``'input'``/``'output'``
+    strings whose counts match ``len(input)`` and ``len(output)``. A malformed
+    order (or item) also logs a warning and returns ``None``.
+    """
+    if not isinstance(output, dict) or output.get('object') != 'response':
+        return None
+    metadata = output.get('metadata')
+    if not isinstance(metadata, dict) or RESPONSES_ITEM_ORDER_KEY not in metadata:
+        return None
+    order = metadata[RESPONSES_ITEM_ORDER_KEY]
+    inputs = output.get('input')
+    outputs = output.get('output')
+    if (
+        not isinstance(order, list)
+        or not isinstance(inputs, list)
+        or not isinstance(outputs, list)
+        or any(entry not in ('input', 'output') for entry in order)
+        or order.count('input') != len(inputs)
+        or order.count('output') != len(outputs)
+    ):
+        logger.warning(f'ignoring malformed OpenResponses {RESPONSES_ITEM_ORDER_KEY!r}: does not match input/output')
+        return None
+
+    cursors = {'input': iter(inputs), 'output': iter(outputs)}
+    messages: list[Message] = []
+    try:
+        for entry in order:
+            item = next(cursors[entry])
+            item_type = item.get('type')
+            if item_type == 'message':
+                messages.append(Message(role=item['role'], content=_responses_item_text(item)))
+            elif item_type == 'function_call':
+                tool_call = StrategyToolCall(
+                    id=item['call_id'],
+                    function=FunctionCall(name=item['name'], arguments=item['arguments']),
+                    item_id=item.get('id'),
+                )
+                previous = messages[-1] if messages else None
+                if previous is not None and previous.role == 'assistant':
+                    previous.tool_calls = [*(previous.tool_calls or []), tool_call]
+                else:
+                    messages.append(Message(role='assistant', content='', tool_calls=[tool_call]))
+            elif item_type == 'function_call_output':
+                messages.append(Message(role='tool', tool_call_id=item['call_id'], content=item.get('output')))
+            else:
+                logger.warning(f'ignoring OpenResponses transcript with unknown item type {item_type!r}')
+                return None
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        logger.warning(f'ignoring malformed OpenResponses transcript item: {exc}')
+        return None
+    return messages
