@@ -40,6 +40,8 @@ def choice_document() -> dict[str, Any]:
                 'selection': {'kind': 'values', 'values': ['billing']},
             }
         ],
+        'start': None,
+        'end': None,
         'numeric': {
             'tokens_min': 20_000,
             'tokens_max': None,
@@ -125,10 +127,9 @@ async def test_compile_query_uses_shared_structured_output_and_returns_numeric_f
     assert plan.numeric.duration_ms_min is None
     assert calls[0]['client'] is client
     assert calls[0]['model'] == 'compiler-model'
-    assert calls[0]['messages'] == [
-        {'role': 'system', 'content': COMPILER_INSTRUCTIONS},
-        {'role': 'user', 'content': 'find long billing requests'},
-    ]
+    assert calls[0]['messages'][0] == {'role': 'system', 'content': COMPILER_INSTRUCTIONS}
+    assert calls[0]['messages'][1]['content'].startswith('find long billing requests')
+    assert 'Current UTC time:' in calls[0]['messages'][1]['content']
     assert calls[0]['label'] == 'trace_finder.compile'
     assert calls[0]['max_tokens'] == 2000
     assert calls[0]['api'] == 'responses'
@@ -495,3 +496,41 @@ def test_classification_legend_uses_dashboard_chart_tokens() -> None:
         {'label': 'billing', 'color': 'var(--chart-5)', 'kind': 'value', 'threshold': None},
         {'label': 'technical', 'color': 'var(--chart-2)', 'kind': 'value', 'threshold': None},
     ]
+def test_time_filters_require_aware_ordered_bounds() -> None:
+    from datetime import UTC, datetime
+
+    from evaluatorq.trace_finder.compiler import TimeFilters
+
+    assert TimeFilters(start=None, end=datetime(2025, 1, 1, tzinfo=UTC)).end.tzinfo is not None
+    with pytest.raises(ValidationError):
+        TimeFilters(start=datetime(2025, 1, 1), end=None)
+    with pytest.raises(ValidationError):
+        TimeFilters(
+            start=datetime(2025, 1, 2, tzinfo=UTC),
+            end=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+
+
+@pytest.mark.asyncio
+async def test_compile_query_returns_datetime_filters_and_passes_utc_now(monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    document = choice_document()
+    document['dimensions'] = []
+    document['start'] = '2025-01-01T00:00:00Z'
+    document['end'] = '2025-01-02T00:00:00Z'
+    captured: list[dict[str, Any]] = []
+
+    async def fake_generate_structured(client: object, **kwargs: Any) -> FakeStructuredResult:
+        captured.append(kwargs)
+        return FakeStructuredResult(CompilerWireQuery.model_validate(document))
+
+    monkeypatch.setattr('evaluatorq.trace_finder.compiler.generate_structured', fake_generate_structured)
+    now = datetime(2025, 1, 3, tzinfo=UTC)
+    plan = await compile_query(cast(Any, object()), 'compiler-model', 'on January 1', now=now)
+
+    assert plan.time is not None
+    assert plan.time.start == datetime(2025, 1, 1, tzinfo=UTC)
+    assert captured[0]['messages'][-1]['content'].endswith(f'Current UTC time: {now.isoformat()}')
+    assert plan.dimensions == ()
+
