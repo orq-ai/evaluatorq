@@ -26,7 +26,7 @@ MAX_FILTER_QUESTIONS = 100
 # "tool errors" once became status = error, which emptied the population before any judgment ran.
 _STATUS_NOTE = (
     ' Status is the recorded trace status, not an error inside the conversation: "tool errors" or "errors" '
-    f'alone are {NO_FILTER_LABEL!r}.'
+    'alone do not constrain trace status.'
 )
 
 
@@ -163,14 +163,15 @@ def _questions_for_catalogue(
                     state={},
                 )
             continue
-        choice_map = _choice_map(name, values)
+        choice_map = _choice_map(values)
         choices[name] = choice_map
+        no_filter_label = next(label for label, value in choice_map.items() if value is None)
         questions[name] = ClassifyQuestion(
             kind='choice',
             instructions=(
                 f'Identify the {name.replace("_", " ")} value explicitly requested by the user query. '
-                f'Choose {NO_FILTER_LABEL!r} when the query does not constrain this dimension. '
-                f'Follow the rule in state: choose {NO_FILTER_LABEL!r} when the value is only implied by what '
+                f'Choose {no_filter_label!r} when the query does not constrain this dimension. '
+                f'Follow the rule in state: choose {no_filter_label!r} when the value is only implied by what '
                 'happened in the conversation, or when the query is an aggregate question.'
                 + (_STATUS_NOTE if name == 'status' else '')
             ),
@@ -212,10 +213,14 @@ def _selection_from_answers(
     return FacetSelection.model_validate({name: frozenset(values) for name, values in selected.items()})
 
 
-def _choice_map(name: str, values: tuple[str, ...]) -> dict[str, str | None]:
-    """Use short stable labels while keeping exact dataset values in descriptions."""
+def _choice_map(values: tuple[str, ...]) -> dict[str, str | None]:
+    """Use exact catalogue values as labels, reserving a distinct no-filter choice."""
 
-    return {NO_FILTER_LABEL: None, **{f'{name}_{index}': value for index, value in enumerate(values)}}
+    choices: dict[str, str | None] = dict.fromkeys(values)
+    no_filter_label = NO_FILTER_LABEL
+    while no_filter_label in choices:
+        no_filter_label += '_'
+    return {no_filter_label: None, **{value: value for value in choices}}
 
 
 def _choice_description(name: str, value: str | None) -> str:

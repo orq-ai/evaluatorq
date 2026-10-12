@@ -394,14 +394,14 @@ async def test_parallelism_must_be_positive(parallelism: int) -> None:
 async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    original_messages = labeling_module.prompt_messages
+    original_messages = labeling_module.to_chat_messages
 
     def sometimes_fail(trace):
         if trace.trace_id == 'bad':
             raise ValueError('malformed trace')
         return original_messages(trace)
 
-    monkeypatch.setattr(labeling_module, 'prompt_messages', sometimes_fail)
+    monkeypatch.setattr(labeling_module, 'to_chat_messages', sometimes_fail)
 
     async def fake_run_classify(
         *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
@@ -962,7 +962,7 @@ def test_merge_chunks_last_chunk_decides_unfixed_error() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('model', 'structured'), [('typesafe/jev-latest', True), ('openai/gpt-6-luna', False)])
-async def test_classifier_uses_jev_state_only_for_jev_and_full_transcript_otherwise(
+async def test_classifier_uses_jev_state_only_for_jev_and_the_conversation_view_otherwise(
     monkeypatch: pytest.MonkeyPatch, model: str, structured: bool
 ) -> None:
     messages = (
@@ -1011,5 +1011,5 @@ async def test_classifier_uses_jev_state_only_for_jev_and_full_transcript_otherw
         )
     else:
         assert isinstance(state, str)
-        for phrase in ('REQUEST-START', 'middle-input', 'MIDDLE-RESULT', 'FINAL-ANSWER'):
+        for phrase in ('REQUEST-START', '#1 tool input search (call 1.1): ', 'middle-input', 'MIDDLE-RESULT', 'FINAL-ANSWER'):
             assert phrase in state

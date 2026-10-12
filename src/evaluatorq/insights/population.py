@@ -49,7 +49,7 @@ from evaluatorq.common.model_input import (
     serialized_question_chars,
 )
 from evaluatorq.common.model_roles import role_model
-from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, to_chat_messages
 from evaluatorq.insights.labeling import MATCH_KEY, prepare_classifier_state
 from evaluatorq.insights.models import ensure_unique_trace_ids
 from evaluatorq.insights.summarize import _build_prompt_with_coverage
@@ -120,7 +120,7 @@ def projection_coverage(
     questions = classifier_questions
     question_chars = serialized_question_chars(questions) if questions is not None else 0
     for trace in traces:
-        messages = prompt_messages(trace)
+        messages = to_chat_messages(trace)
         prompt, summary_truncated = _build_prompt_with_coverage(trace, input_char_cap=cap)
         state = prepare_classifier_state(trace, model=model, char_cap=cap)
         if questions is not None:

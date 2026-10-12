@@ -11,7 +11,7 @@ import pytest
 
 from evaluatorq.common.trace_document import ensure_trace_document
 from evaluatorq.insights.summarize import _build_prompt
-from evaluatorq.insights.transcript import tool_activity_chunks, tool_inventory
+from evaluatorq.insights.transcript import WHOLE, full_conversation_view, tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.models import TraceRecord
 
 
@@ -100,10 +100,14 @@ def test_current_classifier_views_match_characterization_snapshots(use_atif: boo
     assert actual == expected
     serialized = json.dumps(actual, ensure_ascii=False)
     assert 'secret reminder' not in serialized
-    assert '<conversation>0 user: Inspect the deployment. [harness reminder omitted]' in summary_prompt
+    assert '<conversation>#0 user: Inspect the deployment. [harness reminder omitted]' in summary_prompt
     assert 'middle assistant details' in summary_prompt
     assert 'credential=<API_KEY>' in summary_prompt
     assert 'sk-live-secret-value' not in summary_prompt
+    # Shown whole, tool results are still scrubbed.
+    whole = full_conversation_view(trace, budget=100_000, options=WHOLE)
+    assert 'credential=<API_KEY>' in whole
+    assert 'sk-live-secret-value' not in whole
 
 
 

@@ -12,7 +12,7 @@ An Insights run keeps three different things separate. A **classifier** is the m
 | Labels | Fixed classifier questions | One answer per trace for each yes/no (`noul`), choice, or score question, with confidence and probabilities. |
 | Discovered dimensions | Text fields from a per-trace summary | Two-level clusters and saved 3D UMAP coordinates for traces in groups large enough to project. |
 
-The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary request includes every readable conversation message, tool input, and tool result, but its full prompt including analysis instructions fits within the global input cap; the conversation is shortened as needed to leave room for those instructions. The summary model does not reuse the classifier's compact Jev state. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
+The built-in discovered dimensions are `intent` (summary field `request`), `failure` (`assistant_errors`), and `sentiment` (`sentiment_explanation`). The summary request reads the `DETAILED` [conversation view](#the-conversation-view): each message cut to a fixed length, with every tool call and the start and end of its result. The full prompt including analysis instructions fits within the global input cap; the conversation is shortened from the middle as needed to leave room for those instructions. The summary model does not reuse the classifier's compact Jev state. The classifier answers labels such as sentiment, customer satisfaction, or your own questions. When you request the discovered `sentiment` dimension without a sentiment label, Insights adds that label so it can group the explanations by sentiment.
 
 The run writes its JSON result to `.evaluatorq/insights-runs/` and its manifest under `.evaluatorq/insights-runs/.manifests/`; `EVALUATORQ_DIR` changes the base directory. It does not store message bodies or embedding vectors in the run JSON.
 
@@ -167,7 +167,7 @@ Before the run starts, the CLI states where the sessions go:
 Sending 3 traces (290.5 KB) from sessions.json to models: summary openai/gpt-6-sol, classifier typesafe/jev-latest, embedding openai/text-embedding-3-small.
 ```
 
-The size is the snapshot file on disk, not the amount sent. Summaries receive the retained readable conversation, tool inputs and tool results, shortened as needed so the whole summary prompt fits `trace_input_chars` (500,000 characters by default). Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); Jev uses structured excerpts rather than the full summary transcript. The embedding model reads the summaries. Known credential patterns are scrubbed locally before rendering, but this does not remove all personal or confidential content. There is no confirmation prompt. Check the models named in that line before you run.
+The size is the snapshot file on disk, not the amount sent. Summaries receive the [conversation view](#the-conversation-view), cut further as needed so the whole summary prompt fits `trace_input_chars` (500,000 characters by default). Classification uses the model-specific state and question budget described in [What the classifier reads](#what-the-classifier-reads); Jev uses structured excerpts rather than the full summary transcript. The embedding model reads the summaries. Known credential patterns are scrubbed locally before rendering, but this does not remove all personal or confidential content. There is no confirmation prompt. Check the models named in that line before you run.
 
 To check what a run would send without sending anything, run the preview. It needs no Orq credential, and it ends with the same sentence worded as what a run would send. Its coverage line uses the run's summary and classifier renderers, configured input cap, classifier model and selected questions:
 
@@ -244,9 +244,94 @@ The model-input cap applies separately to the retained session content: a long s
 
 ## What the classifier reads
 
-The classifier does not read the summary. `trace_input_chars`, saved in Dashboard Settings and defaulting to 500,000, caps classifier state and the exact serialized question payloads together. For `typesafe/jev` models, the state is indexed and structured; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages. Jev state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched. Other classifiers receive the full readable conversation, including tool inputs and results, shortened as needed to leave room for their selected questions. Known media parts render as placeholders, while unrelated structured content remains JSON. The source trace stays unchanged.
+The classifier does not read the summary. `trace_input_chars`, saved in Dashboard Settings and defaulting to 500,000, caps classifier state and the exact serialized question payloads together. For `typesafe/jev` models, the state is indexed and structured; tool calls are grouped with matching results, recorded status and error codes are retained, and text excerpts keep the first and last 100 characters for tool inputs/results, 500 for assistant messages, 1,000 for user messages, and 4,000 for system/developer messages. Jev state is also capped at 112,000 characters; state plus the longest question stays within 128,000 characters and state plus all questions within 256,000 characters. Credentials are scrubbed before excerpting; reasoning and known `<system-reminder>` sections are removed. Inline images show their size when known, and remote media is never fetched. Other classifiers receive the `DETAILED` [conversation view](#the-conversation-view), shortened as needed to leave room for their selected questions. Known media parts render as placeholders, while unrelated structured content remains JSON. The source trace stays unchanged.
 
 Every trace also records how often it called each tool, shell program, and skill, counted from its messages. The trace detail page lists them under **Tool use**.
+
+### The conversation view
+
+The **conversation view** is the plain-text transcript that summaries, non-Jev classifiers and Trace Finder read. Read this when you call `full_conversation_view` from Python, or when you need to know what a summary or label was based on. It does not apply to `typesafe/jev` models, which read the structured state above, or to the coding-agent tool labels, which read a separate one-line-per-call tool activity list.
+
+Each entry starts with `#<message index> <kind>:` at the left edge. A line break inside a message is indented two spaces, so text a user pasted cannot pose as a new turn. A tool call and its result both name the call as `<tool> (call <message>.<n>)`, and both carry `[error]` or `[pending]` when the call did not complete. Credentials are scrubbed and each `<system-reminder>` block becomes `[harness reminder omitted]` before anything is cut.
+
+```python
+from datetime import datetime, timezone
+
+from evaluatorq.insights.transcript import DETAILED, full_conversation_view
+from evaluatorq.trace_finder.models import TraceRecord
+
+bash = {'name': 'Bash', 'arguments': '{"command": "uv run pytest -q"}'}
+# Only `messages` changes the rendering; the other fields are required metadata.
+trace = TraceRecord(
+    schema_version=1,
+    trace_id='demo',
+    span_id='demo',
+    timestamp=datetime(2026, 10, 1, tzinfo=timezone.utc),
+    project='default',
+    model='claude',
+    provider='anthropic',
+    status='completed',
+    product='agent',
+    trace_type='conversation',
+    messages=(
+        {'role': 'user', 'content': 'Fix the failing parser test.'},
+        {
+            'role': 'assistant',
+            'content': 'Running the tests first.',
+            'reasoning_content': 'I need the failure output.',
+            'tool_calls': [{'id': 'c1', 'function': bash}],
+        },
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'FAILED test_dates\n1 failed, 3 passed', 'is_error': True},
+        {'role': 'assistant', 'content': 'The date parser drops the timezone; fixing it.'},
+    ),
+)
+
+print(full_conversation_view(trace, budget=50_000, options=DETAILED))
+print()
+print(full_conversation_view(trace, budget=50_000))
+print()
+print(full_conversation_view(trace, budget=50_000, options=DETAILED, include=DETAILED.include | {'reasoning'}))
+```
+
+```console
+#0 user: Fix the failing parser test.
+#1 assistant: Running the tests first.
+#1 tool input Bash (call 1.1) [error]: uv run pytest -q
+#2 tool result Bash (call 1.1) [error]: FAILED test_dates
+  1 failed, 3 passed
+#3 assistant: The date parser drops the timezone; fixing it.
+
+#0 user: Fix the failing parser test.
+#1 assistant: Running the tests first.
+#1 tools: Bash: pytest [error]
+#3 assistant: The date parser drops the timezone; fixing it.
+
+#0 user: Fix the failing parser test.
+#1 reasoning: I need the failure output.
+#1 assistant: Running the tests first.
+#1 tool input Bash (call 1.1) [error]: uv run pytest -q
+#2 tool result Bash (call 1.1) [error]: FAILED test_dates
+  1 failed, 3 passed
+#3 assistant: The date parser drops the timezone; fixing it.
+```
+
+The three calls print `DETAILED`, which summaries and classifiers pass, then the default `COMPACT`, then `DETAILED` with reasoning added. Reasoning is read from a message's `reasoning_content`, `reasoning` or `thinking` field, or from reasoning content parts.
+
+The `options` argument takes one of three presets from `evaluatorq.insights.transcript`, and defaults to `COMPACT`. None of them include reasoning. `full_conversation_view` accepts a `TraceRecord`, as here, or a loaded `TraceDocument`.
+
+| Preset | Use it when | Tool calls | Characters kept per message |
+|---|---|---|---|
+| `COMPACT`, the default | You want the cheapest overview | One `tools:` line per message, no results | System whole, user 8,000, assistant 1,000 |
+| `DETAILED` | You need every call's input and the start and end of its result; summaries and classifiers use it | One line per call and one per result | As `COMPACT`, plus 300 for each tool input and each tool result |
+| `WHOLE` | No single message may be cut; Trace Finder uses it | One line per call and one per result | Every rendered message whole |
+
+A cap keeps that many characters, split between the start and end of the text, and leaves `[... N chars left out ...]` in between; text within 40 characters of its cap is kept whole. In the `tools:` line, `COMPACT` shortens a shell command to its program name and keeps a risky one, such as `rm -rf`, up to 300 characters.
+
+A keyword argument replaces one field of the preset: `tools`, `include`, `exclude`, and the caps `system_chars`, `user_chars`, `assistant_chars`, `reasoning_chars` (2,000 by default), `tool_input_chars` and `tool_result_chars`, where `-1` keeps the type whole. The message types are `system`, `user`, `assistant`, `reasoning`, `tool_input` and `tool_result`; a developer message counts as `system`. `include` replaces the preset's set rather than adding to it, so add reasoning with `include=DETAILED.include | {'reasoning'}`, or every tool line disappears.
+
+A cap on a type the preset leaves out does nothing, silently: `full_conversation_view(trace, tool_result_chars=-1)` still shows no results, because `COMPACT` renders none. Start from `DETAILED` or `WHOLE` to see results, as in `full_conversation_view(trace, options=DETAILED, tool_result_chars=-1)`. Combining `tools='collapsed'` with `tool_result` in `include` raises a `ValueError` rather than dropping the results, and so does naming one type in both `include` and `exclude`.
+
+The whole view is then cut to `budget`, which defaults to the `trace_input_chars` setting, so even `WHOLE` loses text on a very long trace. That cut drops whole entries from the middle and leaves a marker such as `[... 4 messages (1-4) left out ...]`. When the entry at either edge of the cut is too long to keep, the cut lands inside it, marked as `[... N chars of message M left out ...]`.
 
 ## Trace signals
 

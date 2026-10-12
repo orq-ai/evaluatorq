@@ -34,11 +34,11 @@ from evaluatorq.common.model_input import (
     jev_text_state,
 )
 from evaluatorq.common.retry import with_retry
-from evaluatorq.common.trace_document import prompt_messages
+from evaluatorq.common.trace_document import to_chat_messages
 from evaluatorq.contracts import LLMCallConfig
 from evaluatorq.insights.models import LabelAnswer, LabelSpec
 from evaluatorq.insights.presets import CODING_AGENT, CODING_CONVERSATION_LABELS, CODING_TOOL_LABELS
-from evaluatorq.insights.transcript import full_conversation_view, tool_activity_chunks, tool_inventory
+from evaluatorq.insights.transcript import DETAILED, full_conversation_view, tool_activity_chunks, tool_inventory
 from evaluatorq.trace_finder.classifier import matches_selection
 
 if TYPE_CHECKING:
@@ -240,8 +240,8 @@ def _prepare_state(
 def prepare_classifier_state(trace: TraceRecord | TraceDocument, *, model: str, char_cap: int) -> str | dict[str, Any]:
     """Build the main Insights classifier state before any Jev question-capacity fit."""
     if is_jev_model(model):
-        return jev_state(prompt_messages(trace), global_char_cap=char_cap)
-    return _prepare_state(full_conversation_view(trace, char_cap), model, char_cap)
+        return jev_state(to_chat_messages(trace), global_char_cap=char_cap)
+    return _prepare_state(full_conversation_view(trace, char_cap, DETAILED), model, char_cap)
 
 
 # ponytail: the two chunked tool labels, named here; move onto LabelSpec if other labels ever chunk.
