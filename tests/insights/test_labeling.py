@@ -258,6 +258,39 @@ async def test_missing_label_answer_fails_only_that_label(monkeypatch: pytest.Mo
     assert outcome.answers['sentiment'].value is None
 
 
+
+@pytest.mark.asyncio
+async def test_refused_label_answer_fails_only_that_label_and_says_it_was_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
+        return ClassifyOutcome(
+            response=ClassifyResponse(
+                answers={
+                    MATCH_KEY: ClassifyAnswer(type='choice', choice='billing'),
+                    'sentiment': ClassifyAnswer(type='refusal'),
+                }
+            )
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+
+    outcomes = await label_traces(
+        [make_trace('t1')],
+        labels=[SENTIMENT],
+        compiled=(INTENT_MATCH,),
+        client=_client(),
+        model='typesafe/jev-latest',
+    )
+
+    answer = outcomes[0].answers['sentiment']
+    assert answer.value is None
+    assert answer.error is not None
+    assert 'refused' in answer.error
+    assert outcomes[0].matched is True
+
 @pytest.mark.asyncio
 async def test_outcome_failure_fails_every_answer_and_clears_match(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_classify(

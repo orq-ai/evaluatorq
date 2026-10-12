@@ -89,6 +89,13 @@ def _map_answer(question: ClassifyQuestion, answer: ClassifyAnswer) -> LabelAnsw
     `answer.type`, an out-of-criteria choice, an out-of-range score) is
     unreadable and reported as `error`, never guessed; the caller logs it.
     """
+    if answer.type == 'refusal':
+        return LabelAnswer(
+            value=None,
+            confidence=None,
+            probabilities=None,
+            error=f'classify model refused to answer the {question.kind} question',
+        )
     if answer.type != question.kind:
         return LabelAnswer(
             value=None,

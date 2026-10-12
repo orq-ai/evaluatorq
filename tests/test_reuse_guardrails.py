@@ -250,11 +250,11 @@ _DECISIONS_POST_PATHS = ('/decisions', '/classify')
 
 
 def _decisions_post_lines(source: str) -> list[int]:
-    """Line numbers of ``<something>.post('/decisions'...)`` calls, or its deprecated ``/classify`` alias.
+    """Line numbers of ``<something>.post(...)`` calls to the decisions route or its deprecated ``/classify`` alias.
 
     Narrow on purpose: the package POSTs to plenty of non-LLM endpoints
     (`send_results.py`, `fetch_data.py`, `simulation/traces.py`), so the
-    predicate is the endpoint literal, not the method name.
+    predicate is the endpoint, written as a literal or as ``DECISIONS_PATH``, not the method name.
     """
     return [
         node.lineno
@@ -263,9 +263,13 @@ def _decisions_post_lines(source: str) -> list[int]:
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == 'post'
         and node.args
-        and isinstance(node.args[0], ast.Constant)
-        and isinstance(node.args[0].value, str)
-        and node.args[0].value.startswith(_DECISIONS_POST_PATHS)
+        and (
+            isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+            and node.args[0].value.startswith(_DECISIONS_POST_PATHS)
+            or isinstance(node.args[0], ast.Name)
+            and node.args[0].id == 'DECISIONS_PATH'
+        )
     ]
 
 
@@ -295,6 +299,7 @@ def test_decisions_post_detector_actually_fires() -> None:
     assert _decisions_post_lines('"""Docstring mentions client.post(\'/decisions\')."""') == []
     assert _decisions_post_lines("# client.post('/decisions')") == []
     assert _decisions_post_lines("path = '/decisions'") == []
+    assert _decisions_post_lines('await client.post(DECISIONS_PATH, body=b)') == [1]
 
 
 def test_openai_clients_come_from_llm_client() -> None:

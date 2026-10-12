@@ -858,6 +858,35 @@ async def test_run_classify_judges_answers_several_questions_in_one_classify_cal
 
 
 @pytest.mark.asyncio
+async def test_run_classify_judges_abstains_on_a_refused_question_and_keeps_the_others() -> None:
+    """One refused question does not fail the reply: it abstains, carries the refusal as data, and the rest still judge."""
+    client = _client({
+        'answers': {'tone': {'type': 'refusal'}, 'risk': {'type': 'noul', 'noul': 0.9}},
+        'usage': _usage(),
+        'model': JEV,
+    })
+    questions = {
+        'tone': ClassifyQuestion(
+            kind='choice', instructions='Classify the tone.', criteria={'neutral': 'plain'}, state='ignored'
+        ),
+        'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state={'reply': 'hello'}, questions=questions
+    )
+
+    tone = outcomes['tone']
+    assert tone.error_kind is None
+    assert tone.payload is not None
+    assert tone.payload.abstain is True
+    assert tone.payload.value is None
+    assert tone.error_message == tone.payload.explanation
+    assert outcomes['risk'].payload is not None
+    assert outcomes['risk'].payload.value is True
+
+
+@pytest.mark.asyncio
 async def test_run_classify_judges_empty_questions_returns_immediately() -> None:
     client = _client()
 

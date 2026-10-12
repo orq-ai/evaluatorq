@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from openai import BadRequestError
 
+from evaluatorq.common.cli_oauth import DECISIONS_PATH
 from evaluatorq.common.llm_limit import llm_slot
 from evaluatorq.common.model_catalogue import price_usage
 from evaluatorq.common.model_input import classifier_question_wire_payloads
@@ -597,7 +598,7 @@ async def execute_classify(
         ],
     )
     payload = await _bounded_call(
-        client.post('/decisions', cast_to=object, body=body, options=cast('Any', options)),
+        client.post(DECISIONS_PATH, cast_to=object, body=body, options=cast('Any', options)),
         timeout_s,
     )
     # `record_llm_response` is duck-typed (its `_field` helper reads dicts as well as

@@ -202,7 +202,7 @@ class ClassifyAnswer(BaseModel):
 
 
 class ClassifyResponse(BaseModel):
-    """A ``/decisions`` reply. ``model`` is the qualified id the router served (``typesafe/jev-latest``)."""
+    """A ``/decisions`` reply. ``model`` is echoed by the router and passed through unchanged."""
 
     model_config = ConfigDict(extra='allow')
 
@@ -813,11 +813,12 @@ def _classify_answer_outcome(
         )
     if answer.type == 'refusal':
         message = f'classify model refused to answer the {question.kind} question'
-        logger.error('Judge [{}] {} (raw={})', model, message, raw[:500])
+        logger.warning('Judge [{}] {} (raw={})', model, message, raw[:500])
         return JudgeOutcome(
             payload=EvaluatorResponsePayload(value=None, abstain=True, explanation=message),
             token_usage=outcome.token_usage,
             raw_content=raw,
+            error_message=message,
             endpoint='classify',
         )
     verdict = _classify_verdict(question, answer)

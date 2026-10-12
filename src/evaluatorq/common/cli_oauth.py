@@ -21,6 +21,9 @@ from typing import Any, Literal, NamedTuple
 
 from loguru import logger
 
+# The Orq router route classify models are served on, shared with the executor that posts to it.
+DECISIONS_PATH = '/decisions'
+
 # Environment credentials and profile selection override the CLI OAuth session.
 # Every OAuth call removes them so the CLI has one unambiguous auth source.
 _OVERRIDE_ENV = (
@@ -293,7 +296,7 @@ class _LLMClient:
         """Route Orq's decisions endpoint through the CLI OAuth session."""
 
         del cast_to
-        if path != '/decisions':
+        if path != DECISIONS_PATH:
             raise ValueError(f'Unsupported CLI OAuth model endpoint: {path}')
         args = ['request', 'POST', f'/v3/router{path}', '--force']
         # The CLI owns authentication. Caller headers may contain credentials,
