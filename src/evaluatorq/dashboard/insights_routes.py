@@ -264,7 +264,7 @@ async def _model_rejection(auth: DashboardAuth, spec: InsightsLaunchSpec) -> str
         if info is None:
             unchecked.append(field)
         elif wrong_for(info):
-            what = 'serve /classify' if field == 'classifier_model' else 'produce embeddings'
+            what = 'serve /decisions' if field == 'classifier_model' else 'produce embeddings'
             return f'{INSIGHTS_MODEL_FIELDS[field][1]} {model} cannot {what}. Choose another from the list.'
     if unchecked:
         logger.warning(

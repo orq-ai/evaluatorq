@@ -293,7 +293,7 @@ class _LLMClient:
         """Route Orq's classify endpoint through the CLI OAuth session."""
 
         del cast_to
-        if path != '/classify':
+        if path != '/decisions':
             raise ValueError(f'Unsupported CLI OAuth model endpoint: {path}')
         args = ['request', 'POST', f'/v3/router{path}', '--force']
         # The CLI owns authentication. Caller headers may contain credentials,

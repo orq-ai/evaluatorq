@@ -12,7 +12,7 @@ An evaluatorq **jury** is a panel of judge models whose votes are aggregated int
 
 | | Prompted LLM judge | Classify judge |
 | --- | --- | --- |
-| Endpoint | Responses or Chat Completions | Orq router `POST /v3/router/classify` |
+| Endpoint | Responses or Chat Completions | Orq router `POST /v3/router/decisions` |
 | Input | Rendered system and user prompts | Structured state plus one typed question |
 | Output | Schema-constrained verdict and written explanation | Probability, choice or score |
 | Explanation | Written by the model | Synthesised by evaluatorq from the returned numbers |

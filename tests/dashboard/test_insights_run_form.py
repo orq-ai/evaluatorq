@@ -630,7 +630,7 @@ def test_start_rejects_models_the_catalogue_says_cannot_do_the_job(monkeypatch: 
     assert classifier.status_code == 422
     assert 'acme/chat-only' in classifier.text
     assert 'value="acme/chat-2"' in classifier.text
-    assert 'classify' in classifier.text
+    assert 'cannot serve /decisions' in classifier.text
     assert embedding.status_code == 422
     assert 'embedding' in embedding.text
     assert accepted.status_code == 303

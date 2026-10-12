@@ -1,6 +1,6 @@
 # The classify endpoint
 
-`run_classify()` sends one piece of state and several typed questions about it to the Orq router's `/classify` endpoint, and returns every answer from one round trip.
+`run_classify()` sends one piece of state and several typed questions about it to the Orq router's Decisions endpoint, `POST /v3/router/decisions`, and returns every answer from one round trip. The older `/classify` route is a deprecated alias of it with the same request and response, and evaluatorq no longer calls it.
 
 Reach for it when you want typed labels over state you already have — a trace, a transcript, a row of a dataset — and you do not want a judge panel around them. If you want a verdict aggregated over several models, with repetitions and abstentions, you want a [jury](llm-as-a-jury.md), and [classify judges](classify-judges.md) is how a classify model takes a seat on one.
 
@@ -20,7 +20,7 @@ A `criteria` shape that disagrees with `kind` raises `pydantic.ValidationError` 
 
 ## Ask three questions in one call
 
-`/classify` lives only on the Orq router, so the client's `base_url` has to be the router and `ORQ_API_KEY` has to be set.
+`/decisions` lives only on the Orq router, so the client's `base_url` has to be the router and `ORQ_API_KEY` has to be set. The key needs the `classify` permission, which the Decisions rename did not change and the standard gateway key preset grants. The gateway has to be an Orq release that serves Decisions (4.16 or later); an older or self-hosted gateway answers 404 and evaluatorq does not fall back to `/classify`.
 
 ```bash
 export ORQ_API_KEY=...
@@ -120,7 +120,7 @@ Three things in that snippet are not obvious and bite later if you change them:
 | Field | What it holds |
 |---|---|
 | `response.answers` | One `ClassifyAnswer` per question. The keys are the provider's echo of yours; nothing checks parity, so index with `.get()` when it matters. `response` itself is `None` on any failure. |
-| `response.model` | The id the router echoes — the qualified id you sent, such as `typesafe/jev-latest`. It is not a bare id, and it does not reveal a substitution. (`ClassifyResponse`'s own docstring says "bare id"; the wire reply disagrees.) |
+| `response.model` | The id the router echoes — the qualified id you sent, such as `typesafe/jev-latest`. It is not a bare id, and it does not reveal a substitution. |
 | `token_usage` | Tokens and cost for the one call — but `None` on a `timeout`, `api_connection`, `api_status` or `unknown` failure, and a `calls=1, priced_calls=0` marker with `total_cost=None` when the reply carried no readable usage block. |
 | `raw_content` | The validated response as JSON on success, and the raw wire payload on a `parse` failure, which is the case where you most need it. |
 | `error_kind` | `None` on success; otherwise one of `timeout`, `parse`, `api_connection`, `api_status`, `unknown`. |
@@ -139,7 +139,7 @@ A `choice` answer's `choice` is one of the labels you supplied, and `probabiliti
 
 ## Which model to send it to
 
-A model serves `/classify` when its Orq catalogue entry sets `supports_classify` to exactly `true`. Being a chat model neither qualifies nor disqualifies it — several models serve both. Routing, the built-in fallback for `typesafe/jev-latest` and the `register_model()` override are covered at [Classify judges › Routing and fallbacks](classify-judges.md#routing-and-fallbacks), and the classifier model role is at [Configuration › Models](configuration.md#models).
+A model serves `/decisions` when its Orq catalogue entry sets `supports_classify` to exactly `true`; the catalogue flag keeps its old name. Being a chat model neither qualifies nor disqualifies it — several models serve both. Routing, the built-in fallback for `typesafe/jev-latest` and the `register_model()` override are covered at [Classify judges › Routing and fallbacks](classify-judges.md#routing-and-fallbacks), and the classifier model role is at [Configuration › Models](configuration.md#models).
 
 To see the current list, which reads the live catalogue and so needs `ORQ_API_KEY` too:
 
@@ -191,7 +191,7 @@ assert "state" not in body["questions"]["verdict"]
 
 **A question's own `state` is dropped.** `ClassifyQuestion.state` is a required field because the type is shared with the single-question judge path, but on a `ClassifyRequest` only the request's `state` is sent. Pass `state={}` on each question, as the examples here do.
 
-**An answer's `type` is not checked against the question's `kind`.** `run_classify` validates the response against the wire schema and stops there. The jury path rejects a mismatch; this one hands it to you as sent, with the field for the kind you asked about left `None`. Read `answer.type` before you read a value.
+**An answer's `type` is not checked against the question's `kind`.** `run_classify` validates the response against the wire schema and stops there. The jury path rejects a mismatch; this one hands it to you as sent, with the field for the kind you asked about left `None`. Read `answer.type` before you read a value. A native OpenAI model such as `openai/gpt-6-luna` may answer `{"type": "refusal"}` with no other field; `run_classify` returns it as sent, and the jury path reports it as a `parse` error that says the model refused.
 
 **`run_classify` never reads `retry_count`.** It makes exactly one attempt. The field is nonetheless in the set the "unread config field" warning counts as read, because its sibling `run_classify_judges` does honour it — so a `retry_count=5` on a direct `run_classify` call gets you neither a retry nor a warning. Set a field neither function reads, such as `temperature`, and you do get one: `run_classify ignores llm_config temperature — this call site owns those. It reads retry_count, timeout_ms.` That warning is deduplicated per process and per field set, so a loop logs it once, not once per call.
 
@@ -291,7 +291,7 @@ else:
 Three failures never reach a second attempt, and the shape above is why none of them crashes your row:
 
 - **A timeout from `timeout_ms`.** That deadline is enforced with `asyncio.wait_for`, and `with_retry` re-raises `asyncio.TimeoutError` without retrying, so a `timeout_ms` that is too short retries nothing — raise the deadline rather than the attempt count. An SDK-level timeout is different: `openai.APITimeoutError` subclasses `APIConnectionError`, so it is retried as a connection error even though it lands under the same `timeout` error kind.
-- **A 400**, such as a model that does not serve `/classify`. `with_retry`'s classifier sees it is not retryable and raises at once.
+- **A 400**, such as a model that does not serve classify (the router's message says `does not support classify`). `with_retry`'s classifier sees it is not retryable and raises at once.
 - **A `parse` failure**, which carries no `error_exc` at all and so is returned rather than raised. Classify verdicts for the same state and question are deterministic ([Classify judges](classify-judges.md#settings-that-do-not-apply)), so a reply that did not validate will not validate better on a second attempt.
 
 What does retry is a 429, a 500 or above, and a connection error. The wait is `2s`, then `4s`, then `8s`, doubling to a `60s` ceiling, with up to 25% of each wait added as jitter; `with_retry` reads no `Retry-After` header, so a provider asking for a longer pause does not get one.

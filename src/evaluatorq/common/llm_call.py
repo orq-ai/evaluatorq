@@ -510,7 +510,7 @@ def classify_request_body(
     state: dict[str, Any] | str | list[Any],
     questions: Mapping[str, ClassifyQuestion],
 ) -> dict[str, Any]:
-    """Build the exact body sent to the Orq ``/classify`` endpoint."""
+    """Build the exact body sent to the Orq ``/decisions`` endpoint."""
     return {'model': model, 'state': state, 'questions': classifier_question_wire_payloads(questions)}
 
 
@@ -524,7 +524,7 @@ async def execute_classify(
     timeout_s: float,
     inject_trace_headers: bool = True,
 ) -> tuple[Any, TokenUsage | None]:
-    """Execute one Orq router ``/classify`` call and return the decoded reply plus its usage.
+    """Execute one Orq router ``/decisions`` call and return the decoded reply plus its usage.
 
     Pass exactly one of ``question`` for the single-question form or ``request``
     for the multi-question form. The request's state is used for every question.
@@ -563,7 +563,7 @@ async def execute_classify(
         request = cast('ClassifyRequest', request)
         questions = request.questions
         state = request.state
-    # No `apply_pipeline_metadata` here: the /classify wire contract accepts only
+    # No `apply_pipeline_metadata` here: the /decisions wire contract this module sends accepts only
     # model, state and questions, so a metadata block is an unknown key on a body
     # the router validates strictly.
     body = classify_request_body(model, state, questions)
@@ -598,7 +598,7 @@ async def execute_classify(
         ],
     )
     payload = await _bounded_call(
-        client.post('/classify', cast_to=object, body=body, options=cast('Any', options)),
+        client.post('/decisions', cast_to=object, body=body, options=cast('Any', options)),
         timeout_s,
     )
     # `record_llm_response` is duck-typed (its `_field` helper reads dicts as well as

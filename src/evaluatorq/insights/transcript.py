@@ -1,6 +1,6 @@
 """Text views of a trace for the Insights classifier, plus the tool counts read straight from its messages.
 
-Three views, each for one `/classify` call:
+Three views, each for one `/decisions` call:
 
 - `full_conversation_view`: the readable source messages, tool inputs, and complete tool results for non-Jev classifiers and summaries, capped to the configured trace-input budget.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.

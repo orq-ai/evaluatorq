@@ -1,4 +1,4 @@
-"""Label pass: one `/classify` request per trace, carrying every requested label plus the optional population-match question.
+"""Label pass: one `/decisions` request per trace, carrying every requested label plus the optional population-match question.
 
 One retry layer: `with_retry` wraps `run_classify`, retried only for
 `JudgeError.TIMEOUT`/`JudgeError.API_CONNECTION` outcomes (mirroring their
@@ -64,7 +64,7 @@ _RETRYABLE_ERROR_KINDS = frozenset({JudgeError.TIMEOUT, JudgeError.API_CONNECTIO
 
 @dataclass
 class LabelOutcome:
-    """One trace's labels from a single `/classify` round trip, plus the optional population-match verdict."""
+    """One trace's labels from a single `/decisions` round trip, plus the optional population-match verdict."""
 
     trace: TraceRecord | TraceDocument
     answers: dict[str, LabelAnswer]
@@ -188,7 +188,7 @@ async def _ask(
     what: str,
     trace_input_chars: int | None = None,
 ) -> tuple[dict[str, LabelAnswer], str | None]:
-    """Ask `specs` about the bounded state in one `/classify` call."""
+    """Ask `specs` about the bounded state in one `/decisions` call."""
     trace_input_chars = trace_input_chars if trace_input_chars is not None else effective_trace_input_chars()
     state = _prepare_state(state, model, trace_input_chars)
     questions = {spec.name: spec.to_question(state) for spec in specs}
@@ -482,7 +482,7 @@ async def label_traces(
     coding_labels: Sequence[LabelSpec] | None = None,
     trace_input_chars: int | None = None,
 ) -> list[LabelOutcome]:
-    """Label every trace, bounded by `parallelism` concurrent `/classify` calls.
+    """Label every trace, bounded by `parallelism` concurrent `/decisions` calls.
 
     Per trace: prepare the classifier state from the full transcript or indexed Jev messages, ask
     every label's question plus (when `compiled` is given) the population-match

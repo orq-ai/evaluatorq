@@ -1,4 +1,4 @@
-"""Unit tests for `evaluatorq.insights.labeling` — the per-trace `/classify` label pass."""
+"""Unit tests for `evaluatorq.insights.labeling` — the per-trace `/decisions` label pass."""
 
 from __future__ import annotations
 
@@ -459,7 +459,7 @@ async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypat
 
 
 def _coding_fake(detect: ClassifyOutcome, calls: list[ClassifyRequest]) -> Any:
-    """A `/classify` fake answering the coding check with `detect` and every other question with a fixed answer."""
+    """A `/decisions` fake answering the coding check with `detect` and every other question with a fixed answer."""
 
     async def fake_run_classify(
         *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
