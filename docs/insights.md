@@ -439,11 +439,11 @@ Without **Assistant mistakes**, the run estimates the error share from the summa
 | Picker | Used for | Default |
 |---|---|---|
 | Summary model | The per-trace summary | The `summary_model` default of `InsightsConfig` |
-| Classifier model | Label questions; must serve `/classify` | The classifier model from Settings |
+| Classifier model | Label questions; must serve `/decisions` | The classifier model from Settings |
 | Embedding model | Embeddings of the summaries | The `embedding_model` default of `InsightsConfig` |
 | Question compiler | Compiling your question into a population filter; shown only when the **Question** field is filled | The compiler model from Settings |
 
-The run uses the models you pick and records them in its config, so **Re-run** prefills them. Starting a run is rejected when the Orq catalogue says the classifier cannot serve `/classify` or the embedding model is not an embedding model. When the catalogue is unavailable, the pickers become text boxes, a typed id is accepted, and a warning is logged. A blank field falls back to the default.
+The run uses the models you pick and records them in its config, so **Re-run** prefills them. Starting a run is rejected when the Orq catalogue says the classifier cannot serve `/decisions` or the embedding model is not an embedding model. When the catalogue is unavailable, the pickers become text boxes, a typed id is accepted, and a warning is logged. A blank field falls back to the default.
 
 **Expected stages** lists the stages the run will report, produced by the same plan the run uses, so the progress list on the run page matches it. The estimate is described below.
 

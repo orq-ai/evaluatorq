@@ -64,13 +64,13 @@ async def test_cli_classify_post_uses_oauth_request_endpoint(monkeypatch: Any) -
     monkeypatch.setenv('ORQ_API_KEY', 'must-not-be-forwarded')
     _, llm = cli_oauth.build_cli_oauth_clients('https://my.orq.ai')
     result = await llm.post(
-        '/classify',
+        '/decisions',
         body={'model': 'typesafe/jev-latest', 'state': {}, 'questions': {}},
         options={'headers': {'Authorization': 'Bearer secret-token', 'X-Api-Key': 'secret-key', 'X-Trace': 'trace-1'}},
     )
 
     assert result.answers == {}
-    assert seen['args'][-5:] == ('request', 'POST', '/v3/router/classify', '--force', '--stdin')
+    assert seen['args'][-5:] == ('request', 'POST', '/v3/router/decisions', '--force', '--stdin')
     assert not any('secret-token' in arg or 'secret-key' in arg or 'X-Trace' in arg for arg in seen['args'])
     assert json.loads(seen['process'].received)['model'] == 'typesafe/jev-latest'
     assert 'ORQ_API_KEY' not in seen['env']

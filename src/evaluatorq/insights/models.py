@@ -111,7 +111,7 @@ class LabelSpec(BaseModel):
     noul_threshold: BoundedRatio = 0.5
 
     def to_question(self, state: dict[str, Any] | str | list[Any]) -> ClassifyQuestion:
-        """Build the `/classify` question for this label against `state`, validating the criteria/kind shape."""
+        """Build the `/decisions` question for this label against `state`, validating the criteria/kind shape."""
         return ClassifyQuestion(
             kind=self.kind,
             instructions=self.instructions,

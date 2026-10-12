@@ -154,6 +154,7 @@ plugins:
           - custom-evaluators-and-frameworks.md: Define custom evaluators and frameworks.
           - llm-as-a-jury.md: Multi-judge panel (jury) evaluation.
           - classify-judges.md: Use classify models as typed, structured jury seats.
+          - classify-endpoint.md: Several typed questions about one state, in one /decisions call.
           - jury-presets.md: Named judge panels with published costs, and how they stay current.
           - cyclic-judge.md: Round-robin (CyclicJudge) judge assignment at single-judge cost.
           - pairwise-judging.md: Pairwise comparison judging.
@@ -303,6 +304,7 @@ nav:
       - LLM as a Jury:
           - Overview: llm-as-a-jury.md
           - Classify Judges: classify-judges.md
+          - Classify Endpoint: classify-endpoint.md
           - Jury Presets: jury-presets.md
           - Cyclic Judge Assignment: cyclic-judge.md
           - Pairwise Judging: pairwise-judging.md

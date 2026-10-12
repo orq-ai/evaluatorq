@@ -91,7 +91,7 @@ DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT = (
 # billed takes down the run's report instead of the one verdict.
 #
 # The classify leg is the second producer of this payload and fills it differently:
-# a `/classify` answer carries a distribution, not prose, so it never abstains and its
+# a `/decisions` answer carries a distribution, not prose, so it abstains only by refusing and its
 # `explanation` is synthesised from the numbers (`ClassifyQuestion` below). Nothing on
 # that path is generated against this model's schema, so the field-order and prompt
 # notes above do not bind it.
@@ -143,7 +143,7 @@ class EvaluatorResponsePayload(BaseModel):
 
 
 class ClassifyQuestion(BaseModel):
-    """One question for the Orq router's ``/classify`` endpoint.
+    """One question for the Orq router's ``/decisions`` endpoint.
 
     A classify model is not prompted: it is handed the material to judge
     (``state``) and a question about it. ``kind`` picks the answer shape —
@@ -176,9 +176,10 @@ class ClassifyQuestion(BaseModel):
 
 
 class ClassifyAnswer(BaseModel):
-    """One answer from ``/classify``; only the field matching ``type`` is filled.
+    """One answer from ``/decisions``; only the field matching ``type`` is filled.
 
-    ``extra='allow'`` because the endpoint's answer shape is the provider's to
+    ``type`` is ``noul``, ``choice``, ``score`` or ``refusal``; a refusal carries no other
+    field. ``extra='allow'`` because the endpoint's answer shape is the provider's to
     extend — an unknown field is kept in `raw_content` rather than dropped.
     """
 
@@ -201,7 +202,7 @@ class ClassifyAnswer(BaseModel):
 
 
 class ClassifyResponse(BaseModel):
-    """A ``/classify`` reply. ``model`` is the bare id the router served (``jev-latest``)."""
+    """A ``/decisions`` reply. ``model`` is echoed by the router and passed through unchanged."""
 
     model_config = ConfigDict(extra='allow')
 
@@ -211,7 +212,7 @@ class ClassifyResponse(BaseModel):
 
 
 class ClassifyRequest(BaseModel):
-    """Several questions about one ``state``, answered in one ``/classify`` round trip."""
+    """Several questions about one ``state``, answered in one ``/decisions`` round trip."""
 
     state: dict[str, Any] | str | list[Any]
     questions: dict[str, ClassifyQuestion] = Field(min_length=1)  # the request's state wins over each question's state
@@ -682,7 +683,7 @@ async def run_classify(
     request: ClassifyRequest,
     span_attributes: dict[str, Any] | None = None,
 ) -> ClassifyOutcome:
-    """Call ``/classify`` once for all questions in ``request`` and validate the reply.
+    """Call ``/decisions`` once for all questions in ``request`` and validate the reply.
 
     The caller owns retry policy. This helper owns the classify span, timeout, wire
     response validation, and mapping provider failures into ``ClassifyOutcome``.
@@ -750,13 +751,14 @@ async def _classify_judge(
     question: ClassifyQuestion,
     span_attributes: dict[str, Any] | None = None,
 ) -> JudgeOutcome:
-    """Judge via the Orq router's ``/classify`` endpoint — the only endpoint a classify model serves.
+    """Judge via the Orq router's ``/decisions`` endpoint — the only endpoint a classify model serves.
 
     There is no prompt and no verdict schema on this path: the model answers the
     question it was handed, and `_classify_verdict` maps that answer onto the
-    payload every other judge leg returns. A classify answer never abstains — an
-    answer that cannot be read at all is a `JudgeError.PARSE`, not an abstention,
-    so a broken verdict is never counted as a judge declining to call it.
+    payload every other judge leg returns. A classify answer abstains only when the
+    model answers `refusal`, as the chat and Responses legs do; any other answer that
+    cannot be read is a `JudgeError.PARSE`, so a broken verdict is never counted as
+    a judge declining to call it.
 
     `run_classify` owns the decoded response shape and all provider error mapping;
     this function only translates the ``verdict`` answer into the neutral judge
@@ -778,7 +780,7 @@ async def _classify_judge(
 def _classify_answer_outcome(
     *, model: str, question: ClassifyQuestion, outcome: ClassifyOutcome, key: str
 ) -> JudgeOutcome:
-    """Translate the ``key`` answer of one ``/classify`` reply into the neutral judge outcome."""
+    """Translate the ``key`` answer of one ``/decisions`` reply into the neutral judge outcome."""
     if outcome.error_kind is not None:
         return JudgeOutcome(
             error_kind=outcome.error_kind,
@@ -807,6 +809,16 @@ def _classify_answer_outcome(
             ),
             token_usage=outcome.token_usage,
             raw_content=raw,
+            endpoint='classify',
+        )
+    if answer.type == 'refusal':
+        message = f'classify model refused to answer the {question.kind} question'
+        logger.warning('Judge [{}] {} (raw={})', model, message, raw[:500])
+        return JudgeOutcome(
+            payload=EvaluatorResponsePayload(value=None, abstain=True, explanation=message),
+            token_usage=outcome.token_usage,
+            raw_content=raw,
+            error_message=message,
             endpoint='classify',
         )
     verdict = _classify_verdict(question, answer)
@@ -847,7 +859,7 @@ async def run_classify_judges(
 ) -> dict[str, JudgeOutcome]:
     """Judge several questions about one ``state``, returning one outcome per question key.
 
-    A classify model (Jev) answers every question in one ``/classify`` round trip, so
+    A classify model (Jev) answers every question in one ``/decisions`` round trip, so
     three questions cost one call, not three. Its token usage rides on each outcome,
     because the reply is not split per question. Any other model falls back to one
     `run_judge` call per question, which is what a single-question caller gets.
@@ -1206,7 +1218,7 @@ async def run_judge(
 ) -> JudgeOutcome:
     """Render the template, call the judge model, and parse the verdict.
 
-    **Classify models.** A judge is asked on the router's ``/classify`` endpoint when
+    **Classify models.** A judge is asked on the router's ``/decisions`` endpoint when
     the caller supplied a ``classify`` question and the catalogue says the model serves
     that endpoint. The flag alone does not mean classify-*only*, so it never redirects a
     caller who asked for the prompt path.

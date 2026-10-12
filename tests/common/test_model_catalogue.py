@@ -321,7 +321,7 @@ def test_parse_catalogue_warns_when_nonempty_payload_yields_zero_entries(monkeyp
     assert prices == {}
     assert any('none parsed' in w for w in warnings)
     # The consequence named is the catalogue's own, not "everything falls back to chat":
-    # a classify model still routes to /classify off the built-in list.
+    # a classify model still routes to /decisions off the built-in list.
     assert any('endpoint qualification and local pricing are unavailable' in w for w in warnings)
     assert any('classify fallback still applies' in w for w in warnings)
 
