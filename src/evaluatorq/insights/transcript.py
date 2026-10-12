@@ -2,7 +2,7 @@
 
 Three views, each for one `/classify` call:
 
-- `full_conversation_view`: the readable source messages, tool inputs, and complete tool results for non-Jev classifiers and summaries, capped to the configured trace-input budget.
+- `full_conversation_view`: the source messages as `#<index> <kind>:` entries, for non-Jev classifiers, summaries and Trace Finder. `ConversationViewOptions` and its presets `COMPACT`, `DETAILED` and `WHOLE` choose the message types and each type's cap; the trace-input budget then drops whole entries from the middle.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
 - `tool_activity_chunks`: user context and paired tool activity for coding-tool questions. Non-Jev traces keep their question-specific command excerpts; Jev traces use filtered structured state, 100-character input/result edges, and complete-record chunks that fit the exact question reserve and Jev state-plus-question ceilings.
 
@@ -17,13 +17,15 @@ import json
 import re
 import shlex
 from collections import Counter
+from dataclasses import dataclass, replace
+from itertools import groupby
 from operator import itemgetter
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Any, overload
+from typing import TYPE_CHECKING, Any, Literal, get_args, overload
 
 from pydantic import BaseModel
 
-from evaluatorq.common.messages import coerce_content_text, contains_media_content
+from evaluatorq.common.messages import coerce_content_text, contains_media_content, reasoning_text
 from evaluatorq.common.model_input import (
     cap_text,
     clean_model_text,
@@ -31,23 +33,42 @@ from evaluatorq.common.model_input import (
     is_jev_model,
     jev_state,
     jev_state_char_limit,
+    message_lines,
     pair_tool_call_results,
     serialized_chars,
     serialized_question_chars,
 )
 from evaluatorq.common.redact import scrub_known_secrets
-from evaluatorq.common.trace_document import TraceDocument, prompt_messages
+from evaluatorq.common.trace_document import TraceDocument, to_chat_messages
 from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Collection, Iterator
 
     from evaluatorq.trace_finder.models import TraceRecord
 
 TOOL_INPUT_CHARS = 300
-RISKY_COMMAND_CHARS = 300
+# `ConversationViewOptions` defaults: each cap is the characters kept, start and end; -1 keeps the type whole.
+USER_TURN_CHARS = 8_000
+ASSISTANT_CHARS = 1_000
+REASONING_CHARS = 2_000
+TOOL_RESULT_CHARS = 300
+# How much of a file path, URL or query a collapsed `tools:` entry keeps.
+TARGET_CHARS = 80
+MessageKind = Literal['system', 'user', 'assistant', 'reasoning', 'tool_input', 'tool_result']
+MESSAGE_KINDS: frozenset[MessageKind] = frozenset(get_args(MessageKind))
+# `developer` carries system instructions; `function` is the legacy name for a tool result. Other roles render
+# under their own name with the system cap.
+_ROLE_KINDS: dict[str, MessageKind] = {
+    'system': 'system',
+    'developer': 'system',
+    'user': 'user',
+    'assistant': 'assistant',
+    'tool': 'tool_result',
+    'function': 'tool_result',
+}
 # Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
 SHELL_OUTPUT_CHARS = 300
 # Preserve short text whole instead of adding a cut marker for a few characters.
@@ -105,7 +126,7 @@ _BLOCK_WORDS = frozenset({'do', 'then', 'else', 'elif', '{', '(', '!'})
 _BLOCK_CLOSERS = frozenset({'done', 'fi', 'esac', '}', ')'})
 # Commands kept verbatim instead of collapsed to their program name: they change shared
 # state or delete data, so a classifier judging risk needs the line, not `git push`. They
-# are still cut to RISKY_COMMAND_CHARS, the same limit as any other tool input.
+# are still cut to the tool-input cap.
 _RISKY = re.compile(
     r'\bgit\s+(push|reset|clean|rebase|branch\s+-D|checkout\s+--|restore|stash|tag\s+-d|filter-branch)\b'
     r'|\brm\s|\bgh\s+(pr\s+(merge|close|edit|comment|create|review)|release|repo\s+(delete|edit)|issue\s+(close|delete)|api\b)'
@@ -134,9 +155,7 @@ def tool_stats(trace: TraceRecord | TraceDocument) -> ToolStats:
     for _, call in _tool_calls(trace):
         name, arguments = _call_name(call), _call_arguments(call)
         if name == SKILL_TOOL:
-            skills.update(
-                _SKILL_ARG.findall(_raw_arguments(call)) or ([arguments['skill']] if 'skill' in arguments else [])
-            )
+            skills.update(_skill_names(call, arguments))
             continue
         tools[name] += 1
         if name in SHELL_TOOLS:
@@ -195,60 +214,213 @@ def tool_inventory(trace: TraceRecord | TraceDocument) -> str:
     return '\n'.join(lines)
 
 
+def _message_kinds(kinds: Collection[MessageKind], name: str) -> frozenset[MessageKind]:
+    if isinstance(kinds, str):
+        raise TypeError(f'{name} takes a collection of message kinds, not a string')
+    if unknown := set(kinds) - MESSAGE_KINDS:
+        raise ValueError(f'unknown message kinds {sorted(unknown)}, expected some of {sorted(MESSAGE_KINDS)}')
+    return frozenset(kinds)
+
+
+@dataclass(frozen=True)
+class ConversationViewOptions:
+    """What `full_conversation_view` renders and how much of each message type it keeps.
+
+    `include` names the message types to render; reasoning is left out unless named. Every `*_chars` cap is the
+    number of characters kept, split between the start and end of the text, and `-1` keeps that type whole.
+    `tools='collapsed'` puts each message's tool calls on one `tools:` line and shows no results, so it rejects
+    `tool_result` in `include`; there `tool_input_chars` bounds a risky shell command kept verbatim.
+    `tools='per_call'` gives every call and every result its own line.
+    """
+
+    include: frozenset[MessageKind] = MESSAGE_KINDS - {'reasoning', 'tool_result'}
+    tools: Literal['collapsed', 'per_call'] = 'collapsed'
+    system_chars: int = -1
+    user_chars: int = USER_TURN_CHARS
+    assistant_chars: int = ASSISTANT_CHARS
+    reasoning_chars: int = REASONING_CHARS
+    tool_input_chars: int = TOOL_INPUT_CHARS
+    tool_result_chars: int = TOOL_RESULT_CHARS
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, 'include', _message_kinds(self.include, 'include'))
+        if self.tools not in ('collapsed', 'per_call'):
+            raise ValueError(f"tools must be 'collapsed' or 'per_call', got {self.tools!r}")
+        if self.tools == 'collapsed' and 'tool_result' in self.include:
+            raise ValueError("tools='collapsed' shows no tool results; use tools='per_call' or leave out 'tool_result'")
+        for kind, cap in self.caps.items():
+            if cap != -1 and cap < 2:
+                raise ValueError(f'the {kind} cap must be -1 (whole) or at least 2, got {cap}')
+
+    @property
+    def caps(self) -> dict[MessageKind, int]:
+        return {
+            'system': self.system_chars,
+            'user': self.user_chars,
+            'assistant': self.assistant_chars,
+            'reasoning': self.reasoning_chars,
+            'tool_input': self.tool_input_chars,
+            'tool_result': self.tool_result_chars,
+        }
+
+
+# One line of tool names per message, no results: the cheapest view that still shows what the agent did.
+COMPACT = ConversationViewOptions()
+# Every call and its result, results cut to 300 characters: summaries and classifiers judge failed and risky calls.
+DETAILED = ConversationViewOptions(include=MESSAGE_KINDS - {'reasoning'}, tools='per_call')
+# Everything whole, one line per call: Trace Finder counts which messages survive the model-input cap.
+WHOLE = ConversationViewOptions(
+    include=MESSAGE_KINDS - {'reasoning'},
+    tools='per_call',
+    system_chars=-1,
+    user_chars=-1,
+    assistant_chars=-1,
+    reasoning_chars=-1,
+    tool_input_chars=-1,
+    tool_result_chars=-1,
+)
+
+
 def full_conversation_view_with_message_spans(
     trace: TraceRecord | TraceDocument,
 ) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
-    """Return complete rendered text, source-message spans and total source-message count."""
-    return _render_full_conversation(trace, capture_message_spans=True)
+    """Return the `WHOLE` rendering, its `(start, end, message index)` entry spans and the source-message count."""
+    text, count = _render_full_conversation(trace, WHOLE)
+    return text, text.spans, count  # ty: ignore[unresolved-attribute]
 
 
-def full_conversation_view(trace: TraceRecord | TraceDocument, budget: int | None = None) -> str:
-    """Render source messages, tool inputs, and complete tool results for model input."""
-    rendered, _, _ = _render_full_conversation(trace, capture_message_spans=False)
-    cap = budget if budget is not None else effective_trace_input_chars()
-    return cap_text(rendered, cap)[0]
-
-
-def _render_full_conversation(
+def full_conversation_view(
     trace: TraceRecord | TraceDocument,
+    budget: int | None = None,
+    options: ConversationViewOptions = COMPACT,
     *,
-    capture_message_spans: bool,
-) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
-    messages = prompt_messages(trace)
-    lines: list[str] = []
-    line_indexes = [] if capture_message_spans else None
+    include: Collection[MessageKind] | None = None,
+    exclude: Collection[MessageKind] = (),
+    tools: Literal['collapsed', 'per_call'] | None = None,
+    system_chars: int | None = None,
+    user_chars: int | None = None,
+    assistant_chars: int | None = None,
+    reasoning_chars: int | None = None,
+    tool_input_chars: int | None = None,
+    tool_result_chars: int | None = None,
+) -> str:
+    """Render the conversation as text, one entry per message part, each starting `#<message index> <kind>:`.
+
+    `options` picks a preset (`COMPACT`, `DETAILED`, `WHOLE`); a keyword argument replaces that one field, and
+    `exclude` removes message types from the result. Naming a type in both `include` and `exclude` raises. A line break inside a message is indented by two spaces, so
+    only a new entry starts at the left edge. A cut inside a message leaves `[... N chars left out ...]`, and an
+    injected `<system-reminder>` block becomes `[harness reminder omitted]`. Every part is scrubbed of credentials
+    before it is cut. Tool calls and results name their call as `<tool> (call <message>.<n>)`, flagged `[error]` or
+    `[pending]` when the call did not complete.
+
+    The whole view is then cut to `budget` characters, `None` reading the configured trace-input cap. That cut keeps
+    whole entries from both ends and puts `[... N messages (a-b) left out ...]` where it dropped them.
+    """
+    overrides = {
+        name: value
+        for name, value in {
+            'include': include,
+            'tools': tools,
+            'system_chars': system_chars,
+            'user_chars': user_chars,
+            'assistant_chars': assistant_chars,
+            'reasoning_chars': reasoning_chars,
+            'tool_input_chars': tool_input_chars,
+            'tool_result_chars': tool_result_chars,
+        }.items()
+        if value is not None
+    }
+    if dropped := _message_kinds(exclude, 'exclude'):
+        kept = _message_kinds(include if include is not None else options.include, 'include')
+        if include is not None and (both := sorted(kept & dropped)):
+            raise ValueError(f'include and exclude both name {", ".join(both)}; name each message type in only one')
+        overrides['include'] = kept - dropped
+    if overrides:
+        options = replace(options, **overrides)
+    rendered, _ = _render_full_conversation(trace, options)
+    return cap_text(rendered, budget if budget is not None else effective_trace_input_chars())[0]
+
+
+def _render_full_conversation(trace: TraceRecord | TraceDocument, options: ConversationViewOptions) -> tuple[str, int]:
+    include, caps = options.include, options.caps
+    messages = to_chat_messages(trace)
+    # Pair repeated call ids in order, as the Jev state does, so each call and result reads its own status.
+    calls, _ = pair_tool_call_results(messages)
+    statuses: dict[tuple[int, int], str] = {}
+    result_calls: dict[int, tuple[str, str]] = {}
+    for record in calls:
+        key = (record['index'], record['call_index'])
+        statuses[key] = _tool_call_status(record['call'].get('id'), tuple(result for _, result in record['results']))
+        for result_index, _ in record['results']:
+            result_calls[result_index] = (_call_label(record['call'], *key), statuses[key])
+    entries: list[tuple[str, int]] = []
+    parts_cut = False
+
+    def fit(text: str, kind: MessageKind) -> str:
+        nonlocal parts_cut
+        fitted, cut = _fit(text, caps[kind])
+        parts_cut |= cut
+        return fitted
+
     for index, message in enumerate(messages):
-        role = message.get('role', 'unknown')
-        if role == 'tool':
-            content = message.get('content')
-            rendered = coerce_content_text(content) if contains_media_content(content) else tool_result_to_text(content)
-            result = scrub_known_secrets(rendered)
-            result = _REMINDER.sub('[harness reminder omitted]', result)
-            lines.append(f'{index} tool result {message.get("tool_call_id", "")}: {result}')
-            if line_indexes is not None:
-                line_indexes.append(index)
-        else:
-            content = scrub_known_secrets(coerce_content_text(message.get('content')))
-            content = _REMINDER.sub('[harness reminder omitted]', content)
-            if content.strip():
-                lines.append(f'{index} {role}: {content}')
-                if line_indexes is not None:
-                    line_indexes.append(index)
-        for call in message.get('tool_calls') or []:
-            name = _call_name(call)
-            arguments = _REMINDER.sub('[harness reminder omitted]', scrub_known_secrets(_raw_arguments(call)))
-            lines.append(f'{index} tool input {name}: {arguments}')
-            if line_indexes is not None:
-                line_indexes.append(index)
-    conversation = '\n'.join(lines)
-    if line_indexes is None:
-        return conversation, (), len(messages)
-    spans = []
+        role = str(message.get('role') or 'unknown')
+        kind = _ROLE_KINDS.get(role, 'system')
+        if kind == 'tool_result':
+            if 'tool_result' in include:
+                label, status = result_calls.get(index, ('(no matching call)', 'completed'))
+                text = fit(_result_text(message), 'tool_result')
+                entries.append((f'#{index} tool result {label}{_flag(status)}: {text}', index))
+            continue
+        if 'reasoning' in include and (reasoning := reasoning_text(message)):
+            entries.append((f'#{index} reasoning: {fit(reasoning, "reasoning")}', index))
+        content = coerce_content_text(message.get('content'))
+        if kind in include and content.strip():
+            entries.append((f'#{index} {role}: {fit(content, kind)}', index))
+        if 'tool_input' not in include:
+            continue
+        collapsed: list[str] = []
+        for call_index, call in enumerate(message.get('tool_calls') or []):
+            if not isinstance(call, dict):
+                continue
+            flag = _flag(statuses.get((index, call_index), 'completed'))
+            if options.tools == 'collapsed':
+                collapsed.append(_call_line(call, caps['tool_input']) + flag)
+            else:
+                text = fit(_input_text(call), 'tool_input')
+                entries.append((f'#{index} tool input {_call_label(call, index, call_index)}{flag}: {text}', index))
+        if collapsed:
+            runs = ((entry, len(list(repeats))) for entry, repeats in groupby(collapsed))
+            entries.append((f'#{index} tools: {", ".join(f"{e} x{n}" if n > 1 else e for e, n in runs)}', index))
+    lines: list[str] = []
+    spans: list[tuple[int, int, int]] = []
     offset = 0
-    for line, index in zip(lines, line_indexes, strict=True):
+    for entry, index in entries:
+        line = entry.replace('\n', '\n  ')
+        lines.append(line)
         spans.append((offset, offset + len(line), index))
         offset += len(line) + 1
-    return conversation, tuple(spans), len(messages)
+    return message_lines('\n'.join(lines), tuple(spans), parts_cut=parts_cut), len(messages)
+
+
+def _fit(text: str, cap: int) -> tuple[str, bool]:
+    """Scrub credentials, mark injected reminders, strip, then keep `cap` characters from both ends (-1: whole)."""
+    text = clean_model_text(text).strip()
+    if cap == -1 or len(text) <= cap + CUT_SLACK:
+        return text, False
+    return join_cut(text[: cap // 2], text[-(cap - cap // 2) :], len(text) - cap), True
+
+
+def _flag(status: str) -> str:
+    return '' if status == 'completed' else f' [{status}]'
+
+
+def _call_label(call: dict[str, Any], index: int, call_index: int) -> str:
+    return f'{_call_name(call)} (call {index}.{call_index + 1})'
+
+
+def _input_text(call: dict[str, Any]) -> str:
+    """The shell command for a shell call, the raw arguments otherwise."""
+    return _shell_command(_call_arguments(call)) if _call_name(call) in SHELL_TOOLS else _raw_arguments(call)
 
 
 @overload
@@ -299,7 +471,7 @@ def tool_activity_chunks(
         raise ValueError('trace input character cap must be positive')
     questions = question_payloads or []
     jev = is_jev_model(model) if model is not None else False
-    messages = prompt_messages(trace)
+    messages = to_chat_messages(trace)
     if jev:
         units = _jev_activity_units(messages)
         state_budget = jev_state_char_limit(questions, global_char_cap=request_budget)
@@ -312,16 +484,24 @@ def tool_activity_chunks(
     chunk_budget = request_budget - serialized_question_chars(questions)
     if chunk_budget <= 0:
         raise ValueError('classifier questions leave no tool-activity state budget under the configured input cap')
-    results = _results(messages)
+    call_records, _ = pair_tool_call_results(messages)
+    paired = {
+        (record['index'], record['call_index']): tuple(result for _, result in record['results'])
+        for record in call_records
+    }
     lines: list[str] = []
-    for message in messages:
+    for index, message in enumerate(messages):
         role = message.get('role')
         if role == 'user':
             text = _user_text(message)
             if text:
                 lines.append(f'USER: {_head_tail(text, 400, 200)}')
         elif role == 'assistant':
-            lines.extend(_activity_line(call, results) for call in message.get('tool_calls') or [])
+            lines.extend(
+                _activity_line(call, paired[index, call_index])
+                for call_index, call in enumerate(message.get('tool_calls') or [])
+                if isinstance(call, dict)
+            )
     call_lines = [line for line in lines if line.startswith('CALL')]
     if any(len(line) + 1 > chunk_budget for line in call_lines):
         raise ValueError('one non-Jev tool-activity record exceeds the question-reserved state budget')
@@ -447,7 +627,7 @@ def _jev_activity_source(
         source.append(message)
         expected_results.add(index)
         if kind == 'result' and record is not None and _call_name(record['call']) in SHELL_TOOLS:
-            text = _jev_result_text(message).strip()
+            text = _result_text(message).strip()
             markers = [label for label, pattern in OUTPUT_MARKERS if pattern.search(text)]
             if markers:
                 result_metadata[index] = {'output_markers': markers}
@@ -507,7 +687,7 @@ def _jev_activity_state(
     return state if serialized_chars(state) <= state_budget else None
 
 
-def _jev_result_text(message: dict[str, Any]) -> str:
+def _result_text(message: dict[str, Any]) -> str:
     content = message.get('content')
     return coerce_content_text(content) if contains_media_content(content) else tool_result_to_text(content)
 
@@ -551,25 +731,22 @@ def _chunk(lines: list[str], budget: int) -> list[str]:
 
 def join_cut(head: str, tail: str, omitted: int) -> str:
     """Join the two kept ends of a cut text around a count of the characters left out."""
-    return f'{head} [... {omitted} chars ...] {tail}'
+    return f'{head} [... {omitted} chars left out ...] {tail}'
 
 
-def _results(messages: list[dict[str, Any]]) -> dict[Any, dict[str, Any]]:
-    return {message.get('tool_call_id'): message for message in messages if message.get('role') == 'tool'}
-
-
-def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> str:
+def _call_input(call: dict[str, Any], limit: int = TOOL_INPUT_CHARS) -> str:
+    """A call's input on one line, scrubbed: the shell command, or the raw arguments, cut to `limit`."""
     name, arguments = _call_name(call), _call_arguments(call)
     if name in SHELL_TOOLS:
-        command = _shell_command(arguments)
-        shown = command[:RISKY_COMMAND_CHARS] if is_risky_command(command) else command[:TOOL_INPUT_CHARS]
-        call_input = shown.replace('\n', ' ⏎ ')
-    else:
-        call_input = _raw_arguments(call)[:TOOL_INPUT_CHARS]
+        return _shell_command(arguments)[:limit].replace('\n', ' ⏎ ')
+    return scrub_known_secrets(_raw_arguments(call))[:limit]
+
+
+def _activity_line(call: dict[str, Any], paired: tuple[dict[str, Any], ...]) -> str:
+    name, call_input = _call_name(call), _call_input(call)
     call_id = call.get('id')
-    result = results.get(call_id)
-    paired = (result,) if result else ()
     status = _tool_call_status(call_id, paired)
+    result = paired[0] if paired else None
     # Result bodies are cut to keep a long trace inside one classifier call.
     # Non-shell results keep only the diagnostic category; shell output decides
     # whether a command worked, so it keeps an excerpt and its failure markers.
@@ -586,8 +763,31 @@ def _activity_line(call: dict[str, Any], results: dict[Any, dict[str, Any]]) -> 
     return f'CALL {name} [{status}]: {call_input}\n  → {"; ".join(evidence) or "result body omitted"}'
 
 
+def _call_line(call: dict[str, Any], limit: int) -> str:
+    """One call inside a collapsed `tools:` line: the program, skill or target, or a risky command cut to `limit`."""
+    name, arguments = _call_name(call), _call_arguments(call)
+    if name in SHELL_TOOLS:
+        command = _shell_command(arguments)
+        if is_risky_command(command):
+            return f'{name}: `{_fit(command, limit)[0].replace(chr(10), " ⏎ ")}`'
+        return f'{name}: {first_command(command)}'
+    if name == SKILL_TOOL:
+        skills = _skill_names(call, arguments)
+        return f'{name}: {skills[0] if skills else "?"}'
+    for key in ('file_path', 'path', 'url', 'query', 'description', 'pattern'):
+        value = arguments.get(key)
+        if isinstance(value, str):
+            return f'{name}: {_fit(value, TARGET_CHARS)[0]}'
+    return name
+
+
+def _skill_names(call: dict[str, Any], arguments: dict[str, Any]) -> list[str]:
+    names = _SKILL_ARG.findall(_raw_arguments(call)) or ([arguments['skill']] if 'skill' in arguments else [])
+    return [scrub_known_secrets(str(name)) for name in names]
+
+
 def _tool_calls(trace: TraceRecord | TraceDocument) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
-    for message in prompt_messages(trace):
+    for message in to_chat_messages(trace):
         if message.get('role') != 'assistant':
             continue
         for call in message.get('tool_calls') or []:
@@ -627,12 +827,13 @@ def _call_arguments(call: dict[str, Any]) -> dict[str, Any]:
 
 
 def _shell_command(arguments: dict[str, Any]) -> str:
+    """The shell line a call runs, scrubbed of credentials so no view derived from it can carry one."""
     for key in ('command', 'cmd', 'script'):
         value = arguments.get(key)
         if isinstance(value, str):
-            return value
+            return scrub_known_secrets(value)
         if isinstance(value, list):
-            return ' '.join(str(part) for part in value)
+            return scrub_known_secrets(' '.join(str(part) for part in value))
     return ''
 
 

@@ -30,7 +30,7 @@ from evaluatorq.common.structured_output import generate_structured, usage_from_
 from evaluatorq.common.template_engine import render_template
 from evaluatorq.insights.cache import prompt_hash
 from evaluatorq.insights.models import TraceSummary, ensure_unique_trace_ids
-from evaluatorq.insights.transcript import full_conversation_view
+from evaluatorq.insights.transcript import DETAILED, full_conversation_view
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -106,7 +106,7 @@ def _build_prompt_with_coverage(
     empty_prompt = render_template(SUMMARY_PROMPT, {'conversation': delimit('', tag='conversation')})
     if len(empty_prompt) > cap:
         raise ValueError('trace_input_chars is too small for the summary prompt instructions')
-    source = full_conversation_view(trace, cap)
+    source = full_conversation_view(trace, cap, DETAILED)
     source_was_capped = has_truncated_source_text(source)
     low, high = 0, len(source)
     best: str | None = None
