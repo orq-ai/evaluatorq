@@ -221,7 +221,7 @@ def test_legacy_settings_load_without_defaults_warning(
     assert settings.classifier_model == 'custom/classifier'
 
 
-def test_retired_trace_input_limit_preserves_saved_settings_and_is_removed_on_save(
+def test_saved_trace_input_limit_loads_with_the_other_settings_and_survives_a_save(
     caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
     path = tmp_path / 'settings.json'
@@ -245,8 +245,7 @@ def test_retired_trace_input_limit_preserves_saved_settings_and_is_removed_on_sa
         settings = load_settings(path)
 
     assert 'using defaults' not in caplog.text
-    assert 'trace_input_chars' in caplog.text
-    assert '180000' not in caplog.text
+    assert settings.trace_input_chars == 180000
     assert settings.fast_model == 'saved/fast'
     assert settings.window_days == 12
     assert settings.limit == 64
@@ -260,10 +259,10 @@ def test_retired_trace_input_limit_preserves_saved_settings_and_is_removed_on_sa
 
     save_settings(settings, path)
 
-    assert 'trace_input_chars' not in json.loads(path.read_text())
+    assert json.loads(path.read_text())['trace_input_chars'] == 180000
 
 
-def test_retired_trace_input_limit_does_not_allow_other_unknown_settings() -> None:
+def test_trace_input_limit_does_not_allow_other_unknown_settings() -> None:
     with pytest.raises(ValueError, match='extra_forbidden'):
         DashboardSettings.model_validate({'trace_input_chars': 180000, 'limt': 64})
 
