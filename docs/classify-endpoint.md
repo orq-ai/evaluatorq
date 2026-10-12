@@ -152,14 +152,16 @@ from evaluatorq.common.model_catalogue import models_by_provider
 
 by_provider = asyncio.run(models_by_provider(kind="classify"))
 ids = sorted(model_id for ids in by_provider.values() for model_id in ids)
-print(len(ids), "classify models")
+
+# print(len(ids), ids) for the whole list — its size depends on your own key
 print("typesafe/jev-latest available:", "typesafe/jev-latest" in ids)
 ```
 
 ```console
-24 classify models
 typesafe/jev-latest available: True
 ```
+
+**The list is not a fixed set.** It is whatever your key's workspace can see, so the count moves between keys — two keys running the call above on the same day returned 24 ids and 59. Check for the id you want rather than relying on a number.
 
 `models_by_provider` returns `{}` rather than raising when the catalogue is unavailable, so flatten it as above instead of indexing a provider key. `typesafe/jev-latest` is the model evaluatorq's own classify judges default to, and the one this page uses.
 
