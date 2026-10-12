@@ -83,11 +83,13 @@ def range_inputs(
     *,
     include_load: bool = True,
     row_limit: int = DEFAULT_EXPLORER_ROWS,
+    time_origin: str = 'default',
 ) -> str:
     end = end or datetime.now(timezone.utc)
     start = start or end - timedelta(days=window_days)
     range_seconds = max(1, int((end - start).total_seconds()))
     preset_seconds = {int(span.total_seconds()) for _, span in PRESETS}
+    initial_origin = 'default' if time_origin == 'default' else 'explicit'
     range_mode = 'relative' if range_seconds in preset_seconds else 'exact'
     presets = ''.join(
         f'<button type="button" class="xr-preset" data-explorer-preset="{int(span.total_seconds())}" '
@@ -132,6 +134,7 @@ def range_inputs(
         f'<form id="explorer-load-form" hidden hx-post="/find/load" hx-target="#explorer-results" hx-swap="outerHTML" hx-sync="#explorer-results:replace" hx-include="#finder-controls, #finder-scope">{_csrf()}</form>'
         f'<input id="explorer-range-mode" type="hidden" name="range_mode" value="{range_mode}" form="explorer-load-form" hx-preserve data-explorer-range-mode>'
         f'<input id="explorer-range-seconds" type="hidden" name="range_seconds" value="{range_seconds}" form="explorer-load-form" hx-preserve data-explorer-range-seconds>'
+        f'<input id="explorer-time-origin" type="hidden" name="time_origin" value="{initial_origin}" form="explorer-load-form" hx-preserve data-explorer-time-origin>'
         '<input type="hidden" name="tz_offset" form="explorer-load-form" data-explorer-tz>'
         f'<details class="xr-time-menu"><summary><span class="xr-time-label" data-explorer-range-label>Custom range</span></summary><div class="xr-time-options"><span class="xr-presets" role="group" aria-label="Relative range">{presets}</span>'
         '<details class="xr-exact"><summary>Custom range</summary><div class="xr-range-fields">'
@@ -720,7 +723,12 @@ def _toolbar(
         else ''
     )
     date_and_rows = range_inputs(
-        view.start, view.end, window_days, include_load=False, row_limit=view.limit or DEFAULT_EXPLORER_ROWS
+        view.start,
+        view.end,
+        window_days,
+        include_load=False,
+        row_limit=view.limit or DEFAULT_EXPLORER_ROWS,
+        time_origin='default' if view.initial_load else 'explicit',
     )
     context_menu = sort if view.view == 'trajectories' else columns_menu
     load = '<button class="btn-secondary xr-load" type="submit" form="explorer-load-form">Load</button>'

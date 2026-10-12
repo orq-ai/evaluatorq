@@ -682,6 +682,7 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
     values['orq_project_id'] = form_data.get('orq_project_id') if values['orq_auth_method'] == 'cli_oauth' else None
     values['orq_project_name'] = None
     values['ask_ai_mode'] = form_data.get('ask_ai_mode', current.ask_ai_mode)
+    values['filter_selection'] = form_data.get('filter_selection', current.filter_selection)
     raw_input_cap = form_data.get('trace_input_chars')
     if raw_input_cap is None:
         values['trace_input_chars'] = current.trace_input_chars

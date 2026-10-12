@@ -1410,6 +1410,10 @@
   document.body.addEventListener('htmx:afterSettle', explorerInit);
   document.body.addEventListener('change', function (evt) {
     if (evt.target && (evt.target.id === 'explorer-from' || evt.target.id === 'explorer-to' || evt.target.id === 'explorer-from-time' || evt.target.id === 'explorer-to-time')) explorerUpdateOffsets();
+    if (evt.target?.matches?.('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time')) {
+      const origin = document.querySelector('[data-explorer-time-origin]');
+      if (origin) origin.value = 'explicit';
+    }
   });
   document.addEventListener('click', function (evt) {
     if (evt.target.closest('[data-explorer-apply]')) {
@@ -1420,8 +1424,9 @@
         if (!toInput.reportValidity()) return;
       }
       const mode = document.querySelector('[data-explorer-range-mode]');
+      const origin = document.querySelector('[data-explorer-time-origin]');
       if (mode) mode.value = 'exact';
-      document.querySelectorAll('[data-explorer-preset]').forEach((b) => b.setAttribute('aria-pressed', 'false'));
+      if (origin) origin.value = 'explicit';
       document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = true; });
       explorerUpdateRangeLabel();
       const menu = evt.target.closest('.xr-time-menu');
@@ -1435,6 +1440,8 @@
     const seconds = document.querySelector('[data-explorer-range-seconds]');
     if (mode) mode.value = 'relative';
     if (seconds) seconds.value = preset.getAttribute('data-explorer-preset');
+    const origin = document.querySelector('[data-explorer-time-origin]');
+    if (origin) origin.value = 'explicit';
     document.querySelectorAll('[data-explorer-preset]').forEach((b) => b.setAttribute('aria-pressed', String(b === preset)));
     explorerUpdateRangeLabel(preset.textContent.trim());
     document.querySelectorAll('#explorer-from, #explorer-to, #explorer-from-time, #explorer-to-time').forEach((el) => { el.required = false; });

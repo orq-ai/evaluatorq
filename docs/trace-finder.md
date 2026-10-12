@@ -217,7 +217,12 @@ Models resolve through the roles described under [Configuration › Models](conf
 | Classifier model | `typesafe/jev-latest` | `EVALUATORQ_CLASSIFIER_MODEL` |
 | Trace search window default | 7 days (1–90) | `EVALUATORQ_FINDER_WINDOW_DAYS` |
 | Trace search limit default | 500 (max 5000) | `EVALUATORQ_FINDER_LIMIT` |
+
 | Trace search parallelism default | 100 (max 200) | `EVALUATORQ_FINDER_PARALLELISM` |
+
+Natural-language metadata filters use the saved **Trace filters** setting, which defaults to **LLM + Jev**. Choose **LLM only** to use the configured fast `finder.filters` task instead. The command-line override `--filter-selection llm|llm+jev` applies to `eq find` and query-based `eq insights`. Neither mode changes compiler/classifier dimensions: `llm` selects facets and numeric bounds with the fast role; `llm+jev` uses the configured `finder.classifier` role for facet selection.
+
+Generated calendar bounds replace the default search window; explicit window controls remain authoritative. `eq find --window-days` marks its window explicit only when supplied, while an omitted option keeps the configured window as a default so a question can narrow it. On the dashboard, the initial date window is a default; choosing a preset or applying exact dates makes it explicit. Within-results questions only narrow the already-loaded rows and do not reload a broader population.
 
 `EVALUATORQ_COMPILER_MODEL` still works as a deprecated override for the `finder.compiler` task and logs a warning once per process.
 
@@ -247,6 +252,7 @@ For a small diagnostic run, use `eq find "mentions a refund" --limit 10 --debug`
 | `--yes`, `-y` | Skip the plan confirmation prompt. |
 | `--debug` | Print changed progress and compiler and classifier request and response data, including trace content. |
 | `--window-days INTEGER` (`1`–`90`) | How many recent days to search. |
+| `--filter-selection llm|llm+jev` | Override the saved metadata-filter selection mode for this run. |
 | `--limit INTEGER` (`1`–`5000`) | Maximum traces to classify. |
 | `--parallelism INTEGER` (`1`–`200`) | Concurrent classify calls. |
 | `--compiler-model TEXT` | Model that compiles the search question through the Orq router. Pins the `finder.compiler` task; default is the `fast` role, `openai/gpt-6-luna`. |

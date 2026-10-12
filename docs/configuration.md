@@ -84,6 +84,7 @@ A **task** is one named use of a role. A task override pins that single use to a
 | `sim.judge` | `smart` | The simulation judge. |
 | `sim.generator` | `fast` | Persona, scenario, first-message and datapoint generation, simulation recommendations and executive summary. |
 | `finder.compiler` | `fast` | The trace-finder query compiler. |
+| `finder.filters` | `fast` | Natural-language trace metadata filters in `llm` mode. |
 | `finder.classifier` | `classifier` | Ask AI and trace-finder classification. |
 | `apply` | `smart` | The dashboard's apply-recommendations merge. |
 | `insights.summary` | `smart` | Insights per-trace summaries. |
@@ -137,6 +138,7 @@ These options go before the subcommand, for example `eq --smart-model gpt-6-sol 
 | `--model-override TASK=MODEL` | One task from the table above. Repeatable. |
 
 An unknown task exits with an error that lists the valid tasks, and a pair without `=` exits with an `expected task=model` error. Subcommands keep their own model flags (`--attack-model`, `--sim-model`, `--summary-model` and the others), which rank above everything here. `eq dashboard` and `eq find` also take `--compiler-model`, a `finder.compiler` override, and `--classifier-model`.
+`eq find` and query-based `eq insights` also accept `--filter-selection llm|llm+jev`; the saved dashboard setting defaults to `llm+jev`. `llm` uses the configured `finder.filters` fast task, while `llm+jev` uses `finder.classifier`.
 
 ### Go OpenAI-direct
 

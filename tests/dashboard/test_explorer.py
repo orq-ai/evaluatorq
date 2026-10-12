@@ -1926,6 +1926,23 @@ def test_load_preserves_exact_review_range() -> None:
     assert request.population.start == start
     assert request.population.end == end
 
+def test_run_request_distinguishes_default_and_user_selected_windows() -> None:
+    from types import SimpleNamespace
+
+    settings = SimpleNamespace(window_days=7, limit=200, parallelism=10, orq_project_id=None)
+    defaulted = finder_routes._run_request(
+        {'query': 'q', 'mode': 'review', 'window_days': '7', 'limit': '2', 'parallelism': '1',
+         'from': '2026-09-27T00:00:00', 'to': '2026-10-04T00:00:00', 'time_origin': 'default'},
+        settings,
+    )
+    explicit = finder_routes._run_request(
+        {'query': 'q', 'mode': 'review', 'window_days': '7', 'limit': '2', 'parallelism': '1',
+         'from': '2026-09-27T00:00:00', 'to': '2026-10-04T00:00:00', 'time_origin': 'explicit'},
+        settings,
+    )
+    assert defaulted.population.time_origin == 'default'
+    assert explicit.population.time_origin == 'explicit'
+
 
 def test_rows_controls_share_sync_without_rerendering_scope(explorer_client) -> None:
     _, _, client = explorer_client
@@ -1954,6 +1971,7 @@ def test_range_controls_reflect_loaded_range_and_row_cap() -> None:
     assert 'aria-pressed="true">15m</button>' in html
     assert 'id="explorer-rows" hx-preserve form="explorer-load-form" name="rows"' in html
     assert 'value="37" style="width:72px"' in html
+    assert 'name="time_origin" value="default"' in html
 
     custom = range_inputs(end - timedelta(hours=2, minutes=5), end, 7, row_limit=41)
     assert 'name="range_mode" value="exact"' in custom

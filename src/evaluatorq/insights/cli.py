@@ -5,9 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
-import tempfile
 from pathlib import Path
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 
 import httpx
 import typer
@@ -450,6 +449,10 @@ def insights_cmd(
     window_days: Annotated[
         int | None, typer.Option('--window-days', min=1, max=90, help='Recent days to scan.')
     ] = None,
+    filter_selection: Annotated[
+        Literal['llm', 'llm+jev'] | None,
+        typer.Option('--filter-selection', help='Natural-language metadata filter mode: llm or llm+jev.'),
+    ] = None,
     limit: Annotated[
         int | None,
         typer.Option(
@@ -607,6 +610,8 @@ def insights_cmd(
                 ),
                 numeric=numeric,
                 window_days=settings.window_days,
+                time_origin='explicit' if window_days is not None else 'default',
+                filter_selection=filter_selection,
                 limit=settings.limit,
             )
         )
