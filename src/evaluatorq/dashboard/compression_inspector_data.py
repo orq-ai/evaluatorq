@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, get_args
 
@@ -15,14 +15,15 @@ from evaluatorq.common.model_input import (
     JevOptions,
     cap_text,
     jev_state,
-    omission_count,
     serialized_chars,
+    state_omitted_messages,
 )
 from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
 from evaluatorq.dashboard.auth import build_orq_client
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
+from evaluatorq.insights.readable_style import ReadableStyle
 from evaluatorq.insights.transcript import (
     DEFAULT_MESSAGE_KINDS,
     MESSAGE_KINDS,
@@ -61,6 +62,17 @@ JEV_EDGE_FIELDS: dict[str, tuple[str, str]] = {
     'tool_result': ('jev_tool_result_total', 'jev_tool_result_edge'),
 }
 JEV_FLAGS = ('system', 'developer', 'user', 'assistant', 'tool_calls', 'tool_results')
+JEV_FORMAT_FLAGS = ('located_omission', 'field_order', 'drop_empty')
+READABLE_STYLE_FLAGS = (
+    'blocks',
+    'pair_results',
+    'plain_tool_input',
+    'labelled_cuts',
+    'strip_terminal_noise',
+    'shorten_cwd',
+    'collapse_repeats',
+    'collapse_blobs',
+)
 # Readable-view caps: `-1` keeps the part whole, and tool results may also be 0 (left out).
 VIEW_CAP_FIELDS: dict[str, str] = {
     'view_system_chars': 'system_chars',
@@ -97,11 +109,18 @@ class CompressionKnobs:
     original_view: OriginalView = 'atif'
     wrap: bool = False
     coverage: bool = False
+    style: ReadableStyle = field(default_factory=ReadableStyle)
 
     @classmethod
     def defaults(cls, global_char_cap: int) -> CompressionKnobs:
-        """Reproduce the original pane (every part whole) beside the classifier's Jev state."""
-        return cls(global_char_cap=global_char_cap, budget=global_char_cap, coverage=True)
+        """Enable inspector-only formatting beside the classifier's existing part limits."""
+        return cls(
+            global_char_cap=global_char_cap,
+            budget=global_char_cap,
+            coverage=True,
+            jev=replace(DEFAULT_JEV_OPTIONS, **dict.fromkeys(JEV_FORMAT_FLAGS, True)),
+            style=ReadableStyle(**dict.fromkeys(READABLE_STYLE_FLAGS, True)),
+        )
 
     def as_form(self) -> dict[str, int | str | bool]:
         """Flatten to the form fields the inspector posts; ``from_form`` reads them back."""
@@ -118,6 +137,8 @@ class CompressionKnobs:
             limit: EdgeLimit = getattr(self.jev, attribute)
             values[total_name], values[edge_name] = limit.total, limit.edge
         values.update({f'jev_include_{flag}': getattr(self.jev, f'include_{flag}') for flag in JEV_FLAGS})
+        values.update({f'jev_{flag}': getattr(self.jev, flag) for flag in JEV_FORMAT_FLAGS})
+        values.update({f'view_{flag}': getattr(self.style, flag) for flag in READABLE_STYLE_FLAGS})
         values.update({f'view_include_{kind}': kind in self.include for kind in sorted(MESSAGE_KINDS)})
         values.update({name: getattr(self, attribute) for name, attribute in VIEW_CAP_FIELDS.items()})
         return values
@@ -138,6 +159,7 @@ class CompressionKnobs:
             include_assistant=_checked(form, 'jev_include_assistant'),
             include_tool_calls=_checked(form, 'jev_include_tool_calls'),
             include_tool_results=_checked(form, 'jev_include_tool_results'),
+            **{flag: _checked(form, f'jev_{flag}') for flag in JEV_FORMAT_FLAGS},
         )
         caps = {
             attribute: _whole(
@@ -158,6 +180,7 @@ class CompressionKnobs:
             original_view=_choice(form, 'original_view', 'Original shows', ORIGINAL_VIEWS),
             wrap=_checked(form, 'wrap'),
             coverage=_checked(form, 'coverage'),
+            style=ReadableStyle(**{flag: _checked(form, f'view_{flag}') for flag in READABLE_STYLE_FLAGS}),
             system_chars=caps['system_chars'],
             user_chars=caps['user_chars'],
             assistant_edge=caps['assistant_edge'],
@@ -218,6 +241,7 @@ class CompressionPreview:
     message_count: int
     omitted_messages: int
     global_cap: int
+    readable_body_present: bool = True
 
 
 class InspectorSourceError(ValueError):
@@ -246,19 +270,25 @@ def preview_document(
         messages, global_char_cap=knobs.global_char_cap, options=replace(knobs.jev, coverage=knobs.coverage)
     )
     full, _, message_count = full_conversation_view_with_message_spans(document)
-    readable = full_conversation_view(
-        document,
-        knobs.budget,
-        include=knobs.include,
-        system_chars=knobs.system_chars,
-        user_chars=knobs.user_chars,
-        assistant_edge=knobs.assistant_edge,
-        reasoning_chars=knobs.reasoning_chars,
-        tools=knobs.tools,
-        tool_input_chars=knobs.tool_input_chars,
-        tool_max_chars=knobs.tool_max_chars,
-        coverage_header=knobs.coverage,
-    )
+
+    def render_readable(*, coverage: bool) -> str:
+        return full_conversation_view(
+            document,
+            budget=knobs.budget,
+            include=knobs.include,
+            system_chars=knobs.system_chars,
+            user_chars=knobs.user_chars,
+            assistant_edge=knobs.assistant_edge,
+            reasoning_chars=knobs.reasoning_chars,
+            tools=knobs.tools,
+            tool_input_chars=knobs.tool_input_chars,
+            tool_max_chars=knobs.tool_max_chars,
+            style=knobs.style,
+            coverage_header=coverage,
+        )
+
+    body = render_readable(coverage=False)
+    readable = render_readable(coverage=True) if knobs.coverage else body
     original, note = _original(document, knobs.original_view, readable, source_path)
     return CompressionPreview(
         readable=readable,
@@ -271,8 +301,9 @@ def preview_document(
         readable_chars=len(readable),
         compressed_chars=serialized_chars(compressed),
         message_count=message_count,
-        omitted_messages=omission_count(compressed.get('omission')),
+        omitted_messages=state_omitted_messages(compressed),
         global_cap=knobs.global_char_cap,
+        readable_body_present=bool(body),
     )
 
 

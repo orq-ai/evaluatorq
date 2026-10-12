@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from dataclasses import replace
 from typing import Any
@@ -15,6 +16,7 @@ from evaluatorq.dashboard import compression_inspector, compression_inspector_da
 from evaluatorq.dashboard.compression_inspector_data import CompressionKnobs, KnobError
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.insights.transcript import DEFAULT_MESSAGE_KINDS
+from evaluatorq.insights.readable_style import ReadableStyle
 from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, save_settings
 from evaluatorq.local_sessions import SessionRef, load_session_document
 from tests.dashboard.test_compression_inspector_routes import _claude_session
@@ -33,7 +35,7 @@ def test_default_knobs_reproduce_the_whole_readable_view_beside_the_classifier_j
     assert DEFAULTS.tools == 'per_call'
     assert {DEFAULTS.system_chars, DEFAULTS.user_chars, DEFAULTS.assistant_edge} == {-1}
     assert {DEFAULTS.reasoning_chars, DEFAULTS.tool_input_chars, DEFAULTS.tool_max_chars} == {-1}
-    assert DEFAULTS.jev == JevOptions()
+    assert DEFAULTS.jev == JevOptions(located_omission=True, field_order=True, drop_empty=True)
 
 
 def test_valid_form_values_round_trip() -> None:
@@ -305,7 +307,7 @@ def test_the_atif_original_is_the_default_and_shows_the_trajectory_not_the_plain
 def test_the_readable_original_is_the_plaintext_render(client: TestClient) -> None:
     token = _load(client)
 
-    pane = _pane_text(_preview(client, token, original_view='readable'))
+    pane = _pane_text(_preview(client, token, original_view='readable', style=ReadableStyle()))
 
     assert 'Original, readable text' in pane
     assert '0 user: PPP' in pane
@@ -472,3 +474,67 @@ def test_the_atif_original_carries_no_coverage_header(client: TestClient) -> Non
     response = _preview(client, token)
 
     assert '[context:' not in _pane(response.text, 'compression-original-title')
+
+
+@pytest.mark.parametrize('flag', inspector_data.READABLE_STYLE_FLAGS)
+def test_each_readable_style_checkbox_round_trips_and_absence_disables_it(flag: str) -> None:
+    form = _posted(DEFAULTS)
+    assert getattr(CompressionKnobs.from_form(form).style, flag) is True
+    del form[f'view_{flag}']
+    assert getattr(CompressionKnobs.from_form(form).style, flag) is False
+    assert DEFAULTS.as_form()[f'view_{flag}'] is True
+    assert getattr(ReadableStyle(), flag) is False
+
+
+@pytest.mark.parametrize('flag', inspector_data.JEV_FORMAT_FLAGS)
+def test_each_jev_format_checkbox_round_trips_and_absence_disables_it(flag: str) -> None:
+    form = _posted(DEFAULTS)
+    assert getattr(CompressionKnobs.from_form(form).jev, flag) is True
+    del form[f'jev_{flag}']
+    assert getattr(CompressionKnobs.from_form(form).jev, flag) is False
+    assert DEFAULTS.as_form()[f'jev_{flag}'] is True
+    assert getattr(JevOptions(), flag) is False
+
+
+def test_preview_route_applies_block_layout_and_degrades_pairing_without_blocks(client: TestClient) -> None:
+    token = _load(client)
+    blocked = _preview(client, token, original_view='readable', coverage=False)
+    unblocked = _preview(
+        client, token, original_view='readable', coverage=False,
+        style=ReadableStyle(pair_results=True),
+    )
+    legacy = _preview(client, token, original_view='readable', coverage=False, style=ReadableStyle())
+    assert blocked.status_code == unblocked.status_code == legacy.status_code == 200
+    assert _pane(blocked.text, 'compression-original-title') != _pane(legacy.text, 'compression-original-title')
+    assert _pane(unblocked.text, 'compression-original-title') == _pane(legacy.text, 'compression-original-title')
+    knobs = CompressionKnobs.from_form(_posted(replace(DEFAULTS, style=replace(DEFAULTS.style, blocks=False))))
+    assert knobs.style.pair_results and not knobs.style.blocks
+
+
+def test_preview_route_reports_empty_body_even_when_coverage_header_remains(client: TestClient) -> None:
+    token = _load(client)
+    response = _preview(client, token, original_view='readable', include=frozenset(), coverage=True)
+    assert response.status_code == 200
+    pane = _pane(response.text, 'compression-original-title')
+    assert '[context:' in pane
+    assert 'No readable input or output is available for this source.' in pane
+
+
+def test_preview_route_switches_jev_omission_format_without_changing_count(client: TestClient) -> None:
+    token = _load(client)
+    states = []
+    for located in (True, False):
+        response = _preview(
+            client, token, coverage=False,
+            jev=replace(DEFAULTS.jev, include_assistant=False, located_omission=located),
+        )
+        assert response.status_code == 200
+        pane = _pane_text(response, 'compression-jev-title')
+        match = re.search(r'<pre>(.*?)</pre>', pane, re.DOTALL)
+        assert match is not None
+        states.append(json.loads(match.group(1)))
+    assert states[0]['messages'][-1] == {
+        'type': 'omission', 'after_index': 0, 'before_index': None, 'messages_left_out': 1,
+    }
+    assert 'omission' not in states[0]
+    assert states[1]['omission'] == '[... 1 messages left out ...]'

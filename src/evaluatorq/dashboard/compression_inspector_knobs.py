@@ -5,7 +5,9 @@ from __future__ import annotations
 from evaluatorq.dashboard.compression_inspector_data import (
     JEV_EDGE_FIELDS,
     JEV_FLAGS,
+    JEV_FORMAT_FLAGS,
     MAX_KNOB_CHARS,
+    READABLE_STYLE_FLAGS,
     VIEW_CAP_FIELDS,
     CompressionKnobs,
 )
@@ -52,6 +54,21 @@ _VIEW_CAP_LABELS = {
     'view_reasoning_chars': 'Reasoning limit',
     'view_tool_input_chars': 'Tool input limit',
     'view_tool_max_chars': 'Tool result limit',
+}
+_JEV_FORMAT_LABELS = {
+    'located_omission': 'Mark omitted messages at each source gap',
+    'field_order': 'Identifiers and status before text',
+    'drop_empty': 'Leave out empty fields',
+}
+_READABLE_STYLE_LABELS = {
+    'blocks': 'Message blocks with source indexes',
+    'pair_results': 'Pair tool results with calls (requires message blocks)',
+    'plain_tool_input': 'Show tool input as plain text',
+    'labelled_cuts': 'Label cuts with the part and exact omitted count',
+    'strip_terminal_noise': 'Remove terminal control codes and progress redraws',
+    'shorten_cwd': 'Shorten the session working directory to &lt;cwd&gt;',
+    'collapse_repeats': 'Collapse consecutive repeated tool output',
+    'collapse_blobs': 'Collapse long hex and base64 blobs',
 }
 _ORIGINAL_OPTIONS = (
     ('atif', 'ATIF trajectory (canonical)'),
@@ -131,6 +148,10 @@ def _jev_group(values: Values, defaults: Values) -> str:
         f'<div class="compression-knob-grid">{limits}</div>'
         '<p class="compression-knob-title">Include</p>'
         f'<div class="compression-checks">{flags}</div>'
+        '<p class="compression-knob-title">Format</p>'
+        '<div class="compression-checks">'
+        + ''.join(_check(f'jev_{flag}', _JEV_FORMAT_LABELS[flag], values, defaults) for flag in JEV_FORMAT_FLAGS)
+        + '</div>'
         '<p class="compression-count-note">A text longer than its whole-up-to limit keeps that many characters at '
         'each edge, so an edge may be at most half of it. Turning off tool calls drops their results as well; '
         'turning off tool results keeps the calls without them.</p>'
@@ -159,6 +180,12 @@ def _view_group(values: Values, defaults: Values) -> str:
         '<p class="compression-knob-title">Include</p>'
         f'<div class="compression-checks">{kinds}</div>'
         f'<div class="compression-knob-grid">{caps}</div>'
+        '<p class="compression-knob-title">Layout and de-noising</p>'
+        '<div class="compression-checks">'
+        + ''.join(
+            _check(f'view_{flag}', _READABLE_STYLE_LABELS[flag], values, defaults) for flag in READABLE_STYLE_FLAGS
+        )
+        + '</div>'
         '<p class="compression-count-note">These options apply when Original shows Readable text. Use -1 to keep a part whole. A tool result limit of 0 leaves results out.</p>'
         '</fieldset>'
     )
@@ -181,7 +208,8 @@ def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: 
         '<p class="compression-count-note">The Original is the canonical ATIF JSON, the raw session file or the readable '
         'text, which uses the Insights full_conversation_view options. The Output uses the classifier Jev limits. '
         'Every original is scrubbed of known secrets and cut to 2,000,000 characters, and a raw session file is read '
-        'up to 5,000,000 bytes; a note says when anything is cut. The coverage line is added only to the readable '
-        'text and the Jev state, never to the Original. Changes update the preview as you make them.</p>'
+        'up to 5,000,000 bytes; a note says when anything is cut. Coverage is added to the readable '
+        'text and Jev state, not ATIF or raw-source originals. Format switches start on here only; production '
+        'Insights and classifier defaults are unchanged. Changes update the preview as you make them.</p>'
         '</div></form>'
     )

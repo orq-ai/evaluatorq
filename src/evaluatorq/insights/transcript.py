@@ -34,15 +34,23 @@ from evaluatorq.common.model_input import (
     pair_tool_call_results,
     serialized_chars,
     serialized_question_chars,
+    tool_result_metadata,
 )
 from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, prompt_messages
 from evaluatorq.contracts import tool_result_to_text
+from evaluatorq.insights.readable_style import (
+    MIN_REFERENCED_RESULT_CHARS,
+    ReadableStyle,
+    TextReducer,
+    detect_working_directory,
+    plain_arguments,
+)
 from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Iterator
+    from collections.abc import Callable, Collection, Iterator
 
     from evaluatorq.trace_finder.models import TraceRecord
 
@@ -234,6 +242,7 @@ def full_conversation_view(
     tool_input_chars: int = TOOL_INPUT_CHARS,
     tool_max_chars: int = 0,
     coverage_header: bool = False,
+    style: ReadableStyle | None = None,
 ) -> str:
     """Render the conversation as text, one line per message part, each prefixed with its message index.
 
@@ -257,6 +266,9 @@ def full_conversation_view(
     and how many source messages there are. The line counts against `budget` and is never the part that is cut; it
     adds `view cut to budget` when the budget cut the messages. It is off by default so Insights and classifier
     inputs stay unchanged.
+
+    `style` selects the opt-in layouts and reductions of `ReadableStyle`; `None` is the legacy layout that Insights
+    and the classifier read. The header names every enabled option under `format:` or `reduced:`.
     """
     if tools not in ('collapsed', 'per_call'):
         raise ValueError(f"tools must be 'collapsed' or 'per_call', got {tools!r}")
@@ -277,18 +289,25 @@ def full_conversation_view(
         if cap != -1 and cap < floor:
             raise ValueError(f'the {kind} cap must be -1 (whole) or >= {floor}, got {cap}')
     kinds = frozenset(include) - frozenset(exclude)
-    rendered, _, message_count, present = _render_full_conversation(trace, include=kinds, caps=caps, tools=tools)
+    style = style or ReadableStyle()
+    rendered, _, message_count, present = _render_full_conversation(
+        trace, include=kinds, caps=caps, tools=tools, style=style
+    )
     cap = budget if budget is not None else effective_trace_input_chars()
     if not coverage_header:
         return cap_text(rendered, cap)[0]
-    header = _coverage_header(
-        kinds=kinds, caps=caps, tools=tools, present=present, message_count=message_count, cut=False
-    )
+    header_settings: dict[str, Any] = {
+        'kinds': kinds,
+        'caps': caps,
+        'tools': tools,
+        'present': present,
+        'message_count': message_count,
+        'style': style,
+    }
+    header = _coverage_header(**header_settings, cut=False)
     body, omitted = _cap_under_header(rendered, header, cap)
     if omitted:
-        header = _coverage_header(
-            kinds=kinds, caps=caps, tools=tools, present=present, message_count=message_count, cut=True
-        )
+        header = _coverage_header(**header_settings, cut=True)
         body, _ = _cap_under_header(rendered, header, cap)
     return f'{header}\n{body}' if body else header
 
@@ -329,6 +348,7 @@ def _coverage_header(
     present: frozenset[MessageKind],
     message_count: int,
     cut: bool,
+    style: ReadableStyle,
 ) -> str:
     """Describe the rendered view from the settings in effect and from which kinds the trace turned out to hold."""
     shown = [
@@ -354,10 +374,24 @@ def _coverage_header(
         parts.append(f'cuts: {", ".join(cuts)}')
     if 'tool_input' in shown:
         parts.append(
-            'tools: one line per call'
+            ('tools: one block per call' if style.blocks else 'tools: one line per call')
             if tools == 'per_call'
             else 'tools: calls collapsed to one `tools:` line per run, results left out'
         )
+    pairing_enabled = (
+        style.blocks and tools == 'per_call' and 'tool_input' in kinds and _shows_results(kinds, caps, tools)
+    )
+    layout = [note for note in style.format_notes() if note != 'results paired with calls' or pairing_enabled]
+    if layout:
+        parts.append(f'format: {", ".join(layout)}')
+    if style.pair_results and not pairing_enabled:
+        parts.append(
+            'pairing disabled: requires block layout'
+            if not style.blocks
+            else 'pairing disabled: requires shown tool inputs and results in per-call mode'
+        )
+    if reductions := style.reduction_notes():
+        parts.append(f'reduced: {", ".join(reductions)}')
     parts.append(f'{message_count} source messages')
     if cut:
         parts.append('view cut to budget')
@@ -370,94 +404,329 @@ def _shows_results(
     return 'tool_result' in kinds and tools == 'per_call' and caps['tool_result'] != 0
 
 
+def _block(header: str, body: str) -> str:
+    """Keep source-message headers separate from every body line, including marker-shaped source text."""
+    return '\n'.join([header, *(f'  {row}' for row in body.split('\n'))]) if body else header
+
+
+def _header_text(value: Any) -> str:
+    """Scrub untrusted header fields without letting them insert another header line."""
+    return clean_model_text(value).replace('\r', ' ⏎ ').replace('\n', ' ⏎ ')
+
+
+def _result_outcome(message: dict[str, Any]) -> str:
+    """Read status and exit/error codes before truncating the result body."""
+    status = _tool_call_status('result', ({**message, 'tool_call_id': 'result'},))
+    _, exit_code, error_code = tool_result_metadata(message)
+    if exit_code is None:
+        content = tool_result_to_text(message.get('content'))
+        try:
+            decoded = json.loads(content)
+        except ValueError:
+            decoded = None
+        if isinstance(decoded, dict):
+            exit_code = decoded.get('exit_code')
+            outcome = decoded.get('outcome')
+            if exit_code is None and isinstance(outcome, dict):
+                exit_code = outcome.get('exit_code')
+        elif match := re.match(r'Exit (?:code|status)[: ]+(-?\d+)\b', content, re.IGNORECASE):
+            exit_code = match[1]
+    if exit_code is not None and not isinstance(exit_code, bool) and re.fullmatch(r'-?\d+', str(exit_code)):
+        if str(exit_code).lstrip('-').strip('0'):
+            status = 'error'
+    if error_code not in (None, False, ''):
+        status = 'error'
+    parts = [status]
+    if exit_code is not None:
+        parts.append(f'exit {_header_text(exit_code)}')
+    if error_code is not None:
+        parts.append(f'error {_header_text(error_code)}')
+    return ', '.join(parts)
+
+
+def _call_outcome(results: list[tuple[int, dict[str, Any]]]) -> str:
+    """Keep all distinct outcomes when a call has more than one result."""
+    outcomes = dict.fromkeys(_result_outcome(result) for _, result in results)
+    return '; '.join(sorted(outcomes, key=lambda outcome: not outcome.startswith('error'))) or 'pending'
+
+
+def _call_runs(messages: list[dict[str, Any]]) -> dict[tuple[int, int], list[tuple[int, int]]]:
+    """Fold only adjacent identical calls; source prose breaks a run even when the view excludes it."""
+    runs: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    head: tuple[int, int] | None = None
+    signature: tuple[str, str] | None = None
+    for index, message in enumerate(messages):
+        if message.get('role') == 'tool':
+            continue
+        if reasoning_text(message) or coerce_content_text(message.get('content')).strip():
+            head = None
+        calls = message.get('tool_calls') or []
+        if message.get('role') != 'assistant' or not calls:
+            head = None
+            continue
+        for call_index, call in enumerate(calls):
+            if not isinstance(call, dict):
+                head = None
+                continue
+            key = (index, call_index)
+            call_signature = (_prepare(_call_name(call)), _prepare(_raw_arguments(call)))
+            if head is not None and call_signature == signature:
+                runs[head].append(key)
+            else:
+                head, signature = key, call_signature
+                runs[head] = [key]
+    return {first: members for first, members in runs.items() if len(members) > 1}
+
+
+def _run_status(statuses: list[str]) -> str:
+    return 'error' if 'error' in statuses else 'pending' if 'pending' in statuses else 'completed'
+
+
+def _view_working_directory(
+    trace: TraceRecord | TraceDocument, records: dict[tuple[int, int], dict[str, Any]]
+) -> str | None:
+    metadata = trace.metadata if isinstance(trace, TraceDocument) else trace
+    capture = metadata.capture_metadata
+    recorded = [value for key in ('cwd', 'workdir', 'working_directory') if isinstance(value := capture.get(key), str)]
+    if str(capture.get('source', '')).startswith('local:') and metadata.project.startswith('/'):
+        recorded.append(metadata.project)
+    return detect_working_directory((_raw_arguments(record['call']) for record in records.values()), recorded=recorded)
+
+
+class _ConversationRenderer:
+    """Render one view while keeping pairing, pending calls and result references local to that view."""
+
+    def __init__(
+        self,
+        *,
+        trace: TraceRecord | TraceDocument,
+        include: frozenset[MessageKind],
+        caps: dict[MessageKind, int],
+        tools: Literal['collapsed', 'per_call'],
+        style: ReadableStyle,
+    ) -> None:
+        self.include = include
+        self.caps = caps
+        self.tools = tools
+        self.style = style
+        self.messages = prompt_messages(trace, include_reasoning='reasoning' in include or style.collapse_repeats)
+        calls, _ = pair_tool_call_results(self.messages)
+        if style.blocks:
+            for record in calls:
+                if not isinstance(record['call'].get('id'), str) or not record['call']['id']:
+                    record['results'] = []
+        self.records: dict[tuple[int, int], dict[str, Any]] = {
+            (record['index'], record['call_index']): record for record in calls
+        }
+        self.statuses = {
+            key: _tool_call_status(record['call'].get('id'), tuple(result for _, result in record['results']))
+            for key, record in self.records.items()
+        }
+        self.call_labels = {key: f'c{number}' for number, key in enumerate(self.records, 1)}
+        self.result_labels: dict[int, str] = {
+            result_index: self.call_labels[key]
+            for key, record in self.records.items()
+            for result_index, _ in record['results']
+        }
+        self.show_results = _shows_results(include, caps, tools)
+        self.pair = style.pair_results and style.blocks and tools == 'per_call' and 'tool_input' in include
+        self.paired_results = set(self.result_labels) if self.pair else set()
+        self.cwd = _view_working_directory(trace=trace, records=self.records) if style.shorten_cwd else None
+        self.reducer = TextReducer.for_style(style, self.cwd)
+        self.runs = _call_runs(self.messages) if style.collapse_repeats and tools == 'per_call' else {}
+        self.folded = {member for members in self.runs.values() for member in members[1:]}
+        self.seen_results: dict[str, str] = {}
+        self.lines: list[tuple[str, int]] = []
+        self.present: set[MessageKind] = set()
+        self.pending: list[str] = []
+        self.pending_index = 0
+
+    def _cut_label(self, kind: MessageKind) -> str | None:
+        return _KIND_LABELS[kind] if self.style.labelled_cuts else None
+
+    def _add(self, *, index: int, label: str, text: str) -> None:
+        rendered = _block(f'[{index}] {_header_text(label)}', text) if self.style.blocks else f'{index} {label}: {text}'
+        self.lines.append((rendered, index))
+
+    def _flush(self) -> None:
+        if self.pending:
+            runs = Counter(self.pending)
+            names = ', '.join(f'{name} x{n}' if n > 1 else name for name, n in runs.items())
+            self._add(index=self.pending_index, label='tools', text=names)
+            self.pending.clear()
+
+    def _result_text(self, *, index: int, message: dict[str, Any]) -> str:
+        content = message.get('content')
+        text = coerce_content_text(content) if contains_media_content(content) else tool_result_to_text(content)
+        prepared = _prepare(text, self.reducer)
+        # Compare before lossy reductions and cuts: distinct blobs or truncated middles must not compare equal.
+        if self.style.collapse_repeats:
+            scrubbed = _prepare(text)
+            if len(scrubbed) >= MIN_REFERENCED_RESULT_CHARS:
+                earlier = self.seen_results.get(scrubbed)
+                if earlier is None:
+                    label = self.result_labels.get(index)
+                    self.seen_results[scrubbed] = (
+                        f'[{index}] ({label})' if self.style.blocks and label else f'[{index}]'
+                    )
+                else:
+                    reference = f'same as result {earlier}'
+                    if len(reference) < len(prepared):
+                        return _cut(reference, self.caps['tool_result'], self._cut_label('tool_result'))
+        return _cut(prepared, self.caps['tool_result'], self._cut_label('tool_result'))
+
+    def _add_result(self, *, index: int, message: dict[str, Any]) -> None:
+        body = self._result_text(index=index, message=message)
+        if not self.style.blocks:
+            rendered = f'{index} tool result {message.get("tool_call_id", "")}: {body}'
+        else:
+            label = self.result_labels.get(index)
+            subject = f'result of {label}' if label else 'orphan (no matching call)'
+            rendered = _block(f'[{index}] tool result [{_result_outcome(message)}] {subject}', body)
+        self.lines.append((rendered, index))
+        self.present.add('tool_result')
+
+    def _tool_input_text(self, call: dict[str, Any]) -> str:
+        cap = self.caps['tool_input']
+        if not (self.style.plain_tool_input or self.style.labelled_cuts or self.reducer):
+            return _clean(_raw_arguments(call), -1) if cap == -1 else _call_input(call, cap)
+        shell_command = not self.style.plain_tool_input and cap != -1 and _call_name(call) in SHELL_TOOLS
+        if self.style.plain_tool_input:
+            text = _prepare(_raw_arguments(call), self.reducer, transform=plain_arguments)
+        else:
+            text = _prepare(
+                _shell_command(_call_arguments(call)) if shell_command else _raw_arguments(call), self.reducer
+            )
+        if shell_command and not self.style.blocks:
+            text = text.replace('\n', ' ⏎ ')
+        if cap != -1 and len(text) > cap:
+            text = _labelled_cut(text, cap, 'tool input', first_only=True) if self.style.labelled_cuts else text[:cap]
+        return text
+
+    def _add_message_text(self, *, index: int, message: dict[str, Any]) -> None:
+        if 'reasoning' in self.include and (reasoning := reasoning_text(message)):
+            self._flush()
+            text = _clean(reasoning, self.caps['reasoning'], label=self._cut_label('reasoning'))
+            self._add(index=index, label='reasoning', text=text)
+            self.present.add('reasoning')
+        role = message.get('role', 'unknown')
+        kind: MessageKind = role if role in ('user', 'assistant') else 'system'
+        content = coerce_content_text(message.get('content'))
+        if kind in self.include and content.strip():
+            self._flush()
+            cap = self.caps[kind]
+            text = _clean(content, -1 if kind == 'assistant' else cap, label=self._cut_label(kind))
+            if kind == 'assistant' and cap != -1:
+                text = _head_tail(text, cap, cap, self._cut_label(kind))
+            self._add(index=index, label=role, text=text)
+            self.present.add(kind)
+
+    def _add_paired_results(self, members: list[tuple[int, int]]) -> None:
+        if self.pair and self.show_results:
+            for member in members:
+                for result_index, result in self.records[member]['results']:
+                    self._add_result(index=result_index, message=result)
+
+    def _add_call(self, *, index: int, call: dict[str, Any], key: tuple[int, int]) -> None:
+        members = self.runs.get(key, [key])
+        status = _run_status([self.statuses[member] for member in members])
+        times = f' x{len(members)}' if len(members) > 1 else ''
+        arguments = self._tool_input_text(call=call)
+        if self.style.blocks:
+            span = (
+                self.call_labels[key]
+                if len(members) == 1
+                else f'{self.call_labels[key]}-{self.call_labels[members[-1]]}'
+            )
+            outcomes = sorted(
+                dict.fromkeys(_call_outcome(self.records[member]['results']) for member in members),
+                key=lambda outcome: not outcome.startswith('error'),
+            )
+            header = f'[{index}] tool call [{"; ".join(outcomes)}] {_header_text(_call_name(call))} ({span}){times}'
+            rendered = _block(header, arguments)
+        else:
+            flag = '' if status == 'completed' else f' [{status}]'
+            rendered = f'{index} tool input {_call_name(call)}{times}{flag}: {arguments}'
+        self.lines.append((rendered, index))
+        self.present.add('tool_input')
+        self._add_paired_results(members=members)
+
+    def _add_calls(self, *, index: int, message: dict[str, Any]) -> None:
+        if 'tool_input' not in self.include:
+            return
+        for call_index, call in enumerate(message.get('tool_calls') or []):
+            if not isinstance(call, dict):
+                continue
+            if self.tools == 'collapsed':
+                if not self.pending:
+                    self.pending_index = index
+                self.pending.append(_call_line(call))
+                self.present.add('tool_input')
+                continue
+            key = (index, call_index)
+            if key not in self.folded:
+                self._add_call(index=index, call=call, key=key)
+
+    def render(self) -> tuple[str, tuple[tuple[int, int, int], ...], int, frozenset[MessageKind]]:
+        for index, message in enumerate(self.messages):
+            if message.get('role', 'unknown') == 'tool':
+                if self.show_results and index not in self.paired_results:
+                    self._add_result(index=index, message=message)
+            else:
+                self._add_message_text(index=index, message=message)
+                self._add_calls(index=index, message=message)
+        self._flush()
+        if self.lines and self.cwd:
+            self.lines.insert(0, (f'paths under {self.cwd} are shown as ./', 0))
+        conversation = '\n'.join(line for line, _ in self.lines)
+        spans = []
+        offset = 0
+        for line, index in self.lines:
+            spans.append((offset, offset + len(line), index))
+            offset += len(line) + 1
+        return conversation, tuple(spans), len(self.messages), frozenset(self.present)
+
+
 def _render_full_conversation(
     trace: TraceRecord | TraceDocument,
     *,
     include: frozenset[MessageKind],
     caps: dict[MessageKind, int],
     tools: Literal['collapsed', 'per_call'],
+    style: ReadableStyle | None = None,
 ) -> tuple[str, tuple[tuple[int, int, int], ...], int, frozenset[MessageKind]]:
-    """Render the lines, their spans, the source-message count and the message types that produced a line."""
-    messages = prompt_messages(trace, include_reasoning='reasoning' in include)
-    # Pair repeated call ids in order, as the Jev state does, so each call's flag reads its own result.
-    calls, _ = pair_tool_call_results(messages)
-    statuses = {
-        (record['index'], record['call_index']): _tool_call_status(
-            record['call'].get('id'), tuple(result for _, result in record['results'])
-        )
-        for record in calls
-    }
-    lines: list[tuple[str, int]] = []
-    present: set[MessageKind] = set()
-    pending: list[str] = []
-    pending_index = 0
-
-    def flush() -> None:
-        if pending:
-            runs = Counter(pending)
-            names = ', '.join(f'{name} x{n}' if n > 1 else name for name, n in runs.items())
-            lines.append((f'{pending_index} tools: {names}', pending_index))
-            pending.clear()
-
-    for index, message in enumerate(messages):
-        role = message.get('role', 'unknown')
-        if role == 'tool':
-            if tools == 'per_call' and 'tool_result' in include and caps['tool_result'] != 0:
-                content = message.get('content')
-                text = coerce_content_text(content) if contains_media_content(content) else tool_result_to_text(content)
-                result = _clean(text, caps['tool_result'])
-                lines.append((f'{index} tool result {message.get("tool_call_id", "")}: {result}', index))
-                present.add('tool_result')
-            continue
-        if 'reasoning' in include and (reasoning := reasoning_text(message)):
-            flush()
-            lines.append((f'{index} reasoning: {_clean(reasoning, caps["reasoning"])}', index))
-            present.add('reasoning')
-        kind: MessageKind = role if role in ('user', 'assistant') else 'system'
-        content = coerce_content_text(message.get('content'))
-        if kind in include and content.strip():
-            flush()
-            cap = caps[kind]
-            text = _clean(content, -1 if kind == 'assistant' else cap)
-            if kind == 'assistant' and cap != -1:
-                text = _head_tail(text, cap, cap)
-            lines.append((f'{index} {role}: {text}', index))
-            present.add(kind)
-        if 'tool_input' not in include:
-            continue
-        for call_index, call in enumerate(message.get('tool_calls') or []):
-            if not isinstance(call, dict):
-                continue
-            if tools == 'collapsed':
-                if not pending:
-                    pending_index = index
-                pending.append(_call_line(call))
-                present.add('tool_input')
-                continue
-            status = statuses[index, call_index]
-            flag = '' if status == 'completed' else f' [{status}]'
-            arguments = (
-                _clean(_raw_arguments(call), -1) if caps['tool_input'] == -1 else _call_input(call, caps['tool_input'])
-            )
-            lines.append((f'{index} tool input {_call_name(call)}{flag}: {arguments}', index))
-            present.add('tool_input')
-    flush()
-    conversation = '\n'.join(line for line, _ in lines)
-    spans = []
-    offset = 0
-    for line, index in lines:
-        spans.append((offset, offset + len(line), index))
-        offset += len(line) + 1
-    return conversation, tuple(spans), len(messages), frozenset(present)
+    """Render text and source-message spans without deriving message boundaries from body text."""
+    return _ConversationRenderer(
+        trace=trace, include=include, caps=caps, tools=tools, style=style or ReadableStyle()
+    ).render()
 
 
-def _clean(text: str, cap: int) -> str:
-    """Scrub credentials, mark injected reminders, then keep the start and end within `cap` (-1 keeps it whole)."""
+def _prepare(text: str, reducer: TextReducer | None = None, transform: Callable[[str], str] | None = None) -> str:
+    """Scrub credentials, mark injected reminders, then apply the opt-in reductions to what is left.
+
+    `transform` reshapes a scrubbed text first (a JSON argument into plain lines); the text is scrubbed again after
+    the reductions that run before scrubbing, so nothing they join back together is left unscrubbed.
+    """
+    if reducer is not None or transform is not None:
+        text = scrub_known_secrets(text)
+    if transform is not None:
+        text = transform(text)
+    if reducer is not None:
+        text = reducer.before_scrub(text)
     text = _REMINDER.sub('[harness reminder omitted]', scrub_known_secrets(text))
+    return reducer.after_scrub(text) if reducer is not None else text
+
+
+def _cut(prepared: str, cap: int, label: str | None = None) -> str:
+    """Keep the start and end of a prepared text within `cap` (-1 keeps it whole)."""
     if cap == -1:
-        return text
-    stripped = text.strip()
-    return _head_tail(stripped, cap // 2, cap - cap // 2)
+        return prepared
+    return _head_tail(prepared if label is not None else prepared.strip(), cap // 2, cap - cap // 2, label)
+
+
+def _clean(text: str, cap: int, *, label: str | None = None, reducer: TextReducer | None = None) -> str:
+    """Scrub credentials, mark injected reminders, then keep the start and end within `cap` (-1 keeps it whole)."""
+    return _cut(_prepare(text, reducer), cap, label)
 
 
 @overload
@@ -895,7 +1164,31 @@ def _user_text(message: dict[str, Any]) -> str:
     return _REMINDER.sub('', coerce_content_text(message.get('content'))).strip()
 
 
-def _head_tail(text: str, head: int, tail: int) -> str:
+def _labelled_cut(text: str, limit: int, label: str, *, first_only: bool = False) -> str:
+    """Fit source characters and a kind-specific exact omission marker within the part's final cap."""
+    if len(text) <= limit:
+        return text
+    marker = f'[... {len(text)} chars of {label} left out ...]'
+    if len(marker) > limit:
+        raise ValueError('the message cap is too small for a labelled omission marker')
+    retained = limit - len(marker)
+    while True:
+        omitted = len(text) - retained
+        marker = f'[... {omitted} chars of {label} left out ...]'
+        room = limit - len(marker)
+        if retained <= room:
+            break
+        retained = room
+    first = retained if first_only else retained // 2
+    last = 0 if first_only else retained - first
+    return f'{text[:first]}{marker}{text[-last:] if last else ""}'
+
+
+def _head_tail(text: str, head: int, tail: int, label: str | None = None) -> str:
+    """Keep both text ends; opt-in labelled markers count against the final per-part cap."""
+    if label is not None:
+        return _labelled_cut(text, head + tail, label)
     if len(text) <= head + tail + CUT_SLACK:
         return text
-    return join_cut(text[:head], text[-tail:], len(text) - head - tail)
+    omitted = len(text) - head - tail
+    return join_cut(text[:head], text[-tail:], omitted)

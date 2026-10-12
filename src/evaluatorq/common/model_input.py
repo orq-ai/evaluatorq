@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any, SupportsIndex
 
 from typing_extensions import Self
@@ -204,6 +206,13 @@ class JevOptions:
     Excluded messages count in the state's omission marker. Secret scrubbing is not optional. `coverage` puts a
     leading `context` object in the state that says which message kinds it holds, which it leaves out and how each
     kind is trimmed; it is off by default so classifier and Insights inputs stay byte-identical.
+
+    Three format switches, also off by default for the same reason, change only how the state is laid out.
+    `located_omission` replaces the one trailing `omission` string by an `omission` entry in `messages` at each gap,
+    naming the source indexes on both sides and how many messages it hides. `field_order` writes each entry's keys
+    as identifiers first (index, role, type, name, status) and the long text, input and results last.
+    `drop_empty` leaves out fields that carry nothing: empty `results`, empty `text` or `input` on entries that are
+    not plain messages, and a `call_index` of 0 when the message has one call.
     """
 
     state_chars: int = JEV_STATE_CHARS
@@ -219,6 +228,9 @@ class JevOptions:
     include_tool_calls: bool = True
     include_tool_results: bool = True
     coverage: bool = False
+    located_omission: bool = False
+    field_order: bool = False
+    drop_empty: bool = False
 
 
 DEFAULT_JEV_OPTIONS = JevOptions()
@@ -246,12 +258,24 @@ def jev_coverage(options: JevOptions) -> dict[str, Any]:
     # Results ride on their calls; with calls off only orphan results (no call in the trace) remain.
     if options.include_tool_results and not options.include_tool_calls:
         includes[includes.index('tool_results')] = 'tool_results (only those without a call)'
-    return {
+    context: dict[str, Any] = {
         'includes': includes,
         'left_out': [name for name, included, _ in switches if not included],
         'reasoning': 'not included',
         'trimmed': {name: _edge_phrase(limit) for name, included, limit in switches if included},
     }
+    layout = [
+        text
+        for text, enabled in (
+            ('omissions marked in place as omission entries', options.located_omission),
+            ('keys ordered with identifiers first and text last', options.field_order),
+            ('empty fields left out', options.drop_empty),
+        )
+        if enabled
+    ]
+    if layout:
+        context['format'] = layout
+    return context
 
 
 def _edge(text: str, limit: EdgeLimit) -> str:
@@ -318,25 +342,143 @@ def jev_state(
     entries.extend(calls)
     entries.extend(orphan_results)
     entries.sort(key=lambda item: (item['index'], item.get('call_index', -1), item['type']))
+    if options.drop_empty:
+        calls_per_message = Counter(call['index'] for call in calls)
+        entries = [_compact(entry, drop_call_index=calls_per_message[entry['index']] == 1) for entry in entries]
     bounded = _cap_messages(entries, global_char_cap)
     for entry in bounded.get('messages', []):
         if entry['type'] == 'message':
             limit = {'assistant': options.assistant, 'user': options.user}.get(entry['role'], options.system)
             entry['text'] = _edge(entry['text'], limit)
         elif entry['type'] == 'tool_call':
-            entry['input'] = _edge(entry['input'], options.tool_input)
-            entry['results'] = [
-                {**result, 'text': _edge(result['text'], options.tool_result)} for result in entry['results']
-            ]
-        elif entry['type'] == 'orphan_result':
+            if 'input' in entry:
+                entry['input'] = _edge(entry['input'], options.tool_input)
+            if 'results' in entry:
+                entry['results'] = [
+                    {**result, 'text': _edge(result['text'], options.tool_result)} if 'text' in result else result
+                    for result in entry['results']
+                ]
+        elif entry['type'] == 'orphan_result' and 'text' in entry:
             entry['text'] = _edge(entry['text'], options.tool_result)
     omitted_before = len(messages) - len(_represented_indexes(bounded.get('messages', [])))
-    return _cap_messages(
-        bounded.get('messages', []),
-        min(global_char_cap, options.state_chars),
-        omitted_before=omitted_before,
-        metadata={'context': jev_coverage(options)} if options.coverage else None,
-    )
+    cap = min(global_char_cap, options.state_chars)
+    metadata = {'context': jev_coverage(options)} if options.coverage else None
+    if options.located_omission:
+        state = _located_state(
+            bounded.get('messages', []),
+            total=len(messages),
+            cap=cap,
+            omitted_before=omitted_before,
+            metadata=metadata,
+        )
+    else:
+        state = _cap_messages(bounded.get('messages', []), cap, omitted_before=omitted_before, metadata=metadata)
+    if options.drop_empty:
+        # The size cap can empty a text further; that only shrinks the state.
+        state['messages'] = [
+            entry if entry['type'] == 'omission' else _compact(entry, drop_call_index=False)
+            for entry in state['messages']
+        ]
+    if options.field_order:
+        state['messages'] = [
+            entry if entry['type'] == 'omission' else _in_field_order(entry) for entry in state['messages']
+        ]
+    return state
+
+
+def _compact(entry: dict[str, Any], *, drop_call_index: bool) -> dict[str, Any]:
+    """Leave out the fields of an entry that carry nothing; a plain message keeps its text and its `type`."""
+    compact = {
+        key: value
+        for key, value in entry.items()
+        if not (
+            (key in {'text', 'input'} and value == '' and entry['type'] != 'message')
+            or (key == 'results' and value == [])
+            or (key == 'call_index' and value == 0 and drop_call_index)
+        )
+    }
+    if 'results' in compact:
+        compact['results'] = [
+            {key: value for key, value in result.items() if not (key == 'text' and value == '')}
+            for result in compact['results']
+        ]
+    return compact
+
+
+_IDENTIFIER_KEYS = ('index', 'call_index', 'role', 'type', 'id', 'name', 'status', 'exit_code', 'error_code', 'media')
+_BODY_KEYS = ('text', 'input', 'results')
+
+
+def _in_field_order(entry: dict[str, Any]) -> dict[str, Any]:
+    """Order an entry's keys as identifiers, then status, then the long text, input and results last."""
+    ordered = {key: entry[key] for key in _IDENTIFIER_KEYS if key in entry}
+    ordered.update({key: value for key, value in entry.items() if key not in ordered and key not in _BODY_KEYS})
+    ordered.update({key: entry[key] for key in _BODY_KEYS if key in entry})
+    if isinstance(ordered.get('results'), list):
+        ordered['results'] = [_in_field_order(result) for result in ordered['results']]
+    return ordered
+
+
+def _located_state(
+    entries: list[dict[str, Any]],
+    *,
+    total: int,
+    cap: int,
+    omitted_before: int,
+    metadata: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Fit entries and located markers together without overshooting the available entry budget."""
+    best = {**(metadata or {}), 'messages': _with_omission_markers([], total)}
+    if serialized_chars(best) > cap:
+        raise ValueError('model input character cap cannot fit Jev state metadata and its omission marker')
+    low, high = 1, cap
+    while low <= high:
+        entry_cap = (low + high) // 2
+        try:
+            state = _cap_messages(entries, entry_cap, omitted_before=omitted_before, metadata=metadata)
+        except ValueError:
+            # Below the fixed metadata reserve: a larger entry budget is required.
+            low = entry_cap + 1
+            continue
+        located = {
+            **{key: value for key, value in state.items() if key not in {'messages', 'omission'}},
+            'messages': _with_omission_markers(state['messages'], total),
+        }
+        if serialized_chars(located) <= cap:
+            best = located
+            low = entry_cap + 1
+        else:
+            high = entry_cap - 1
+    return best
+
+
+def _with_omission_markers(kept: list[dict[str, Any]], total: int) -> list[dict[str, Any]]:
+    """Mark contiguous absent source indexes, including gaps around grouped tool results."""
+    represented = sorted(_represented_indexes(kept))
+    neighbours = [None, *represented, None]
+    markers: list[tuple[int, dict[str, Any]]] = []
+    for after, before in pairwise(neighbours):
+        first = 0 if after is None else after + 1
+        end = total if before is None else before
+        if first < end:
+            markers.append((
+                first,
+                {
+                    'type': 'omission',
+                    'after_index': after,
+                    'before_index': before,
+                    'messages_left_out': end - first,
+                },
+            ))
+    located: list[dict[str, Any]] = []
+    position = 0
+    for entry in kept:
+        while position < len(markers) and markers[position][0] < entry['index']:
+            located.append(markers[position][1])
+            position += 1
+        located.append(entry)
+    located.extend(marker for _, marker in markers[position:])
+    return located
 
 
 def jev_text_state(text: str, *, global_char_cap: int) -> dict[str, Any]:
@@ -377,6 +519,12 @@ def fit_jev_state(
     original = state.get('messages', [])
     omitted_before = omission_count(state.get('omission'))
     metadata = {key: value for key, value in state.items() if key not in {'messages', 'omission'}}
+    if any(entry.get('type') == 'omission' for entry in original):
+        entries = [entry for entry in original if entry.get('type') != 'omission']
+        total = len(_represented_indexes(entries)) + state_omitted_messages(state)
+        return _located_state(
+            entries, total=total, cap=limit, omitted_before=state_omitted_messages(state), metadata=metadata
+        )
     return _cap_messages(original, limit, omitted_before=omitted_before, metadata=metadata)
 
 
@@ -629,6 +777,16 @@ def _represented_indexes(entries: list[dict[str, Any]]) -> set[int]:
             if isinstance(result_index, int):
                 indexes.add(result_index)
     return indexes
+
+
+def state_omitted_messages(state: Mapping[str, Any]) -> int:
+    """Count the messages a Jev state leaves out, from its omission string or from its in-place `omission` entries."""
+    placed = sum(
+        entry.get('messages_left_out', 0)
+        for entry in state.get('messages', [])
+        if isinstance(entry, Mapping) and entry.get('type') == 'omission'
+    )
+    return omission_count(state.get('omission')) + placed
 
 
 def omission_count(marker: Any) -> int:

@@ -127,6 +127,8 @@ def _output_html(*, preview: CompressionPreview | None = None, notice: str | Non
         original_html = '<p class="compression-count-note" role="status">No readable input or output is available for this source.</p>'
     else:
         original_html = '<p class="compression-count-note" role="status">The original is empty.</p>'
+    if preview.original_view == 'readable' and preview.original and not preview.readable_body_present:
+        original_html += '<p class="compression-count-note" role="status">No readable input or output is available for this source.</p>'
     note_html = (
         f'<p class="compression-count-note" role="status">{html.escape(preview.original_note, quote=True)}</p>'
         if preview.original_note

@@ -21,6 +21,7 @@ from evaluatorq.common.model_input import (
     serialized_question_chars,
     source_text_chars,
     source_text_ranges,
+    state_omitted_messages,
 )
 
 
@@ -542,3 +543,115 @@ def test_jev_coverage_counts_inside_the_state_cap() -> None:
     assert serialized_chars(state) <= cap
     assert next(iter(state)) == 'context'
     assert state['omission'].endswith('messages left out ...]')
+
+
+def test_located_gaps_use_source_neighbours_including_grouped_results() -> None:
+    messages = [
+        {'role': 'system', 'content': 'excluded beginning'},
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'call', 'function': {'name': 'shell', 'arguments': ''}},
+        ]},
+        {'role': 'system', 'content': 'excluded before result'},
+        {'role': 'tool', 'tool_call_id': 'call', 'content': 'done'},
+        {'role': 'system', 'content': 'excluded after result'},
+        {'role': 'user', 'content': 'retained'},
+        {'role': 'system', 'content': 'excluded end'},
+    ]
+    state = jev_state(
+        messages, global_char_cap=10_000,
+        options=JevOptions(include_system=False, located_omission=True),
+    )
+    gaps = [entry for entry in state['messages'] if entry['type'] == 'omission']
+    assert [(gap['after_index'], gap['before_index'], gap['messages_left_out']) for gap in gaps] == [
+        (None, 1, 1), (1, 3, 1), (3, 5, 1), (5, None, 1),
+    ]
+    assert state_omitted_messages(state) == 4
+    assert 'omission' not in state
+    legacy = jev_state(messages, global_char_cap=10_000, options=JevOptions(include_system=False))
+    assert state_omitted_messages(legacy) == 4
+
+
+@pytest.mark.parametrize('cap', [150, 300, 500, 1000])
+def test_located_caps_count_unique_source_indexes_and_marker_metadata(cap: int) -> None:
+    messages = [
+        {'role': 'assistant', 'content': 'call', 'tool_calls': [
+            {'id': 'a', 'function': {'name': 'shell', 'arguments': 'x' * 100}},
+            {'id': 'b', 'function': {'name': 'shell', 'arguments': 'y' * 100}},
+        ]},
+        {'role': 'tool', 'tool_call_id': 'a', 'content': 'a' * 100},
+        {'role': 'tool', 'tool_call_id': 'b', 'content': 'b' * 100},
+        *({'role': 'user', 'content': 'z' * 300} for _ in range(8)),
+    ]
+    state = jev_state(messages, global_char_cap=10_000, options=JevOptions(state_chars=cap, located_omission=True))
+    represented = {
+        index
+        for entry in state['messages'] if entry['type'] != 'omission'
+        for index in [entry['index'], *(result['index'] for result in entry.get('results', []))]
+    }
+    assert serialized_chars(state) <= cap
+    assert state_omitted_messages(state) == len(messages) - len(represented)
+    for gap in state['messages']:
+        if gap['type'] == 'omission':
+            first = 0 if gap['after_index'] is None else gap['after_index'] + 1
+            end = len(messages) if gap['before_index'] is None else gap['before_index']
+            assert not represented.intersection(range(first, end))
+    fitted = fit_jev_state(state, [], global_char_cap=cap)
+    assert serialized_chars(fitted) <= cap
+
+
+def test_jev_layout_options_preserve_type_and_status_without_empty_call_fields() -> None:
+    messages = [
+        {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'a', 'function': {'name': 'shell', 'arguments': ''}},
+        ]},
+        {'role': 'tool', 'tool_call_id': 'a', 'content': '', 'status': 'error', 'exit_code': 7},
+    ]
+    state = jev_state(messages, global_char_cap=10_000, options=JevOptions(field_order=True, drop_empty=True))
+    call = state['messages'][0]
+    assert call['type'] == 'tool_call'
+    assert 'call_index' not in call and 'input' not in call
+    assert list(call)[-1] == 'results'
+    result = call['results'][0]
+    assert result['status'] == 'error' and result['exit_code'] == 7
+    assert 'text' not in result
+    legacy = jev_state(messages, global_char_cap=10_000)
+    assert legacy['messages'][0]['call_index'] == 0
+    assert legacy['messages'][0]['input'] == ''
+
+
+def test_drop_empty_keeps_multi_call_indexes_and_null_identifiers() -> None:
+    messages = [{'role': 'assistant', 'content': '', 'tool_calls': [
+        {'id': None, 'function': {'name': None, 'arguments': ''}},
+        {'id': 'b', 'function': {'name': 'shell', 'arguments': ''}},
+    ]}]
+    state = jev_state(messages, global_char_cap=10_000, options=JevOptions(drop_empty=True))
+    assert [entry['call_index'] for entry in state['messages']] == [0, 1]
+    assert state['messages'][0]['id'] is None and state['messages'][0]['name'] is None
+    assert all('results' not in entry and 'input' not in entry for entry in state['messages'])
+
+
+def test_located_coverage_metadata_fits_or_reports_an_impossible_cap() -> None:
+    messages = [{'role': 'user', 'content': 'body ' * 200} for _ in range(20)]
+    options = JevOptions(coverage=True, located_omission=True, state_chars=1_500)
+    state = jev_state(messages, global_char_cap=10_000, options=options)
+    assert 'context' in state
+    assert serialized_chars(state) <= 1_500
+    with pytest.raises(ValueError, match='metadata'):
+        jev_state(messages, global_char_cap=10_000, options=JevOptions(
+            coverage=True, located_omission=True, state_chars=50,
+        ))
+
+
+def test_located_marker_overhead_preserves_useful_messages_within_budget() -> None:
+    messages = [
+        {'role': 'system' if index % 2 else 'user', 'content': f'visible turn {index}'}
+        for index in range(161)
+    ]
+    state = jev_state(
+        messages, global_char_cap=10_000,
+        options=JevOptions(include_system=False, coverage=True, located_omission=True, state_chars=5_000),
+    )
+    retained = [entry['index'] for entry in state['messages'] if entry['type'] != 'omission']
+    assert 0 in retained and 160 in retained
+    assert state_omitted_messages(state) == len(messages) - len(retained)
+    assert serialized_chars(state) <= 5_000
