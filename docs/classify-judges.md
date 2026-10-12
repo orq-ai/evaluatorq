@@ -4,6 +4,8 @@ A **classify judge** scores structured state by answering a typed question inste
 
 Use one when you want a fast, inexpensive vote for a yes/no, fixed-label, ordered-scale or pairwise decision. Use a prompted LLM judge when you need model-written reasoning or a verdict outside those four shapes.
 
+If you want typed answers without a panel around them, call the endpoint directly — see [the classify endpoint](classify-endpoint.md).
+
 ## How a classifier fits into a jury
 
 An evaluatorq **jury** is a panel of judge models whose votes are aggregated into one result. A classify judge occupies an ordinary seat beside prompted LLM judges, but the request and response differ:
