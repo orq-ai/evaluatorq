@@ -78,6 +78,21 @@ def test_invalid_settings_file_warns_and_returns_defaults(tmp_path: Path, caplog
     assert 'Could not load dashboard settings' in caplog.text
 
 
+def test_invalid_known_setting_warns_with_field_and_error_type_without_value(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'window_days': 'secret-invalid-value', 'limit': 64}))
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        settings = load_settings(path)
+    finally:
+        logger.remove(sink_id)
+
+    assert settings == DashboardSettings.model_validate({})
+    assert any('window_days:int_parsing' in message for message in messages)
+    assert all('secret-invalid-value' not in message for message in messages)
+
+
 def test_unreadable_settings_file_warns_with_path_and_returns_defaults(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -265,6 +280,76 @@ def test_saved_trace_input_limit_loads_with_the_other_settings_and_survives_a_sa
 def test_trace_input_limit_does_not_allow_other_unknown_settings() -> None:
     with pytest.raises(ValueError, match='extra_forbidden'):
         DashboardSettings.model_validate({'trace_input_chars': 180000, 'limt': 64})
+
+
+def test_loader_ignores_unknown_top_level_keys_and_keeps_recognized_values(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'window_days': 19, 'limit': 73, 'private_future_value': 'secret'}))
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        settings = load_settings(path)
+    finally:
+        logger.remove(sink_id)
+
+    assert (settings.window_days, settings.limit) == (19, 73)
+    assert any('private_future_value' in message for message in messages)
+    assert all('secret' not in message for message in messages)
+
+
+def test_unversioned_legacy_settings_migrate_and_save_as_v1(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'compiler_model': 'custom/compiler', 'orq_profile': 'research-bauke'}))
+
+    settings = load_settings(path)
+
+    assert settings.schema_version == 1
+    assert settings.model_overrides == {'finder.compiler': 'custom/compiler'}
+    assert settings.orq_auth_method == 'cli_profile'
+    save_settings(settings, path)
+    assert json.loads(path.read_text())['schema_version'] == 1
+
+
+@pytest.mark.parametrize('version', [0, -1, True, '1', 1.0])
+def test_invalid_schema_versions_fall_back_to_defaults(tmp_path: Path, version: object) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': version, 'window_days': 21}))
+
+    assert load_settings(path) == DashboardSettings.model_validate({})
+
+
+def test_newer_schema_warns_reads_known_values_and_preserves_version_on_save(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': 2, 'window_days': 22, 'future_field': 'kept in file'}))
+    messages: list[str] = []
+    sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
+    try:
+        settings = load_settings(path)
+    finally:
+        logger.remove(sink_id)
+
+    assert settings.schema_version == 2
+    assert settings.window_days == 22
+    assert any('newer than supported' in message for message in messages)
+    save_settings(settings, path)
+    saved = json.loads(path.read_text())
+    assert saved['schema_version'] == 2
+    assert saved['window_days'] == 22
+    assert 'future_field' not in saved
+
+
+def test_persisted_schema_version_round_trip_and_strict_validation(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    settings = DashboardSettings(window_days=17)
+
+    save_settings(settings, path)
+
+    assert json.loads(path.read_text())['schema_version'] == 1
+    assert load_settings(path) == settings
+    with pytest.raises(ValueError, match='int_type'):
+        DashboardSettings.model_validate({'schema_version': '1'})
 
 
 def test_explorer_columns_round_trip_and_unknown_keys_drop(tmp_path: Path) -> None:

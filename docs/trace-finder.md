@@ -211,6 +211,8 @@ Under **CLI OAuth**, choose a signed-in server, then a workspace and optionally 
 
 Models resolve through the roles described under [Configuration › Models](configuration.md#models): the compiler runs on the `fast` role (`openai/gpt-6-luna` by default) and the classifier on the `classifier` role (`typesafe/jev-latest`). The `finder.compiler` and `finder.classifier` tasks pin either one alone. For the finder's other settings, values resolve from strongest to weakest: explicit CLI or dashboard overrides, environment variables, the saved JSON file, then built-in defaults. Trace search window, limit, and parallelism are set per run; Settings edits the model roles and Ask AI review mode. Invalid environment integers are ignored with a warning; invalid saved settings fall back to built-in defaults.
 
+Saved settings include `schema_version: 1`; an older file without a version is migrated when loaded. Unknown top-level fields in a saved file are ignored with a warning that names the fields, while recognized settings still load. A file with malformed JSON or an invalid supported value falls back to built-in defaults. Explicit CLI or dashboard overrides continue to reject unknown fields. A file from a newer schema version is loaded on a best-effort basis using recognized settings, with a warning; saving it keeps recognized settings and drops unknown fields.
+
 | Setting | Default | Environment variable |
 |---|---|---|
 | Fast model (query compiler) | `openai/gpt-6-luna` | `EVALUATORQ_FAST_MODEL` |

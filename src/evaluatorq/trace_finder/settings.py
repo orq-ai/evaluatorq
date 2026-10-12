@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 from contextlib import suppress
@@ -27,6 +28,7 @@ DEFAULT_TRACE_INPUT_CHARS = 500_000
 _LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_model'})
 _LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
 _LEGACY_CLASSIFIER_MODEL = 'typesafe/jev-latest'
+CURRENT_SETTINGS_SCHEMA_VERSION = 1
 
 
 class DashboardSettings(BaseModel):
@@ -34,6 +36,7 @@ class DashboardSettings(BaseModel):
 
     model_config = ConfigDict(extra='forbid')
 
+    schema_version: int = Field(CURRENT_SETTINGS_SCHEMA_VERSION, strict=True, gt=0)
     fast_model: str | None = None
     smart_model: str | None = None
     classifier_model: str | None = None
@@ -172,16 +175,45 @@ def load_settings(path: Path | None = None) -> DashboardSettings:
     """Load settings from *path*, falling back to defaults when unavailable.
 
     A missing file is normal on first use. An unreadable or invalid file emits a
-    warning naming the problem and also falls back to defaults so the dashboard
-    can still start.
+    warning naming the path and error type and also falls back to defaults so
+    the dashboard can still start. Newer schemas are read best-effort; saving
+    writes recognized fields and preserves the newer schema version.
     """
     target = path or settings_path()
     try:
-        return DashboardSettings.model_validate_json(target.read_text(encoding='utf-8'))
+        raw = json.loads(target.read_text(encoding='utf-8'))
+        if not isinstance(raw, dict):
+            return DashboardSettings.model_validate(raw)
+        version = raw.get('schema_version', 0)
+        # Validate version before filtering keys so booleans and strings cannot
+        # masquerade as supported integer schema versions.
+        if isinstance(version, bool) or not isinstance(version, int) or (version <= 0 and 'schema_version' in raw):
+            return DashboardSettings.model_validate({**raw, 'schema_version': version})
+        if version == 0:
+            raw = migrate_settings_v0_to_v1(raw)
+        elif version > CURRENT_SETTINGS_SCHEMA_VERSION:
+            logger.warning(
+                'Dashboard settings schema version {} is newer than supported version {}; reading known fields, and only recognized fields will be retained on save',
+                version,
+                CURRENT_SETTINGS_SCHEMA_VERSION,
+            )
+        known = DashboardSettings.model_fields.keys() | _LEGACY_MODEL_KEYS
+        unknown = sorted(raw.keys() - known)
+        if unknown:
+            logger.warning('Ignoring unknown dashboard settings field(s): {}', ', '.join(unknown))
+            raw = {key: value for key, value in raw.items() if key in known}
+        return DashboardSettings.model_validate(raw)
     except FileNotFoundError:
         return _default_settings()
-    except (OSError, ValidationError, ValueError) as exc:
-        logger.warning('Could not load dashboard settings from {}: {}; using defaults', target, exc)
+    except ValidationError as exc:
+        failures = ', '.join(
+            f'{".".join(str(part) for part in error["loc"])}:{error["type"]}'
+            for error in exc.errors(include_input=False, include_context=False, include_url=False)
+        )
+        logger.warning('Could not load dashboard settings from {} ({}); using defaults', target, failures)
+        return _default_settings()
+    except (OSError, ValueError) as exc:
+        logger.warning('Could not load dashboard settings from {} ({}); using defaults', target, type(exc).__name__)
         return _default_settings()
 
 
@@ -210,6 +242,17 @@ def save_settings(s: DashboardSettings, path: Path | None = None) -> None:
             with suppress(OSError):
                 temporary.unlink(missing_ok=True)
         raise
+
+
+def migrate_settings_v0_to_v1(data: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade an unversioned settings mapping to schema version 1.
+
+    Legacy model and authentication migrations remain in ``DashboardSettings``
+    validation so callers validating explicit mappings get the same behavior.
+    """
+    migrated = dict(data)
+    migrated['schema_version'] = CURRENT_SETTINGS_SCHEMA_VERSION
+    return migrated
 
 
 def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSettings:
