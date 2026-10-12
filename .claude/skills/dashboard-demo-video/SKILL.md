@@ -56,8 +56,10 @@ ab record stop; ab close
 Encode, trimming the first 1.2 s where the notice is dismissed:
 
 ```bash
-ffmpeg -y -ss 1.2 -i $S/raw.webm -an -c:v libvpx-vp9 -crf 20 -b:v 0 -row-mt 1 \
-  -deadline good -cpu-used 2 -pix_fmt yuv420p $S/demo.webm
+ffmpeg -y -ss 1.2 -i $S/raw.webm -an \
+  -vf "scale=in_range=pc:out_range=tv:in_color_matrix=bt601:out_color_matrix=bt709,format=yuv420p" \
+  -c:v libvpx-vp9 -crf 20 -b:v 0 -row-mt 1 -deadline good -cpu-used 2 \
+  -colorspace bt709 -color_range tv $S/demo.webm
 ```
 
 Check it before anyone else sees it: `ffprobe` should report 1440×900 with `display_aspect_ratio=8:5`, and a contact sheet should show every state in order:
@@ -84,4 +86,5 @@ gh pr edit <number> --body-file body.md --attach $S/demo.webm     # or gh pr cre
 - **Wall-clock trims drift.** The recorder emits frames only when the page changes, so video time is shorter than real time. Trim little; check the sheet.
 - **Snapshot refs and `find text` miss** tabs and filters rendered as hidden radios behind `<label>`. Select by CSS selector plus text, as `clk` does.
 - **A filter can reset the tab.** On a sim report, applying the goal-outcome filter returns the page to Overview. Apply filters first, then open the tab.
-- **Re-encoding cannot add detail.** The raw capture is about 215 kbit/s VP8 from JPEG frames; a lower CRF only adds bytes. The raw file is uploadable as is if it is under 5 MB.
+- **A washed-out video means the colour range is wrong.** The raw capture is full-range (`color_range=pc`) BT.601 from JPEG frames. A plain `-pix_fmt yuv420p` encode keeps those values but tags them limited-range, so the browser stretches them again: light greys clip to white and card borders vanish. The `scale=in_range=pc:out_range=tv` filter above converts them; `ffprobe` should then report `color_range=tv`.
+- **Re-encoding cannot add detail.** The raw capture is about 215 kbit/s VP8; a lower CRF only adds bytes.
