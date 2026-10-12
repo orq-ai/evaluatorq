@@ -292,7 +292,7 @@ _RUN_FLAGS: tuple[Flag, ...] = (
     Flag('max_turns'),
     Flag('max_per_category'),
     Flag('attacker_instructions'),
-    Flag('datapoint_parallelism'),
+    Flag('datapoint_parallelism', replaces=('parallelism',)),
     Flag('llm_parallelism'),
     Flag('generate_strategies'),
     Flag('generated_strategy_count'),

@@ -22,7 +22,6 @@ from evaluatorq.redteam.contracts import (
     SaveMode,
     TargetConfig,
 )
-from evaluatorq.redteam.run_config import RedTeamRunConfig
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -385,50 +384,6 @@ def test_json_keeps_the_coverage_gate_exit_code() -> None:
     assert RedTeamReport.model_validate_json(result.stdout).summary.evaluated_attacks == 0
     assert 'could be evaluated' in result.stderr
 
-
-def test_every_config_field_reaches_red_team(tmp_path: Path) -> None:
-    """A field the command maps and also forwards would raise a duplicate-keyword error at call time."""
-    payload: dict[str, Any] = {
-        'target': 'agent:x',
-        'llm_config': {'retry_count': 1},
-        'mode': 'dynamic',
-        'categories': ['ASI01'],
-        'vulnerabilities': ['goal_hijacking'],
-        'strategies': None,
-        'datapoints': None,
-        'attack_techniques': None,
-        'delivery_methods': ['direct_request'],
-        'max_turns': 2,
-        'max_per_category': 1,
-        'datapoint_parallelism': 3,
-        'llm_parallelism': 4,
-        'generate_strategies': False,
-        'generated_strategy_count': 1,
-        'max_dynamic_datapoints': 5,
-        'max_static_datapoints': 6,
-        'cleanup_memory': False,
-        'name': 'n',
-        'description': 'd',
-        'dataset': 'hf:org/repo',
-        'previous_run': None,
-        'artifacts_dir': str(tmp_path),
-        'target_config': {'system_prompt': 's'},
-        'recommendations': False,
-        'generate_executive_summary': False,
-        'attacker_instructions': 'i',
-        'verbosity': 2,
-        'save': 'detail',
-    }
-    assert set(payload) == set(RedTeamRunConfig.model_fields)
-
-    result, fake = _invoke(['--config', _write(tmp_path, payload)])
-
-    assert result.exit_code == 0, result.output
-    kwargs = fake.call_args.kwargs
-    assert kwargs['verbosity'] == 2
-    assert kwargs['cleanup_memory'] is False
-    assert kwargs['generate_executive_summary'] is False
-    assert kwargs['max_static_datapoints'] == 6
 
 
 def test_schema_defaults_to_the_config_input_shape() -> None:

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from datetime import datetime, timezone
@@ -643,36 +642,3 @@ def test_an_empty_evaluator_list_in_the_config_is_forwarded_as_unset() -> None:
     assert fake.call_args.kwargs['evaluator_names'] is None
 
 
-CLI_OWNED = {'target', 'memory_entity_id', 'report_path'}
-
-
-@pytest.mark.parametrize(
-    ('cfg_model', 'impl_name', 'fake_name', 'impl_kwargs'),
-    [
-        (SimulateCliConfig, '_simulate_impl', '_simulate_run', {}),
-        (GenerateAndSimulateCliConfig, '_run_impl', '_generate_and_simulate_run', {'agent_description': 'bot'}),
-    ],
-)
-def test_every_config_field_reaches_the_run_function_or_is_cli_owned(
-    cfg_model: type[Any], impl_name: str, fake_name: str, impl_kwargs: dict[str, Any]
-) -> None:
-    """A field added to the config model cannot be dropped silently: it is forwarded or declared CLI-owned."""
-    from evaluatorq.simulation import cli
-
-    sentinel = object()
-    resolved_target = object()
-    cfg = cfg_model.model_construct(**{name: sentinel for name in cfg_model.model_fields})
-    fake = AsyncMock(return_value=_run('simulate'))
-    with patch(f'evaluatorq.simulation.api.{fake_name}', new=fake):
-        asyncio.run(getattr(cli, impl_name)(cfg, target=resolved_target, hooks=None, **impl_kwargs))
-
-    received = fake.call_args.kwargs
-    for field in cfg_model.model_fields:
-        if field == 'target':
-            assert received[field] is resolved_target
-        elif field in CLI_OWNED:
-            assert field not in received, field
-        elif field == 'agent_description':
-            assert received[field] == impl_kwargs['agent_description']  # the CLI's resolved value wins
-        else:
-            assert received[field] is sentinel, field

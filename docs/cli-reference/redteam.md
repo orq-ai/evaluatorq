@@ -72,6 +72,8 @@ Both cases print the dominant failure cause with a sample message before exiting
 `--config` takes the keyword arguments of the Python `red_team()` function as one JSON object, so every data-shaped parameter is reachable from the CLI, including the ones without a flag (`datapoints`, `attack_techniques`, `description`, the full `llm_config`, a tuned `recommendations` object). Pass a JSON file path, a shell-quoted inline JSON object, or `-` to read JSON from stdin. YAML is not accepted. Inline JSON is recognized after leading whitespace is stripped; a filename beginning with `{` can be passed as `./{name}.json` to disambiguate it. Malformed inline JSON is reported as a JSON usage error and is not retried as a file path.
 For sensitive values, prefer a config file or stdin instead of placing them in shell history or process arguments.
 
+The Python alias `parallelism` is accepted too. If both names are supplied in the config, `datapoint_parallelism` wins, as in the Python API. An explicit `--datapoint-parallelism` replaces either config spelling. Use `eq redteam schema` for the complete accepted shape.
+
 ```json
 {
   "target": "agent:my-agent",

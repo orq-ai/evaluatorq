@@ -605,10 +605,10 @@ _SHARED_FLAGS: tuple[Flag, ...] = (
     Flag('vercel_url', None, replaces=('target',)),
     Flag('openai_model', None, replaces=('target',)),
     Flag('memory_entity', 'memory_entity_id'),
-    Flag('report_path'),
-    Flag('name', 'run_name'),
+    Flag('report_path', replaces=('report',)),
+    Flag('name', 'run_name', replaces=('evaluation_name',)),
     Flag('max_turns'),
-    Flag('datapoint_parallelism'),
+    Flag('datapoint_parallelism', replaces=('parallelism',)),
     Flag('llm_parallelism'),
     Flag('evaluator', 'evaluator_names'),
     Flag('save'),
@@ -652,7 +652,18 @@ _RUN_FLAGS: tuple[Flag, ...] = (
 
 # Config fields the CLI consumes itself: ``target`` and ``memory_entity_id`` become the resolved target object
 # (the SDK rejects a ``memory_entity_id`` beside an object target), and ``--report`` also accepts a directory.
-_CLI_OWNED_FIELDS = frozenset({'target', 'memory_entity_id', 'report_path'})
+# Aliases are resolved to current names by the config model; internal run functions receive only those names.
+_CLI_OWNED_FIELDS = frozenset({
+    'target',
+    'memory_entity_id',
+    'report_path',
+    'evaluation_name',
+    'evaluation_description',
+    'orq_results_path',
+    'exit_on_failure',
+    'report',
+    'parallelism',
+})
 
 
 def _forwarded_kwargs(cfg: BaseModel) -> dict[str, Any]:

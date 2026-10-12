@@ -1,8 +1,8 @@
 """Structured input and output for run commands: ``--config``, JSON-valued flags, ``--json`` and ``schema``.
 
-``eq redteam run``, ``eq sim simulate`` and ``eq sim run`` accept current canonical SDK keyword arguments through
-``--config``; deprecated aliases are excluded. They print their result model as JSON (``--json``). Each surface
-owns the pydantic model naming its keyword arguments and a table of `Flag` rows saying which field each flag sets;
+``eq redteam run``, ``eq sim simulate`` and ``eq sim run`` accept every JSON-expressible SDK keyword through
+``--config``, including aliases. They print their result model as JSON (``--json``). Each surface owns the
+pydantic model naming its keyword arguments and a table of `Flag` rows saying which field each flag sets;
 this module turns the two into one validated model with `resolve_config`.
 
 Precedence is the same everywhere: a flag passed on the command line beats inline JSON, a config file or stdin,

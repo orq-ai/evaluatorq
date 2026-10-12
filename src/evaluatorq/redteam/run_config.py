@@ -1,8 +1,8 @@
 """The data-shaped keyword arguments of `red_team`, as one JSON configuration model.
 
 ``eq redteam run --config`` validates its input against `RedTeamCliConfig` and ``eq redteam schema`` prints
-its JSON schema. Python objects (an ``AgentTarget``, ``hooks``, ``llm_client``) and the deprecated
-``parallelism`` alias have no field here; ``tests/test_cli_config_parity.py`` keeps the two in step.
+its JSON schema. Every JSON-expressible keyword, including ``parallelism``, has a field here.
+Python objects (an ``AgentTarget``, ``hooks``, ``llm_client``) do not; ``tests/test_cli_config_parity.py`` keeps parity.
 """
 
 from __future__ import annotations
@@ -46,6 +46,7 @@ class RedTeamRunConfig(BaseModel):
     max_turns: int | None = None
     max_per_category: int | None = None
     datapoint_parallelism: int | None = None
+    parallelism: int | None = None
     llm_parallelism: Annotated[int | None, AfterValidator(check_llm_parallelism)] = None
     generate_strategies: bool = True
     generated_strategy_count: int = 2
