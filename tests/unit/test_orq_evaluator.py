@@ -299,3 +299,61 @@ def test_orq_evaluator_uses_one_keyword_identifier() -> None:
 
     assert parameters['evaluator_id'].kind is Parameter.KEYWORD_ONLY
     assert 'name' not in parameters
+
+
+def _two_turn_simulation_output() -> dict[str, Any]:
+    from evaluatorq.contracts import TokenUsage
+    from evaluatorq.simulation.convert import to_open_responses
+    from evaluatorq.simulation.types import SimulationResult, TerminatedBy
+
+    result = SimulationResult(
+        messages=[
+            Message(role='user', content='I want a refund for order 42'),
+            Message(role='assistant', content='Sure, what is the reason?'),
+            Message(role='user', content='It arrived broken'),
+            Message(role='assistant', content='Refund issued.'),
+        ],
+        terminated_by=TerminatedBy.judge,
+        reason='Goal achieved',
+        goal_achieved=True,
+        goal_completion_score=1.0,
+        rules_broken=[],
+        turn_count=2,
+        token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        turn_metrics=[],
+    )
+    return dict(to_open_responses(result))
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_sends_full_simulated_conversation() -> None:
+    client = _Client({'type': 'number', 'value': 1.0})
+    evaluator = orq_evaluator(evaluator_id='eval-sim', client=client)
+    datapoint = DataPoint(inputs={'datapoint': {'id': 'dp-1', 'first_message': 'I want a refund for order 42'}})
+
+    await evaluator['scorer']({'data': datapoint, 'output': _two_turn_simulation_output()})
+
+    sent = client.evals.calls[0]
+    assert sent['query'] == 'It arrived broken'
+    assert sent['messages'] == [
+        {'role': 'user', 'content': 'I want a refund for order 42'},
+        {'role': 'assistant', 'content': 'Sure, what is the reason?'},
+    ]
+    assert 'Refund issued.' in sent['output']
+    assert 'Sure, what is the reason?' not in sent['output']
+
+
+@pytest.mark.asyncio
+async def test_orq_evaluator_explicit_messages_win_over_simulation_output() -> None:
+    client = _Client({'type': 'number', 'value': 1.0})
+    evaluator = orq_evaluator(evaluator_id='eval-sim', client=client)
+    datapoint = DataPoint(
+        inputs={'messages': [{'role': 'user', 'content': 'earlier'}, {'role': 'user', 'content': 'explicit question'}]}
+    )
+
+    await evaluator['scorer']({'data': datapoint, 'output': _two_turn_simulation_output()})
+
+    sent = client.evals.calls[0]
+    assert sent['query'] == 'explicit question'
+    assert sent['messages'] == [{'role': 'user', 'content': 'earlier'}]
+    assert 'Sure, what is the reason?' in sent['output']

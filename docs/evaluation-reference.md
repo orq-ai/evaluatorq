@@ -235,6 +235,8 @@ Evaluatorq skips jobs and sends the trace's recorded output to your evaluators â
 
 `orq_evaluator` needs the Orq SDK, which the `evaluatorq[orq]` extra installs (`uv add "evaluatorq[orq]"`) â€” a base evaluatorq install already carries it, but name the extra explicitly rather than relying on that. `evaluator_id` is required and keyword-only. It identifies an evaluator that already exists in Orq and determines the evaluatorq result name (`orq:eval-1` when `model` is omitted, `orq:eval-1@<model>` when you set one); there is no separate `name=` override. `model=` is optional and overrides the configured model only for model-backed evaluators; deterministic built-ins do not need it. A missing trace response is an error, not a clean score, so check the returned results before trusting a rate.
 
+`orq_evaluator` also scores agent simulation runs, for example `evaluatorq(..., jobs=[wrap_simulation_agent(...)], evaluators=[orq_evaluator(evaluator_id='eval-1')])`. When the datapoint has no `messages` or `query`, it reads the conversation from the simulation output: the final simulated-customer turn is sent as `query`, every earlier turn as `messages`, and the agent's final turn, tool calls included, as `output`.
+
 ## Built-in evaluators
 
 ```python

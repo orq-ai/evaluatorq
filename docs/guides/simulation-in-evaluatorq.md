@@ -192,6 +192,7 @@ The job's output is an OpenResponses response dict. The transcript is in `input`
 | `scorer_errors` | `dict \| None` | Scorer failures recorded after conversion. Always present; it is `None` on this job path because conversion happens before scoring. |
 | `datapoint_id` | `str \| None` | The simulation datapoint identifier. Always present; `None` when the result carries no datapoint id. |
 | `turn_metrics` | `list[dict]` | Per-turn latency and token detail. Present only when metrics were collected. |
+| `item_order` | `list[str]` | One entry per `input` and `output` item, each `"input"` or `"output"`, in transcript order. Walk it with one cursor per list to rebuild the conversation; `orq_evaluator` uses it to send the full conversation. |
 
 `criteria_results` and `turn_metrics` are optional, so read them with a default rather than by subscript. The audit and error keys listed as always present are different: their `None` value carries meaning, so preserve it instead of treating it as an empty collection.
 
