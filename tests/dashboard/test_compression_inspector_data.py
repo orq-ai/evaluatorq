@@ -164,7 +164,7 @@ def test_preview_document_defaults_show_the_whole_transcript_beside_one_jev_stat
     preview = inspector_data.preview_document(document, knobs=CompressionKnobs.defaults(4096))
 
     assert len(state_calls) == 1
-    assert preview.original_chars == len(original)
+    assert preview.transcript_chars == len(original)
     assert preview.readable == cap_text(original, 4096)[0]
     assert preview.readable_chars == 4096
     assert preview.compressed == expected_state
@@ -175,7 +175,7 @@ def test_preview_document_defaults_show_the_whole_transcript_beside_one_jev_stat
     marker_count = int(marker_match.group(1)) if marker_match else 0
     assert preview.omitted_messages == marker_count
     assert preview.omitted_messages > 0
-    assert preview.original_chars > preview.global_cap
+    assert preview.transcript_chars > preview.global_cap
     assert preview.compressed_chars <= preview.global_cap
     assert preview.global_cap == 4096
     assert document.model_dump(mode='python') == original_document
@@ -190,7 +190,7 @@ def test_preview_document_scrubs_secrets_from_both_views() -> None:
 
     preview = inspector_data.preview_document(document, knobs=replace(CompressionKnobs.defaults(4096), budget=100_000))
 
-    assert preview.readable_chars == preview.original_chars > preview.global_cap
+    assert preview.readable_chars == preview.transcript_chars > preview.global_cap
     assert 'gXeRk29vLq0Pz8Wd' not in preview.readable
     assert 'gXeRk29vLq0Pz8Wd' not in str(preview.compressed)
     assert 'context' in preview.readable

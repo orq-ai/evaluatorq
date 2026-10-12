@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import replace
 from typing import Any
@@ -10,10 +11,12 @@ import pytest
 from starlette.testclient import TestClient
 
 from evaluatorq.common.model_input import EdgeLimit, JevOptions
+from evaluatorq.dashboard import compression_inspector, compression_inspector_data as inspector_data
 from evaluatorq.dashboard.compression_inspector_data import CompressionKnobs, KnobError
 from evaluatorq.dashboard.app import build_app
 from evaluatorq.insights.transcript import DEFAULT_MESSAGE_KINDS
 from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, save_settings
+from evaluatorq.local_sessions import SessionRef, load_session_document
 from tests.dashboard.test_compression_inspector_routes import _claude_session
 
 DEFAULTS = CompressionKnobs.defaults(500_000)
@@ -52,6 +55,8 @@ def test_valid_form_values_round_trip() -> None:
         tools='collapsed',
         tool_input_chars=80,
         tool_max_chars=0,
+        original_view='readable',
+        wrap=True,
     )
 
     assert CompressionKnobs.from_form(_posted(knobs)) == knobs
@@ -94,6 +99,8 @@ def test_absent_checkboxes_read_as_unchecked() -> None:
         pytest.param('jev_user_edge', '1001', id='edge-over-half-the-total'),
         pytest.param('jev_user_total', '1999', id='total-under-twice-the-edge'),
         pytest.param('view_tools', 'everything', id='unknown-tool-mode'),
+        pytest.param('original_view', 'pdf', id='unknown-original-view'),
+        pytest.param('original_view', '', id='blank-original-view'),
     ],
 )
 def test_invalid_form_values_are_rejected(field: str, value: str) -> None:
@@ -115,6 +122,12 @@ def test_a_missing_number_is_rejected_instead_of_defaulted() -> None:
 
     with pytest.raises(KnobError, match='assistant edge'):
         CompressionKnobs.from_form(form)
+
+
+def test_defaults_show_the_atif_original_without_wrapping() -> None:
+    assert DEFAULTS.original_view == 'atif'
+    assert DEFAULTS.wrap is False
+    assert CompressionKnobs.from_form({k: v for k, v in _posted(DEFAULTS).items() if k != 'wrap'}).wrap is False
 
 
 def test_zero_keeps_tool_results_out_and_whole_is_allowed_for_readable_caps() -> None:
@@ -153,6 +166,12 @@ def _load(client: TestClient, *, session_id: str = 'knob-session') -> str:
     return match.group(1)
 
 
+def _token_of(response: Any) -> str:
+    match = re.search(r'name="token" value="([^"]+)"', response.text)
+    assert match is not None
+    return match.group(1)
+
+
 def _preview(client: TestClient, token: str, *, htmx: bool = True, **changes: Any) -> Any:
     knobs = replace(CompressionKnobs.defaults(effective_settings().trace_input_chars), **changes)
     return client.post(
@@ -171,7 +190,7 @@ def _pane(text: str, title_id: str) -> str:
 def test_excluding_a_message_kind_removes_it_from_the_readable_view_only(client: TestClient) -> None:
     token = _load(client)
 
-    response = _preview(client, token, include=DEFAULT_MESSAGE_KINDS - {'assistant'})
+    response = _preview(client, token, original_view='readable', include=DEFAULT_MESSAGE_KINDS - {'assistant'})
 
     assert response.status_code == 200
     assert 'ANSWER-TEXT' not in _pane(response.text, 'compression-original-title')
@@ -181,8 +200,10 @@ def test_excluding_a_message_kind_removes_it_from_the_readable_view_only(client:
 def test_a_user_limit_shortens_a_long_user_message_in_the_readable_view(client: TestClient) -> None:
     token = _load(client)
 
-    whole = _pane(_preview(client, token).text, 'compression-original-title')
-    capped = _pane(_preview(client, token, user_chars=200).text, 'compression-original-title')
+    whole = _pane(_preview(client, token, original_view='readable').text, 'compression-original-title')
+    capped = _pane(
+        _preview(client, token, original_view='readable', user_chars=200).text, 'compression-original-title'
+    )
 
     assert 'P' * 3_000 in whole
     assert 'P' * 3_000 not in capped
@@ -251,7 +272,7 @@ def test_htmx_gets_only_the_live_region_and_a_plain_post_gets_the_page(client: T
     fragment = _preview(client, token).text
     page = _preview(client, token, htmx=False).text
 
-    assert fragment.startswith('<div id="compression-output">')
+    assert fragment.startswith('<div id="compression-output"')
     assert 'Inspect trace compression' not in fragment
     assert 'Inspect trace compression' in page
     assert 'id="compression-output"' in page
@@ -264,3 +285,136 @@ def test_preview_post_without_the_csrf_token_is_rejected(client: TestClient) -> 
     response = client.post('/compression-inspector/preview', data={'token': token}, headers={'HX-Request': 'true'})
 
     assert response.status_code == 403
+
+
+def _pane_text(response: Any, title_id: str = 'compression-original-title') -> str:
+    return html.unescape(_pane(response.text, title_id))
+
+
+def test_the_atif_original_is_the_default_and_shows_the_trajectory_not_the_plaintext(client: TestClient) -> None:
+    token = _load(client)
+
+    pane = _pane_text(_preview(client, token))
+
+    assert 'Original, ATIF trajectory' in pane
+    assert '"steps"' in pane
+    assert 'ANSWER-TEXT' in pane
+    assert '0 user:' not in pane
+
+
+def test_the_readable_original_is_the_plaintext_render(client: TestClient) -> None:
+    token = _load(client)
+
+    pane = _pane_text(_preview(client, token, original_view='readable'))
+
+    assert 'Original, readable text' in pane
+    assert '0 user: PPP' in pane
+    assert '"steps"' not in pane
+
+
+def test_the_source_original_is_the_raw_session_file(client: TestClient) -> None:
+    token = _load(client)
+
+    source = _pane_text(_preview(client, token, original_view='source'))
+    atif = _pane_text(_preview(client, token, original_view='atif'))
+
+    assert 'Original, raw source file' in source
+    assert '"parentUuid"' in source and '"uuid": "user-1"' in source
+    assert 'ANSWER-TEXT' in source
+    assert '"parentUuid"' not in atif
+
+
+def test_a_raw_source_longer_than_the_byte_limit_is_cut_with_a_note(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = _load(client)
+    monkeypatch.setattr(inspector_data, 'SOURCE_BYTES', 300)
+
+    response = _preview(client, token, original_view='source')
+
+    assert 'Showing the first 300 of ' in html.unescape(response.text)
+    assert 'ANSWER-TEXT' not in _pane_text(response)
+
+
+def test_an_original_longer_than_the_character_limit_is_cut_with_a_note(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = _load(client)
+    monkeypatch.setattr(inspector_data, 'ORIGINAL_CHARS', 500)
+
+    response = _preview(client, token)
+
+    assert 'Cut to 500 characters' in response.text
+    assert 'chars left out' in response.text
+    assert '"steps"' in _pane_text(response) or '"schema_version"' in _pane_text(response)
+
+
+def test_every_original_is_scrubbed_of_known_secrets(client: TestClient) -> None:
+    path = _claude_session('secret-session', prompt='API_TOKEN=gXeRk29vLq0Pz8Wd please', answer='ok')
+    loaded = client.post(
+        '/compression-inspector/sessions/load',
+        data={'csrf': _csrf(client), 'session': f'claude-code:{path}'},
+    )
+    token = _token_of(loaded)
+    assert 'gXeRk29vLq0Pz8Wd' in path.read_text()
+
+    for view in ('atif', 'source', 'readable'):
+        assert 'gXeRk29vLq0Pz8Wd' not in _preview(client, token, original_view=view).text
+
+
+def test_an_orq_trace_has_no_raw_source_option_and_the_view_is_refused(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _claude_session('orq-like', prompt='hello', answer='world')
+    document = load_session_document(SessionRef(source='claude-code', path=path))
+
+    async def fetch(*_args: Any, **_kwargs: Any) -> Any:
+        return document
+
+    monkeypatch.setattr(compression_inspector, 'fetch_orq_document', fetch)
+    loaded = client.post('/compression-inspector/source/orq', data={'csrf': _csrf(client), 'trace_id': 'trace-9'})
+    token = _token_of(loaded)
+
+    assert 'value="atif"' in loaded.text and 'value="readable"' in loaded.text
+    assert 'value="source"' not in loaded.text
+    refused = _preview(client, token, original_view='source')
+    assert refused.status_code == 200
+    assert 'role="alert"' in refused.text
+    assert 'only available for local sessions' in refused.text
+    assert 'compression-panels' not in refused.text
+
+
+def test_a_local_session_offers_the_raw_source_option(client: TestClient) -> None:
+    path = _claude_session('offers-source', prompt='hello', answer='world')
+    loaded = client.post(
+        '/compression-inspector/sessions/load', data={'csrf': _csrf(client), 'session': f'claude-code:{path}'}
+    )
+
+    assert 'value="source"' in loaded.text
+
+
+def test_the_wrap_checkbox_sets_the_wrapped_class_on_the_output(client: TestClient) -> None:
+    token = _load(client)
+
+    off = _preview(client, token).text
+    on = _preview(client, token, wrap=True).text
+
+    assert 'is-wrapped' not in off.split('<dl')[0]
+    assert 'is-wrapped' in on.split('<dl')[0]
+    assert re.search(r'name="wrap"[^>]* checked', _preview(client, token, htmx=False, wrap=True).text)
+    assert not re.search(r'name="wrap"[^>]* checked', _preview(client, token, htmx=False).text)
+
+
+def test_an_unknown_original_view_shows_an_inline_error(client: TestClient) -> None:
+    token = _load(client)
+    knobs = {**_posted(CompressionKnobs.defaults(effective_settings().trace_input_chars)), 'original_view': 'pdf'}
+
+    response = client.post(
+        '/compression-inspector/preview',
+        data={**knobs, 'csrf': _csrf(client), 'token': token},
+        headers={'HX-Request': 'true'},
+    )
+
+    assert 'role="alert"' in response.text
+    assert 'Original shows' in response.text
+    assert 'compression-panels' not in response.text

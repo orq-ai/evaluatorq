@@ -3691,6 +3691,9 @@ _COMPRESSION_INSPECTOR_CSS = """
 .compression-panel h3 { margin:0 0 7px; color:var(--text-strong); font-size:13px; font-weight:650; }
 .compression-panel pre { box-sizing:border-box; width:100%; max-width:100%; max-height:70vh; min-height:170px; overflow:auto; overscroll-behavior:contain; margin:0; padding:12px; border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-sunken); color:var(--text-body); font:12px/1.5 var(--font-mono); white-space:pre; }
 .compression-count-note { margin:6px 0 0; color:var(--text-muted); font-size:11px; line-height:1.45; }
+.compression-display { align-items:end; }
+.compression-display .compression-check { min-height:34px; }
+.compression-output.is-wrapped .compression-panel pre { white-space:pre-wrap; overflow-wrap:anywhere; }
 .compression-knobs { display:grid; gap:12px; margin-top:16px; }
 .compression-knobs-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
 .compression-knob-group { display:grid; gap:10px; min-width:0; margin:0; padding:12px 14px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-md); background:var(--surface-sunken); }

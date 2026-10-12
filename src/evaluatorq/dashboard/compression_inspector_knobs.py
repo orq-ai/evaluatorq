@@ -17,8 +17,10 @@ _RESET_SCRIPT = (
     'var f=this.form;'
     "f.querySelectorAll('[data-default]').forEach(function(e){"
     "if(e.type==='checkbox'){e.checked=e.dataset.default==='1';}else{e.value=e.dataset.default;}});"
+    "document.getElementById('compression-output').classList.toggle('is-wrapped',f.elements.wrap.checked);"
     "f.dispatchEvent(new Event('change',{bubbles:true}));"
 )
+_WRAP_SCRIPT = "document.getElementById('compression-output').classList.toggle('is-wrapped',this.checked)"
 
 _JEV_EDGE_LABELS = {
     'assistant': 'Assistant messages',
@@ -51,6 +53,11 @@ _VIEW_CAP_LABELS = {
     'view_tool_input_chars': 'Tool input limit',
     'view_tool_max_chars': 'Tool result limit',
 }
+_ORIGINAL_OPTIONS = (
+    ('atif', 'ATIF trajectory (canonical)'),
+    ('source', 'Raw source file (local sessions)'),
+    ('readable', 'Readable text'),
+)
 _TOOLS_OPTIONS = (
     ('per_call', 'One line per call'),
     ('collapsed', 'Collapsed, no results'),
@@ -79,6 +86,28 @@ def _check(name: str, label: str, values: Values, defaults: Values) -> str:
         '<label class="compression-check">'
         f'<input type="checkbox" name="{name}" value="1"{checked} data-default="{int(bool(defaults[name]))}">'
         f'<span>{label}</span></label>'
+    )
+
+
+def _display_group(values: Values, defaults: Values, *, has_source: bool) -> str:
+    options = ''.join(
+        f'<option value="{value}"{" selected" if values["original_view"] == value else ""}>{label}</option>'
+        for value, label in _ORIGINAL_OPTIONS
+        if value != 'source' or has_source
+    )
+    wrap = (
+        '<label class="compression-check">'
+        f'<input type="checkbox" name="wrap" value="1"{" checked" if values["wrap"] else ""} '
+        f'data-default="{int(bool(defaults["wrap"]))}" onchange="{_WRAP_SCRIPT}">'
+        '<span>Wrap long lines</span></label>'
+    )
+    return (
+        '<div class="compression-knob-grid compression-display">'
+        '<label class="compression-knob"><span>Original shows</span>'
+        f'<select name="original_view" data-default="{defaults["original_view"]}">{options}</select>'
+        '<small>Default ATIF trajectory</small></label>'
+        f'{wrap}'
+        '</div>'
     )
 
 
@@ -119,7 +148,7 @@ def _view_group(values: Values, defaults: Values) -> str:
     )
     return (
         '<fieldset class="compression-knob-group">'
-        '<legend>Original (readable view)</legend>'
+        '<legend>Readable text</legend>'
         '<div class="compression-knob-grid">'
         f'{_number("view_budget", "Whole view limit", values, defaults)}'
         '<label class="compression-knob"><span>Tool display</span>'
@@ -129,12 +158,12 @@ def _view_group(values: Values, defaults: Values) -> str:
         '<p class="compression-knob-title">Include</p>'
         f'<div class="compression-checks">{kinds}</div>'
         f'<div class="compression-knob-grid">{caps}</div>'
-        '<p class="compression-count-note">Use -1 to keep a part whole. A tool result limit of 0 leaves results out.</p>'
+        '<p class="compression-count-note">These options apply when Original shows Readable text. Use -1 to keep a part whole. A tool result limit of 0 leaves results out.</p>'
         '</fieldset>'
     )
 
 
-def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: str) -> str:
+def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: str, *, has_source: bool) -> str:
     """Render the live-updating form; its fields post under the names ``CompressionKnobs.from_form`` reads."""
     values, default_values = knobs.as_form(), defaults.as_form()
     return (
@@ -142,13 +171,15 @@ def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: 
         f'hx-post="{PREVIEW_ROUTE}" hx-trigger="change, input delay:400ms" hx-target="#compression-output" '
         'hx-swap="outerHTML" hx-sync="this:replace">'
         f'{csrf_field()}<input type="hidden" name="token" value="{token}">'
+        f'{_display_group(values, default_values, has_source=has_source)}'
         '<div class="compression-knobs-groups">'
         f'{_view_group(values, default_values)}{_jev_group(values, default_values)}'
         '</div>'
         '<div class="compression-knobs-footer">'
         f'<button type="button" class="compression-reset" onclick="{_RESET_SCRIPT}">Reset to defaults</button>'
-        '<p class="compression-count-note">The Readable view uses the Insights full_conversation_view options and the '
-        'Jev state uses the classifier Jev limits. Scrubbing of known secrets is always on. Changes update the '
-        'preview as you make them.</p>'
+        '<p class="compression-count-note">The Original is the canonical ATIF JSON, the raw session file or the readable '
+        'text, which uses the Insights full_conversation_view options. The Output uses the classifier Jev limits. '
+        'Every original is scrubbed of known secrets and cut to 2,000,000 characters, and a raw session file is read '
+        'up to 5,000,000 bytes; a note says when anything is cut. Changes update the preview as you make them.</p>'
         '</div></form>'
     )

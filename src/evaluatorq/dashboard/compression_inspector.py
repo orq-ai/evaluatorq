@@ -17,6 +17,7 @@ from starlette.responses import Response
 from starlette.routing import Route
 
 from evaluatorq.dashboard.compression_inspector_data import (
+    ORIGINAL_VIEW_LABELS,
     CompressionKnobs,
     CompressionPreview,
     InspectorSourceError,
@@ -26,7 +27,13 @@ from evaluatorq.dashboard.compression_inspector_data import (
 from evaluatorq.dashboard.compression_inspector_knobs import PREVIEW_ROUTE, knobs_form_html
 from evaluatorq.dashboard.security import csrf_field, request_rejected
 from evaluatorq.dashboard.shell import page
-from evaluatorq.local_sessions import SessionQuery, SessionRef, load_session_document, search_sessions
+from evaluatorq.local_sessions import (
+    SessionQuery,
+    SessionRef,
+    load_session_document,
+    resolve_session_ref,
+    search_sessions,
+)
 from evaluatorq.local_sessions.models import day_window
 from evaluatorq.local_sessions.roots import session_roots
 from evaluatorq.trace_finder.settings import effective_settings, load_settings
@@ -54,24 +61,32 @@ _EXPIRED_ERROR = 'Load the trace again to adjust it.'
 _MAX_CACHED_DOCUMENTS = 8
 
 
+@dataclass(frozen=True)
+class _Cached:
+    """A loaded document and, for a local session, the validated path of its raw file (Orq traces have none)."""
+
+    document: TraceDocument
+    source_path: Path | None
+
+
 class _DocumentCache:
     """Loaded documents kept in memory only, least recently used first out, so knob changes need no reload."""
 
     def __init__(self) -> None:
-        self._documents: OrderedDict[str, TraceDocument] = OrderedDict()
+        self._entries: OrderedDict[str, _Cached] = OrderedDict()
 
-    def put(self, document: TraceDocument) -> str:
+    def put(self, document: TraceDocument, source_path: Path | None) -> str:
         token = secrets.token_urlsafe(16)
-        self._documents[token] = document
-        while len(self._documents) > _MAX_CACHED_DOCUMENTS:
-            self._documents.popitem(last=False)
+        self._entries[token] = _Cached(document, source_path)
+        while len(self._entries) > _MAX_CACHED_DOCUMENTS:
+            self._entries.popitem(last=False)
         return token
 
-    def get(self, token: str) -> TraceDocument | None:
-        document = self._documents.get(token)
-        if document is not None:
-            self._documents.move_to_end(token)
-        return document
+    def get(self, token: str) -> _Cached | None:
+        entry = self._entries.get(token)
+        if entry is not None:
+            self._entries.move_to_end(token)
+        return entry
 
 
 @dataclass(frozen=True)
@@ -81,6 +96,7 @@ class _Loaded:
     preview: CompressionPreview
     knobs: CompressionKnobs
     token: str
+    has_source: bool
 
 
 def _date_bounds(form: Any) -> tuple[datetime | None, datetime | None]:
@@ -98,21 +114,30 @@ def _date_bounds(form: Any) -> tuple[datetime | None, datetime | None]:
     return day_window(start_day, end_day, zone=timezone.utc)
 
 
-def _output_html(*, preview: CompressionPreview | None = None, notice: str | None = None) -> str:
+def _output_html(*, preview: CompressionPreview | None = None, notice: str | None = None, wrapped: bool = False) -> str:
     """The live region the knobs form replaces: metrics and both panes, or the reason there are none."""
+    opening = f'<div id="compression-output" class="compression-output{" is-wrapped" if wrapped else ""}">'
     if notice is not None or preview is None:
         message = html.escape(str(notice or ''), quote=True)
-        return f'<div id="compression-output"><p class="compression-notice" role="alert">{message}</p></div>'
+        return f'{opening}<p class="compression-notice" role="alert">{message}</p></div>'
     state = json.dumps(preview.compressed, ensure_ascii=False, indent=2)
-    readable_html = (
-        f'<pre>{html.escape(str(preview.readable), quote=True)}</pre>'
-        if preview.readable
-        else '<p class="compression-count-note" role="status">No readable input or output is available for this source.</p>'
+    if preview.original:
+        original_html = f'<pre>{html.escape(str(preview.original), quote=True)}</pre>'
+    elif preview.original_view == 'readable':
+        original_html = '<p class="compression-count-note" role="status">No readable input or output is available for this source.</p>'
+    else:
+        original_html = '<p class="compression-count-note" role="status">The original is empty.</p>'
+    note_html = (
+        f'<p class="compression-count-note" role="status">{html.escape(preview.original_note, quote=True)}</p>'
+        if preview.original_note
+        else ''
     )
+    label = html.escape(ORIGINAL_VIEW_LABELS[preview.original_view], quote=True)
     return (
-        '<div id="compression-output">'
+        f'{opening}'
         '<dl class="compression-metrics">'
-        f'<div><dt>Readable source characters</dt><dd>{preview.original_chars:,}</dd></div>'
+        f'<div><dt>Original characters</dt><dd>{preview.original_chars:,}</dd></div>'
+        f'<div><dt>Readable source characters</dt><dd>{preview.transcript_chars:,}</dd></div>'
         f'<div><dt>Readable view characters</dt><dd>{preview.readable_chars:,}</dd></div>'
         f'<div><dt>Source messages</dt><dd>{preview.message_count:,}</dd></div>'
         f'<div><dt>Serialized Jev state characters</dt><dd>{preview.compressed_chars:,}</dd></div>'
@@ -121,8 +146,8 @@ def _output_html(*, preview: CompressionPreview | None = None, notice: str | Non
         '</dl>'
         '<div class="compression-panels">'
         '<section class="compression-panel" aria-labelledby="compression-original-title">'
-        '<h3 id="compression-original-title">Original</h3>'
-        f'{readable_html}'
+        f'<h3 id="compression-original-title">Original, {label}</h3>'
+        f'{original_html}{note_html}'
         '</section>'
         '<section class="compression-panel" aria-labelledby="compression-jev-title">'
         '<h3 id="compression-jev-title">Output (Jev state)</h3>'
@@ -139,10 +164,10 @@ def _preview_html(loaded: _Loaded) -> str:
         '<section class="compression-preview" aria-labelledby="compression-preview-title">'
         '<div class="compression-preview-heading"><div>'
         '<h2 id="compression-preview-title">Preview</h2>'
-        '<p>Readable conversation with known sensitive values scrubbed; the canonical ATIF source is unchanged.</p>'
+        '<p>The original and its Jev state, with known sensitive values scrubbed; the canonical ATIF source is unchanged.</p>'
         '</div><p class="compression-question-note">No question included.</p></div>'
-        f'{knobs_form_html(loaded.knobs, defaults, loaded.token)}'
-        f'{_output_html(preview=loaded.preview)}'
+        f'{knobs_form_html(loaded.knobs, defaults, loaded.token, has_source=loaded.has_source)}'
+        f'{_output_html(preview=loaded.preview, wrapped=loaded.knobs.wrap)}'
         '</section>'
     )
 
@@ -300,11 +325,12 @@ def compression_inspector_page(_req: Request) -> Response:
     return _page_response()
 
 
-def _load(req: Request, document: TraceDocument) -> _Loaded:
+def _load(req: Request, document: TraceDocument, source_path: Path | None = None) -> _Loaded:
     """Render a document under the default knobs and keep it in memory for later knob changes."""
     knobs = CompressionKnobs.defaults(effective_settings().trace_input_chars)
-    preview = preview_document(document, knobs=knobs)
-    return _Loaded(preview, knobs, req.app.state.compression_documents.put(document))
+    preview = preview_document(document, knobs=knobs, source_path=source_path)
+    token = req.app.state.compression_documents.put(document, source_path)
+    return _Loaded(preview, knobs, token, has_source=source_path is not None)
 
 
 async def compression_inspector_orq(req: Request) -> Response:
@@ -357,8 +383,9 @@ async def compression_inspector_sessions_load(req: Request) -> Response:
         return _page_response(notice=_SESSION_ERROR, status_code=422)
     try:
         ref = SessionRef(source=source, path=Path(raw_path))
+        source_path = (await asyncio.to_thread(resolve_session_ref, ref)).path
         document = await asyncio.to_thread(load_session_document, ref=ref)
-        loaded = _load(req, document)
+        loaded = _load(req, document, source_path)
     except Exception:  # noqa: BLE001 — loader errors can contain local paths or transcript data
         return _page_response(notice=_SESSION_ERROR)
     return _page_response(loaded=loaded)
@@ -370,20 +397,23 @@ async def compression_inspector_preview(req: Request) -> Response:
     if error:
         return error
     token = str(form.get('token') or '')
-    document = req.app.state.compression_documents.get(token)
+    cached = req.app.state.compression_documents.get(token)
     loaded: _Loaded | None = None
     notice: str | None = None
-    if document is None:
+    if cached is None:
         notice = _EXPIRED_ERROR
     else:
         try:
             knobs = CompressionKnobs.from_form(form)
-            loaded = _Loaded(preview_document(document, knobs=knobs), knobs, token)
+            preview = preview_document(cached.document, knobs=knobs, source_path=cached.source_path)
+            loaded = _Loaded(preview, knobs, token, has_source=cached.source_path is not None)
         except ValueError as exc:  # knob errors and fixed-text renderer limits; neither echoes trace content
             notice = str(exc)
     if req.headers.get('HX-Request', '').casefold() == 'true':
         return Response(
-            content=_output_html(preview=loaded.preview if loaded else None, notice=notice),
+            content=_output_html(
+                preview=loaded.preview if loaded else None, notice=notice, wrapped=form.get('wrap') is not None
+            ),
             media_type='text/html',
             headers={'Cache-Control': 'no-store'},
         )

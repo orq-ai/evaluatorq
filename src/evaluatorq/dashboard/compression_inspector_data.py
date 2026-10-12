@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, get_args
 
 from loguru import logger
 
@@ -13,11 +13,13 @@ from evaluatorq.common.model_input import (
     DEFAULT_JEV_OPTIONS,
     EdgeLimit,
     JevOptions,
+    cap_text,
     jev_state,
     omission_count,
     serialized_chars,
 )
 from evaluatorq.common.orq_client import close_orq_client
+from evaluatorq.common.redact import scrub_known_secrets
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
 from evaluatorq.dashboard.auth import build_orq_client
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
@@ -33,12 +35,23 @@ from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from pathlib import Path
 
 _SAFE_ORQ_ERROR = 'The selected Orq trace could not be loaded.'
 
 MAX_KNOB_CHARS = 5_000_000
 ToolsMode = Literal['collapsed', 'per_call']
 TOOLS_MODES: tuple[ToolsMode, ...] = get_args(ToolsMode)
+OriginalView = Literal['atif', 'source', 'readable']
+ORIGINAL_VIEWS: tuple[OriginalView, ...] = get_args(OriginalView)
+ORIGINAL_VIEW_LABELS: dict[OriginalView, str] = {
+    'atif': 'ATIF trajectory',
+    'source': 'raw source file',
+    'readable': 'readable text',
+}
+# The original pane is cut to this many characters; a raw session file is read up to this many bytes.
+ORIGINAL_CHARS = 2_000_000
+SOURCE_BYTES = 5_000_000
 # Posted (total, edge) field names of each Jev edge limit.
 JEV_EDGE_FIELDS: dict[str, tuple[str, str]] = {
     'assistant': ('jev_assistant_total', 'jev_assistant_edge'),
@@ -57,6 +70,9 @@ VIEW_CAP_FIELDS: dict[str, str] = {
     'view_tool_input_chars': 'tool_input_chars',
     'view_tool_max_chars': 'tool_max_chars',
 }
+
+
+_Choice = TypeVar('_Choice', bound=str)
 
 
 class KnobError(ValueError):
@@ -78,6 +94,8 @@ class CompressionKnobs:
     tools: ToolsMode = 'per_call'
     tool_input_chars: int = -1
     tool_max_chars: int = -1
+    original_view: OriginalView = 'atif'
+    wrap: bool = False
 
     @classmethod
     def defaults(cls, global_char_cap: int) -> CompressionKnobs:
@@ -91,6 +109,8 @@ class CompressionKnobs:
             'jev_state_chars': self.jev.state_chars,
             'view_budget': self.budget,
             'view_tools': self.tools,
+            'original_view': self.original_view,
+            'wrap': self.wrap,
         }
         for attribute, (total_name, edge_name) in JEV_EDGE_FIELDS.items():
             limit: EdgeLimit = getattr(self.jev, attribute)
@@ -132,7 +152,9 @@ class CompressionKnobs:
             jev=jev,
             budget=_whole(form, 'view_budget', 'Readable view budget'),
             include=frozenset(kind for kind in sorted(MESSAGE_KINDS) if _checked(form, f'view_include_{kind}')),
-            tools=_tools_mode(form),
+            tools=_choice(form, 'view_tools', 'Readable view tool display', TOOLS_MODES),
+            original_view=_choice(form, 'original_view', 'Original shows', ORIGINAL_VIEWS),
+            wrap=_checked(form, 'wrap'),
             system_chars=caps['system_chars'],
             user_chars=caps['user_chars'],
             assistant_edge=caps['assistant_edge'],
@@ -159,12 +181,12 @@ def _checked(form: Mapping[str, Any], name: str) -> bool:
     return form.get(name) is not None
 
 
-def _tools_mode(form: Mapping[str, Any]) -> ToolsMode:
-    text = str(form.get('view_tools') or '')
-    for mode in TOOLS_MODES:
-        if mode == text:
-            return mode
-    raise KnobError('Readable view tool display: choose one of the listed modes.')
+def _choice(form: Mapping[str, Any], name: str, label: str, options: tuple[_Choice, ...]) -> _Choice:
+    text = str(form.get(name) or '')
+    for option in options:
+        if option == text:
+            return option
+    raise KnobError(f'{label}: choose one of the listed options.')
 
 
 def _edge_limit(form: Mapping[str, Any], attribute: str) -> EdgeLimit:
@@ -182,8 +204,12 @@ class CompressionPreview:
     """The readable view and the structured Jev state of one document under a set of knobs."""
 
     readable: str
+    original: str
+    original_view: OriginalView
+    original_note: str
     compressed: dict[str, Any]
     original_chars: int
+    transcript_chars: int
     readable_chars: int
     compressed_chars: int
     message_count: int
@@ -198,13 +224,17 @@ class InspectorSourceError(ValueError):
         super().__init__(_SAFE_ORQ_ERROR)
 
 
-def preview_document(document: TraceDocument, *, knobs: CompressionKnobs) -> CompressionPreview:
+def preview_document(
+    document: TraceDocument, *, knobs: CompressionKnobs, source_path: Path | None = None
+) -> CompressionPreview:
     """Render a local-only preview without mutating its canonical document or calling a model.
 
-    The readable view uses the Insights ``full_conversation_view`` options and the Jev state the classifier's Jev
-    limits; both scrub known secrets and omit harness reminders, and neither downloads media URLs or changes the
-    document. The source character count is that of the uncapped readable transcript. Limits too small for either
-    renderer raise ``ValueError`` with a fixed message.
+    The original is the canonical ATIF JSON, the raw session file (`source_path`, local sessions only) or the
+    readable text, as `knobs.original_view` says; every original is scrubbed of known secrets and cut to
+    ``ORIGINAL_CHARS``. The readable text uses the Insights ``full_conversation_view`` options and the Jev state the
+    classifier's Jev limits, and neither downloads media URLs or changes the document. The transcript character
+    count is that of the uncapped readable transcript. Limits too small for either renderer, and a source that is
+    unavailable, raise ``ValueError`` with a fixed message.
     """
     messages = prompt_messages(document)
     compressed = jev_state(messages, global_char_cap=knobs.global_char_cap, options=knobs.jev)
@@ -221,16 +251,47 @@ def preview_document(document: TraceDocument, *, knobs: CompressionKnobs) -> Com
         tool_input_chars=knobs.tool_input_chars,
         tool_max_chars=knobs.tool_max_chars,
     )
+    original, note = _original(document, knobs.original_view, readable, source_path)
     return CompressionPreview(
         readable=readable,
+        original=original,
+        original_view=knobs.original_view,
+        original_note=note,
         compressed=compressed,
-        original_chars=len(full),
+        original_chars=len(original),
+        transcript_chars=len(full),
         readable_chars=len(readable),
         compressed_chars=serialized_chars(compressed),
         message_count=message_count,
         omitted_messages=omission_count(compressed.get('omission')),
         global_cap=knobs.global_char_cap,
     )
+
+
+def _original(document: TraceDocument, view: OriginalView, readable: str, source_path: Path | None) -> tuple[str, str]:
+    """The scrubbed, capped text of the chosen original and a note on anything cut from it."""
+    notes: list[str] = []
+    if view == 'atif':
+        text = document.model_dump_json(indent=2, exclude_none=True)
+    elif view == 'readable':
+        text = readable
+    elif source_path is None:
+        raise KnobError('Original shows: the raw source is only available for local sessions; choose another view.')
+    else:
+        try:
+            with source_path.open('rb') as handle:
+                data = handle.read(SOURCE_BYTES)
+            total = source_path.stat().st_size
+        except OSError:
+            raise KnobError('Original shows: the source file could not be read.') from None
+        if total > len(data):
+            notes.append(f'Showing the first {len(data):,} of {total:,} bytes of the source file.')
+        text = data.decode('utf-8', errors='replace')
+    text = scrub_known_secrets(text)
+    shown, omitted = cap_text(text, ORIGINAL_CHARS)
+    if omitted:
+        notes.append(f'Cut to {ORIGINAL_CHARS:,} characters; {omitted:,} characters are left out.')
+    return shown, ' '.join(notes)
 
 
 def _window(start: datetime | None, end: datetime | None) -> tuple[datetime, datetime]:
