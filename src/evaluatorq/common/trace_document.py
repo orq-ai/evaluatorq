@@ -267,8 +267,12 @@ def _source_coverage_projection(capture: Mapping[str, Any]) -> dict[str, Any]:
     return projected
 
 
-def prompt_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any]]:
-    """Rebuild the historical message dictionaries from ATIF native fields and rendering annotations."""
+def prompt_messages(document: TraceDocument | TraceRecord, *, include_reasoning: bool = False) -> list[dict[str, Any]]:
+    """Rebuild the historical message dictionaries from ATIF native fields and rendering annotations.
+
+    `include_reasoning` copies a step's native `reasoning_content` onto its message when the message has none of its
+    own, so a converted OTel trace keeps the reasoning a renderer can opt into.
+    """
     doc = ensure_trace_document(document)
     ordered: list[tuple[int, dict[str, Any]]] = []
     for step in doc.trajectory.steps:
@@ -290,6 +294,8 @@ def prompt_messages(document: TraceDocument | TraceRecord) -> list[dict[str, Any
             calls = [_render_call(call) for call in step.tool_calls or []]
             if calls:
                 message['tool_calls'] = calls
+            if include_reasoning and step.reasoning_content and 'reasoning_content' not in message:
+                message['reasoning_content'] = step.reasoning_content
             ordered.append((order, message))
         for result in step.observation.results if step.observation else []:
             result_extra = result.extra or {}

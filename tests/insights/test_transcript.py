@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from evaluatorq.common.model_input import serialized_question_chars
+from evaluatorq.common.trace_document import ensure_trace_document
 
 from evaluatorq.insights.transcript import (
     first_command,
@@ -217,6 +218,71 @@ def test_full_conversation_view_flags_repeated_call_ids_by_their_own_result() ->
     assert '1 tool input Bash [pending]: second' in view
 
 
+def test_full_conversation_view_exclude_removes_types_from_the_default() -> None:
+    view = full_conversation_view(CODING_TRACE, budget=10_000, exclude={'assistant', 'tool_input'})
+
+    assert view == '0 user: Fix the failing parser test.[harness reminder omitted]'
+    per_call = full_conversation_view(
+        CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=-1, exclude={'tool_input', 'assistant'}
+    )
+    assert 'tool input' not in per_call
+    assert '3 tool result c2: Error: 1 failed, 3 passed' in per_call
+
+
+REASONING_TRACE = _trace(
+    {'role': 'user', 'content': 'Why?'},
+    {
+        'role': 'assistant',
+        'content': [{'type': 'thinking', 'thinking': 'PART-THOUGHT'}, {'type': 'text', 'text': 'Because.'}],
+        'reasoning_content': 'FIELD-THOUGHT',
+    },
+    {
+        'role': 'assistant',
+        'content': [
+            {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'SUMMARY-THOUGHT'}]},
+            {'type': 'text', 'text': 'Done.'},
+        ],
+    },
+)
+
+
+def test_full_conversation_view_omits_reasoning_unless_included() -> None:
+    assert 'THOUGHT' not in full_conversation_view(REASONING_TRACE, budget=10_000)
+
+    view = full_conversation_view(REASONING_TRACE, budget=10_000, include={'user', 'assistant', 'reasoning'})
+
+    assert view.splitlines() == [
+        '0 user: Why?',
+        '1 reasoning: FIELD-THOUGHT',
+        '',
+        'PART-THOUGHT',
+        '1 assistant: Because.',
+        '2 reasoning: SUMMARY-THOUGHT',
+        '2 assistant: Done.',
+    ]
+    capped = full_conversation_view(
+        _trace({'role': 'assistant', 'reasoning_content': 'R' * 100 + 'x' * 5_000 + 'END'}),
+        budget=10_000,
+        include={'reasoning'},
+        reasoning_chars=200,
+    )
+    assert capped.startswith('0 reasoning: RRR')
+    assert capped.endswith('END')
+    assert '[... 4903 chars ...]' in capped
+
+
+def test_full_conversation_view_reads_native_atif_reasoning() -> None:
+    document = ensure_trace_document(_trace({'role': 'user', 'content': 'Why?'}, {'role': 'assistant', 'content': 'Because.'}))
+    steps = list(document.trajectory.steps)
+    steps[1] = steps[1].model_copy(update={'reasoning_content': 'NATIVE-THOUGHT'})
+    document = document.model_copy(update={'trajectory': document.trajectory.model_copy(update={'steps': steps})})
+
+    view = full_conversation_view(document, budget=10_000, include={'assistant', 'reasoning'})
+
+    assert view.splitlines() == ['1 reasoning: NATIVE-THOUGHT', '1 assistant: Because.']
+    assert 'NATIVE-THOUGHT' not in full_conversation_view(document, budget=10_000)
+
+
 def test_full_conversation_view_include_filters_message_types() -> None:
     view = full_conversation_view(CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=-1, include={'user', 'tool_result'})
 
@@ -286,6 +352,12 @@ def test_full_conversation_view_rejects_bad_options() -> None:
         full_conversation_view(CODING_TRACE, budget=10_000, user_chars=0)
     with pytest.raises(ValueError, match='unknown message kinds'):
         full_conversation_view(CODING_TRACE, budget=10_000, include={'tool'})  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match='unknown message kinds'):
+        full_conversation_view(CODING_TRACE, budget=10_000, exclude={'thinking'})  # ty: ignore[invalid-argument-type]
+    with pytest.raises(TypeError, match='not a string'):
+        full_conversation_view(CODING_TRACE, budget=10_000, exclude='user')  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match='reasoning cap'):
+        full_conversation_view(CODING_TRACE, budget=10_000, reasoning_chars=0)
 
 
 def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:

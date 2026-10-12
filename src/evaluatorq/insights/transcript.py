@@ -2,7 +2,7 @@
 
 Three views, each for one `/classify` call:
 
-- `full_conversation_view`: the source messages, numbered by message index, for non-Jev classifiers and summaries. Each message type has its own cap (`-1` keeps it whole) and can be left out; tool calls are either one collapsed line per run or one line per call with a status flag. The whole view is capped to the configured trace-input budget.
+- `full_conversation_view`: the source messages, numbered by message index, for non-Jev classifiers and summaries. Each message type has its own cap (`-1` keeps it whole) and can be included or excluded, with reasoning left out by default; tool calls are either one collapsed line per run or one line per call with a status flag. The whole view is capped to the configured trace-input budget.
 - `tool_inventory`: which tools ran and how often, for the coding-agent check.
 - `tool_activity_chunks`: user context and paired tool activity for coding-tool questions. Non-Jev traces keep their question-specific command excerpts; Jev traces use filtered structured state, 100-character input/result edges, and complete-record chunks that fit the exact question reserve and Jev state-plus-question ceilings.
 
@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal, get_args, overload
 
 from pydantic import BaseModel
 
-from evaluatorq.common.messages import coerce_content_text, contains_media_content
+from evaluatorq.common.messages import coerce_content_text, contains_media_content, reasoning_text
 from evaluatorq.common.model_input import (
     cap_text,
     clean_model_text,
@@ -42,7 +42,7 @@ from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Collection, Iterator
 
     from evaluatorq.trace_finder.models import TraceRecord
 
@@ -50,8 +50,11 @@ TOOL_INPUT_CHARS = 300
 # `full_conversation_view` defaults; -1 keeps a message type whole.
 USER_TURN_CHARS = 8_000
 ASSISTANT_EDGE = 500
-MessageKind = Literal['system', 'user', 'assistant', 'tool_input', 'tool_result']
+REASONING_CHARS = 2_000
+MessageKind = Literal['system', 'user', 'assistant', 'reasoning', 'tool_input', 'tool_result']
 MESSAGE_KINDS: frozenset[MessageKind] = frozenset(get_args(MessageKind))
+# Reasoning is shown only on request.
+DEFAULT_MESSAGE_KINDS: frozenset[MessageKind] = MESSAGE_KINDS - {'reasoning'}
 RISKY_COMMAND_CHARS = 300
 # Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
 SHELL_OUTPUT_CHARS = 300
@@ -209,8 +212,8 @@ def full_conversation_view_with_message_spans(
     """
     return _render_full_conversation(
         trace,
-        include=MESSAGE_KINDS,
-        caps={'system': -1, 'user': -1, 'assistant': -1, 'tool_input': -1, 'tool_result': -1},
+        include=DEFAULT_MESSAGE_KINDS,
+        caps={'system': -1, 'user': -1, 'assistant': -1, 'reasoning': -1, 'tool_input': -1, 'tool_result': -1},
         tools='per_call',
     )
 
@@ -219,19 +222,22 @@ def full_conversation_view(
     trace: TraceRecord | TraceDocument,
     budget: int | None = None,
     *,
-    include: frozenset[MessageKind] | set[MessageKind] = MESSAGE_KINDS,
+    include: Collection[MessageKind] = DEFAULT_MESSAGE_KINDS,
+    exclude: Collection[MessageKind] = (),
     system_chars: int = -1,
     user_chars: int = USER_TURN_CHARS,
     assistant_edge: int = ASSISTANT_EDGE,
+    reasoning_chars: int = REASONING_CHARS,
     tools: Literal['collapsed', 'per_call'] = 'collapsed',
     tool_input_chars: int = TOOL_INPUT_CHARS,
     tool_max_chars: int = 0,
 ) -> str:
     """Render the conversation as text, one line per message part, each prefixed with its message index.
 
-    `include` picks the message types to render. Each type has its own cap, and `-1` keeps that type whole:
-    `system_chars` and `user_chars` keep the start and end of a message within that many characters,
-    `assistant_edge` keeps that many characters at each end of the assistant text. A cut leaves a
+    `include` picks the message types to render and `exclude` removes types from it; reasoning is left out unless
+    `include` names it. Each type has its own cap, and `-1` keeps that type whole: `system_chars`, `user_chars` and
+    `reasoning_chars` keep the start and end of a message within that many characters, `assistant_edge` keeps that
+    many characters at each end of the assistant text. A cut leaves a
     `[... N chars ...]` marker and an injected `<system-reminder>` block becomes `[harness reminder omitted]`.
 
     `tools='collapsed'` turns a run of tool calls into one `tools:` line with repeats counted and leaves the
@@ -245,12 +251,15 @@ def full_conversation_view(
     """
     if tools not in ('collapsed', 'per_call'):
         raise ValueError(f"tools must be 'collapsed' or 'per_call', got {tools!r}")
-    if unknown := set(include) - MESSAGE_KINDS:
+    if isinstance(include, str) or isinstance(exclude, str):
+        raise TypeError('include and exclude take a collection of message kinds, not a string')
+    if unknown := (set(include) | set(exclude)) - MESSAGE_KINDS:
         raise ValueError(f'unknown message kinds {sorted(unknown)}, expected some of {sorted(MESSAGE_KINDS)}')
     caps: dict[MessageKind, int] = {
         'system': system_chars,
         'user': user_chars,
         'assistant': assistant_edge,
+        'reasoning': reasoning_chars,
         'tool_input': tool_input_chars,
         'tool_result': tool_max_chars,
     }
@@ -258,7 +267,8 @@ def full_conversation_view(
         floor = 0 if kind == 'tool_result' else 1
         if cap != -1 and cap < floor:
             raise ValueError(f'the {kind} cap must be -1 (whole) or >= {floor}, got {cap}')
-    rendered, _, _ = _render_full_conversation(trace, include=frozenset(include), caps=caps, tools=tools)
+    kinds = frozenset(include) - frozenset(exclude)
+    rendered, _, _ = _render_full_conversation(trace, include=kinds, caps=caps, tools=tools)
     cap = budget if budget is not None else effective_trace_input_chars()
     return cap_text(rendered, cap)[0]
 
@@ -270,7 +280,7 @@ def _render_full_conversation(
     caps: dict[MessageKind, int],
     tools: Literal['collapsed', 'per_call'],
 ) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
-    messages = prompt_messages(trace)
+    messages = prompt_messages(trace, include_reasoning='reasoning' in include)
     # Pair repeated call ids in order, as the Jev state does, so each call's flag reads its own result.
     calls, _ = pair_tool_call_results(messages)
     statuses = {
@@ -299,6 +309,9 @@ def _render_full_conversation(
                 result = _clean(text, caps['tool_result'])
                 lines.append((f'{index} tool result {message.get("tool_call_id", "")}: {result}', index))
             continue
+        if 'reasoning' in include and (reasoning := reasoning_text(message)):
+            flush()
+            lines.append((f'{index} reasoning: {_clean(reasoning, caps["reasoning"])}', index))
         kind: MessageKind = role if role in ('user', 'assistant') else 'system'
         content = coerce_content_text(message.get('content'))
         if kind in include and content.strip():

@@ -134,6 +134,27 @@ def contains_media_content(content: Any) -> bool:
     return any(_media_kind(part) is not None for part in parts if part is not None)
 
 
+def reasoning_text(message: Mapping[str, Any]) -> str:
+    """Join a message's reasoning: its `reasoning_content`, `reasoning` or `thinking` field, then reasoning parts.
+
+    Content renderers skip reasoning parts; this is the one place that reads them.
+    """
+    texts = [
+        value for key in ('reasoning_content', 'reasoning', 'thinking') if isinstance(value := message.get(key), str)
+    ]
+    content = message.get('content')
+    for part in content if isinstance(content, (list, tuple)) else ():
+        if _field(part, 'type') not in _REASONING_PART_TYPES:
+            continue
+        texts.extend(
+            value for key in ('thinking', 'text', 'reasoning', 'content') if isinstance(value := _field(part, key), str)
+        )
+        summary = _field(part, 'summary')
+        if isinstance(summary, list):
+            texts.extend(text for item in summary if isinstance(text := _field(item, 'text'), str))
+    return '\n\n'.join(text for text in texts if text.strip())
+
+
 def coerce_content_text(content: Any) -> str:
     """Flatten content, preserving structured values as JSON and marking known media."""
     rendered = (f'[{part.kind}]' if isinstance(part, MediaContent) else part for part in iter_content_parts(content))
