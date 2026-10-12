@@ -3665,7 +3665,8 @@ _COMPRESSION_INSPECTOR_CSS = """
 .compression-date-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .compression-date-fields > div { min-width:0; display:grid; gap:5px; }
 .compression-source button,.compression-session button { justify-self:start; min-height:38px; padding:7px 12px; border:1px solid var(--teal-600); border-radius:6px; background:var(--teal-600); color:#fff; font:600 13px var(--font-sans); cursor:pointer; }
-.compression-source button:hover,.compression-session button:hover { background:var(--teal-700); border-color:var(--teal-700); }
+.compression-source button:hover,.compression-session button:hover { background:var(--teal-600); border-color:var(--teal-600); filter:brightness(.85); }
+.compression-source button:disabled { cursor:progress; opacity:.7; }
 .compression-limits { margin-top:16px; background:var(--surface-sunken); }
 .compression-notice,.compression-empty { margin:12px 0; color:var(--red-700); font-size:13px; line-height:1.5; }
 .compression-result-count { margin:16px 0 0; color:var(--text-strong); font-size:13px; font-weight:650; }
@@ -3673,7 +3674,7 @@ _COMPRESSION_INSPECTOR_CSS = """
 .compression-session-list { display:grid; gap:0; margin:12px 0 0; padding:0; list-style:none; }
 .compression-session { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; min-width:0; padding:10px 0; border-top:1px solid var(--border-subtle); }
 .compression-session-description { display:grid; gap:3px; min-width:0; }
-.compression-session-description strong { color:var(--teal-700); font-size:11px; }
+.compression-session-description strong { color:var(--teal-600); font-size:11px; }
 .compression-session-description span { overflow-wrap:anywhere; color:var(--text-body); font-size:13px; }
 .compression-session-description time { color:var(--text-muted); font-size:11px; font-variant-numeric:tabular-nums; }
 .compression-session form { margin:0; }
