@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from evaluatorq.common.model_input import serialized_question_chars
+from evaluatorq.common.trace_document import ensure_trace_document
 
 from evaluatorq.insights.transcript import (
     first_command,
@@ -108,6 +109,255 @@ def test_tool_stats_read_a_skill_from_arguments_cut_mid_string() -> None:
 
     assert tool_stats(trace).skills == {'hate': 1}
 
+
+
+def test_full_conversation_view_collapses_tools_by_default_and_ignores_tool_max_chars() -> None:
+    expected = (
+        '0 user: Fix the failing parser test.[harness reminder omitted]\n'
+        '1 assistant: Looking at the parser.\n'
+        '1 tools: Skill: systematic-debugging, Bash: pytest, Edit: src/parser.py, Bash: `git push --force origin main`\n'
+        '6 assistant: Fixed and pushed.'
+    )
+
+    assert full_conversation_view(CODING_TRACE, budget=10_000) == expected
+    assert full_conversation_view(CODING_TRACE, budget=10_000, tool_max_chars=500) == expected
+
+
+def test_full_conversation_view_per_call_lists_each_call_and_cuts_results() -> None:
+    log = 'HEAD' + 'x' * 500 + 'TAIL'
+    trace = _trace(
+        {'role': 'user', 'content': 'Run the tests.'},
+        {
+            'role': 'assistant',
+            'content': 'Running.',
+            'tool_calls': [
+                _call('c1', 'Bash', {'command': 'uv run pytest -q\necho done'}),
+                _call('c2', 'Read', {'file_path': 'src/a.py'}),
+                _call('c3', 'Read', {'file_path': 'src/b.py'}),
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': log},
+        {'role': 'tool', 'tool_call_id': 'c2', 'content': 'line one\nline two'},
+        {'role': 'assistant', 'content': 'Done.'},
+    )
+
+    lines = full_conversation_view(trace, budget=10_000, tools='per_call', tool_max_chars=40).splitlines()
+
+    assert lines[2] == '1 tool input Bash: uv run pytest -q ⏎ echo done'
+    assert lines[3] == '1 tool input Read: {"file_path": "src/a.py"}'
+    assert lines[4] == '1 tool input Read [pending]: {"file_path": "src/b.py"}'
+    assert lines[5].startswith('2 tool result c1: HEAD')
+    assert lines[5].endswith('TAIL')
+    assert '[... 468 chars ...]' in lines[5]
+    assert lines[6:8] == ['3 tool result c2: line one', 'line two']
+    assert lines[8] == '4 assistant: Done.'
+    # 0 (the default) keeps the per-call lines but leaves every result out
+    without_output = full_conversation_view(trace, budget=10_000, tools='per_call')
+    assert 'HEAD' not in without_output
+    assert 'tool result' not in without_output
+    assert '1 tool input Read [pending]: {"file_path": "src/b.py"}' in without_output
+
+
+def test_full_conversation_view_per_call_marks_errors() -> None:
+    view = full_conversation_view(CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=200)
+
+    assert '1 tool input Bash [error]: cd repo && uv run pytest tests/test_parser.py -q' in view
+    assert '3 tool result c2: Error: 1 failed, 3 passed' in view
+    assert '1 tool input Bash: git push --force origin main' in view
+    assert 'injected context' not in view
+
+
+def test_full_conversation_view_caps_each_message_type_and_minus_one_keeps_it_whole() -> None:
+    long_user = 'U' * 100 + 'u' * 20_000 + 'END'
+    long_reply = 'A' * 100 + 'a' * 5_000 + 'Z' * 100
+    trace = _trace(
+        {'role': 'system', 'content': 'S' * 3_000},
+        {'role': 'user', 'content': long_user},
+        {'role': 'assistant', 'content': long_reply, 'tool_calls': [_call('c1', 'Read', {'file_path': 'p' * 900})]},
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'r' * 900},
+    )
+
+    view = full_conversation_view(trace, budget=100_000, tools='per_call', tool_max_chars=100)
+    lines = view.splitlines()
+    assert lines[0] == '0 system: ' + 'S' * 3_000  # system is whole by default
+    assert lines[1].startswith('1 user: UUU') and lines[1].endswith('END')
+    assert len(lines[1]) < 8_100
+    assert lines[2] == '2 assistant: ' + long_reply[:500] + ' [... 4200 chars ...] ' + long_reply[-500:]
+    assert len(lines[3]) == len('2 tool input Read: ') + 300
+    assert '[... 800 chars ...]' in lines[4]
+
+    whole = full_conversation_view(
+        trace,
+        budget=100_000,
+        tools='per_call',
+        user_chars=-1,
+        assistant_edge=-1,
+        tool_input_chars=-1,
+        tool_max_chars=-1,
+    )
+    assert f'1 user: {long_user}' in whole
+    assert f'2 assistant: {long_reply}' in whole
+    assert 'p' * 900 in whole
+    assert '3 tool result c1: ' + 'r' * 900 in whole
+    assert 'chars ...]' not in whole
+
+
+def test_full_conversation_view_flags_repeated_call_ids_by_their_own_result() -> None:
+    trace = _trace(
+        {'role': 'user', 'content': 'Run both.'},
+        {
+            'role': 'assistant',
+            'tool_calls': [_call('dup', 'Bash', {'command': 'first'}), _call('dup', 'Bash', {'command': 'second'})],
+        },
+        {'role': 'tool', 'tool_call_id': 'dup', 'content': 'ok', 'is_error': True},
+    )
+
+    view = full_conversation_view(trace, budget=10_000, tools='per_call')
+
+    assert '1 tool input Bash [error]: first' in view
+    assert '1 tool input Bash [pending]: second' in view
+
+
+def test_full_conversation_view_exclude_removes_types_from_the_default() -> None:
+    view = full_conversation_view(CODING_TRACE, budget=10_000, exclude={'assistant', 'tool_input'})
+
+    assert view == '0 user: Fix the failing parser test.[harness reminder omitted]'
+    per_call = full_conversation_view(
+        CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=-1, exclude={'tool_input', 'assistant'}
+    )
+    assert 'tool input' not in per_call
+    assert '3 tool result c2: Error: 1 failed, 3 passed' in per_call
+
+
+REASONING_TRACE = _trace(
+    {'role': 'user', 'content': 'Why?'},
+    {
+        'role': 'assistant',
+        'content': [{'type': 'thinking', 'thinking': 'PART-THOUGHT'}, {'type': 'text', 'text': 'Because.'}],
+        'reasoning_content': 'FIELD-THOUGHT',
+    },
+    {
+        'role': 'assistant',
+        'content': [
+            {'type': 'reasoning', 'summary': [{'type': 'summary_text', 'text': 'SUMMARY-THOUGHT'}]},
+            {'type': 'text', 'text': 'Done.'},
+        ],
+    },
+)
+
+
+def test_full_conversation_view_omits_reasoning_unless_included() -> None:
+    assert 'THOUGHT' not in full_conversation_view(REASONING_TRACE, budget=10_000)
+
+    view = full_conversation_view(REASONING_TRACE, budget=10_000, include={'user', 'assistant', 'reasoning'})
+
+    assert view.splitlines() == [
+        '0 user: Why?',
+        '1 reasoning: FIELD-THOUGHT',
+        '',
+        'PART-THOUGHT',
+        '1 assistant: Because.',
+        '2 reasoning: SUMMARY-THOUGHT',
+        '2 assistant: Done.',
+    ]
+    capped = full_conversation_view(
+        _trace({'role': 'assistant', 'reasoning_content': 'R' * 100 + 'x' * 5_000 + 'END'}),
+        budget=10_000,
+        include={'reasoning'},
+        reasoning_chars=200,
+    )
+    assert capped.startswith('0 reasoning: RRR')
+    assert capped.endswith('END')
+    assert '[... 4903 chars ...]' in capped
+
+
+def test_full_conversation_view_reads_native_atif_reasoning() -> None:
+    document = ensure_trace_document(_trace({'role': 'user', 'content': 'Why?'}, {'role': 'assistant', 'content': 'Because.'}))
+    steps = list(document.trajectory.steps)
+    steps[1] = steps[1].model_copy(update={'reasoning_content': 'NATIVE-THOUGHT'})
+    document = document.model_copy(update={'trajectory': document.trajectory.model_copy(update={'steps': steps})})
+
+    view = full_conversation_view(document, budget=10_000, include={'assistant', 'reasoning'})
+
+    assert view.splitlines() == ['1 reasoning: NATIVE-THOUGHT', '1 assistant: Because.']
+    assert 'NATIVE-THOUGHT' not in full_conversation_view(document, budget=10_000)
+
+
+def test_full_conversation_view_include_filters_message_types() -> None:
+    view = full_conversation_view(CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=-1, include={'user', 'tool_result'})
+
+    assert view.splitlines() == [
+        '0 user: Fix the failing parser test.[harness reminder omitted]',
+        '2 tool result c1: loaded',
+        '3 tool result c2: Error: 1 failed, 3 passed',
+        '4 tool result c3: ok',
+        '5 tool result c4: forced update',
+    ]
+    assert full_conversation_view(CODING_TRACE, budget=10_000, include={'assistant'}).splitlines() == [
+        '1 assistant: Looking at the parser.',
+        '6 assistant: Fixed and pushed.',
+    ]
+
+
+@pytest.mark.parametrize('padding', [0, 15, 30, 60])
+def test_full_conversation_view_per_call_scrubs_secrets_in_inputs_and_outputs(padding: int) -> None:
+    secret = 'ghp_' + 'aB3dE5gH7j' * 3
+    trace = _trace(
+        {'role': 'user', 'content': 'Deploy it.'},
+        {
+            'role': 'assistant',
+            'tool_calls': [
+                _call('c1', 'Bash', {'command': f'curl -H "Authorization: Bearer {secret}" https://api.example.com'}),
+                _call('c2', 'Lookup', {'token': secret}),
+                _call('c3', 'Bash', {'command': f'git push https://x:{secret}@github.com/o/r --force'}),
+            ],
+        },
+        {'role': 'tool', 'tool_call_id': 'c1', 'content': 'a' * padding + f' {secret} ' + 'z' * 200},
+        {'role': 'tool', 'tool_call_id': 'c2', 'content': 'ok'},
+    )
+
+    per_call = full_conversation_view(trace, budget=10_000, tools='per_call', tool_max_chars=80)
+    collapsed = full_conversation_view(trace, budget=10_000)
+
+    for view in (per_call, collapsed):
+        for size in (8, 12):
+            assert secret[:size] not in view
+            assert secret[-size:] not in view
+    assert '1 tool input Bash: curl -H' in per_call
+    assert '1 tool input Lookup: {"token":' in per_call
+
+
+def test_full_conversation_view_over_budget_keeps_both_ends() -> None:
+    calls = [_call(f'c{index}', 'Bash', {'command': f'step {index}'}) for index in range(60)]
+    trace = _trace(
+        {'role': 'user', 'content': 'Run every step.'},
+        {'role': 'assistant', 'tool_calls': calls},
+        *({'role': 'tool', 'tool_call_id': f'c{index}', 'content': f'output {index}'} for index in range(60)),
+    )
+
+    view = full_conversation_view(trace, budget=1_200, tools='per_call', tool_max_chars=40)
+
+    assert len(view) <= 1_200
+    assert view.startswith('0 user: Run every step.')
+    assert 'chars left out ...]' in view
+    assert view.endswith('61 tool result c59: output 59')
+
+
+def test_full_conversation_view_rejects_bad_options() -> None:
+    with pytest.raises(ValueError, match='tools must be'):
+        full_conversation_view(CODING_TRACE, budget=10_000, tools='verbose')  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match='tool_result cap'):
+        full_conversation_view(CODING_TRACE, budget=10_000, tool_max_chars=-2)
+    with pytest.raises(ValueError, match='user cap'):
+        full_conversation_view(CODING_TRACE, budget=10_000, user_chars=0)
+    with pytest.raises(ValueError, match='unknown message kinds'):
+        full_conversation_view(CODING_TRACE, budget=10_000, include={'tool'})  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match='unknown message kinds'):
+        full_conversation_view(CODING_TRACE, budget=10_000, exclude={'thinking'})  # ty: ignore[invalid-argument-type]
+    with pytest.raises(TypeError, match='not a string'):
+        full_conversation_view(CODING_TRACE, budget=10_000, exclude='user')  # ty: ignore[invalid-argument-type]
+    with pytest.raises(ValueError, match='reasoning cap'):
+        full_conversation_view(CODING_TRACE, budget=10_000, reasoning_chars=0)
 
 
 def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:
@@ -298,7 +548,7 @@ def test_full_conversation_renders_structured_tool_results(result: Any, expected
         {'role': 'tool', 'tool_call_id': 'lookup-1', 'content': result},
     )
 
-    rendered = full_conversation_view(trace)
+    rendered = full_conversation_view(trace, tools='per_call', tool_max_chars=-1)
 
     assert 'tool result lookup-1:' in rendered
     assert expected in rendered

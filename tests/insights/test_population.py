@@ -317,7 +317,8 @@ def test_projection_coverage_uses_the_actual_non_jev_insights_classifier_state()
     state = prepare_classifier_state(trace, model='openai/gpt-6-luna', char_cap=cap)
 
     assert isinstance(state, str)
-    assert 'FULL-TOOL-RESULT' in state
+    assert 'REQUEST-START' in state
+    assert 'FULL-TOOL-RESULT' not in state  # tool results are left out by default
     assert coverage['classifier_state_chars'] == len(state)
     assert coverage['classifier_state_format'] == 'text'
     assert coverage['classifier_question_reserve'] == 'not_available'

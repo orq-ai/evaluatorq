@@ -929,7 +929,7 @@ def test_merge_chunks_last_chunk_decides_unfixed_error() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(('model', 'structured'), [('typesafe/jev-latest', True), ('openai/gpt-6-luna', False)])
-async def test_classifier_uses_jev_state_only_for_jev_and_full_transcript_otherwise(
+async def test_classifier_uses_jev_state_only_for_jev_and_the_conversation_view_otherwise(
     monkeypatch: pytest.MonkeyPatch, model: str, structured: bool
 ) -> None:
     messages = (
@@ -978,5 +978,6 @@ async def test_classifier_uses_jev_state_only_for_jev_and_full_transcript_otherw
         )
     else:
         assert isinstance(state, str)
-        for phrase in ('REQUEST-START', 'middle-input', 'MIDDLE-RESULT', 'FINAL-ANSWER'):
+        for phrase in ('REQUEST-START', '1 tools: search: middle-input', 'FINAL-ANSWER'):
             assert phrase in state
+        assert 'MIDDLE-RESULT' not in state  # tool results are left out by default
