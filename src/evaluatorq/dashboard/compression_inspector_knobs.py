@@ -101,12 +101,13 @@ def _display_group(values: Values, defaults: Values, *, has_source: bool) -> str
         f'data-default="{int(bool(defaults["wrap"]))}" onchange="{_WRAP_SCRIPT}">'
         '<span>Wrap long lines</span></label>'
     )
+    coverage = _check('coverage', 'Describe what is present and absent at the start', values, defaults)
     return (
         '<div class="compression-knob-grid compression-display">'
         '<label class="compression-knob"><span>Original shows</span>'
         f'<select name="original_view" data-default="{defaults["original_view"]}">{options}</select>'
         '<small>Default ATIF trajectory</small></label>'
-        f'{wrap}'
+        f'{wrap}{coverage}'
         '</div>'
     )
 
@@ -180,6 +181,7 @@ def knobs_form_html(knobs: CompressionKnobs, defaults: CompressionKnobs, token: 
         '<p class="compression-count-note">The Original is the canonical ATIF JSON, the raw session file or the readable '
         'text, which uses the Insights full_conversation_view options. The Output uses the classifier Jev limits. '
         'Every original is scrubbed of known secrets and cut to 2,000,000 characters, and a raw session file is read '
-        'up to 5,000,000 bytes; a note says when anything is cut. Changes update the preview as you make them.</p>'
+        'up to 5,000,000 bytes; a note says when anything is cut. The coverage line is added only to the readable '
+        'text and the Jev state, never to the Original. Changes update the preview as you make them.</p>'
         '</div></form>'
     )

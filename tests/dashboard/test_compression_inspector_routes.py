@@ -300,7 +300,9 @@ def test_incomplete_empty_session_search_does_not_claim_no_matches_or_folders(
 def test_preview_explains_when_there_are_no_readable_messages() -> None:
     path = _claude_session('empty-content', prompt=' ', answer=' ')
     document = load_session_document(SessionRef(source='claude-code', path=path))
-    knobs = replace(CompressionKnobs.defaults(effective_settings().trace_input_chars), original_view='readable')
+    knobs = replace(
+        CompressionKnobs.defaults(effective_settings().trace_input_chars), original_view='readable', coverage=False
+    )
     preview = compression_inspector.preview_document(document, knobs=knobs)
 
     assert preview.readable == ''

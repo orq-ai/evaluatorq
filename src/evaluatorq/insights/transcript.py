@@ -55,6 +55,7 @@ MessageKind = Literal['system', 'user', 'assistant', 'reasoning', 'tool_input', 
 MESSAGE_KINDS: frozenset[MessageKind] = frozenset(get_args(MessageKind))
 # Reasoning is shown only on request.
 DEFAULT_MESSAGE_KINDS: frozenset[MessageKind] = MESSAGE_KINDS - {'reasoning'}
+_KIND_ORDER: tuple[MessageKind, ...] = ('system', 'user', 'assistant', 'reasoning', 'tool_input', 'tool_result')
 RISKY_COMMAND_CHARS = 300
 # Shell output kept per call, split between its start and end, where exit codes and test summaries sit.
 SHELL_OUTPUT_CHARS = 300
@@ -210,12 +211,13 @@ def full_conversation_view_with_message_spans(
 
     Every message type is kept whole and each tool call gets its own line, so a span covers its source message.
     """
-    return _render_full_conversation(
+    conversation, spans, count, _ = _render_full_conversation(
         trace,
         include=DEFAULT_MESSAGE_KINDS,
         caps={'system': -1, 'user': -1, 'assistant': -1, 'reasoning': -1, 'tool_input': -1, 'tool_result': -1},
         tools='per_call',
     )
+    return conversation, spans, count
 
 
 def full_conversation_view(
@@ -231,6 +233,7 @@ def full_conversation_view(
     tools: Literal['collapsed', 'per_call'] = 'collapsed',
     tool_input_chars: int = TOOL_INPUT_CHARS,
     tool_max_chars: int = 0,
+    coverage_header: bool = False,
 ) -> str:
     """Render the conversation as text, one line per message part, each prefixed with its message index.
 
@@ -248,6 +251,12 @@ def full_conversation_view(
 
     The whole view is then cut to `budget` characters, keeping its start and end; `None` reads the configured
     trace-input cap.
+
+    `coverage_header` puts one bracketed `[context: ...]` line before message 0 that says which message types the
+    text includes, leaves out or cannot show because the trace has none, how each is cut, how tool calls are shown
+    and how many source messages there are. The line counts against `budget` and is never the part that is cut; it
+    adds `view cut to budget` when the budget cut the messages. It is off by default so Insights and classifier
+    inputs stay unchanged.
     """
     if tools not in ('collapsed', 'per_call'):
         raise ValueError(f"tools must be 'collapsed' or 'per_call', got {tools!r}")
@@ -268,9 +277,97 @@ def full_conversation_view(
         if cap != -1 and cap < floor:
             raise ValueError(f'the {kind} cap must be -1 (whole) or >= {floor}, got {cap}')
     kinds = frozenset(include) - frozenset(exclude)
-    rendered, _, _ = _render_full_conversation(trace, include=kinds, caps=caps, tools=tools)
+    rendered, _, message_count, present = _render_full_conversation(trace, include=kinds, caps=caps, tools=tools)
     cap = budget if budget is not None else effective_trace_input_chars()
-    return cap_text(rendered, cap)[0]
+    if not coverage_header:
+        return cap_text(rendered, cap)[0]
+    header = _coverage_header(
+        kinds=kinds, caps=caps, tools=tools, present=present, message_count=message_count, cut=False
+    )
+    body, omitted = _cap_under_header(rendered, header, cap)
+    if omitted:
+        header = _coverage_header(
+            kinds=kinds, caps=caps, tools=tools, present=present, message_count=message_count, cut=True
+        )
+        body, _ = _cap_under_header(rendered, header, cap)
+    return f'{header}\n{body}' if body else header
+
+
+def _cap_under_header(rendered: str, header: str, cap: int) -> tuple[str, int]:
+    room = cap - len(header) - 1
+    if room < 1:
+        raise ValueError('the view budget is too small for the coverage header')
+    return cap_text(rendered, room)
+
+
+_KIND_LABELS: dict[MessageKind, str] = {
+    'system': 'system',
+    'user': 'user',
+    'assistant': 'assistant',
+    'reasoning': 'reasoning',
+    'tool_input': 'tool input',
+    'tool_result': 'tool result',
+}
+
+
+def _cap_phrase(kind: MessageKind, cap: int) -> str:
+    label = _KIND_LABELS[kind]
+    if cap == -1:
+        return f'{label} whole'
+    if kind == 'assistant':
+        return f'{label} {cap} chars at each end'
+    if kind == 'tool_input':
+        return f'{label} {cap} chars'
+    return f'{label} {cap} chars (start and end kept)'
+
+
+def _coverage_header(
+    *,
+    kinds: frozenset[MessageKind],
+    caps: dict[MessageKind, int],
+    tools: Literal['collapsed', 'per_call'],
+    present: frozenset[MessageKind],
+    message_count: int,
+    cut: bool,
+) -> str:
+    """Describe the rendered view from the settings in effect and from which kinds the trace turned out to hold."""
+    shown = [
+        kind
+        for kind in _KIND_ORDER
+        if kind in kinds and not (kind == 'tool_result' and not _shows_results(kinds, caps, tools))
+    ]
+    included = [_KIND_LABELS[kind] for kind in shown if kind in present]
+    absent = [_KIND_LABELS[kind] for kind in shown if kind not in present]
+    left_out = [_KIND_LABELS[kind] for kind in _KIND_ORDER if kind not in shown]
+    # A collapsed run names tools without their inputs, so only per-call mode has an input cut to report.
+    cuts = [
+        _cap_phrase(kind, caps[kind])
+        for kind in shown
+        if kind in present and not (kind == 'tool_input' and tools == 'collapsed')
+    ]
+    parts = [f'includes {", ".join(included) or "nothing"}']
+    if left_out:
+        parts.append(f'left out: {", ".join(left_out)}')
+    if absent:
+        parts.append(f'none in this trace: {", ".join(absent)}')
+    if cuts:
+        parts.append(f'cuts: {", ".join(cuts)}')
+    if 'tool_input' in shown:
+        parts.append(
+            'tools: one line per call'
+            if tools == 'per_call'
+            else 'tools: calls collapsed to one `tools:` line per run, results left out'
+        )
+    parts.append(f'{message_count} source messages')
+    if cut:
+        parts.append('view cut to budget')
+    return f'[context: {"; ".join(parts)}]'
+
+
+def _shows_results(
+    kinds: frozenset[MessageKind], caps: dict[MessageKind, int], tools: Literal['collapsed', 'per_call']
+) -> bool:
+    return 'tool_result' in kinds and tools == 'per_call' and caps['tool_result'] != 0
 
 
 def _render_full_conversation(
@@ -279,7 +376,8 @@ def _render_full_conversation(
     include: frozenset[MessageKind],
     caps: dict[MessageKind, int],
     tools: Literal['collapsed', 'per_call'],
-) -> tuple[str, tuple[tuple[int, int, int], ...], int]:
+) -> tuple[str, tuple[tuple[int, int, int], ...], int, frozenset[MessageKind]]:
+    """Render the lines, their spans, the source-message count and the message types that produced a line."""
     messages = prompt_messages(trace, include_reasoning='reasoning' in include)
     # Pair repeated call ids in order, as the Jev state does, so each call's flag reads its own result.
     calls, _ = pair_tool_call_results(messages)
@@ -290,6 +388,7 @@ def _render_full_conversation(
         for record in calls
     }
     lines: list[tuple[str, int]] = []
+    present: set[MessageKind] = set()
     pending: list[str] = []
     pending_index = 0
 
@@ -308,10 +407,12 @@ def _render_full_conversation(
                 text = coerce_content_text(content) if contains_media_content(content) else tool_result_to_text(content)
                 result = _clean(text, caps['tool_result'])
                 lines.append((f'{index} tool result {message.get("tool_call_id", "")}: {result}', index))
+                present.add('tool_result')
             continue
         if 'reasoning' in include and (reasoning := reasoning_text(message)):
             flush()
             lines.append((f'{index} reasoning: {_clean(reasoning, caps["reasoning"])}', index))
+            present.add('reasoning')
         kind: MessageKind = role if role in ('user', 'assistant') else 'system'
         content = coerce_content_text(message.get('content'))
         if kind in include and content.strip():
@@ -321,6 +422,7 @@ def _render_full_conversation(
             if kind == 'assistant' and cap != -1:
                 text = _head_tail(text, cap, cap)
             lines.append((f'{index} {role}: {text}', index))
+            present.add(kind)
         if 'tool_input' not in include:
             continue
         for call_index, call in enumerate(message.get('tool_calls') or []):
@@ -330,6 +432,7 @@ def _render_full_conversation(
                 if not pending:
                     pending_index = index
                 pending.append(_call_line(call))
+                present.add('tool_input')
                 continue
             status = statuses[index, call_index]
             flag = '' if status == 'completed' else f' [{status}]'
@@ -337,6 +440,7 @@ def _render_full_conversation(
                 _clean(_raw_arguments(call), -1) if caps['tool_input'] == -1 else _call_input(call, caps['tool_input'])
             )
             lines.append((f'{index} tool input {_call_name(call)}{flag}: {arguments}', index))
+            present.add('tool_input')
     flush()
     conversation = '\n'.join(line for line, _ in lines)
     spans = []
@@ -344,7 +448,7 @@ def _render_full_conversation(
     for line, index in lines:
         spans.append((offset, offset + len(line), index))
         offset += len(line) + 1
-    return conversation, tuple(spans), len(messages)
+    return conversation, tuple(spans), len(messages), frozenset(present)
 
 
 def _clean(text: str, cap: int) -> str:

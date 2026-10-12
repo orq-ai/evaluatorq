@@ -201,7 +201,9 @@ class JevOptions:
 
     `system` also applies to developer messages and `tool_result` to orphan results. Excluding tool calls drops
     their paired results; excluding tool results keeps each call with no results and drops orphan results.
-    Excluded messages count in the state's omission marker. Secret scrubbing is not optional.
+    Excluded messages count in the state's omission marker. Secret scrubbing is not optional. `coverage` puts a
+    leading `context` object in the state that says which message kinds it holds, which it leaves out and how each
+    kind is trimmed; it is off by default so classifier and Insights inputs stay byte-identical.
     """
 
     state_chars: int = JEV_STATE_CHARS
@@ -216,9 +218,40 @@ class JevOptions:
     include_assistant: bool = True
     include_tool_calls: bool = True
     include_tool_results: bool = True
+    coverage: bool = False
 
 
 DEFAULT_JEV_OPTIONS = JevOptions()
+
+
+def _edge_phrase(limit: EdgeLimit) -> str:
+    return f'whole up to {limit.total} chars, longer keeps {limit.edge} at each end'
+
+
+def jev_coverage(options: JevOptions) -> dict[str, Any]:
+    """Describe what a Jev state built with `options` holds and what it leaves out.
+
+    Reasoning is never part of the state: `jev_state` reads only message content, which renderers strip of reasoning
+    parts, and never a message's `reasoning_content`.
+    """
+    switches = (
+        ('system', options.include_system, options.system),
+        ('developer', options.include_developer, options.system),
+        ('user', options.include_user, options.user),
+        ('assistant', options.include_assistant, options.assistant),
+        ('tool_calls', options.include_tool_calls, options.tool_input),
+        ('tool_results', options.include_tool_results, options.tool_result),
+    )
+    includes = [name for name, included, _ in switches if included]
+    # Results ride on their calls; with calls off only orphan results (no call in the trace) remain.
+    if options.include_tool_results and not options.include_tool_calls:
+        includes[includes.index('tool_results')] = 'tool_results (only those without a call)'
+    return {
+        'includes': includes,
+        'left_out': [name for name, included, _ in switches if not included],
+        'reasoning': 'not included',
+        'trimmed': {name: _edge_phrase(limit) for name, included, limit in switches if included},
+    }
 
 
 def _edge(text: str, limit: EdgeLimit) -> str:
@@ -302,6 +335,7 @@ def jev_state(
         bounded.get('messages', []),
         min(global_char_cap, options.state_chars),
         omitted_before=omitted_before,
+        metadata={'context': jev_coverage(options)} if options.coverage else None,
     )
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, get_args
 
@@ -96,11 +96,12 @@ class CompressionKnobs:
     tool_max_chars: int = -1
     original_view: OriginalView = 'atif'
     wrap: bool = False
+    coverage: bool = False
 
     @classmethod
     def defaults(cls, global_char_cap: int) -> CompressionKnobs:
         """Reproduce the original pane (every part whole) beside the classifier's Jev state."""
-        return cls(global_char_cap=global_char_cap, budget=global_char_cap)
+        return cls(global_char_cap=global_char_cap, budget=global_char_cap, coverage=True)
 
     def as_form(self) -> dict[str, int | str | bool]:
         """Flatten to the form fields the inspector posts; ``from_form`` reads them back."""
@@ -111,6 +112,7 @@ class CompressionKnobs:
             'view_tools': self.tools,
             'original_view': self.original_view,
             'wrap': self.wrap,
+            'coverage': self.coverage,
         }
         for attribute, (total_name, edge_name) in JEV_EDGE_FIELDS.items():
             limit: EdgeLimit = getattr(self.jev, attribute)
@@ -155,6 +157,7 @@ class CompressionKnobs:
             tools=_choice(form, 'view_tools', 'Readable view tool display', TOOLS_MODES),
             original_view=_choice(form, 'original_view', 'Original shows', ORIGINAL_VIEWS),
             wrap=_checked(form, 'wrap'),
+            coverage=_checked(form, 'coverage'),
             system_chars=caps['system_chars'],
             user_chars=caps['user_chars'],
             assistant_edge=caps['assistant_edge'],
@@ -233,11 +236,15 @@ def preview_document(
     readable text, as `knobs.original_view` says; every original is scrubbed of known secrets and cut to
     ``ORIGINAL_CHARS``. The readable text uses the Insights ``full_conversation_view`` options and the Jev state the
     classifier's Jev limits, and neither downloads media URLs or changes the document. The transcript character
-    count is that of the uncapped readable transcript. Limits too small for either renderer, and a source that is
+    count is that of the uncapped readable transcript. `knobs.coverage` adds the opt-in coverage description to both
+    compressed formats, a leading `[context: ...]` line in the readable text and a leading `context` object in the
+    Jev state, and never to the original pane. Limits too small for either renderer, and a source that is
     unavailable, raise ``ValueError`` with a fixed message.
     """
     messages = prompt_messages(document)
-    compressed = jev_state(messages, global_char_cap=knobs.global_char_cap, options=knobs.jev)
+    compressed = jev_state(
+        messages, global_char_cap=knobs.global_char_cap, options=replace(knobs.jev, coverage=knobs.coverage)
+    )
     full, _, message_count = full_conversation_view_with_message_spans(document)
     readable = full_conversation_view(
         document,
@@ -250,6 +257,7 @@ def preview_document(
         tools=knobs.tools,
         tool_input_chars=knobs.tool_input_chars,
         tool_max_chars=knobs.tool_max_chars,
+        coverage_header=knobs.coverage,
     )
     original, note = _original(document, knobs.original_view, readable, source_path)
     return CompressionPreview(

@@ -418,3 +418,57 @@ def test_an_unknown_original_view_shows_an_inline_error(client: TestClient) -> N
     assert 'role="alert"' in response.text
     assert 'Original shows' in response.text
     assert 'compression-panels' not in response.text
+
+
+def test_coverage_defaults_on_and_round_trips_through_the_form() -> None:
+    assert DEFAULTS.coverage is True
+    assert CompressionKnobs.from_form(_posted(DEFAULTS)).coverage is True
+    off = replace(DEFAULTS, coverage=False)
+    assert 'coverage' not in _posted(off)
+    assert CompressionKnobs.from_form(_posted(off)).coverage is False
+
+
+def test_coverage_checkbox_is_in_the_form_and_restored_by_reset(client: TestClient) -> None:
+    token = _load(client)
+    page = _preview(client, token, htmx=False).text
+
+    assert 'name="coverage"' in page
+    assert re.search(r'name="coverage"[^>]*checked[^>]*data-default="1"', page)
+
+
+def test_coverage_adds_a_header_to_the_readable_text_and_a_context_to_the_jev_state(client: TestClient) -> None:
+    token = _load(client)
+
+    on = _preview(client, token, original_view='readable')
+    off = _preview(client, token, original_view='readable', coverage=False)
+
+    assert '[context: includes' in _pane(on.text, 'compression-original-title')
+    assert '&quot;context&quot;' in _pane(on.text, 'compression-jev-title') or '"context"' in _pane(
+        on.text, 'compression-jev-title'
+    )
+    assert '[context:' not in off.text
+    assert 'context' not in _pane(off.text, 'compression-jev-title')
+
+
+def test_unchecking_a_message_kind_changes_the_coverage_in_both_panes(client: TestClient) -> None:
+    token = _load(client)
+
+    response = _preview(
+        client,
+        token,
+        original_view='readable',
+        include=DEFAULT_MESSAGE_KINDS - {'assistant'},
+        jev=replace(DEFAULTS.jev, include_assistant=False),
+    )
+
+    original = _pane(response.text, 'compression-original-title')
+    assert 'left out: assistant, reasoning' in original
+    assert 'assistant' in _pane(response.text, 'compression-jev-title').split('left_out')[1][:80]
+
+
+def test_the_atif_original_carries_no_coverage_header(client: TestClient) -> None:
+    token = _load(client)
+
+    response = _preview(client, token)
+
+    assert '[context:' not in _pane(response.text, 'compression-original-title')

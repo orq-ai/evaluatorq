@@ -468,3 +468,77 @@ def test_jev_state_limit_option_lowers_the_ceiling_under_the_global_cap() -> Non
 
     assert serialized_chars(state) <= 3_000
     assert 'omission' in state
+
+
+def test_jev_coverage_is_off_by_default_and_leaves_the_state_identical() -> None:
+    assert jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=False)) == jev_state(
+        _OPTION_SOURCE, global_char_cap=500_000
+    )
+    assert 'context' not in jev_state(_OPTION_SOURCE, global_char_cap=500_000)
+
+
+def test_jev_coverage_puts_the_context_first_and_says_reasoning_is_not_included() -> None:
+    state = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=True))
+
+    assert next(iter(state)) == 'context'
+    assert state['context']['reasoning'] == 'not included'
+    assert state['context']['includes'] == [
+        'system',
+        'developer',
+        'user',
+        'assistant',
+        'tool_calls',
+        'tool_results',
+    ]
+    assert state['context']['left_out'] == []
+    assert state['messages'] == jev_state(_OPTION_SOURCE, global_char_cap=500_000)['messages']
+
+
+def test_jev_state_never_reads_reasoning_even_when_the_source_carries_it() -> None:
+    source = [
+        {'role': 'user', 'content': 'question'},
+        {
+            'role': 'assistant',
+            'content': [{'type': 'thinking', 'thinking': 'SECRET-THOUGHT'}, {'type': 'text', 'text': 'answer'}],
+            'reasoning_content': 'SECRET-THOUGHT',
+        },
+    ]
+
+    state = jev_state(source, global_char_cap=500_000, options=JevOptions(coverage=True))
+
+    assert 'SECRET-THOUGHT' not in str(state['messages'])
+    assert state['context']['reasoning'] == 'not included'
+
+
+def test_jev_coverage_follows_the_include_flags_and_the_trim_limits() -> None:
+    off = JevOptions(
+        coverage=True, include_user=False, include_tool_results=False, user=EdgeLimit(10, 5), assistant=EdgeLimit(90, 30)
+    )
+
+    context = jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=off)['context']
+
+    assert context['left_out'] == ['user', 'tool_results']
+    assert 'user' not in context['includes'] and 'tool_results' not in context['includes']
+    assert 'user' not in context['trimmed']
+    assert '90' in context['trimmed']['assistant'] and '30' in context['trimmed']['assistant']
+    assert context != jev_state(_OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=True))['context']
+
+
+def test_jev_coverage_says_only_call_less_results_remain_when_tool_calls_are_off() -> None:
+    context = jev_state(
+        _OPTION_SOURCE, global_char_cap=500_000, options=JevOptions(coverage=True, include_tool_calls=False)
+    )['context']
+
+    assert 'tool_calls' in context['left_out']
+    assert any(item.startswith('tool_results (only') for item in context['includes'])
+
+
+def test_jev_coverage_counts_inside_the_state_cap() -> None:
+    source = [{'role': 'user', 'content': f'message {n} ' + 'w' * 300} for n in range(40)]
+    cap = 3_000
+
+    state = jev_state(source, global_char_cap=cap, options=JevOptions(coverage=True, state_chars=cap))
+
+    assert serialized_chars(state) <= cap
+    assert next(iter(state)) == 'context'
+    assert state['omission'].endswith('messages left out ...]')

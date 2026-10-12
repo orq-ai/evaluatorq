@@ -161,7 +161,7 @@ def test_preview_document_defaults_show_the_whole_transcript_beside_one_jev_stat
     original, _, source_message_count = full_conversation_view_with_message_spans(document)
     expected_state = jev_state(messages, global_char_cap=4096)
 
-    preview = inspector_data.preview_document(document, knobs=CompressionKnobs.defaults(4096))
+    preview = inspector_data.preview_document(document, knobs=replace(CompressionKnobs.defaults(4096), coverage=False))
 
     assert len(state_calls) == 1
     assert preview.transcript_chars == len(original)
@@ -188,7 +188,8 @@ def test_preview_document_scrubs_secrets_from_both_views() -> None:
         *('context ' * 120 for _ in range(19)),
     ])
 
-    preview = inspector_data.preview_document(document, knobs=replace(CompressionKnobs.defaults(4096), budget=100_000))
+    knobs = replace(CompressionKnobs.defaults(4096), budget=100_000, coverage=False)
+    preview = inspector_data.preview_document(document, knobs=knobs)
 
     assert preview.readable_chars == preview.transcript_chars > preview.global_cap
     assert 'gXeRk29vLq0Pz8Wd' not in preview.readable

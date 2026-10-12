@@ -589,3 +589,109 @@ def test_full_conversation_source_spans_keep_message_indexes() -> None:
     assert [index for _, _, index in spans] == [0, 2]
     assert literal_marker in rendered[spans[0][0] : spans[0][1]]
     assert 'final answer' in rendered[spans[1][0] : spans[1][1]]
+
+
+def _header(text: str) -> str:
+    first = text.splitlines()[0]
+    assert first.startswith('[context: ') and first.endswith(']')
+    return first
+
+
+def test_coverage_header_is_off_by_default_and_changes_nothing() -> None:
+    plain = full_conversation_view(CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=50)
+
+    assert full_conversation_view(CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=50, coverage_header=False) == plain
+    with_header = full_conversation_view(
+        CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=50, coverage_header=True
+    )
+    assert with_header.startswith('[context: ')
+    assert with_header.endswith(plain)
+    assert full_conversation_view(CODING_TRACE, budget=10_000) == full_conversation_view(
+        CODING_TRACE, budget=10_000, coverage_header=False
+    )
+
+
+def test_coverage_header_comes_first_and_lists_left_out_kinds_caps_and_message_count() -> None:
+    view = full_conversation_view(
+        CODING_TRACE,
+        budget=10_000,
+        tools='per_call',
+        tool_max_chars=50,
+        user_chars=200,
+        assistant_edge=30,
+        tool_input_chars=80,
+        exclude=('system',),
+        coverage_header=True,
+    )
+
+    header = _header(view)
+    assert view.splitlines()[1].startswith('0 user:')
+    assert 'includes user, assistant, tool input, tool result' in header
+    assert 'left out: system, reasoning' in header
+    assert 'user 200 chars' in header
+    assert 'assistant 30 chars at each end' in header
+    assert 'tool input 80 chars' in header
+    assert 'tool result 50 chars' in header
+    assert 'tools: one line per call' in header
+    assert '7 source messages' in header
+
+
+def test_coverage_header_reports_whole_for_unlimited_caps() -> None:
+    header = _header(
+        full_conversation_view(
+            CODING_TRACE, budget=10_000, user_chars=-1, assistant_edge=-1, coverage_header=True
+        )
+    )
+
+    assert 'user whole' in header
+    assert 'assistant whole' in header
+
+
+def test_coverage_header_names_excluded_reasoning_and_tool_results() -> None:
+    header = _header(
+        full_conversation_view(
+            CODING_TRACE, budget=10_000, tools='per_call', tool_max_chars=50, exclude=('tool_result',), coverage_header=True
+        )
+    )
+
+    assert 'left out: reasoning, tool result' in header
+    assert 'tool result 50' not in header
+
+
+def test_coverage_header_says_tool_results_are_left_out_when_the_cap_is_zero_or_tools_collapse() -> None:
+    zero = _header(full_conversation_view(CODING_TRACE, budget=10_000, tools='per_call', coverage_header=True))
+    collapsed = _header(full_conversation_view(CODING_TRACE, budget=10_000, tools='collapsed', coverage_header=True))
+
+    assert 'tool result' in zero.split('left out:')[1].split(';')[0]
+    assert 'one line per call' in zero
+    assert 'tool result' in collapsed.split('left out:')[1].split(';')[0]
+    assert 'collapsed to one `tools:` line per run, results left out' in collapsed
+
+
+def test_coverage_header_separates_kinds_the_trace_lacks_from_kinds_left_out() -> None:
+    header = _header(full_conversation_view(CODING_TRACE, budget=10_000, coverage_header=True))
+
+    assert 'none in this trace: system' in header
+    assert 'system' not in header.split('left out:')[1].split(';')[0]
+
+
+def test_coverage_header_counts_against_the_budget_and_is_never_the_part_cut() -> None:
+    trace = _trace(*({'role': 'user', 'content': f'turn {n} ' + 'x' * 400} for n in range(10)))
+    plain = full_conversation_view(trace, budget=600)
+
+    view = full_conversation_view(trace, budget=600, coverage_header=True)
+
+    assert len(plain) <= 600
+    assert len(view) <= 600
+    header = _header(view)
+    assert 'view cut to budget' in header
+    assert 'chars left out' in view.removeprefix(header)
+
+
+def test_coverage_header_does_not_claim_a_cut_when_the_view_fits() -> None:
+    assert 'view cut to budget' not in _header(full_conversation_view(CODING_TRACE, budget=10_000, coverage_header=True))
+
+
+def test_coverage_header_refuses_a_budget_it_cannot_fit() -> None:
+    with pytest.raises(ValueError, match='coverage header'):
+        full_conversation_view(CODING_TRACE, budget=40, coverage_header=True)
