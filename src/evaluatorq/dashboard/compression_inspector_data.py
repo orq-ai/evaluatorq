@@ -2,31 +2,189 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from loguru import logger
 
-from evaluatorq.common.model_input import jev_state, omission_count, serialized_chars
+from evaluatorq.common.model_input import (
+    DEFAULT_JEV_OPTIONS,
+    EdgeLimit,
+    JevOptions,
+    jev_state,
+    omission_count,
+    serialized_chars,
+)
 from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
 from evaluatorq.dashboard.auth import build_orq_client
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
-from evaluatorq.insights.transcript import full_conversation_view_with_message_spans
+from evaluatorq.insights.transcript import (
+    DEFAULT_MESSAGE_KINDS,
+    MESSAGE_KINDS,
+    MessageKind,
+    full_conversation_view,
+    full_conversation_view_with_message_spans,
+)
 from evaluatorq.trace_finder import FacetSelection, NumericFilters
 from evaluatorq.trace_finder.orq_source import OrqTraceSource, require_complete_targeted_load
 
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
 _SAFE_ORQ_ERROR = 'The selected Orq trace could not be loaded.'
+
+MAX_KNOB_CHARS = 5_000_000
+ToolsMode = Literal['collapsed', 'per_call']
+TOOLS_MODES: tuple[ToolsMode, ...] = get_args(ToolsMode)
+# Posted (total, edge) field names of each Jev edge limit.
+JEV_EDGE_FIELDS: dict[str, tuple[str, str]] = {
+    'assistant': ('jev_assistant_total', 'jev_assistant_edge'),
+    'user': ('jev_user_total', 'jev_user_edge'),
+    'system': ('jev_system_total', 'jev_system_edge'),
+    'tool_input': ('jev_tool_input_total', 'jev_tool_input_edge'),
+    'tool_result': ('jev_tool_result_total', 'jev_tool_result_edge'),
+}
+JEV_FLAGS = ('system', 'developer', 'user', 'assistant', 'tool_calls', 'tool_results')
+# Readable-view caps: `-1` keeps the part whole, and tool results may also be 0 (left out).
+VIEW_CAP_FIELDS: dict[str, str] = {
+    'view_system_chars': 'system_chars',
+    'view_user_chars': 'user_chars',
+    'view_assistant_edge': 'assistant_edge',
+    'view_reasoning_chars': 'reasoning_chars',
+    'view_tool_input_chars': 'tool_input_chars',
+    'view_tool_max_chars': 'tool_max_chars',
+}
+
+
+class KnobError(ValueError):
+    """An invalid knob value; the text names the field and its allowed range and never echoes the input."""
+
+
+@dataclass(frozen=True)
+class CompressionKnobs:
+    """Every compression setting the inspector exposes: the Jev state limits and the readable-view options."""
+
+    global_char_cap: int
+    jev: JevOptions = DEFAULT_JEV_OPTIONS
+    budget: int = 0
+    include: frozenset[MessageKind] = DEFAULT_MESSAGE_KINDS
+    system_chars: int = -1
+    user_chars: int = -1
+    assistant_edge: int = -1
+    reasoning_chars: int = -1
+    tools: ToolsMode = 'per_call'
+    tool_input_chars: int = -1
+    tool_max_chars: int = -1
+
+    @classmethod
+    def defaults(cls, global_char_cap: int) -> CompressionKnobs:
+        """Reproduce the original pane (every part whole) beside the classifier's Jev state."""
+        return cls(global_char_cap=global_char_cap, budget=global_char_cap)
+
+    def as_form(self) -> dict[str, int | str | bool]:
+        """Flatten to the form fields the inspector posts; ``from_form`` reads them back."""
+        values: dict[str, int | str | bool] = {
+            'global_char_cap': self.global_char_cap,
+            'jev_state_chars': self.jev.state_chars,
+            'view_budget': self.budget,
+            'view_tools': self.tools,
+        }
+        for attribute, (total_name, edge_name) in JEV_EDGE_FIELDS.items():
+            limit: EdgeLimit = getattr(self.jev, attribute)
+            values[total_name], values[edge_name] = limit.total, limit.edge
+        values.update({f'jev_include_{flag}': getattr(self.jev, f'include_{flag}') for flag in JEV_FLAGS})
+        values.update({f'view_include_{kind}': kind in self.include for kind in sorted(MESSAGE_KINDS)})
+        values.update({name: getattr(self, attribute) for name, attribute in VIEW_CAP_FIELDS.items()})
+        return values
+
+    @classmethod
+    def from_form(cls, form: Mapping[str, Any]) -> CompressionKnobs:
+        """Parse and validate the posted fields; every number must be present and in range."""
+        jev = JevOptions(
+            state_chars=_whole(form, 'jev_state_chars', 'Jev state limit'),
+            assistant=_edge_limit(form, 'assistant'),
+            user=_edge_limit(form, 'user'),
+            system=_edge_limit(form, 'system'),
+            tool_input=_edge_limit(form, 'tool_input'),
+            tool_result=_edge_limit(form, 'tool_result'),
+            include_system=_checked(form, 'jev_include_system'),
+            include_developer=_checked(form, 'jev_include_developer'),
+            include_user=_checked(form, 'jev_include_user'),
+            include_assistant=_checked(form, 'jev_include_assistant'),
+            include_tool_calls=_checked(form, 'jev_include_tool_calls'),
+            include_tool_results=_checked(form, 'jev_include_tool_results'),
+        )
+        caps = {
+            attribute: _whole(
+                form,
+                name,
+                f'Readable view {attribute.replace("_", " ")}',
+                minimum=0 if attribute == 'tool_max_chars' else 1,
+                keep_whole=True,
+            )
+            for name, attribute in VIEW_CAP_FIELDS.items()
+        }
+        return cls(
+            global_char_cap=_whole(form, 'global_char_cap', 'Global character cap'),
+            jev=jev,
+            budget=_whole(form, 'view_budget', 'Readable view budget'),
+            include=frozenset(kind for kind in sorted(MESSAGE_KINDS) if _checked(form, f'view_include_{kind}')),
+            tools=_tools_mode(form),
+            system_chars=caps['system_chars'],
+            user_chars=caps['user_chars'],
+            assistant_edge=caps['assistant_edge'],
+            reasoning_chars=caps['reasoning_chars'],
+            tool_input_chars=caps['tool_input_chars'],
+            tool_max_chars=caps['tool_max_chars'],
+        )
+
+
+def _whole(form: Mapping[str, Any], name: str, label: str, *, minimum: int = 1, keep_whole: bool = False) -> int:
+    """Read one whole number in range; `-1` (keep whole) is allowed only when `keep_whole`."""
+    text = str(form.get(name) or '').strip()
+    if re.fullmatch(r'-?\d{1,9}', text):
+        value = int(text)
+        if minimum <= value <= MAX_KNOB_CHARS or (keep_whole and value == -1):
+            return value
+    allowed = f'{minimum:,} to {MAX_KNOB_CHARS:,}'
+    if keep_whole:
+        allowed = f'-1 (whole) or {allowed}'
+    raise KnobError(f'{label}: enter a whole number, {allowed}.')
+
+
+def _checked(form: Mapping[str, Any], name: str) -> bool:
+    return form.get(name) is not None
+
+
+def _tools_mode(form: Mapping[str, Any]) -> ToolsMode:
+    text = str(form.get('view_tools') or '')
+    for mode in TOOLS_MODES:
+        if mode == text:
+            return mode
+    raise KnobError('Readable view tool display: choose one of the listed modes.')
+
+
+def _edge_limit(form: Mapping[str, Any], attribute: str) -> EdgeLimit:
+    total_name, edge_name = JEV_EDGE_FIELDS[attribute]
+    label = f'Jev {attribute.replace("_", " ")} limit'
+    total = _whole(form, total_name, f'{label} total')
+    edge = _whole(form, edge_name, f'{label} edge')
+    if edge * 2 > total:
+        raise KnobError(f'{label}: the edge must be at most half the total.')
+    return EdgeLimit(total, edge)
 
 
 @dataclass(frozen=True)
 class CompressionPreview:
-    """The uncapped readable conversation and its exact structured Jev state preview."""
+    """The readable view and the structured Jev state of one document under a set of knobs."""
 
-    original: str
+    readable: str
     compressed: dict[str, Any]
     original_chars: int
+    readable_chars: int
     compressed_chars: int
     message_count: int
     omitted_messages: int
@@ -40,25 +198,38 @@ class InspectorSourceError(ValueError):
         super().__init__(_SAFE_ORQ_ERROR)
 
 
-def preview_document(document: TraceDocument, *, global_char_cap: int) -> CompressionPreview:
+def preview_document(document: TraceDocument, *, knobs: CompressionKnobs) -> CompressionPreview:
     """Render a local-only preview without mutating its canonical document or calling a model.
 
-    The original is the uncapped readable transcript, not raw source bytes. Its shared renderer redacts known
-    secrets and omits harness reminders. Jev state is independently scrubbed and may represent media with markers;
-    neither view downloads media URLs or changes the document.
+    The readable view uses the Insights ``full_conversation_view`` options and the Jev state the classifier's Jev
+    limits; both scrub known secrets and omit harness reminders, and neither downloads media URLs or changes the
+    document. The source character count is that of the uncapped readable transcript. Limits too small for either
+    renderer raise ``ValueError`` with a fixed message.
     """
     messages = prompt_messages(document)
-    compressed = jev_state(messages, global_char_cap=global_char_cap)
-    original, _, message_count = full_conversation_view_with_message_spans(document)
-    omitted_messages = omission_count(compressed.get('omission'))
+    compressed = jev_state(messages, global_char_cap=knobs.global_char_cap, options=knobs.jev)
+    full, _, message_count = full_conversation_view_with_message_spans(document)
+    readable = full_conversation_view(
+        document,
+        knobs.budget,
+        include=knobs.include,
+        system_chars=knobs.system_chars,
+        user_chars=knobs.user_chars,
+        assistant_edge=knobs.assistant_edge,
+        reasoning_chars=knobs.reasoning_chars,
+        tools=knobs.tools,
+        tool_input_chars=knobs.tool_input_chars,
+        tool_max_chars=knobs.tool_max_chars,
+    )
     return CompressionPreview(
-        original=original,
+        readable=readable,
         compressed=compressed,
-        original_chars=len(original),
+        original_chars=len(full),
+        readable_chars=len(readable),
         compressed_chars=serialized_chars(compressed),
         message_count=message_count,
-        omitted_messages=omitted_messages,
-        global_cap=global_char_cap,
+        omitted_messages=omission_count(compressed.get('omission')),
+        global_cap=knobs.global_char_cap,
     )
 
 

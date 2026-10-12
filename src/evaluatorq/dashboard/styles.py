@@ -3691,8 +3691,28 @@ _COMPRESSION_INSPECTOR_CSS = """
 .compression-panel h3 { margin:0 0 7px; color:var(--text-strong); font-size:13px; font-weight:650; }
 .compression-panel pre { box-sizing:border-box; width:100%; max-width:100%; max-height:70vh; min-height:170px; overflow:auto; overscroll-behavior:contain; margin:0; padding:12px; border:1px solid var(--border-subtle); border-radius:6px; background:var(--surface-sunken); color:var(--text-body); font:12px/1.5 var(--font-mono); white-space:pre; }
 .compression-count-note { margin:6px 0 0; color:var(--text-muted); font-size:11px; line-height:1.45; }
-@media (max-width:760px) { .compression-sources,.compression-panels { grid-template-columns:minmax(0,1fr); } }
-@media (max-width:480px) { .compression-source,.compression-limits,.compression-preview { padding:12px; }.compression-date-fields { grid-template-columns:minmax(0,1fr); }.compression-session { grid-template-columns:minmax(0,1fr); align-items:start; }.compression-session button { width:100%; }.compression-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.compression-source input,.compression-source button,.compression-session button { min-height:44px; }.compression-source input { font-size:16px; } }
+.compression-knobs { display:grid; gap:12px; margin-top:16px; }
+.compression-knobs-groups { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
+.compression-knob-group { display:grid; gap:10px; min-width:0; margin:0; padding:12px 14px 14px; border:1px solid var(--border-subtle); border-radius:var(--radius-md); background:var(--surface-sunken); }
+.compression-knob-group legend { padding:0 6px; color:var(--text-strong); font-size:13px; font-weight:650; }
+.compression-knob-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; min-width:0; }
+.compression-knob { display:grid; align-content:start; gap:4px; min-width:0; }
+.compression-knob > span { color:var(--text-body); font-size:12px; font-weight:600; line-height:1.3; }
+.compression-knob input,.compression-knob select { box-sizing:border-box; width:100%; min-width:0; min-height:34px; padding:5px 8px; border:1px solid var(--border-default); border-radius:6px; background:var(--surface-card); color:var(--text-strong); font:13px var(--font-mono); font-variant-numeric:tabular-nums; }
+.compression-knob small { color:var(--text-muted); font-size:11px; }
+.compression-knob-title { margin:2px 0 0 !important; color:var(--text-body) !important; font-size:12px !important; font-weight:600; }
+.compression-checks { display:flex; flex-wrap:wrap; gap:6px 14px; }
+.compression-check { display:inline-flex; align-items:center; gap:6px; color:var(--text-body); font-size:12px; cursor:pointer; }
+.compression-check input { width:15px; height:15px; margin:0; accent-color:var(--teal-600); }
+.compression-knob input:focus-visible,.compression-knob select:focus-visible,.compression-check input:focus-visible,.compression-reset:focus-visible { outline:2px solid var(--teal-600); outline-offset:2px; }
+.compression-knobs-footer { display:flex; flex-wrap:wrap; align-items:center; gap:8px 16px; }
+.compression-knobs-footer .compression-count-note { margin:0; flex:1 1 280px; }
+.compression-reset { min-height:34px; padding:5px 12px; border:1px solid var(--border-strong); border-radius:6px; background:var(--surface-card); color:var(--text-strong); font:600 13px var(--font-sans); cursor:pointer; }
+.compression-reset:hover { background:var(--app-gray-50); }
+#compression-output.htmx-request { opacity:.6; }
+#compression-output > .compression-notice { margin:0; padding:10px 12px; border:1px solid var(--red-100); border-radius:6px; background:var(--red-50); }
+@media (max-width:760px) { .compression-sources,.compression-panels,.compression-knobs-groups { grid-template-columns:minmax(0,1fr); } }
+@media (max-width:480px) { .compression-source,.compression-limits,.compression-preview { padding:12px; }.compression-date-fields { grid-template-columns:minmax(0,1fr); }.compression-session { grid-template-columns:minmax(0,1fr); align-items:start; }.compression-session button { width:100%; }.compression-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }.compression-source input,.compression-source button,.compression-session button,.compression-knob input,.compression-knob select,.compression-reset { min-height:44px; }.compression-source input,.compression-knob input,.compression-knob select { font-size:16px; }.compression-knob-grid { grid-template-columns:minmax(0,1fr); } }
 """
 
 DASHBOARD_CSS = (

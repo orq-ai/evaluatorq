@@ -17,7 +17,7 @@ from evaluatorq.common.trace_document import TraceDocument
 from evaluatorq.dashboard import compression_inspector
 from evaluatorq.dashboard.compression_inspector import TRACE_ID_MAX_LENGTH, SESSION_REF_MAX_LENGTH
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.dashboard.compression_inspector_data import CompressionPreview
+from evaluatorq.dashboard.compression_inspector_data import CompressionKnobs
 from evaluatorq.local_sessions import SessionRef, SessionSearchResult, load_session_document
 from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, save_settings
 from tests.local_sessions.conftest import write_jsonl
@@ -83,6 +83,7 @@ def test_every_route_returns_not_found_when_persisted_switch_is_disabled(client:
         client.post('/compression-inspector/source/orq'),
         client.post('/compression-inspector/sessions/search'),
         client.post('/compression-inspector/sessions/load'),
+        client.post('/compression-inspector/preview'),
     )
 
     assert all(response.status_code == 404 for response in responses)
@@ -143,7 +144,7 @@ def test_orq_load_uses_recent_seven_day_window_and_renders_actual_preview(
     assert calls == [(None, None)]
     assert '&lt;script&gt;alert(1)&lt;/script&gt;' in response.text
     assert '<script>alert(1)</script>' not in response.text
-    assert 'Original readable trace' in response.text
+    assert 'Readable view' in response.text
     assert 'Jev state' in response.text
     assert 'trace-42' not in response.text
 
@@ -295,22 +296,25 @@ def test_incomplete_empty_session_search_does_not_claim_no_matches_or_folders(
     assert 'no local sessions matched' not in response.text.lower()
 
 
-def test_preview_explains_when_original_has_no_readable_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preview_explains_when_there_are_no_readable_messages() -> None:
     path = _claude_session('empty-content', prompt=' ', answer=' ')
     document = load_session_document(SessionRef(source='claude-code', path=path))
-    from evaluatorq.dashboard.compression_inspector_data import preview_document
-    preview = preview_document(document, global_char_cap=500_000)
-    assert preview.original == ''
-    rendered = compression_inspector._preview_html(preview)
+    preview = compression_inspector.preview_document(
+        document, knobs=CompressionKnobs.defaults(effective_settings().trace_input_chars)
+    )
+
+    assert preview.readable == ''
+    rendered = compression_inspector._output_html(preview=preview)
     assert 'No readable input or output is available for this source.' in rendered
-    assert '<h3 id="compression-original-title">Original readable trace</h3><p' in rendered
-    assert '<h3 id="compression-original-title">Original readable trace</h3><pre></pre>' not in rendered
+    assert '<h3 id="compression-original-title">Readable view</h3><pre></pre>' not in rendered
+
+
 def test_rendered_preview_uses_exact_backend_counts_and_structured_state(client: TestClient) -> None:
     path = _claude_session('count-check', prompt='a prompt', answer='an answer')
     trace_document = load_session_document(SessionRef(source='claude-code', path=path))
     preview = compression_inspector.preview_document(
         trace_document,
-        global_char_cap=effective_settings().trace_input_chars,
+        knobs=CompressionKnobs.defaults(effective_settings().trace_input_chars),
     )
     ref = f'claude-code:{path}'
     response = client.post(
@@ -321,6 +325,7 @@ def test_rendered_preview_uses_exact_backend_counts_and_structured_state(client:
 
     assert response.headers['cache-control'] == 'no-store'
     assert f'{preview.original_chars:,}' in response.text
+    assert f'{preview.readable_chars:,}' in response.text
     assert f'{preview.compressed_chars:,}' in response.text
     assert str(preview.omitted_messages) in response.text
     assert state in response.text

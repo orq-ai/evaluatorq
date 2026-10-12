@@ -187,21 +187,73 @@ def pair_tool_call_results(
     return calls, orphan_results
 
 
-def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[str, Any]:
+@dataclass(frozen=True)
+class EdgeLimit:
+    """Keep a text whole up to `total` characters, otherwise its first and last `edge` characters."""
+
+    total: int
+    edge: int
+
+
+@dataclass(frozen=True)
+class JevOptions:
+    """Per-part trimming limits and message-kind switches for ``jev_state``; defaults are the classifier's.
+
+    `system` also applies to developer messages and `tool_result` to orphan results. Excluding tool calls drops
+    their paired results; excluding tool results keeps each call with no results and drops orphan results.
+    Excluded messages count in the state's omission marker. Secret scrubbing is not optional.
+    """
+
+    state_chars: int = JEV_STATE_CHARS
+    assistant: EdgeLimit = EdgeLimit(1000, 500)
+    user: EdgeLimit = EdgeLimit(2000, 1000)
+    system: EdgeLimit = EdgeLimit(8000, 4000)
+    tool_input: EdgeLimit = EdgeLimit(200, 100)
+    tool_result: EdgeLimit = EdgeLimit(200, 100)
+    include_system: bool = True
+    include_developer: bool = True
+    include_user: bool = True
+    include_assistant: bool = True
+    include_tool_calls: bool = True
+    include_tool_results: bool = True
+
+
+DEFAULT_JEV_OPTIONS = JevOptions()
+
+
+def _edge(text: str, limit: EdgeLimit) -> str:
+    return edge_text(text, limit.total, limit.edge)
+
+
+def jev_state(
+    messages: list[dict[str, Any]], *, global_char_cap: int, options: JevOptions = DEFAULT_JEV_OPTIONS
+) -> dict[str, Any]:
     """Build scrubbed, indexed message entries with each tool call grouped with its results."""
     call_records, orphan_records = pair_tool_call_results(messages)
     entries: list[dict[str, Any]] = []
     calls: list[dict[str, Any]] = []
-    orphan_results = [
-        {'index': index, 'role': 'tool', 'type': 'orphan_result', **_result(message, global_char_cap)}
-        for index, message in orphan_records
-    ]
+    included_roles = {
+        role
+        for role, included in (
+            ('system', options.include_system),
+            ('developer', options.include_developer),
+            ('user', options.include_user),
+            ('assistant', options.include_assistant),
+        )
+        if included
+    }
+    orphan_results = (
+        [
+            {'index': index, 'role': 'tool', 'type': 'orphan_result', **_result(message, global_char_cap)}
+            for index, message in orphan_records
+        ]
+        if options.include_tool_results
+        else []
+    )
 
     for index, message in enumerate(messages):
         role = message.get('role', 'unknown')
-        if role == 'tool':
-            continue
-        if role in {'system', 'developer', 'user', 'assistant'}:
+        if role in included_roles:
             body, media = _content(message.get('content'))
             body = cap_text(body, global_char_cap)[0]
             if body or media:
@@ -213,7 +265,7 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
                     **({'media': media} if media else {}),
                 })
 
-    for record in call_records:
+    for record in call_records if options.include_tool_calls else []:
         call = record['call']
         function = call.get('function') if isinstance(call.get('function'), dict) else {}
         call_id = call.get('id')
@@ -225,7 +277,9 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
             'id': call_id,
             'name': function.get('name', call.get('name')),
             'input': cap_text(clean_model_text(function.get('arguments', call.get('arguments'))), global_char_cap)[0],
-            'results': [_result_entry(message, index, global_char_cap) for index, message in record['results']],
+            'results': [_result_entry(message, index, global_char_cap) for index, message in record['results']]
+            if options.include_tool_results
+            else [],
         })
 
     entries.extend(calls)
@@ -234,17 +288,19 @@ def jev_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[s
     bounded = _cap_messages(entries, global_char_cap)
     for entry in bounded.get('messages', []):
         if entry['type'] == 'message':
-            total, side = {'assistant': (1000, 500), 'user': (2000, 1000)}.get(entry['role'], (8000, 4000))
-            entry['text'] = edge_text(entry['text'], total, side)
+            limit = {'assistant': options.assistant, 'user': options.user}.get(entry['role'], options.system)
+            entry['text'] = _edge(entry['text'], limit)
         elif entry['type'] == 'tool_call':
-            entry['input'] = edge_text(entry['input'], 200, 100)
-            entry['results'] = [{**result, 'text': edge_text(result['text'], 200, 100)} for result in entry['results']]
+            entry['input'] = _edge(entry['input'], options.tool_input)
+            entry['results'] = [
+                {**result, 'text': _edge(result['text'], options.tool_result)} for result in entry['results']
+            ]
         elif entry['type'] == 'orphan_result':
-            entry['text'] = edge_text(entry['text'], 200, 100)
+            entry['text'] = _edge(entry['text'], options.tool_result)
     omitted_before = len(messages) - len(_represented_indexes(bounded.get('messages', [])))
     return _cap_messages(
         bounded.get('messages', []),
-        min(global_char_cap, JEV_STATE_CHARS),
+        min(global_char_cap, options.state_chars),
         omitted_before=omitted_before,
     )
 

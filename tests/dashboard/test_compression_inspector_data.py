@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,10 +13,11 @@ from typing import Any
 
 import pytest
 
-from evaluatorq.common.model_input import jev_state, serialized_chars
+from evaluatorq.common.model_input import cap_text, jev_state, serialized_chars
 from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
 from evaluatorq.dashboard import compression_inspector_data as inspector_data
 from evaluatorq.dashboard.auth import DashboardAuth
+from evaluatorq.dashboard.compression_inspector_data import CompressionKnobs
 from evaluatorq.insights.transcript import full_conversation_view_with_message_spans
 from evaluatorq.local_sessions import SessionRef, load_session_document
 from evaluatorq.trace_finder.orq_source import PAGE_SIZE
@@ -134,21 +136,23 @@ def test_preview_renders_media_markers_without_fetching_urls() -> None:
     )
     document = ensure_trace_document(record)
 
-    preview = inspector_data.preview_document(document, global_char_cap=10_000)
+    preview = inspector_data.preview_document(document, knobs=CompressionKnobs.defaults(10_000))
 
-    assert '[image]' in preview.original
+    assert '[image]' in preview.readable
     assert '[image, size unknown]' in str(preview.compressed)
-    assert image_url not in preview.original
+    assert image_url not in preview.readable
     assert image_url not in str(preview.compressed)
 
 
-def test_preview_document_uses_uncapped_transcript_and_one_jev_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preview_document_defaults_show_the_whole_transcript_beside_one_jev_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     state_calls: list[tuple[list[dict[str, Any]], int]] = []
     build_state = inspector_data.jev_state
 
-    def counted_state(messages: list[dict[str, Any]], *, global_char_cap: int) -> dict[str, Any]:
-        state_calls.append((messages, global_char_cap))
-        return build_state(messages, global_char_cap=global_char_cap)
+    def counted_state(messages: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        state_calls.append((messages, kwargs['global_char_cap']))
+        return build_state(messages, **kwargs)
 
     monkeypatch.setattr(inspector_data, 'jev_state', counted_state)
     document = _document_with_messages(['detail ' * 100 for _ in range(20)])
@@ -157,11 +161,12 @@ def test_preview_document_uses_uncapped_transcript_and_one_jev_state(monkeypatch
     original, _, source_message_count = full_conversation_view_with_message_spans(document)
     expected_state = jev_state(messages, global_char_cap=4096)
 
-    preview = inspector_data.preview_document(document, global_char_cap=4096)
+    preview = inspector_data.preview_document(document, knobs=CompressionKnobs.defaults(4096))
 
     assert len(state_calls) == 1
-    assert preview.original == original
     assert preview.original_chars == len(original)
+    assert preview.readable == cap_text(original, 4096)[0]
+    assert preview.readable_chars == 4096
     assert preview.compressed == expected_state
     assert preview.compressed_chars == serialized_chars(expected_state)
     assert preview.message_count == source_message_count == len(messages)
@@ -176,30 +181,29 @@ def test_preview_document_uses_uncapped_transcript_and_one_jev_state(monkeypatch
     assert document.model_dump(mode='python') == original_document
 
 
-def test_preview_document_keeps_original_text_uncapped_and_redacted() -> None:
+def test_preview_document_scrubs_secrets_from_both_views() -> None:
     secret = 'API_TOKEN=gXeRk29vLq0Pz8Wd'
     document = _document_with_messages([
         secret + ' ' + ('context ' * 120),
         *('context ' * 120 for _ in range(19)),
     ])
 
-    preview = inspector_data.preview_document(document, global_char_cap=4096)
+    preview = inspector_data.preview_document(document, knobs=replace(CompressionKnobs.defaults(4096), budget=100_000))
 
-    assert len(preview.original) == preview.original_chars
-    assert preview.original_chars > preview.global_cap
-    assert 'gXeRk29vLq0Pz8Wd' not in preview.original
+    assert preview.readable_chars == preview.original_chars > preview.global_cap
+    assert 'gXeRk29vLq0Pz8Wd' not in preview.readable
     assert 'gXeRk29vLq0Pz8Wd' not in str(preview.compressed)
-    assert 'context' in preview.original
+    assert 'context' in preview.readable
     assert preview.compressed_chars <= preview.global_cap
 
 
 def test_compression_preview_uses_real_codex_reader(codex_home: Path) -> None:
     document = _codex_document(codex_home, prompt='Codex source prompt')
 
-    preview = inspector_data.preview_document(document, global_char_cap=10_000)
+    preview = inspector_data.preview_document(document, knobs=CompressionKnobs.defaults(10_000))
 
     assert document.metadata.capture_metadata['source'] == 'local:codex'
-    assert 'Codex source prompt' in preview.original
+    assert 'Codex source prompt' in preview.readable
     assert preview.message_count == 2
     assert preview.omitted_messages == 0
 
@@ -207,10 +211,10 @@ def test_compression_preview_uses_real_codex_reader(codex_home: Path) -> None:
 def test_compression_preview_uses_real_claude_reader(claude_projects: Path) -> None:
     document = _claude_document(claude_projects, prompt='Claude source prompt')
 
-    preview = inspector_data.preview_document(document, global_char_cap=10_000)
+    preview = inspector_data.preview_document(document, knobs=CompressionKnobs.defaults(10_000))
 
     assert document.metadata.capture_metadata['source'] == 'local:claude-code'
-    assert 'Claude source prompt' in preview.original
+    assert 'Claude source prompt' in preview.readable
     assert preview.message_count == 2
     assert preview.omitted_messages == 0
 
