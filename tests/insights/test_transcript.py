@@ -372,6 +372,23 @@ def test_full_conversation_view_scrubs_secrets_in_inputs_and_outputs(padding: in
     assert '#1 tool input Lookup (call 1.2): {"token":' in per_call
 
 
+def test_collapsed_tools_line_scrubs_program_and_skill_names() -> None:
+    secret = 'ghp_' + 'aB3dE5gH7j' * 3
+    trace = _trace(
+        {'role': 'user', 'content': 'Go.'},
+        {
+            'role': 'assistant',
+            'tool_calls': [_call('c1', 'Bash', {'command': f'{secret} --help'}), _call('c2', 'Skill', {'skill': secret})],
+        },
+    )
+
+    view = full_conversation_view(trace, budget=10_000)
+
+    assert view.startswith('#0 user: Go.\n#1 tools: Bash: ')
+    assert secret[:8] not in view
+    assert secret[-8:] not in view
+
+
 def test_full_conversation_view_over_budget_drops_whole_messages_from_the_middle() -> None:
     calls = [_call(f'c{index}', 'Bash', {'command': f'step {index}'}) for index in range(60)]
     trace = _trace(

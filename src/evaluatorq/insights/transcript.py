@@ -738,7 +738,7 @@ def _call_input(call: dict[str, Any], limit: int = TOOL_INPUT_CHARS) -> str:
     """A call's input on one line, scrubbed: the shell command, or the raw arguments, cut to `limit`."""
     name, arguments = _call_name(call), _call_arguments(call)
     if name in SHELL_TOOLS:
-        return scrub_known_secrets(_shell_command(arguments))[:limit].replace('\n', ' ⏎ ')
+        return _shell_command(arguments)[:limit].replace('\n', ' ⏎ ')
     return scrub_known_secrets(_raw_arguments(call))[:limit]
 
 
@@ -782,7 +782,8 @@ def _call_line(call: dict[str, Any], limit: int) -> str:
 
 
 def _skill_names(call: dict[str, Any], arguments: dict[str, Any]) -> list[str]:
-    return _SKILL_ARG.findall(_raw_arguments(call)) or ([arguments['skill']] if 'skill' in arguments else [])
+    names = _SKILL_ARG.findall(_raw_arguments(call)) or ([arguments['skill']] if 'skill' in arguments else [])
+    return [scrub_known_secrets(str(name)) for name in names]
 
 
 def _tool_calls(trace: TraceRecord | TraceDocument) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
@@ -826,12 +827,13 @@ def _call_arguments(call: dict[str, Any]) -> dict[str, Any]:
 
 
 def _shell_command(arguments: dict[str, Any]) -> str:
+    """The shell line a call runs, scrubbed of credentials so no view derived from it can carry one."""
     for key in ('command', 'cmd', 'script'):
         value = arguments.get(key)
         if isinstance(value, str):
-            return value
+            return scrub_known_secrets(value)
         if isinstance(value, list):
-            return ' '.join(str(part) for part in value)
+            return scrub_known_secrets(' '.join(str(part) for part in value))
     return ''
 
 
