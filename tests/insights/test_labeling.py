@@ -1,4 +1,4 @@
-"""Unit tests for `evaluatorq.insights.labeling` — the per-trace `/classify` label pass."""
+"""Unit tests for `evaluatorq.insights.labeling` — the per-trace `/decisions` label pass."""
 
 from __future__ import annotations
 
@@ -258,6 +258,39 @@ async def test_missing_label_answer_fails_only_that_label(monkeypatch: pytest.Mo
     assert outcome.answers['sentiment'].value is None
 
 
+
+@pytest.mark.asyncio
+async def test_refused_label_answer_fails_only_that_label_and_says_it_was_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_run_classify(
+        *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
+    ) -> ClassifyOutcome:
+        return ClassifyOutcome(
+            response=ClassifyResponse(
+                answers={
+                    MATCH_KEY: ClassifyAnswer(type='choice', choice='billing'),
+                    'sentiment': ClassifyAnswer(type='refusal'),
+                }
+            )
+        )
+
+    monkeypatch.setattr('evaluatorq.insights.labeling.run_classify', fake_run_classify)
+
+    outcomes = await label_traces(
+        [make_trace('t1')],
+        labels=[SENTIMENT],
+        compiled=(INTENT_MATCH,),
+        client=_client(),
+        model='typesafe/jev-latest',
+    )
+
+    answer = outcomes[0].answers['sentiment']
+    assert answer.value is None
+    assert answer.error is not None
+    assert 'refused' in answer.error
+    assert outcomes[0].matched is True
+
 @pytest.mark.asyncio
 async def test_outcome_failure_fails_every_answer_and_clears_match(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_run_classify(
@@ -361,14 +394,14 @@ async def test_parallelism_must_be_positive(parallelism: int) -> None:
 async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    original_messages = labeling_module.prompt_messages
+    original_messages = labeling_module.to_chat_messages
 
     def sometimes_fail(trace):
         if trace.trace_id == 'bad':
             raise ValueError('malformed trace')
         return original_messages(trace)
 
-    monkeypatch.setattr(labeling_module, 'prompt_messages', sometimes_fail)
+    monkeypatch.setattr(labeling_module, 'to_chat_messages', sometimes_fail)
 
     async def fake_run_classify(
         *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
@@ -459,7 +492,7 @@ async def test_unreadable_answer_logs_a_warning_naming_trace_and_label(monkeypat
 
 
 def _coding_fake(detect: ClassifyOutcome, calls: list[ClassifyRequest]) -> Any:
-    """A `/classify` fake answering the coding check with `detect` and every other question with a fixed answer."""
+    """A `/decisions` fake answering the coding check with `detect` and every other question with a fixed answer."""
 
     async def fake_run_classify(
         *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any
@@ -978,6 +1011,5 @@ async def test_classifier_uses_jev_state_only_for_jev_and_the_conversation_view_
         )
     else:
         assert isinstance(state, str)
-        for phrase in ('REQUEST-START', '1 tools: search: middle-input', 'FINAL-ANSWER'):
+        for phrase in ('REQUEST-START', '#1 tool input search (call 1.1): ', 'middle-input', 'MIDDLE-RESULT', 'FINAL-ANSWER'):
             assert phrase in state
-        assert 'MIDDLE-RESULT' not in state  # tool results are left out by default

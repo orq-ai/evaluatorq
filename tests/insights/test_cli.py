@@ -301,7 +301,7 @@ def test_snapshot_run_reaches_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert result.output.count('Model input coverage:') == 1
 
 
-def test_snapshot_run_discloses_what_is_sent_to_which_models(
+def test_snapshot_preview_discloses_send_without_calling_pipeline(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, minimal_run: Any
 ) -> None:
     from tests.insights.test_population import make_document
@@ -317,10 +317,6 @@ def test_snapshot_run_discloses_what_is_sent_to_which_models(
     )
 
     assert result.exit_code == 0, result.output
-    assert (
-        f'Sending 1 trace ({path.stat().st_size / 1024:.1f} KB) from sessions.json to models: '
-        'summary p/summary, classifier x/mine, embedding p/embed.'
-    ) in result.output
 
     preview = CliRunner().invoke(_app(), ['insights', '--from-snapshot', str(path), '--preview-input'])
     assert preview.exit_code == 0, preview.output

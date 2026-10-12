@@ -20,13 +20,13 @@ from evaluatorq.common.model_input import (
 )
 from evaluatorq.common.orq_client import close_orq_client
 from evaluatorq.common.redact import scrub_known_secrets
-from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, to_chat_messages
 from evaluatorq.dashboard.auth import build_orq_client
 from evaluatorq.dashboard.trace_finder.routes import selected_dashboard_auth
 from evaluatorq.insights.readable_style import ReadableStyle
 from evaluatorq.insights.transcript import (
-    DEFAULT_MESSAGE_KINDS,
     MESSAGE_KINDS,
+    WHOLE,
     MessageKind,
     full_conversation_view,
     full_conversation_view_with_message_spans,
@@ -98,7 +98,7 @@ class CompressionKnobs:
     global_char_cap: int
     jev: JevOptions = DEFAULT_JEV_OPTIONS
     budget: int = 0
-    include: frozenset[MessageKind] = DEFAULT_MESSAGE_KINDS
+    include: frozenset[MessageKind] = WHOLE.include
     system_chars: int = -1
     user_chars: int = -1
     assistant_edge: int = -1
@@ -276,7 +276,7 @@ def preview_document(
     Jev state, and never to the original pane. Limits too small for either renderer, and a source that is
     unavailable, raise ``ValueError`` with a fixed message.
     """
-    messages = prompt_messages(document)
+    messages = to_chat_messages(document)
     compressed = jev_state(
         messages, global_char_cap=knobs.global_char_cap, options=replace(knobs.jev, coverage=knobs.coverage)
     )
@@ -285,6 +285,7 @@ def preview_document(
     def render_readable(*, coverage: bool) -> str:
         return full_conversation_view(
             document,
+            options=WHOLE,
             budget=knobs.budget,
             include=knobs.include,
             system_chars=knobs.system_chars,

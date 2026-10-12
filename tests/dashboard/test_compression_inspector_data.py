@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 from evaluatorq.common.model_input import cap_text, jev_state, serialized_chars
-from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, prompt_messages
+from evaluatorq.common.trace_document import TraceDocument, ensure_trace_document, to_chat_messages
 from evaluatorq.dashboard import compression_inspector_data as inspector_data
 from evaluatorq.dashboard.auth import DashboardAuth
 from evaluatorq.dashboard.compression_inspector_data import CompressionKnobs
@@ -144,7 +144,7 @@ def test_preview_renders_media_markers_without_fetching_urls() -> None:
     assert image_url not in str(preview.compressed)
 
 
-def test_preview_document_defaults_show_the_whole_transcript_beside_one_jev_state(
+def test_preview_document_uses_whole_transcript_budget_beside_one_jev_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state_calls: list[tuple[list[dict[str, Any]], int]] = []
@@ -157,7 +157,7 @@ def test_preview_document_defaults_show_the_whole_transcript_beside_one_jev_stat
     monkeypatch.setattr(inspector_data, 'jev_state', counted_state)
     document = _document_with_messages(['detail ' * 100 for _ in range(20)])
     original_document = document.model_dump(mode='python')
-    messages = prompt_messages(document)
+    messages = to_chat_messages(document)
     original, _, source_message_count = full_conversation_view_with_message_spans(document)
     expected_state = jev_state(messages, global_char_cap=4096)
 
@@ -166,7 +166,10 @@ def test_preview_document_defaults_show_the_whole_transcript_beside_one_jev_stat
     assert len(state_calls) == 1
     assert preview.transcript_chars == len(original)
     assert preview.readable == cap_text(original, 4096)[0]
-    assert preview.readable_chars == 4096
+    assert preview.readable_chars <= 4096
+    assert preview.readable.startswith('#0 user:')
+    assert re.search(r'(?m)^#19 assistant:', preview.readable)
+    assert re.search(r'\[\.\.\. \d+ messages \(\d+-\d+\) left out \.\.\.\]', preview.readable)
     assert preview.compressed == expected_state
     assert preview.compressed_chars == serialized_chars(expected_state)
     assert preview.message_count == source_message_count == len(messages)

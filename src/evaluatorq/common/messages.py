@@ -139,16 +139,15 @@ def reasoning_text(message: Mapping[str, Any]) -> str:
 
     Content renderers skip reasoning parts; this is the one place that reads them.
     """
-    texts = [
-        value for key in ('reasoning_content', 'reasoning', 'thinking') if isinstance(value := message.get(key), str)
-    ]
+    # Providers mirror one reasoning text under several names, so each source contributes its first string field.
+    keys = ('reasoning_content', 'reasoning', 'thinking')
+    texts = [next((value for key in keys if isinstance(value := message.get(key), str)), '')]
     content = message.get('content')
     for part in content if isinstance(content, (list, tuple)) else ():
         if _field(part, 'type') not in _REASONING_PART_TYPES:
             continue
-        texts.extend(
-            value for key in ('thinking', 'text', 'reasoning', 'content') if isinstance(value := _field(part, key), str)
-        )
+        part_keys = ('thinking', 'text', 'reasoning', 'content')
+        texts.append(next((value for key in part_keys if isinstance(value := _field(part, key), str)), ''))
         summary = _field(part, 'summary')
         if isinstance(summary, list):
             texts.extend(text for item in summary if isinstance(text := _field(item, 'text'), str))

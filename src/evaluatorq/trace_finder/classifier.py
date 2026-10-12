@@ -100,7 +100,7 @@ def build_classifier_evaluator(
                     outcome.error_message,
                 )
         results = [_outcome_result(outcomes[key], model=model) for key in questions]
-        # One /classify reply answers every dimension and rides on each outcome; count it once.
+        # One /decisions reply answers every dimension and rides on each outcome; count it once.
         usages = {id(outcome.token_usage): outcome.token_usage for outcome in outcomes.values() if outcome.token_usage}
         token_usage: TokenUsage | None = None
         for usage in usages.values():

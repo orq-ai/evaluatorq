@@ -1,4 +1,4 @@
-"""A classify model is judged on the Orq router's /classify endpoint."""
+"""A classify model is judged on the Orq router's /decisions endpoint."""
 
 from __future__ import annotations
 
@@ -142,7 +142,7 @@ async def test_noul_above_threshold_is_a_true_verdict():
     assert outcome.payload.abstain is False
     assert outcome.payload.explanation == 'noul=0.92 (threshold 0.5)'
     path, kwargs = client.post.await_args.args, client.post.await_args.kwargs
-    assert path == ('/classify',)
+    assert path == ('/decisions',)
     assert kwargs['body']['model'] == JEV
     assert kwargs['body']['state'] == {'transcript': 'hello'}
     assert kwargs['body']['questions']['verdict'] == {
@@ -575,6 +575,27 @@ async def test_a_reply_without_a_verdict_answer_is_a_parse_error():
 
 
 @pytest.mark.asyncio
+async def test_a_refusal_answer_is_an_abstention_not_a_parse_error():
+    """A native OpenAI model may answer `refusal`; that abstains, like a chat or Responses refusal."""
+    reply = {
+        'answers': {'verdict': {'type': 'refusal'}},
+        'telemetry': {'trace_id': 't', 'span_id': 's'},
+        'usage': _usage(0.1) | {'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}},
+        'model': JEV,
+    }
+    client = _client(reply)
+
+    outcome = await _judge(client, _noul_question())
+
+    assert outcome.error_kind is None
+    assert outcome.payload is not None
+    assert outcome.payload.abstain is True
+    assert outcome.payload.value is None
+    assert outcome.endpoint == 'classify'
+    assert outcome.token_usage is not None
+
+
+@pytest.mark.asyncio
 async def test_an_answer_of_the_wrong_type_for_the_question_is_a_parse_error():
     """The question's kind is the authority: a choice answer cannot settle a noul question."""
     client = _client(_reply({'type': 'choice', 'choice': 'neutral'}))
@@ -837,6 +858,35 @@ async def test_run_classify_judges_answers_several_questions_in_one_classify_cal
 
 
 @pytest.mark.asyncio
+async def test_run_classify_judges_abstains_on_a_refused_question_and_keeps_the_others() -> None:
+    """One refused question does not fail the reply: it abstains, carries the refusal as data, and the rest still judge."""
+    client = _client({
+        'answers': {'tone': {'type': 'refusal'}, 'risk': {'type': 'noul', 'noul': 0.9}},
+        'usage': _usage(),
+        'model': JEV,
+    })
+    questions = {
+        'tone': ClassifyQuestion(
+            kind='choice', instructions='Classify the tone.', criteria={'neutral': 'plain'}, state='ignored'
+        ),
+        'risk': ClassifyQuestion(kind='noul', instructions='Is it risky?', state='ignored'),
+    }
+
+    outcomes = await run_classify_judges(
+        client=client, model=JEV, cfg=LLMCallConfig(model=JEV), state={'reply': 'hello'}, questions=questions
+    )
+
+    tone = outcomes['tone']
+    assert tone.error_kind is None
+    assert tone.payload is not None
+    assert tone.payload.abstain is True
+    assert tone.payload.value is None
+    assert tone.error_message == tone.payload.explanation
+    assert outcomes['risk'].payload is not None
+    assert outcomes['risk'].payload.value is True
+
+
+@pytest.mark.asyncio
 async def test_run_classify_judges_empty_questions_returns_immediately() -> None:
     client = _client()
 
@@ -850,7 +900,7 @@ async def test_run_classify_judges_empty_questions_returns_immediately() -> None
 async def test_run_classify_judges_falls_back_to_one_run_judge_call_per_question_for_a_non_classify_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A model that cannot serve /classify gets one `run_judge` call per question, run concurrently."""
+    """A model that cannot serve /decisions gets one `run_judge` call per question, run concurrently."""
     calls: list[dict[str, Any]] = []
 
     async def fake_run_judge(**kwargs: Any) -> JudgeOutcome:

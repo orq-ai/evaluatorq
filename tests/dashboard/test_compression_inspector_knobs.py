@@ -15,7 +15,7 @@ from evaluatorq.common.model_input import EdgeLimit, JevOptions
 from evaluatorq.dashboard import compression_inspector, compression_inspector_data as inspector_data
 from evaluatorq.dashboard.compression_inspector_data import CompressionKnobs, KnobError
 from evaluatorq.dashboard.app import build_app
-from evaluatorq.insights.transcript import DEFAULT_MESSAGE_KINDS
+from evaluatorq.insights.transcript import WHOLE
 from evaluatorq.insights.readable_style import ReadableStyle
 from evaluatorq.trace_finder.settings import DashboardSettings, effective_settings, save_settings
 from evaluatorq.local_sessions import SessionRef, load_session_document
@@ -31,7 +31,7 @@ def _posted(knobs: CompressionKnobs) -> dict[str, str]:
 
 def test_default_knobs_reproduce_the_whole_readable_view_beside_the_classifier_jev_state() -> None:
     assert DEFAULTS.budget == DEFAULTS.global_char_cap == 500_000
-    assert DEFAULTS.include == DEFAULT_MESSAGE_KINDS
+    assert DEFAULTS.include == WHOLE.include
     assert DEFAULTS.tools == 'per_call'
     assert {DEFAULTS.system_chars, DEFAULTS.user_chars, DEFAULTS.assistant_edge} == {-1}
     assert {DEFAULTS.reasoning_chars, DEFAULTS.tool_input_chars, DEFAULTS.tool_max_chars} == {-1}
@@ -192,7 +192,7 @@ def _pane(text: str, title_id: str) -> str:
 def test_excluding_a_message_kind_removes_it_from_the_readable_view_only(client: TestClient) -> None:
     token = _load(client)
 
-    response = _preview(client, token, original_view='readable', include=DEFAULT_MESSAGE_KINDS - {'assistant'})
+    response = _preview(client, token, original_view='readable', include=WHOLE.include - {'assistant'})
 
     assert response.status_code == 200
     assert 'ANSWER-TEXT' not in _pane(response.text, 'compression-original-title')
@@ -459,7 +459,7 @@ def test_unchecking_a_message_kind_changes_the_coverage_in_both_panes(client: Te
         client,
         token,
         original_view='readable',
-        include=DEFAULT_MESSAGE_KINDS - {'assistant'},
+        include=WHOLE.include - {'assistant'},
         jev=replace(DEFAULTS.jev, include_assistant=False),
     )
 

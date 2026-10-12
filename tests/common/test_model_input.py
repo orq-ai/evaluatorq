@@ -17,6 +17,7 @@ from evaluatorq.common.model_input import (
     fit_jev_state,
     is_jev_model,
     jev_state,
+    message_lines,
     serialized_chars,
     serialized_question_chars,
     source_text_chars,
@@ -56,6 +57,29 @@ def test_capped_text_source_ranges_survive_deepcopy_and_recapping() -> None:
     assert source_text_chars(recapped) == len(source)
     assert source_text_ranges(recapped)[0][0] == 0
     assert source_text_ranges(recapped)[-1][1] == len(source)
+
+
+def test_message_lines_cut_between_entries_and_survive_deepcopy_and_recapping() -> None:
+    entries = [f'#{index} user: ' + str(index) * 40 for index in range(10)]
+    source = '\n'.join(entries)
+    spans = []
+    offset = 0
+    for index, entry in enumerate(entries):
+        spans.append((offset, offset + len(entry), index))
+        offset += len(entry) + 1
+    text = message_lines(source, tuple(spans), parts_cut=False)
+
+    capped, _ = cap_text(copy.deepcopy(text), 300)
+    recapped, _ = cap_text(capped, 250)
+
+    for bounded in (capped, recapped):
+        lines = bounded.splitlines()
+        assert len(bounded) <= 300
+        assert lines[0] == entries[0]
+        assert lines[-1] == entries[-1]
+        assert re.fullmatch(r'\[\.\.\. \d+ messages \(\d+-\d+\) left out \.\.\.\]', lines[1 if len(lines) == 3 else 2])
+        assert all(line in entries or 'left out' in line for line in lines)
+    assert source_text_chars(recapped) == len(source)
 
 
 def test_question_wire_payloads_count_exact_fields_and_are_idempotent() -> None:

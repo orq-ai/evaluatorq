@@ -91,6 +91,8 @@ helpfulness = llm_jury(
 
 See [Classify judges](classify-judges.md) for the task-focused guide to question shapes, state selection, routing, warnings and failure modes.
 
+A jury seat answers one question per call. If you want several typed labels about the same state in a single call, and no panel around them, call the endpoint directly — see [The classify endpoint](classify-endpoint.md).
+
 A Jev call costs about **$0.042 per million input tokens**, with free output, and answers in **under a second** — a three-question probe took 0.7 s. Use it for a cheap third vote on yes/no, fixed-label, or ordered-scale verdicts. Its explanation is synthesised from numbers, so use a prompted judge when you need reasoning.
 
 Seat it by naming it in `judges` alongside anything else, and give the panel `criteria`:

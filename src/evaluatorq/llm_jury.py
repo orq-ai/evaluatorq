@@ -442,10 +442,10 @@ async def _run_single_judge(
 
     ``classify`` is a candidate question built whenever the panel fields can express
     one. The fetched catalogue is the runtime authority: `run_judge` reads the question
-    only for a model that serves the router's ``/classify`` endpoint and ignores it for
+    only for a model that serves the router's ``/decisions`` endpoint and ignores it for
     every prompted judge.
 
-    A judge that will be served by ``/classify`` gets a config carrying only the two
+    A judge that will be served by ``/decisions`` gets a config carrying only the two
     fields that leg reads. Passing the prompted judges' sampling settings would mark
     them as explicitly set on a config nothing reads them from, and `run_judge`'s
     `warn_unread_config_fields` guard would then warn about settings the caller never

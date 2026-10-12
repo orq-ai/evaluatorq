@@ -40,12 +40,54 @@ class _CappedText(str):  # noqa: FURB189
         return type(self), (str(self), self.source_text, self.source_prefix_chars, self.source_suffix_chars)
 
 
+class _MessageLines(_CappedText):
+    """Rendered transcript entries that `cap_text` cuts between whole messages instead of mid-line."""
+
+    spans: tuple[tuple[int, int, int], ...]
+    parts_cut: bool
+
+    def __new__(
+        cls,
+        value: str,
+        source_text: str,
+        prefix_chars: int,
+        suffix_chars: int,
+        spans: tuple[tuple[int, int, int], ...],
+        parts_cut: bool,  # noqa: FBT001 -- `__reduce_ex__` rebuilds it positionally
+    ) -> Self:
+        instance = super().__new__(cls, value, source_text, prefix_chars, suffix_chars)
+        instance.spans = spans
+        instance.parts_cut = parts_cut
+        return instance
+
+    def __reduce_ex__(self, _protocol: SupportsIndex) -> tuple[Any, tuple[Any, ...]]:
+        return type(self), (
+            str(self),
+            self.source_text,
+            self.source_prefix_chars,
+            self.source_suffix_chars,
+            self.spans,
+            self.parts_cut,
+        )
+
+
+def message_lines(text: str, spans: tuple[tuple[int, int, int], ...], *, parts_cut: bool) -> str:
+    """Mark rendered transcript text so every later `cap_text` drops whole entries and names the messages it dropped.
+
+    `spans` holds one `(start, end, message index)` per entry, in order. `parts_cut` records that the renderer
+    already shortened a message, so `has_truncated_source_text` reports it even when the whole text fits.
+    """
+    return _MessageLines(text, text, len(text), 0, spans, parts_cut)
+
+
 def cap_text(text: str, limit: int) -> tuple[str, int]:
     """Keep both ends within a character limit and report the exact omitted count."""
     if limit < 1:
         raise ValueError('model input character cap must be positive')
     if len(text) <= limit:
         return text, 0
+    if isinstance(text, _MessageLines) and (by_message := _cap_message_lines(text, limit)) is not None:
+        return by_message
     if limit < len('[... 0 chars left out ...]'):
         raise ValueError('model input character cap is too small for an omission marker')
     source = text.source_text if isinstance(text, _CappedText) else text
@@ -64,6 +106,52 @@ def cap_text(text: str, limit: int) -> tuple[str, int]:
     if first + last + len(marker) > limit:
         raise ValueError('model input character cap is too small for an exact omission marker')
     return _CappedText(f'{source[:first]}{marker}{source[-last:] if last else ""}', source, first, last), omitted
+
+
+def _cap_message_lines(text: _MessageLines, limit: int) -> tuple[str, int] | None:
+    """Keep whole entries from both ends and name the dropped messages; `None` when even the markers do not fit.
+
+    When an end entry alone is longer than its half, that entry is cut inside instead, so both ends stay.
+    """
+    source, spans = text.source_text, text.spans
+    if not spans:
+        return None
+    last = max(index for _, _, index in spans)
+    char_marker = f'[... {len(source)} chars of message {last} left out ...]'
+    budget = limit - 2 * len(char_marker) - len(f'[... {len(spans)} messages ({last}-{last}) left out ...]') - 3
+    if budget < 2:
+        return None
+    tail = len(spans)
+    while tail > 0 and len(source) - spans[tail - 1][0] <= budget // 2:
+        tail -= 1
+    cut_end = spans[tail][0] if tail < len(spans) else len(source) - budget // 2
+    head = 0
+    while head < len(spans) and spans[head][1] <= budget - (len(source) - cut_end):
+        head += 1
+    cut_start = spans[head - 1][1] if head else budget - (len(source) - cut_end)
+
+    def owner(offset: int) -> tuple[int, int, int] | None:
+        return next((span for span in spans if span[0] < offset < span[1]), None)
+
+    head_entry, tail_entry = owner(cut_start), owner(cut_end)
+    middle: list[str] = []
+    if head_entry is not None and head_entry is tail_entry:
+        middle.append(f'[... {cut_end - cut_start} chars left out ...]')
+    else:
+        if head_entry is not None:
+            middle.append(f'[... {head_entry[1] - cut_start} chars of message {head_entry[2]} left out ...]\n')
+        if dropped := sorted({index for start, end, index in spans if start >= cut_start and end <= cut_end}):
+            which = (
+                f'message {dropped[0]}'
+                if len(dropped) == 1
+                else f'{len(dropped)} messages ({dropped[0]}-{dropped[-1]})'
+            )
+            middle.append(f'[... {which} left out ...]\n')
+        if tail_entry is not None:
+            middle.append(f'[... {cut_end - tail_entry[0]} chars of message {tail_entry[2]} left out ...]')
+    value = f'{source[:cut_start]}{"" if head_entry else chr(10)}{"".join(middle)}{source[cut_end:]}'
+    tail_chars = len(source) - cut_end
+    return _MessageLines(value, source, cut_start, tail_chars, spans, text.parts_cut), cut_end - cut_start
 
 
 def source_text_chars(text: str) -> int:
@@ -86,6 +174,8 @@ def source_text_ranges(text: str) -> tuple[tuple[int, int], ...]:
 
 def has_truncated_source_text(value: Any) -> bool:
     """Whether capped-text provenance shows source characters were omitted."""
+    if isinstance(value, _MessageLines) and value.parts_cut:
+        return True
     if isinstance(value, _CappedText):
         return len(value.source_text) > len(value)
     if isinstance(value, Mapping):
