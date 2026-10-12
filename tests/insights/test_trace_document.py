@@ -16,7 +16,7 @@ from evaluatorq.common.trace_document import (
     TrajectoryCounts,
     check_trace_document,
     ensure_trace_document,
-    prompt_messages,
+    to_chat_messages,
     trace_document_with_signals,
     trajectory_counts,
 )
@@ -76,7 +76,7 @@ def test_trace_document_reconstructs_exact_existing_projection() -> None:
 
     document = ensure_trace_document(trace)
 
-    assert prompt_messages(document) == list(trace.messages)
+    assert to_chat_messages(document) == list(trace.messages)
     assert document.trajectory.steps[2].observation is not None
     assert len(document.trajectory.steps[2].observation.results) == 1
 
@@ -163,7 +163,7 @@ def test_multimessage_response_metadata_is_distributed_without_double_counting()
     )
 
     first, second = document.trajectory.steps
-    assert prompt_messages(document) == source_messages
+    assert to_chat_messages(document) == source_messages
     assert first.metrics is not None
     assert (first.metrics.prompt_tokens, first.metrics.completion_tokens) == (40, 12)
     assert second.metrics is None
@@ -189,14 +189,14 @@ def test_prompt_renderer_reads_native_atif_message_content() -> None:
         }
     )
 
-    assert prompt_messages(document) == [{'role': 'user', 'content': 'before'}]
-    assert prompt_messages(changed) == [{'role': 'user', 'content': 'after'}]
+    assert to_chat_messages(document) == [{'role': 'user', 'content': 'before'}]
+    assert to_chat_messages(changed) == [{'role': 'user', 'content': 'after'}]
 
 
 def test_orphan_tool_result_is_stored_once_as_observation() -> None:
     document = ensure_trace_document(_trace({'role': 'tool', 'tool_call_id': 'missing', 'content': 'orphan'}))
 
-    assert prompt_messages(document) == [{'role': 'tool', 'content': 'orphan', 'tool_call_id': 'missing'}]
+    assert to_chat_messages(document) == [{'role': 'tool', 'content': 'orphan', 'tool_call_id': 'missing'}]
     assert len(document.trajectory.steps) == 1
     assert document.trajectory.steps[0].observation is not None
     report = compute_signals(document.trajectory, only=['user_message_count', 'assistant_message_count', 'llm_call_count'])
@@ -217,7 +217,7 @@ def test_orphan_result_owner_uses_source_order() -> None:
         {'role': 'tool', 'tool_call_id': 'after-call', 'content': 'result'},
     ))
 
-    assert prompt_messages(document) == [
+    assert to_chat_messages(document) == [
         {'role': 'user', 'content': 'before'},
         {'role': 'tool', 'content': 'orphan', 'tool_call_id': 'missing'},
         {'role': 'assistant', 'content': 'after', 'tool_calls': [
@@ -259,7 +259,7 @@ def test_prompt_renderer_falls_back_for_invalid_source_order(bad_order: Any) -> 
         ),
     )
 
-    assert prompt_messages(document) == [
+    assert to_chat_messages(document) == [
         {'role': 'user', 'content': 'first'},
         {'role': 'tool', 'content': 'orphan'},
         {'role': 'assistant', 'content': 'second'},
@@ -324,7 +324,7 @@ def test_empty_projection_does_not_create_activity() -> None:
         ),
     )
 
-    assert prompt_messages(document) == []
+    assert to_chat_messages(document) == []
     report = compute_signals(document.trajectory, only=['user_message_count', 'assistant_message_count', 'llm_call_count'])
     assert {name: result.value for name, result in report.results.items()} == {
         'user_message_count': 0,
@@ -349,7 +349,7 @@ def test_native_observation_retains_legacy_error_status_for_signals() -> None:
     report = compute_signals(document.trajectory, only=['tool_error_count'])
 
     assert report.results['tool_error_count'].value == 1
-    assert prompt_messages(document)[1]['trace_finder_metadata'] == {'tool_result': {'status': 'failed'}}
+    assert to_chat_messages(document)[1]['trace_finder_metadata'] == {'tool_result': {'status': 'failed'}}
 
 
 def test_text_from_mixed_multimodal_content_uses_native_atif_part() -> None:
@@ -365,7 +365,7 @@ def test_text_from_mixed_multimodal_content_uses_native_atif_part() -> None:
     assert isinstance(step.message, list)
     assert [part.text for part in step.message if part.type == 'text'] == ['before', 'after']
     assert step.message[1].type == 'image'
-    assert prompt_messages(document)[0]['content'][0]['text'] == 'before'
+    assert to_chat_messages(document)[0]['content'][0]['text'] == 'before'
 
 
 @pytest.mark.parametrize(
@@ -384,7 +384,7 @@ def test_image_parts_keep_native_content_and_exact_source_shape(image_part: dict
     assert isinstance(message, list)
     part = message[0]
     assert part.type == 'image'
-    assert prompt_messages(document)[0]['content'] == [image_part]
+    assert to_chat_messages(document)[0]['content'] == [image_part]
 
 
 def test_image_data_uri_infers_jpeg_without_changing_prompt_shape() -> None:
@@ -397,7 +397,7 @@ def test_image_data_uri_infers_jpeg_without_changing_prompt_shape() -> None:
     assert part.type == 'image'
     assert part.source is not None
     assert part.source.media_type == 'image/jpeg'
-    assert prompt_messages(document)[0]['content'] == [image_part]
+    assert to_chat_messages(document)[0]['content'] == [image_part]
 
 
 @pytest.mark.parametrize('url', ['https://example.test/image?token=secret', 'https://[invalid'])
@@ -408,7 +408,7 @@ def test_unknown_or_malformed_image_url_stays_raw(url: str) -> None:
     message = document.trajectory.steps[0].message
     assert isinstance(message, list)
     assert message[0].type == 'text'
-    assert prompt_messages(document)[0]['content'] == [image_part]
+    assert to_chat_messages(document)[0]['content'] == [image_part]
 
 
 def test_input_audio_is_stored_as_atif_audio_and_roundtrips_exactly() -> None:
@@ -422,7 +422,7 @@ def test_input_audio_is_stored_as_atif_audio_and_roundtrips_exactly() -> None:
     assert part.source is not None
     assert part.source.media_type == 'audio/wav'
     assert part.source.path == 'data:audio/wav;base64,c291bmQ='
-    assert prompt_messages(document)[0]['content'] == [audio_part]
+    assert to_chat_messages(document)[0]['content'] == [audio_part]
     serialized_trajectory = document.model_dump(mode='json')['trajectory']
     restored = AtifTrajectory.from_json(serialized_trajectory)
     assert restored.schema_version == 'ATIF-v1.8'
@@ -470,7 +470,7 @@ def test_audio_source_layouts_are_native_and_losslessly_rendered(audio_part: dic
     assert isinstance(message, list)
     part = message[0]
     assert part.type == 'audio'
-    assert prompt_messages(document)[0]['content'] == [audio_part]
+    assert to_chat_messages(document)[0]['content'] == [audio_part]
 
 
 @pytest.mark.parametrize('arguments', ['[]', '"scalar"', 'not json'])
@@ -487,7 +487,7 @@ def test_non_object_argument_text_roundtrips_and_keeps_signal_provenance(argumen
     assert call.arguments == {}
     assert call.extra is not None
     assert call.extra['evaluatorq.raw_arguments'] == arguments
-    assert prompt_messages(document)[0]['tool_calls'][0]['function']['arguments'] == arguments
+    assert to_chat_messages(document)[0]['tool_calls'][0]['function']['arguments'] == arguments
 
 
 def test_idless_tool_call_keeps_no_fabricated_prompt_id() -> None:
@@ -501,7 +501,7 @@ def test_idless_tool_call_keeps_no_fabricated_prompt_id() -> None:
     assert calls is not None
     call = calls[0]
     assert call.tool_call_id.startswith('unknown-')
-    assert prompt_messages(document)[0]['tool_calls'] == [
+    assert to_chat_messages(document)[0]['tool_calls'] == [
         {'type': 'function', 'function': {'name': 'run', 'arguments': '{}'}}
     ]
 
@@ -531,14 +531,14 @@ def test_tool_call_shape_roundtrips_and_mutations_use_native_values(
     assert step.tool_calls is not None
     call = step.tool_calls[0]
 
-    assert prompt_messages(document)[0]['tool_calls'] == [raw_call]
+    assert to_chat_messages(document)[0]['tool_calls'] == [raw_call]
     changed_call = call.model_copy(update={'function_name': 'renamed', 'arguments': {'cmd': 'ls'}})
     changed = document.model_copy(update={
         'trajectory': document.trajectory.model_copy(update={
             'steps': [step.model_copy(update={'tool_calls': [changed_call]})],
         }),
     })
-    assert prompt_messages(changed)[0]['tool_calls'] == [mutated_call]
+    assert to_chat_messages(changed)[0]['tool_calls'] == [mutated_call]
 
 
 @pytest.mark.parametrize(
@@ -551,7 +551,7 @@ def test_tool_call_shape_roundtrips_and_mutations_use_native_values(
 def test_tool_call_missing_name_and_arguments_stay_missing(raw_call: dict[str, Any]) -> None:
     document = ensure_trace_document(_trace({'role': 'assistant', 'tool_calls': [raw_call]}))
 
-    assert prompt_messages(document)[0]['tool_calls'] == [raw_call]
+    assert to_chat_messages(document)[0]['tool_calls'] == [raw_call]
 
 
 def test_prompt_renderer_preserves_absent_content_and_explicit_null_content() -> None:
@@ -560,7 +560,7 @@ def test_prompt_renderer_preserves_absent_content_and_explicit_null_content() ->
         {'role': 'assistant', 'content': None},
     ))
 
-    assert prompt_messages(document) == [
+    assert to_chat_messages(document) == [
         {'role': 'assistant'},
         {'role': 'assistant', 'content': None},
     ]
@@ -582,7 +582,7 @@ def test_prompt_renderer_uses_native_call_and_observation_ids() -> None:
     changed = document.model_copy(update={'trajectory': document.trajectory.model_copy(update={
         'steps': [step.model_copy(update={'tool_calls': [call], 'observation': observation})],
     })})
-    rendered = prompt_messages(changed)
+    rendered = to_chat_messages(changed)
     assert rendered[0]['tool_calls'][0]['id'] == 'after'
     assert rendered[1]['tool_call_id'] == 'after'
 

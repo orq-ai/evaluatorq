@@ -361,14 +361,14 @@ async def test_parallelism_must_be_positive(parallelism: int) -> None:
 async def test_unexpected_trace_failure_is_isolated_and_progress_continues(monkeypatch: pytest.MonkeyPatch) -> None:
     from evaluatorq.insights import labeling as labeling_module
 
-    original_messages = labeling_module.prompt_messages
+    original_messages = labeling_module.to_chat_messages
 
     def sometimes_fail(trace):
         if trace.trace_id == 'bad':
             raise ValueError('malformed trace')
         return original_messages(trace)
 
-    monkeypatch.setattr(labeling_module, 'prompt_messages', sometimes_fail)
+    monkeypatch.setattr(labeling_module, 'to_chat_messages', sometimes_fail)
 
     async def fake_run_classify(
         *, client: Any, model: str, cfg: Any, request: ClassifyRequest, **_: Any

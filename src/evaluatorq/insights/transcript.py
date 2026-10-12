@@ -39,7 +39,7 @@ from evaluatorq.common.model_input import (
     serialized_question_chars,
 )
 from evaluatorq.common.redact import scrub_known_secrets
-from evaluatorq.common.trace_document import TraceDocument, prompt_messages
+from evaluatorq.common.trace_document import TraceDocument, to_chat_messages
 from evaluatorq.contracts import tool_result_to_text
 from evaluatorq.signals.config import SHELL_TOOL_NAMES
 from evaluatorq.trace_finder.projection import _tool_call_status, _tool_result_category
@@ -343,7 +343,7 @@ def full_conversation_view(
 
 def _render_full_conversation(trace: TraceRecord | TraceDocument, options: ConversationViewOptions) -> tuple[str, int]:
     include, caps = options.include, options.caps
-    messages = prompt_messages(trace)
+    messages = to_chat_messages(trace)
     # Pair repeated call ids in order, as the Jev state does, so each call and result reads its own status.
     calls, _ = pair_tool_call_results(messages)
     statuses: dict[tuple[int, int], str] = {}
@@ -471,7 +471,7 @@ def tool_activity_chunks(
         raise ValueError('trace input character cap must be positive')
     questions = question_payloads or []
     jev = is_jev_model(model) if model is not None else False
-    messages = prompt_messages(trace)
+    messages = to_chat_messages(trace)
     if jev:
         units = _jev_activity_units(messages)
         state_budget = jev_state_char_limit(questions, global_char_cap=request_budget)
@@ -786,7 +786,7 @@ def _skill_names(call: dict[str, Any], arguments: dict[str, Any]) -> list[str]:
 
 
 def _tool_calls(trace: TraceRecord | TraceDocument) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
-    for message in prompt_messages(trace):
+    for message in to_chat_messages(trace):
         if message.get('role') != 'assistant':
             continue
         for call in message.get('tool_calls') or []:

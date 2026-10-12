@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from evaluatorq.common.model_input import has_truncated_source_text, serialized_question_chars
-from evaluatorq.common.trace_document import ensure_trace_document, prompt_messages
+from evaluatorq.common.trace_document import ensure_trace_document, to_chat_messages
 
 from evaluatorq.insights.transcript import (
     DETAILED,
@@ -325,7 +325,7 @@ def test_full_conversation_view_reads_native_atif_reasoning() -> None:
 
     assert view.splitlines() == ['#1 reasoning: NATIVE-THOUGHT', '#1 assistant: Because.']
     assert 'NATIVE-THOUGHT' not in full_conversation_view(document, budget=10_000)
-    assert prompt_messages(document)[1]['reasoning_content'] == 'NATIVE-THOUGHT'
+    assert to_chat_messages(document)[1]['reasoning_content'] == 'NATIVE-THOUGHT'
 
 
 def test_full_conversation_view_include_filters_message_types() -> None:
