@@ -322,7 +322,7 @@ async def test_compile_merges_generated_filters_and_numeric_constraints_with_man
 async def test_filter_response_survives_review_start_and_is_detached() -> None:
     runner = Runner()
     response = ClassifyResponse(
-        model='jev-latest', answers={'provider': ClassifyAnswer(type='choice', choice='provider_0')}
+        model='jev-latest', answers={'provider': ClassifyAnswer(type='choice', choice='openai')}
     )
 
     async def select_filters(query: str, population: PopulationRequest) -> FilterSelectionResult:
@@ -338,12 +338,12 @@ async def test_filter_response_survives_review_start_and_is_detached() -> None:
     review.filter_response.answers['provider'].choice = 'changed'
     current = await store.snapshot()
     assert current.filter_response is not None
-    assert current.filter_response.answers['provider'].choice == 'provider_0'
+    assert current.filter_response.answers['provider'].choice == 'openai'
 
     assert current.request is not None
     started = await store.start(current.request, (compiled_query(),))
     assert started.filter_response is not None
-    assert started.filter_response.answers['provider'].choice == 'provider_0'
+    assert started.filter_response.answers['provider'].choice == 'openai'
     runner.release.set()
     assert store._task is not None
     await asyncio.wait_for(store._task, timeout=1)
