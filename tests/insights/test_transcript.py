@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 from evaluatorq.common.model_input import has_truncated_source_text, serialized_question_chars
-from evaluatorq.common.trace_document import ensure_trace_document
+from evaluatorq.common.trace_document import ensure_trace_document, prompt_messages
 
 from evaluatorq.insights.transcript import (
     DETAILED,
@@ -325,6 +325,7 @@ def test_full_conversation_view_reads_native_atif_reasoning() -> None:
 
     assert view.splitlines() == ['#1 reasoning: NATIVE-THOUGHT', '#1 assistant: Because.']
     assert 'NATIVE-THOUGHT' not in full_conversation_view(document, budget=10_000)
+    assert prompt_messages(document)[1]['reasoning_content'] == 'NATIVE-THOUGHT'
 
 
 def test_full_conversation_view_include_filters_message_types() -> None:
@@ -418,6 +419,10 @@ def test_full_conversation_view_rejects_bad_options() -> None:
         full_conversation_view(CODING_TRACE, budget=10_000, exclude='user')  # ty: ignore[invalid-argument-type]
     with pytest.raises(ValueError, match='reasoning cap'):
         ConversationViewOptions(reasoning_chars=0)
+    with pytest.raises(ValueError, match='include and exclude both name reasoning, user'):
+        full_conversation_view(
+            CODING_TRACE, budget=10_000, include={'user', 'reasoning', 'assistant'}, exclude={'reasoning', 'user'}
+        )
 
 
 def test_tool_activity_view_shows_inputs_statuses_and_safe_diagnostics() -> None:

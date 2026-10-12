@@ -307,7 +307,7 @@ def full_conversation_view(
     """Render the conversation as text, one entry per message part, each starting `#<message index> <kind>:`.
 
     `options` picks a preset (`COMPACT`, `DETAILED`, `WHOLE`); a keyword argument replaces that one field, and
-    `exclude` removes message types from the result. A line break inside a message is indented by two spaces, so
+    `exclude` removes message types from the result. Naming a type in both `include` and `exclude` raises. A line break inside a message is indented by two spaces, so
     only a new entry starts at the left edge. A cut inside a message leaves `[... N chars left out ...]`, and an
     injected `<system-reminder>` block becomes `[harness reminder omitted]`. Every part is scrubbed of credentials
     before it is cut. Tool calls and results name their call as `<tool> (call <message>.<n>)`, flagged `[error]` or
@@ -331,7 +331,10 @@ def full_conversation_view(
         if value is not None
     }
     if dropped := _message_kinds(exclude, 'exclude'):
-        overrides['include'] = _message_kinds(include if include is not None else options.include, 'include') - dropped
+        kept = _message_kinds(include if include is not None else options.include, 'include')
+        if include is not None and (both := sorted(kept & dropped)):
+            raise ValueError(f'include and exclude both name {", ".join(both)}; name each message type in only one')
+        overrides['include'] = kept - dropped
     if overrides:
         options = replace(options, **overrides)
     rendered, _ = _render_full_conversation(trace, options)
@@ -340,7 +343,7 @@ def full_conversation_view(
 
 def _render_full_conversation(trace: TraceRecord | TraceDocument, options: ConversationViewOptions) -> tuple[str, int]:
     include, caps = options.include, options.caps
-    messages = prompt_messages(trace, include_reasoning='reasoning' in include)
+    messages = prompt_messages(trace)
     # Pair repeated call ids in order, as the Jev state does, so each call and result reads its own status.
     calls, _ = pair_tool_call_results(messages)
     statuses: dict[tuple[int, int], str] = {}
