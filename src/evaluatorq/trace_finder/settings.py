@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from loguru import logger
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
 SETTINGS_PATH_ENV = 'EVALUATORQ_DASHBOARD_SETTINGS'
 MIN_WINDOW_DAYS = 1
@@ -35,6 +35,7 @@ class DashboardSettings(BaseModel):
     """Configurable models and finder limits used by the dashboard and CLI."""
 
     model_config = ConfigDict(extra='forbid')
+    _future_fields: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     schema_version: int = Field(CURRENT_SETTINGS_SCHEMA_VERSION, strict=True, gt=0)
     fast_model: str | None = None
@@ -57,6 +58,12 @@ class DashboardSettings(BaseModel):
     orq_project_id: str | None = None
     orq_project_name: str | None = None
     explorer_columns: tuple[str, ...] | None = None
+
+    def with_updates(self, updates: dict[str, Any]) -> DashboardSettings:
+        """Validate updates while retaining future fields; caller updates win over saved values."""
+        updated = DashboardSettings.model_validate({**self.model_dump(), **updates})
+        updated._future_fields = dict(self._future_fields)  # noqa: SLF001 - opaque persisted metadata
+        return updated
 
     @field_validator('explorer_columns', mode='after')
     @classmethod
@@ -176,10 +183,12 @@ def load_settings(path: Path | None = None) -> DashboardSettings:
 
     A missing file is normal on first use. An unreadable or invalid file emits a
     warning naming the path and error type and also falls back to defaults so
-    the dashboard can still start. Newer schemas are read best-effort; saving
-    writes recognized fields and preserves the newer schema version.
+    the dashboard can still start. Newer schemas are read best-effort; their
+    unknown top-level fields are preserved when the settings are saved again.
     """
     target = path or settings_path()
+    future_schema_version: int | None = None
+    future_fields: dict[str, Any] = {}
     try:
         raw = json.loads(target.read_text(encoding='utf-8'))
         if not isinstance(raw, dict):
@@ -192,17 +201,22 @@ def load_settings(path: Path | None = None) -> DashboardSettings:
         if version == 0:
             raw = migrate_settings_v0_to_v1(raw)
         elif version > CURRENT_SETTINGS_SCHEMA_VERSION:
+            future_schema_version = version
             logger.warning(
-                'Dashboard settings schema version {} is newer than supported version {}; reading known fields, and only recognized fields will be retained on save',
+                'Dashboard settings schema version {} is newer than supported version {}; reading known fields and preserving unknown top-level fields for save',
                 version,
                 CURRENT_SETTINGS_SCHEMA_VERSION,
             )
         known = DashboardSettings.model_fields.keys() | _LEGACY_MODEL_KEYS
         unknown = sorted(raw.keys() - known)
+        future_fields = {key: raw[key] for key in unknown} if future_schema_version is not None else {}
         if unknown:
-            logger.warning('Ignoring unknown dashboard settings field(s): {}', ', '.join(unknown))
+            action = 'preserving for save' if future_fields else 'ignoring'
+            logger.warning('Unknown dashboard settings field(s) {}: {}', action, ', '.join(unknown))
             raw = {key: value for key, value in raw.items() if key in known}
-        return DashboardSettings.model_validate(raw)
+        settings = DashboardSettings.model_validate(raw)
+        settings._future_fields = future_fields  # noqa: SLF001 - attached only by the file loader
+        return settings
     except FileNotFoundError:
         return _default_settings()
     except ValidationError as exc:
@@ -211,14 +225,18 @@ def load_settings(path: Path | None = None) -> DashboardSettings:
             for error in exc.errors(include_input=False, include_context=False, include_url=False)
         )
         logger.warning('Could not load dashboard settings from {} ({}); using defaults', target, failures)
-        return _default_settings()
+        settings = _default_settings()
+        if future_schema_version is not None:
+            settings.schema_version = future_schema_version
+            settings._future_fields = future_fields  # noqa: SLF001 - preserved for newer-schema saves
+        return settings
     except (OSError, ValueError) as exc:
         logger.warning('Could not load dashboard settings from {} ({}); using defaults', target, type(exc).__name__)
         return _default_settings()
 
 
 def save_settings(s: DashboardSettings, path: Path | None = None) -> None:
-    """Atomically write *s* to *path*, creating parent directories as needed."""
+    """Atomically write *s* to *path*, including opaque fields from newer schemas."""
     target = path or settings_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
@@ -232,7 +250,8 @@ def save_settings(s: DashboardSettings, path: Path | None = None) -> None:
             delete=False,
         ) as handle:
             temporary = Path(handle.name)
-            handle.write(s.model_dump_json(indent=2))
+            persisted = {**s._future_fields, **s.model_dump(mode='json')}  # noqa: SLF001 - private persisted metadata
+            handle.write(json.dumps(persisted, indent=2))
             handle.write('\n')
             handle.flush()
             os.fsync(handle.fileno())
@@ -267,7 +286,8 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
     ``EVALUATORQ_FINDER_PARALLELISM``; invalid integer or out-of-range values
     are ignored with a warning.
     """
-    values = load_settings().model_dump()
+    saved = load_settings()
+    values = saved.model_dump()
     # Legacy saved scope is ignored for API-key methods; OAuth explicitly selects its scope.
     if values['orq_auth_method'] != 'cli_oauth':
         values.update(orq_workspace=None, orq_project_id=None, orq_project_name=None)
@@ -296,7 +316,7 @@ def effective_settings(overrides: dict[str, Any] | None = None) -> DashboardSett
         values[field] = parsed
     if overrides:
         values.update({key: value for key, value in overrides.items() if value is not None})
-    return DashboardSettings.model_validate(values)
+    return saved.with_updates(values)
 
 
 def store_api_key(settings: DashboardSettings, key: str) -> DashboardSettings:

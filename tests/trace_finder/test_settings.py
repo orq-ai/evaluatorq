@@ -322,7 +322,13 @@ def test_invalid_schema_versions_fall_back_to_defaults(tmp_path: Path, version: 
 
 def test_newer_schema_warns_reads_known_values_and_preserves_version_on_save(tmp_path: Path) -> None:
     path = tmp_path / 'settings.json'
-    path.write_text(json.dumps({'schema_version': 2, 'window_days': 22, 'future_field': 'kept in file'}))
+    future_values = {
+        'future_field': 'opaque string',
+        'future_object': {'nested': [1, 'two', {'three': True}]},
+        'future_list': ['a', 2, None],
+        'future_null': None,
+    }
+    path.write_text(json.dumps({'schema_version': 2, 'window_days': 22, **future_values}))
     messages: list[str] = []
     sink_id = logger.add(lambda message: messages.append(message.record['message']), level='WARNING')
     try:
@@ -333,10 +339,81 @@ def test_newer_schema_warns_reads_known_values_and_preserves_version_on_save(tmp
     assert settings.schema_version == 2
     assert settings.window_days == 22
     assert any('newer than supported' in message for message in messages)
+    assert any(', '.join(sorted(future_values)) in message for message in messages)
+    assert all('opaque string' not in message for message in messages)
+    assert not set(future_values) & settings.model_dump().keys()
+
+    updated = settings.with_updates({'window_days': 23})
+    assert updated.window_days == 23
     save_settings(settings, path)
     saved = json.loads(path.read_text())
     assert saved['schema_version'] == 2
     assert saved['window_days'] == 22
+    assert {key: saved[key] for key in future_values} == future_values
+    save_settings(updated, path)
+    saved = json.loads(path.read_text())
+    assert saved['window_days'] == 23
+    assert {key: saved[key] for key in future_values} == future_values
+
+
+def test_model_copy_preserves_future_fields_for_explorer_columns(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': 2, 'future_field': {'keep': True}}))
+
+    settings = load_settings(path)
+    updated = settings.model_copy(update={'explorer_columns': ('model', 'cost')})
+    save_settings(updated, path)
+
+    saved = json.loads(path.read_text())
+    assert saved['explorer_columns'] == ['model', 'cost']
+    assert saved['future_field'] == {'keep': True}
+
+
+def test_effective_settings_updates_preserve_future_fields_on_save(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': 3, 'window_days': 8, 'future_field': {'keep': True}}))
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+
+    settings = effective_settings({'window_days': 13})
+    save_settings(settings, path)
+
+    saved = json.loads(path.read_text())
+    assert saved['schema_version'] == 3
+    assert saved['window_days'] == 13
+    assert saved['future_field'] == {'keep': True}
+
+
+def test_invalid_known_future_setting_falls_back_but_preserves_future_fields_on_save(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    path.write_text(json.dumps({'schema_version': 2, 'window_days': 'invalid', 'future_option': {'keep': True}}))
+
+    settings = load_settings(path)
+
+    assert settings.window_days == 7
+    assert settings.schema_version == 2
+    save_settings(settings, path)
+
+    saved = json.loads(path.read_text())
+    assert saved['schema_version'] == 2
+    assert saved['window_days'] == 7
+    assert saved['future_option'] == {'keep': True}
+
+
+@pytest.mark.parametrize('version', [None, 1])
+def test_supported_and_unversioned_files_drop_unknown_fields_on_save(tmp_path: Path, version: int | None) -> None:
+    path = tmp_path / 'settings.json'
+    raw = {'window_days': 18, 'future_field': 'drop me'}
+    if version is not None:
+        raw['schema_version'] = version
+    path.write_text(json.dumps(raw))
+
+    save_settings(load_settings(path), path)
+
+    saved = json.loads(path.read_text())
+    assert saved['schema_version'] == 1
+    assert saved['window_days'] == 18
     assert 'future_field' not in saved
 
 

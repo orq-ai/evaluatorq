@@ -495,7 +495,7 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     errors: dict[str, str] = {}
     settings: DashboardSettings | None = None
     try:
-        settings = DashboardSettings.model_validate(values)
+        settings = current.with_updates(values)
     except ValidationError as exc:
         for detail in exc.errors():
             location = detail.get('loc', ())

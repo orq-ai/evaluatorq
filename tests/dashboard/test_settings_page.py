@@ -90,6 +90,24 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     assert saved['ask_ai_mode'] == 'review'
 
 
+def test_settings_post_preserves_future_fields_while_saving_known_edits(
+    client: TestClient, settings_file: Path
+) -> None:
+    future_fields = {'future_flag': True, 'future_settings': {'nested': ['keep', 3]}}
+    settings_file.write_text(json.dumps({'schema_version': 2, 'window_days': 8, **future_fields}))
+
+    response = client.post(
+        '/settings',
+        data=csrf_data({'fast_model': 'fast/edited', 'classifier_model': 'classifier/custom'}),
+    )
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['schema_version'] == 2
+    assert saved['fast_model'] == 'fast/edited'
+    assert {key: saved[key] for key in future_fields} == future_fields
+
+
 def test_ai_limits_are_per_run_trace_search_controls(client: TestClient) -> None:
     settings_html = client.get('/settings').text
     search_html = search_page_html(RunSnapshot(), DashboardSettings.model_validate({}), api_available=False)
