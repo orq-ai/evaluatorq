@@ -91,7 +91,7 @@ DEFAULT_SECURITY_EVALUATOR_SYSTEM_PROMPT = (
 # billed takes down the run's report instead of the one verdict.
 #
 # The classify leg is the second producer of this payload and fills it differently:
-# a `/decisions` answer carries a distribution, not prose, so it never abstains and its
+# a `/decisions` answer carries a distribution, not prose, so it abstains only by refusing and its
 # `explanation` is synthesised from the numbers (`ClassifyQuestion` below). Nothing on
 # that path is generated against this model's schema, so the field-order and prompt
 # notes above do not bind it.
@@ -755,9 +755,10 @@ async def _classify_judge(
 
     There is no prompt and no verdict schema on this path: the model answers the
     question it was handed, and `_classify_verdict` maps that answer onto the
-    payload every other judge leg returns. A classify answer never abstains — an
-    answer that cannot be read at all is a `JudgeError.PARSE`, not an abstention,
-    so a broken verdict is never counted as a judge declining to call it.
+    payload every other judge leg returns. A classify answer abstains only when the
+    model answers `refusal`, as the chat and Responses legs do; any other answer that
+    cannot be read is a `JudgeError.PARSE`, so a broken verdict is never counted as
+    a judge declining to call it.
 
     `run_classify` owns the decoded response shape and all provider error mapping;
     this function only translates the ``verdict`` answer into the neutral judge
@@ -811,10 +812,10 @@ def _classify_answer_outcome(
             endpoint='classify',
         )
     if answer.type == 'refusal':
-        logger.warning('Judge [{}] classify model refused the {} question (raw={})', model, question.kind, raw[:500])
+        message = f'classify model refused to answer the {question.kind} question'
+        logger.error('Judge [{}] {} (raw={})', model, message, raw[:500])
         return JudgeOutcome(
-            error_kind=JudgeError.PARSE,
-            error_message=f'classify model refused to answer the {question.kind} question',
+            payload=EvaluatorResponsePayload(value=None, abstain=True, explanation=message),
             token_usage=outcome.token_usage,
             raw_content=raw,
             endpoint='classify',

@@ -575,8 +575,8 @@ async def test_a_reply_without_a_verdict_answer_is_a_parse_error():
 
 
 @pytest.mark.asyncio
-async def test_a_refusal_answer_is_a_parse_error_naming_the_refusal():
-    """A native OpenAI model may answer `refusal`; that is reported as a refusal, never as a verdict."""
+async def test_a_refusal_answer_is_an_abstention_not_a_parse_error():
+    """A native OpenAI model may answer `refusal`; that abstains, like a chat or Responses refusal."""
     reply = {
         'answers': {'verdict': {'type': 'refusal'}},
         'telemetry': {'trace_id': 't', 'span_id': 's'},
@@ -587,8 +587,10 @@ async def test_a_refusal_answer_is_a_parse_error_naming_the_refusal():
 
     outcome = await _judge(client, _noul_question())
 
-    assert outcome.payload is None
-    assert outcome.error_kind is JudgeError.PARSE
+    assert outcome.error_kind is None
+    assert outcome.payload is not None
+    assert outcome.payload.abstain is True
+    assert outcome.payload.value is None
     assert outcome.endpoint == 'classify'
     assert outcome.token_usage is not None
 
