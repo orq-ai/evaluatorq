@@ -93,7 +93,7 @@ def _jev_group(values: Values, defaults: Values) -> str:
     flags = ''.join(_check(f'jev_include_{flag}', _JEV_FLAG_LABELS[flag], values, defaults) for flag in JEV_FLAGS)
     return (
         '<fieldset class="compression-knob-group">'
-        '<legend>Jev state</legend>'
+        '<legend>Output (Jev state)</legend>'
         '<div class="compression-knob-grid">'
         f'{_number("global_char_cap", "Global character cap", values, defaults)}'
         f'{_number("jev_state_chars", "Jev state limit", values, defaults)}'
@@ -119,7 +119,7 @@ def _view_group(values: Values, defaults: Values) -> str:
     )
     return (
         '<fieldset class="compression-knob-group">'
-        '<legend>Readable view</legend>'
+        '<legend>Original (readable view)</legend>'
         '<div class="compression-knob-grid">'
         f'{_number("view_budget", "Whole view limit", values, defaults)}'
         '<label class="compression-knob"><span>Tool display</span>'
