@@ -143,6 +143,17 @@ def test_compare_kpis_covers_aggregates_scorers_and_terminated():
 # ---------------------------------------------------------------------------
 
 
+def test_match_entries_counts_repeated_same_object_by_position() -> None:
+    from evaluatorq.dashboard.sim_compare import match_entries
+    from evaluatorq.simulation.reports.sections import individual_entries
+
+    entry = individual_entries(_run_a().results[:1])[0]
+    matching = match_entries([entry, entry], [entry, entry])
+    assert [(pair.a, pair.b) for pair in matching.matched] == [(entry, entry), (entry, entry)]
+    assert matching.a_only == []
+    assert matching.b_only == []
+
+
 def test_match_entries_pairs_and_flags_unmatched():
     from evaluatorq.dashboard.sim_compare import match_entries
     from evaluatorq.simulation.reports.sections import individual_entries

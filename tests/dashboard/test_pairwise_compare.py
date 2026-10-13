@@ -51,6 +51,25 @@ def test_duplicate_questions_pair_positionally() -> None:
     assert m.b_only == []
 
 
+def test_duplicate_same_entry_object_is_paired_by_position() -> None:
+    run = _run('same', [('q', 'A')])
+    entry = run.entries[0]
+    run.entries = [entry, entry]
+    other = _run('other', [('q', 'B')])
+    other.entries = [other.entries[0], other.entries[0]]
+
+    matching = match_comparisons(run, other)
+    assert matching.matched == [(0, 0), (1, 1)]
+    assert matching.a_only == []
+    assert matching.b_only == []
+    a = _run('a', [('q', 'A'), ('q', 'B'), ('q', 'A')])
+    b = _run('b', [('q', 'A'), ('q', 'B')])
+    m = match_comparisons(a, b)
+    assert m.matched == [(0, 0), (1, 1)]
+    assert m.a_only == [2]
+    assert m.b_only == []
+
+
 def test_changed_winner_is_tagged_by_side_label() -> None:
     a = _run('a', [('q1', 'A'), ('q2', 'A')], a='old', b='new')
     # Slot letters differ but the winning label ('old') is the same for q1.
@@ -107,6 +126,21 @@ def test_route_422_for_corrupt_run(client_and_ids: tuple[TestClient, str, str, P
     bad = d / 'bad.json'
     bad.write_text('{"judging": "pairwise", ')
     assert client.get(f'/compare/pairwise?a={a}&b={report_id(bad)}').status_code == 422
+
+
+def test_route_422_for_invalid_utf8(client_and_ids: tuple[TestClient, str, str, Path]) -> None:
+    client, a, _, d = client_and_ids
+    bad = d / 'invalid-utf8.json'
+    bad.write_bytes(b'\xff\xfe')
+    response = client.get(f'/compare/pairwise?a={a}&b={report_id(bad)}')
+    assert response.status_code == 422
+
+
+def test_empty_runs_keep_the_actual_zero_comparison_total() -> None:
+    a, b = _run('empty a', []), _run('empty b', [])
+    matching = match_comparisons(a, b)
+    assert matching.total == 0
+    assert matching.match_rate == 0
 
 
 def test_control_omits_current_run_and_hides_when_alone() -> None:

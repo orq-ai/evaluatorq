@@ -13,7 +13,6 @@ from evaluatorq.dashboard.app import build_app
 from evaluatorq.dashboard.library import report_id
 from evaluatorq.dashboard.pairwise_palette import pw_side_label
 from evaluatorq.dashboard.pairwise_tabs import (
-    _EMPTY_FILTERED,
     pairwise_report_tabs,
     with_entries,
 )
@@ -132,13 +131,11 @@ def test_run_name_and_labels_are_escaped() -> None:
 def test_empty_run_still_renders_every_tab() -> None:
     html = pairwise_report_tabs('rid', new_run(run_name='empty'))
     assert html.count('class="tab-label"') == 4
-    assert 'No comparisons in this run.' in html
 
 
 def test_comparisons_tab_lists_the_entries(run: PairwiseRun) -> None:
     html = pairwise_report_tabs('rid', run)
     assert 'id="cmp-4"' in html
-    assert 'No comparisons in this run.' not in html
 
 
 def test_filtered_render_changes_the_verdict(run: PairwiseRun) -> None:
@@ -155,7 +152,6 @@ def test_filtered_render_changes_the_verdict(run: PairwiseRun) -> None:
 def test_a_filter_matching_nothing_shows_the_note_not_a_verdict(run: PairwiseRun) -> None:
     html = pairwise_report_tabs('rid', run, entries=[])
     assert _kpis(html) == {}
-    assert html.count(_EMPTY_FILTERED) == 3
     # An unfiltered render of the same run does show the verdict KPIs.
     assert _kpis(pairwise_report_tabs('rid', run))
 

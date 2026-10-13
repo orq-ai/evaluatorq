@@ -118,6 +118,23 @@ def test_fleiss_kappa_needs_two_judges():
     assert fleiss_kappa(r) == (None, 0)
 
 
+def test_fleiss_kappa_does_not_infer_a_panel_from_replacement_votes():
+    r = new_run(run_name='legacy', judges=[])
+    r.add(
+        PairwiseComparison(
+            winner='A',
+            votes=[
+                PairwiseVote(model='stand-in-1', vote='A', replacement=True),
+                PairwiseVote(model='stand-in-2', vote='A', replacement=True),
+            ],
+        ),
+        question='q',
+        response_a='a',
+        response_b='b',
+    )
+    assert fleiss_kappa(r) == (None, 0)
+
+
 @pytest.mark.parametrize(
     ('k', 'label'),
     [(-0.1, 'poor'), (0.1, 'slight'), (0.3, 'fair'), (0.5, 'moderate'), (0.7, 'substantial'), (0.85, 'almost perfect')],
@@ -170,8 +187,10 @@ def test_judge_usage_sums_tokens_and_keeps_unknown_cost_unknown():
     r = _run([(['A'] * 3, 'A', {'usage': u1}), (['B'] * 3, 'B', {'usage': u2}), (['A'] * 3, 'A', {})])
     t = judge_usage(r)
     assert (t.input_tokens, t.output_tokens, t.total_tokens, t.with_usage) == (15, 3, 18, 2)
-    assert t.cost == pytest.approx(0.5)
+    assert t.cost is None
     assert judge_usage(_run([(['A'] * 3, 'A', {})])).cost is None
+    assert judge_usage(_run([(['A'] * 3, 'A', {'usage': u1})])).cost == pytest.approx(0.5)
+    assert judge_usage(_run([(['A'] * 3, 'A', {'usage': u1}), (['B'] * 3, 'B', {})])).cost is None
 
 
 def test_trust_signals_order_and_tones():

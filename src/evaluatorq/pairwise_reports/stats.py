@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from evaluatorq.pairwise_reports.sections import POSITION_BIAS_WARN, is_split, judge_order, observed_swap
+from evaluatorq.pairwise_reports.sections import POSITION_BIAS_WARN, is_split, observed_swap
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -89,7 +89,7 @@ def fleiss_kappa(run: PairwiseRun) -> tuple[float | None, int]:
     panel judge failed is skipped. Returns ``(kappa, rows_used)``; ``(None, 0)``
     with fewer than two judges or no full-panel comparison.
     """
-    judges = list(run.judges or judge_order(run))
+    judges = list(run.judges)
     n = len(judges)
     if n < 2:
         return (None, 0)
@@ -163,14 +163,14 @@ class UsageTotals:
 
 
 def judge_usage(run: PairwiseRun) -> UsageTotals:
-    """Judge token use summed over comparisons; cost stays None when none was priced."""
+    """Sum recorded tokens; report cost only when every comparison was priced."""
     usages = [e.comparison.token_usage for e in run.entries if e.comparison.token_usage is not None]
     costs = [u.total_cost for u in usages if u.total_cost is not None]
     return UsageTotals(
         input_tokens=sum(u.input_tokens for u in usages),
         output_tokens=sum(u.output_tokens for u in usages),
         total_tokens=sum(u.total_tokens or (u.input_tokens + u.output_tokens) for u in usages),
-        cost=math.fsum(costs) if costs else None,
+        cost=math.fsum(costs) if costs and len(costs) == len(run.entries) else None,
         with_usage=len(usages),
     )
 

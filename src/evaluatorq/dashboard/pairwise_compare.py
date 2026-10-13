@@ -10,13 +10,13 @@ status codes mirror ``/compare/sim``.
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects at runtime
 from starlette.responses import Response
 
+from evaluatorq.common.matching import pair_indices_by_key
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import kpi_cards, pct
 from evaluatorq.dashboard.pairwise_palette import pw_side_label, verdict_eyebrow
@@ -53,24 +53,12 @@ class PairwiseMatching:
 
 def match_comparisons(a: PairwiseRun, b: PairwiseRun) -> PairwiseMatching:
     """Pair entries by exact ``question``; duplicates pair positionally per key."""
-    b_by_q: dict[str, list[int]] = defaultdict(list)
-    for j, e in enumerate(b.entries):
-        b_by_q[e.question].append(j)
-    cursor: dict[str, int] = defaultdict(int)
-    matched: list[tuple[int, int]] = []
-    a_only: list[int] = []
-    used_b: set[int] = set()
-    for i, e in enumerate(a.entries):
-        pool = b_by_q.get(e.question, [])
-        k = cursor[e.question]
-        if k < len(pool):
-            matched.append((i, pool[k]))
-            used_b.add(pool[k])
-            cursor[e.question] = k + 1
-        else:
-            a_only.append(i)
-    b_only = [j for j in range(len(b.entries)) if j not in used_b]
-    total = max(len(a.entries), len(b.entries), 1)
+    matched, a_only, b_only = pair_indices_by_key(
+        a.entries,
+        b.entries,
+        key=lambda entry: entry.question,
+    )
+    total = max(len(a.entries), len(b.entries))
     return PairwiseMatching(matched, a_only, b_only, total)
 
 

@@ -24,7 +24,7 @@ Charts are Vega-Lite specs rendered server-side to SVG via the shared
 from __future__ import annotations
 
 import operator
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -32,6 +32,7 @@ from loguru import logger
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects at runtime
 from starlette.responses import Response
 
+from evaluatorq.common.matching import pair_indices_by_key
 from evaluatorq.common.reports import esc
 from evaluatorq.common.reports.html_helpers import kpi_cards, pct
 from evaluatorq.common.reports.palette import COLORS
@@ -194,29 +195,16 @@ def match_entries(entries_a: list[SimulationEntry], entries_b: list[SimulationEn
     etc.) — an approximation surfaced by the low-overlap note on the page; any
     leftovers on either side fall into ``a_only`` / ``b_only``.
     """
-    by_key_b: dict[tuple[str, str], list[SimulationEntry]] = defaultdict(list)
-    for e in entries_b:
-        by_key_b[e.persona, e.scenario].append(e)
-
-    matched: list[MatchedPair] = []
-    a_only: list[SimulationEntry] = []
-    consumed_b: set[int] = set()
-    cursor: dict[tuple[str, str], int] = defaultdict(int)
-
-    for ea in entries_a:
-        key = (ea.persona, ea.scenario)
-        bucket = by_key_b.get(key, [])
-        i = cursor[key]
-        if i < len(bucket):
-            eb = bucket[i]
-            cursor[key] = i + 1
-            consumed_b.add(id(eb))
-            matched.append(MatchedPair(ea, eb))
-        else:
-            a_only.append(ea)
-
-    b_only = [e for e in entries_b if id(e) not in consumed_b]
-    return Matching(matched, a_only, b_only)
+    matched_indices, a_only_indices, b_only_indices = pair_indices_by_key(
+        entries_a,
+        entries_b,
+        key=lambda entry: (entry.persona, entry.scenario),
+    )
+    return Matching(
+        [MatchedPair(entries_a[i], entries_b[j]) for i, j in matched_indices],
+        [entries_a[i] for i in a_only_indices],
+        [entries_b[i] for i in b_only_indices],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +532,7 @@ def resolve_run(rid: str, roots: list[Path] | None, surface: str) -> tuple[str, 
     # as an unknown surface (which load_surface does for lenient directory scans).
     try:
         found, _raw = library.load_surface_strict(path)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         logger.opt(exception=True).warning('compare: corrupt/unreadable {} report {}', surface, rid)
         return 'error', None
     if found != surface:
