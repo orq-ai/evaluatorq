@@ -13,6 +13,8 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
 
+from evaluatorq.common.file_lock import strict_file_lock
+
 SETTINGS_PATH_ENV = 'EVALUATORQ_DASHBOARD_SETTINGS'
 MIN_WINDOW_DAYS = 1
 MAX_WINDOW_DAYS = 90
@@ -29,6 +31,17 @@ _LEGACY_MODEL_KEYS = frozenset({'compiler_model', 'apply_model', 'classifier_mod
 _LEGACY_DEFAULT_MODEL = 'openai/gpt-5.6-luna'
 _LEGACY_CLASSIFIER_MODEL = 'typesafe/jev-latest'
 CURRENT_SETTINGS_SCHEMA_VERSION = 1
+AUTH_SETTINGS_FIELDS = frozenset({
+    'orq_auth_method',
+    'orq_api_key_ciphertext',
+    'orq_oauth_server',
+    'orq_profile',
+    'orq_profile_host',
+    'orq_credential_fingerprint',
+    'orq_workspace',
+    'orq_project_id',
+    'orq_project_name',
+})
 
 
 class DashboardSettings(BaseModel):
@@ -72,6 +85,8 @@ class DashboardSettings(BaseModel):
         updated._explicit_updates = set(self._explicit_updates)  # noqa: SLF001 - preserve caller intent
         if persistent:
             updated._explicit_updates.update(updates)  # noqa: SLF001 - track caller intent
+            if self._source_document is None and self._baseline_values is None:
+                updated._explicit_updates.update(self.model_fields_set)  # noqa: SLF001 - preserve authored inputs
         else:
             updated._baseline_values = updated.model_dump(mode='json')  # noqa: SLF001 - reset runtime baseline
             updated._explicit_updates.clear()  # noqa: SLF001 - runtime overrides are not edits
@@ -151,6 +166,10 @@ class DashboardSettings(BaseModel):
         return kept
 
 
+if AUTH_SETTINGS_FIELDS - DashboardSettings.model_fields.keys():
+    raise RuntimeError('AUTH_SETTINGS_FIELDS contains fields missing from DashboardSettings')
+
+
 def _default_settings() -> DashboardSettings:
     return DashboardSettings.model_validate({})
 
@@ -213,20 +232,9 @@ def load_settings(path: Path | None = None) -> DashboardSettings:  # noqa: C901
         try:
             settings = DashboardSettings.model_validate(raw)
         except ValidationError as exc:
-            auth_fields = {
-                'orq_auth_method',
-                'orq_api_key_ciphertext',
-                'orq_oauth_server',
-                'orq_profile',
-                'orq_profile_host',
-                'orq_credential_fingerprint',
-                'orq_workspace',
-                'orq_project_id',
-                'orq_project_name',
-            }
             errors = exc.errors(include_input=False, include_context=False, include_url=False)
             invalid_fields = {str(error['loc'][0]) for error in errors if error.get('loc')}
-            if not invalid_fields or invalid_fields & auth_fields:
+            if not invalid_fields or invalid_fields & AUTH_SETTINGS_FIELDS:
                 raise
             defaults = DashboardSettings().model_dump(mode='json')
             recovered = dict(raw)
@@ -246,7 +254,7 @@ def load_settings(path: Path | None = None) -> DashboardSettings:  # noqa: C901
                 except ValidationError as retry_exc:
                     errors = retry_exc.errors(include_input=False, include_context=False, include_url=False)
                     invalid_fields = {str(error['loc'][0]) for error in errors if error.get('loc')}
-                    if not invalid_fields or invalid_fields & auth_fields:
+                    if not invalid_fields or invalid_fields & AUTH_SETTINGS_FIELDS:
                         raise
             logger.warning(
                 'Invalid dashboard settings field(s); using defaults for {}',
@@ -279,7 +287,14 @@ def load_settings(path: Path | None = None) -> DashboardSettings:  # noqa: C901
         return _default_settings()
 
 
-def save_settings(  # noqa: C901
+def save_settings(s: DashboardSettings, path: Path | None = None, *, changed_fields: set[str] | None = None) -> None:
+    """Serialize a complete settings read, patch, validation, and replace transaction."""
+    target = path or settings_path()
+    with strict_file_lock(target.with_name(f'.{target.name}.lock')):
+        _save_settings_locked(s, target, changed_fields=changed_fields)
+
+
+def _save_settings_locked(  # noqa: C901
     s: DashboardSettings, path: Path | None = None, *, changed_fields: set[str] | None = None
 ) -> None:
     """Atomically write *s* to *path*, including opaque fields from newer schemas."""
@@ -289,7 +304,7 @@ def save_settings(  # noqa: C901
     if changed_fields is None:
         baseline = s._baseline_values or DashboardSettings().model_dump(mode='json')  # noqa: SLF001 - source baseline
         fields.update(key for key, value in values.items() if baseline.get(key, value) != value)
-        if s._source_document is None:  # noqa: SLF001 - distinguish new models from loaded models
+        if s._source_document is None and s._baseline_values is None:  # noqa: SLF001 - seed a fresh model's explicit fields
             fields.update(s.model_fields_set)
     unknown_fields = fields - DashboardSettings.model_fields.keys()
     if unknown_fields:
@@ -299,6 +314,8 @@ def save_settings(  # noqa: C901
         persisted = dict(s._source_document or s._future_fields)  # noqa: SLF001 - seed a new destination
         if persisted and persisted.get('schema_version', 0) == 0:
             persisted = migrate_settings_v0_to_v1(persisted)
+        if s._source_document is None:  # noqa: SLF001 - seed defaults, not runtime overrides
+            persisted.update(DashboardSettings().model_dump(mode='json'))
         if 'model_overrides' in fields and s._source_document is not None:  # noqa: SLF001 - loaded-source patch
             baseline = s._baseline_values or DashboardSettings().model_dump(mode='json')  # noqa: SLF001
             persisted['model_overrides'] = _patch_model_overrides(
@@ -307,10 +324,11 @@ def save_settings(  # noqa: C901
                 values.get('model_overrides'),
             )
             fields.discard('model_overrides')
-        persisted.update({field: values[field] for field in fields if field != 'schema_version'})
-        if s._source_document is None:  # noqa: SLF001 - new models seed all defaults
-            persisted.update(values)
-        elif 'schema_version' not in persisted:
+        if s._source_document is None:  # noqa: SLF001 - apply only authored choices over the defaults
+            persisted.update({field: values[field] for field in fields})
+        else:
+            persisted.update({field: values[field] for field in fields if field != 'schema_version'})
+        if s._source_document is not None and 'schema_version' not in persisted:  # noqa: SLF001
             persisted['schema_version'] = values['schema_version']
     else:
         latest = json.loads(target.read_text(encoding='utf-8'))
@@ -341,19 +359,8 @@ def save_settings(  # noqa: C901
         for field in fields:
             latest[field] = values[field]
         persisted = latest
-    auth_fields = {
-        'orq_auth_method',
-        'orq_profile',
-        'orq_profile_host',
-        'orq_api_key_ciphertext',
-        'orq_oauth_server',
-        'orq_workspace',
-        'orq_project_id',
-        'orq_project_name',
-        'orq_credential_fingerprint',
-    }
-    if fields & auth_fields:
-        auth_candidate = {field: persisted[field] for field in auth_fields if field in persisted}
+    if fields & AUTH_SETTINGS_FIELDS:
+        auth_candidate = {field: persisted[field] for field in AUTH_SETTINGS_FIELDS if field in persisted}
         DashboardSettings.model_validate(auth_candidate)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None

@@ -1061,7 +1061,7 @@ def test_finder_export_lock_uses_windows_interprocess_lock_when_fcntl_is_unavail
 
     with finder_routes._finder_export_lock(export_dir):
         lock_path = export_dir / '.finder-export.lock'
-        assert lock_path.stat().st_size == 1
+        assert lock_path.stat().st_size == 0
         assert operations == [1]
 
     assert operations == [1, 2]

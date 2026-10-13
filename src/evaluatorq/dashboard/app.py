@@ -95,6 +95,7 @@ from evaluatorq.dashboard.view import (
     sim_overview_body,
 )
 from evaluatorq.trace_finder.settings import (
+    AUTH_SETTINGS_FIELDS,
     DashboardSettings,
     credential_fingerprint,
     effective_settings,
@@ -571,18 +572,7 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     if 'orq_stored_key_host' in changed_fields:
         changed_fields.update({'orq_profile_host', 'orq_credential_fingerprint'})
     changed_fields.difference_update({'orq_api_key_entry', 'orq_stored_key_host'})
-    auth_group_fields = {
-        'orq_auth_method',
-        'orq_profile',
-        'orq_profile_host',
-        'orq_api_key_ciphertext',
-        'orq_oauth_server',
-        'orq_workspace',
-        'orq_project_id',
-        'orq_project_name',
-        'orq_credential_fingerprint',
-    }
-    auth_group_requested = bool(changed_fields & auth_group_fields)
+    auth_group_requested = bool(changed_fields & AUTH_SETTINGS_FIELDS)
     values['settings_changed_fields'] = ','.join(sorted(rendered_changed_fields))
     profiles = await asyncio.to_thread(list_orq_profiles)
     errors: dict[str, str] = {}

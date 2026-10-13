@@ -137,6 +137,7 @@ CI does not run integration tests. Real-API coverage runs weekly via `.github/wo
 | Prompt templating | `common.template_engine.render_template` | f-string prompt assembly |
 | Untrusted text into a prompt | `common.sanitize.delimit` | raw interpolation |
 | Run lifecycle state | `common.run_manifest` (`start_manifest`, `list_manifests`) | new status dict / sidecar file |
+| Strict cross-process file locking | `common.file_lock.strict_file_lock` on a permanent sibling lock file | locks on atomically replaced data files or surface-local platform locking |
 | Applying recommendations to an agent | `common.apply.apply_recommendations` | surface-local merge logic |
 | Console / HTML / MD report output | `common/reports/` (`console`, `render`, `vega`, `palette`) | new renderer or colour set |
 | CLI output, errors, JSON, width | `common/cli_*.py` | bespoke `typer.echo` formatting |

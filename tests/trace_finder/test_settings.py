@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 from loguru import logger
@@ -17,6 +20,44 @@ from evaluatorq.trace_finder.settings import (
     store_api_key,
 )
 from evaluatorq.trace_finder import secure_credentials
+
+
+def _save_while_holding_lock(path: str, held: Any, release: Any) -> None:
+    import evaluatorq.trace_finder.settings as settings_module
+
+    path_obj = Path(path)
+    loaded = settings_module.load_settings(path_obj)
+    original_temporary_file = settings_module.tempfile.NamedTemporaryFile
+
+    def pause_before_write(*args: Any, **kwargs: Any) -> Any:
+        held.set()
+        if not release.wait(timeout=10):
+            raise TimeoutError('timed out waiting to save settings')
+        return original_temporary_file(*args, **kwargs)
+
+    setattr(settings_module.tempfile, 'NamedTemporaryFile', pause_before_write)
+    settings_module.save_settings(loaded.with_updates({'smart_model': 'new/smart'}), path_obj)
+
+
+def _save_after_signaling(path: str, waiting: Any, transaction_io: Any) -> None:
+    import evaluatorq.trace_finder.settings as settings_module
+
+    path_obj = Path(path)
+    loaded = settings_module.load_settings(path_obj)
+    original_lock = settings_module.strict_file_lock
+    original_temporary_file = settings_module.tempfile.NamedTemporaryFile
+
+    def signal_then_lock(lock_path: Path):
+        waiting.set()
+        return original_lock(lock_path)
+
+    def signal_temporary_file(*args: Any, **kwargs: Any) -> Any:
+        transaction_io.set()
+        return original_temporary_file(*args, **kwargs)
+
+    setattr(settings_module, 'strict_file_lock', signal_then_lock)
+    setattr(settings_module.tempfile, 'NamedTemporaryFile', signal_temporary_file)
+    settings_module.save_settings(loaded.with_updates({'fast_model': 'new/fast'}), path_obj)
 
 
 def test_settings_round_trip_uses_json_file(tmp_path: Path) -> None:
@@ -87,6 +128,95 @@ def test_save_loaded_malformed_file_fails_without_changing_bytes(tmp_path: Path)
         save_settings(load_settings(path).with_updates({'fast_model': 'edited/fast'}), path)
 
     assert path.read_bytes() == original
+
+
+def test_fresh_constructor_edits_survive_with_updates_and_save(tmp_path: Path) -> None:
+    path = tmp_path / 'settings.json'
+    settings = DashboardSettings(smart_model='authored/smart').with_updates({'fast_model': 'edited/fast'})
+
+    save_settings(settings, path)
+
+    saved = load_settings(path)
+    assert saved.smart_model == 'authored/smart'
+    assert saved.fast_model == 'edited/fast'
+
+
+def test_runtime_environment_override_is_not_seeded_into_new_settings_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.json'
+    monkeypatch.setenv('EVALUATORQ_DASHBOARD_SETTINGS', str(path))
+    monkeypatch.setenv('EVALUATORQ_FINDER_LIMIT', '120')
+
+    runtime = effective_settings()
+    assert runtime.limit == 120
+    save_settings(runtime, path)
+
+    assert load_settings(path).limit == DashboardSettings.model_fields['limit'].default
+
+
+def test_settings_lock_failure_preserves_file_and_releases_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import evaluatorq.trace_finder.settings as settings_module
+
+    path = tmp_path / 'settings.json'
+    original = b'{"schema_version":1,"fast_model":"saved/fast"}\n'
+    path.write_bytes(original)
+    loaded = load_settings(path).with_updates({'fast_model': 'edited/fast'})
+    real_lock = settings_module.strict_file_lock
+
+    @contextmanager
+    def fail_after_lock(lock_path: Path):
+        with real_lock(lock_path):
+            if lock_path.name == '.settings.json.lock':
+                raise OSError('simulated lock transaction failure')
+            yield
+
+    monkeypatch.setattr(settings_module, 'strict_file_lock', fail_after_lock)
+    with pytest.raises(OSError, match='simulated lock transaction failure'):
+        save_settings(loaded, path)
+    assert path.read_bytes() == original
+
+    monkeypatch.setattr(settings_module, 'strict_file_lock', real_lock)
+    save_settings(loaded, path)
+    assert load_settings(path).fast_model == 'edited/fast'
+
+
+@pytest.mark.parametrize('initially_exists', [False, True])
+def test_concurrent_save_rereads_latest_document_under_process_lock(
+    initially_exists: bool, tmp_path: Path
+) -> None:
+    path = tmp_path / 'settings.json'
+    if initially_exists:
+        path.write_text(json.dumps({'schema_version': 1, 'fast_model': 'old/fast', 'smart_model': 'old/smart'}))
+    context = multiprocessing.get_context('spawn')
+    held = context.Event()
+    release = context.Event()
+    waiting = context.Event()
+    transaction_io = context.Event()
+    first = context.Process(target=_save_while_holding_lock, args=(str(path), held, release))
+    second = context.Process(target=_save_after_signaling, args=(str(path), waiting, transaction_io))
+
+    try:
+        first.start()
+        assert held.wait(timeout=10), 'first save did not pause after capturing the current document state'
+        second.start()
+        assert waiting.wait(timeout=10), 'second save did not reach the lock'
+        assert not transaction_io.wait(timeout=1), 'second save entered the file transaction while the first held its lock'
+        release.set()
+        for process in (first, second):
+            process.join(timeout=10)
+            assert not process.is_alive(), 'settings writer remained blocked after the preceding save completed'
+            assert process.exitcode == 0
+    finally:
+        release.set()
+        for process in (first, second):
+            if process.is_alive():
+                process.terminate()
+            if process.pid is not None:
+                process.join(timeout=10)
+    saved = json.loads(path.read_text(encoding='utf-8'))
+    assert saved['fast_model'] == 'new/fast'
+    assert saved['smart_model'] == 'new/smart'
 
 
 def test_invalid_known_setting_warns_with_field_and_error_type_without_value(tmp_path: Path) -> None:

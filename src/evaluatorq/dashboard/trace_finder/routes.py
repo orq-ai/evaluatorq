@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.requests import Request  # noqa: TC002 — FastHTML inspects this annotation at runtime
 from starlette.responses import Response
 
+from evaluatorq.common.file_lock import strict_file_lock
 from evaluatorq.common.llm_client import resolve_llm_client
 from evaluatorq.common.orq_client import (
     OrqProfile,
@@ -94,44 +95,8 @@ _FINDER_EXPORT_THREAD_LOCK = threading.Lock()
 @contextlib.contextmanager
 def _finder_export_lock(export_dir: Path):
     """Serialize Finder export replacement and pruning across threads and processes."""
-    export_dir.mkdir(parents=True, exist_ok=True)
-    with _FINDER_EXPORT_THREAD_LOCK:
-        lock_path = export_dir / '.finder-export.lock'
-        flags = os.O_CREAT | os.O_RDWR
-        if hasattr(os, 'O_NOFOLLOW'):
-            flags |= os.O_NOFOLLOW
-        descriptor = os.open(lock_path, flags, 0o600)
-        try:
-            if hasattr(os, 'fchmod'):
-                os.fchmod(descriptor, 0o600)
-            try:
-                import fcntl
-            except ImportError:
-                try:
-                    import msvcrt
-                except ImportError as exc:
-                    raise OSError('Finder export inter-process locking is unavailable') from exc
-                # msvcrt locks byte ranges, so make byte zero available first.
-                # Competing initializers write the same byte at offset zero.
-                if os.fstat(descriptor).st_size == 0:
-                    os.write(descriptor, b'\0')
-                os.lseek(descriptor, 0, os.SEEK_SET)
-                # LK_LOCK waits for contention and raises if it cannot acquire
-                # the lock. Never continue with only the process-local lock.
-                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-                try:
-                    yield
-                finally:
-                    os.lseek(descriptor, 0, os.SEEK_SET)
-                    msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
-            else:
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-        finally:
-            os.close(descriptor)
+    with strict_file_lock(export_dir / '.finder-export.lock', thread_lock=_FINDER_EXPORT_THREAD_LOCK):
+        yield
 
 
 def _referenced_finder_exports(export_dir: Path) -> set[Path] | None:
