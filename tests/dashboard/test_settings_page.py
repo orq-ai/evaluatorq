@@ -91,6 +91,136 @@ def test_settings_post_saves_and_redirects(client: TestClient, settings_file: Pa
     assert saved['filter_selection'] == 'llm'
 
 
+def test_settings_post_preserves_future_fields_while_saving_known_edits(
+    client: TestClient, settings_file: Path
+) -> None:
+    future_fields = {'future_flag': True, 'future_settings': {'nested': ['keep', 3]}}
+    settings_file.write_text(json.dumps({'schema_version': 2, 'window_days': 8, **future_fields}))
+
+    response = client.post(
+        '/settings',
+        data=csrf_data({'fast_model': 'fast/edited', 'classifier_model': 'classifier/custom'}),
+    )
+
+    assert response.status_code == 303
+    saved = json.loads(settings_file.read_text())
+    assert saved['schema_version'] == 2
+    assert saved['fast_model'] == 'fast/edited'
+    assert {key: saved[key] for key in future_fields} == future_fields
+
+
+def test_settings_post_patches_only_changed_values_and_preserves_invalid_raw_values(
+    client: TestClient, settings_file: Path
+) -> None:
+    raw = {
+        'schema_version': 1,
+        'trace_input_chars': 'bad',
+        'window_days': 'also bad',
+        'limit': 64,
+        'model_overrides': {'apply': 'saved/apply', 'future.task': {'opaque': True}},
+        'future_setting': {'nested': ['keep']},
+    }
+    settings_file.write_text(json.dumps(raw))
+
+    response = client.post(
+        '/settings',
+        data=csrf_data({
+            'fast_model': 'fast/edited',
+            'smart_model': 'smart/custom',
+            'classifier_model': 'classifier/custom',
+            'embedding_model': 'embed/custom',
+            'trace_input_chars': '500000',
+            'ask_ai_mode': 'immediate',
+        }),
+    )
+
+    assert response.status_code == 303
+    reopened = client.get('/settings').text
+    assert 'value="smart/custom"' in reopened
+    saved = json.loads(settings_file.read_text())
+    assert saved['fast_model'] == 'fast/edited'
+    assert saved['trace_input_chars'] == 'bad'
+    assert saved['window_days'] == 'also bad'
+    assert saved['limit'] == 64
+    assert saved['model_overrides'] == raw['model_overrides']
+    assert saved['future_setting'] == raw['future_setting']
+
+
+def test_settings_post_can_repair_invalid_value_to_displayed_default(client: TestClient, settings_file: Path) -> None:
+    settings_file.write_text(json.dumps({'schema_version': 1, 'trace_input_chars': 'bad'}))
+
+    response = client.post(
+        '/settings',
+        data=csrf_data({
+            'fast_model': '',
+            'smart_model': '',
+            'classifier_model': '',
+            'embedding_model': '',
+            'trace_input_chars': '500000',
+            'settings_changed_fields': 'trace_input_chars',
+        }),
+    )
+
+    assert response.status_code == 303
+    assert json.loads(settings_file.read_text())['trace_input_chars'] == 500000
+
+
+def test_invalid_auth_settings_post_does_not_write_partial_auth_group(client: TestClient, settings_file: Path) -> None:
+    original = json.dumps({
+        'schema_version': 1,
+        'orq_auth_method': 'environment',
+        'orq_profile': 'saved-profile',
+        'future': {'keep': True},
+    })
+    settings_file.write_text(original)
+
+    response = client.post(
+        '/settings',
+        data=csrf_data({
+            'orq_auth_method': 'cli_profile',
+            'orq_profile': 'missing-profile',
+            'fast_model': '',
+            'smart_model': '',
+            'classifier_model': '',
+            'embedding_model': '',
+            'settings_changed_fields': 'orq_auth_method,orq_profile',
+        }),
+    )
+
+    assert response.status_code == 422
+    assert settings_file.read_text() == original
+
+
+def test_settings_post_fails_visibly_without_overwriting_malformed_file(
+    client: TestClient, settings_file: Path
+) -> None:
+    original = b'{malformed saved settings'
+    settings_file.write_bytes(original)
+
+    response = client.post(
+        '/settings',
+        data=csrf_data({'fast_model': 'fast/new', 'settings_changed_fields': 'fast_model'}),
+    )
+
+    assert response.status_code == 422
+    assert 'saved file is unreadable or invalid' in response.text
+    assert settings_file.read_bytes() == original
+
+
+def test_settings_post_rejects_changed_field_marker_for_hidden_schema_version(
+    client: TestClient, settings_file: Path
+) -> None:
+    original = json.dumps({'schema_version': 1, 'fast_model': 'saved/fast'})
+    settings_file.write_text(original)
+
+    response = client.post(
+        '/settings', data=csrf_data({'fast_model': 'fast/new', 'settings_changed_fields': 'schema_version'})
+    )
+
+    assert response.status_code == 422
+    assert settings_file.read_text() == original
+
+
 def test_ai_limits_are_per_run_trace_search_controls(client: TestClient) -> None:
     settings_html = client.get('/settings').text
     search_html = search_page_html(RunSnapshot(), DashboardSettings.model_validate({}), api_available=False)
@@ -219,6 +349,58 @@ def test_unchanged_environment_model_keeps_the_saved_value(
 
     assert response.status_code == 303
     assert json.loads(settings_file.read_text())['smart_model'] == 'saved/smart'
+
+
+@pytest.mark.parametrize(
+    ('auth_method', 'auth_values'),
+    [
+        (
+            'cli_oauth',
+            {'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'alpha', 'orq_project_id': 'project-a'},
+        ),
+        ('cli_profile', {'orq_profile': 'deleted-profile'}),
+        ('cli_profile', {'orq_profile': 'masked-profile'}),
+    ],
+)
+def test_model_edit_saves_while_saved_auth_source_is_unavailable(
+    client: TestClient,
+    settings_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    auth_method: str,
+    auth_values: dict[str, str],
+) -> None:
+    from evaluatorq.trace_finder.settings import load_settings
+
+    save_settings(DashboardSettings.model_validate({'orq_auth_method': auth_method, **auth_values}), settings_file)
+    profiles = (
+        (OrqProfile('masked-profile', 'sk-****', None, True),)
+        if auth_values.get('orq_profile') == 'masked-profile'
+        else ()
+    )
+    monkeypatch.setattr(app_module, 'list_orq_profiles', lambda: profiles)
+
+    def unavailable(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError('credential discovery is unavailable')
+
+    monkeypatch.setattr(app_module, 'discover_oauth_scopes', unavailable)
+    response = client.post(
+        '/settings',
+        data=csrf_data({
+            **_MODELS,
+            'fast_model': 'edited/fast',
+            'orq_auth_method': auth_method,
+            **auth_values,
+            'settings_changed_fields': 'fast_model',
+        }),
+    )
+
+    assert response.status_code == 303
+    saved = load_settings(settings_file)
+    assert saved.fast_model == 'edited/fast'
+    assert saved.orq_auth_method == auth_method
+    assert saved.orq_profile == auth_values.get('orq_profile')
+    assert saved.orq_workspace == auth_values.get('orq_workspace')
+    assert saved.orq_project_id == auth_values.get('orq_project_id')
 
 
 def test_page_shows_the_environment_model_and_says_where_it_came_from(
@@ -759,7 +941,6 @@ def test_settings_page_defers_the_session_check_and_keeps_the_saved_server_in_th
 
     assert 'hx-get="/settings/oauth-sessions?value=https%3A%2F%2Fmy.staging.orq.ai" hx-trigger="load"' in html
     assert '<input type="hidden" name="orq_oauth_server" value="https://my.staging.orq.ai">' in html
-
 
 
 def test_cli_oauth_scope_selects_project_in_chosen_workspace(
@@ -2100,9 +2281,11 @@ def test_cli_oauth_project_survives_failed_discovery_and_saves_after_recovery(
 ) -> None:
     from evaluatorq.dashboard.orq_scope import OAuthScopes, OrqProject, OrqWorkspace
 
-    monkeypatch.setattr(app_module, 'list_oauth_sessions', lambda: (
-        OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', None, 'valid', True),
-    ))
+    monkeypatch.setattr(
+        app_module,
+        'list_oauth_sessions',
+        lambda: (OAuthSession('https://my.orq.ai', 'my.orq.ai', 'ada@orq.ai', None, 'valid', True),),
+    )
     saved = DashboardSettings.model_validate({
         'orq_auth_method': 'cli_oauth',
         'orq_oauth_server': 'https://my.orq.ai',
@@ -2120,24 +2303,33 @@ def test_cli_oauth_project_survives_failed_discovery_and_saves_after_recovery(
             error='Project listing unavailable',
         ),
     )
-    failed_lookup = client.get('/settings/oauth-scope', params={
-        'orq_oauth_server': 'https://my.orq.ai', 'orq_workspace': 'alpha', 'orq_project_id': 'project-a',
-    })
+    failed_lookup = client.get(
+        '/settings/oauth-scope',
+        params={
+            'orq_oauth_server': 'https://my.orq.ai',
+            'orq_workspace': 'alpha',
+            'orq_project_id': 'project-a',
+        },
+    )
     assert failed_lookup.status_code == 200
     assert '<input type="hidden" name="orq_project_id" value="project-a">' in failed_lookup.text
     trigger = failed_lookup.text.split('id="orq_project_id"', 1)[1].split('</button>', 1)[0]
     assert 'project-a' in trigger and 'All projects' not in trigger
     assert 'Project listing unavailable' in failed_lookup.text
 
-    failed_save = client.post('/settings', data=csrf_data({
-        **_MODELS,
-        'orq_auth_method': 'cli_oauth',
-        'orq_oauth_server': 'https://my.orq.ai',
-        'orq_workspace': 'alpha',
-        'orq_project_id': 'project-a',
-    }))
+    failed_save = client.post(
+        '/settings',
+        data=csrf_data({
+            **_MODELS,
+            'orq_auth_method': 'cli_oauth',
+            'orq_oauth_server': 'https://my.orq.ai',
+            'orq_workspace': 'alpha',
+            'orq_project_id': 'project-a',
+            'settings_changed_fields': 'orq_auth_method,orq_oauth_server,orq_workspace,orq_project_id',
+        }),
+    )
     assert failed_save.status_code == 422
-    assert load_settings(settings_file) == saved
+    assert load_settings(settings_file).model_dump() == saved.model_dump()
 
     monkeypatch.setattr(
         app_module,
@@ -2147,13 +2339,16 @@ def test_cli_oauth_project_survives_failed_discovery_and_saves_after_recovery(
             projects=(OrqProject('project-a', 'Recovered project name', 'workspace-a'),),
         ),
     )
-    recovered_save = client.post('/settings', data=csrf_data({
-        **_MODELS,
-        'orq_auth_method': 'cli_oauth',
-        'orq_oauth_server': 'https://my.orq.ai',
-        'orq_workspace': 'alpha',
-        'orq_project_id': 'project-a',
-    }))
+    recovered_save = client.post(
+        '/settings',
+        data=csrf_data({
+            **_MODELS,
+            'orq_auth_method': 'cli_oauth',
+            'orq_oauth_server': 'https://my.orq.ai',
+            'orq_workspace': 'alpha',
+            'orq_project_id': 'project-a',
+        }),
+    )
     assert recovered_save.status_code == 303
     persisted = load_settings(settings_file)
     assert (persisted.orq_project_id, persisted.orq_project_name) == ('project-a', 'Recovered project name')

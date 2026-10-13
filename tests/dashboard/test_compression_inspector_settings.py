@@ -108,6 +108,24 @@ def test_autosave_post_saves_and_returns_the_matching_sidebar_as_json(
     assert load_settings(settings_path).compression_inspector_enabled is False
 
 
+def test_model_only_autosave_preserves_compression_inspector(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    client, settings_path = _client(monkeypatch, tmp_path)
+    settings_path.write_text(json.dumps({'schema_version': 1, 'compression_inspector_enabled': True}))
+
+    response = client.post(
+        '/settings',
+        data={CSRF_FIELD: _CSRF_TOKEN, 'smart_model': 'openai/test-smart', 'settings_changed_fields': 'smart_model'},
+        headers={'X-Autosave': '1'},
+    )
+
+    assert response.status_code == 200
+    saved = load_settings(settings_path)
+    assert saved.compression_inspector_enabled is True
+    assert saved.smart_model == 'openai/test-smart'
+
+
 def test_autosave_post_reports_validation_errors_as_json_and_saves_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

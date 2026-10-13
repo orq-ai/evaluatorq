@@ -62,7 +62,7 @@ from evaluatorq.dashboard.filters import FILTERS, apply_or_all
 from evaluatorq.dashboard.insights_routes import register_insights_routes
 from evaluatorq.dashboard.orq_scope import OAuthScopes, discover_oauth_scopes
 from evaluatorq.dashboard.redteam_views import register_redteam_view_routes
-from evaluatorq.dashboard.security import request_rejected
+from evaluatorq.dashboard.security import CSRF_FIELD, request_rejected
 from evaluatorq.dashboard.shell import current_sidebar_html, dashboard_css, dashboard_css_version, page
 from evaluatorq.dashboard.sim_compare import register_sim_compare_routes
 from evaluatorq.dashboard.sim_views import register_sim_view_routes
@@ -95,6 +95,7 @@ from evaluatorq.dashboard.view import (
     sim_overview_body,
 )
 from evaluatorq.trace_finder.settings import (
+    AUTH_SETTINGS_FIELDS,
     DashboardSettings,
     credential_fingerprint,
     effective_settings,
@@ -499,17 +500,93 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     # Use saved values as the baseline so unchanged environment overrides are not persisted.
     current = load_settings()
     values = _submitted_settings_values(form_data, current)
+    try:
+        changed_fields = _settings_changed_fields(form_data, current)
+    except ValueError:
+        if _autosaving(req):
+            return JSONResponse({'errors': {'form': 'The submitted changed-field list is invalid.'}}, status_code=422)
+        body = settings_body(
+            _settings_config(roots), values, errors={'form': 'The submitted changed-field list is invalid.'}
+        )
+        return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
+    legacy_full_form = set(MODEL_FIELDS) <= form_data.keys()
+    if (
+        form_data.get('settings_changed_fields') is None
+        and 'compression_inspector_enabled' not in form_data
+        and current.compression_inspector_enabled
+        and (legacy_full_form or set(form_data.keys()) <= {CSRF_FIELD})
+    ):
+        # Older full-form clients omit unchecked checkboxes. Modern autosaves
+        # carry a dirty marker, so an unrelated edit cannot clear this toggle.
+        changed_fields.add('compression_inspector_enabled')
+    # The browser marker describes only controls the user changed. Keep it
+    # separate from derived persistence paths so a validation rerender can
+    # safely submit the same marker again.
+    rendered_changed_fields = set(changed_fields)
+    auth_controls = {
+        'orq_auth_method',
+        'orq_profile',
+        'orq_oauth_server',
+        'orq_workspace',
+        'orq_project_id',
+        'orq_api_key_entry',
+        'orq_stored_key_host',
+    }
+    if form_data.get('settings_changed_fields') is None and auth_controls & form_data.keys():
+        # Older clients have no dirty marker, so submitted auth controls mean
+        # an intentional auth-group refresh, including its derived values.
+        changed_fields.update({
+            'orq_auth_method',
+            'orq_profile',
+            'orq_profile_host',
+            'orq_oauth_server',
+            'orq_workspace',
+            'orq_project_id',
+            'orq_project_name',
+            'orq_credential_fingerprint',
+        })
+    if 'orq_profile' in changed_fields and 'orq_auth_method' not in form_data:
+        changed_fields.add('orq_auth_method')
+    values['settings_changed_fields'] = ','.join(sorted(rendered_changed_fields))
+    method_changed = 'orq_auth_method' in changed_fields
+    if method_changed:
+        changed_fields.update({'orq_auth_method', 'orq_profile', 'orq_project_name'})
+        settings_method = str(values['orq_auth_method'])
+        if settings_method == 'cli_profile':
+            changed_fields.update({'orq_profile_host', 'orq_credential_fingerprint'})
+        if settings_method == 'cli_oauth':
+            changed_fields.update({'orq_oauth_server', 'orq_workspace', 'orq_project_id'})
+        else:
+            changed_fields.update({'orq_workspace', 'orq_project_id'})
+    if 'orq_profile' in changed_fields:
+        changed_fields.update({'orq_profile_host', 'orq_credential_fingerprint'})
+    if {'orq_oauth_server', 'orq_workspace', 'orq_project_id'} & changed_fields:
+        changed_fields.add('orq_project_name')
+    if 'orq_api_key_entry' in changed_fields:
+        changed_fields.update({
+            'orq_auth_method',
+            'orq_api_key_ciphertext',
+            'orq_profile_host',
+            'orq_credential_fingerprint',
+        })
+    if 'orq_stored_key_host' in changed_fields:
+        changed_fields.update({'orq_profile_host', 'orq_credential_fingerprint'})
+    changed_fields.difference_update({'orq_api_key_entry', 'orq_stored_key_host'})
+    auth_group_requested = bool(changed_fields & AUTH_SETTINGS_FIELDS)
+    values['settings_changed_fields'] = ','.join(sorted(rendered_changed_fields))
     profiles = await asyncio.to_thread(list_orq_profiles)
     errors: dict[str, str] = {}
     settings: DashboardSettings | None = None
     try:
-        settings = DashboardSettings.model_validate(values)
+        settings = current.with_updates(
+            {key: value for key, value in values.items() if key != 'settings_changed_fields'}, persistent=False
+        )
     except ValidationError as exc:
         for detail in exc.errors():
             location = detail.get('loc', ())
             field = str(location[0]) if location else 'form'
             errors[field] = str(detail.get('msg', 'Invalid value'))
-    if settings is not None and settings.orq_auth_method == 'stored_api_key':
+    if auth_group_requested and settings is not None and settings.orq_auth_method == 'stored_api_key':
         entered_key = str(form_data.get('orq_api_key_entry', '')).strip()
         if entered_key:
             try:
@@ -521,6 +598,7 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
             errors['orq_api_key_entry'] = 'Enter an API key to use this method.'
     if (
         settings is not None
+        and auth_group_requested
         and settings.orq_auth_method == 'cli_profile'
         and ('orq_auth_method' in form_data or 'orq_profile' in form_data)
         and settings.orq_profile is not None
@@ -537,14 +615,15 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
     )
     if (
         settings is not None
+        and auth_group_requested
         and settings.orq_auth_method == 'cli_profile'
         and selected_profile is None
         and ('orq_auth_method' in form_data or 'orq_profile' in form_data)
     ):
         errors.setdefault('orq_profile', 'Choose an Orq CLI API-key profile.')
-    if selected_profile is not None and '*' in selected_profile.api_key:
+    if auth_group_requested and selected_profile is not None and '*' in selected_profile.api_key:
         errors['orq_profile'] = 'The installed orq CLI masks this profile key; use Environment credentials.'
-    if settings is not None and settings.orq_auth_method == 'cli_oauth':
+    if auth_group_requested and settings is not None and settings.orq_auth_method == 'cli_oauth':
         server = settings.orq_oauth_server or DEFAULT_ORQ_BASE_URL
         if settings.orq_workspace or settings.orq_project_id:
             sessions = await asyncio.to_thread(list_oauth_sessions)
@@ -571,7 +650,7 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
                                 'orq_project_name': project.name if project else None,
                             }
                         )
-    if settings is not None:
+    if auth_group_requested and settings is not None:
         if settings.orq_auth_method != 'cli_oauth':
             settings = settings.model_copy(
                 update={
@@ -603,7 +682,18 @@ async def _save_settings(req: Request) -> Response | NotStr:  # noqa: C901
         body = settings_body(_settings_config(roots), values, errors=errors, profiles=profiles)
         return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
 
-    await asyncio.to_thread(save_settings, settings)
+    try:
+        await asyncio.to_thread(save_settings, settings, changed_fields=changed_fields)
+    except (OSError, ValueError) as exc:
+        logger.warning('Could not save dashboard settings: {}', type(exc).__name__)
+        message = (
+            'Could not save settings because the saved file is unreadable or invalid. '
+            'Fix or restore the JSON settings file, then try again.'
+        )
+        if _autosaving(req):
+            return JSONResponse({'errors': {'form': message}}, status_code=422)
+        body = settings_body(_settings_config(roots), values, errors={'form': message}, profiles=profiles)
+        return Response(page('Settings', body, active_nav='settings'), status_code=422, media_type='text/html')
     async with req.app.state.finder_store_lock:
         req.app.state.finder_profile = selected_profile
         if settings.orq_auth_method == 'cli_profile' and req.app.state.finder_profile is None:
@@ -712,6 +802,54 @@ def _submitted_settings_values(form_data: Any, current: DashboardSettings) -> di
         explorer_columns=current.explorer_columns,
     )
     return values
+
+
+def _settings_changed_fields(form_data: Any, current: DashboardSettings) -> set[str]:
+    """Return deliberate edits, with value differences as a fallback for older clients."""
+    auth_inputs = {
+        'orq_auth_method',
+        'orq_profile',
+        'orq_oauth_server',
+        'orq_workspace',
+        'orq_project_id',
+        'orq_api_key_entry',
+        'orq_stored_key_host',
+    }
+    allowed = (
+        set(MODEL_FIELDS)
+        | {'ask_ai_mode', 'filter_selection', 'trace_input_chars', 'compression_inspector_enabled'}
+        | auth_inputs
+    )
+    marker = form_data.get('settings_changed_fields')
+    if marker is not None:
+        names = {name for name in str(marker).split(',') if name}
+        if names - allowed:
+            raise ValueError('invalid settings changed-field list')
+        return names
+    changed: set[str] = set()
+    for name in allowed - {'orq_api_key_entry', 'orq_stored_key_host'}:
+        if name not in form_data:
+            continue
+        value = form_data.get(name)
+        saved = getattr(current, name)
+        if name == 'compression_inspector_enabled':
+            normalized: Any = value in ('on', 'true')
+        elif isinstance(saved, int):
+            try:
+                normalized: Any = int(str(value).strip())
+            except (TypeError, ValueError):
+                normalized = value
+        elif saved is None and name.endswith('_model'):
+            normalized = str(value).strip() or None
+        else:
+            normalized = value
+        if normalized != saved:
+            changed.add(name)
+    if str(form_data.get('orq_api_key_entry', '')).strip():
+        changed.add('orq_api_key_entry')
+    if 'orq_stored_key_host' in form_data and form_data.get('orq_stored_key_host') != current.orq_profile_host:
+        changed.add('orq_stored_key_host')
+    return changed
 
 
 def _search(req: Request) -> NotStr:
